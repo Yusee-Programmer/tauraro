@@ -1,0 +1,48 @@
+# Built binaries and build artifacts
+/target
+**/*.rs.bk
+Cargo.lock
+*.swp
+*~
+*.bak
+*.tmp
+
+# Tauraro-specific generated files
+*.tr.bk
+*.trc  # if you add a bytecode/cache format later
+
+# IDE and editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# Logs and local config
+*.log
+.env
+.env.local
+
+# OS junk
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Rust analyzer (optional, if you want to share settings, remove this line)
+/rust-analyzer
+
+# If you generate docs locally
+/doc
+/docs/_build
+
+# Coverage or profiling output
+*.profdata
+*.gcda
+*.gcno
+*.info
+cov/
