@@ -6,41 +6,105 @@ description = "A high-performance, multi-paradigm programming language combining
 authors = ["TauraroLang Team"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/tauraro/tauraro-lang"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+readme = "README.md"
+keywords = ["programming-language", "compiler", "vm", "python-interop"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
+# Core dependencies
+anyhow = "1.0"
+thiserror = "1.0"
+
 # Lexing and parsing
-logos = "0.13"           # Efficient lexer generator
-lalrpop = "0.19"         # LR parser generator (or use hand-rolled recursive descent)
+logos = "0.13"
+lalrpop = { version = "0.19", optional = true }
 
 # Code generation
-inkwell = "0.4"          # LLVM bindings for Rust
-wasmtime = "8"           # WebAssembly runtime (optional)
+inkwell = { version = "0.4", features = ["llvm12-0"] }
+llvm-sys = "160"
 
-# Runtime and utilities
-anyhow = "1.0"           # Error handling
-thiserror = "1.0"        # Custom error types
-clap = { version = "4.0", features = ["derive"] } # Command-line argument parsing
-log = "0.4"              # Logging facade
-env_logger = "0.10"      # Logging implementation
+# WebAssembly
+wasmtime = { version = "8", optional = true }
+cranelift = { version = "0.95", optional = true }
+
+# CLI and user interface
+clap = { version = "4.4", features = ["derive", "env"] }
+dialoguer = { version = "0.11", optional = true }
+syntect = { version = "5.0", optional = true }
 
 # FFI and interoperability
-libloading = "0.8"       # Dynamic library loading
-serde = { version = "1.0", features = ["derive"] } # Serialization for data exchange
-serde_json = "1.0"       # JSON support for config
+libloading = "0.8"
+pyo3 = { version = "0.26", features = ["extension-module"], optional = true }
 
 # Utilities
-regex = "1.8"            # Regular expressions
-indexmap = "1.9"         # Ordered HashMap
-once_cell = "1.18"       // Lazy initialization
+regex = "1.10"
+indexmap = "2.0"
+once_cell = "1.18"
+num-traits = "0.2"
+num-bigint = { version = "0.4", optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+
+# Memory and performance
+crossbeam = { version = "0.8", optional = true }
+rayon = { version = "1.7", optional = true }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+toml = { version = "0.8", optional = true }
+
+# Logging and debugging
+log = "0.4"
+env_logger = "0.10"
+colored = "2.1"
+
+# Async support
+tokio = { version = "1.0", features = ["full"], optional = true }
 
 [dev-dependencies]
-tempfile = "3.6"         # Temporary files for tests
-assert_cmd = "2.0"       # Command assertion for CLI tests
+tempfile = "3.8"
+assert_cmd = "2.0"
+predicates = "3.0"
+serial_test = "2.0"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[build-dependencies]
+lazy_static = "1.4"
 
 [features]
-default = ["llvm"]       # Default with LLVM backend
-llvm = ["inkwell"]       # LLVM code generation
-wasm = ["wasmtime"]      # WebAssembly support
-cli = ["clap"]           # Command-line interface
+default = ["cli", "basic-repl"]
+
+# Backend features
+llvm = []  # LLVM is always enabled now
+wasm = ["wasmtime"]
+cranelift-backend = ["cranelift"]
+
+# Component features
+cli = []
+basic-repl = []
+repl-enhanced = ["dialoguer", "syntect"]
+
+# Language features
+python = ["pyo3"]
+bigint = ["num-bigint"]
+datetime = ["chrono"]
+parallel = ["crossbeam", "rayon"]
+async = ["tokio"]
+
+# Development features
+dev = ["serde", "serde_json", "toml"]
+full = [
+    "wasm",
+    "cranelift-backend",
+    "repl-enhanced",
+    "python",
+    "bigint",
+    "datetime",
+    "parallel",
+    "async",
+    "dev"
+]
+
+[[bin]]
+name = "tauraro"
+path = "src/main.rs"
