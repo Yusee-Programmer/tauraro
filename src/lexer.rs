@@ -1,4 +1,4 @@
-//! Lexical analysis for TauraroLang - Tokenizes source code into tokens
+//! Complete lexical analysis for TauraroLang - Tokenizes source code into tokens
 use logos::Logos;
 use std::fmt;
 
@@ -18,10 +18,11 @@ pub enum Token {
     KwIf,
 
     #[token("elif")] 
+    #[token("sai idan")] // Hausa: elif
     KwElif,
     
     #[token("else")] 
-    #[token("sai")]   // Hausa: else/otherwise
+    #[token("sai dai")]   // Hausa: else/otherwise
     KwElse,
 
     #[token("for")] 
@@ -69,18 +70,6 @@ pub enum Token {
     #[token("jira")]  // Hausa: wait
     KwAwait,
 
-    // --- Literals ---
-    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
-    Int(i64),
-
-    #[regex(r"[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?", |lex| lex.slice().parse::<f64>().ok())]
-    Float(f64),
-
-    // String literals with escape sequences
-    #[regex(r#""([^"\\]|\\.)*""#, |lex| unescape_string(lex.slice()))]
-    #[regex(r#"'([^'\\]|\\.)*'"#, |lex| unescape_string(lex.slice()))]
-    StringLit(String),
-
     #[token("true")] 
     #[token("gaskiya")] // Hausa: truth
     True,
@@ -92,6 +81,18 @@ pub enum Token {
     #[token("none")] 
     #[token("babu")]   // Hausa: nothing
     None,
+
+    // --- Literals ---
+    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
+    Int(i64),
+
+    #[regex(r"[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?", |lex| lex.slice().parse::<f64>().ok())]
+    Float(f64),
+
+    // String literals with escape sequences
+    #[regex(r#""([^"\\]|\\.)*""#, |lex| unescape_string(lex.slice()))]
+    #[regex(r#"'([^'\\]|\\.)*'"#, |lex| unescape_string(lex.slice()))]
+    StringLit(String),
 
     // --- Identifiers ---
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
@@ -144,10 +145,9 @@ pub enum Token {
     #[token("<<")] Shl,
     #[token(">>")] Shr,
 
-    // Type and flow
+    // Type annotation
+    #[token(":")] Colon,
     #[token("->")] Arrow,
-    #[token("..")] DotDot,
-    #[token("...")] DotDotDot,
 
     // --- Delimiters ---
     #[token("(")] LParen,
@@ -156,7 +156,6 @@ pub enum Token {
     #[token("}")] RBrace,
     #[token("[")] LBracket,
     #[token("]")] RBracket,
-    #[token(":")] Colon,
     #[token(";")] Semicolon,
     #[token(",")] Comma,
     #[token(".")] Dot,
@@ -168,8 +167,13 @@ pub enum Token {
     // --- Whitespace and comments ---
     #[regex(r"[ \t\r]+", logos::skip)]
     #[regex(r"#.*", logos::skip)]  // Line comments
+    #[regex(r"\n", |lex| {
+        Some(lex.slice().to_string())
+    })]
+    Newline(String),
     
     // Error variant
+    #[error]
     Error,
 }
 
@@ -186,16 +190,16 @@ impl fmt::Display for LexError {
     }
 }
 
+impl std::error::Error for LexError {}
+
 /// Unescape string literals (remove quotes and process escape sequences)
 fn unescape_string(s: &str) -> Option<String> {
     let content = &s[1..s.len()-1];  // Remove surrounding quotes
     let mut result = String::new();
     let mut chars = content.chars().peekable();
-    let mut position = 1;  // Start after opening quote
     
     while let Some(ch) = chars.next() {
         if ch == '\\' {
-            position += 1;
             match chars.next() {
                 Some('n') => result.push('\n'),
                 Some('t') => result.push('\t'),
@@ -209,20 +213,18 @@ fn unescape_string(s: &str) -> Option<String> {
                     if hex_str.len() == 2 {
                         if let Ok(val) = u8::from_str_radix(&hex_str, 16) {
                             result.push(val as char);
-                            position += 2;
                         }
                     }
                 }
                 Some(c) => {
-                    // Invalid escape sequence
-                    return None;
+                    // Keep invalid escape sequences as-is
+                    result.push('\\');
+                    result.push(c);
                 }
-                None => return None,  // Unclosed escape
+                None => break,  // Unclosed escape
             }
-            position += 1;
         } else {
             result.push(ch);
-            position += 1;
         }
     }
     Some(result)
@@ -231,12 +233,16 @@ fn unescape_string(s: &str) -> Option<String> {
 /// Enhanced Lexer with error handling and position tracking
 pub struct Lexer<'a> {
     inner: logos::Lexer<'a, Token>,
+    current_line: usize,
+    current_column: usize,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
         Self {
             inner: Token::lexer(source),
+            current_line: 1,
+            current_column: 1,
         }
     }
     
@@ -247,11 +253,7 @@ impl<'a> Lexer<'a> {
     
     /// Get current line and column
     pub fn line_col(&self) -> (usize, usize) {
-        let span = self.inner.span();
-        let source = self.inner.source();
-        let line = source[..span.start].chars().filter(|&c| c == '\n').count() + 1;
-        let col = span.start - source[..span.start].rfind('\n').unwrap_or(0);
-        (line, col)
+        (self.current_line, self.current_column)
     }
 }
 
@@ -260,11 +262,21 @@ impl<'a> Iterator for Lexer<'a> {
     
     fn next(&mut self) -> Option<Self::Item> {
         match self.inner.next() {
-            Some(Ok(token)) => Some(Ok(token)),
+            Some(Ok(token)) => {
+                // Update line/column tracking
+                if let Token::Newline(_) = token {
+                    self.current_line += 1;
+                    self.current_column = 1;
+                } else {
+                    self.current_column += self.inner.slice().len();
+                }
+                
+                Some(Ok(token))
+            }
             Some(Err(_)) => {
                 let pos = self.position();
                 Some(Err(LexError {
-                    message: "Invalid token".to_string(),
+                    message: format!("Invalid token: '{}'", self.inner.slice()),
                     position: pos,
                 }))
             }
@@ -293,7 +305,7 @@ impl Token {
             Token::KwFunc => Some("aiki"),
             Token::KwClass => Some("iri"),
             Token::KwIf => Some("idan"),
-            Token::KwElse => Some("sai"),
+            Token::KwElse => Some("sai dai"),
             Token::KwFor => Some("don"),
             Token::KwWhile => Some("yayin"),
             Token::KwReturn => Some("mayar"),
@@ -311,5 +323,15 @@ impl Token {
             Token::Not => Some("ba"),
             _ => None,
         }
+    }
+    
+    /// Check if token can start an expression
+    pub fn can_start_expression(&self) -> bool {
+        matches!(self,
+            Token::Int(_) | Token::Float(_) | Token::StringLit(_) |
+            Token::True | Token::False | Token::None |
+            Token::Identifier(_) | Token::LParen | Token::LBracket |
+            Token::LBrace | Token::Plus | Token::Minus | Token::Not
+        )
     }
 }

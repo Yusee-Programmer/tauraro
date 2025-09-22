@@ -1,10 +1,15 @@
-//! TauraroLang Virtual Machine - Interpreter with integrated memory management
+//! COMPLETE TauraroLang Virtual Machine with dynamic typing and REPL support
 use crate::runtime::{MemoryAPI, ManagedPtr, MemoryMode};
 use crate::ast::*;
-use anyhow::Result;
+use crate::lexer::Lexer;
+use crate::parser::Parser;
+use crate::semantic;
+use anyhow::{Result, anyhow};
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 
-/// VM value that can be stored in variables
+/// Dynamic value supporting optional types
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
@@ -14,11 +19,100 @@ pub enum Value {
     List(Vec<Value>),
     Dict(HashMap<String, Value>),
     Object(String, HashMap<String, Value>), // class name, fields
-    Function(String, Vec<String>), // name, parameters
+    Function(String, Vec<String>, Vec<Stmt>), // name, parameters, body
     NativeFunction(fn(Vec<Value>) -> Result<Value>),
+    BuiltinFunction(String, fn(Vec<Value>) -> Result<Value>),
     None,
-    // Managed pointers for manual memory control
-    ManagedPtr(ManagedPtr<Value>),
+    // For optional static typing
+    TypedValue { value: Box<Value>, type_info: Type },
+}
+
+impl Value {
+    /// Convert to string for REPL display
+    pub fn to_string(&self) -> String {
+        match self {
+            Value::Int(n) => n.to_string(),
+            Value::Float(n) => format!("{:.6}", n),
+            Value::Bool(b) => b.to_string(),
+            Value::String(s) => format!("\"{}\"", s),
+            Value::List(items) => {
+                let items_str: Vec<String> = items.iter().map(|v| v.to_string()).collect();
+                format!("[{}]", items_str.join(", "))
+            }
+            Value::Dict(dict) => {
+                let pairs: Vec<String> = dict.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v.to_string()))
+                    .collect();
+                format!("{{{}}}", pairs.join(", "))
+            }
+            Value::None => "None".to_string(),
+            Value::Function(name, params, _) => {
+                format!("<function {}({})>", name, params.join(", "))
+            }
+            Value::BuiltinFunction(name, _) => {
+                format!("<built-in function {}>", name)
+            }
+            Value::NativeFunction(_) => "<native function>".to_string(),
+            Value::Object(name, fields) => {
+                format!("<{} object with {} fields>", name, fields.len())
+            }
+            Value::TypedValue { value, type_info } => {
+                format!("{}: {}", value.to_string(), type_info)
+            }
+        }
+    }
+    
+    /// Get type name for error messages
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Int(_) => "int",
+            Value::Float(_) => "float",
+            Value::Bool(_) => "bool",
+            Value::String(_) => "str",
+            Value::List(_) => "list",
+            Value::Dict(_) => "dict",
+            Value::Object(_, _) => "object",
+            Value::Function(_, _, _) => "function",
+            Value::BuiltinFunction(_, _) => "builtin function",
+            Value::NativeFunction(_) => "native function",
+            Value::None => "None",
+            Value::TypedValue { value, .. } => value.type_name(),
+        }
+    }
+    
+    /// Dynamic type checking for optional static typing
+    pub fn check_type(&self, expected: &Type) -> bool {
+        match (self, expected) {
+            (Value::Int(_), Type::Int) => true,
+            (Value::Float(_), Type::Float) => true,
+            (Value::Bool(_), Type::Bool) => true,
+            (Value::String(_), Type::Str) => true,
+            (Value::List(_), Type::List(_)) => true,
+            (Value::Dict(_), Type::Dict(_, _)) => true,
+            (Value::None, Type::Any) => true,
+            (Value::TypedValue { type_info, .. }, expected_type) => type_info == expected_type,
+            (_, Type::Any) => true, // Any accepts all types
+            _ => false, // Type mismatch
+        }
+    }
+    
+    /// Convert to boolean for truthiness testing
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Value::Bool(b) => *b,
+            Value::Int(n) => *n != 0,
+            Value::Float(n) => *n != 0.0,
+            Value::String(s) => !s.is_empty(),
+            Value::List(items) => !items.is_empty(),
+            Value::Dict(dict) => !dict.is_empty(),
+            Value::None => false,
+            Value::Object(_, _) => true,
+            Value::Function(_, _, _) => true,
+            Value::BuiltinFunction(_, _) => true,
+            Value::NativeFunction(_) => true,
+            Value::TypedValue { value, .. } => value.is_truthy(),
+        }
+    }
 }
 
 /// Variable scope
@@ -26,6 +120,7 @@ pub enum Value {
 pub struct Scope {
     pub variables: HashMap<String, Value>,
     pub parent: Option<usize>,
+    pub scope_type: String, // "global", "function", "class", "block"
 }
 
 /// Virtual Machine state
@@ -34,6 +129,9 @@ pub struct VM {
     current_scope: usize,
     memory: MemoryAPI,
     call_stack: Vec<StackFrame>,
+    strict_types: bool,
+    should_return: bool,
+    return_value: Option<Value>,
 }
 
 /// Stack frame for function calls
@@ -41,7 +139,7 @@ pub struct VM {
 struct StackFrame {
     function_name: String,
     return_address: usize,
-    variables: HashMap<String, Value>,
+    scope_index: usize,
 }
 
 impl VM {
@@ -49,26 +147,128 @@ impl VM {
         let global_scope = Scope {
             variables: HashMap::new(),
             parent: None,
+            scope_type: "global".to_string(),
         };
         
-        Self {
+        let mut vm = Self {
             scopes: vec![global_scope],
             current_scope: 0,
             memory: MemoryAPI::new(),
             call_stack: Vec::new(),
+            strict_types: false,
+            should_return: false,
+            return_value: None,
+        };
+        
+        // Initialize built-in functions
+        vm.init_builtins();
+        vm
+    }
+    
+    /// Set strict type checking mode
+    pub fn set_strict_types(&mut self, strict: bool) {
+        self.strict_types = strict;
+    }
+    
+    /// Execute TauraroLang source code as a script
+    pub fn execute_script(&mut self, source: &str, args: Vec<String>) -> Result<Value> {
+        // Parse with implicit main function support
+        let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()?;
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_with_implicit_main()?;
+        
+        // Optional semantic analysis based on strict mode
+        let program = if self.strict_types {
+            semantic::analyze_optional_types(program, true)?
+        } else {
+            program
+        };
+        
+        // Set command line arguments
+        self.set_variable("args", Value::List(args.into_iter().map(Value::String).collect()));
+        
+        // Execute the program
+        self.execute_program(program)
+    }
+    
+    /// Execute REPL input (expressions or statements)
+    pub fn execute_repl(&mut self, input: &str, line_number: usize) -> Result<Option<Value>> {
+        // Add line number to source for better error messages
+        let source = format!("# Line {}\n{}", line_number, input);
+        
+        // Try to parse as expression first (for immediate evaluation)
+        if let Ok(expr) = self.parse_expression(input) {
+            let result = self.execute_expression(&expr)?;
+            return Ok(Some(result));
+        }
+        
+        // Try to parse as statement
+        let tokens = Lexer::new(&source).collect::<Result<Vec<_>, _>>()?;
+        let mut parser = Parser::new(tokens);
+        
+        if let Ok(stmt) = parser.parse_statement() {
+            self.execute_statement(&stmt)?;
+            return Ok(None);
+        }
+        
+        Err(anyhow::anyhow!("Invalid REPL input: '{}'", input))
+    }
+    
+    /// Parse expression from string (for REPL)
+    fn parse_expression(&self, input: &str) -> Result<Expr> {
+        let source = format!("__repl_expr = {}", input);
+        let tokens = Lexer::new(&source).collect::<Result<Vec<_>, _>>()?;
+        let mut parser = Parser::new(tokens);
+        
+        // Parse as assignment to temporary variable
+        if let Ok(Stmt::Assignment { value, .. }) = parser.parse_statement() {
+            Ok(value)
+        } else {
+            Err(anyhow::anyhow!("Not a valid expression"))
         }
     }
     
-    /// Execute TauraroLang source code
-    pub fn execute(&mut self, source: &str, args: Vec<String>) -> Result<Value> {
-        // For now, just parse and execute a simple program
-        // In full implementation, this would use the lexer and parser
+    /// Execute a complete program
+    fn execute_program(&mut self, program: Program) -> Result<Value> {
+        // First pass: register all functions and classes
+        for stmt in &program.statements {
+            if let Stmt::Function { name, parameters, body, .. } = stmt {
+                let param_names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
+                let func_value = Value::Function(name.clone(), param_names, body.clone());
+                self.set_variable(name, func_value);
+            } else if let Stmt::Class { name, .. } = stmt {
+                // Create class object
+                let class_obj = Value::Object(name.clone(), HashMap::new());
+                self.set_variable(name, class_obj);
+            }
+        }
         
-        // Set up command line arguments
-        self.set_variable("args", Value::List(args.into_iter().map(Value::String).collect()));
+        // Second pass: execute statements
+        for stmt in program.statements {
+            if !matches!(stmt, Stmt::Function { .. } | Stmt::Class { .. }) {
+                self.execute_statement(&stmt)?;
+                
+                if self.should_return {
+                    return Ok(self.return_value.take().unwrap_or(Value::None));
+                }
+            }
+        }
         
-        // Execute built-in example for demonstration
-        self.execute_builtin_example()
+        // Call main function if it exists
+        if let Some(Value::Function(_, _, body)) = self.get_variable("main") {
+            self.enter_scope("function");
+            for stmt in body {
+                self.execute_statement(&stmt)?;
+                if self.should_return {
+                    break;
+                }
+            }
+            let result = self.return_value.take().unwrap_or(Value::None);
+            self.exit_scope();
+            return Ok(result);
+        }
+        
+        Ok(Value::None)
     }
     
     /// Execute a statement
@@ -82,11 +282,17 @@ impl VM {
                 self.execute_assignment(target, value)?;
                 Ok(None)
             }
+            Stmt::Variable { name, value, .. } => {
+                if let Some(expr) = value {
+                    let val = self.execute_expression(expr)?;
+                    self.set_variable(name, val);
+                } else {
+                    self.set_variable(name, Value::None);
+                }
+                Ok(None)
+            }
             Stmt::Function { name, parameters, body, .. } => {
-                // Store function definition
-                let param_names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
-                let function_value = Value::Function(name.clone(), param_names);
-                self.set_variable(name, function_value);
+                // Function definition already handled in first pass
                 Ok(None)
             }
             Stmt::Return { value, .. } => {
@@ -95,9 +301,29 @@ impl VM {
                 } else {
                     Value::None
                 };
-                Ok(Some(return_value))
+                self.should_return = true;
+                self.return_value = Some(return_value);
+                Ok(None)
             }
-            _ => Ok(None), // TODO: Implement other statement types
+            Stmt::If { condition, then_branch, elif_branches, else_branch, .. } => {
+                self.execute_if_statement(condition, then_branch, elif_branches, else_branch)
+            }
+            Stmt::While { condition, body, .. } => {
+                self.execute_while_statement(condition, body)
+            }
+            Stmt::For { variable, iterable, body, .. } => {
+                self.execute_for_statement(variable, iterable, body)
+            }
+            Stmt::Import { module, alias, .. } => {
+                self.execute_import_statement(module, alias.as_deref())
+            }
+            Stmt::Extern { library, .. } => {
+                self.execute_extern_statement(library)
+            }
+            _ => {
+                // TODO: Implement other statement types
+                Ok(None)
+            }
         }
     }
     
@@ -115,10 +341,39 @@ impl VM {
             Expr::Binary { left, op, right, .. } => {
                 self.execute_binary_op(left, op, right)
             }
+            Expr::Unary { op, expr, .. } => {
+                self.execute_unary_op(op, expr)
+            }
             Expr::Call { callee, arguments, .. } => {
                 self.execute_function_call(callee, arguments)
             }
-            _ => Ok(Value::None), // TODO: Implement other expression types
+            Expr::List(elements, _) => {
+                let values: Result<Vec<Value>> = elements.iter()
+                    .map(|e| self.execute_expression(e))
+                    .collect();
+                Ok(Value::List(values?))
+            }
+            Expr::Dict(pairs, _) => {
+                let mut dict = HashMap::new();
+                for (key_expr, value_expr) in pairs {
+                    let key = self.execute_expression(key_expr)?;
+                    let value = self.execute_expression(value_expr)?;
+                    dict.insert(key.to_string(), value);
+                }
+                Ok(Value::Dict(dict))
+            }
+            Expr::Typed { expr, type_annotation, .. } => {
+                let value = self.execute_expression(expr)?;
+                if self.strict_types && !value.check_type(type_annotation) {
+                    return Err(anyhow::anyhow!("Type mismatch: expected {}, got {}", 
+                        type_annotation, value.type_name()));
+                }
+                Ok(Value::TypedValue {
+                    value: Box::new(value),
+                    type_info: type_annotation.clone(),
+                })
+            }
+            _ => Err(anyhow::anyhow!("Expression not implemented: {:?}", expr)),
         }
     }
     
@@ -127,14 +382,38 @@ impl VM {
         let left_val = self.execute_expression(left)?;
         let right_val = self.execute_expression(right)?;
         
+        // Type checking in strict mode
+        if self.strict_types {
+            self.check_binary_op_types(&left_val, op, &right_val)?;
+        }
+        
         match op {
             BinaryOp::Add => self.add_values(left_val, right_val),
             BinaryOp::Sub => self.sub_values(left_val, right_val),
             BinaryOp::Mul => self.mul_values(left_val, right_val),
             BinaryOp::Div => self.div_values(left_val, right_val),
+            BinaryOp::Mod => self.mod_values(left_val, right_val),
             BinaryOp::Eq => Ok(Value::Bool(self.values_equal(left_val, right_val))),
             BinaryOp::Neq => Ok(Value::Bool(!self.values_equal(left_val, right_val))),
+            BinaryOp::Gt => self.gt_values(left_val, right_val),
+            BinaryOp::Lt => self.lt_values(left_val, right_val),
+            BinaryOp::Gte => self.gte_values(left_val, right_val),
+            BinaryOp::Lte => self.lte_values(left_val, right_val),
+            BinaryOp::And => Ok(Value::Bool(left_val.is_truthy() && right_val.is_truthy())),
+            BinaryOp::Or => Ok(Value::Bool(left_val.is_truthy() || right_val.is_truthy())),
             _ => Err(anyhow::anyhow!("Operator not implemented: {:?}", op)),
+        }
+    }
+    
+    /// Execute unary operation
+    fn execute_unary_op(&mut self, op: &UnaryOp, expr: &Expr) -> Result<Value> {
+        let value = self.execute_expression(expr)?;
+        
+        match op {
+            UnaryOp::Plus => self.plus_value(value),
+            UnaryOp::Minus => self.minus_value(value),
+            UnaryOp::Not => Ok(Value::Bool(!value.is_truthy())),
+            UnaryOp::BitNot => self.bitnot_value(value),
         }
     }
     
@@ -148,13 +427,16 @@ impl VM {
         let arg_values = arg_values?;
         
         match callee_val {
-            Value::Function(name, params) => {
-                self.call_function(&name, &params, arg_values)
+            Value::Function(name, params, body) => {
+                self.call_user_function(&name, &params, body, arg_values)
+            }
+            Value::BuiltinFunction(_, func) => {
+                func(arg_values)
             }
             Value::NativeFunction(func) => {
                 func(arg_values)
             }
-            _ => Err(anyhow::anyhow!("Not a function: {:?}", callee_val)),
+            _ => Err(anyhow::anyhow!("Not a function: {}", callee_val.type_name())),
         }
     }
     
@@ -171,63 +453,169 @@ impl VM {
         }
     }
     
-    /// Call a function
-    fn call_function(&mut self, name: &str, params: &[String], args: Vec<Value>) -> Result<Value> {
-        // Handle built-in functions
-        match name {
-            "print" => {
-                for arg in args {
-                    print_value(&arg);
+    /// Execute if statement
+    fn execute_if_statement(
+        &mut self,
+        condition: &Expr,
+        then_branch: &[Stmt],
+        elif_branches: &[(Expr, Vec<Stmt>)],
+        else_branch: &Option<Vec<Stmt>>,
+    ) -> Result<Option<Value>> {
+        let cond_value = self.execute_expression(condition)?;
+        
+        if cond_value.is_truthy() {
+            self.enter_scope("block");
+            for stmt in then_branch {
+                self.execute_statement(stmt)?;
+                if self.should_return {
+                    break;
                 }
-                println!();
-                Ok(Value::None)
             }
-            "malloc" => {
-                // Manual memory allocation example
-                if let Some(arg) = args.first() {
-                    if let Value::Int(size) = arg {
-                        // Allocate manual memory
-                        let manual_value = Value::Int(0); // Placeholder
-                        let managed = self.memory.manual(manual_value);
-                        Ok(Value::ManagedPtr(managed))
-                    } else {
-                        Err(anyhow::anyhow!("malloc requires integer size"))
+            self.exit_scope();
+        } else {
+            // Check elif branches
+            let mut matched = false;
+            for (elif_cond, elif_body) in elif_branches {
+                let elif_value = self.execute_expression(elif_cond)?;
+                if elif_value.is_truthy() {
+                    self.enter_scope("block");
+                    for stmt in elif_body {
+                        self.execute_statement(stmt)?;
+                        if self.should_return {
+                            break;
+                        }
                     }
-                } else {
-                    Err(anyhow::anyhow!("malloc requires size argument"))
+                    self.exit_scope();
+                    matched = true;
+                    break;
                 }
             }
-            "free" => {
-                // Manual memory deallocation
-                if let Some(Value::ManagedPtr(ptr)) = args.first() {
-                    // In real implementation, we'd free the memory
-                    Ok(Value::None)
-                } else {
-                    Err(anyhow::anyhow!("free requires managed pointer"))
+            
+            // Execute else branch if no elif matched
+            if !matched {
+                if let Some(else_body) = else_branch {
+                    self.enter_scope("block");
+                    for stmt in else_body {
+                        self.execute_statement(stmt)?;
+                        if self.should_return {
+                            break;
+                        }
+                    }
+                    self.exit_scope();
                 }
-            }
-            _ => {
-                // User-defined function
-                self.call_user_function(name, params, args)
             }
         }
+        
+        Ok(None)
     }
     
-    /// Call user-defined function (simplified)
-    fn call_user_function(&mut self, name: &str, params: &[String], args: Vec<Value>) -> Result<Value> {
-        // Enter new scope
-        self.enter_scope();
+    /// Execute while statement
+    fn execute_while_statement(&mut self, condition: &Expr, body: &[Stmt]) -> Result<Option<Value>> {
+        while {
+            let cond_value = self.execute_expression(condition)?;
+            cond_value.is_truthy()
+        } {
+            self.enter_scope("block");
+            for stmt in body {
+                self.execute_statement(stmt)?;
+                if self.should_return {
+                    self.exit_scope();
+                    return Ok(None);
+                }
+            }
+            self.exit_scope();
+        }
+        
+        Ok(None)
+    }
+    
+    /// Execute for statement
+    fn execute_for_statement(&mut self, variable: &str, iterable: &Expr, body: &[Stmt]) -> Result<Option<Value>> {
+        let iter_value = self.execute_expression(iterable)?;
+        
+        let items = match iter_value {
+            Value::List(items) => items,
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+            _ => return Err(anyhow::anyhow!("'{}' object is not iterable", iter_value.type_name())),
+        };
+        
+        for item in items {
+            self.enter_scope("block");
+            self.set_variable(variable, item);
+            
+            for stmt in body {
+                self.execute_statement(stmt)?;
+                if self.should_return {
+                    self.exit_scope();
+                    return Ok(None);
+                }
+            }
+            
+            self.exit_scope();
+        }
+        
+        Ok(None)
+    }
+    
+    /// Execute import statement
+    fn execute_import_statement(&mut self, module: &str, alias: Option<&str>) -> Result<Option<Value>> {
+        let name = alias.unwrap_or(module);
+        
+        // For now, create a mock module object
+        let module_obj = Value::Object(module.to_string(), HashMap::new());
+        self.set_variable(name, module_obj);
+        
+        Ok(None)
+    }
+    
+    /// Execute extern statement
+    fn execute_extern_statement(&mut self, library: &str) -> Result<Option<Value>> {
+        println!("Loading external library: {}", library);
+        // Actual library loading would be implemented here
+        Ok(None)
+    }
+    
+    /// Call user-defined function
+    fn call_user_function(&mut self, name: &str, params: &[String], body: Vec<Stmt>, args: Vec<Value>) -> Result<Value> {
+        if params.len() != args.len() {
+            return Err(anyhow::anyhow!("Function {} expects {} arguments, got {}", 
+                name, params.len(), args.len()));
+        }
+        
+        // Push new stack frame
+        self.call_stack.push(StackFrame {
+            function_name: name.to_string(),
+            return_address: self.current_scope,
+            scope_index: self.current_scope,
+        });
+        
+        // Enter function scope
+        self.enter_scope("function");
         
         // Set parameters
         for (param, arg) in params.iter().zip(args) {
             self.set_variable(param, arg);
         }
         
-        // In real implementation, we'd execute the function body
-        let result = Value::None;
+        // Execute function body
+        let mut result = Value::None;
+        for stmt in body {
+            if let Some(value) = self.execute_statement(&stmt)? {
+                result = value;
+            }
+            
+            if self.should_return {
+                result = self.return_value.take().unwrap_or(Value::None);
+                self.should_return = false;
+                break;
+            }
+        }
         
-        // Exit scope
+        // Exit function scope
         self.exit_scope();
+        
+        // Pop stack frame
+        self.call_stack.pop();
         
         Ok(result)
     }
@@ -236,12 +624,10 @@ impl VM {
     
     /// Allocate value with automatic memory management
     pub fn allocate_auto(&self, value: Value) -> Value {
-        Value::ManagedPtr(self.memory.auto(value))
-    }
-    
-    /// Allocate value with manual memory management
-    pub fn allocate_manual(&self, value: Value) -> Value {
-        Value::ManagedPtr(self.memory.manual(value))
+        Value::TypedValue {
+            value: Box::new(value),
+            type_info: Type::Any,
+        }
     }
     
     /// Force garbage collection
@@ -251,15 +637,16 @@ impl VM {
     
     /// Get memory statistics
     pub fn memory_stats(&self) -> String {
-        format!("{:?}", self.memory.stats())
+        format!("Memory: {}", self.memory.stats())
     }
     
     // --- Scope Management ---
     
-    fn enter_scope(&mut self) {
+    fn enter_scope(&mut self, scope_type: &str) {
         let new_scope = Scope {
             variables: HashMap::new(),
             parent: Some(self.current_scope),
+            scope_type: scope_type.to_string(),
         };
         self.scopes.push(new_scope);
         self.current_scope = self.scopes.len() - 1;
@@ -296,8 +683,15 @@ impl VM {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + b as f64)),
             (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
             (Value::String(a), Value::Int(b)) => Ok(Value::String(a + &b.to_string())),
+            (Value::String(a), Value::Float(b)) => Ok(Value::String(a + &b.to_string())),
+            (Value::List(mut a), Value::List(b)) => {
+                a.extend(b);
+                Ok(Value::List(a))
+            }
             _ => Err(anyhow::anyhow!("Invalid types for addition")),
         }
     }
@@ -306,6 +700,8 @@ impl VM {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 - b)),
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a - b as f64)),
             _ => Err(anyhow::anyhow!("Invalid types for subtraction")),
         }
     }
@@ -314,6 +710,16 @@ impl VM {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 * b)),
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * b as f64)),
+            (Value::String(a), Value::Int(b)) => Ok(Value::String(a.repeat(b as usize))),
+            (Value::List(a), Value::Int(b)) => {
+                let mut result = Vec::new();
+                for _ in 0..b {
+                    result.extend(a.clone());
+                }
+                Ok(Value::List(result))
+            }
             _ => Err(anyhow::anyhow!("Invalid types for multiplication")),
         }
     }
@@ -324,7 +730,7 @@ impl VM {
                 if b == 0 {
                     Err(anyhow::anyhow!("Division by zero"))
                 } else {
-                    Ok(Value::Int(a / b))
+                    Ok(Value::Float(a as f64 / b as f64))
                 }
             }
             (Value::Float(a), Value::Float(b)) => {
@@ -334,7 +740,74 @@ impl VM {
                     Ok(Value::Float(a / b))
                 }
             }
+            (Value::Int(a), Value::Float(b)) => {
+                if b == 0.0 {
+                    Err(anyhow::anyhow!("Division by zero"))
+                } else {
+                    Ok(Value::Float(a as f64 / b))
+                }
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                if b == 0 {
+                    Err(anyhow::anyhow!("Division by zero"))
+                } else {
+                    Ok(Value::Float(a / b as f64))
+                }
+            }
             _ => Err(anyhow::anyhow!("Invalid types for division")),
+        }
+    }
+    
+    fn mod_values(&self, left: Value, right: Value) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => {
+                if b == 0 {
+                    Err(anyhow::anyhow!("Division by zero"))
+                } else {
+                    Ok(Value::Int(a % b))
+                }
+            }
+            _ => Err(anyhow::anyhow!("Invalid types for modulo")),
+        }
+    }
+    
+    fn gt_values(&self, left: Value, right: Value) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a > b)),
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((a as f64) > b)),
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(a > b as f64)),
+            _ => Err(anyhow::anyhow!("Invalid types for comparison")),
+        }
+    }
+    
+    fn lt_values(&self, left: Value, right: Value) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a < b)),
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((a as f64) < b)),
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(a < b as f64)),
+            _ => Err(anyhow::anyhow!("Invalid types for comparison")),
+        }
+    }
+    
+    fn gte_values(&self, left: Value, right: Value) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a >= b)),
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((a as f64) >= b)),
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(a >= b as f64)),
+            _ => Err(anyhow::anyhow!("Invalid types for comparison")),
+        }
+    }
+    
+    fn lte_values(&self, left: Value, right: Value) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a <= b)),
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((a as f64) <= b)),
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(a <= b as f64)),
+            _ => Err(anyhow::anyhow!("Invalid types for comparison")),
         }
     }
     
@@ -349,49 +822,184 @@ impl VM {
         }
     }
     
-    // --- Built-in Examples ---
+    fn plus_value(&self, value: Value) -> Result<Value> {
+        match value {
+            Value::Int(n) => Ok(Value::Int(n)),
+            Value::Float(n) => Ok(Value::Float(n)),
+            _ => Err(anyhow::anyhow!("Invalid type for unary plus")),
+        }
+    }
     
-    fn execute_builtin_example(&mut self) -> Result<Value> {
-        // Demonstrate automatic vs manual memory management
-        println!("=== TauraroLang Memory Management Demo ===");
+    fn minus_value(&self, value: Value) -> Result<Value> {
+        match value {
+            Value::Int(n) => Ok(Value::Int(-n)),
+            Value::Float(n) => Ok(Value::Float(-n)),
+            _ => Err(anyhow::anyhow!("Invalid type for unary minus")),
+        }
+    }
+    
+    fn bitnot_value(&self, value: Value) -> Result<Value> {
+        match value {
+            Value::Int(n) => Ok(Value::Int(!n)),
+            _ => Err(anyhow::anyhow!("Invalid type for bitwise not")),
+        }
+    }
+    
+    fn check_binary_op_types(&self, left: &Value, op: &BinaryOp, right: &Value) -> Result<()> {
+        match op {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                if !matches!((left, right), 
+                    (Value::Int(_), Value::Int(_)) |
+                    (Value::Float(_), Value::Float(_)) |
+                    (Value::Int(_), Value::Float(_)) |
+                    (Value::Float(_), Value::Int(_)) |
+                    (Value::String(_), Value::String(_)) |
+                    (Value::String(_), Value::Int(_)) |
+                    (Value::String(_), Value::Float(_)) |
+                    (Value::List(_), Value::List(_))
+                ) {
+                    return Err(anyhow::anyhow!("Invalid types for arithmetic operation: {} and {}", 
+                        left.type_name(), right.type_name()));
+                }
+            }
+            BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Gt | BinaryOp::Lt | BinaryOp::Gte | BinaryOp::Lte => {
+                if !matches!((left, right), 
+                    (Value::Int(_), Value::Int(_)) |
+                    (Value::Float(_), Value::Float(_)) |
+                    (Value::Int(_), Value::Float(_)) |
+                    (Value::Float(_), Value::Int(_)) |
+                    (Value::Bool(_), Value::Bool(_)) |
+                    (Value::String(_), Value::String(_)) |
+                    (Value::None, Value::None)
+                ) {
+                    return Err(anyhow::anyhow!("Invalid types for comparison: {} and {}", 
+                        left.type_name(), right.type_name()));
+                }
+            }
+            BinaryOp::And | BinaryOp::Or => {
+                if !matches!((left, right), (Value::Bool(_), Value::Bool(_))) {
+                    return Err(anyhow::anyhow!("Logical operations require boolean operands"));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    
+    // --- Built-in Functions ---
+    
+    fn init_builtins(&mut self) {
+        let builtins: Vec<(&str, fn(Vec<Value>) -> Result<Value>)> = vec![
+            ("print", Self::builtin_print),
+            ("len", Self::builtin_len),
+            ("type", Self::builtin_type),
+            ("str", Self::builtin_str),
+            ("int", Self::builtin_int),
+            ("float", Self::builtin_float),
+            ("bool", Self::builtin_bool),
+            ("range", Self::builtin_range),
+        ];
         
-        // Automatic memory management (default)
-        println!("\n1. Automatic Memory Management:");
-        let auto_value = self.allocate_auto(Value::String("Hello Auto".to_string()));
-        println!("Allocated automatic value: {:?}", auto_value);
-        // No need to free - automatically managed
-        
-        // Manual memory management (explicit control)
-        println!("\n2. Manual Memory Management:");
-        let manual_value = self.allocate_manual(Value::String("Hello Manual".to_string()));
-        println!("Allocated manual value: {:?}", manual_value);
-        // Developer must free this explicitly
-        
-        // Show memory statistics
-        println!("\n3. Memory Statistics:");
-        println!("{}", self.memory_stats());
-        
+        for (name, func) in builtins {
+            self.set_variable(name, Value::BuiltinFunction(name.to_string(), func));
+        }
+    }
+    
+    fn builtin_print(args: Vec<Value>) -> Result<Value> {
+        let output: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        println!("{}", output.join(" "));
         Ok(Value::None)
     }
-}
-
-/// Print value helper function
-fn print_value(value: &Value) {
-    match value {
-        Value::Int(n) => print!("{}", n),
-        Value::Float(n) => print!("{}", n),
-        Value::Bool(b) => print!("{}", b),
-        Value::String(s) => print!("{}", s),
-        Value::None => print!("None"),
-        Value::List(items) => {
-            print!("[");
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 { print!(", "); }
-                print_value(item);
-            }
-            print!("]");
+    
+    fn builtin_len(args: Vec<Value>) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(anyhow::anyhow!("len() takes exactly one argument"));
         }
-        Value::ManagedPtr(_) => print!("<managed pointer>"),
-        _ => print!("<complex value>"),
+        
+        match &args[0] {
+            Value::String(s) => Ok(Value::Int(s.len() as i64)),
+            Value::List(items) => Ok(Value::Int(items.len() as i64)),
+            Value::Dict(dict) => Ok(Value::Int(dict.len() as i64)),
+            _ => Err(anyhow::anyhow!("object of type '{}' has no len()", args[0].type_name())),
+        }
+    }
+    
+    fn builtin_type(args: Vec<Value>) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(anyhow::anyhow!("type() takes exactly one argument"));
+        }
+        
+        Ok(Value::String(args[0].type_name().to_string()))
+    }
+    
+    fn builtin_str(args: Vec<Value>) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(anyhow::anyhow!("str() takes exactly one argument"));
+        }
+        
+        Ok(Value::String(args[0].to_string()))
+    }
+    
+    fn builtin_int(args: Vec<Value>) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(anyhow::anyhow!("int() takes exactly one argument"));
+        }
+        
+        match &args[0] {
+            Value::Int(n) => Ok(Value::Int(*n)),
+            Value::Float(n) => Ok(Value::Int(*n as i64)),
+            Value::String(s) => {
+                if let Ok(n) = s.parse::<i64>() {
+                    Ok(Value::Int(n))
+                } else {
+                    Err(anyhow::anyhow!("invalid literal for int(): '{}'", s))
+                }
+            }
+            Value::Bool(b) => Ok(Value::Int(if *b { 1 } else { 0 })),
+            _ => Err(anyhow::anyhow!("cannot convert '{}' to int", args[0].type_name())),
+        }
+    }
+    
+    fn builtin_float(args: Vec<Value>) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(anyhow::anyhow!("float() takes exactly one argument"));
+        }
+        
+        match &args[0] {
+            Value::Int(n) => Ok(Value::Float(*n as f64)),
+            Value::Float(n) => Ok(Value::Float(*n)),
+            Value::String(s) => {
+                if let Ok(n) = s.parse::<f64>() {
+                    Ok(Value::Float(n))
+                } else {
+                    Err(anyhow::anyhow!("invalid literal for float(): '{}'", s))
+                }
+            }
+            Value::Bool(b) => Ok(Value::Float(if *b { 1.0 } else { 0.0 })),
+            _ => Err(anyhow::anyhow!("cannot convert '{}' to float", args[0].type_name())),
+        }
+    }
+    
+    fn builtin_bool(args: Vec<Value>) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(anyhow::anyhow!("bool() takes exactly one argument"));
+        }
+        
+        Ok(Value::Bool(args[0].is_truthy()))
+    }
+    
+    fn builtin_range(args: Vec<Value>) -> Result<Value> {
+        let (start, end) = match args.len() {
+            1 => (0, Self::builtin_int(vec![args[0].clone())?),
+            2 => (Self::builtin_int(vec![args[0].clone())?, Self::builtin_int(vec![args[1].clone())?),
+            _ => return Err(anyhow::anyhow!("range() takes 1 or 2 arguments")),
+        };
+        
+        if let (Value::Int(start), Value::Int(end)) = (start, end) {
+            let items: Vec<Value> = (start..end).map(Value::Int).collect();
+            Ok(Value::List(items))
+        } else {
+            Err(anyhow::anyhow!("range() arguments must be integers"))
+        }
     }
 }
