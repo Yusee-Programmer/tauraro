@@ -1,80 +1,100 @@
+//! Lexical analysis for TauraroLang - Tokenizes source code into tokens
 use logos::Logos;
+use std::fmt;
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 pub enum Token {
     // --- Keywords (English + Hausa) ---
-    #[token("func")] #[token("aiki")]
-    Func,
+    #[token("func")] 
+    #[token("aiki")]  // Hausa: function/work
+    KwFunc,
 
-    #[token("class")] #[token("irin")]
-    Class,
+    #[token("class")] 
+    #[token("iri")]   // Hausa: type/kind
+    KwClass,
 
-    #[token("if")] #[token("idan")]
-    If,
+    #[token("if")] 
+    #[token("idan")]  // Hausa: if
+    KwIf,
 
-    #[token("elif")] #[token("idan kuma")]
-    Elif,
+    #[token("elif")] 
+    KwElif,
+    
+    #[token("else")] 
+    #[token("sai")]   // Hausa: else/otherwise
+    KwElse,
 
-    #[token("else")] #[token("akasi")]
-    Else,
+    #[token("for")] 
+    #[token("don")]   // Hausa: for
+    KwFor,
 
-    #[token("for")] #[token("duk")]
-    For,
+    #[token("while")] 
+    #[token("yayin")] // Hausa: while/during
+    KwWhile,
 
-    #[token("while")] #[token("yayinda")]
-    While,
+    #[token("return")] 
+    #[token("mayar")] // Hausa: return
+    KwReturn,
 
-    #[token("return")] #[token("maido")]
-    Return,
+    #[token("break")] 
+    #[token("tsaya")] // Hausa: stop
+    KwBreak,
 
-    #[token("break")] #[token("tsaya")]
-    Break,
+    #[token("continue")] 
+    #[token("cigaba")] // Hausa: continue
+    KwContinue,
 
-    #[token("continue")] #[token("cigaba")]
-    Continue,
+    #[token("import")] 
+    #[token("shigo")] // Hausa: import/enter
+    KwImport,
 
-    #[token("import")] #[token("shigoda")]
-    Import,
+    #[token("from")] 
+    #[token("daga")]  // Hausa: from
+    KwFrom,
 
-    #[token("from")] #[token("daga")]
-    From,
-
-    #[token("as")] #[token("amatsayin")]
-    As,
+    #[token("as")] 
+    #[token("kamar")] // Hausa: as/like
+    KwAs,
 
     #[token("extern")]
-    Extern,
+    KwExtern,
 
     #[token("export")]
-    Export,
+    KwExport,
 
     #[token("async")]
-    Async,
+    KwAsync,
 
-    #[token("await")] #[token("jira")]
-    Await,
+    #[token("await")] 
+    #[token("jira")]  // Hausa: wait
+    KwAwait,
 
     // --- Literals ---
-    #[regex("[0-9]+", |lex| lex.slice().parse())]
+    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
     Int(i64),
 
-    #[regex("[0-9]+\\.[0-9]+", |lex| lex.slice().parse())]
+    #[regex(r"[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?", |lex| lex.slice().parse::<f64>().ok())]
     Float(f64),
 
-    #[regex(r#""([^"\\]|\\.)*""#, |lex| lex.slice().to_string())]
-    String(String),
+    // String literals with escape sequences
+    #[regex(r#""([^"\\]|\\.)*""#, |lex| unescape_string(lex.slice()))]
+    #[regex(r#"'([^'\\]|\\.)*'"#, |lex| unescape_string(lex.slice()))]
+    StringLit(String),
 
-    #[token("true")] #[token("gaskiyane")]
+    #[token("true")] 
+    #[token("gaskiya")] // Hausa: truth
     True,
 
-    #[token("false")] #[token("karyane")]
+    #[token("false")] 
+    #[token("karya")]  // Hausa: falsehood
     False,
 
-    #[token("none")] #[token("babu")]
+    #[token("none")] 
+    #[token("babu")]   // Hausa: nothing
     None,
 
     // --- Identifiers ---
-    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
+    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
     Identifier(String),
 
     // --- Operators ---
@@ -86,7 +106,16 @@ pub enum Token {
     #[token("**")] Power,
     #[token("//")] FloorDiv,
 
-    #[token("=")] Assign,
+    // Compound assignment
+    #[token("+=")] PlusEq,
+    #[token("-=")] MinusEq,
+    #[token("*=")] StarEq,
+    #[token("/=")] SlashEq,
+    #[token("%=")] PercentEq,
+    #[token("**=")] PowerEq,
+    #[token("//=")] FloorDivEq,
+
+    // Comparison
     #[token("==")] Eq,
     #[token("!=")] Neq,
     #[token(">")] Gt,
@@ -94,21 +123,31 @@ pub enum Token {
     #[token(">=")] Gte,
     #[token("<=")] Lte,
 
-    #[token("and")] #[token("dakuma")]
+    // Logical
+    #[token("and")] 
+    #[token("da")]  // Hausa: and
     And,
-
-    #[token("or")] #[token("kokuma")]
+    
+    #[token("or")] 
+    #[token("ko")]  // Hausa: or
     Or,
-
-    #[token("not")] #[token("ba")]
+    
+    #[token("not")] 
+    #[token("ba")]  // Hausa: not
     Not,
 
+    // Bitwise
     #[token("&")] BitAnd,
     #[token("|")] BitOr,
     #[token("^")] BitXor,
     #[token("~")] BitNot,
     #[token("<<")] Shl,
     #[token(">>")] Shr,
+
+    // Type and flow
+    #[token("->")] Arrow,
+    #[token("..")] DotDot,
+    #[token("...")] DotDotDot,
 
     // --- Delimiters ---
     #[token("(")] LParen,
@@ -122,8 +161,155 @@ pub enum Token {
     #[token(",")] Comma,
     #[token(".")] Dot,
 
-    // --- Skip whitespace/comments ---
-    #[regex(r"[ \t\n\f]+", logos::skip)]
-    #[regex(r"#.*", logos::skip)]
+    // --- Special ---
+    #[token("@")] At,      // Decorators
+    #[token("$")] Dollar,  // String interpolation
+
+    // --- Whitespace and comments ---
+    #[regex(r"[ \t\r]+", logos::skip)]
+    #[regex(r"#.*", logos::skip)]  // Line comments
+    
+    // Error variant
     Error,
+}
+
+/// Lexer error type
+#[derive(Debug, Clone, PartialEq)]
+pub struct LexError {
+    pub message: String,
+    pub position: usize,
+}
+
+impl fmt::Display for LexError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Lex error at position {}: {}", self.position, self.message)
+    }
+}
+
+/// Unescape string literals (remove quotes and process escape sequences)
+fn unescape_string(s: &str) -> Option<String> {
+    let content = &s[1..s.len()-1];  // Remove surrounding quotes
+    let mut result = String::new();
+    let mut chars = content.chars().peekable();
+    let mut position = 1;  // Start after opening quote
+    
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            position += 1;
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('r') => result.push('\r'),
+                Some('"') => result.push('"'),
+                Some('\'') => result.push('\''),
+                Some('\\') => result.push('\\'),
+                Some('x') => {
+                    // Hex escape: \xXX
+                    let hex_str: String = chars.by_ref().take(2).collect();
+                    if hex_str.len() == 2 {
+                        if let Ok(val) = u8::from_str_radix(&hex_str, 16) {
+                            result.push(val as char);
+                            position += 2;
+                        }
+                    }
+                }
+                Some(c) => {
+                    // Invalid escape sequence
+                    return None;
+                }
+                None => return None,  // Unclosed escape
+            }
+            position += 1;
+        } else {
+            result.push(ch);
+            position += 1;
+        }
+    }
+    Some(result)
+}
+
+/// Enhanced Lexer with error handling and position tracking
+pub struct Lexer<'a> {
+    inner: logos::Lexer<'a, Token>,
+}
+
+impl<'a> Lexer<'a> {
+    pub fn new(source: &'a str) -> Self {
+        Self {
+            inner: Token::lexer(source),
+        }
+    }
+    
+    /// Get current position in source
+    pub fn position(&self) -> usize {
+        self.inner.span().start
+    }
+    
+    /// Get current line and column
+    pub fn line_col(&self) -> (usize, usize) {
+        let span = self.inner.span();
+        let source = self.inner.source();
+        let line = source[..span.start].chars().filter(|&c| c == '\n').count() + 1;
+        let col = span.start - source[..span.start].rfind('\n').unwrap_or(0);
+        (line, col)
+    }
+}
+
+impl<'a> Iterator for Lexer<'a> {
+    type Item = Result<Token, LexError>;
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.inner.next() {
+            Some(Ok(token)) => Some(Ok(token)),
+            Some(Err(_)) => {
+                let pos = self.position();
+                Some(Err(LexError {
+                    message: "Invalid token".to_string(),
+                    position: pos,
+                }))
+            }
+            None => None,
+        }
+    }
+}
+
+// Utility methods for tokens
+impl Token {
+    /// Check if token is a keyword
+    pub fn is_keyword(&self) -> bool {
+        matches!(self,
+            Token::KwFunc | Token::KwClass | Token::KwIf |
+            Token::KwElse | Token::KwFor | Token::KwWhile |
+            Token::KwReturn | Token::KwBreak | Token::KwContinue |
+            Token::KwImport | Token::KwFrom | Token::KwAs |
+            Token::KwExtern | Token::KwExport | Token::KwAsync |
+            Token::KwAwait | Token::KwElif
+        )
+    }
+    
+    /// Get Hausa equivalent for keyword tokens
+    pub fn to_hausa(&self) -> Option<&'static str> {
+        match self {
+            Token::KwFunc => Some("aiki"),
+            Token::KwClass => Some("iri"),
+            Token::KwIf => Some("idan"),
+            Token::KwElse => Some("sai"),
+            Token::KwFor => Some("don"),
+            Token::KwWhile => Some("yayin"),
+            Token::KwReturn => Some("mayar"),
+            Token::KwBreak => Some("tsaya"),
+            Token::KwContinue => Some("cigaba"),
+            Token::KwImport => Some("shigo"),
+            Token::KwFrom => Some("daga"),
+            Token::KwAs => Some("kamar"),
+            Token::KwAwait => Some("jira"),
+            Token::True => Some("gaskiya"),
+            Token::False => Some("karya"),
+            Token::None => Some("babu"),
+            Token::And => Some("da"),
+            Token::Or => Some("ko"),
+            Token::Not => Some("ba"),
+            _ => None,
+        }
+    }
 }
