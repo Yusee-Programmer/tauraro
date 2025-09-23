@@ -1,5 +1,7 @@
 //! COMPLETE Python interoperability for TauraroLang
 use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
+use pyo3::{Python, PyObject, PyResult, PyModule, PyErr};
 use pyo3::types::{PyDict, PyList, PyTuple};
 use anyhow::Result;
 use std::collections::HashMap;

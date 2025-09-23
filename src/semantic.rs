@@ -1,4 +1,5 @@
 //! COMPLETE semantic analysis with optional static typing
+use std::fmt;
 use crate::ast::*;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
@@ -658,7 +659,7 @@ impl SemanticAnalyzer {
     fn check_binary_op_type(&self, left_type: &Type, op: &BinaryOp, right_type: &Type) -> Result<Type> {
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                if left_type == Type::Int && right_type == Type::Int {
+                if *left_type == Type::Int && *right_type == Type::Int {
                     Ok(Type::Int)
                 } else if matches!(left_type, Type::Int | Type::Float) && 
                           matches!(right_type, Type::Int | Type::Float) {
@@ -677,7 +678,7 @@ impl SemanticAnalyzer {
                 }
             }
             BinaryOp::And | BinaryOp::Or => {
-                if left_type == Type::Bool && right_type == Type::Bool {
+                if *left_type == Type::Bool && *right_type == Type::Bool {
                     Ok(Type::Bool)
                 } else {
                     Err(anyhow!("Logical operation requires boolean operands"))
@@ -728,6 +729,7 @@ impl SemanticAnalyzer {
             self.add_symbol(name.to_string(), const_type, false, Span::unknown(), true).unwrap();
         }
     }
+
 }
 
 // Error reporting

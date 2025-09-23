@@ -1,6 +1,6 @@
 //! COMPLETE TauraroLang Runtime - Innovative memory management with automatic GC and optional manual control
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, OnceLock};
 use std::ptr;
 use std::any::Any;
 
@@ -517,14 +517,23 @@ impl MemoryAPI {
 
 // Thread-safe global runtime
 lazy_static::lazy_static! {
-    pub static ref GLOBAL_RUNTIME: Arc<Runtime> = Arc::new(Runtime::new());
-    pub static ref GLOBAL_MEMORY_API: MemoryAPI = MemoryAPI::new();
+    // Thread-safe global runtime using OnceLock
+    static GLOBAL_RUNTIME: OnceLock<Arc<Runtime>> = OnceLock::new();
+    static GLOBAL_MEMORY_API: OnceLock<MemoryAPI> = OnceLock::new();
+
+    pub fn get_global_runtime() -> Arc<Runtime> {
+        GLOBAL_RUNTIME.get_or_init(|| Arc::new(Runtime::new())).clone()
+    }
+
+    pub fn get_global_memory_api() -> MemoryAPI {
+        GLOBAL_MEMORY_API.get_or_init(|| MemoryAPI::new()).clone()
+    }
 }
 
 // Safe conversion traits for common types
 impl<T> From<T> for ManagedPtr<T> {
     fn from(value: T) -> Self {
-        GLOBAL_MEMORY_API.auto(value)
+        get_global_memory_api().auto(value)
     }
 }
 

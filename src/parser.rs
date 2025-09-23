@@ -96,7 +96,7 @@ impl Parser {
     }
 
     /// Parse a statement
-    fn parse_statement(&mut self) -> Result<Stmt> {
+    pub fn parse_statement(&mut self) -> Result<Stmt> {
         let token = self.current_token.clone().ok_or_else(|| self.error("Unexpected end of input"))?;
         
         match token {

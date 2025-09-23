@@ -11,28 +11,24 @@ keywords = ["programming-language", "compiler", "vm", "python-interop"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-# Core dependencies
+# Core
 anyhow = "1.0"
 thiserror = "1.0"
+log = "0.4"
+env_logger = "0.10"
+lazy_static = "1.4"
 
-# Lexing and parsing
+# Lexing / Parsing
 logos = "0.13"
-lalrpop = { version = "0.19", optional = true }
 
-# Code generation
-inkwell = { version = "0.4", features = ["llvm12-0"] }
-llvm-sys = "160"
+# LLVM backend
+inkwell = { version = "0.4", features = ["llvm17-0"], optional = true }
+llvm-sys = { version = "170", optional = true }
 
-# WebAssembly
-wasmtime = { version = "8", optional = true }
-cranelift = { version = "0.95", optional = true }
-
-# CLI and user interface
+# CLI
 clap = { version = "4.4", features = ["derive", "env"] }
-dialoguer = { version = "0.11", optional = true }
-syntect = { version = "5.0", optional = true }
 
-# FFI and interoperability
+# Interop
 libloading = "0.8"
 pyo3 = { version = "0.26", features = ["extension-module"], optional = true }
 
@@ -41,25 +37,7 @@ regex = "1.10"
 indexmap = "2.0"
 once_cell = "1.18"
 num-traits = "0.2"
-num-bigint = { version = "0.4", optional = true }
-chrono = { version = "0.4", features = ["serde"], optional = true }
-
-# Memory and performance
-crossbeam = { version = "0.8", optional = true }
-rayon = { version = "1.7", optional = true }
-
-# Serialization
-serde = { version = "1.0", features = ["derive"], optional = true }
-serde_json = { version = "1.0", optional = true }
-toml = { version = "0.8", optional = true }
-
-# Logging and debugging
-log = "0.4"
-env_logger = "0.10"
-colored = "2.1"
-
-# Async support
-tokio = { version = "1.0", features = ["full"], optional = true }
+winapi = "0.3.9"
 
 [dev-dependencies]
 tempfile = "3.8"
@@ -68,34 +46,29 @@ predicates = "3.0"
 serial_test = "2.0"
 criterion = { version = "0.5", features = ["html_reports"] }
 
-[build-dependencies]
-lazy_static = "1.4"
-
 [features]
 default = ["cli", "basic-repl"]
 
-# Backend features
-llvm = []  # LLVM is always enabled now
-wasm = ["wasmtime"]
-cranelift-backend = ["cranelift"]
+# Backends
+llvm-native = ["inkwell", "llvm-sys"]
 
-# Component features
+# Components
 cli = []
 basic-repl = []
-repl-enhanced = ["dialoguer", "syntect"]
 
-# Language features
+# Optional extensions (keep defined but not default)
+repl-enhanced = []     # dialoguer, syntect (add back later if needed)
+wasm = []              # wasmtime (add back later if needed)
 python = ["pyo3"]
-bigint = ["num-bigint"]
-datetime = ["chrono"]
-parallel = ["crossbeam", "rayon"]
-async = ["tokio"]
+bigint = []            # num-bigint
+datetime = []          # chrono
+parallel = []          # crossbeam, rayon
+async = []             # tokio
+dev = []               # serde, serde_json, toml
 
-# Development features
-dev = ["serde", "serde_json", "toml"]
 full = [
+    "llvm-native",
     "wasm",
-    "cranelift-backend",
     "repl-enhanced",
     "python",
     "bigint",
@@ -104,6 +77,7 @@ full = [
     "async",
     "dev"
 ]
+inkwell = ["dep:inkwell"]
 
 [[bin]]
 name = "tauraro"

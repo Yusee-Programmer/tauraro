@@ -18,23 +18,23 @@ pub enum Token {
     KwIf,
 
     #[token("elif")] 
-    #[token("sai idan")] // Hausa: elif
+    #[token("kokuma")] // Hausa: elif
     KwElif,
     
     #[token("else")] 
-    #[token("sai dai")]   // Hausa: else/otherwise
+    #[token("akasi")]   // Hausa: else/otherwise
     KwElse,
 
     #[token("for")] 
-    #[token("don")]   // Hausa: for
+    #[token("duk")]   // Hausa: for
     KwFor,
 
     #[token("while")] 
-    #[token("yayin")] // Hausa: while/during
+    #[token("yayinda")] // Hausa: while/during
     KwWhile,
 
     #[token("return")] 
-    #[token("mayar")] // Hausa: return
+    #[token("maido")] // Hausa: return
     KwReturn,
 
     #[token("break")] 
@@ -46,7 +46,7 @@ pub enum Token {
     KwContinue,
 
     #[token("import")] 
-    #[token("shigo")] // Hausa: import/enter
+    #[token("shigoda")] // Hausa: import/enter
     KwImport,
 
     #[token("from")] 
@@ -54,7 +54,7 @@ pub enum Token {
     KwFrom,
 
     #[token("as")] 
-    #[token("kamar")] // Hausa: as/like
+    #[token("dasunan")] // Hausa: as/like
     KwAs,
 
     #[token("extern")]
@@ -71,16 +71,21 @@ pub enum Token {
     KwAwait,
 
     #[token("true")] 
-    #[token("gaskiya")] // Hausa: truth
+    #[token("gaskiyane")] // Hausa: truth
     True,
 
     #[token("false")] 
-    #[token("karya")]  // Hausa: falsehood
+    #[token("karyane")]  // Hausa: falsehood
     False,
 
     #[token("none")] 
     #[token("babu")]   // Hausa: nothing
     None,
+
+    #[token("=")] Assign,           // Add this
+
+    #[token("in")]           // Add this
+    #[token("cikin")] KwIn,         // Alternative if needed
 
     // --- Literals ---
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
@@ -173,8 +178,6 @@ pub enum Token {
     Newline(String),
     
     // Error variant
-    #[error]
-    Error,
 }
 
 /// Lexer error type
@@ -274,7 +277,7 @@ impl<'a> Iterator for Lexer<'a> {
                 Some(Ok(token))
             }
             Some(Err(_)) => {
-                let pos = self.position();
+                let pos = self.inner.span().start;
                 Some(Err(LexError {
                     message: format!("Invalid token: '{}'", self.inner.slice()),
                     position: pos,

@@ -1,4 +1,5 @@
 //! COMPLETE Code generation utilities and shared functionality
+use crate::ir::IRInstruction;
 pub mod llvm;
 pub mod c_abi;
 pub mod wasm;

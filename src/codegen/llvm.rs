@@ -1,4 +1,5 @@
 //! COMPLETE LLVM backend for native code generation with async/await support
+use std::collections::HashMap;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;

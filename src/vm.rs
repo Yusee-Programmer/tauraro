@@ -8,6 +8,7 @@ use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::fmt;
 
 /// Dynamic value supporting optional types
 #[derive(Debug, Clone)]
@@ -990,8 +991,8 @@ impl VM {
     
     fn builtin_range(args: Vec<Value>) -> Result<Value> {
         let (start, end) = match args.len() {
-            1 => (0, Self::builtin_int(vec![args[0].clone())?),
-            2 => (Self::builtin_int(vec![args[0].clone())?, Self::builtin_int(vec![args[1].clone())?),
+            1 => (0, Self::builtin_int(vec![args[0].clone()])?),
+            2 => (Self::builtin_int(vec![args[0].clone()])?, Self::builtin_int(vec![args[1].clone()])?),
             _ => return Err(anyhow::anyhow!("range() takes 1 or 2 arguments")),
         };
         
@@ -1001,5 +1002,11 @@ impl VM {
         } else {
             Err(anyhow::anyhow!("range() arguments must be integers"))
         }
+    }
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_string())
     }
 }

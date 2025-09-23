@@ -696,7 +696,7 @@ impl IRGenerator {
     
     fn new_temp_var(&mut self) -> String {
         self.variable_count += 1;
-        format("%{}", self.variable_count)
+        format!("%{}", self.variable_count)
     }
     
     fn new_label(&mut self) -> String {
