@@ -424,7 +424,7 @@ impl SemanticAnalyzer {
                 
                 // Type checking for function calls
                 if self.enforce_types {
-                    if let Expr::Identifier(name, _) = *analyzed_callee {
+                    if let Expr::Identifier(name, _) = analyzed_callee {
                         if let Some(symbol) = self.lookup_symbol(&name) {
                             if let Type::Function(param_types, _) = &symbol.symbol_type {
                                 if param_types.len() != analyzed_args.len() {
@@ -664,7 +664,7 @@ impl SemanticAnalyzer {
                 } else if matches!(left_type, Type::Int | Type::Float) && 
                           matches!(right_type, Type::Int | Type::Float) {
                     Ok(Type::Float)
-                } else if left_type == Type::Str && right_type == Type::Str && *op == BinaryOp::Add {
+                } else if *left_type == Type::Str && *right_type == Type::Str && *op == BinaryOp::Add {
                     Ok(Type::Str) // String concatenation
                 } else {
                     Err(anyhow!("Operation {} not supported for types {} and {}", op, left_type, right_type))

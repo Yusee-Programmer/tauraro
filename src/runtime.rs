@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock, OnceLock};
 use std::ptr;
 use std::any::Any;
+use std::fmt;
 
 /// Memory management mode
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -548,5 +549,11 @@ impl<T> std::ops::Deref for ManagedPtr<T> {
 impl<T> std::ops::DerefMut for ManagedPtr<T> {
     fn deref_mut(&mut self) -> &mut T {
         self.get_mut()
+    }
+}
+
+impl fmt::Display for RuntimeStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "allocs: {}, frees: {}, total: {}", self.allocs, self.frees, self.total)
     }
 }

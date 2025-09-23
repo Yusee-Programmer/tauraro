@@ -83,7 +83,7 @@ impl WASMCodeGenerator {
     fn global_definition(&self, name: &str, ir_type: &IRType, initial_value: Option<&IRValue>) -> String {
         let wasm_type = self.ir_type_to_wasm(ir_type);
         let init_expr = if let Some(value) = initial_value {
-            format!("({}.const {})", wasm_type, self.ir_value_to_wasm(value))
+            format!("({}.const {})", wasm_type, self.value_to_wasm(value))
         } else {
             format!("({}.const 0)", wasm_type)
         };

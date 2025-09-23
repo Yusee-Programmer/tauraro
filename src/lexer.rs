@@ -131,11 +131,11 @@ pub enum Token {
 
     // Logical
     #[token("and")] 
-    #[token("da")]  // Hausa: and
+    #[token("dakuma")]  // Hausa: and
     And,
     
     #[token("or")] 
-    #[token("ko")]  // Hausa: or
+    #[token("kokuma")]  // Hausa: or
     Or,
     
     #[token("not")] 

@@ -32,7 +32,7 @@ impl CABICodeGenerator {
         // Generate function declarations
         for function in module.functions.values() {
             if function.name.starts_with("export_") || !function.name.starts_with('_') {
-                header.push_str(&self.function_to_c_declaration(function));
+                header.push_str(&function_to_c_declaration(function));
                 header.push_str(";\n");
             }
         }
