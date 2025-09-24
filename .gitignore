@@ -73,6 +73,9 @@ Thumbs.db
 /doc
 /docs/_build
 
+# Markdown files
+*.md
+
 # Coverage or profiling output
 *.profdata
 *.gcda

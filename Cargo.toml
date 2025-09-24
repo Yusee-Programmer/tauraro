@@ -1,5 +1,5 @@
 [package]
-name = "taurarolang"
+name = "tauraro"
 version = "0.1.0"
 edition = "2021"
 description = "A flexible programming language with multiple compilation backends"
