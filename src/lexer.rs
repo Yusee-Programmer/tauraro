@@ -257,7 +257,9 @@ pub enum Token {
 
     // Whitespace and comments
     #[regex(r"[ \t\r]+", logos::skip)]
-    #[regex(r"#.*", logos::skip)]  // Line comments
+    #[regex(r"#.*", logos::skip)]  // Line comments (Python-style)
+    #[regex(r#""{3}[^"]*"{3}"#, logos::skip)]  // Multiline comments/docstrings (using negative character class)
+    #[regex(r"\\\n", logos::skip)]  // Line continuation (backslash followed by newline)
     #[regex(r"\n", |_| Token::Newline)]
     Newline,
 
@@ -417,12 +419,18 @@ impl<'a> Iterator for Lexer<'a> {
                         column: self.column,
                     }))
                 } else {
-                    Some(Ok(TokenInfo {
-                        token: Token::Eof,
-                        span: (0, 0),
-                        line: self.line,
-                        column: self.column,
-                    }))
+                    // Return EOF token once, then None to end iteration
+                    if !self.at_line_start {
+                        self.at_line_start = true; // Use this as a flag to track if we've sent EOF
+                        Some(Ok(TokenInfo {
+                            token: Token::Eof,
+                            span: (0, 0),
+                            line: self.line,
+                            column: self.column,
+                        }))
+                    } else {
+                        None // End the iterator
+                    }
                 }
             }
         }

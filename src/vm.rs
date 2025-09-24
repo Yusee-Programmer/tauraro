@@ -37,12 +37,31 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::String(s) => format!("\"{}\"", s),
             Value::List(items) => {
-                let items_str: Vec<String> = items.iter().map(|v| v.to_string()).collect();
+                // Prevent infinite recursion by handling each type explicitly
+                let items_str: Vec<String> = items.iter().map(|v| match v {
+                    Value::String(s) => format!("\"{}\"", s),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(n) => format!("{:.6}", n),
+                    Value::Bool(b) => b.to_string(),
+                    Value::None => "None".to_string(),
+                    _ => "<complex value>".to_string(), // Avoid deep recursion
+                }).collect();
                 format!("[{}]", items_str.join(", "))
             }
             Value::Dict(dict) => {
+                // Prevent infinite recursion by handling each type explicitly
                 let pairs: Vec<String> = dict.iter()
-                    .map(|(k, v)| format!("{}: {}", k, v.to_string()))
+                    .map(|(k, v)| {
+                        let v_str = match v {
+                            Value::String(s) => format!("\"{}\"", s),
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(n) => format!("{:.6}", n),
+                            Value::Bool(b) => b.to_string(),
+                            Value::None => "None".to_string(),
+                            _ => "<complex value>".to_string(), // Avoid deep recursion
+                        };
+                        format!("{}: {}", k, v_str)
+                    })
                     .collect();
                 format!("{{{}}}", pairs.join(", "))
             }
@@ -58,7 +77,16 @@ impl Value {
                 format!("<{} object with {} fields>", name, fields.len())
             }
             Value::TypedValue { value, type_info } => {
-                format!("{}: {}", value.to_string(), type_info)
+                // Prevent recursion by handling the inner value safely
+                let value_str = match value.as_ref() {
+                    Value::String(s) => format!("\"{}\"", s),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(n) => format!("{:.6}", n),
+                    Value::Bool(b) => b.to_string(),
+                    Value::None => "None".to_string(),
+                    _ => "<complex value>".to_string(),
+                };
+                format!("{}: {}", value_str, type_info)
             }
         }
     }
@@ -177,7 +205,42 @@ impl VM {
         let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
         let mut parser = Parser::new(tokens);
-        let program = parser.parse_with_implicit_main()?;
+        
+        // Try to parse as a single expression first (for simple scripts like "42")
+        let program = if let Ok(program) = parser.parse() {
+            if program.statements.is_empty() {
+                // Empty program, create a simple one that returns None
+                Program {
+                    statements: vec![Statement::Expression(Expr::Literal(Literal::None))],
+                }
+            } else if program.statements.len() == 1 {
+                // Single statement - check if it's an expression or variable definition
+                match &program.statements[0] {
+                    Statement::Expression(_) | Statement::VariableDef { .. } => {
+                        program
+                    },
+                    _ => {
+                        // Reset parser and try with implicit main
+                        let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
+                            .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+                        let mut parser = Parser::new(tokens);
+                        parser.parse_with_implicit_main()?
+                    }
+                }
+            } else {
+                // Multiple statements - use implicit main
+                let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+                let mut parser = Parser::new(tokens);
+                parser.parse_with_implicit_main()?
+            }
+        } else {
+            // Parsing failed, try with implicit main
+            let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
+                .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+            let mut parser = Parser::new(tokens);
+            parser.parse_with_implicit_main()?
+        };
         
         // Optional semantic analysis based on strict mode
         let program = if self.strict_types {
@@ -371,7 +434,15 @@ impl VM {
                 for (key_expr, value_expr) in pairs {
                     let key = self.execute_expression(key_expr)?;
                     let value = self.execute_expression(value_expr)?;
-                    dict.insert(key.to_string(), value);
+                    let key_string = match &key {
+                        Value::String(s) => s.clone(),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(n) => format!("{:.6}", n),
+                        Value::Bool(b) => b.to_string(),
+                        Value::None => "None".to_string(),
+                        _ => format!("{}", key), // Use Display trait directly
+                    };
+                    dict.insert(key_string, value);
                 }
                 Ok(Value::Dict(dict))
             }
@@ -904,8 +975,14 @@ impl VM {
     }
     
     fn builtin_print(args: Vec<Value>) -> Result<Value> {
-        let output: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
-        println!("{}", output.join(" "));
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 { print!(" "); }
+            match arg {
+                Value::String(s) => print!("{}", s), // Print strings without quotes
+                _ => print!("{}", arg),
+            }
+        }
+        println!();
         Ok(Value::None)
     }
     
@@ -935,7 +1012,11 @@ impl VM {
             return Err(anyhow::anyhow!("str() takes exactly one argument"));
         }
         
-        Ok(Value::String(args[0].to_string()))
+        let string_repr = match &args[0] {
+            Value::String(s) => s.clone(), // Don't add quotes for str() conversion
+            _ => format!("{}", args[0]), // Use Display trait
+        };
+        Ok(Value::String(string_repr))
     }
     
     fn builtin_int(args: Vec<Value>) -> Result<Value> {
@@ -1063,6 +1144,68 @@ pub fn run_file(source: &str, backend: &str, optimization: u8) -> Result<()> {
 
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        match self {
+            Value::Int(n) => write!(f, "{}", n),
+            Value::Float(n) => write!(f, "{:.6}", n),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::String(s) => write!(f, "\"{}\"", s),
+            Value::List(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    // Prevent infinite recursion by handling each type explicitly
+                    match item {
+                        Value::String(s) => write!(f, "\"{}\"", s)?,
+                        Value::Int(n) => write!(f, "{}", n)?,
+                        Value::Float(n) => write!(f, "{:.6}", n)?,
+                        Value::Bool(b) => write!(f, "{}", b)?,
+                        Value::None => write!(f, "None")?,
+                        _ => write!(f, "<complex value>")?, // Avoid deep recursion
+                    }
+                }
+                write!(f, "]")
+            }
+            Value::Dict(dict) => {
+                write!(f, "{{")?;
+                let mut first = true;
+                for (k, v) in dict.iter() {
+                    if !first { write!(f, ", ")?; }
+                    // Handle key and value safely to prevent recursion
+                    write!(f, "{}: ", k)?;
+                    match v {
+                        Value::String(s) => write!(f, "\"{}\"", s)?,
+                        Value::Int(n) => write!(f, "{}", n)?,
+                        Value::Float(n) => write!(f, "{:.6}", n)?,
+                        Value::Bool(b) => write!(f, "{}", b)?,
+                        Value::None => write!(f, "None")?,
+                        _ => write!(f, "<complex value>")?, // Avoid deep recursion
+                    }
+                    first = false;
+                }
+                write!(f, "}}")
+            }
+            Value::None => write!(f, "None"),
+            Value::Function(name, params, _) => {
+                write!(f, "<function {}({})>", name, params.join(", "))
+            }
+            Value::BuiltinFunction(name, _) => {
+                write!(f, "<built-in function {}>", name)
+            }
+            Value::NativeFunction(_) => write!(f, "<native function>"),
+            Value::Object(name, fields) => {
+                write!(f, "<{} object with {} fields>", name, fields.len())
+            }
+            Value::TypedValue { value, type_info } => {
+                // Prevent recursion by handling the inner value safely
+                match value.as_ref() {
+                    Value::String(s) => write!(f, "\"{}\": {}", s, type_info),
+                    Value::Int(n) => write!(f, "{}: {}", n, type_info),
+                    Value::Float(n) => write!(f, "{:.6}: {}", n, type_info),
+                    Value::Bool(b) => write!(f, "{}: {}", b, type_info),
+                    Value::None => write!(f, "None: {}", type_info),
+                    _ => write!(f, "<complex value>: {}", type_info),
+                }
+            }
+        }
     }
 }

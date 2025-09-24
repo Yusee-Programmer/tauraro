@@ -20,14 +20,23 @@ pub struct Parser {
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<TokenInfo>) -> Self {
+    pub fn new(mut tokens: Vec<TokenInfo>) -> Self {
+        // Ensure there's always an EOF token at the end
+        if tokens.is_empty() || !matches!(tokens.last().unwrap().token, Token::Eof) {
+            tokens.push(TokenInfo {
+                token: Token::Eof,
+                span: (0, 0),
+                line: 1,
+                column: 1,
+            });
+        }
         Self { tokens, current: 0 }
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
         let mut statements = Vec::new();
         
-        while !self.is_at_end() {
+        while !self.is_at_end() && !self.check(&Token::Eof) {
             // Skip newlines at the top level
             if self.check(&Token::Newline) {
                 self.advance();
@@ -45,7 +54,7 @@ impl Parser {
         let mut main_body = Vec::new();
         let mut has_main_function = false;
         
-        while !self.is_at_end() {
+        while !self.is_at_end() && !self.check(&Token::Eof) {
             // Skip newlines at the top level
             if self.check(&Token::Newline) {
                 self.advance();
@@ -121,8 +130,8 @@ impl Parser {
                 if self.match_token(&[Token::Assign]) {
                     self.variable_def(expr)
                 } else {
-                    // Optional semicolon for expression statements
-                    self.match_token(&[Token::Semicolon]);
+                    // Optional semicolon or newline for expression statements
+                    self.match_token(&[Token::Semicolon, Token::Newline]);
                     Ok(Statement::Expression(expr))
                 }
             }
@@ -389,7 +398,7 @@ impl Parser {
         let expr = self.or()?;
         
         if self.match_token(&[
-            Token::Assign, Token::PlusEq, Token::MinusEq, Token::StarEq,
+            Token::PlusEq, Token::MinusEq, Token::StarEq,
             Token::SlashEq, Token::PercentEq, Token::PowerEq, Token::FloorDivEq,
         ]) {
             let op = self.previous().token.clone();
@@ -399,7 +408,6 @@ impl Parser {
                 Expr::Identifier(name) => Ok(Expr::BinaryOp {
                     left: Box::new(Expr::Identifier(name)),
                     op: match op {
-                        Token::Assign => BinaryOp::Eq,
                         Token::PlusEq => BinaryOp::Add,
                         Token::MinusEq => BinaryOp::Sub,
                         Token::StarEq => BinaryOp::Mul,
@@ -609,6 +617,8 @@ impl Parser {
             self.list_or_comp()
         } else if self.match_token(&[Token::LBrace]) {
             self.dict_or_set()
+        } else if self.is_at_end() || self.check(&Token::Eof) {
+            Err(ParseError::UnexpectedEof)
         } else {
             Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
@@ -630,7 +640,7 @@ impl Parser {
 
     fn check(&self, token: &Token) -> bool {
         if self.is_at_end() {
-            false
+            matches!(token, Token::Eof)
         } else {
             &self.peek().token == token
         }
@@ -648,7 +658,12 @@ impl Parser {
     }
 
     fn peek(&self) -> &TokenInfo {
-        &self.tokens[self.current]
+        if self.is_at_end() {
+            // Return the last token (should be EOF) if we're at the end
+            &self.tokens[self.tokens.len() - 1]
+        } else {
+            &self.tokens[self.current]
+        }
     }
 
     fn previous(&self) -> &TokenInfo {
@@ -773,7 +788,7 @@ impl Parser {
             None
         };
         
-        self.match_token(&[Token::Semicolon]);
+        self.match_token(&[Token::Semicolon, Token::Newline]);
         
         match target {
             Expr::Identifier(name) => Ok(Statement::VariableDef {
