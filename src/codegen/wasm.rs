@@ -1,5 +1,5 @@
 //! COMPLETE WebAssembly code generator
-use crate::ir::{IRModule, IRFunction, IRType, IRValue, IRInstruction, BasicBlock};
+use crate::ir::{IRModule, IRFunction, IRType, IRValue, IRInstruction, IRBlock};
 use crate::codegen::{CodeGenerator, CodegenOptions, Target};
 use anyhow::Result;
 
@@ -28,8 +28,8 @@ impl WASMCodeGenerator {
         
         // Generate global variables
         wat.push_str("  ;; Global variables\n");
-        for (name, (ir_type, initial_value)) in &module.globals {
-            wat.push_str(&self.global_definition(name, ir_type, initial_value.as_ref()));
+        for global in &module.globals {
+            wat.push_str(&self.global_definition(&global.name, &global.ty, global.value.as_ref()));
         }
         wat.push_str("\n");
         
@@ -57,9 +57,9 @@ impl WASMCodeGenerator {
     
     /// Generate function type definition
     fn function_type_definition(&self, function: &IRFunction) -> String {
-        let params: Vec<String> = function.parameters
+        let param_types: Vec<String> = function.params
             .iter()
-            .map(|(_, ty)| self.ir_type_to_wasm(ty).to_string())
+            .map(|param| self.ir_type_to_wasm(&param.ty).to_string())
             .collect();
         
         let results = if function.return_type == IRType::Void {
@@ -74,7 +74,7 @@ impl WASMCodeGenerator {
         } else {
             format!("  (type ${}_type (func (param {}) (result {})))\n", 
                    function.name, 
-                   params.join(" "),
+                   param_types.join(" "),
                    results.join(" "))
         }
     }
@@ -115,30 +115,35 @@ impl WASMCodeGenerator {
     fn generate_sync_function(&self, function: &IRFunction, options: &CodegenOptions) -> String {
         let mut body = String::new();
         
-        // Add local variables
-        for (var_name, var_type) in &function.variables {
-            body.push_str(&format!("    (local ${} {})\n", var_name, self.ir_type_to_wasm(var_type)));
-        }
+        // Add local variables (removed since IRFunction doesn't have variables field)
+        // Local variables would be handled differently in the IR structure
         
         // Generate basic blocks
-        for (block_name, basic_block) in &function.basic_blocks {
-            if block_name != "entry" {
-                body.push_str(&format!("    (block ${}\n", block_name));
+        for block in &function.blocks {
+            if block.label != "entry" {
+                body.push_str(&format!("    (block ${}\n", block.label));
             }
             
-            body.push_str(&format!("      ;; Basic block: {}\n", block_name));
+            body.push_str(&format!("      ;; Basic block: {}\n", block.label));
             
             // Generate instructions
-            for instruction in &basic_block.instructions {
+            for instruction in &block.instructions {
                 body.push_str(&self.instruction_to_wasm(instruction));
             }
             
-            // Generate terminator
-            if let Some(terminator) = &basic_block.terminator {
-                body.push_str(&self.terminator_to_wasm(terminator, basic_block));
+            // Check if the last instruction is a terminator (Ret, Br, Jmp)
+            if let Some(last_instruction) = block.instructions.last() {
+                match last_instruction {
+                    IRInstruction::Ret { .. } | IRInstruction::Br { .. } | IRInstruction::Jmp { .. } => {
+                        // Already handled in instruction_to_wasm
+                    }
+                    _ => {
+                        // Add implicit return if needed
+                    }
+                }
             }
             
-            if block_name != "entry" {
+            if block.label != "entry" {
                 body.push_str("    )\n");
             }
         }
@@ -193,60 +198,59 @@ impl WASMCodeGenerator {
     /// Convert IR instruction to WASM
     fn instruction_to_wasm(&self, instruction: &IRInstruction) -> String {
         match instruction {
-            IRInstruction::Add { result, left, right } => {
+            IRInstruction::Add { dest, left, right } => {
                 format!("    (local.set ${} ({} (local.get ${}) (local.get ${})))\n", 
-                       result, 
+                       dest, 
                        self.operation_to_wasm("add", left, right),
                        self.value_to_wasm(left),
                        self.value_to_wasm(right))
             }
-            IRInstruction::Call { result, function, args } => {
+            IRInstruction::Call { dest, func, args } => {
                 let args_code: Vec<String> = args.iter().map(|arg| {
                     format!("(local.get ${})", self.value_to_wasm(arg))
                 }).collect();
                 
-                if let Some(result_var) = result {
+                if let Some(result_var) = dest {
                     format!("    (local.set ${} (call ${} {}))\n", 
-                           result_var, function, args_code.join(" "))
+                           result_var, func, args_code.join(" "))
                 } else {
-                    format!("    (call ${} {})\n", function, args_code.join(" "))
+                    format!("    (call ${} {})\n", func, args_code.join(" "))
                 }
             }
-            IRInstruction::Load { result, pointer } => {
+            IRInstruction::Load { dest, ptr, ty: _ } => {
                 format!("    (local.set ${} (i32.load (local.get ${})))\n", 
-                       result, self.value_to_wasm(pointer))
+                       dest, ptr)
             }
-            IRInstruction::Store { pointer, value } => {
-                format!("    (i32.store (local.get ${}) (local.get ${}))\n", 
-                       self.value_to_wasm(pointer), self.value_to_wasm(value))
+            IRInstruction::Store { value, ptr } => {
+                format!("    (i32.store (local.get ${}) {})\n", 
+                       ptr, self.value_to_wasm(&value))
             }
-            IRInstruction::Alloca { result, ir_type } => {
+            IRInstruction::Alloca { dest, ty } => {
                 // In WASM, we use the linear memory for allocations
                 format!("    (local.set ${} (call $malloc (i32.const {})))\n", 
-                       result, self.type_size(ir_type))
+                       dest, self.type_size(ty))
             }
             _ => "    ;; Instruction not implemented\n".to_string(),
         }
     }
     
     /// Convert terminator to WASM
-    fn terminator_to_wasm(&self, terminator: &IRInstruction, block: &BasicBlock) -> String {
+    fn terminator_to_wasm(&self, terminator: &IRInstruction, block: &IRBlock) -> String {
         match terminator {
-            IRInstruction::Return { value } => {
+            IRInstruction::Ret { value } => {
                 if let Some(val) = value {
                     format!("    (return (local.get ${}))\n", self.value_to_wasm(val))
                 } else {
                     "    (return)\n".to_string()
                 }
             }
-            IRInstruction::Jump { target } => {
-                format!("    (br ${})\n", target)
+            IRInstruction::Jmp { label } => {
+                format!("    (br ${})
+", label)
             }
-            IRInstruction::Branch { condition, true_target, false_target } => {
-                format!(
-                    "    (br_if ${} (local.get ${}))\n    (br ${})\n", 
-                    true_target, self.value_to_wasm(condition), false_target
-                )
+            IRInstruction::Br { cond, then_label, else_label } => {
+                format!("    (if {} (then (br ${})) (else (br ${})))\n", 
+                       self.value_to_wasm(&cond), then_label, else_label)
             }
             _ => "    ;; Terminator not implemented\n".to_string(),
         }

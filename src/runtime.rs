@@ -5,6 +5,10 @@ use std::ptr;
 use std::any::Any;
 use std::fmt;
 
+// Thread-safe global runtime using OnceLock
+static GLOBAL_RUNTIME: OnceLock<Arc<Runtime>> = OnceLock::new();
+static GLOBAL_MEMORY_API: OnceLock<MemoryAPI> = OnceLock::new();
+
 /// Memory management mode
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MemoryMode {
@@ -16,13 +20,12 @@ pub enum MemoryMode {
 /// Memory allocation with metadata
 #[derive(Debug)]
 pub struct Allocation {
-    pub ptr: *mut u8,
     pub size: usize,
     pub type_id: &'static str,
     pub rc: usize,           // Reference count for automatic mode
     pub mode: MemoryMode,    // How this allocation is managed
     pub is_managed: bool,    // Whether GC can automatically collect
-    pub trace_fn: Option<fn(*mut u8) -> Vec<*mut u8>>, // For tracing GC
+    pub trace_fn: Option<fn(usize) -> Vec<usize>>, // For tracing GC, now uses usize
 }
 
 /// Smart pointer for manual memory management
@@ -35,13 +38,13 @@ pub struct ManagedPtr<T> {
 /// The main runtime managing all allocations
 #[derive(Clone)]
 pub struct Runtime {
-    allocations: Arc<RwLock<HashMap<*mut u8, Arc<Allocation>>>>,
+    allocations: Arc<RwLock<HashMap<usize, Arc<Allocation>>>>, // Use usize instead of raw pointer
     mode: MemoryMode,
     stats: Arc<RwLock<RuntimeStats>>,
 }
 
 /// Runtime statistics
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RuntimeStats {
     pub total_allocations: usize,
     pub current_allocations: usize,
@@ -76,7 +79,6 @@ impl Runtime {
         let ptr = Box::into_raw(Box::new(value));
         
         let allocation = Allocation {
-            ptr: ptr as *mut u8,
             size,
             type_id: std::any::type_name::<T>(),
             rc: 1,
@@ -89,7 +91,7 @@ impl Runtime {
         
         {
             let mut allocations = self.allocations.write().unwrap();
-            allocations.insert(ptr as *mut u8, arc_allocation.clone());
+            allocations.insert(ptr as usize, arc_allocation.clone());
         }
         
         {
@@ -113,7 +115,6 @@ impl Runtime {
         let ptr = Box::into_raw(Box::new(value));
         
         let allocation = Allocation {
-            ptr: ptr as *mut u8,
             size,
             type_id: std::any::type_name::<T>(),
             rc: 0, // Manual mode doesn't use reference counting
@@ -126,7 +127,7 @@ impl Runtime {
         
         {
             let mut allocations = self.allocations.write().unwrap();
-            allocations.insert(ptr as *mut u8, arc_allocation.clone());
+            allocations.insert(ptr as usize, arc_allocation.clone());
         }
         
         {
@@ -145,7 +146,7 @@ impl Runtime {
     }
     
     /// Trace function for garbage collection
-    fn trace_object<T: 'static>(_ptr: *mut u8) -> Vec<*mut u8> {
+    fn trace_object<T: 'static>(_ptr: usize) -> Vec<usize> {
         // Default implementation: no internal pointers to trace
         // For complex objects, this would trace internal references
         Vec::new()
@@ -154,7 +155,7 @@ impl Runtime {
     /// Increment reference count
     fn increment_rc(&self, ptr: *mut u8) {
         let mut allocations = self.allocations.write().unwrap();
-        if let Some(allocation) = allocations.get_mut(&ptr) {
+        if let Some(allocation) = allocations.get_mut(&(ptr as usize)) {
             if allocation.mode == MemoryMode::Automatic {
                 // We need to clone the Arc to get mutable access to the underlying Allocation
                 if let Some(allocation_clone) = Arc::get_mut(allocation) {
@@ -168,15 +169,20 @@ impl Runtime {
     fn decrement_rc(&self, ptr: *mut u8) {
         let should_collect = {
             let mut allocations = self.allocations.write().unwrap();
-            if let Some(allocation) = allocations.get_mut(&ptr) {
+            if let Some(allocation) = allocations.get_mut(&(ptr as usize)) {
                 if allocation.mode == MemoryMode::Automatic {
                     if let Some(allocation_clone) = Arc::get_mut(allocation) {
                         allocation_clone.rc -= 1;
-                        return allocation_clone.rc == 0;
+                        allocation_clone.rc == 0
+                    } else {
+                        false
                     }
+                } else {
+                    false
                 }
+            } else {
+                false
             }
-            false
         };
         
         if should_collect {
@@ -191,18 +197,19 @@ impl Runtime {
         
         for (ptr, allocation) in allocations.iter() {
             if allocation.mode == MemoryMode::Automatic && allocation.rc == 0 {
-                unsafe {
-                    // Call destructor if needed
-                    drop(Box::from_raw(ptr as *mut u8 as *mut dyn Any));
-                }
+                // Note: Cannot safely drop arbitrary pointers without type information
+                // This would require storing type information in Allocation
+                // For now, we'll just mark as freed without calling destructors
                 to_remove.push(*ptr);
             }
         }
         
         for ptr in to_remove {
-            allocations.remove(&ptr);
-            let mut stats = self.stats.write().unwrap();
-            stats.current_allocations -= 1;
+            if let Some(allocation) = allocations.remove(&ptr) {
+                let mut stats = self.stats.write().unwrap();
+                stats.current_allocations -= 1;
+                stats.total_bytes -= allocation.size;
+            }
         }
         
         let mut stats = self.stats.write().unwrap();
@@ -221,17 +228,21 @@ impl Runtime {
         
         // Sweep phase
         let mut allocations = self.allocations.write().unwrap();
-        let mut to_remove: Vec<*mut u8> = allocations.keys()
-            .filter(|ptr| !reachable.contains_key(ptr))
+        let mut to_remove: Vec<usize> = allocations.keys()
+            .filter(|ptr| {
+                // Convert usize back to pointer for reachability check
+                let ptr_as_raw = **ptr as *mut u8;
+                !reachable.contains_key(&ptr_as_raw)
+            })
             .cloned()
             .collect();
         
         for ptr in to_remove.drain(..) {
             if let Some(allocation) = allocations.remove(&ptr) {
                 if allocation.mode == MemoryMode::Automatic {
-                    unsafe {
-                        drop(Box::from_raw(ptr as *mut u8 as *mut dyn Any));
-                    }
+                    // Note: Cannot safely drop arbitrary pointers without type information
+                    // This would require storing type information in Allocation
+                    // For now, we'll just mark as freed without calling destructors
                     let mut stats = self.stats.write().unwrap();
                     stats.current_allocations -= 1;
                 }
@@ -258,11 +269,11 @@ impl Runtime {
         reachable.insert(root, true);
         
         let allocations = self.allocations.read().unwrap();
-        if let Some(allocation) = allocations.get(&root) {
+        if let Some(allocation) = allocations.get(&(root as usize)) {
             if let Some(trace_fn) = allocation.trace_fn {
-                let references = trace_fn(root);
+                let references = trace_fn(root as usize);
                 for reference in references {
-                    self.mark_reachable(reference, reachable);
+                    self.mark_reachable(reference as *mut u8, reachable);
                 }
             }
         }
@@ -270,7 +281,7 @@ impl Runtime {
     
     /// Get runtime statistics
     pub fn stats(&self) -> RuntimeStats {
-        self.stats.read().unwrap().clone()
+        (*self.stats.read().unwrap()).clone()
     }
     
     /// Get memory usage in human-readable format
@@ -315,7 +326,7 @@ impl<T> ManagedPtr<T> {
                 unsafe {
                     drop(Box::from_raw(self.ptr));
                     let mut allocations = self.runtime.allocations.write().unwrap();
-                    allocations.remove(&(self.ptr as *mut u8));
+                    allocations.remove(&(self.ptr as usize));
                 }
                 let mut stats = self.runtime.stats.write().unwrap();
                 stats.current_allocations -= 1;
@@ -426,7 +437,6 @@ impl Arena {
         
         // Create a managed pointer for the arena allocation
         let allocation = Allocation {
-            ptr: ptr as *mut u8,
             size,
             type_id: std::any::type_name::<T>(),
             rc: 1,
@@ -516,23 +526,13 @@ impl MemoryAPI {
     }
 }
 
-// Thread-safe global runtime
-lazy_static::lazy_static! {
-    // Thread-safe global runtime using OnceLock
-    static GLOBAL_RUNTIME: OnceLock<Arc<Runtime>> = OnceLock::new();
-    static GLOBAL_MEMORY_API: OnceLock<MemoryAPI> = OnceLock::new();
-
-    pub fn get_global_runtime() -> Arc<Runtime> {
-        GLOBAL_RUNTIME.get_or_init(|| Arc::new(Runtime::new())).clone()
-    }
-
-    pub fn get_global_memory_api() -> MemoryAPI {
-        GLOBAL_MEMORY_API.get_or_init(|| MemoryAPI::new()).clone()
-    }
+/// Get or initialize the global memory API
+pub fn get_global_memory_api() -> &'static MemoryAPI {
+    GLOBAL_MEMORY_API.get_or_init(|| MemoryAPI::new())
 }
 
 // Safe conversion traits for common types
-impl<T> From<T> for ManagedPtr<T> {
+impl<T: 'static> From<T> for ManagedPtr<T> {
     fn from(value: T) -> Self {
         get_global_memory_api().auto(value)
     }
@@ -554,6 +554,9 @@ impl<T> std::ops::DerefMut for ManagedPtr<T> {
 
 impl fmt::Display for RuntimeStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "allocs: {}, frees: {}, total: {}", self.allocs, self.frees, self.total)
+        write!(f, "allocs: {}, current: {}, total_bytes: {}", 
+               self.total_allocations, 
+               self.current_allocations, 
+               self.total_bytes)
     }
 }

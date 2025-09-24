@@ -1,9 +1,17 @@
-//! COMPLETE Foreign Function Interface - Seamless interoperability with other languages
-use libloading::{Library, Symbol};
+//! COMPLETE Foreign Function Interface (FFI) for TauraroLang
 use std::collections::HashMap;
 use anyhow::Result;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
+
+#[cfg(feature = "ffi")]
+use libloading::{Library, Symbol};
+
+#[cfg(not(feature = "ffi"))]
+pub struct Library;
+
+#[cfg(not(feature = "ffi"))]
+pub struct Symbol<T>(std::marker::PhantomData<T>);
 
 /// FFI type mapping
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +79,7 @@ pub struct ExternalLibrary {
 }
 
 impl ExternalLibrary {
+    #[cfg(feature = "ffi")]
     pub fn load(path: &str) -> Result<Self> {
         let library = unsafe { Library::new(path) }?;
         
@@ -81,7 +90,13 @@ impl ExternalLibrary {
         })
     }
     
+    #[cfg(not(feature = "ffi"))]
+    pub fn load(_path: &str) -> Result<Self> {
+        Err(anyhow::anyhow!("FFI support not enabled"))
+    }
+    
     /// Register a function from the library
+    #[cfg(feature = "ffi")]
     pub fn register_function(&mut self, name: &str, return_type: FFIType, param_types: Vec<FFIType>, calling_convention: CallingConvention) -> Result<()> {
         let symbol: Symbol<*const c_void> = unsafe { self.library.get(name.as_bytes()) }?;
         
@@ -96,6 +111,11 @@ impl ExternalLibrary {
         Ok(())
     }
     
+    #[cfg(not(feature = "ffi"))]
+    pub fn register_function(&mut self, _name: &str, _return_type: FFIType, _param_types: Vec<FFIType>, _calling_convention: CallingConvention) -> Result<()> {
+        Err(anyhow::anyhow!("FFI support not enabled"))
+    }
+    
     /// Auto-detect function signatures (platform-specific)
     pub fn auto_register_functions(&mut self) -> Result<()> {
         // This would use platform-specific tools to detect function signatures
@@ -105,6 +125,7 @@ impl ExternalLibrary {
     }
     
     /// Call a foreign function
+    #[cfg(feature = "ffi")]
     pub fn call_function(&self, name: &str, args: Vec<FFIValue>) -> Result<FFIValue> {
         if let Some(function) = self.functions.get(name) {
             self.call_function_impl(function, args)
@@ -113,6 +134,12 @@ impl ExternalLibrary {
         }
     }
     
+    #[cfg(not(feature = "ffi"))]
+    pub fn call_function(&self, _name: &str, _args: Vec<FFIValue>) -> Result<FFIValue> {
+        Err(anyhow::anyhow!("FFI support not enabled"))
+    }
+    
+    #[cfg(feature = "ffi")]
     fn call_function_impl(&self, function: &FFIFunction, args: Vec<FFIValue>) -> Result<FFIValue> {
         // Convert Tauraro values to FFI values
         let ffi_args: Result<Vec<FFIValue>> = args
@@ -136,6 +163,7 @@ impl ExternalLibrary {
     }
     
     // Various function calling implementations for different arities
+    #[cfg(feature = "ffi")]
     fn call_function_0_args(&self, symbol: Symbol<*const c_void>, function: &FFIFunction) -> Result<FFIValue> {
         match function.return_type {
             FFIType::Void => {
@@ -160,6 +188,7 @@ impl ExternalLibrary {
         }
     }
     
+    #[cfg(feature = "ffi")]
     fn call_function_1_arg(&self, symbol: Symbol<*const c_void>, function: &FFIFunction, arg: &FFIValue) -> Result<FFIValue> {
         match (&function.return_type, arg) {
             (FFIType::Int32, FFIValue::Int32(a)) => {
@@ -184,12 +213,14 @@ impl ExternalLibrary {
         }
     }
     
+    #[cfg(feature = "ffi")]
     fn call_function_2_args(&self, symbol: Symbol<*const c_void>, function: &FFIFunction, arg1: &FFIValue, arg2: &FFIValue) -> Result<FFIValue> {
         // Similar implementation for 2-arg functions
         // Placeholder for brevity
         Err(anyhow::anyhow!("2-arg functions not yet implemented"))
     }
     
+    #[cfg(feature = "ffi")]
     fn call_function_var_args(&self, _symbol: Symbol<*const c_void>, _function: &FFIFunction, _args: Vec<FFIValue>) -> Result<FFIValue> {
         // Variable argument functions require special handling
         Err(anyhow::anyhow!("Variable argument functions not yet implemented"))
@@ -384,7 +415,7 @@ impl FFIManager {
 }
 
 // Example of platform-specific implementations
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "ffi"))]
 pub mod windows {
     use super::*;
     use winapi::um::libloaderapi::{GetProcAddress, LoadLibraryA};

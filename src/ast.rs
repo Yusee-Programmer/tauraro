@@ -1,575 +1,569 @@
-//! COMPLETE Abstract Syntax Tree representation of TauraroLang programs
 use std::fmt;
-use std::rc::Rc;
+use serde::{Deserialize, Serialize};
 
-/// Source code location for error reporting
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-    pub line: usize,
-    pub column: usize,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Program {
+    pub statements: Vec<Statement>,
 }
 
-impl Span {
-    pub fn new(start: usize, end: usize, line: usize, column: usize) -> Self {
-        Self { start, end, line, column }
-    }
-    
-    pub fn unknown() -> Self {
-        Self { start: 0, end: 0, line: 0, column: 0 }
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Statement {
+    Expression(Expr),
+    VariableDef {
+        name: String,
+        type_annotation: Option<Type>,
+        value: Option<Expr>,
+    },
+    FunctionDef {
+        name: String,
+        params: Vec<Param>,
+        return_type: Option<Type>,
+        body: Vec<Statement>,
+        is_async: bool,
+        decorators: Vec<Expr>,
+    },
+    ClassDef {
+        name: String,
+        bases: Vec<Expr>,
+        body: Vec<Statement>,
+        decorators: Vec<Expr>,
+        metaclass: Option<Expr>,
+    },
+    If {
+        condition: Expr,
+        then_branch: Vec<Statement>,
+        elif_branches: Vec<(Expr, Vec<Statement>)>,
+        else_branch: Option<Vec<Statement>>,
+    },
+    While {
+        condition: Expr,
+        body: Vec<Statement>,
+        else_branch: Option<Vec<Statement>>,
+    },
+    For {
+        variable: String,
+        iterable: Expr,
+        body: Vec<Statement>,
+        else_branch: Option<Vec<Statement>>,
+    },
+    Match {
+        value: Expr,
+        cases: Vec<MatchCase>,
+    },
+    Try {
+        body: Vec<Statement>,
+        except_handlers: Vec<ExceptHandler>,
+        else_branch: Option<Vec<Statement>>,
+        finally: Option<Vec<Statement>>,
+    },
+    Return(Option<Expr>),
+    Break,
+    Continue,
+    Raise(Option<Expr>),
+    Import {
+        module: String,
+        alias: Option<String>,
+    },
+    FromImport {
+        module: String,
+        names: Vec<(String, Option<String>)>,
+    },
+    With {
+        context: Expr,
+        alias: Option<String>,
+        body: Vec<Statement>,
+    },
+    Async(Box<Statement>),
+    Await(Expr),
+    Export {
+        name: String,
+    },
+    Extern {
+        name: String,
+        signature: String,
+    },
+    Global {
+        names: Vec<String>,
+    },
+    Nonlocal {
+        names: Vec<String>,
+    },
+    Del {
+        targets: Vec<Expr>,
+    },
+    Assert {
+        condition: Expr,
+        message: Option<Expr>,
+    },
+    Pass,
+    TypeAlias {
+        name: String,
+        type_def: Type,
+    },
 }
 
-impl Default for Span {
-    fn default() -> Self {
-        Self::unknown()
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Param {
+    pub name: String,
+    pub type_annotation: Option<Type>,
+    pub default: Option<Expr>,
+    pub kind: ParamKind,
 }
 
-/// Type representation with support for optional static typing
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ParamKind {
+    Positional,
+    PositionalOnly,
+    KeywordOnly,
+    VarArgs,    // *args
+    VarKwargs,  // **kwargs
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MatchCase {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Vec<Statement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Pattern {
+    Literal(Expr),
+    Variable(String),
+    Wildcard,
+    Tuple(Vec<Pattern>),
+    List(Vec<Pattern>),
+    Dict(Vec<(Pattern, Pattern)>),
+    Class {
+        name: String,
+        patterns: Vec<Pattern>,
+    },
+    Or(Vec<Pattern>),
+    As {
+        pattern: Box<Pattern>,
+        name: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExceptHandler {
+    pub exception_type: Option<Expr>,
+    pub name: Option<String>,
+    pub body: Vec<Statement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Expr {
+    Literal(Literal),
+    Identifier(String),
+    BinaryOp {
+        left: Box<Expr>,
+        op: BinaryOp,
+        right: Box<Expr>,
+    },
+    UnaryOp {
+        op: UnaryOp,
+        operand: Box<Expr>,
+    },
+    Call {
+        func: Box<Expr>,
+        args: Vec<Expr>,
+        kwargs: Vec<(String, Expr)>,
+    },
+    Attribute {
+        object: Box<Expr>,
+        name: String,
+    },
+    Subscript {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
+    Slice {
+        object: Box<Expr>,
+        start: Option<Box<Expr>>,
+        stop: Option<Box<Expr>>,
+        step: Option<Box<Expr>>,
+    },
+    List(Vec<Expr>),
+    Tuple(Vec<Expr>),
+    Dict(Vec<(Expr, Expr)>),
+    Set(Vec<Expr>),
+    ListComp {
+        element: Box<Expr>,
+        generators: Vec<Comprehension>,
+    },
+    DictComp {
+        key: Box<Expr>,
+        value: Box<Expr>,
+        generators: Vec<Comprehension>,
+    },
+    SetComp {
+        element: Box<Expr>,
+        generators: Vec<Comprehension>,
+    },
+    GeneratorExp {
+        element: Box<Expr>,
+        generators: Vec<Comprehension>,
+    },
+    Lambda {
+        params: Vec<Param>,
+        body: Box<Expr>,
+    },
+    IfExp {
+        condition: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+    },
+    Yield(Option<Box<Expr>>),
+    YieldFrom(Box<Expr>),
+    Await(Box<Expr>),
+    FormatString {
+        parts: Vec<FormatPart>,
+    },
+    Starred(Box<Expr>),
+    NamedExpr {
+        target: Box<Expr>,
+        value: Box<Expr>,
+    },
+    Compare {
+        left: Box<Expr>,
+        ops: Vec<CompareOp>,
+        comparators: Vec<Expr>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum FormatPart {
+    String(String),
+    Expression {
+        expr: Expr,
+        format_spec: Option<String>,
+        conversion: Option<char>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Literal {
+    Int(i64),
+    Float(f64),
+    String(String),
+    Bool(bool),
+    None,
+    Bytes(Vec<u8>),
+    Complex { real: f64, imag: f64 },
+    Ellipsis,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    FloorDiv,
+    Mod,
+    Pow,
+    LShift,
+    RShift,
+    BitOr,
+    BitXor,
+    BitAnd,
+    MatMul,
+    // Logical operators
+    And,
+    Or,
+    // Comparison operators (moved to CompareOp)
+    Eq,
+    Ne,
+    Neq, // Added for compatibility
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Gte, // Added for compatibility
+    Lte, // Added for compatibility
+    Is,
+    IsNot,
+    In,
+    NotIn,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CompareOp {
+    Eq,
+    NotEq,
+    Lt,
+    LtE,
+    Gt,
+    GtE,
+    Is,
+    IsNot,
+    In,
+    NotIn,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AssignTarget {
+    Identifier(String, Option<Type>),
+    Attribute {
+        object: Box<Expr>,
+        name: String,
+    },
+    Subscript {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
+    Tuple(Vec<AssignTarget>),
+    List(Vec<AssignTarget>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum UnaryOp {
+    Not,
+    UAdd,
+    USub,
+    Minus, // Added for compatibility
+    Invert,
+    BitNot, // Added for compatibility
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Comprehension {
+    pub target: String,
+    pub iter: Expr,
+    pub ifs: Vec<Expr>,
+    pub is_async: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Type {
-    Int,
-    Float,
-    Bool,
-    Str,
-    List(Box<Type>),
-    Dict(Box<Type>, Box<Type>), // key type, value type
+    Simple(String),
+    Generic {
+        name: String,
+        args: Vec<Type>,
+    },
     Tuple(Vec<Type>),
-    Function(Vec<Type>, Box<Type>), // parameter types, return type
-    Custom(String), // User-defined types
-    Any, // Dynamic type (default)
+    Union(Vec<Type>),
+    Optional(Box<Type>),
+    Function {
+        params: Vec<Type>,
+        return_type: Box<Type>,
+    },
+    Literal(Expr),
+    TypeVar {
+        name: String,
+        bound: Option<Box<Type>>,
+        constraints: Vec<Type>,
+    },
+    Protocol {
+        name: String,
+        members: Vec<ProtocolMember>,
+    },
+    Any, // Added for compatibility
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ProtocolMember {
+    Method {
+        name: String,
+        params: Vec<Type>,
+        return_type: Type,
+    },
+    Property {
+        name: String,
+        type_annotation: Type,
+    },
+}
+
+// Additional helper types for advanced features
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Decorator {
+    pub name: String,
+    pub args: Vec<Expr>,
+    pub kwargs: Vec<(String, Expr)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AsyncContext {
+    pub is_async: bool,
+    pub await_expressions: Vec<Expr>,
+}
+
+// Trait implementations for better ergonomics
+impl Default for ParamKind {
+    fn default() -> Self {
+        ParamKind::Positional
+    }
+}
+
+impl From<String> for Expr {
+    fn from(s: String) -> Self {
+        Expr::Identifier(s)
+    }
+}
+
+impl From<i64> for Expr {
+    fn from(i: i64) -> Self {
+        Expr::Literal(Literal::Int(i))
+    }
+}
+
+impl From<f64> for Expr {
+    fn from(f: f64) -> Self {
+        Expr::Literal(Literal::Float(f))
+    }
+}
+
+impl From<bool> for Expr {
+    fn from(b: bool) -> Self {
+        Expr::Literal(Literal::Bool(b))
+    }
+}
+
+impl From<&str> for Expr {
+    fn from(s: &str) -> Self {
+        Expr::Literal(Literal::String(s.to_string()))
+    }
+}
+
+// Helper methods for AST construction
+impl Expr {
+    pub fn call(self, args: Vec<Expr>) -> Self {
+        Expr::Call {
+            func: Box::new(self),
+            args,
+            kwargs: Vec::new(),
+        }
+    }
+
+    pub fn attr(self, name: &str) -> Self {
+        Expr::Attribute {
+            object: Box::new(self),
+            name: name.to_string(),
+        }
+    }
+
+    pub fn index(self, index: Expr) -> Self {
+        Expr::Subscript {
+            object: Box::new(self),
+            index: Box::new(index),
+        }
+    }
+
+    pub fn add(self, other: Expr) -> Self {
+        Expr::BinaryOp {
+            left: Box::new(self),
+            op: BinaryOp::Add,
+            right: Box::new(other),
+        }
+    }
+
+    pub fn sub(self, other: Expr) -> Self {
+        Expr::BinaryOp {
+            left: Box::new(self),
+            op: BinaryOp::Sub,
+            right: Box::new(other),
+        }
+    }
+
+    pub fn mul(self, other: Expr) -> Self {
+        Expr::BinaryOp {
+            left: Box::new(self),
+            op: BinaryOp::Mul,
+            right: Box::new(other),
+        }
+    }
+
+    pub fn div(self, other: Expr) -> Self {
+        Expr::BinaryOp {
+            left: Box::new(self),
+            op: BinaryOp::Div,
+            right: Box::new(other),
+        }
+    }
+}
+
+impl Statement {
+    pub fn expr(expr: Expr) -> Self {
+        Statement::Expression(expr)
+    }
+
+    pub fn var_def(name: &str, value: Expr) -> Self {
+        Statement::VariableDef {
+            name: name.to_string(),
+            type_annotation: None,
+            value: Some(value),
+        }
+    }
+
+    pub fn func_def(name: &str, params: Vec<Param>, body: Vec<Statement>) -> Self {
+        Statement::FunctionDef {
+            name: name.to_string(),
+            params,
+            return_type: None,
+            body,
+            is_async: false,
+            decorators: Vec::new(),
+        }
+    }
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Type::Int => write!(f, "int"),
-            Type::Float => write!(f, "float"),
-            Type::Bool => write!(f, "bool"),
-            Type::Str => write!(f, "str"),
-            Type::List(inner) => write!(f, "list[{}]", inner),
-            Type::Dict(key, value) => write!(f, "dict[{}, {}]", key, value),
+            Type::Simple(name) => write!(f, "{}", name),
+            Type::Generic { name, args } => {
+                write!(f, "{}<", name)?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", arg)?;
+                }
+                write!(f, ">")
+            }
             Type::Tuple(types) => {
-                write!(f, "tuple[")?;
+                write!(f, "(")?;
                 for (i, ty) in types.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}", ty)?;
                 }
-                write!(f, "]")
+                write!(f, ")")
             }
-            Type::Function(params, ret) => {
-                write!(f, "fn(")?;
+            Type::Union(types) => {
+                for (i, ty) in types.iter().enumerate() {
+                    if i > 0 { write!(f, " | ")?; }
+                    write!(f, "{}", ty)?;
+                }
+                Ok(())
+            }
+            Type::Optional(inner) => write!(f, "{}?", inner),
+            Type::Function { params, return_type } => {
+                write!(f, "(")?;
                 for (i, param) in params.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}", param)?;
                 }
-                write!(f, ") -> {}", ret)
+                write!(f, ") -> {}", return_type)
             }
-            Type::Custom(name) => write!(f, "{}", name),
-            Type::Any => write!(f, "any"),
-        }
-    }
-}
-
-impl Default for Type {
-    fn default() -> Self {
-        Type::Any
-    }
-}
-
-/// Expression nodes
-#[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
-    // Literals
-    Int(i64, Span),
-    Float(f64, Span),
-    String(String, Span),
-    Bool(bool, Span),
-    None(Span),
-    
-    // Variables and access
-    Identifier(String, Span),
-    MemberAccess {
-        object: Box<Expr>,
-        member: String,
-        span: Span,
-    },
-    Index {
-        object: Box<Expr>,
-        index: Box<Expr>,
-        span: Span,
-    },
-    
-    // Operations
-    Binary {
-        left: Box<Expr>,
-        op: BinaryOp,
-        right: Box<Expr>,
-        span: Span,
-    },
-    Unary {
-        op: UnaryOp,
-        expr: Box<Expr>,
-        span: Span,
-    },
-    Ternary {
-        condition: Box<Expr>,
-        then_expr: Box<Expr>,
-        else_expr: Box<Expr>,
-        span: Span,
-    },
-    
-    // Function calls
-    Call {
-        callee: Box<Expr>,
-        arguments: Vec<Expr>,
-        span: Span,
-    },
-    
-    // Collections
-    List(Vec<Expr>, Span),
-    Tuple(Vec<Expr>, Span),
-    Dict(Vec<(Expr, Expr)>, Span),
-    Set(Vec<Expr>, Span),
-    
-    // Async
-    Await {
-        expr: Box<Expr>,
-        span: Span,
-    },
-    
-    // Comprehensions (Python-like)
-    ListComp {
-        element: Box<Expr>,
-        generators: Vec<Comprehension>,
-        span: Span,
-    },
-    
-    // Type annotation
-    Typed {
-        expr: Box<Expr>,
-        type_annotation: Type,
-        span: Span,
-    },
-}
-
-/// Binary operators
-#[derive(Debug, Clone, PartialEq)]
-pub enum BinaryOp {
-    Add, Sub, Mul, Div, Mod, Pow, FloorDiv,
-    Eq, Neq, Gt, Lt, Gte, Lte,
-    And, Or,
-    BitAnd, BitOr, BitXor, Shl, Shr,
-    In, NotIn, Is, IsNot,
-}
-
-/// Unary operators
-#[derive(Debug, Clone, PartialEq)]
-pub enum UnaryOp {
-    Plus, Minus, Not, BitNot,
-}
-
-/// Comprehension generator (for list/dict comprehensions)
-#[derive(Debug, Clone, PartialEq)]
-pub struct Comprehension {
-    pub target: String,
-    pub iter: Expr,
-    pub conditions: Vec<Expr>,
-    pub span: Span,
-}
-
-/// Statement nodes
-#[derive(Debug, Clone, PartialEq)]
-pub enum Stmt {
-    // Declarations
-    Function {
-        name: String,
-        parameters: Vec<Parameter>,
-        return_type: Option<Type>,
-        body: Vec<Stmt>,
-        span: Span,
-        is_async: bool,
-        is_export: bool,
-    },
-    Class {
-        name: String,
-        bases: Vec<Expr>,
-        body: Vec<Stmt>,
-        span: Span,
-        is_export: bool,
-    },
-    Variable {
-        name: String,
-        type_annotation: Option<Type>,
-        value: Option<Expr>,
-        span: Span,
-    },
-    
-    // Control flow
-    If {
-        condition: Expr,
-        then_branch: Vec<Stmt>,
-        elif_branches: Vec<(Expr, Vec<Stmt>)>,
-        else_branch: Option<Vec<Stmt>>,
-        span: Span,
-    },
-    While {
-        condition: Expr,
-        body: Vec<Stmt>,
-        span: Span,
-    },
-    For {
-        variable: String,
-        iterable: Expr,
-        body: Vec<Stmt>,
-        span: Span,
-    },
-    Match {
-        expr: Expr,
-        cases: Vec<MatchCase>,
-        else_branch: Option<Vec<Stmt>>,
-        span: Span,
-    },
-    
-    // Jumps
-    Return {
-        value: Option<Expr>,
-        span: Span,
-    },
-    Break(Span),
-    Continue(Span),
-    
-    // Expressions
-    Expression(Expr, Span),
-    Assignment {
-        target: AssignTarget,
-        value: Expr,
-        span: Span,
-    },
-    AugAssignment {
-        target: AssignTarget,
-        op: BinaryOp,
-        value: Expr,
-        span: Span,
-    },
-    
-    // Modules
-    Import {
-        module: String,
-        alias: Option<String>,
-        span: Span,
-    },
-    FromImport {
-        module: String,
-        items: Vec<ImportItem>,
-        span: Span,
-    },
-    Extern {
-        library: String,
-        span: Span,
-    },
-    
-    // Async
-    Async {
-        stmt: Box<Stmt>,
-        span: Span,
-    },
-    
-    // Error handling
-    Try {
-        body: Vec<Stmt>,
-        except_handlers: Vec<ExceptHandler>,
-        else_body: Option<Vec<Stmt>>,
-        finally_body: Option<Vec<Stmt>>,
-        span: Span,
-    },
-    Raise {
-        exc: Option<Expr>,
-        span: Span,
-    },
-}
-
-/// Import item for from-import statements
-#[derive(Debug, Clone, PartialEq)]
-pub struct ImportItem {
-    pub name: String,
-    pub alias: Option<String>,
-    pub span: Span,
-}
-
-/// Exception handler
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExceptHandler {
-    pub type_: Option<Expr>,
-    pub name: Option<String>,
-    pub body: Vec<Stmt>,
-    pub span: Span,
-}
-
-/// Assignment targets
-#[derive(Debug, Clone, PartialEq)]
-pub enum AssignTarget {
-    Identifier(String, Span),
-    Member {
-        object: Box<Expr>,
-        member: String,
-        span: Span,
-    },
-    Index {
-        object: Box<Expr>,
-        index: Box<Expr>,
-        span: Span,
-    },
-    Tuple(Vec<AssignTarget>, Span),
-    List(Vec<AssignTarget>, Span),
-}
-
-/// Function parameters
-#[derive(Debug, Clone, PartialEq)]
-pub struct Parameter {
-    pub name: String,
-    pub type_annotation: Option<Type>,
-    pub default_value: Option<Expr>,
-    pub is_varargs: bool,    // *args
-    pub is_kwargs: bool,     // **kwargs
-    pub span: Span,
-}
-
-/// Match cases
-#[derive(Debug, Clone, PartialEq)]
-pub struct MatchCase {
-    pub pattern: Pattern,
-    pub guard: Option<Expr>,
-    pub body: Vec<Stmt>,
-    pub span: Span,
-}
-
-/// Pattern matching
-#[derive(Debug, Clone, PartialEq)]
-pub enum Pattern {
-    Wildcard(Span),
-    Literal(Expr, Span),
-    Identifier(String, Span),
-    Tuple(Vec<Pattern>, Span),
-    List(Vec<Pattern>, Span),
-    Class(String, Vec<Pattern>, Span),
-}
-
-/// Complete program AST
-#[derive(Debug, Clone, PartialEq)]
-pub struct Program {
-    pub statements: Vec<Stmt>,
-    pub span: Span,
-}
-
-impl Program {
-    pub fn new(statements: Vec<Stmt>) -> Self {
-        Self {
-            statements,
-            span: Span::unknown(),
-        }
-    }
-    
-    /// Count total nodes for debugging
-    pub fn nodes_count(&self) -> usize {
-        let mut count = 0;
-        
-        fn count_stmt(stmt: &Stmt) -> usize {
-            let mut total = 1; // Count the statement itself
-            
-            match stmt {
-                Stmt::Function { body, .. } => {
-                    total += count_stmts(body);
+            Type::Literal(expr) => write!(f, "Literal({:?})", expr),
+            Type::TypeVar { name, bound, constraints } => {
+                write!(f, "TypeVar({})", name)?;
+                if let Some(bound) = bound {
+                    write!(f, " bound {}", bound)?;
                 }
-                Stmt::Class { body, .. } => {
-                    total += count_stmts(body);
-                }
-                Stmt::If { then_branch, elif_branches, else_branch, .. } => {
-                    total += count_stmts(then_branch);
-                    for (_, branch) in elif_branches {
-                        total += count_stmts(branch);
+                if !constraints.is_empty() {
+                    write!(f, " constraints [")?;
+                    for (i, constraint) in constraints.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{}", constraint)?;
                     }
-                    if let Some(else_branch) = else_branch {
-                        total += count_stmts(else_branch);
-                    }
+                    write!(f, "]")?;
                 }
-                Stmt::While { body, .. } => {
-                    total += count_stmts(body);
-                }
-                Stmt::For { body, .. } => {
-                    total += count_stmts(body);
-                }
-                Stmt::Match { cases, else_branch, .. } => {
-                    for case in cases {
-                        total += count_stmts(&case.body);
-                    }
-                    if let Some(else_branch) = else_branch {
-                        total += count_stmts(else_branch);
-                    }
-                }
-                Stmt::Try { body, except_handlers, else_body, finally_body, .. } => {
-                    total += count_stmts(body);
-                    for handler in except_handlers {
-                        total += count_stmts(&handler.body);
-                    }
-                    if let Some(else_body) = else_body {
-                        total += count_stmts(else_body);
-                    }
-                    if let Some(finally_body) = finally_body {
-                        total += count_stmts(finally_body);
-                    }
-                }
-                Stmt::Expression(expr, _) => {
-                    total += count_expr(expr);
-                }
-                Stmt::Assignment { target: _, value, .. } => {
-                    total += count_expr(value);
-                }
-                Stmt::AugAssignment { target: _, value, .. } => {
-                    total += count_expr(value);
-                }
-                _ => {}
+                Ok(())
             }
-            
-            total
-        }
-        
-        fn count_expr(expr: &Expr) -> usize {
-            let mut total = 1; // Count the expression itself
-            
-            match expr {
-                Expr::Binary { left, right, .. } => {
-                    total += count_expr(left);
-                    total += count_expr(right);
-                }
-                Expr::Unary { expr, .. } => {
-                    total += count_expr(expr);
-                }
-                Expr::Ternary { condition, then_expr, else_expr, .. } => {
-                    total += count_expr(condition);
-                    total += count_expr(then_expr);
-                    total += count_expr(else_expr);
-                }
-                Expr::Call { callee, arguments, .. } => {
-                    total += count_expr(callee);
-                    for arg in arguments {
-                        total += count_expr(arg);
-                    }
-                }
-                Expr::MemberAccess { object, .. } => {
-                    total += count_expr(object);
-                }
-                Expr::Index { object, index, .. } => {
-                    total += count_expr(object);
-                    total += count_expr(index);
-                }
-                Expr::List(items, _) => {
-                    for item in items {
-                        total += count_expr(item);
-                    }
-                }
-                Expr::Tuple(items, _) => {
-                    for item in items {
-                        total += count_expr(item);
-                    }
-                }
-                Expr::Dict(pairs, _) => {
-                    for (key, value) in pairs {
-                        total += count_expr(key);
-                        total += count_expr(value);
-                    }
-                }
-                Expr::Set(items, _) => {
-                    for item in items {
-                        total += count_expr(item);
-                    }
-                }
-                Expr::Await { expr, .. } => {
-                    total += count_expr(expr);
-                }
-                Expr::ListComp { element, generators, .. } => {
-                    total += count_expr(element);
-                    for gen in generators {
-                        total += count_expr(&gen.iter);
-                        for cond in &gen.conditions {
-                            total += count_expr(cond);
-                        }
-                    }
-                }
-                Expr::Typed { expr, .. } => {
-                    total += count_expr(expr);
-                }
-                _ => {}
-            }
-            
-            total
-        }
-        
-        fn count_stmts(stmts: &[Stmt]) -> usize {
-            let mut total = 0;
-            for stmt in stmts {
-                total += count_stmt(stmt);
-            }
-            total
-        }
-        
-        count_stmts(&self.statements)
-    }
-}
-
-// Display implementations for debugging
-impl fmt::Display for BinaryOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            BinaryOp::Add => write!(f, "+"),
-            BinaryOp::Sub => write!(f, "-"),
-            BinaryOp::Mul => write!(f, "*"),
-            BinaryOp::Div => write!(f, "/"),
-            BinaryOp::Mod => write!(f, "%"),
-            BinaryOp::Pow => write!(f, "**"),
-            BinaryOp::FloorDiv => write!(f, "//"),
-            BinaryOp::Eq => write!(f, "=="),
-            BinaryOp::Neq => write!(f, "!="),
-            BinaryOp::Gt => write!(f, ">"),
-            BinaryOp::Lt => write!(f, "<"),
-            BinaryOp::Gte => write!(f, ">="),
-            BinaryOp::Lte => write!(f, "<="),
-            BinaryOp::And => write!(f, "and"),
-            BinaryOp::Or => write!(f, "or"),
-            BinaryOp::BitAnd => write!(f, "&"),
-            BinaryOp::BitOr => write!(f, "|"),
-            BinaryOp::BitXor => write!(f, "^"),
-            BinaryOp::Shl => write!(f, "<<"),
-            BinaryOp::Shr => write!(f, ">>"),
-            BinaryOp::In => write!(f, "in"),
-            BinaryOp::NotIn => write!(f, "not in"),
-            BinaryOp::Is => write!(f, "is"),
-            BinaryOp::IsNot => write!(f, "is not"),
-        }
-    }
-}
-
-impl fmt::Display for UnaryOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            UnaryOp::Plus => write!(f, "+"),
-            UnaryOp::Minus => write!(f, "-"),
-            UnaryOp::Not => write!(f, "not"),
-            UnaryOp::BitNot => write!(f, "~"),
-        }
-    }
-}
-
-// Helper trait for AST walking
-pub trait Visitor {
-    fn visit_expr(&mut self, expr: &Expr);
-    fn visit_stmt(&mut self, stmt: &Stmt);
-    
-    fn visit_program(&mut self, program: &Program) {
-        for stmt in &program.statements {
-            self.visit_stmt(stmt);
+            Type::Protocol { name, .. } => write!(f, "Protocol({})", name),
+            Type::Any => write!(f, "Any"),
         }
     }
 }

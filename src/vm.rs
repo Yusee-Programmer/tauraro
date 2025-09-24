@@ -20,7 +20,7 @@ pub enum Value {
     List(Vec<Value>),
     Dict(HashMap<String, Value>),
     Object(String, HashMap<String, Value>), // class name, fields
-    Function(String, Vec<String>, Vec<Stmt>), // name, parameters, body
+    Function(String, Vec<String>, Vec<Statement>), // name, parameters, body
     NativeFunction(fn(Vec<Value>) -> Result<Value>),
     BuiltinFunction(String, fn(Vec<Value>) -> Result<Value>),
     None,
@@ -84,12 +84,12 @@ impl Value {
     /// Dynamic type checking for optional static typing
     pub fn check_type(&self, expected: &Type) -> bool {
         match (self, expected) {
-            (Value::Int(_), Type::Int) => true,
-            (Value::Float(_), Type::Float) => true,
-            (Value::Bool(_), Type::Bool) => true,
-            (Value::String(_), Type::Str) => true,
-            (Value::List(_), Type::List(_)) => true,
-            (Value::Dict(_), Type::Dict(_, _)) => true,
+            (Value::Int(_), Type::Simple(name)) if name == "int" => true,
+            (Value::Float(_), Type::Simple(name)) if name == "float" => true,
+            (Value::Bool(_), Type::Simple(name)) if name == "bool" => true,
+            (Value::String(_), Type::Simple(name)) if name == "str" => true,
+            (Value::List(_), Type::Simple(name)) if name == "list" => true,
+            (Value::Dict(_), Type::Simple(name)) if name == "dict" => true,
             (Value::None, Type::Any) => true,
             (Value::TypedValue { type_info, .. }, expected_type) => type_info == expected_type,
             (_, Type::Any) => true, // Any accepts all types
@@ -174,13 +174,15 @@ impl VM {
     /// Execute TauraroLang source code as a script
     pub fn execute_script(&mut self, source: &str, args: Vec<String>) -> Result<Value> {
         // Parse with implicit main function support
-        let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()?;
+        let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
         let mut parser = Parser::new(tokens);
         let program = parser.parse_with_implicit_main()?;
         
         // Optional semantic analysis based on strict mode
         let program = if self.strict_types {
-            semantic::analyze_optional_types(program, true)?
+            semantic::analyze_optional_types(program, true)
+                .map_err(|errors| anyhow::anyhow!("Semantic errors: {:?}", errors))?
         } else {
             program
         };
@@ -198,46 +200,63 @@ impl VM {
         let source = format!("# Line {}\n{}", line_number, input);
         
         // Try to parse as expression first (for immediate evaluation)
-        if let Ok(expr) = self.parse_expression(input) {
-            let result = self.execute_expression(&expr)?;
-            return Ok(Some(result));
+        let tokens = Lexer::new(input).collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+        let mut parser = Parser::new(tokens);
+        
+        // Try to parse as expression first
+        if let Ok(program) = parser.parse() {
+            if let Some(Statement::Expression(expr)) = program.statements.first() {
+                let result = self.execute_expression(expr)?;
+                return Ok(Some(result));
+            }
         }
         
         // Try to parse as statement
-        let tokens = Lexer::new(&source).collect::<Result<Vec<_>, _>>()?;
+        let tokens = Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
         let mut parser = Parser::new(tokens);
         
-        if let Ok(stmt) = parser.parse_statement() {
-            self.execute_statement(&stmt)?;
-            return Ok(None);
+        if let Ok(program) = parser.parse() {
+            if let Some(stmt) = program.statements.first() {
+                self.execute_statement(stmt)?;
+            }
         }
         
-        Err(anyhow::anyhow!("Invalid REPL input: '{}'", input))
+        Ok(None)
     }
     
-    /// Parse expression from string (for REPL)
-    fn parse_expression(&self, input: &str) -> Result<Expr> {
-        let source = format!("__repl_expr = {}", input);
-        let tokens = Lexer::new(&source).collect::<Result<Vec<_>, _>>()?;
+    /// Execute a single line (for REPL)
+    pub fn execute_line(&mut self, line: &str) -> Result<Value> {
+        let tokens = Lexer::new(line).collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
         let mut parser = Parser::new(tokens);
         
-        // Parse as assignment to temporary variable
-        if let Ok(Stmt::Assignment { value, .. }) = parser.parse_statement() {
-            Ok(value)
-        } else {
-            Err(anyhow::anyhow!("Not a valid expression"))
+        // Try to parse as program
+        let program = parser.parse()?;
+        
+        // Check if it's a variable definition
+        if let Some(Statement::VariableDef { value: Some(value), .. }) = program.statements.first() {
+            return self.execute_expression(value);
         }
+        
+        // Otherwise parse as expression
+        if let Some(Statement::Expression(expr)) = program.statements.first() {
+            return self.execute_expression(expr);
+        }
+        
+        Err(anyhow::anyhow!("Unable to parse line as expression or statement"))
     }
     
     /// Execute a complete program
     fn execute_program(&mut self, program: Program) -> Result<Value> {
         // First pass: register all functions and classes
         for stmt in &program.statements {
-            if let Stmt::Function { name, parameters, body, .. } = stmt {
-                let param_names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
+            if let Statement::FunctionDef { name, params, body, .. } = stmt {
+                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 let func_value = Value::Function(name.clone(), param_names, body.clone());
                 self.set_variable(name, func_value);
-            } else if let Stmt::Class { name, .. } = stmt {
+            } else if let Statement::ClassDef { name, .. } = stmt {
                 // Create class object
                 let class_obj = Value::Object(name.clone(), HashMap::new());
                 self.set_variable(name, class_obj);
@@ -246,7 +265,7 @@ impl VM {
         
         // Second pass: execute statements
         for stmt in program.statements {
-            if !matches!(stmt, Stmt::Function { .. } | Stmt::Class { .. }) {
+            if !matches!(stmt, Statement::FunctionDef { .. } | Statement::ClassDef { .. }) {
                 self.execute_statement(&stmt)?;
                 
                 if self.should_return {
@@ -273,17 +292,13 @@ impl VM {
     }
     
     /// Execute a statement
-    fn execute_statement(&mut self, stmt: &Stmt) -> Result<Option<Value>> {
+    fn execute_statement(&mut self, stmt: &Statement) -> Result<Option<Value>> {
         match stmt {
-            Stmt::Expression(expr, _) => {
+            Statement::Expression(expr) => {
                 let value = self.execute_expression(expr)?;
                 Ok(Some(value))
             }
-            Stmt::Assignment { target, value, .. } => {
-                self.execute_assignment(target, value)?;
-                Ok(None)
-            }
-            Stmt::Variable { name, value, .. } => {
+            Statement::VariableDef { name, value, .. } => {
                 if let Some(expr) = value {
                     let val = self.execute_expression(expr)?;
                     self.set_variable(name, val);
@@ -292,11 +307,11 @@ impl VM {
                 }
                 Ok(None)
             }
-            Stmt::Function { name, parameters, body, .. } => {
+            Statement::FunctionDef { name, params, body, .. } => {
                 // Function definition already handled in first pass
                 Ok(None)
             }
-            Stmt::Return { value, .. } => {
+            Statement::Return(value) => {
                 let return_value = if let Some(expr) = value {
                     self.execute_expression(expr)?
                 } else {
@@ -306,20 +321,17 @@ impl VM {
                 self.return_value = Some(return_value);
                 Ok(None)
             }
-            Stmt::If { condition, then_branch, elif_branches, else_branch, .. } => {
+            Statement::If { condition, then_branch, elif_branches, else_branch } => {
                 self.execute_if_statement(condition, then_branch, elif_branches, else_branch)
             }
-            Stmt::While { condition, body, .. } => {
+            Statement::While { condition, body, .. } => {
                 self.execute_while_statement(condition, body)
             }
-            Stmt::For { variable, iterable, body, .. } => {
+            Statement::For { variable, iterable, body, .. } => {
                 self.execute_for_statement(variable, iterable, body)
             }
-            Stmt::Import { module, alias, .. } => {
+            Statement::Import { module, alias } => {
                 self.execute_import_statement(module, alias.as_deref())
-            }
-            Stmt::Extern { library, .. } => {
-                self.execute_extern_statement(library)
             }
             _ => {
                 // TODO: Implement other statement types
@@ -331,30 +343,30 @@ impl VM {
     /// Execute an expression
     fn execute_expression(&mut self, expr: &Expr) -> Result<Value> {
         match expr {
-            Expr::Int(n, _) => Ok(Value::Int(*n)),
-            Expr::Float(n, _) => Ok(Value::Float(*n)),
-            Expr::String(s, _) => Ok(Value::String(s.clone())),
-            Expr::Bool(b, _) => Ok(Value::Bool(*b)),
-            Expr::None(_) => Ok(Value::None),
-            Expr::Identifier(name, _) => {
+            Expr::Literal(Literal::Int(n)) => Ok(Value::Int(*n)),
+            Expr::Literal(Literal::Float(n)) => Ok(Value::Float(*n)),
+            Expr::Literal(Literal::String(s)) => Ok(Value::String(s.clone())),
+            Expr::Literal(Literal::Bool(b)) => Ok(Value::Bool(*b)),
+            Expr::Literal(Literal::None) => Ok(Value::None),
+            Expr::Identifier(name) => {
                 self.get_variable(name).ok_or_else(|| anyhow::anyhow!("Undefined variable: {}", name))
             }
-            Expr::Binary { left, op, right, .. } => {
+            Expr::BinaryOp { left, op, right } => {
                 self.execute_binary_op(left, op, right)
             }
-            Expr::Unary { op, expr, .. } => {
-                self.execute_unary_op(op, expr)
+            Expr::UnaryOp { op, operand } => {
+                self.execute_unary_op(op, operand)
             }
-            Expr::Call { callee, arguments, .. } => {
-                self.execute_function_call(callee, arguments)
+            Expr::Call { func, args, .. } => {
+                self.execute_function_call(func, args)
             }
-            Expr::List(elements, _) => {
+            Expr::List(elements) => {
                 let values: Result<Vec<Value>> = elements.iter()
                     .map(|e| self.execute_expression(e))
                     .collect();
                 Ok(Value::List(values?))
             }
-            Expr::Dict(pairs, _) => {
+            Expr::Dict(pairs) => {
                 let mut dict = HashMap::new();
                 for (key_expr, value_expr) in pairs {
                     let key = self.execute_expression(key_expr)?;
@@ -363,17 +375,8 @@ impl VM {
                 }
                 Ok(Value::Dict(dict))
             }
-            Expr::Typed { expr, type_annotation, .. } => {
-                let value = self.execute_expression(expr)?;
-                if self.strict_types && !value.check_type(type_annotation) {
-                    return Err(anyhow::anyhow!("Type mismatch: expected {}, got {}", 
-                        type_annotation, value.type_name()));
-                }
-                Ok(Value::TypedValue {
-                    value: Box::new(value),
-                    type_info: type_annotation.clone(),
-                })
-            }
+            // Typed expressions are not part of the current AST definition
+            // This case has been removed as Expr::Typed doesn't exist
             _ => Err(anyhow::anyhow!("Expression not implemented: {:?}", expr)),
         }
     }
@@ -411,10 +414,10 @@ impl VM {
         let value = self.execute_expression(expr)?;
         
         match op {
-            UnaryOp::Plus => self.plus_value(value),
-            UnaryOp::Minus => self.minus_value(value),
+            UnaryOp::UAdd => self.plus_value(value),
+            UnaryOp::Minus | UnaryOp::USub => self.minus_value(value),
             UnaryOp::Not => Ok(Value::Bool(!value.is_truthy())),
-            UnaryOp::BitNot => self.bitnot_value(value),
+            UnaryOp::BitNot | UnaryOp::Invert => self.bitnot_value(value),
         }
     }
     
@@ -442,25 +445,19 @@ impl VM {
     }
     
     /// Execute assignment
-    fn execute_assignment(&mut self, target: &AssignTarget, value: &Expr) -> Result<()> {
+    fn execute_assignment(&mut self, target: &str, value: &Expr) -> Result<()> {
         let value = self.execute_expression(value)?;
-        
-        match target {
-            AssignTarget::Identifier(name, _) => {
-                self.set_variable(name, value);
-                Ok(())
-            }
-            _ => Err(anyhow::anyhow!("Complex assignment not supported")),
-        }
+        self.set_variable(target, value);
+        Ok(())
     }
     
     /// Execute if statement
     fn execute_if_statement(
         &mut self,
         condition: &Expr,
-        then_branch: &[Stmt],
-        elif_branches: &[(Expr, Vec<Stmt>)],
-        else_branch: &Option<Vec<Stmt>>,
+        then_branch: &[Statement],
+        elif_branches: &[(Expr, Vec<Statement>)],
+        else_branch: &Option<Vec<Statement>>,
     ) -> Result<Option<Value>> {
         let cond_value = self.execute_expression(condition)?;
         
@@ -511,7 +508,7 @@ impl VM {
     }
     
     /// Execute while statement
-    fn execute_while_statement(&mut self, condition: &Expr, body: &[Stmt]) -> Result<Option<Value>> {
+    fn execute_while_statement(&mut self, condition: &Expr, body: &[Statement]) -> Result<Option<Value>> {
         while {
             let cond_value = self.execute_expression(condition)?;
             cond_value.is_truthy()
@@ -531,7 +528,7 @@ impl VM {
     }
     
     /// Execute for statement
-    fn execute_for_statement(&mut self, variable: &str, iterable: &Expr, body: &[Stmt]) -> Result<Option<Value>> {
+    fn execute_for_statement(&mut self, variable: &str, iterable: &Expr, body: &[Statement]) -> Result<Option<Value>> {
         let iter_value = self.execute_expression(iterable)?;
         
         let items = match iter_value {
@@ -577,7 +574,7 @@ impl VM {
     }
     
     /// Call user-defined function
-    fn call_user_function(&mut self, name: &str, params: &[String], body: Vec<Stmt>, args: Vec<Value>) -> Result<Value> {
+    fn call_user_function(&mut self, name: &str, params: &[String], body: Vec<Statement>, args: Vec<Value>) -> Result<Value> {
         if params.len() != args.len() {
             return Err(anyhow::anyhow!("Function {} expects {} arguments, got {}", 
                 name, params.len(), args.len()));
@@ -991,7 +988,7 @@ impl VM {
     
     fn builtin_range(args: Vec<Value>) -> Result<Value> {
         let (start, end) = match args.len() {
-            1 => (0, Self::builtin_int(vec![args[0].clone()])?),
+            1 => (Value::Int(0), Self::builtin_int(vec![args[0].clone()])?),
             2 => (Self::builtin_int(vec![args[0].clone()])?, Self::builtin_int(vec![args[1].clone()])?),
             _ => return Err(anyhow::anyhow!("range() takes 1 or 2 arguments")),
         };
@@ -1001,6 +998,65 @@ impl VM {
             Ok(Value::List(items))
         } else {
             Err(anyhow::anyhow!("range() arguments must be integers"))
+        }
+    }
+}
+
+/// Start the REPL (Read-Eval-Print Loop)
+pub fn repl() -> Result<()> {
+    use std::io::{self, Write};
+    
+    let mut vm = VM::new();
+    let mut line_number = 1;
+    
+    loop {
+        print!(">>> ");
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        
+        let input = input.trim();
+        
+        if input == "exit" || input == "quit" {
+            break;
+        }
+        
+        if input.is_empty() {
+            continue;
+        }
+        
+        match vm.execute_repl(input, line_number) {
+            Ok(Some(value)) => {
+                if !matches!(value, Value::None) {
+                    println!("{}", value);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("Error: {}", e);
+            }
+        }
+        
+        line_number += 1;
+    }
+    
+    Ok(())
+}
+
+/// Run a TauraroLang file
+pub fn run_file(source: &str, backend: &str, optimization: u8) -> Result<()> {
+    match backend {
+        "vm" => {
+            let mut vm = VM::new();
+            let result = vm.execute_script(source, vec![])?;
+            if !matches!(result, Value::None) {
+                println!("{}", result);
+            }
+            Ok(())
+        }
+        _ => {
+            Err(anyhow::anyhow!("Backend '{}' not supported for running files", backend))
         }
     }
 }

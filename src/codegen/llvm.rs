@@ -1,15 +1,26 @@
 //! COMPLETE LLVM backend for native code generation with async/await support
+
+#[cfg(feature = "llvm")]
 use std::collections::HashMap;
+#[cfg(feature = "llvm")]
 use inkwell::context::Context;
+#[cfg(feature = "llvm")]
 use inkwell::module::Module;
+#[cfg(feature = "llvm")]
 use inkwell::builder::Builder;
+#[cfg(feature = "llvm")]
 use inkwell::values::{FunctionValue, BasicValueEnum, PointerValue};
+#[cfg(feature = "llvm")]
 use inkwell::types::{BasicTypeEnum, FunctionType, StructType};
+#[cfg(feature = "llvm")]
 use inkwell::IntPredicate;
+#[cfg(feature = "llvm")]
 use inkwell::AddressSpace;
-use crate::ir::{IRModule, IRFunction, IRType, IRInstruction, IRValue, BasicBlock};
+use crate::ir::{IRModule, IRFunction, IRType, IRInstruction, IRValue, IRBlock};
 use crate::codegen::{CodeGenerator, CodegenOptions, Target, OptimizationLevel};
 use anyhow::{Result, anyhow};
+
+#[cfg(feature = "llvm")]
 
 /// LLVM-based code generator
 pub struct LLVMCodeGenerator {
@@ -225,7 +236,8 @@ impl LLVMCodeGenerator {
     }
     
     /// Generate instruction
-    fn generate_instruction(
+    #[cfg(feature = "llvm")]
+    fn ir_instruction_to_llvm(
         &self,
         builder: &Builder,
         instruction: &IRInstruction,
@@ -249,18 +261,18 @@ impl LLVMCodeGenerator {
                 
                 Ok(Some(sum))
             }
-            IRInstruction::Call { result, function, args } => {
-                let function_value = builder.get_module().get_function(function)
-                    .ok_or_else(|| anyhow!("Function not found: {}", function))?;
+            IRInstruction::Call { dest, func, args } => {
+                let function_value = builder.get_module().get_function(func)
+                    .ok_or_else(|| anyhow!("Function not found: {}", func))?;
                 
                 let arg_values: Result<Vec<BasicValueEnum>> = args
                     .iter()
                     .map(|arg| self.ir_value_to_llvm(builder, arg, param_allocas))
                     .collect();
+
+                let call_result = builder.build_call(function_value, &arg_values?, &dest.clone().unwrap_or("".to_string()));
                 
-                let call_result = builder.build_call(function_value, &arg_values?, &result.clone().unwrap_or("".to_string()));
-                
-                if let Some(result_var) = result {
+                if let Some(result_var) = dest {
                     let alloca = builder.build_alloca(call_result.get_type(), result_var);
                     builder.build_store(alloca, call_result.try_as_basic_value().left().unwrap());
                     Ok(None)
@@ -268,20 +280,20 @@ impl LLVMCodeGenerator {
                     Ok(None)
                 }
             }
-            IRInstruction::Load { result, pointer } => {
-                let ptr_val = self.ir_value_to_llvm(builder, pointer, param_allocas)?;
-                let loaded = builder.build_load(ptr_val.get_type(), ptr_val.into_pointer_value(), result);
+            IRInstruction::Load { dest, ptr, ty: _ } => {
+                let ptr_val = self.ir_value_to_llvm(builder, &IRValue::Variable(ptr.clone()), param_allocas)?;
+                let loaded = builder.build_load(ptr_val.get_type(), ptr_val.into_pointer_value(), dest);
                 Ok(Some(loaded))
             }
-            IRInstruction::Store { pointer, value } => {
-                let ptr_val = self.ir_value_to_llvm(builder, pointer, param_allocas)?;
+            IRInstruction::Store { value, ptr } => {
+                let ptr_val = self.ir_value_to_llvm(builder, &IRValue::Variable(ptr.clone()), param_allocas)?;
                 let value_val = self.ir_value_to_llvm(builder, value, param_allocas)?;
                 builder.build_store(ptr_val.into_pointer_value(), value_val);
                 Ok(None)
             }
-            IRInstruction::Alloca { result, ir_type } => {
-                let llvm_type = self.ir_type_to_llvm(ir_type);
-                let alloca = builder.build_alloca(llvm_type, result);
+            IRInstruction::Alloca { dest, ty } => {
+                let llvm_type = self.ir_type_to_llvm(ty);
+                let alloca = builder.build_alloca(llvm_type, dest);
                 Ok(Some(alloca.as_basic_value_enum()))
             }
             _ => Ok(None), // TODO: Implement other instructions
@@ -289,6 +301,7 @@ impl LLVMCodeGenerator {
     }
     
     /// Generate terminator instruction
+    #[cfg(feature = "llvm")]
     fn generate_terminator(
         &self,
         builder: &Builder,
@@ -296,7 +309,7 @@ impl LLVMCodeGenerator {
         basic_blocks: &HashMap<String, inkwell::basic_block::BasicBlock>,
     ) -> Result<()> {
         match terminator {
-            IRInstruction::Return { value } => {
+            IRInstruction::Ret { value } => {
                 let return_value = if let Some(val) = value {
                     Some(self.ir_value_to_llvm(builder, val, &HashMap::new())?) // Empty param_allocas for now
                 } else {
@@ -305,19 +318,19 @@ impl LLVMCodeGenerator {
                 
                 builder.build_return(return_value.as_ref());
             }
-            IRInstruction::Jump { target } => {
-                if let Some(target_block) = basic_blocks.get(target) {
+            IRInstruction::Jmp { label } => {
+                if let Some(target_block) = basic_blocks.get(label) {
                     builder.build_unconditional_branch(*target_block);
                 } else {
-                    return Err(anyhow!("Unknown basic block: {}", target));
+                    return Err(anyhow!("Unknown basic block: {}", label));
                 }
             }
-            IRInstruction::Branch { condition, true_target, false_target } => {
-                let cond_val = self.ir_value_to_llvm(builder, condition, &HashMap::new())?;
-                let true_block = basic_blocks.get(true_target)
-                    .ok_or_else(|| anyhow!("Unknown basic block: {}", true_target))?;
-                let false_block = basic_blocks.get(false_target)
-                    .ok_or_else(|| anyhow!("Unknown basic block: {}", false_target))?;
+            IRInstruction::Br { cond, then_label, else_label } => {
+                let cond_val = self.ir_value_to_llvm(builder, cond, &HashMap::new())?;
+                let true_block = basic_blocks.get(then_label)
+                    .ok_or_else(|| anyhow!("Unknown basic block: {}", then_label))?;
+                let false_block = basic_blocks.get(else_label)
+                    .ok_or_else(|| anyhow!("Unknown basic block: {}", else_label))?;
                 
                 builder.build_conditional_branch(
                     cond_val.into_int_value(),
@@ -333,16 +346,18 @@ impl LLVMCodeGenerator {
     /// Convert IR type to LLVM type
     fn ir_type_to_llvm(&self, ir_type: &IRType) -> BasicTypeEnum {
         match ir_type {
-            IRType::I8 => self.context.i8_type().into(),
-            IRType::I16 => self.context.i16_type().into(),
-            IRType::I32 => self.context.i32_type().into(),
-            IRType::I64 => self.context.i64_type().into(),
-            IRType::F32 => self.context.f32_type().into(),
-            IRType::F64 => self.context.f64_type().into(),
+            IRType::I8 | IRType::Int8 => self.context.i8_type().into(),
+            IRType::I16 | IRType::Int16 => self.context.i16_type().into(),
+            IRType::I32 | IRType::Int32 => self.context.i32_type().into(),
+            IRType::I64 | IRType::Int64 | IRType::Int => self.context.i64_type().into(),
+            IRType::F32 | IRType::Float32 => self.context.f32_type().into(),
+            IRType::F64 | IRType::Float64 | IRType::Float => self.context.f64_type().into(),
             IRType::Bool => self.context.bool_type().into(),
             IRType::Pointer(inner) => self.ir_type_to_llvm(inner).ptr_type(AddressSpace::Generic).into(),
             IRType::Void => self.context.void_type().into(),
             IRType::Dynamic => self.context.i8_type().ptr_type(AddressSpace::Generic).into(), // Treat dynamic as opaque pointer
+            IRType::String => self.context.i8_type().ptr_type(AddressSpace::Generic).into(),
+            IRType::List(_) | IRType::Dict(_, _) | IRType::Any => self.context.i8_type().ptr_type(AddressSpace::Generic).into(),
             _ => self.context.i64_type().into(), // Default fallback
         }
     }
@@ -355,10 +370,16 @@ impl LLVMCodeGenerator {
         param_allocas: &HashMap<String, PointerValue>,
     ) -> Result<BasicValueEnum> {
         match value {
-            IRValue::ConstantInt(n) => Ok(self.context.i64_type().const_int(*n as u64, false).into()),
-            IRValue::ConstantFloat(n) => Ok(self.context.f64_type().const_float(*n).into()),
-            IRValue::ConstantBool(b) => Ok(self.context.bool_type().const_int(*b as u64, false).into()),
-            IRValue::ConstantString(s) => {
+            IRValue::ConstantInt(n) | IRValue::ImmediateInt(n) | IRValue::Int(n) => {
+                Ok(self.context.i64_type().const_int(*n as u64, false).into())
+            }
+            IRValue::ConstantFloat(n) | IRValue::ImmediateFloat(n) | IRValue::Float(n) => {
+                Ok(self.context.f64_type().const_float(*n).into())
+            }
+            IRValue::ConstantBool(b) | IRValue::ImmediateBool(b) | IRValue::Bool(b) => {
+                Ok(self.context.bool_type().const_int(*b as u64, false).into())
+            }
+            IRValue::ConstantString(s) | IRValue::ImmediateString(s) | IRValue::String(s) => {
                 // Create global string constant
                 let string_type = self.context.i8_type().array_type(s.len() as u32);
                 let global_string = builder.get_module().add_global(string_type, None, ".str");
@@ -378,8 +399,13 @@ impl LLVMCodeGenerator {
                     }
                 }
             }
-            IRValue::Null => Ok(self.context.i8_type().ptr_type(AddressSpace::Generic).const_null().into()),
-            _ => Err(anyhow!("Unsupported IR value: {:?}", value)),
+            IRValue::Null | IRValue::None => {
+                Ok(self.context.i8_type().ptr_type(AddressSpace::Generic).const_null().into())
+            }
+            IRValue::List(_) | IRValue::Dict(_) => {
+                // For complex types, return a null pointer for now
+                Ok(self.context.i8_type().ptr_type(AddressSpace::Generic).const_null().into())
+            }
         }
     }
     
@@ -484,6 +510,7 @@ impl LLVMCodeGenerator {
     }
     
     fn optimize_module(&self, module: &Module, opt_level: OptimizationLevel) -> Result<()> {
+        #[cfg(feature = "llvm")]
         use inkwell::passes::{PassManager, PassManagerBuilder};
         
         // Create pass manager builder
@@ -530,6 +557,7 @@ impl LLVMCodeGenerator {
     }
 }
 
+#[cfg(feature = "llvm")]
 impl CodeGenerator for LLVMCodeGenerator {
     fn generate(&self, module: IRModule, options: &CodegenOptions) -> Result<Vec<u8>> {
         // Generate LLVM IR
@@ -560,7 +588,9 @@ impl CodeGenerator for LLVMCodeGenerator {
 }
 
 impl LLVMCodeGenerator {
+    #[cfg(feature = "llvm")]
     fn create_target_machine(&self, options: &CodegenOptions) -> Result<inkwell::targets::TargetMachine> {
+        #[cfg(feature = "llvm")]
         use inkwell::targets::{Target, TargetTriple, InitializationConfig};
         
         // Initialize targets
@@ -607,5 +637,27 @@ impl LLVMCodeGenerator {
     
     fn get_target_features(&self, options: &CodegenOptions) -> String {
         options.features.join(",")
+    }
+}
+
+#[cfg(not(feature = "llvm"))]
+/// Stub implementation when LLVM feature is not enabled
+pub struct LLVMCodeGenerator;
+
+#[cfg(not(feature = "llvm"))]
+impl LLVMCodeGenerator {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(not(feature = "llvm"))]
+impl CodeGenerator for LLVMCodeGenerator {
+    fn generate(&self, _module: IRModule, _options: &CodegenOptions) -> Result<Vec<u8>> {
+        Err(anyhow!("LLVM backend not enabled. Enable with --features llvm"))
+    }
+    
+    fn get_target(&self) -> Target {
+        Target::Native
     }
 }
