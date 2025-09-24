@@ -1026,6 +1026,9 @@ impl Parser {
     }
 
     fn dict_or_set(&mut self) -> Result<Expr, ParseError> {
+        // Skip newlines after opening brace
+        while self.match_token(&[Token::Newline]) {}
+        
         if self.check(&Token::RBrace) {
             self.consume(Token::RBrace, "Expected '}'")?;
             return Ok(Expr::Dict(Vec::new()));
@@ -1038,6 +1041,9 @@ impl Parser {
             let mut pairs = vec![(first_expr, self.expression()?)];
             
             while self.match_token(&[Token::Comma]) {
+                // Skip newlines after comma
+                while self.match_token(&[Token::Newline]) {}
+                
                 if self.check(&Token::RBrace) {
                     break;
                 }
@@ -1047,6 +1053,8 @@ impl Parser {
                 pairs.push((key, value));
             }
             
+            // Skip newlines before closing brace
+            while self.match_token(&[Token::Newline]) {}
             self.consume(Token::RBrace, "Expected '}' after dictionary")?;
             Ok(Expr::Dict(pairs))
         } else {
@@ -1054,12 +1062,17 @@ impl Parser {
             let mut elements = vec![first_expr];
             
             while self.match_token(&[Token::Comma]) {
+                // Skip newlines after comma
+                while self.match_token(&[Token::Newline]) {}
+                
                 if self.check(&Token::RBrace) {
                     break;
                 }
                 elements.push(self.expression()?);
             }
             
+            // Skip newlines before closing brace
+            while self.match_token(&[Token::Newline]) {}
             self.consume(Token::RBrace, "Expected '}' after set")?;
             Ok(Expr::Set(elements))
         }

@@ -446,6 +446,54 @@ impl VM {
                 }
                 Ok(Value::Dict(dict))
             }
+            Expr::Subscript { object, index } => {
+                let obj_value = self.execute_expression(object)?;
+                let index_value = self.execute_expression(index)?;
+                
+                match (&obj_value, &index_value) {
+                    (Value::Dict(dict), index_val) => {
+                        let key_string = match index_val {
+                            Value::String(s) => s.clone(),
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(n) => format!("{:.6}", n),
+                            Value::Bool(b) => b.to_string(),
+                            Value::None => "None".to_string(),
+                            _ => format!("{}", index_val),
+                        };
+                        dict.get(&key_string)
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("Key '{}' not found in dictionary", key_string))
+                    }
+                    (Value::List(list), Value::Int(index)) => {
+                        let idx = if *index < 0 {
+                            (list.len() as i64 + index) as usize
+                        } else {
+                            *index as usize
+                        };
+                        
+                        if idx < list.len() {
+                            Ok(list[idx].clone())
+                        } else {
+                            Err(anyhow::anyhow!("List index {} out of range", index))
+                        }
+                    }
+                    (Value::String(s), Value::Int(index)) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let idx = if *index < 0 {
+                            (chars.len() as i64 + index) as usize
+                        } else {
+                            *index as usize
+                        };
+                        
+                        if idx < chars.len() {
+                            Ok(Value::String(chars[idx].to_string()))
+                        } else {
+                            Err(anyhow::anyhow!("String index {} out of range", index))
+                        }
+                    }
+                    _ => Err(anyhow::anyhow!("Invalid subscript operation: {:?}[{:?}]", obj_value, index_value)),
+                }
+            }
             // Typed expressions are not part of the current AST definition
             // This case has been removed as Expr::Typed doesn't exist
             _ => Err(anyhow::anyhow!("Expression not implemented: {:?}", expr)),
