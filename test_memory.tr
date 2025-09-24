@@ -1,0 +1,50 @@
+# Test memory management and basic operations
+print("Starting memory tests...")
+
+# Basic variable assignment
+name = "Tauraro"
+version = 1.0
+is_ready = true
+
+print("Language:", name)
+print("Version:", version)
+print("Ready:", is_ready)
+
+# String operations
+greeting = "Hello, " + name + "!"
+repeated = greeting * 3
+print("Greeting:", greeting)
+print("Repeated:", repeated)
+
+# List operations
+numbers = [1, 2, 3, 4, 5]
+mixed_list = [name, version, is_ready]
+print("Numbers:", numbers)
+print("Mixed list:", mixed_list)
+
+# Nested structures
+nested = {
+    "info": {
+        "name": name,
+        "version": version
+    },
+    "features": ["memory_safe", "fast", "simple"],
+    "stats": {
+        "lines": 1000,
+        "functions": 50
+    }
+}
+
+print("Nested structure:", nested)
+
+# Dictionary operations
+config = {
+    "debug": true,
+    "max_memory": 1024,
+    "timeout": 30.0
+}
+
+print("Config:", config)
+print("Debug mode:", config["debug"])
+
+print("Memory tests completed!")

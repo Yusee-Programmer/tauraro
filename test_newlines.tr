@@ -1,0 +1,7 @@
+x = 42
+y = x + 10
+z = y * \
+    2
+print(x)
+print(y)
+print(z)
