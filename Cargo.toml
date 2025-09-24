@@ -1,6 +1,52 @@
 [package]
-name = "tauraro"
+name = "taurarolang"
 version = "0.1.0"
 edition = "2021"
+description = "A flexible programming language with multiple compilation backends"
+license = "MIT OR Apache-2.0"
+authors = ["TauraroLang Team"]
+repository = "https://github.com/taurarolang/tauraro"
 
 [dependencies]
+logos = "0.14"
+thiserror = "1.0"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4.4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+indexmap = "2.0"
+unicode-segmentation = "1.10"
+
+# Optional backends
+llvm-sys = { version = "170.0", optional = true }
+inkwell = { version = "0.4", optional = true }
+wasmer = { version = "4.2", optional = true }
+object = { version = "0.32", optional = true }
+
+# For C code generation and FFI
+tempfile = "3.8"
+libffi = { version = "3.2", optional = true }
+libloading = { version = "0.8", optional = true }
+winapi = { version = "0.3", features = ["libloaderapi"], optional = true }
+bincode = "1.3"
+
+# Python interop
+pyo3 = { version = "0.20", features = ["auto-initialize"], optional = true }
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"], optional = true }
+
+[features]
+default = ["interpreter", "async"]
+interpreter = []  # VM-based execution
+llvm = ["dep:llvm-sys", "dep:inkwell"]  # LLVM backend
+wasm = ["dep:wasmer", "dep:object"]  # WebAssembly backend
+c-backend = []  # C code generation backend
+ffi = ["dep:libffi", "dep:libloading", "dep:winapi"]  # Foreign Function Interface
+python-interop = ["dep:pyo3"]  # Python interoperability
+async = ["dep:tokio"]  # Async/await support
+
+[dev-dependencies]
+pretty_assertions = "1.4"

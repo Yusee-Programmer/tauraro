@@ -1,5 +1,5 @@
 # Built binaries and build artifacts
-/target
+/target/
 **/*.rs.bk
 Cargo.lock
 *.swp
@@ -7,9 +7,42 @@ Cargo.lock
 *.bak
 *.tmp
 
+# Rust build outputs
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.rlib
+*.pdb
+
 # Tauraro-specific generated files
 *.tr.bk
 *.trc  # if you add a bytecode/cache format later
+*.c     # Generated C files from transpiler
+*.h     # Generated header files
+*.wasm  # Generated WebAssembly files
+*.wat   # WebAssembly text format
+*.ll    # LLVM IR files
+*.bc    # LLVM bitcode files
+*.o     # Object files
+*.obj   # Windows object files
+
+# Build and error logs
+*.txt
+!README.txt
+!LICENSE.txt
+build_errors.txt
+current_build_status.txt
+current_errors.txt
+errors*.txt
+final_*.txt
+latest_*.txt
+fixed_errors.txt
+interpreter_build_check.txt
+transpiler_*.txt
+lib.long-type-*.txt
 
 # IDE and editor files
 .vscode/
@@ -46,3 +79,18 @@ Thumbs.db
 *.gcno
 *.info
 cov/
+
+# Test outputs and temporary files
+test_output/
+temp/
+tmp/
+
+# Package manager files
+node_modules/
+package-lock.json
+yarn.lock
+
+# Python bytecode (if using Python interop)
+__pycache__/
+*.py[cod]
+*$py.class
