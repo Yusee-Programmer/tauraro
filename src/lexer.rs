@@ -18,7 +18,7 @@ pub enum Token {
     KwIf,
 
     #[token("elif")] 
-    #[token("kokuma")] // Hausa: elif
+    #[token("kokuma idan")] // Hausa: elif
     KwElif,
     
     #[token("else")] 
@@ -135,7 +135,7 @@ pub enum Token {
     And,
     
     #[token("or")] 
-    #[token("kokuma")]  // Hausa: or
+    #[token("ko")]  // Hausa: or
     Or,
     
     #[token("not")] 

@@ -25,7 +25,7 @@ indexmap = "2.0"
 num-traits = "0.2"
 
 # LLVM backend (optional)
-inkwell = { version = "0.4", features = ["llvm17-0"], optional = true }
+inkwell = { version = "0.4", features = ["llvm15-0", "llvm17-0"], optional = true }
 llvm-sys = { version = "170", optional = true }
 
 # CLI
@@ -35,6 +35,7 @@ clap = { version = "4.4", features = ["derive", "env"] }
 libloading = "0.8"
 pyo3 = { version = "0.26", features = ["extension-module"], optional = true }
 winapi = { version = "0.3.9", features = ["libloaderapi"] }
+lazy_static = "1.5.0"
 
 [dev-dependencies]
 tempfile = "3.8"
@@ -78,6 +79,7 @@ full = [
 
 # Ensure inkwell feature mapping
 inkwell = ["dep:inkwell"]
+pyo3 = ["dep:pyo3"]
 
 [[bin]]
 name = "tauraro"
