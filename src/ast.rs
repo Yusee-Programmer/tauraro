@@ -96,6 +96,11 @@ pub enum Statement {
         message: Option<Expr>,
     },
     Pass,
+    AttributeAssignment {
+        object: Expr,
+        name: String,
+        value: Expr,
+    },
     TypeAlias {
         name: String,
         type_def: Type,

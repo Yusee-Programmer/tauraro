@@ -171,9 +171,12 @@ pub enum Token {
     #[regex(r#"'([^'\\]|\\.)*'"#, |lex| unescape_string(lex.slice()))]
     #[regex(r#"r"[^"]*""#, |lex| lex.slice()[2..lex.slice().len()-1].to_string())]
     #[regex(r#"r'[^']*'"#, |lex| lex.slice()[2..lex.slice().len()-1].to_string())]
-    #[regex(r#"f"([^"\\]|\\.)*""#, |lex| unescape_string(lex.slice()))]
-    #[regex(r#"f'([^'\\]|\\.)*'"#, |lex| unescape_string(lex.slice()))]
     StringLit(String),
+
+    // F-string literals (formatted strings)
+    #[regex(r#"f"([^"\\]|\\.)*""#, |lex| lex.slice()[2..lex.slice().len()-1].to_string())]
+    #[regex(r#"f'([^'\\]|\\.)*'"#, |lex| lex.slice()[2..lex.slice().len()-1].to_string())]
+    FString(String),
 
     // --- Identifiers ---
     #[regex(r"[a-zA-Z_\u{0590}-\u{05FF}\u{0600}-\u{06FF}][a-zA-Z0-9_\u{0590}-\u{05FF}\u{0600}-\u{06FF}]*", |lex| lex.slice().to_string())]
@@ -229,6 +232,7 @@ pub enum Token {
 
     // Assignment and other operators
     #[token("=")] Assign,
+    #[token(":=")] WalrusOp,  // Walrus operator (assignment expression)
     #[token(":")] Colon,
     #[token("->")] Arrow,
     #[token("=>")] FatArrow,
@@ -529,6 +533,7 @@ impl fmt::Display for Token {
             Token::Int(n) => write!(f, "{}", n),
             Token::Float(n) => write!(f, "{}", n),
             Token::StringLit(s) => write!(f, "\"{}\"", s),
+            Token::FString(s) => write!(f, "f\"{}\"", s),
             Token::Identifier(s) => write!(f, "{}", s),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
