@@ -1,8 +1,10 @@
 use crate::ast::*;
 #[cfg(feature = "ffi")]
 use crate::ffi::FFIType;
+use crate::object_system::{resolve_dunder_method, call_dunder_method};
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// Dynamic value supporting optional types
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +37,16 @@ pub enum Value {
 }
 
 impl Value {
+    /// Get dunder method for this value type
+    pub fn get_dunder_method(&self, method_name: &str) -> Option<fn(&Value, Vec<Value>) -> Option<Value>> {
+        resolve_dunder_method(self, method_name)
+    }
+    
+    /// Call a dunder method on this value
+    pub fn call_dunder_method(&self, method_name: &str, args: &[Value]) -> Option<Value> {
+        call_dunder_method(self, method_name, args.to_vec())
+    }
+
     /// Get a string representation for debugging
     pub fn debug_string(&self) -> String {
         match self {
@@ -342,6 +354,168 @@ impl Value {
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    /// Convert a Value back to an Expr for decorator application
+    pub fn to_expr(&self) -> Expr {
+        match self {
+            Value::Int(n) => Expr::Literal(Literal::Int(*n)),
+            Value::Float(n) => Expr::Literal(Literal::Float(*n)),
+            Value::Bool(b) => Expr::Literal(Literal::Bool(*b)),
+            Value::String(s) => Expr::Literal(Literal::String(s.clone())),
+            Value::None => Expr::Literal(Literal::None),
+            Value::List(items) => {
+                let exprs: Vec<Expr> = items.iter().map(|v| v.to_expr()).collect();
+                Expr::List(exprs)
+            }
+            Value::Tuple(items) => {
+                let exprs: Vec<Expr> = items.iter().map(|v| v.to_expr()).collect();
+                Expr::Tuple(exprs)
+            }
+            Value::Dict(dict) => {
+                let pairs: Vec<(Expr, Expr)> = dict.iter()
+                    .map(|(k, v)| (Expr::Literal(Literal::String(k.clone())), v.to_expr()))
+                    .collect();
+                Expr::Dict(pairs)
+            }
+            Value::Set(items) => {
+                let exprs: Vec<Expr> = items.iter().map(|v| v.to_expr()).collect();
+                Expr::Set(exprs)
+            }
+            Value::Function(name, _, _) => Expr::Identifier(name.clone()),
+            Value::BuiltinFunction(name, _) => Expr::Identifier(name.clone()),
+            Value::NativeFunction(_) => Expr::Identifier("native_function".to_string()),
+            Value::Object(class_name, _) => Expr::Identifier(class_name.clone()),
+            Value::Module(name, _) => Expr::Identifier(name.clone()),
+            Value::Bytes(bytes) => {
+                // Convert bytes to a bytes literal expression
+                Expr::Literal(Literal::String(format!("b'{}'", String::from_utf8_lossy(bytes))))
+            }
+            Value::ByteArray(bytes) => {
+                // Convert bytearray to a bytearray call expression
+                Expr::Call {
+                    func: Box::new(Expr::Identifier("bytearray".to_string())),
+                    args: vec![Expr::Literal(Literal::String(format!("b'{}'", String::from_utf8_lossy(bytes))))],
+                    kwargs: vec![],
+                }
+            }
+            Value::TypedValue { value, .. } => value.to_expr(),
+            #[cfg(feature = "ffi")]
+            Value::ExternFunction { name, .. } => Expr::Identifier(name.clone()),
+        }
+    }
+}
+
+impl Eq for Value {}
+
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Value::Int(i) => {
+                0u8.hash(state);
+                i.hash(state);
+            }
+            Value::Float(f) => {
+                1u8.hash(state);
+                // For floats, we need to handle NaN and special cases
+                if f.is_nan() {
+                    "NaN".hash(state);
+                } else if f.is_infinite() {
+                    if f.is_sign_positive() {
+                        "inf".hash(state);
+                    } else {
+                        "-inf".hash(state);
+                    }
+                } else {
+                    f.to_bits().hash(state);
+                }
+            }
+            Value::Bool(b) => {
+                2u8.hash(state);
+                b.hash(state);
+            }
+            Value::String(s) => {
+                3u8.hash(state);
+                s.hash(state);
+            }
+            Value::List(items) => {
+                4u8.hash(state);
+                items.hash(state);
+            }
+            Value::Dict(map) => {
+                5u8.hash(state);
+                // For HashMap, we need to hash in a deterministic order
+                let mut pairs: Vec<_> = map.iter().collect();
+                pairs.sort_by_key(|(k, _)| *k);
+                pairs.hash(state);
+            }
+            Value::Tuple(items) => {
+                6u8.hash(state);
+                items.hash(state);
+            }
+            Value::Set(items) => {
+                7u8.hash(state);
+                // For sets, we need to hash in a deterministic order
+                let mut sorted_items = items.clone();
+                sorted_items.sort_by(|a, b| {
+                    // Simple comparison for sorting - this is a basic implementation
+                    format!("{:?}", a).cmp(&format!("{:?}", b))
+                });
+                sorted_items.hash(state);
+            }
+            Value::Bytes(bytes) => {
+                8u8.hash(state);
+                bytes.hash(state);
+            }
+            Value::ByteArray(bytes) => {
+                9u8.hash(state);
+                bytes.hash(state);
+            }
+            Value::Object(class_name, fields) => {
+                10u8.hash(state);
+                class_name.hash(state);
+                let mut pairs: Vec<_> = fields.iter().collect();
+                pairs.sort_by_key(|(k, _)| *k);
+                pairs.hash(state);
+            }
+            Value::Function(name, params, _) => {
+                11u8.hash(state);
+                name.hash(state);
+                params.hash(state);
+                // We can't hash the body (statements) easily, so we just use name and params
+            }
+            Value::NativeFunction(_) => {
+                12u8.hash(state);
+                // Function pointers can't be hashed directly, so we use a constant
+                "native_function".hash(state);
+            }
+            Value::BuiltinFunction(name, _) => {
+                13u8.hash(state);
+                name.hash(state);
+            }
+            Value::Module(name, namespace) => {
+                14u8.hash(state);
+                name.hash(state);
+                let mut pairs: Vec<_> = namespace.iter().collect();
+                pairs.sort_by_key(|(k, _)| *k);
+                pairs.hash(state);
+            }
+            #[cfg(feature = "ffi")]
+            Value::ExternFunction { name, signature, .. } => {
+                15u8.hash(state);
+                name.hash(state);
+                signature.hash(state);
+            }
+            Value::None => {
+                16u8.hash(state);
+            }
+            Value::TypedValue { value, type_info } => {
+                17u8.hash(state);
+                value.hash(state);
+                // We can't easily hash type_info, so we use its debug representation
+                format!("{:?}", type_info).hash(state);
+            }
         }
     }
 }

@@ -316,11 +316,11 @@ impl ModuleSystem {
         // Execute the module in its own scope
         // First pass: register all functions and classes
         for statement in &program.statements {
-            if let Statement::FunctionDef { name, params, body, .. } = statement {
+            if let Statement::FunctionDef { name, params, return_type: _, body, is_async: _, decorators: _ } = statement {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 let func_value = Value::Function(name.clone(), param_names, body.clone());
                 vm.set_variable(name, func_value);
-            } else if let Statement::ClassDef { name, .. } = statement {
+            } else if let Statement::ClassDef { name, bases: _, body: _, decorators: _, metaclass: _ } = statement {
                 // Create class object
                 let class_obj = Value::Object(name.clone(), HashMap::new());
                 vm.set_variable(name, class_obj);

@@ -275,6 +275,15 @@ impl Analyzer {
                 self.symbol_table.define(name.clone(), type_info)?;
                 Ok(Statement::VariableDef { name, type_annotation, value: analyzed_value })
             }
+            Statement::AttributeAssignment { object, name, value } => {
+                let analyzed_object = self.analyze_expression(object)?;
+                let analyzed_value = self.analyze_expression(value)?;
+                Ok(Statement::AttributeAssignment {
+                    object: analyzed_object,
+                    name,
+                    value: analyzed_value,
+                })
+            }
             Statement::FunctionDef { name, params, return_type, body, is_async, decorators } => {
                 // Analyze decorators first
                 let analyzed_decorators = decorators.into_iter()

@@ -9,6 +9,7 @@ pub mod vm;
 pub mod runtime;
 pub mod builtins;
 pub mod modules;
+pub mod object_system;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;
@@ -26,5 +27,6 @@ pub use vm::*;
 pub use runtime::*;
 pub use builtins::*;
 pub use modules::*;
+pub use object_system::*;
 #[cfg(feature = "ffi")]
 pub use ffi::*;

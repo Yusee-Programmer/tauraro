@@ -13,6 +13,7 @@ mod vm;
 mod runtime;
 mod ffi;
 mod modules;
+mod object_system;
 
 #[derive(Parser)]
 #[command(name = "tauraro")]
@@ -83,9 +84,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Repl => {
-            println!("TauraroLang REPL v0.1.0");
-            println!("Type 'exit' or 'quit' to exit\n");
-            vm::repl()?;
+            println!("Starting TauraroLang REPL...");
+            let mut interpreter = codegen::interpreter::Interpreter::new();
+            interpreter.repl()?;
         }
         Commands::Run { file, backend, optimization } => {
             let source = std::fs::read_to_string(&file)?;
