@@ -170,6 +170,12 @@ pub enum Expr {
         args: Vec<Expr>,
         kwargs: Vec<(String, Expr)>,
     },
+    MethodCall {
+        object: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+        kwargs: Vec<(String, Expr)>,
+    },
     Attribute {
         object: Box<Expr>,
         name: String,

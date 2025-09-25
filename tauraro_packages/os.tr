@@ -1,0 +1,179 @@
+# OS module - Operating System interface for Tauraro
+# Provides functions for interacting with the operating system
+
+# Environment variables
+func getenv(key, default=None):
+    """Get an environment variable value"""
+    # This will be implemented with native calls
+    return default
+
+func putenv(key, value):
+    """Set an environment variable"""
+    # This will be implemented with native calls
+    pass
+
+func environ():
+    """Get all environment variables as a dictionary"""
+    # This will be implemented with native calls
+    return {}
+
+# File and directory operations
+func getcwd():
+    """Get current working directory"""
+    # This will be implemented with native calls
+    return "."
+
+func chdir(path):
+    """Change current working directory"""
+    # This will be implemented with native calls
+    pass
+
+func listdir(path="."):
+    """List directory contents"""
+    # This will be implemented with native calls
+    return []
+
+func mkdir(path, mode=0o777):
+    """Create a directory"""
+    # This will be implemented with native calls
+    pass
+
+func rmdir(path):
+    """Remove a directory"""
+    # This will be implemented with native calls
+    pass
+
+func remove(path):
+    """Remove a file"""
+    # This will be implemented with native calls
+    pass
+
+func rename(src, dst):
+    """Rename a file or directory"""
+    # This will be implemented with native calls
+    pass
+
+func exists(path):
+    """Check if path exists"""
+    # This will be implemented with native calls
+    return False
+
+func isfile(path):
+    """Check if path is a file"""
+    # This will be implemented with native calls
+    return False
+
+func isdir(path):
+    """Check if path is a directory"""
+    # This will be implemented with native calls
+    return False
+
+func getsize(path):
+    """Get file size"""
+    # This will be implemented with native calls
+    return 0
+
+# Path operations
+func join(paths):
+    """Join path components"""
+    if not paths:
+        return ""
+    
+    result = str(paths[0])
+    i = 1
+    while i < len(paths):
+        path = paths[i]
+        path_str = str(path)
+        if result.endswith("/") or result.endswith("\\"):
+            result = result + path_str
+        else:
+            # Use appropriate separator based on platform
+            if "\\" in result:
+                separator = "\\"
+            else:
+                separator = "/"
+            result = result + separator + path_str
+        i = i + 1
+    
+    return result
+
+func basename(path):
+    """Get the base name of a path"""
+    path_str = str(path)
+    # Handle both forward and backward slashes
+    if "/" in path_str:
+        return path_str.split("/")[-1]
+    elif "\\" in path_str:
+        return path_str.split("\\")[-1]
+    else:
+        return path_str
+
+func dirname(path):
+    """Get the directory name of a path"""
+    path_str = str(path)
+    # Handle both forward and backward slashes
+    if "/" in path_str:
+        parts = path_str.split("/")
+        if len(parts) > 1:
+            # Remove the last element (equivalent to parts[:-1])
+            result_parts = []
+            i = 0
+            while i < len(parts) - 1:
+                result_parts.append(parts[i])
+                i = i + 1
+            return "/".join(result_parts)
+    elif "\\" in path_str:
+        parts = path_str.split("\\")
+        if len(parts) > 1:
+            # Remove the last element (equivalent to parts[:-1])
+            result_parts = []
+            i = 0
+            while i < len(parts) - 1:
+                result_parts.append(parts[i])
+                i = i + 1
+            return "\\".join(result_parts)
+    
+    return "."
+
+func splitext(path):
+    """Split path into root and extension"""
+    path_str = str(path)
+    if "." in path_str:
+        parts = path_str.rsplit(".", 1)
+        return (parts[0], "." + parts[1])
+    else:
+        return (path_str, "")
+
+# System information
+func name():
+    """Get operating system name"""
+    # This will be implemented with native calls
+    return "unknown"
+
+func platform():
+    """Get platform information"""
+    # This will be implemented with native calls
+    return "unknown"
+
+# Process operations
+func getpid():
+    """Get current process ID"""
+    # This will be implemented with native calls
+    return 0
+
+func system(command):
+    """Execute a system command"""
+    # This will be implemented with native calls
+    return 0
+
+# Path separator
+sep = "/"  # Will be set based on platform
+
+# Line separator
+linesep = "\n"  # Will be set based on platform
+
+# Current directory
+curdir = "."
+
+# Parent directory
+pardir = ".."

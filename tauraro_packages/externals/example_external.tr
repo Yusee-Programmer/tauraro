@@ -1,0 +1,12 @@
+# Example external module for testing
+print("Loading example_external module from externals directory...")
+
+def external_function(message):
+    return "External: " + message
+
+def process_data(data):
+    return "Processed: " + str(data)
+
+# External module constants
+EXTERNAL_VERSION = "1.0"
+EXTERNAL_TYPE = "downloaded"

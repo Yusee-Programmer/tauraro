@@ -1,0 +1,18 @@
+# Function Call Benchmark for Tauraro
+# Tests function definition and calling performance
+
+print("Starting Tauraro Function Benchmark...")
+
+# Simple function definition
+def simple_add(a, b):
+    return a + b
+
+# Simple function calls without loops
+result1 = simple_add(10, 5)
+result2 = simple_add(20, 30)
+result3 = simple_add(100, 200)
+
+print("Simple function calls completed")
+
+print("Function benchmark completed. Final result:", result3)
+print("Tauraro Function Benchmark finished!")

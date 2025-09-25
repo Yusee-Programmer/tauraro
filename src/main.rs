@@ -7,9 +7,12 @@ mod ast;
 mod semantic;
 mod ir;
 mod codegen;
+mod value;
+mod builtins;
 mod vm;
 mod runtime;
 mod ffi;
+mod modules;
 
 #[derive(Parser)]
 #[command(name = "tauraro")]
@@ -56,7 +59,7 @@ enum Commands {
         target: String,
         
         /// Optimization level (0-3)
-        #[arg(short, long, default_value = "2")]
+        #[arg(long, default_value = "2")]
         optimization: u8,
         
         /// Export as library

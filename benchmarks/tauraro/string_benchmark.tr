@@ -1,0 +1,16 @@
+# String Operations Benchmark for Tauraro
+# Tests string manipulation performance
+
+print("Starting Tauraro String Benchmark...")
+
+# Simple string operations without loops
+result1 = "Hello" + " World"
+result2 = "Hello" == "World"
+result3 = "Test" + " String"
+result4 = "Compare" == "Compare"
+
+print("String concatenation completed")
+print("String comparison completed")
+
+print("String benchmark completed")
+print("Tauraro String Benchmark finished!")

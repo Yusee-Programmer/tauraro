@@ -4,117 +4,12 @@ use crate::ast::*;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::semantic;
+use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::fmt;
-
-/// Dynamic value supporting optional types
-#[derive(Debug, Clone)]
-pub enum Value {
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    String(String),
-    List(Vec<Value>),
-    Dict(HashMap<String, Value>),
-    Object(String, HashMap<String, Value>), // class name, fields
-    Function(String, Vec<String>, Vec<Statement>), // name, parameters, body
-    NativeFunction(fn(Vec<Value>) -> Result<Value>),
-    BuiltinFunction(String, fn(Vec<Value>) -> Result<Value>),
-    None,
-    // For optional static typing
-    TypedValue { value: Box<Value>, type_info: Type },
-}
-
-impl Value {
-    /// Convert to string for REPL display
-    pub fn to_string(&self) -> String {
-        match self {
-            Value::Int(n) => n.to_string(),
-            Value::Float(n) => format!("{:.6}", n),
-            Value::Bool(b) => b.to_string(),
-            Value::String(s) => format!("\"{}\"", s),
-            Value::List(items) => {
-                let items_str: Vec<String> = items.iter().map(|v| v.to_string()).collect();
-                format!("[{}]", items_str.join(", "))
-            }
-            Value::Dict(dict) => {
-                let pairs: Vec<String> = dict.iter()
-                    .map(|(k, v)| format!("{}: {}", k, v.to_string()))
-                    .collect();
-                format!("{{{}}}", pairs.join(", "))
-            }
-            Value::None => "None".to_string(),
-            Value::Function(name, params, _) => {
-                format!("<function {}({})>", name, params.join(", "))
-            }
-            Value::BuiltinFunction(name, _) => {
-                format!("<built-in function {}>", name)
-            }
-            Value::NativeFunction(_) => "<native function>".to_string(),
-            Value::Object(name, fields) => {
-                format!("<{} object with {} fields>", name, fields.len())
-            }
-            Value::TypedValue { value, type_info } => {
-                format!("{}: {}", value.to_string(), type_info)
-            }
-        }
-    }
-    
-    /// Get type name for error messages
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            Value::Int(_) => "int",
-            Value::Float(_) => "float",
-            Value::Bool(_) => "bool",
-            Value::String(_) => "str",
-            Value::List(_) => "list",
-            Value::Dict(_) => "dict",
-            Value::Object(_, _) => "object",
-            Value::Function(_, _, _) => "function",
-            Value::BuiltinFunction(_, _) => "builtin function",
-            Value::NativeFunction(_) => "native function",
-            Value::None => "None",
-            Value::TypedValue { value, .. } => value.type_name(),
-        }
-    }
-    
-    /// Dynamic type checking for optional static typing
-    pub fn check_type(&self, expected: &Type) -> bool {
-        match (self, expected) {
-            (Value::Int(_), Type::Simple(name)) if name == "int" => true,
-            (Value::Float(_), Type::Simple(name)) if name == "float" => true,
-            (Value::Bool(_), Type::Simple(name)) if name == "bool" => true,
-            (Value::String(_), Type::Simple(name)) if name == "str" => true,
-            (Value::List(_), Type::Simple(name)) if name == "list" => true,
-            (Value::Dict(_), Type::Simple(name)) if name == "dict" => true,
-            (Value::None, Type::Any) => true,
-            (Value::TypedValue { type_info, .. }, expected_type) => type_info == expected_type,
-            (_, Type::Any) => true, // Any accepts all types
-            _ => false, // Type mismatch
-        }
-    }
-    
-    /// Convert to boolean for truthiness testing
-    pub fn is_truthy(&self) -> bool {
-        match self {
-            Value::Bool(b) => *b,
-            Value::Int(n) => *n != 0,
-            Value::Float(n) => *n != 0.0,
-            Value::String(s) => !s.is_empty(),
-            Value::List(items) => !items.is_empty(),
-            Value::Dict(dict) => !dict.is_empty(),
-            Value::None => false,
-            Value::Object(_, _) => true,
-            Value::Function(_, _, _) => true,
-            Value::BuiltinFunction(_, _) => true,
-            Value::NativeFunction(_) => true,
-            Value::TypedValue { value, .. } => value.is_truthy(),
-        }
-    }
-}
 
 /// Variable scope
 #[derive(Debug, Clone)]
@@ -122,6 +17,16 @@ pub struct Scope {
     pub variables: HashMap<String, Value>,
     pub parent: Option<usize>,
     pub scope_type: String, // "global", "function", "class", "block"
+}
+
+impl Scope {
+    pub fn new() -> Self {
+        Self {
+            variables: HashMap::new(),
+            parent: None,
+            scope_type: "module".to_string(),
+        }
+    }
 }
 
 /// Virtual Machine state
@@ -177,7 +82,42 @@ impl VM {
         let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
         let mut parser = Parser::new(tokens);
-        let program = parser.parse_with_implicit_main()?;
+        
+        // Try to parse as a single expression first (for simple scripts like "42")
+        let program = if let Ok(program) = parser.parse() {
+            if program.statements.is_empty() {
+                // Empty program, create a simple one that returns None
+                Program {
+                    statements: vec![Statement::Expression(Expr::Literal(Literal::None))],
+                }
+            } else if program.statements.len() == 1 {
+                // Single statement - check if it's an expression or variable definition
+                match &program.statements[0] {
+                    Statement::Expression(_) | Statement::VariableDef { .. } => {
+                        program
+                    },
+                    _ => {
+                        // Reset parser and try with implicit main
+                        let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
+                            .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+                        let mut parser = Parser::new(tokens);
+                        parser.parse_with_implicit_main()?
+                    }
+                }
+            } else {
+                // Multiple statements - use implicit main
+                let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+                let mut parser = Parser::new(tokens);
+                parser.parse_with_implicit_main()?
+            }
+        } else {
+            // Parsing failed, try with implicit main
+            let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
+                .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+            let mut parser = Parser::new(tokens);
+            parser.parse_with_implicit_main()?
+        };
         
         // Optional semantic analysis based on strict mode
         let program = if self.strict_types {
@@ -292,7 +232,7 @@ impl VM {
     }
     
     /// Execute a statement
-    fn execute_statement(&mut self, stmt: &Statement) -> Result<Option<Value>> {
+    pub fn execute_statement(&mut self, stmt: &Statement) -> Result<Option<Value>> {
         match stmt {
             Statement::Expression(expr) => {
                 let value = self.execute_expression(expr)?;
@@ -371,9 +311,65 @@ impl VM {
                 for (key_expr, value_expr) in pairs {
                     let key = self.execute_expression(key_expr)?;
                     let value = self.execute_expression(value_expr)?;
-                    dict.insert(key.to_string(), value);
+                    let key_string = match &key {
+                        Value::String(s) => s.clone(),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(n) => format!("{:.6}", n),
+                        Value::Bool(b) => b.to_string(),
+                        Value::None => "None".to_string(),
+                        _ => format!("{}", key), // Use Display trait directly
+                    };
+                    dict.insert(key_string, value);
                 }
                 Ok(Value::Dict(dict))
+            }
+            Expr::Subscript { object, index } => {
+                let obj_value = self.execute_expression(object)?;
+                let index_value = self.execute_expression(index)?;
+                
+                match (&obj_value, &index_value) {
+                    (Value::Dict(dict), index_val) => {
+                        let key_string = match index_val {
+                            Value::String(s) => s.clone(),
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(n) => format!("{:.6}", n),
+                            Value::Bool(b) => b.to_string(),
+                            Value::None => "None".to_string(),
+                            _ => format!("{}", index_val),
+                        };
+                        dict.get(&key_string)
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("Key '{}' not found in dictionary", key_string))
+                    }
+                    (Value::List(list), Value::Int(index)) => {
+                        let idx = if *index < 0 {
+                            (list.len() as i64 + index) as usize
+                        } else {
+                            *index as usize
+                        };
+                        
+                        if idx < list.len() {
+                            Ok(list[idx].clone())
+                        } else {
+                            Err(anyhow::anyhow!("List index {} out of range", index))
+                        }
+                    }
+                    (Value::String(s), Value::Int(index)) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let idx = if *index < 0 {
+                            (chars.len() as i64 + index) as usize
+                        } else {
+                            *index as usize
+                        };
+                        
+                        if idx < chars.len() {
+                            Ok(Value::String(chars[idx].to_string()))
+                        } else {
+                            Err(anyhow::anyhow!("String index {} out of range", index))
+                        }
+                    }
+                    _ => Err(anyhow::anyhow!("Invalid subscript operation: {:?}[{:?}]", obj_value, index_value)),
+                }
             }
             // Typed expressions are not part of the current AST definition
             // This case has been removed as Expr::Typed doesn't exist
@@ -398,11 +394,11 @@ impl VM {
             BinaryOp::Div => self.div_values(left_val, right_val),
             BinaryOp::Mod => self.mod_values(left_val, right_val),
             BinaryOp::Eq => Ok(Value::Bool(self.values_equal(left_val, right_val))),
-            BinaryOp::Neq => Ok(Value::Bool(!self.values_equal(left_val, right_val))),
+            BinaryOp::Ne | BinaryOp::Neq => Ok(Value::Bool(!self.values_equal(left_val, right_val))),
             BinaryOp::Gt => self.gt_values(left_val, right_val),
             BinaryOp::Lt => self.lt_values(left_val, right_val),
-            BinaryOp::Gte => self.gte_values(left_val, right_val),
-            BinaryOp::Lte => self.lte_values(left_val, right_val),
+            BinaryOp::Ge | BinaryOp::Gte => self.gte_values(left_val, right_val),
+            BinaryOp::Le | BinaryOp::Lte => self.lte_values(left_val, right_val),
             BinaryOp::And => Ok(Value::Bool(left_val.is_truthy() && right_val.is_truthy())),
             BinaryOp::Or => Ok(Value::Bool(left_val.is_truthy() || right_val.is_truthy())),
             _ => Err(anyhow::anyhow!("Operator not implemented: {:?}", op)),
@@ -657,11 +653,27 @@ impl VM {
         }
     }
     
-    fn set_variable(&mut self, name: &str, value: Value) {
+    pub fn push_scope(&mut self, scope: Scope) {
+        self.scopes.push(scope);
+        self.current_scope = self.scopes.len() - 1;
+    }
+    
+    pub fn pop_scope(&mut self) -> Scope {
+        if self.scopes.len() > 1 {
+            let scope = self.scopes.pop().unwrap();
+            self.current_scope = self.scopes.len() - 1;
+            scope
+        } else {
+            // Don't pop the global scope, return a copy instead
+            self.scopes[0].clone()
+        }
+    }
+    
+    pub fn set_variable(&mut self, name: &str, value: Value) {
         self.scopes[self.current_scope].variables.insert(name.to_string(), value);
     }
     
-    fn get_variable(&self, name: &str) -> Option<Value> {
+    pub fn get_variable(&self, name: &str) -> Option<Value> {
         let mut scope_index = Some(self.current_scope);
         
         while let Some(idx) = scope_index {
@@ -904,8 +916,14 @@ impl VM {
     }
     
     fn builtin_print(args: Vec<Value>) -> Result<Value> {
-        let output: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
-        println!("{}", output.join(" "));
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 { print!(" "); }
+            match arg {
+                Value::String(s) => print!("{}", s), // Print strings without quotes
+                _ => print!("{}", arg),
+            }
+        }
+        println!();
         Ok(Value::None)
     }
     
@@ -935,7 +953,11 @@ impl VM {
             return Err(anyhow::anyhow!("str() takes exactly one argument"));
         }
         
-        Ok(Value::String(args[0].to_string()))
+        let string_repr = match &args[0] {
+            Value::String(s) => s.clone(), // Don't add quotes for str() conversion
+            _ => format!("{}", args[0]), // Use Display trait
+        };
+        Ok(Value::String(string_repr))
     }
     
     fn builtin_int(args: Vec<Value>) -> Result<Value> {
@@ -1058,11 +1080,5 @@ pub fn run_file(source: &str, backend: &str, optimization: u8) -> Result<()> {
         _ => {
             Err(anyhow::anyhow!("Backend '{}' not supported for running files", backend))
         }
-    }
-}
-
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
     }
 }

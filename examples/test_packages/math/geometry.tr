@@ -1,0 +1,17 @@
+# Geometry module within math package
+import math
+
+def circle_area(radius):
+    return math.PI * radius * radius
+
+def rectangle_area(width, height):
+    return width * height
+
+def triangle_area(base, height):
+    return 0.5 * base * height
+
+# Import from parent package
+from math import square
+
+def square_area(side):
+    return square(side)
