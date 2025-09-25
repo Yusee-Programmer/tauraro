@@ -4,145 +4,12 @@ use crate::ast::*;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::semantic;
+use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::fmt;
-
-/// Dynamic value supporting optional types
-#[derive(Debug, Clone)]
-pub enum Value {
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    String(String),
-    List(Vec<Value>),
-    Dict(HashMap<String, Value>),
-    Object(String, HashMap<String, Value>), // class name, fields
-    Function(String, Vec<String>, Vec<Statement>), // name, parameters, body
-    NativeFunction(fn(Vec<Value>) -> Result<Value>),
-    BuiltinFunction(String, fn(Vec<Value>) -> Result<Value>),
-    None,
-    // For optional static typing
-    TypedValue { value: Box<Value>, type_info: Type },
-}
-
-impl Value {
-    /// Convert to string for REPL display
-    pub fn to_string(&self) -> String {
-        match self {
-            Value::Int(n) => n.to_string(),
-            Value::Float(n) => format!("{:.6}", n),
-            Value::Bool(b) => b.to_string(),
-            Value::String(s) => format!("\"{}\"", s),
-            Value::List(items) => {
-                // Prevent infinite recursion by handling each type explicitly
-                let items_str: Vec<String> = items.iter().map(|v| match v {
-                    Value::String(s) => format!("\"{}\"", s),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(n) => format!("{:.6}", n),
-                    Value::Bool(b) => b.to_string(),
-                    Value::None => "None".to_string(),
-                    _ => "<complex value>".to_string(), // Avoid deep recursion
-                }).collect();
-                format!("[{}]", items_str.join(", "))
-            }
-            Value::Dict(dict) => {
-                // Prevent infinite recursion by handling each type explicitly
-                let pairs: Vec<String> = dict.iter()
-                    .map(|(k, v)| {
-                        let v_str = match v {
-                            Value::String(s) => format!("\"{}\"", s),
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(n) => format!("{:.6}", n),
-                            Value::Bool(b) => b.to_string(),
-                            Value::None => "None".to_string(),
-                            _ => "<complex value>".to_string(), // Avoid deep recursion
-                        };
-                        format!("{}: {}", k, v_str)
-                    })
-                    .collect();
-                format!("{{{}}}", pairs.join(", "))
-            }
-            Value::None => "None".to_string(),
-            Value::Function(name, params, _) => {
-                format!("<function {}({})>", name, params.join(", "))
-            }
-            Value::BuiltinFunction(name, _) => {
-                format!("<built-in function {}>", name)
-            }
-            Value::NativeFunction(_) => "<native function>".to_string(),
-            Value::Object(name, fields) => {
-                format!("<{} object with {} fields>", name, fields.len())
-            }
-            Value::TypedValue { value, type_info } => {
-                // Prevent recursion by handling the inner value safely
-                let value_str = match value.as_ref() {
-                    Value::String(s) => format!("\"{}\"", s),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(n) => format!("{:.6}", n),
-                    Value::Bool(b) => b.to_string(),
-                    Value::None => "None".to_string(),
-                    _ => "<complex value>".to_string(),
-                };
-                format!("{}: {}", value_str, type_info)
-            }
-        }
-    }
-    
-    /// Get type name for error messages
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            Value::Int(_) => "int",
-            Value::Float(_) => "float",
-            Value::Bool(_) => "bool",
-            Value::String(_) => "str",
-            Value::List(_) => "list",
-            Value::Dict(_) => "dict",
-            Value::Object(_, _) => "object",
-            Value::Function(_, _, _) => "function",
-            Value::BuiltinFunction(_, _) => "builtin function",
-            Value::NativeFunction(_) => "native function",
-            Value::None => "None",
-            Value::TypedValue { value, .. } => value.type_name(),
-        }
-    }
-    
-    /// Dynamic type checking for optional static typing
-    pub fn check_type(&self, expected: &Type) -> bool {
-        match (self, expected) {
-            (Value::Int(_), Type::Simple(name)) if name == "int" => true,
-            (Value::Float(_), Type::Simple(name)) if name == "float" => true,
-            (Value::Bool(_), Type::Simple(name)) if name == "bool" => true,
-            (Value::String(_), Type::Simple(name)) if name == "str" => true,
-            (Value::List(_), Type::Simple(name)) if name == "list" => true,
-            (Value::Dict(_), Type::Simple(name)) if name == "dict" => true,
-            (Value::None, Type::Any) => true,
-            (Value::TypedValue { type_info, .. }, expected_type) => type_info == expected_type,
-            (_, Type::Any) => true, // Any accepts all types
-            _ => false, // Type mismatch
-        }
-    }
-    
-    /// Convert to boolean for truthiness testing
-    pub fn is_truthy(&self) -> bool {
-        match self {
-            Value::Bool(b) => *b,
-            Value::Int(n) => *n != 0,
-            Value::Float(n) => *n != 0.0,
-            Value::String(s) => !s.is_empty(),
-            Value::List(items) => !items.is_empty(),
-            Value::Dict(dict) => !dict.is_empty(),
-            Value::None => false,
-            Value::Object(_, _) => true,
-            Value::Function(_, _, _) => true,
-            Value::BuiltinFunction(_, _) => true,
-            Value::NativeFunction(_) => true,
-            Value::TypedValue { value, .. } => value.is_truthy(),
-        }
-    }
-}
 
 /// Variable scope
 #[derive(Debug, Clone)]
@@ -150,6 +17,16 @@ pub struct Scope {
     pub variables: HashMap<String, Value>,
     pub parent: Option<usize>,
     pub scope_type: String, // "global", "function", "class", "block"
+}
+
+impl Scope {
+    pub fn new() -> Self {
+        Self {
+            variables: HashMap::new(),
+            parent: None,
+            scope_type: "module".to_string(),
+        }
+    }
 }
 
 /// Virtual Machine state
@@ -355,7 +232,7 @@ impl VM {
     }
     
     /// Execute a statement
-    fn execute_statement(&mut self, stmt: &Statement) -> Result<Option<Value>> {
+    pub fn execute_statement(&mut self, stmt: &Statement) -> Result<Option<Value>> {
         match stmt {
             Statement::Expression(expr) => {
                 let value = self.execute_expression(expr)?;
@@ -517,11 +394,11 @@ impl VM {
             BinaryOp::Div => self.div_values(left_val, right_val),
             BinaryOp::Mod => self.mod_values(left_val, right_val),
             BinaryOp::Eq => Ok(Value::Bool(self.values_equal(left_val, right_val))),
-            BinaryOp::Neq => Ok(Value::Bool(!self.values_equal(left_val, right_val))),
+            BinaryOp::Ne | BinaryOp::Neq => Ok(Value::Bool(!self.values_equal(left_val, right_val))),
             BinaryOp::Gt => self.gt_values(left_val, right_val),
             BinaryOp::Lt => self.lt_values(left_val, right_val),
-            BinaryOp::Gte => self.gte_values(left_val, right_val),
-            BinaryOp::Lte => self.lte_values(left_val, right_val),
+            BinaryOp::Ge | BinaryOp::Gte => self.gte_values(left_val, right_val),
+            BinaryOp::Le | BinaryOp::Lte => self.lte_values(left_val, right_val),
             BinaryOp::And => Ok(Value::Bool(left_val.is_truthy() && right_val.is_truthy())),
             BinaryOp::Or => Ok(Value::Bool(left_val.is_truthy() || right_val.is_truthy())),
             _ => Err(anyhow::anyhow!("Operator not implemented: {:?}", op)),
@@ -776,11 +653,27 @@ impl VM {
         }
     }
     
-    fn set_variable(&mut self, name: &str, value: Value) {
+    pub fn push_scope(&mut self, scope: Scope) {
+        self.scopes.push(scope);
+        self.current_scope = self.scopes.len() - 1;
+    }
+    
+    pub fn pop_scope(&mut self) -> Scope {
+        if self.scopes.len() > 1 {
+            let scope = self.scopes.pop().unwrap();
+            self.current_scope = self.scopes.len() - 1;
+            scope
+        } else {
+            // Don't pop the global scope, return a copy instead
+            self.scopes[0].clone()
+        }
+    }
+    
+    pub fn set_variable(&mut self, name: &str, value: Value) {
         self.scopes[self.current_scope].variables.insert(name.to_string(), value);
     }
     
-    fn get_variable(&self, name: &str) -> Option<Value> {
+    pub fn get_variable(&self, name: &str) -> Option<Value> {
         let mut scope_index = Some(self.current_scope);
         
         while let Some(idx) = scope_index {
@@ -1186,74 +1079,6 @@ pub fn run_file(source: &str, backend: &str, optimization: u8) -> Result<()> {
         }
         _ => {
             Err(anyhow::anyhow!("Backend '{}' not supported for running files", backend))
-        }
-    }
-}
-
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Value::Int(n) => write!(f, "{}", n),
-            Value::Float(n) => write!(f, "{:.6}", n),
-            Value::Bool(b) => write!(f, "{}", b),
-            Value::String(s) => write!(f, "\"{}\"", s),
-            Value::List(items) => {
-                write!(f, "[")?;
-                for (i, item) in items.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
-                    // Prevent infinite recursion by handling each type explicitly
-                    match item {
-                        Value::String(s) => write!(f, "\"{}\"", s)?,
-                        Value::Int(n) => write!(f, "{}", n)?,
-                        Value::Float(n) => write!(f, "{:.6}", n)?,
-                        Value::Bool(b) => write!(f, "{}", b)?,
-                        Value::None => write!(f, "None")?,
-                        _ => write!(f, "<complex value>")?, // Avoid deep recursion
-                    }
-                }
-                write!(f, "]")
-            }
-            Value::Dict(dict) => {
-                write!(f, "{{")?;
-                let mut first = true;
-                for (k, v) in dict.iter() {
-                    if !first { write!(f, ", ")?; }
-                    // Handle key and value safely to prevent recursion
-                    write!(f, "{}: ", k)?;
-                    match v {
-                        Value::String(s) => write!(f, "\"{}\"", s)?,
-                        Value::Int(n) => write!(f, "{}", n)?,
-                        Value::Float(n) => write!(f, "{:.6}", n)?,
-                        Value::Bool(b) => write!(f, "{}", b)?,
-                        Value::None => write!(f, "None")?,
-                        _ => write!(f, "<complex value>")?, // Avoid deep recursion
-                    }
-                    first = false;
-                }
-                write!(f, "}}")
-            }
-            Value::None => write!(f, "None"),
-            Value::Function(name, params, _) => {
-                write!(f, "<function {}({})>", name, params.join(", "))
-            }
-            Value::BuiltinFunction(name, _) => {
-                write!(f, "<built-in function {}>", name)
-            }
-            Value::NativeFunction(_) => write!(f, "<native function>"),
-            Value::Object(name, fields) => {
-                write!(f, "<{} object with {} fields>", name, fields.len())
-            }
-            Value::TypedValue { value, type_info } => {
-                // Prevent recursion by handling the inner value safely
-                match value.as_ref() {
-                    Value::String(s) => write!(f, "\"{}\": {}", s, type_info),
-                    Value::Int(n) => write!(f, "{}: {}", n, type_info),
-                    Value::Float(n) => write!(f, "{:.6}: {}", n, type_info),
-                    Value::Bool(b) => write!(f, "{}: {}", b, type_info),
-                    Value::None => write!(f, "None: {}", type_info),
-                    _ => write!(f, "<complex value>: {}", type_info),
-                }
-            }
         }
     }
 }

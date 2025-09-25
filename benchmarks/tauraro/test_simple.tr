@@ -1,0 +1,14 @@
+# Simple test to verify Tauraro execution
+print("Starting simple test...")
+
+# Test basic arithmetic
+result = 10 + 5
+print("Addition result:", result)
+
+# Test simple loop
+i = 0
+while i < 5:
+    print("Loop iteration:", i)
+    i = i + 1
+
+print("Simple test completed!")

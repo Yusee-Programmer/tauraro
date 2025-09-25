@@ -2,7 +2,6 @@
 use crate::ir::{IRModule, IRFunction, IRInstruction, IRValue, IRType};
 use crate::ast::Type;
 use crate::codegen::{CodeGenerator, Target, CodegenOptions};
-use crate::vm::Value;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fmt::Write;

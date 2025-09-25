@@ -70,9 +70,10 @@ impl Parser {
                 }
             }
             
-            // If it's a top-level expression or variable definition, add to main body
+            // If it's a top-level statement that should go in main body
             match &stmt {
-                Statement::Expression(_) | Statement::VariableDef { .. } => {
+                Statement::Expression(_) | Statement::VariableDef { .. } | 
+                Statement::While { .. } | Statement::For { .. } | Statement::If { .. } => {
                     main_body.push(stmt);
                 }
                 _ => {
@@ -483,12 +484,24 @@ impl Parser {
     fn comparison(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.term()?;
         
-        while self.match_token(&[Token::Gt, Token::Gte, Token::Lt, Token::Lte]) {
+        while self.match_token(&[Token::Gt, Token::Gte, Token::Lt, Token::Lte, Token::KwIn, Token::Not]) {
             let op = match self.previous().token {
                 Token::Gt => BinaryOp::Gt,
                 Token::Gte => BinaryOp::Ge,
                 Token::Lt => BinaryOp::Lt,
                 Token::Lte => BinaryOp::Le,
+                Token::KwIn => BinaryOp::In,
+                Token::Not => {
+                    // Handle "not in" operator
+                    if self.match_token(&[Token::KwIn]) {
+                        BinaryOp::NotIn
+                    } else {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "in".to_string(),
+                            found: format!("{:?}", self.peek().token),
+                        });
+                    }
+                }
                 _ => unreachable!(),
             };
             let right = self.term()?;
@@ -571,10 +584,16 @@ impl Parser {
                 expr = self.finish_call(expr)?;
             } else if self.match_token(&[Token::Dot]) {
                 let attr = self.consume_identifier()?;
-                expr = Expr::Attribute {
-                    object: Box::new(expr),
-                    name: attr,
-                };
+                // Check if this is a method call (attribute followed by parentheses)
+                if self.check(&Token::LParen) {
+                    self.advance(); // consume the '('
+                    expr = self.finish_method_call(expr, attr)?;
+                } else {
+                    expr = Expr::Attribute {
+                        object: Box::new(expr),
+                        name: attr,
+                    };
+                }
             } else if self.match_token(&[Token::LBracket]) {
                 let index = self.expression()?;
                 self.consume(Token::RBracket, "Expected ']' after index")?;
@@ -610,9 +629,43 @@ impl Parser {
             self.advance();
             Ok(Expr::Identifier(name))
         } else if self.match_token(&[Token::LParen]) {
-            let expr = self.expression()?;
-            self.consume(Token::RParen, "Expected ')' after expression")?;
-            Ok(expr)
+            // Handle empty tuple
+            if self.check(&Token::RParen) {
+                self.consume(Token::RParen, "Expected ')'")?;
+                return Ok(Expr::Tuple(Vec::new()));
+            }
+            
+            let first_expr = self.expression()?;
+            
+            // Check if this is a tuple (has comma) or just grouped expression
+            if self.match_token(&[Token::Comma]) {
+                let mut elements = vec![first_expr];
+                
+                // Handle trailing comma case: (expr,)
+                if self.check(&Token::RParen) {
+                    self.consume(Token::RParen, "Expected ')' after tuple")?;
+                    return Ok(Expr::Tuple(elements));
+                }
+                
+                // Parse remaining elements
+                loop {
+                    elements.push(self.expression()?);
+                    if !self.match_token(&[Token::Comma]) {
+                        break;
+                    }
+                    // Allow trailing comma
+                    if self.check(&Token::RParen) {
+                        break;
+                    }
+                }
+                
+                self.consume(Token::RParen, "Expected ')' after tuple")?;
+                Ok(Expr::Tuple(elements))
+            } else {
+                // Just a grouped expression
+                self.consume(Token::RParen, "Expected ')' after expression")?;
+                Ok(first_expr)
+            }
         } else if self.match_token(&[Token::LBracket]) {
             self.list_or_comp()
         } else if self.match_token(&[Token::LBrace]) {
@@ -692,6 +745,17 @@ impl Parser {
                 found: self.peek().to_string(),
             })
         }
+    }
+
+    fn consume_dotted_name(&mut self) -> Result<String, ParseError> {
+        let mut name = self.consume_identifier()?;
+        
+        while self.match_token(&[Token::Dot]) {
+            name.push('.');
+            name.push_str(&self.consume_identifier()?);
+        }
+        
+        Ok(name)
     }
 
     fn type_annotation(&mut self) -> Result<Type, ParseError> {
@@ -778,6 +842,46 @@ impl Parser {
         })
     }
 
+    fn finish_method_call(&mut self, object: Expr, method: String) -> Result<Expr, ParseError> {
+        let mut args = Vec::new();
+        let mut kwargs = Vec::new();
+        
+        if !self.check(&Token::RParen) {
+            loop {
+                // Check if this is a keyword argument
+                if let Token::Identifier(_) = &self.peek().token {
+                    let checkpoint = self.current;
+                    let name = self.consume_identifier().unwrap();
+                    
+                    if self.match_token(&[Token::Assign]) {
+                        // It's a keyword argument
+                        let value = self.expression()?;
+                        kwargs.push((name, value));
+                    } else {
+                        // It's a positional argument, backtrack
+                        self.current = checkpoint;
+                        args.push(self.expression()?);
+                    }
+                } else {
+                    args.push(self.expression()?);
+                }
+                
+                if !self.match_token(&[Token::Comma]) {
+                    break;
+                }
+            }
+        }
+        
+        self.consume(Token::RParen, "Expected ')' after arguments")?;
+        
+        Ok(Expr::MethodCall {
+            object: Box::new(object),
+            method,
+            args,
+            kwargs,
+        })
+    }
+
     fn variable_def(&mut self, target: Expr) -> Result<Statement, ParseError> {
         let value = self.expression()?;
         
@@ -826,7 +930,7 @@ impl Parser {
 
     fn import_statement(&mut self) -> Result<Statement, ParseError> {
         self.consume(Token::KwImport, "Expected 'import'")?;
-        let module = self.consume_identifier()?;
+        let module = self.consume_dotted_name()?;
         let alias = if self.match_token(&[Token::KwAs]) {
             Some(self.consume_identifier()?)
         } else {
@@ -837,7 +941,7 @@ impl Parser {
 
     fn from_import_statement(&mut self) -> Result<Statement, ParseError> {
         self.consume(Token::KwFrom, "Expected 'from'")?;
-        let module = self.consume_identifier()?;
+        let module = self.consume_dotted_name()?;
         self.consume(Token::KwImport, "Expected 'import'")?;
         
         let mut items = Vec::new();
@@ -982,7 +1086,12 @@ impl Parser {
     fn block(&mut self) -> Result<Vec<Statement>, ParseError> {
         let mut statements = Vec::new();
         
-        // Expect an indent after colon
+        // Skip any newlines after colon
+        while self.match_token(&[Token::Newline]) {
+            // Continue skipping newlines
+        }
+        
+        // Expect an indent after colon (and possible newlines)
         if !self.match_token(&[Token::Indent]) {
             return Err(ParseError::IndentationError {
                 message: "Expected indented block".to_string(),

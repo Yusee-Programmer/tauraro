@@ -309,6 +309,7 @@ pub struct Lexer<'a> {
     pending_dedents: usize,
     at_line_start: bool,
     paren_depth: usize,
+    buffered_token: Option<TokenInfo>,
 }
 
 impl<'a> Lexer<'a> {
@@ -321,6 +322,7 @@ impl<'a> Lexer<'a> {
             pending_dedents: 0,
             at_line_start: true,
             paren_depth: 0,
+            buffered_token: None,
         }
     }
 
@@ -366,15 +368,68 @@ impl<'a> Iterator for Lexer<'a> {
             self.pending_dedents -= 1;
             return Some(Ok(TokenInfo {
                 token: Token::Dedent,
-                span: (self.inner.span().start, self.inner.span().end),
+                span: (0, 0),
                 line: self.line,
                 column: self.column,
             }));
         }
 
+        // Return buffered token if available
+        if let Some(buffered) = self.buffered_token.take() {
+            return Some(Ok(buffered));
+        }
+
         match self.inner.next() {
             Some(Ok(token)) => {
                 let span = self.inner.span();
+                
+                // Handle indentation at the start of a line (only after newlines)
+                if self.at_line_start && !matches!(token, Token::Newline | Token::Eof) {
+                    // Get the line content to check indentation
+                    let source = self.inner.source();
+                    
+                    // Find the start of the current line
+                    let mut line_begin = span.start;
+                    while line_begin > 0 {
+                        if let Some(ch) = source.chars().nth(line_begin - 1) {
+                            if ch == '\n' {
+                                break;
+                            }
+                            line_begin -= 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    // Only handle indentation if we're actually at the start of a new line (after newline)
+                    // Skip indentation handling for the very first line
+                    if line_begin > 0 || (line_begin == 0 && self.line > 1) {
+                        // Extract the whitespace at the beginning of the line
+                        let line_content = &source[line_begin..span.start];
+                        
+                        if let Some(indent_token) = self.handle_indentation(line_content) {
+                            // Buffer the current token for next iteration
+                            self.buffered_token = Some(TokenInfo {
+                                token: token.clone(),
+                                span: (span.start, span.end),
+                                line: self.line,
+                                column: self.column,
+                            });
+                            
+                            // Mark that we're no longer at line start to prevent re-processing
+                            self.at_line_start = false;
+                            
+                            return Some(Ok(TokenInfo {
+                                token: indent_token,
+                                span: (line_begin, span.start),
+                                line: self.line,
+                                column: 1,
+                            }));
+                        }
+                    }
+                    self.at_line_start = false;
+                }
+
                 let token_info = TokenInfo {
                     token: token.clone(),
                     span: (span.start, span.end),
@@ -409,8 +464,8 @@ impl<'a> Iterator for Lexer<'a> {
             }
             Some(Err(_)) => Some(Err("Lexical error".to_string())),
             None => {
-                // Handle end of file dedents
-                if self.indent_stack.len() > 1 {
+                // Handle remaining dedents at EOF
+                if !self.indent_stack.is_empty() && self.indent_stack.len() > 1 {
                     self.indent_stack.pop();
                     Some(Ok(TokenInfo {
                         token: Token::Dedent,
@@ -419,18 +474,7 @@ impl<'a> Iterator for Lexer<'a> {
                         column: self.column,
                     }))
                 } else {
-                    // Return EOF token once, then None to end iteration
-                    if !self.at_line_start {
-                        self.at_line_start = true; // Use this as a flag to track if we've sent EOF
-                        Some(Ok(TokenInfo {
-                            token: Token::Eof,
-                            span: (0, 0),
-                            line: self.line,
-                            column: self.column,
-                        }))
-                    } else {
-                        None // End the iterator
-                    }
+                    None
                 }
             }
         }

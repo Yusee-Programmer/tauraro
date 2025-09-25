@@ -1,1 +1,14 @@
-print("Hello")
+# Simple test script for native compilation
+print("Hello from compiled Tauraro!")
+
+# Test basic arithmetic
+a = 10
+b = 20
+result = a + b
+print("10 + 20 =", result)
+
+# Test string operations
+name = "Tauraro"
+print("Welcome to", name)
+
+print("Simple test completed successfully!")

@@ -18,6 +18,8 @@ pub enum SemanticError {
     PatternError { message: String },
     #[error("Decorator error: {message}")]
     DecoratorError { message: String },
+    #[error("ModuleNotFoundError: No module named '{name}'")]
+    ModuleNotFoundError { name: String },
 }
 
 #[derive(Debug, Clone)]
