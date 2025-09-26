@@ -390,6 +390,15 @@ impl VM {
             Expr::Literal(Literal::String(s)) => Ok(Value::String(s.clone())),
             Expr::Literal(Literal::Bool(b)) => Ok(Value::Bool(*b)),
             Expr::Literal(Literal::None) => Ok(Value::None),
+            Expr::Literal(Literal::Bytes(bytes)) => Ok(Value::Bytes(bytes.clone())),
+            Expr::Literal(Literal::Complex { real, imag }) => {
+                // For now, return a tuple representing the complex number
+                Ok(Value::Tuple(vec![Value::Float(*real), Value::Float(*imag)]))
+            },
+            Expr::Literal(Literal::Ellipsis) => {
+                // Return a special marker for ellipsis
+                Ok(Value::String("...".to_string()))
+            },
             Expr::Identifier(name) => {
                 self.get_variable(name).ok_or_else(|| anyhow::anyhow!("Undefined variable: {}", name))
             }
@@ -1429,6 +1438,20 @@ impl VM {
     }
     
     pub fn set_variable(&mut self, name: &str, value: Value) {
+        // First check if the variable exists in any parent scope
+        let mut scope_index = Some(self.current_scope);
+        
+        while let Some(idx) = scope_index {
+            let scope = &self.scopes[idx];
+            if scope.variables.contains_key(name) {
+                // Variable exists in this scope, update it here
+                self.scopes[idx].variables.insert(name.to_string(), value);
+                return;
+            }
+            scope_index = scope.parent;
+        }
+        
+        // Variable doesn't exist in any parent scope, create it in current scope
         self.scopes[self.current_scope].variables.insert(name.to_string(), value);
     }
     
@@ -1568,6 +1591,27 @@ impl VM {
                     Err(anyhow::anyhow!("Division by zero"))
                 } else {
                     Ok(Value::Int(a % b))
+                }
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if b == 0.0 {
+                    Err(anyhow::anyhow!("Division by zero"))
+                } else {
+                    Ok(Value::Float(a % b))
+                }
+            }
+            (Value::Int(a), Value::Float(b)) => {
+                if b == 0.0 {
+                    Err(anyhow::anyhow!("Division by zero"))
+                } else {
+                    Ok(Value::Float((a as f64) % b))
+                }
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                if b == 0 {
+                    Err(anyhow::anyhow!("Division by zero"))
+                } else {
+                    Ok(Value::Float(a % (b as f64)))
                 }
             }
             _ => Err(anyhow::anyhow!("Invalid types for modulo")),

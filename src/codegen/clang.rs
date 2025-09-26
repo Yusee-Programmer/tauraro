@@ -37,53 +37,40 @@ impl ClangCodeGenerator {
         c_code.push_str("#include <stdbool.h>\n\n");
 
         // Generate type definitions
-        for (name, ir_type) in &module.types {
-            c_code.push_str(&self.generate_type_definition(name, ir_type)?);
+        for (name, ty) in &module.types {
+            match ty {
+                IRType::Struct(fields) => {
+                    c_code.push_str(&format!("typedef struct {{\n"));
+                    for (i, field_type) in fields.iter().enumerate() {
+                        c_code.push_str(&format!("    {} field{};\n", 
+                            self.ir_type_to_c_type(field_type)?, i));
+                    }
+                    c_code.push_str(&format!("}} {};\n\n", name));
+                }
+                _ => {} // Other types don't need typedef
+            }
         }
 
         // Generate function declarations
-        for function in &module.functions {
+        for (_, function) in &module.functions {
             c_code.push_str(&self.generate_function_declaration(function)?);
         }
 
         // Generate function implementations
-        for function in &module.functions {
+        for (_, function) in &module.functions {
             c_code.push_str(&self.generate_function_implementation(function)?);
         }
 
         Ok(c_code)
     }
 
-    fn generate_type_definition(&self, name: &str, ir_type: &IRType) -> Result<String> {
-        match ir_type {
-            IRType::Struct { fields } => {
-                let mut typedef = format!("typedef struct {{\n");
-                for (field_name, field_type) in fields {
-                    typedef.push_str(&format!("    {} {};\n", 
-                        self.ir_type_to_c_type(field_type)?, field_name));
-                }
-                typedef.push_str(&format!("}} {};\n\n", name));
-                Ok(typedef)
-            }
-            IRType::Enum { variants } => {
-                let mut typedef = format!("typedef enum {{\n");
-                for (i, variant) in variants.iter().enumerate() {
-                    typedef.push_str(&format!("    {}__{} = {},\n", name, variant, i));
-                }
-                typedef.push_str(&format!("}} {};\n\n", name));
-                Ok(typedef)
-            }
-            _ => Ok(String::new()), // Skip primitive types
-        }
-    }
-
     fn generate_function_declaration(&self, function: &IRFunction) -> Result<String> {
         let return_type = self.ir_type_to_c_type(&function.return_type)?;
         let mut params = Vec::new();
         
-        for param in &function.parameters {
+        for param in &function.params {
             params.push(format!("{} {}", 
-                self.ir_type_to_c_type(&param.param_type)?, param.name));
+                self.ir_type_to_c_type(&param.ty)?, param.name));
         }
         
         let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
@@ -94,19 +81,15 @@ impl ClangCodeGenerator {
         let return_type = self.ir_type_to_c_type(&function.return_type)?;
         let mut params = Vec::new();
         
-        for param in &function.parameters {
+        for param in &function.params {
             params.push(format!("{} {}", 
-                self.ir_type_to_c_type(&param.param_type)?, param.name));
+                self.ir_type_to_c_type(&param.ty)?, param.name));
         }
         
         let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
         let mut impl_code = format!("{} {}({}) {{\n", return_type, function.name, params_str);
         
-        // Generate local variables
-        for local in &function.locals {
-            impl_code.push_str(&format!("    {} {};\n", 
-                self.ir_type_to_c_type(&local.local_type)?, local.name));
-        }
+        // Generate local variables (remove this section since IRFunction doesn't have locals field)
         
         // Generate basic blocks
         for block in &function.blocks {
@@ -129,8 +112,8 @@ impl ClangCodeGenerator {
 
     fn generate_instruction(&self, instruction: &IRInstruction) -> Result<String> {
         match instruction {
-            IRInstruction::Assign { target, value } => {
-                Ok(format!("    {} = {};\n", target, self.generate_value(value)?))
+            IRInstruction::LoadConst { dest, value } => {
+                Ok(format!("    {} = {};\n", dest, self.generate_value(value)?))
             }
             IRInstruction::Call { dest, func, args } => {
                 let args_str = args.iter()
@@ -164,9 +147,17 @@ impl ClangCodeGenerator {
 
     fn generate_value(&self, value: &IRValue) -> Result<String> {
         match value {
-            IRValue::Constant { value, .. } => Ok(value.clone()),
-            IRValue::Variable { name, .. } => Ok(name.clone()),
-            IRValue::GlobalRef { name, .. } => Ok(name.clone()),
+            IRValue::ImmediateInt(i) => Ok(i.to_string()),
+            IRValue::ImmediateFloat(f) => Ok(f.to_string()),
+            IRValue::ImmediateBool(b) => Ok(if *b { "true".to_string() } else { "false".to_string() }),
+            IRValue::ImmediateString(s) => Ok(format!("\"{}\"", s)),
+            IRValue::Variable(name) => Ok(name.clone()),
+            IRValue::Null => Ok("NULL".to_string()),
+            IRValue::ConstantInt(i) => Ok(i.to_string()),
+            IRValue::ConstantFloat(f) => Ok(f.to_string()),
+            IRValue::ConstantBool(b) => Ok(if *b { "true".to_string() } else { "false".to_string() }),
+            IRValue::ConstantString(s) => Ok(format!("\"{}\"", s)),
+            IRValue::None => Ok("NULL".to_string()),
             _ => Ok("0".to_string()), // Default fallback
         }
     }
@@ -175,26 +166,28 @@ impl ClangCodeGenerator {
         match ir_type {
             IRType::Void => Ok("void".to_string()),
             IRType::Bool => Ok("bool".to_string()),
+            IRType::Int8 => Ok("int8_t".to_string()),
+            IRType::Int16 => Ok("int16_t".to_string()),
+            IRType::Int32 => Ok("int32_t".to_string()),
+            IRType::Int64 => Ok("int64_t".to_string()),
+            IRType::Float32 => Ok("float".to_string()),
+            IRType::Float64 => Ok("double".to_string()),
             IRType::I8 => Ok("int8_t".to_string()),
             IRType::I16 => Ok("int16_t".to_string()),
             IRType::I32 => Ok("int32_t".to_string()),
             IRType::I64 => Ok("int64_t".to_string()),
-            IRType::U8 => Ok("uint8_t".to_string()),
-            IRType::U16 => Ok("uint16_t".to_string()),
-            IRType::U32 => Ok("uint32_t".to_string()),
-            IRType::U64 => Ok("uint64_t".to_string()),
             IRType::F32 => Ok("float".to_string()),
             IRType::F64 => Ok("double".to_string()),
             IRType::String => Ok("char*".to_string()),
-            IRType::Pointer { pointee } => {
+            IRType::Pointer(pointee) => {
                 Ok(format!("{}*", self.ir_type_to_c_type(pointee)?))
             }
-            IRType::Array { element, size } => {
+            IRType::Array(element, size) => {
                 Ok(format!("{}[{}]", self.ir_type_to_c_type(element)?, size))
             }
-            IRType::Struct { .. } => Ok("struct".to_string()), // Will be handled by typedef
-            IRType::Enum { .. } => Ok("enum".to_string()), // Will be handled by typedef
-            IRType::Function { .. } => Ok("void*".to_string()), // Function pointer
+            IRType::Struct(fields) => Ok("struct".to_string()), // Will be handled by typedef
+            IRType::Function { params, return_type } => Ok("void*".to_string()), // Function pointer
+            _ => Ok("void".to_string()), // Default fallback
         }
     }
 

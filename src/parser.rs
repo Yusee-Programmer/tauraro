@@ -1062,8 +1062,8 @@ impl Parser {
             Ok(self.advance())
         } else {
             Err(ParseError::UnexpectedToken {
-                expected: token.to_string(),
-                found: self.peek().to_string(),
+                expected: format!("{}", token),
+                found: format!("{}", self.peek()),
             })
         }
     }

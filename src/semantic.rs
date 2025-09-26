@@ -93,9 +93,7 @@ impl SymbolTable {
 
     pub fn define(&mut self, name: String, type_info: TypeInfo) -> Result<(), SemanticError> {
         let current_scope = self.scopes.last_mut().unwrap();
-        if current_scope.contains_key(&name) {
-            return Err(SemanticError::DuplicateDefinition { name });
-        }
+        // Allow redefinition in the same scope for dynamic typing
         current_scope.insert(name, type_info);
         Ok(())
     }
@@ -866,14 +864,16 @@ impl Analyzer {
                         (l == "int" && r == "int") ||
                         (l == "float" || r == "float") ||
                         (l == "str" && r == "str") ||
-                        (l == "list" && r == "list")
+                        (l == "list" && r == "list") ||
+                        l == "any" || r == "any"  // Allow any type for dynamic typing
                 )
             }
             BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
                 matches!((left, right), 
                     (Type::Simple(l), Type::Simple(r)) if 
                         (l == "int" && r == "int") ||
-                        (l == "float" || r == "float")
+                        (l == "float" || r == "float") ||
+                        l == "any" || r == "any"  // Allow any type for dynamic typing
                 )
             }
             BinaryOp::Eq | BinaryOp::Ne => true, // Any types can be compared for equality
@@ -882,7 +882,8 @@ impl Analyzer {
                     (Type::Simple(l), Type::Simple(r)) if 
                         (l == "int" && r == "int") ||
                         (l == "float" || r == "float") ||
-                        (l == "str" && r == "str")
+                        (l == "str" && r == "str") ||
+                        l == "any" || r == "any"  // Allow any type for dynamic typing
                 )
             }
             BinaryOp::And | BinaryOp::Or => true, // Any types can be used in boolean context
