@@ -1,0 +1,55 @@
+{
+  "languages": [
+    {
+      "id": "tauraro",
+      "name": "Tauraro",
+      "aliases": ["Tauraro", "tauraro", "TauraroLang"],
+      "extensions": [".tr", ".tauraro"],
+      "mimetypes": ["text/x-tauraro"],
+      "firstLine": "^#!/.*\\btauraro\\b",
+      "configuration": {
+        "comments": {
+          "lineComment": "#",
+          "blockComment": ["\"\"\"", "\"\"\""]
+        },
+        "brackets": [
+          ["{", "}"],
+          ["[", "]"],
+          ["(", ")"]
+        ],
+        "autoClosingPairs": [
+          { "open": "{", "close": "}" },
+          { "open": "[", "close": "]" },
+          { "open": "(", "close": ")" },
+          { "open": "\"", "close": "\"", "notIn": ["string"] },
+          { "open": "'", "close": "'", "notIn": ["string", "comment"] }
+        ],
+        "surroundingPairs": [
+          ["{", "}"],
+          ["[", "]"],
+          ["(", ")"],
+          ["\"", "\""],
+          ["'", "'"]
+        ],
+        "indentationRules": {
+          "increaseIndentPattern": "^\\s*(class|def|func|aiki|iri|if|idan|elif|akasi|else|for|duk|while|yayinda|try|gwada|except|kama|finally|karshe|with|da|async|match|daidaita|case|yanayi)\\b.*:$",
+          "decreaseIndentPattern": "^\\s*(elif|akasi|else|except|kama|finally|karshe|case|yanayi)\\b.*:$"
+        },
+        "wordPattern": "[a-zA-Z_][a-zA-Z0-9_]*",
+        "folding": {
+          "markers": {
+            "start": "^\\s*#\\s*region\\b",
+            "end": "^\\s*#\\s*endregion\\b"
+          }
+        }
+      },
+      "grammar": {
+        "scopeName": "source.tauraro",
+        "path": "../.vscode/tauraro.tmLanguage.json"
+      },
+      "theme": {
+        "path": "./tauraro-theme.json"
+      }
+    }
+  ]
+}

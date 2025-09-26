@@ -1,0 +1,168 @@
+{
+  "name": "Tauraro Syntax Theme",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#1e1e1e",
+    "editor.foreground": "#d4d4d4",
+    "editorLineNumber.foreground": "#858585",
+    "editorCursor.foreground": "#aeafad",
+    "editor.selectionBackground": "#264f78",
+    "editor.inactiveSelectionBackground": "#3a3d41"
+  },
+  "tokenColors": [
+    {
+      "name": "Comment",
+      "scope": [
+        "comment",
+        "punctuation.definition.comment"
+      ],
+      "settings": {
+        "fontStyle": "italic",
+        "foreground": "#6A9955"
+      }
+    },
+    {
+      "name": "Keywords",
+      "scope": [
+        "keyword.control.tauraro",
+        "keyword.declaration.tauraro",
+        "keyword.import.tauraro",
+        "keyword.other.tauraro"
+      ],
+      "settings": {
+        "foreground": "#569CD6"
+      }
+    },
+    {
+      "name": "Logical Operators",
+      "scope": [
+        "keyword.operator.logical.tauraro"
+      ],
+      "settings": {
+        "foreground": "#569CD6"
+      }
+    },
+    {
+      "name": "Constants",
+      "scope": [
+        "constant.language.tauraro"
+      ],
+      "settings": {
+        "foreground": "#4FC1FF"
+      }
+    },
+    {
+      "name": "Strings",
+      "scope": [
+        "string.quoted.double.tauraro",
+        "string.quoted.single.tauraro",
+        "string.quoted.raw.double.tauraro",
+        "string.quoted.raw.single.tauraro"
+      ],
+      "settings": {
+        "foreground": "#CE9178"
+      }
+    },
+    {
+      "name": "F-Strings",
+      "scope": [
+        "string.interpolated.tauraro"
+      ],
+      "settings": {
+        "foreground": "#D7BA7D"
+      }
+    },
+    {
+      "name": "F-String Expressions",
+      "scope": [
+        "meta.embedded.expression.tauraro"
+      ],
+      "settings": {
+        "foreground": "#9CDCFE"
+      }
+    },
+    {
+      "name": "Numbers",
+      "scope": [
+        "constant.numeric.integer.tauraro",
+        "constant.numeric.float.tauraro",
+        "constant.numeric.binary.tauraro",
+        "constant.numeric.octal.tauraro",
+        "constant.numeric.hex.tauraro"
+      ],
+      "settings": {
+        "foreground": "#B5CEA8"
+      }
+    },
+    {
+      "name": "Operators",
+      "scope": [
+        "keyword.operator.arithmetic.tauraro",
+        "keyword.operator.assignment.tauraro",
+        "keyword.operator.comparison.tauraro",
+        "keyword.operator.bitwise.tauraro",
+        "keyword.operator.arrow.tauraro",
+        "keyword.operator.other.tauraro"
+      ],
+      "settings": {
+        "foreground": "#D4D4D4"
+      }
+    },
+    {
+      "name": "Function Names",
+      "scope": [
+        "entity.name.function.tauraro"
+      ],
+      "settings": {
+        "foreground": "#DCDCAA"
+      }
+    },
+    {
+      "name": "Class Names",
+      "scope": [
+        "entity.name.class.tauraro"
+      ],
+      "settings": {
+        "foreground": "#4EC9B0"
+      }
+    },
+    {
+      "name": "Built-in Functions",
+      "scope": [
+        "support.function.builtin.tauraro"
+      ],
+      "settings": {
+        "foreground": "#DCDCAA"
+      }
+    },
+    {
+      "name": "Decorators",
+      "scope": [
+        "entity.name.function.decorator.tauraro",
+        "punctuation.definition.decorator.tauraro"
+      ],
+      "settings": {
+        "foreground": "#FFFF00"
+      }
+    },
+    {
+      "name": "Variables",
+      "scope": [
+        "variable.other.tauraro",
+        "variable.parameter.tauraro"
+      ],
+      "settings": {
+        "foreground": "#9CDCFE"
+      }
+    },
+    {
+      "name": "Escape Characters",
+      "scope": [
+        "constant.character.escape.tauraro"
+      ],
+      "settings": {
+        "foreground": "#D7BA7D"
+      }
+    }
+  ]
+}

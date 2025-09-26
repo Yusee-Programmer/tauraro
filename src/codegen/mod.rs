@@ -1,5 +1,6 @@
 pub mod target;
 pub mod interpreter;
+pub mod native;
 
 #[cfg(feature = "llvm")]
 pub mod llvm;

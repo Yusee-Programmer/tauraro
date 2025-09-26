@@ -1,8 +1,14 @@
 use std::env;
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: {} <c_file>", args[0]);
+        std::process::exit(1);
+    }
+    
     let current_dir = env::current_dir().unwrap();
-    let c_file = current_dir.join("advanced_lib.c");
+    let c_file = current_dir.join(&args[1]);
     
     if !c_file.exists() {
         eprintln!("C file not found: {:?}", c_file);
@@ -14,13 +20,13 @@ fn main() {
     
     // Use cc crate to compile
     let mut build = cc::Build::new();
+    let output_name = c_file.file_stem().unwrap().to_str().unwrap();
     build
         .file(&c_file)
-        .shared_flag(true)
         .out_dir(&current_dir);
     
     // Try to compile and handle the output manually
-    match build.try_compile("advanced_lib") {
+    match build.try_compile(output_name) {
         Ok(_) => println!("Successfully compiled C library"),
         Err(e) => {
             eprintln!("Failed to compile: {}", e);
@@ -29,10 +35,12 @@ fn main() {
             println!("Attempting manual compilation...");
             
             // Try with different compiler commands
+            let exe_name = format!("{}.exe", output_name);
+            let cl_output_arg = format!("/Fe:{}", exe_name);
             let commands = vec![
-                ("gcc", vec!["-shared", "-fPIC", "-o", "advanced_lib.dll", "advanced_lib.c", "-lm"]),
-                ("clang", vec!["-shared", "-fPIC", "-o", "advanced_lib.dll", "advanced_lib.c", "-lm"]),
-                ("cl", vec!["/LD", "advanced_lib.c", "/Fe:advanced_lib.dll"]),
+                ("gcc", vec!["-o", &exe_name, &args[1], "-lm"]),
+                ("clang", vec!["-o", &exe_name, &args[1], "-lm"]),
+                ("cl", vec![&args[1], &cl_output_arg]),
             ];
             
             for (compiler, args) in commands {

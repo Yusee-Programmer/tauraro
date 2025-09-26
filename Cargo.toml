@@ -40,11 +40,13 @@ pyo3 = { version = "0.20", features = ["auto-initialize"], optional = true }
 tokio = { version = "1.0", features = ["full"], optional = true }
 
 [features]
-default = ["interpreter", "async"]
+default = ["interpreter", "async", "clang"]
 interpreter = []  # VM-based execution
 llvm = ["dep:llvm-sys", "dep:inkwell"]  # LLVM backend
 wasm = ["dep:wasmer", "dep:object"]  # WebAssembly backend
 c-backend = []  # C code generation backend
+clang = []  # Clang backend for native compilation
+gcc = []  # GCC backend for native compilation
 ffi = ["dep:libffi", "dep:libloading", "dep:winapi"]  # Foreign Function Interface
 python-interop = ["dep:pyo3"]  # Python interoperability
 async = ["dep:tokio"]  # Async/await support

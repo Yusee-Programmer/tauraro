@@ -15,6 +15,8 @@ mod ffi;
 mod modules;
 mod object_system;
 
+use crate::codegen::{CodeGen, CodegenOptions, Target, CodeGenerator};
+
 #[derive(Parser)]
 #[command(name = "tauraro")]
 #[command(about = "TauraroLang: A flexible programming language", long_about = None)]
@@ -74,6 +76,10 @@ enum Commands {
         /// Enable strict type checking
         #[arg(long)]
         strict_types: bool,
+        
+        /// Compile generated C code to native binary/library
+        #[arg(long)]
+        native: bool,
     },
 }
 
@@ -101,6 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             export, 
             generate_header,
             strict_types,
+            native,
         } => {
             compile_file(
                 &file, 
@@ -111,6 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 export, 
                 generate_header,
                 strict_types,
+                native,
             )?;
         }
     }
@@ -127,6 +135,7 @@ fn compile_file(
     export: bool,
     generate_header: bool,
     strict_types: bool,
+    native: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
     
@@ -156,9 +165,81 @@ fn compile_file(
             return Err("LLVM backend not enabled".into());
         }
         "c" => {
-            let output_path = output.map_or_else(|| PathBuf::from("output.c"), |p| p.clone());
+            let output_path = output.map_or_else(|| PathBuf::from("output.c"), |p| {
+                // Ensure the C file has a .c extension
+                if p.extension().is_none() || p.extension() != Some(std::ffi::OsStr::new("c")) {
+                    let mut c_path = p.clone();
+                    c_path.set_extension("c");
+                    c_path
+                } else {
+                    p.clone()
+                }
+            });
             codegen::c_abi::CCodeGen::new()
-                .compile(ir_module, &output_path, export, generate_header)?;
+                .compile(ir_module.clone(), &output_path, export, generate_header)?;
+            
+            // If native flag is set, compile the generated C code to native binary
+            if native {
+                use codegen::native::{NativeCompiler, OutputType};
+                use codegen::{CodegenOptions, Target};
+                
+                let compiler = NativeCompiler::new();
+                let output_type = if export {
+                    OutputType::SharedLibrary
+                } else {
+                    OutputType::Executable
+                };
+                
+                // Create minimal codegen options for native compilation
+                let options = CodegenOptions {
+                    target: Target::C,
+                    export_symbols: export,
+                    enable_async: false,  // Disable async to avoid pthread.h
+                    enable_ffi: false,    // Disable FFI to avoid dlfcn.h
+                    output_path: Some(output_path.to_string_lossy().to_string()),
+                    ..Default::default()
+                };
+                
+                // Regenerate C code without async/FFI features for native compilation
+                let mut generator = codegen::c_abi::CCodeGenerator::new();
+                if generate_header {
+                    generator = generator.with_header(true);
+                }
+                let c_code = generator.generate(ir_module.clone(), &options)?;
+                std::fs::write(&output_path, c_code)?;
+                
+                // Determine native output path
+                let native_output = if let Some(orig_output) = output {
+                    // If user specified output, use it but change extension appropriately
+                    let stem = orig_output.file_stem()
+                        .unwrap_or_else(|| std::ffi::OsStr::new("output"))
+                        .to_string_lossy();
+                    
+                    let platform = codegen::native::TargetPlatform::detect();
+                    let extension = match output_type {
+                        OutputType::Executable => platform.executable_extension(),
+                        OutputType::SharedLibrary => platform.library_extension(),
+                        _ => "",
+                    };
+                    
+                    if extension.is_empty() {
+                        PathBuf::from(stem.as_ref())
+                    } else {
+                        PathBuf::from(format!("{}.{}", stem, extension))
+                    }
+                } else {
+                    // Let the native compiler determine the output path
+                    PathBuf::new()
+                };
+                
+                let final_output = if native_output == PathBuf::new() {
+                    None
+                } else {
+                    Some(native_output.as_path())
+                };
+                
+                compiler.compile_c_to_native(&output_path, final_output, output_type, export)?;
+            }
         }
         "wasm" => {
             #[cfg(feature = "wasm")]

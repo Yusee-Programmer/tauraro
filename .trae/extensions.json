@@ -1,0 +1,39 @@
+{
+  "extensions": [
+    {
+      "id": "tauraro-language-support",
+      "name": "Tauraro Language Support",
+      "version": "1.0.0",
+      "description": "Syntax highlighting and language support for Tauraro programming language",
+      "publisher": "TauraroLang",
+      "categories": ["Programming Languages", "Syntax Highlighting"],
+      "keywords": ["tauraro", "programming language", "syntax highlighting", "hausa", "bilingual"],
+      "main": "./tauraro-extension.js",
+      "activationEvents": ["onLanguage:tauraro"],
+      "contributes": {
+        "languages": [
+          {
+            "id": "tauraro",
+            "aliases": ["Tauraro", "tauraro", "TauraroLang"],
+            "extensions": [".tr", ".tauraro"],
+            "configuration": "../.vscode/language-configuration.json"
+          }
+        ],
+        "grammars": [
+          {
+            "language": "tauraro",
+            "scopeName": "source.tauraro",
+            "path": "../.vscode/tauraro.tmLanguage.json"
+          }
+        ],
+        "themes": [
+          {
+            "label": "Tauraro Dark",
+            "uiTheme": "vs-dark",
+            "path": "./tauraro-theme.json"
+          }
+        ]
+      }
+    }
+  ]
+}
