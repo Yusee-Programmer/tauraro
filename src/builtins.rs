@@ -348,6 +348,14 @@ pub fn builtin_dir(args: Vec<Value>) -> Result<Value> {
                         .collect();
                     Ok(Value::List(key_values))
                 }
+                Value::Module(_, namespace) => {
+                    let mut keys: Vec<String> = namespace.keys().cloned().collect();
+                    keys.sort();
+                    let key_values: Vec<Value> = keys.into_iter()
+                        .map(|k| Value::String(k))
+                        .collect();
+                    Ok(Value::List(key_values))
+                }
                 _ => {
                     // Return basic type methods/attributes
                     let type_name = type_name(&args[0]);

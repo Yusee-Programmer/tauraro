@@ -7,6 +7,7 @@ use crate::ast::*;
 use crate::value::Value;
 use crate::object_system::{call_dunder_method, resolve_dunder_method};
 use crate::semantic;
+use crate::modules;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -462,6 +463,13 @@ impl VM {
                             Ok(value.clone())
                         } else {
                             Err(anyhow::anyhow!("'{}' object has no attribute '{}'", "object", name))
+                        }
+                    }
+                    Value::Module(_, namespace) => {
+                        if let Some(value) = namespace.get(name) {
+                            Ok(value.clone())
+                        } else {
+                            Err(anyhow::anyhow!("'module' object has no method '{}'", name))
                         }
                     }
                     _ => Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj_value.type_name(), name)),
@@ -1919,10 +1927,17 @@ impl VM {
             ("list", Self::builtin_list),
             ("sum", Self::builtin_sum),
             ("set", crate::builtins::builtin_set),
+            ("dir", crate::builtins::builtin_dir),
         ];
         
         for (name, func) in builtins {
             self.set_variable(name, Value::BuiltinFunction(name.to_string(), func));
+        }
+        
+        // Initialize built-in modules
+        let builtin_modules = modules::init_builtin_modules();
+        for (name, module) in builtin_modules {
+            self.set_variable(&name, module);
         }
     }
     
