@@ -393,6 +393,7 @@ impl ModuleSystem {
                 namespace.insert("pathsep".to_string(), Value::String(std::path::MAIN_SEPARATOR.to_string()));
                 Some(Value::Module("os".to_string(), namespace))
             }
+            "thread" => Some(crate::modules::thread::create_thread_module()),
             _ => None,
         }
     }

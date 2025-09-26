@@ -28,6 +28,7 @@ Cargo.lock
 *.bc    # LLVM bitcode files
 *.o     # Object files
 *.obj   # Windows object files
+*.tr
 
 # Build and error logs
 *.txt
@@ -70,11 +71,11 @@ Thumbs.db
 /rust-analyzer
 
 # If you generate docs locally
-/doc
+#/doc
 /docs/_build
 
 # Markdown files
-*.md
+#*.md
 
 # Coverage or profiling output
 *.profdata
