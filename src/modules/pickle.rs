@@ -207,8 +207,8 @@ fn pickle_pickler(args: Vec<Value>) -> Result<Value> {
     let mut pickler_obj = HashMap::new();
     pickler_obj.insert("file".to_string(), args[0].clone());
     pickler_obj.insert("protocol".to_string(), Value::Int(DEFAULT_PROTOCOL));
-    pickler_obj.insert("dump".to_string(), Value::Function("dump".to_string(), vec![], vec![], None));
-    pickler_obj.insert("clear_memo".to_string(), Value::Function("clear_memo".to_string(), vec![], vec![], None));
+    pickler_obj.insert("dump".to_string(), Value::NativeFunction(pickler_dump));
+    pickler_obj.insert("clear_memo".to_string(), Value::NativeFunction(pickler_clear_memo));
     
     Ok(Value::Object {
         class_name: "Pickler".to_string(),
@@ -216,6 +216,91 @@ fn pickle_pickler(args: Vec<Value>) -> Result<Value> {
         base_object: crate::base_object::BaseObject::new("Pickler".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Pickler".to_string(), "object".to_string()]),
     })
+}
+
+/// Pickler.dump() - Dump object to file
+fn pickler_dump(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("dump() missing required argument: 'obj'"));
+    }
+    
+    // Placeholder implementation
+    Ok(Value::None)
+}
+
+/// Pickler.clear_memo() - Clear the memo dictionary
+fn pickler_clear_memo(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("clear_memo() missing self argument"));
+    }
+    
+    // Placeholder implementation
+    Ok(Value::None)
+}
+
+/// Unpickler.load() - Load object from file
+fn unpickler_load(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("load() missing self argument"));
+    }
+    
+    // Placeholder implementation
+    Ok(Value::Str("Loaded object placeholder".to_string()))
+}
+
+/// Unpickler.find_class() - Find class for unpickling
+fn unpickler_find_class(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 3 {
+        return Err(anyhow::anyhow!("find_class() missing required arguments"));
+    }
+    
+    // Placeholder implementation
+    Ok(Value::None)
+}
+
+/// PickleError.__str__ - String representation of pickle error
+fn pickle_error_str(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("__str__() missing self argument"));
+    }
+    
+    if let Value::Object { fields, .. } = &args[0] {
+        if let Some(Value::Str(message)) = fields.get("message") {
+            return Ok(Value::Str(message.clone()));
+        }
+    }
+    
+    Ok(Value::Str("Pickle error".to_string()))
+}
+
+/// PicklingError.__str__ - String representation of pickling error
+fn pickling_error_str(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("__str__() missing self argument"));
+    }
+    
+    if let Value::Object { fields, .. } = &args[0] {
+        if let Some(Value::Str(message)) = fields.get("message") {
+            return Ok(Value::Str(message.clone()));
+        }
+    }
+    
+    Ok(Value::Str("Pickling error".to_string()))
+}
+
+/// UnpicklingError.__str__ - String representation of unpickling error
+fn unpickling_error_str(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("__str__() missing self argument"));
+    }
+    
+    if let Value::Object { fields, .. } = &args[0] {
+        if let Some(Value::Str(message)) = fields.get("message") {
+            return Ok(Value::Str(message.clone()));
+        }
+    }
+    
+    Ok(Value::Str("Unpickling error".to_string()))
 }
 
 /// pickle.Unpickler(file, *, fix_imports=True, encoding="ASCII", errors="strict", buffers=None)
@@ -226,8 +311,8 @@ fn pickle_unpickler(args: Vec<Value>) -> Result<Value> {
     
     let mut unpickler_obj = HashMap::new();
     unpickler_obj.insert("file".to_string(), args[0].clone());
-    unpickler_obj.insert("load".to_string(), Value::Function("load".to_string(), vec![], vec![], None));
-    unpickler_obj.insert("find_class".to_string(), Value::Function("find_class".to_string(), vec![], vec![], None));
+    unpickler_obj.insert("load".to_string(), Value::NativeFunction(unpickler_load));
+    unpickler_obj.insert("find_class".to_string(), Value::NativeFunction(unpickler_find_class));
     
     Ok(Value::Object {
         class_name: "Unpickler".to_string(),
@@ -250,7 +335,7 @@ fn pickle_error(args: Vec<Value>) -> Result<Value> {
     
     let mut error_obj = HashMap::new();
     error_obj.insert("message".to_string(), Value::Str(message));
-    error_obj.insert("__str__".to_string(), Value::Function("__str__".to_string(), vec![], vec![], None));
+    error_obj.insert("__str__".to_string(), Value::NativeFunction(pickle_error_str));
     
     Ok(Value::Object {
         class_name: "PickleError".to_string(),
@@ -273,7 +358,7 @@ fn pickling_error(args: Vec<Value>) -> Result<Value> {
     
     let mut error_obj = HashMap::new();
     error_obj.insert("message".to_string(), Value::Str(message));
-    error_obj.insert("__str__".to_string(), Value::Function("__str__".to_string(), vec![], vec![], None));
+    error_obj.insert("__str__".to_string(), Value::NativeFunction(pickling_error_str));
     
     Ok(Value::Object {
         class_name: "PicklingError".to_string(),
@@ -296,7 +381,7 @@ fn unpickling_error(args: Vec<Value>) -> Result<Value> {
     
     let mut error_obj = HashMap::new();
     error_obj.insert("message".to_string(), Value::Str(message));
-    error_obj.insert("__str__".to_string(), Value::Function("__str__".to_string(), vec![], vec![], None));
+    error_obj.insert("__str__".to_string(), Value::NativeFunction(unpickling_error_str));
     
     Ok(Value::Object {
         class_name: "UnpicklingError".to_string(),

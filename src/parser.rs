@@ -866,15 +866,15 @@ impl Parser {
                 expr = self.finish_call(expr)?;
             } else if self.match_token(&[Token::Dot]) {
                 let attr = self.consume_identifier()?;
-                // Check if this is a method call (attribute followed by parentheses)
+                // Always create an attribute expression first
+                expr = Expr::Attribute {
+                    object: Box::new(expr),
+                    name: attr,
+                };
+                // If there's a parenthesis after the attribute, it's a function call on that attribute
                 if self.check(&Token::LParen) {
                     self.advance(); // consume the '('
-                    expr = self.finish_method_call(expr, attr)?;
-                } else {
-                    expr = Expr::Attribute {
-                        object: Box::new(expr),
-                        name: attr,
-                    };
+                    expr = self.finish_call(expr)?;
                 }
             } else if self.match_token(&[Token::LBracket]) {
                 // Check if this is a slice or subscript

@@ -396,24 +396,44 @@ impl<'a> Iterator for Lexer<'a> {
                     // Get the line content to check indentation
                     let source = self.inner.source();
                     
-                    // Find the start of the current line
+                    // Find the start of the current line using char_indices for UTF-8 safety
                     let mut line_begin = span.start;
-                    while line_begin > 0 {
-                        if let Some(ch) = source.chars().nth(line_begin - 1) {
-                            if ch == '\n' {
-                                break;
-                            }
-                            line_begin -= 1;
-                        } else {
+                    let char_indices: Vec<(usize, char)> = source.char_indices().collect();
+                    
+                    // Find the character index that corresponds to span.start
+                    let mut span_char_idx = 0;
+                    for (i, (byte_idx, _)) in char_indices.iter().enumerate() {
+                        if *byte_idx >= span.start {
+                            span_char_idx = i;
                             break;
                         }
                     }
                     
+                    // Find the beginning of the line by looking backwards for newline
+                    let mut line_char_begin = span_char_idx;
+                    while line_char_begin > 0 {
+                        if char_indices[line_char_begin - 1].1 == '\n' {
+                            break;
+                        }
+                        line_char_begin -= 1;
+                    }
+                    
+                    // Get the byte index for the line beginning
+                    line_begin = if line_char_begin < char_indices.len() {
+                        char_indices[line_char_begin].0
+                    } else {
+                        0
+                    };
+                    
                     // Only handle indentation if we're actually at the start of a new line (after newline)
                     // Skip indentation handling for the very first line
                     if line_begin > 0 || (line_begin == 0 && self.line > 1) {
-                        // Extract the whitespace at the beginning of the line
-                        let line_content = &source[line_begin..span.start];
+                        // Extract the whitespace at the beginning of the line safely
+                        let line_content = if line_begin <= span.start && span.start <= source.len() {
+                            &source[line_begin..span.start]
+                        } else {
+                            "" // Fallback to empty string if indices are invalid
+                        };
                         
                         if let Some(indent_token) = self.handle_indentation(line_content) {
                             // Buffer the current token for next iteration

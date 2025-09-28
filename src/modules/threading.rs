@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 /// Thread-safe counter for generating unique thread IDs
 static THREAD_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
-/// Create the thread module object with all its functions and attributes
-pub fn create_thread_module() -> Value {
+/// Create the threading module object with all its functions and attributes
+pub fn create_threading_module() -> Value {
     let mut namespace = HashMap::new();
     
     // Threading functions
@@ -42,7 +42,12 @@ pub fn create_thread_module() -> Value {
     // Constants
     namespace.insert("TIMEOUT_MAX".to_string(), Value::Float(f64::MAX));
     
-    Value::Module("thread".to_string(), namespace)
+    Value::Module("threading".to_string(), namespace)
+}
+
+/// Create the thread module object with all its functions and attributes (alias for compatibility)
+pub fn create_thread_module() -> Value {
+    create_threading_module()
 }
 
 // Thread management structures

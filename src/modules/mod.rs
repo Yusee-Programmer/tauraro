@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 pub mod os;
 pub mod sys;
-pub mod thread;
+pub mod threading;
 pub mod time;
 pub mod datetime;
 pub mod io;
@@ -25,6 +25,11 @@ pub mod urllib;
 pub mod csv;
 pub mod logging;
 pub mod unittest;
+pub mod socket;
+pub mod asyncio;
+pub mod httptools;
+pub mod websockets;
+pub mod httpx;
 
 /// Initialize all built-in modules and return them as a HashMap
 pub fn init_builtin_modules() -> HashMap<String, Value> {
@@ -33,7 +38,7 @@ pub fn init_builtin_modules() -> HashMap<String, Value> {
     // Add built-in modules
     modules.insert("os".to_string(), os::create_os_module());
     modules.insert("sys".to_string(), sys::create_sys_module());
-    modules.insert("thread".to_string(), thread::create_thread_module());
+    modules.insert("threading".to_string(), threading::create_threading_module());
     modules.insert("time".to_string(), time::create_time_module());
     modules.insert("datetime".to_string(), datetime::create_datetime_module());
     modules.insert("io".to_string(), io::create_io_module());
@@ -52,6 +57,11 @@ pub fn init_builtin_modules() -> HashMap<String, Value> {
     modules.insert("csv".to_string(), csv::create_csv_module());
     modules.insert("logging".to_string(), logging::create_logging_module());
     modules.insert("unittest".to_string(), unittest::create_unittest_module());
+    modules.insert("socket".to_string(), socket::create_socket_module());
+    modules.insert("asyncio".to_string(), asyncio::create_asyncio_module());
+    modules.insert("httptools".to_string(), httptools::create_httptools_module());
+    modules.insert("websockets".to_string(), websockets::create_websockets_module());
+    modules.insert("httpx".to_string(), httpx::create_httpx_module());
     
     modules
 }
@@ -61,7 +71,7 @@ pub fn get_builtin_module(name: &str) -> Option<Value> {
     match name {
         "os" => Some(os::create_os_module()),
         "sys" => Some(sys::create_sys_module()),
-        "thread" => Some(thread::create_thread_module()),
+        "threading" => Some(threading::create_threading_module()),
         "time" => Some(time::create_time_module()),
         "datetime" => Some(datetime::create_datetime_module()),
         "io" => Some(io::create_io_module()),
@@ -80,13 +90,18 @@ pub fn get_builtin_module(name: &str) -> Option<Value> {
         "csv" => Some(csv::create_csv_module()),
         "logging" => Some(logging::create_logging_module()),
         "unittest" => Some(unittest::create_unittest_module()),
+        "socket" => Some(socket::create_socket_module()),
+        "asyncio" => Some(asyncio::create_asyncio_module()),
+        "httptools" => Some(httptools::create_httptools_module()),
+        "websockets" => Some(websockets::create_websockets_module()),
+        "httpx" => Some(httpx::create_httpx_module()),
         _ => None,
     }
 }
 
 /// Check if a module name is a built-in module
 pub fn is_builtin_module(name: &str) -> bool {
-    matches!(name, "os" | "sys" | "thread" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest")
+    matches!(name, "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx")
 }
 
 /// Get list of all built-in module names
@@ -94,7 +109,7 @@ pub fn get_builtin_module_names() -> Vec<String> {
     vec![
         "os".to_string(),
         "sys".to_string(),
-        "thread".to_string(),
+        "threading".to_string(),
         "time".to_string(),
         "datetime".to_string(),
         "io".to_string(),
@@ -113,5 +128,10 @@ pub fn get_builtin_module_names() -> Vec<String> {
         "csv".to_string(),
         "logging".to_string(),
         "unittest".to_string(),
+        "socket".to_string(),
+        "asyncio".to_string(),
+        "httptools".to_string(),
+        "websockets".to_string(),
+        "httpx".to_string(),
     ]
 }

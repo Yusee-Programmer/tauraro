@@ -18,6 +18,21 @@ pub fn create_copy_module() -> Value {
     Value::Module("copy".to_string(), namespace)
 }
 
+/// copy.Error.__str__ - String representation of copy error
+fn copy_error_str(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("__str__() missing self argument"));
+    }
+    
+    if let Value::Object { fields, .. } = &args[0] {
+        if let Some(Value::Str(message)) = fields.get("message") {
+            return Ok(Value::Str(message.clone()));
+        }
+    }
+    
+    Ok(Value::Str("Copy error".to_string()))
+}
+
 /// Get a copy module function by name
 pub fn get_copy_function(name: &str) -> Option<fn(Vec<Value>) -> Result<Value>> {
     match name {
@@ -162,7 +177,7 @@ fn copy_error(args: Vec<Value>) -> Result<Value> {
     
     let mut error_obj = HashMap::new();
     error_obj.insert("message".to_string(), Value::Str(message));
-    error_obj.insert("__str__".to_string(), Value::Function("__str__".to_string(), vec![], vec![], None));
+    error_obj.insert("__str__".to_string(), Value::NativeFunction(copy_error_str));
     
     Ok(Value::Object {
         class_name: "Error".to_string(),

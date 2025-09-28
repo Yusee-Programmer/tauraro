@@ -163,7 +163,7 @@ fn create_modules_dict() -> Value {
     // Add built-in modules
     modules.insert("sys".to_string(), Value::Str("<module 'sys' (built-in)>".to_string()));
     modules.insert("os".to_string(), crate::modules::os::create_os_module());
-    modules.insert("thread".to_string(), crate::modules::thread::create_thread_module());
+    modules.insert("thread".to_string(), crate::modules::threading::create_thread_module());
     modules.insert("builtins".to_string(), Value::Str("<module 'builtins' (built-in)>".to_string()));
     
     Value::Dict(modules)

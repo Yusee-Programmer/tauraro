@@ -45,6 +45,21 @@ lazy_static = "1.4"
 # Regular expressions
 regex = "1.10"
 
+# URL parsing
+url = "2.4"
+
+# Hostname for socket module
+hostname = "0.3"
+
+# HTTP and WebSocket libraries
+hyper = { version = "1.0", features = ["full"], optional = true }
+reqwest = { version = "0.11", features = ["json", "stream"], optional = true }
+tungstenite = { version = "0.21", optional = true }
+tokio-tungstenite = { version = "0.21", optional = true }
+http = "1.0"
+httparse = "1.8"
+futures = { version = "0.3", optional = true }
+
 # Cryptographic hashing
 sha1 = "0.10"
 sha2 = "0.10"
@@ -52,7 +67,7 @@ sha3 = "0.10"
 md5 = { package = "md-5", version = "0.10" }
 
 [features]
-default = ["interpreter", "async", "clang"]
+default = ["interpreter", "async", "clang", "http"]
 interpreter = []  # VM-based execution
 llvm = ["dep:llvm-sys", "dep:inkwell"]  # LLVM backend
 wasm = ["dep:wasmer", "dep:object"]  # WebAssembly backend
@@ -61,7 +76,8 @@ clang = []  # Clang backend for native compilation
 gcc = []  # GCC backend for native compilation
 ffi = ["dep:libffi", "dep:libloading", "dep:winapi"]  # Foreign Function Interface
 python-interop = ["dep:pyo3"]  # Python interoperability
-async = ["dep:tokio"]  # Async/await support
+async = ["dep:tokio", "dep:futures"]  # Async/await support
+http = ["dep:hyper", "dep:reqwest", "dep:tungstenite", "dep:tokio-tungstenite"]  # HTTP and WebSocket support
 
 [dev-dependencies]
 pretty_assertions = "1.4"

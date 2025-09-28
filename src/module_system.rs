@@ -424,9 +424,15 @@ impl ModuleSystem {
         match module_name {
             "sys" => Some(crate::modules::sys::create_sys_module()),
             "os" => Some(crate::modules::os::create_os_module()),
-            "thread" => Some(crate::modules::thread::create_thread_module()),
+            "thread" => Some(crate::modules::threading::create_thread_module()),
+            "threading" => Some(crate::modules::threading::create_threading_module()),
             "time" => Some(crate::modules::time::create_time_module()),
             "datetime" => Some(crate::modules::datetime::create_datetime_module()),
+            "socket" => Some(crate::modules::socket::create_socket_module()),
+            "asyncio" => Some(crate::modules::asyncio::create_asyncio_module()),
+            "httptools" => Some(crate::modules::httptools::create_httptools_module()),
+            "websockets" => Some(crate::modules::websockets::create_websockets_module()),
+            "httpx" => Some(crate::modules::httpx::create_httpx_module()),
             _ => None,
         }
     }
