@@ -1,246 +1,767 @@
-# FFI and Interoperability Guide
+# FFI and Python Interoperability Guide
 
-TauraroLang provides powerful Foreign Function Interface (FFI) capabilities, allowing seamless integration with C libraries, Python modules, and other programming languages. This guide covers everything you need to know about interoperability.
+This guide covers TauraroLang's Foreign Function Interface (FFI) system and Python interoperability features, enabling seamless integration with C libraries and Python modules.
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [C FFI](#c-ffi)
+2. [FFI System](#ffi-system)
 3. [Python Interoperability](#python-interoperability)
-4. [JavaScript Integration](#javascript-integration)
-5. [Rust Integration](#rust-integration)
-6. [Memory Management](#memory-management)
-7. [Error Handling](#error-handling)
-8. [Performance Considerations](#performance-considerations)
-9. [Best Practices](#best-practices)
-10. [Troubleshooting](#troubleshooting)
+4. [Type Conversion](#type-conversion)
+5. [Memory Management](#memory-management)
+6. [Error Handling](#error-handling)
+7. [Best Practices](#best-practices)
+8. [Examples](#examples)
+9. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
-TauraroLang's FFI system enables:
+TauraroLang provides two main interoperability mechanisms:
 
-- **C Library Integration**: Call C functions and use C data structures
-- **Python Module Access**: Import and use Python libraries
-- **JavaScript Interop**: Seamless web integration via WebAssembly
-- **Rust Integration**: Direct integration with Rust crates
-- **System API Access**: Platform-specific system calls
-- **Database Connectivity**: Direct database driver integration
+1. **FFI (Foreign Function Interface)**: Direct integration with C libraries and native code
+2. **Python Interoperability**: Bidirectional integration with Python modules and functions
 
-### FFI Architecture
+Both systems are designed with safety and performance in mind, providing automatic memory management and type conversion while maintaining native performance.
+
+### Feature Availability
+
+FFI and Python interoperability are optional features that can be enabled during compilation:
+
+```bash
+# Enable FFI support
+cargo build --features ffi
+
+# Enable Python interoperability
+cargo build --features python-interop
+
+# Enable both
+cargo build --features "ffi,python-interop"
+```
+
+## FFI System
+
+The FFI system allows TauraroLang to call functions from C libraries and native code directly.
+
+### Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   TauraroLang   │    │   FFI Bridge    │    │  External Code  │
-│                 │◄──►│                 │◄──►│                 │
-│  - Functions    │    │  - Type Conv.   │    │  - C Libraries  │
-│  - Data Types   │    │  - Memory Mgmt  │    │  - Python Mods  │
-│  - Objects      │    │  - Error Handle │    │  - JS Functions │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+TauraroLang Code
+       ↓
+   FFI Manager
+       ↓
+  Type Conversion
+       ↓
+   C Function Call
+       ↓
+  Result Conversion
+       ↓
+  TauraroLang Value
 ```
 
-## C FFI
+### Core Components
 
-### Basic C Integration
+#### FFI Types
 
-#### Declaring External Functions
+TauraroLang supports the following FFI types for C interoperability:
 
-```tauraro
-// Declare external C functions
-extern "C" {
-    fn printf(format: string, ...) -> int
-    fn malloc(size: int) -> ptr
-    fn free(ptr: ptr)
-    fn strlen(str: string) -> int
-    fn strcmp(str1: string, str2: string) -> int
+```rust
+enum FFIType {
+    Void,           // void
+    Int8,           // int8_t
+    Int16,          // int16_t
+    Int32,          // int32_t
+    Int64,          // int64_t
+    UInt8,          // uint8_t
+    UInt16,         // uint16_t
+    UInt32,         // uint32_t
+    UInt64,         // uint64_t
+    Float32,        // float
+    Float64,        // double
+    Bool,           // bool
+    Pointer,        // void*
+    String,         // const char*
+    Buffer,         // Binary data
 }
+```
 
-// Use C functions
-fn main() {
-    printf("Hello from C!\n")
+#### Calling Conventions
+
+Supported calling conventions:
+
+- **C**: Standard C ABI (default)
+- **StdCall**: Windows stdcall convention
+- **FastCall**: Fast call convention
+- **System**: System default convention
+
+### Loading External Libraries
+
+#### Basic Library Loading
+
+```python
+# Load a shared library
+import ffi
+
+# Load library (platform-specific extension automatically detected)
+lib = ffi.load_library("mylib")  # Loads mylib.dll/.so/.dylib
+
+# Register functions with their signatures
+lib.register_function("add", [ffi.Int32, ffi.Int32], ffi.Int32)
+lib.register_function("sqrt", [ffi.Float64], ffi.Float64)
+lib.register_function("strlen", [ffi.String], ffi.Int32)
+
+# Call functions
+result = lib.call("add", [10, 20])  # Returns 30
+length = lib.call("strlen", ["Hello"])  # Returns 5
+```
+
+#### Function Registration
+
+Functions must be registered with their signatures before calling:
+
+```python
+# Register a function with signature
+lib.register_function(
+    name="function_name",
+    param_types=[ffi.Int32, ffi.String],  # Parameter types
+    return_type=ffi.Float64,              # Return type
+    calling_convention=ffi.CallingConvention.C  # Optional
+)
+```
+
+#### Safe FFI Calls
+
+The FFI system provides memory-safe function calls:
+
+```python
+# Safe FFI call with automatic cleanup
+with ffi.SafeFFI() as safe_ffi:
+    lib = safe_ffi.load_library("mylib")
+    lib.register_function("process_data", [ffi.Buffer], ffi.Int32)
     
-    let text = "TauraroLang"
-    let length = strlen(text)
-    printf("Length of '%s': %d\n", text, length)
-}
+    data = b"Hello, World!"
+    result = lib.call("process_data", [data])
+    # Library automatically unloaded and memory cleaned up
 ```
 
-#### Type Mappings
+### Built-in C Functions
 
-| TauraroLang Type | C Type | Description |
-|------------------|--------|-------------|
+TauraroLang provides built-in support for common C standard library functions:
+
+```python
+# These functions are automatically available
+print("Hello, World!")           # Calls printf internally
+result = malloc(1024)            # Allocate memory
+free(result)                     # Free memory
+
+# String functions
+length = strlen("test")          # Get string length
+comparison = strcmp("a", "b")    # Compare strings
+```
+
+## Python Interoperability
+
+TauraroLang provides bidirectional integration with Python, allowing you to call Python functions from TauraroLang and vice versa.
+
+### Architecture
+
+```
+TauraroLang ←→ Python Bridge ←→ Python Runtime
+     ↑              ↑                  ↑
+   Values      Type Conversion    Python Objects
+```
+
+### Core Components
+
+#### PythonInterop Manager
+
+The `PythonInterop` manager handles all Python integration:
+
+```python
+# Initialize Python interoperability
+python = PythonInterop.new()
+
+# Import Python modules
+numpy = python.import_module("numpy")
+pandas = python.import_module("pandas")
+
+# Call Python functions
+result = python.call_function("numpy.array", [[1, 2, 3, 4]])
+```
+
+#### Python Integration in VM
+
+The TauraroLang VM can be extended with Python modules:
+
+```python
+# Create VM with Python integration
+vm = TauraroVM.new()
+integration = PythonIntegration.new()
+
+# Add Python modules to VM
+integration.add_module("math", python.import_module("math"))
+integration.add_module("json", python.import_module("json"))
+
+vm.set_python_integration(integration)
+```
+
+### Using Python from TauraroLang
+
+#### Importing Python Modules
+
+```python
+# Import standard library modules
+import math
+import json
+import os
+
+# Import third-party packages
+import numpy as np
+import pandas as pd
+import requests
+
+# Use Python functions
+result = math.sqrt(16)           # Returns 4.0
+data = json.loads('{"key": "value"}')
+files = os.listdir(".")
+```
+
+#### Calling Python Functions
+
+```python
+# Call Python functions with arguments
+def python_function(a, b, c=None):
+    return a + b + (c or 0)
+
+# From TauraroLang
+result = python_function(1, 2, c=3)  # Returns 6
+
+# Call with keyword arguments
+result = python_function(a=10, b=20)  # Returns 30
+```
+
+#### Working with Python Objects
+
+```python
+# Create and manipulate Python objects
+data = {
+    "name": "TauraroLang",
+    "version": "1.0",
+    "features": ["FFI", "Python", "WebAssembly"]
+}
+
+# Access object properties
+name = data["name"]
+features = data["features"]
+
+# Call object methods
+features.append("LLVM")
+length = len(features)
+```
+
+### Using TauraroLang from Python
+
+#### PyO3 Bindings
+
+TauraroLang provides Python bindings through PyO3:
+
+```python
+import tauraro
+
+# Evaluate TauraroLang expressions
+result = tauraro.eval("2 + 3 * 4")  # Returns 14
+
+# Execute TauraroLang code
+tauraro.exec("""
+    fn fibonacci(n):
+        if n <= 1:
+            return n
+        return fibonacci(n-1) + fibonacci(n-2)
+""")
+
+# Call TauraroLang functions
+result = tauraro.call("fibonacci", [10])  # Returns 55
+```
+
+#### TauraroVM Class
+
+```python
+# Create and manage TauraroLang VM from Python
+vm = tauraro.TauraroVM()
+
+# Load and execute TauraroLang code
+vm.load_file("script.tr")
+vm.execute()
+
+# Get values from VM
+result = vm.get_variable("result")
+
+# Set values in VM
+vm.set_variable("input_data", [1, 2, 3, 4, 5])
+```
+
+## Type Conversion
+
+### Automatic Type Conversion
+
+TauraroLang automatically converts between TauraroLang and external types:
+
+#### TauraroLang ↔ C Conversion
+
+| TauraroLang | C Type | Notes |
+|-------------|--------|-------|
 | `int` | `int32_t` | 32-bit signed integer |
 | `long` | `int64_t` | 64-bit signed integer |
 | `float` | `float` | 32-bit floating point |
 | `double` | `double` | 64-bit floating point |
 | `bool` | `bool` | Boolean value |
-| `string` | `char*` | Null-terminated string |
-| `ptr` | `void*` | Generic pointer |
-| `array[T]` | `T*` | Array pointer |
+| `string` | `const char*` | UTF-8 encoded, null-terminated |
+| `array[T]` | `T*` | Contiguous memory layout |
+| `ptr` | `void*` | Raw pointer |
 
-### Advanced C Integration
+#### TauraroLang ↔ Python Conversion
 
-#### Working with C Structures
+| TauraroLang | Python | Notes |
+|-------------|--------|-------|
+| `int` | `int` | Arbitrary precision in Python |
+| `float` | `float` | 64-bit floating point |
+| `bool` | `bool` | Boolean value |
+| `string` | `str` | Unicode string |
+| `array` | `list` | Dynamic array |
+| `map` | `dict` | Key-value mapping |
+| `null` | `None` | Null/None value |
 
-**math_lib.h:**
-```c
-// C header file
-typedef struct {
-    double x, y;
-} Point;
+### Manual Type Conversion
 
-typedef struct {
-    Point center;
-    double radius;
-} Circle;
+For complex types, manual conversion may be required:
 
-Point create_point(double x, double y);
-Circle create_circle(Point center, double radius);
-double circle_area(Circle circle);
-double distance(Point p1, Point p2);
+```python
+# Convert TauraroLang array to C buffer
+tauraro_array = [1, 2, 3, 4, 5]
+c_buffer = ffi.array_to_buffer(tauraro_array, ffi.Int32)
+
+# Convert C string to TauraroLang string
+c_string = lib.call("get_string", [])
+tauraro_string = ffi.c_string_to_string(c_string)
+
+# Convert Python object to TauraroLang value
+python_dict = {"key": "value", "number": 42}
+tauraro_map = python.to_tauraro_value(python_dict)
+```
+## Memory Management
+
+### Automatic Memory Management
+
+TauraroLang provides automatic memory management for FFI and Python interoperability:
+
+#### FFI Memory Management
+
+```python
+# Automatic cleanup with SafeFFI
+with ffi.SafeFFI() as safe_ffi:
+    lib = safe_ffi.load_library("mylib")
+    # All allocated memory is automatically freed when exiting the context
+    
+# Manual memory management
+lib = ffi.load_library("mylib")
+try:
+    # Use library functions
+    result = lib.call("process_data", [data])
+finally:
+    lib.unload()  # Explicitly unload library
 ```
 
-**TauraroLang Integration:**
-```tauraro
-// Define corresponding structures
-struct Point {
-    x: double,
-    y: double
-}
+#### Python Memory Management
 
-struct Circle {
-    center: Point,
-    radius: double
-}
-
-// Declare external functions
-extern "C" {
-    fn create_point(x: double, y: double) -> Point
-    fn create_circle(center: Point, radius: double) -> Circle
-    fn circle_area(circle: Circle) -> double
-    fn distance(p1: Point, p2: Point) -> double
-}
-
-// Use C structures and functions
-fn main() {
-    let p1 = create_point(0.0, 0.0)
-    let p2 = create_point(3.0, 4.0)
-    
-    let circle = create_circle(p1, 5.0)
-    let area = circle_area(circle)
-    let dist = distance(p1, p2)
-    
-    printf("Circle area: %.2f\n", area)
-    printf("Distance: %.2f\n", dist)
-}
+```python
+# Python objects are automatically managed by Python's garbage collector
+python = PythonInterop.new()
+numpy_array = python.call_function("numpy.array", [[1, 2, 3]])
+# numpy_array is automatically cleaned up when no longer referenced
 ```
 
-#### Memory Management with C
+### Manual Memory Management
 
-```tauraro
-extern "C" {
-    fn malloc(size: int) -> ptr
-    fn free(ptr: ptr)
-    fn memcpy(dest: ptr, src: ptr, size: int) -> ptr
-}
+For performance-critical applications, manual memory management is available:
 
-fn allocate_buffer(size: int) -> ptr {
-    let buffer = malloc(size)
-    if buffer == null {
-        print("Memory allocation failed!")
-        return null
-    }
-    return buffer
-}
-
-fn safe_free(ptr: ptr) {
-    if ptr != null {
-        free(ptr)
-    }
-}
-
-fn main() {
-    let buffer = allocate_buffer(1024)
-    if buffer != null {
-        // Use buffer...
-        safe_free(buffer)
-    }
-}
+```python
+# Allocate and manage C memory manually
+buffer = ffi.allocate(1024, ffi.UInt8)
+try:
+    # Use buffer
+    lib.call("process_buffer", [buffer])
+finally:
+    ffi.deallocate(buffer)  # Must manually free
 ```
 
-### C Library Integration Example
+## Error Handling
 
-**Using SQLite Database:**
+### FFI Error Handling
 
-```tauraro
-// SQLite FFI declarations
-extern "C" {
-    fn sqlite3_open(filename: string, db: ptr) -> int
-    fn sqlite3_close(db: ptr) -> int
-    fn sqlite3_exec(db: ptr, sql: string, callback: ptr, data: ptr, errmsg: ptr) -> int
-    fn sqlite3_errmsg(db: ptr) -> string
-}
+```python
+try:
+    lib = ffi.load_library("nonexistent_lib")
+except ffi.LibraryLoadError as e:
+    print(f"Failed to load library: {e}")
 
-class Database {
-    fn init(filename: string) {
-        self.db = null
-        self.filename = filename
-    }
+try:
+    result = lib.call("undefined_function", [])
+except ffi.FunctionNotFoundError as e:
+    print(f"Function not found: {e}")
+except ffi.FFICallError as e:
+    print(f"FFI call failed: {e}")
+```
+
+### Python Error Handling
+
+```python
+try:
+    python = PythonInterop.new()
+    result = python.call_function("math.sqrt", [-1])
+except python.PythonError as e:
+    print(f"Python error: {e}")
+except python.ImportError as e:
+    print(f"Failed to import module: {e}")
+```
+
+### Error Recovery
+
+```python
+# Graceful error recovery
+def safe_ffi_call(lib, function_name, args):
+    try:
+        return lib.call(function_name, args)
+    except ffi.FFICallError:
+        # Log error and return default value
+        print(f"FFI call to {function_name} failed, using default")
+        return None
+
+# Retry mechanism
+def retry_python_call(python, function_name, args, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            return python.call_function(function_name, args)
+        except python.PythonError as e:
+            if attempt == max_retries - 1:
+                raise e
+            print(f"Attempt {attempt + 1} failed, retrying...")
+            time.sleep(0.1)
+```
+
+## Best Practices
+
+### FFI Best Practices
+
+1. **Always Register Function Signatures**
+   ```python
+   # Good: Register with proper types
+   lib.register_function("add", [ffi.Int32, ffi.Int32], ffi.Int32)
+   
+   # Bad: Calling without registration may cause crashes
+   result = lib.call("add", [1, 2])  # Unsafe!
+   ```
+
+2. **Use Safe FFI Context**
+   ```python
+   # Good: Automatic cleanup
+   with ffi.SafeFFI() as safe_ffi:
+       lib = safe_ffi.load_library("mylib")
+       # Use library safely
+   
+   # Acceptable: Manual cleanup
+   lib = ffi.load_library("mylib")
+   try:
+       # Use library
+       pass
+   finally:
+       lib.unload()
+   ```
+
+3. **Validate Input Parameters**
+   ```python
+   def safe_call(lib, func_name, args):
+       # Validate arguments before FFI call
+       if not all(isinstance(arg, (int, float, str)) for arg in args):
+           raise ValueError("Invalid argument types")
+       
+       return lib.call(func_name, args)
+   ```
+
+4. **Handle Platform Differences**
+   ```python
+   import platform
+   
+   if platform.system() == "Windows":
+       lib_name = "mylib.dll"
+   elif platform.system() == "Darwin":
+       lib_name = "libmylib.dylib"
+   else:
+       lib_name = "libmylib.so"
+   
+   lib = ffi.load_library(lib_name)
+   ```
+
+### Python Interoperability Best Practices
+
+1. **Import Modules Once**
+   ```python
+   # Good: Import once and reuse
+   python = PythonInterop.new()
+   numpy = python.import_module("numpy")
+   
+   # Use numpy multiple times
+   array1 = python.call_function("numpy.array", [[1, 2, 3]])
+   array2 = python.call_function("numpy.array", [[4, 5, 6]])
+   ```
+
+2. **Handle Python Exceptions**
+   ```python
+   try:
+       result = python.call_function("risky_function", [args])
+   except python.PythonError as e:
+       # Handle Python-specific errors
+       print(f"Python error: {e}")
+   except Exception as e:
+       # Handle other errors
+       print(f"Unexpected error: {e}")
+   ```
+
+3. **Use Type Hints**
+   ```python
+   def call_python_function(python: PythonInterop, 
+                           func_name: str, 
+                           args: list) -> any:
+       """Call a Python function with proper error handling."""
+       try:
+           return python.call_function(func_name, args)
+       except python.PythonError as e:
+           print(f"Failed to call {func_name}: {e}")
+           return None
+   ```
+
+## Examples
+
+### Complete FFI Example: Image Processing
+
+```python
+# Load image processing library
+lib = ffi.load_library("libimageproc")
+
+# Register functions
+lib.register_function("load_image", [ffi.String], ffi.Pointer)
+lib.register_function("resize_image", [ffi.Pointer, ffi.Int32, ffi.Int32], ffi.Pointer)
+lib.register_function("save_image", [ffi.Pointer, ffi.String], ffi.Bool)
+lib.register_function("free_image", [ffi.Pointer], ffi.Void)
+
+def process_image(input_path, output_path, width, height):
+    """Process an image using C library."""
+    image = None
+    resized = None
     
-    fn open() {
-        let result = sqlite3_open(self.filename, &self.db)
-        if result != 0 {
-            print("Cannot open database: " + self.filename)
-            return false
+    try:
+        # Load image
+        image = lib.call("load_image", [input_path])
+        if not image:
+            raise RuntimeError("Failed to load image")
+        
+        # Resize image
+        resized = lib.call("resize_image", [image, width, height])
+        if not resized:
+            raise RuntimeError("Failed to resize image")
+        
+        # Save image
+        success = lib.call("save_image", [resized, output_path])
+        if not success:
+            raise RuntimeError("Failed to save image")
+        
+        print(f"Successfully processed {input_path} -> {output_path}")
+        
+    finally:
+        # Clean up memory
+        if resized:
+            lib.call("free_image", [resized])
+        if image:
+            lib.call("free_image", [image])
+
+# Usage
+process_image("input.jpg", "output.jpg", 800, 600)
+```
+
+### Complete Python Interoperability Example: Data Analysis
+
+```python
+# Initialize Python interoperability
+python = PythonInterop.new()
+
+# Import required modules
+pandas = python.import_module("pandas")
+numpy = python.import_module("numpy")
+matplotlib = python.import_module("matplotlib.pyplot")
+
+def analyze_data(csv_file):
+    """Analyze data using Python libraries."""
+    try:
+        # Load data with pandas
+        df = python.call_function("pandas.read_csv", [csv_file])
+        
+        # Get basic statistics
+        stats = python.call_function("df.describe", [])
+        print("Data Statistics:")
+        print(stats)
+        
+        # Calculate correlation matrix
+        corr = python.call_function("df.corr", [])
+        
+        # Create visualization
+        python.call_function("matplotlib.pyplot.figure", [{"figsize": (10, 8)}])
+        python.call_function("matplotlib.pyplot.imshow", [corr, {"cmap": "coolwarm"}])
+        python.call_function("matplotlib.pyplot.colorbar", [])
+        python.call_function("matplotlib.pyplot.title", ["Correlation Matrix"])
+        python.call_function("matplotlib.pyplot.savefig", ["correlation.png"])
+        
+        print("Analysis complete. Correlation matrix saved as correlation.png")
+        
+        return {
+            "stats": stats,
+            "correlation": corr
         }
-        return true
-    }
-    
-    fn close() {
-        if self.db != null {
-            sqlite3_close(self.db)
-            self.db = null
-        }
-    }
-    
-    fn execute(sql: string) {
-        let result = sqlite3_exec(self.db, sql, null, null, null)
-        if result != 0 {
-            let error = sqlite3_errmsg(self.db)
-            print("SQL error: " + error)
-            return false
-        }
-        return true
-    }
-}
+        
+    except python.PythonError as e:
+        print(f"Python error during analysis: {e}")
+        return None
 
-fn main() {
-    let db = Database("test.db")
-    
-    if db.open() {
-        db.execute("CREATE TABLE users (id INTEGER, name TEXT)")
-        db.execute("INSERT INTO users VALUES (1, 'Alice')")
-        db.execute("INSERT INTO users VALUES (2, 'Bob')")
-        db.close()
-        print("Database operations completed")
-    }
-}
+# Usage
+results = analyze_data("data.csv")
+if results:
+    print("Analysis successful!")
 ```
 
-## Python Interoperability
+## Troubleshooting
 
-### Basic Python Integration
+### Common FFI Issues
 
-#### Importing Python Modules
+1. **Library Not Found**
+   ```
+   Error: LibraryLoadError: Cannot load library 'mylib'
+   
+   Solutions:
+   - Check library path and filename
+   - Ensure library is in system PATH or LD_LIBRARY_PATH
+   - Use absolute path to library file
+   - Verify library architecture matches (32-bit vs 64-bit)
+   ```
 
-```tauraro
-// Import Python modules
-import python "math" as pymath
-import python "json" as pyjson
-import python "requests" as requests
+2. **Function Not Found**
+   ```
+   Error: FunctionNotFoundError: Function 'my_function' not found
+   
+   Solutions:
+   - Check function name spelling
+   - Verify function is exported from library
+   - Use nm/objdump (Linux) or dumpbin (Windows) to list exports
+   - Check for C++ name mangling
+   ```
 
-fn main() {
-    // Use Python math functions
-    let result = pymath.sqrt(16.0)
+3. **Type Mismatch**
+   ```
+   Error: FFICallError: Type mismatch in function call
+   
+   Solutions:
+   - Verify parameter types match C function signature
+   - Check return type registration
+   - Ensure proper type conversion
+   - Review calling convention
+   ```
+
+4. **Memory Access Violations**
+   ```
+   Error: Segmentation fault / Access violation
+   
+   Solutions:
+   - Check pointer validity before dereferencing
+   - Ensure proper memory allocation/deallocation
+   - Verify buffer sizes
+   - Use SafeFFI context for automatic cleanup
+   ```
+
+### Common Python Interoperability Issues
+
+1. **Module Import Errors**
+   ```
+   Error: ImportError: No module named 'numpy'
+   
+   Solutions:
+   - Install required Python packages: pip install numpy
+   - Check Python environment and PATH
+   - Verify Python version compatibility
+   - Use virtual environments for isolation
+   ```
+
+2. **Type Conversion Errors**
+   ```
+   Error: PythonError: Cannot convert TauraroLang value to Python
+   
+   Solutions:
+   - Check supported type conversions
+   - Use manual conversion for complex types
+   - Verify data structure compatibility
+   - Handle None/null values properly
+   ```
+
+3. **Python Exception Propagation**
+   ```
+   Error: PythonError: ZeroDivisionError: division by zero
+   
+   Solutions:
+   - Wrap Python calls in try-catch blocks
+   - Validate input parameters before Python calls
+   - Handle Python exceptions gracefully
+   - Use error recovery mechanisms
+   ```
+
+### Performance Issues
+
+1. **Slow FFI Calls**
+   - Minimize FFI call frequency
+   - Batch operations when possible
+   - Use appropriate data types
+   - Consider caching results
+
+2. **Memory Leaks**
+   - Always pair malloc/free calls
+   - Use SafeFFI for automatic cleanup
+   - Monitor memory usage during development
+   - Implement proper error handling
+
+3. **Python Performance**
+   - Minimize Python/TauraroLang context switches
+   - Use NumPy for numerical operations
+   - Cache imported modules
+   - Consider using compiled Python extensions
+
+### Debugging Tips
+
+1. **Enable Debug Logging**
+   ```python
+   # Enable FFI debug logging
+   ffi.set_debug_level(ffi.DEBUG_VERBOSE)
+   
+   # Enable Python interop debugging
+   python.set_debug_mode(True)
+   ```
+
+2. **Use Memory Debugging Tools**
+   - Valgrind (Linux/macOS)
+   - AddressSanitizer
+   - Windows Application Verifier
+   - Custom memory tracking
+
+3. **Test with Simple Cases**
+   - Start with basic function calls
+   - Gradually increase complexity
+   - Test error conditions
+   - Verify cleanup behavior
+
+This comprehensive guide covers all aspects of FFI and Python interoperability in TauraroLang. For additional help, consult the API reference or community forums.
     print("Square root of 16: " + str(result))
     
     // Use Python JSON

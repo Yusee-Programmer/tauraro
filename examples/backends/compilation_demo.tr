@@ -1,0 +1,313 @@
+#!/usr/bin/env tauraro
+"""
+Example: Backend Compilation Demo
+
+This example demonstrates how TauraroLang code can be compiled
+to different backends (VM, C, LLVM, WebAssembly) and shows
+backend-specific optimizations and features.
+
+Features demonstrated:
+- Cross-backend compatibility
+- Performance comparisons
+- Backend-specific optimizations
+- Compilation targets
+- Runtime characteristics
+
+Usage:
+    # Run with different backends
+    tauraro run --backend vm examples/backends/compilation_demo.tr
+    tauraro run --backend c examples/backends/compilation_demo.tr
+    tauraro run --backend llvm examples/backends/compilation_demo.tr
+    tauraro run --backend wasm examples/backends/compilation_demo.tr
+    
+    # Compile to different targets
+    tauraro compile --backend c examples/backends/compilation_demo.tr -o demo.c
+    tauraro compile --backend llvm examples/backends/compilation_demo.tr -o demo.ll
+    tauraro compile --backend wasm examples/backends/compilation_demo.tr -o demo.wasm
+    
+Requirements:
+    - TauraroLang compiler with multiple backend support
+"""
+
+// Fibonacci function - good for performance testing
+fn fibonacci(n) {
+    if n <= 1 {
+        return n
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2)
+}
+
+// Iterative fibonacci - more efficient
+fn fibonacci_iterative(n) {
+    if n <= 1 {
+        return n
+    }
+    
+    let a = 0
+    let b = 1
+    let i = 2
+    
+    while i <= n {
+        let temp = a + b
+        a = b
+        b = temp
+        i = i + 1
+    }
+    
+    return b
+}
+
+// Array processing function
+fn process_array(arr) {
+    let sum = 0
+    let product = 1
+    let max_val = arr[0]
+    let min_val = arr[0]
+    
+    let i = 0
+    while i < len(arr) {
+        let val = arr[i]
+        sum = sum + val
+        product = product * val
+        
+        if val > max_val {
+            max_val = val
+        }
+        if val < min_val {
+            min_val = val
+        }
+        
+        i = i + 1
+    }
+    
+    return {
+        "sum": sum,
+        "product": product,
+        "max": max_val,
+        "min": min_val,
+        "average": sum / len(arr)
+    }
+}
+
+// String processing function
+fn process_strings(strings) {
+    let total_length = 0
+    let longest = ""
+    let shortest = strings[0]
+    let concatenated = ""
+    
+    let i = 0
+    while i < len(strings) {
+        let str = strings[i]
+        total_length = total_length + len(str)
+        concatenated = concatenated + str + " "
+        
+        if len(str) > len(longest) {
+            longest = str
+        }
+        if len(str) < len(shortest) {
+            shortest = str
+        }
+        
+        i = i + 1
+    }
+    
+    return {
+        "total_length": total_length,
+        "longest": longest,
+        "shortest": shortest,
+        "concatenated": concatenated,
+        "average_length": total_length / len(strings)
+    }
+}
+
+// Mathematical computation
+fn compute_series(n) {
+    let sum = 0
+    let i = 1
+    
+    while i <= n {
+        // Compute 1/i^2 (approximates π²/6 as n approaches infinity)
+        sum = sum + (1.0 / (i * i))
+        i = i + 1
+    }
+    
+    return sum
+}
+
+// Recursive function for testing call stack
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+// Function to demonstrate different data types
+fn type_operations() {
+    print("\n--- Data Type Operations ---")
+    
+    // Integer operations
+    let int_a = 42
+    let int_b = 17
+    print("Integer operations:")
+    print("  " + str(int_a) + " + " + str(int_b) + " = " + str(int_a + int_b))
+    print("  " + str(int_a) + " * " + str(int_b) + " = " + str(int_a * int_b))
+    
+    // Float operations
+    let float_a = 3.14159
+    let float_b = 2.71828
+    print("Float operations:")
+    print("  " + str(float_a) + " + " + str(float_b) + " = " + str(float_a + float_b))
+    print("  " + str(float_a) + " * " + str(float_b) + " = " + str(float_a * float_b))
+    
+    // String operations
+    let str_a = "Hello"
+    let str_b = "World"
+    print("String operations:")
+    print("  '" + str_a + "' + '" + str_b + "' = '" + str_a + str_b + "'")
+    print("  Length of '" + str_a + "': " + str(len(str_a)))
+    
+    // Boolean operations
+    let bool_a = true
+    let bool_b = false
+    print("Boolean operations:")
+    print("  " + str(bool_a) + " && " + str(bool_b) + " = " + str(bool_a && bool_b))
+    print("  " + str(bool_a) + " || " + str(bool_b) + " = " + str(bool_a || bool_b))
+}
+
+fn main() {
+    print("=== TauraroLang Backend Compilation Demo ===")
+    print("This program demonstrates cross-backend compatibility")
+    print("and can be compiled to VM bytecode, C, LLVM IR, or WebAssembly")
+    
+    // Display runtime information
+    print("\n--- Runtime Information ---")
+    print("Backend: " + get_backend_info())
+    print("Platform: " + get_platform_info())
+    print("Timestamp: " + str(get_timestamp()))
+    
+    // Basic operations test
+    type_operations()
+    
+    // Performance test - Fibonacci
+    print("\n--- Performance Test: Fibonacci ---")
+    let fib_n = 10
+    
+    print("Computing fibonacci(" + str(fib_n) + ")...")
+    let start_time = get_timestamp()
+    let fib_result = fibonacci(fib_n)
+    let end_time = get_timestamp()
+    
+    print("Recursive result: " + str(fib_result))
+    print("Time taken: " + str(end_time - start_time) + "ms")
+    
+    print("Computing fibonacci_iterative(" + str(fib_n) + ")...")
+    let iter_start = get_timestamp()
+    let iter_result = fibonacci_iterative(fib_n)
+    let iter_end = get_timestamp()
+    
+    print("Iterative result: " + str(iter_result))
+    print("Time taken: " + str(iter_end - iter_start) + "ms")
+    
+    // Array processing test
+    print("\n--- Array Processing Test ---")
+    let test_array = [1, 5, 3, 9, 2, 7, 4, 8, 6]
+    print("Test array: " + str(test_array))
+    
+    let array_stats = process_array(test_array)
+    print("Array statistics:")
+    print("  Sum: " + str(array_stats["sum"]))
+    print("  Product: " + str(array_stats["product"]))
+    print("  Max: " + str(array_stats["max"]))
+    print("  Min: " + str(array_stats["min"]))
+    print("  Average: " + str(array_stats["average"]))
+    
+    // String processing test
+    print("\n--- String Processing Test ---")
+    let test_strings = ["hello", "world", "TauraroLang", "is", "awesome"]
+    print("Test strings: " + str(test_strings))
+    
+    let string_stats = process_strings(test_strings)
+    print("String statistics:")
+    print("  Total length: " + str(string_stats["total_length"]))
+    print("  Longest: '" + string_stats["longest"] + "'")
+    print("  Shortest: '" + string_stats["shortest"] + "'")
+    print("  Average length: " + str(string_stats["average_length"]))
+    print("  Concatenated: '" + string_stats["concatenated"] + "'")
+    
+    // Mathematical computation test
+    print("\n--- Mathematical Computation Test ---")
+    let series_n = 100
+    let series_result = compute_series(series_n)
+    print("Sum of 1/i² for i=1 to " + str(series_n) + ": " + str(series_result))
+    print("π²/6 ≈ " + str(3.14159 * 3.14159 / 6) + " (theoretical limit)")
+    
+    // Factorial test
+    print("\n--- Factorial Test ---")
+    let fact_n = 8
+    let fact_result = factorial(fact_n)
+    print(str(fact_n) + "! = " + str(fact_result))
+    
+    // Memory and recursion test
+    print("\n--- Memory Usage Test ---")
+    let large_array = []
+    let i = 0
+    while i < 1000 {
+        large_array[i] = i * i
+        i = i + 1
+    }
+    
+    print("Created array with " + str(len(large_array)) + " elements")
+    print("First 10 elements: " + str(large_array[0:10]))
+    print("Last 10 elements: " + str(large_array[990:1000]))
+    
+    // Backend-specific optimizations demo
+    print("\n--- Backend-Specific Features ---")
+    
+    if get_backend_info() == "vm" {
+        print("VM Backend: Optimized for development and debugging")
+        print("  - Fast compilation")
+        print("  - Dynamic typing support")
+        print("  - Interactive debugging")
+    } else if get_backend_info() == "c" {
+        print("C Backend: Optimized for portability and integration")
+        print("  - Portable C code generation")
+        print("  - Easy integration with C libraries")
+        print("  - Good performance with C compiler optimizations")
+    } else if get_backend_info() == "llvm" {
+        print("LLVM Backend: Optimized for performance")
+        print("  - Advanced optimizations")
+        print("  - Native code generation")
+        print("  - Best runtime performance")
+    } else if get_backend_info() == "wasm" {
+        print("WebAssembly Backend: Optimized for web deployment")
+        print("  - Browser compatibility")
+        print("  - Sandboxed execution")
+        print("  - Near-native performance in browsers")
+    }
+    
+    // Compilation instructions
+    print("\n--- Compilation Instructions ---")
+    print("To compile this program to different backends:")
+    print("  VM:   tauraro run --backend vm compilation_demo.tr")
+    print("  C:    tauraro compile --backend c compilation_demo.tr -o demo.c")
+    print("  LLVM: tauraro compile --backend llvm compilation_demo.tr -o demo.ll")
+    print("  WASM: tauraro compile --backend wasm compilation_demo.tr -o demo.wasm")
+    
+    print("\n=== Backend Demo Complete ===")
+    print("This program ran successfully on the " + get_backend_info() + " backend!")
+}
+
+// Mock functions for backend information (these would be implemented by the runtime)
+fn get_backend_info() {
+    return "vm"  // This would return the actual backend being used
+}
+
+fn get_platform_info() {
+    return "unknown"  // This would return the actual platform
+}
+
+fn get_timestamp() {
+    return 0  // This would return the actual timestamp
+}

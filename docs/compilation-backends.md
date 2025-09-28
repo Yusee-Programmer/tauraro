@@ -1,40 +1,114 @@
-# TauraroLang Compilation Backends
+# TauraroLang Compilation Backends & Build System
 
-TauraroLang supports multiple compilation backends, each optimized for different use cases. This guide covers all available backends, their usage, performance characteristics, and best practices.
+This document provides comprehensive information about TauraroLang's multiple compilation backends, build system, and deployment options.
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Interpreter Backend](#interpreter-backend)
-3. [C Transpilation Backend](#c-transpilation-backend)
-4. [WebAssembly Backend](#webassembly-backend)
-5. [LLVM IR Backend](#llvm-ir-backend)
-6. [Backend Comparison](#backend-comparison)
-7. [Performance Optimization](#performance-optimization)
-8. [Best Practices](#best-practices)
-9. [Troubleshooting](#troubleshooting)
+2. [Backend Architecture](#backend-architecture)
+3. [Interpreter Backend](#interpreter-backend)
+4. [C Transpiler Backend](#c-transpiler-backend)
+5. [LLVM Backend](#llvm-backend)
+6. [WebAssembly Backend](#webassembly-backend)
+7. [Build System](#build-system)
+8. [Feature Flags](#feature-flags)
+9. [Compilation Process](#compilation-process)
+10. [Performance Comparison](#performance-comparison)
+11. [Deployment Strategies](#deployment-strategies)
+12. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
-TauraroLang provides four distinct compilation backends:
+TauraroLang supports multiple compilation backends, each optimized for different use cases:
 
-| Backend | Use Case | Performance | Portability | Development Speed |
-|---------|----------|-------------|-------------|-------------------|
-| **Interpreter** | Development, Testing | Low | High | Very Fast |
-| **C Transpilation** | Production, System Programming | Very High | High | Fast |
-| **WebAssembly** | Web Applications, Sandboxing | High | Very High | Fast |
-| **LLVM IR** | Advanced Optimization, Research | Very High | Medium | Medium |
+- **Interpreter**: Fast development and debugging
+- **C Transpiler**: Native performance with broad compatibility
+- **LLVM**: High-performance optimized native code
+- **WebAssembly**: Web deployment and sandboxed execution
 
-### Choosing the Right Backend
+### Backend Selection
 
-- **Development Phase**: Use the Interpreter for rapid prototyping and debugging
-- **Production Deployment**: Use C Transpilation for maximum performance
-- **Web Applications**: Use WebAssembly for browser compatibility
-- **Research/Optimization**: Use LLVM IR for advanced compiler optimizations
+```bash
+# Run with interpreter (default)
+tauraro run script.tr --backend vm
+
+# Compile with LLVM backend
+tauraro compile script.tr --backend llvm --output binary
+
+# Transpile to C
+tauraro compile script.tr --backend c --output script.c
+
+# Compile to WebAssembly
+tauraro compile script.tr --backend wasm --output script.wasm
+```
+
+## Backend Architecture
+
+### Common Pipeline
+
+All backends share a common frontend pipeline:
+
+```
+Source Code → Lexer → Parser → AST → Semantic Analysis → IR → Backend
+```
+
+1. **Lexical Analysis**: Tokenization using `logos` crate
+2. **Parsing**: AST generation with recursive descent parser
+3. **Semantic Analysis**: Type checking and symbol resolution
+4. **IR Generation**: Platform-independent intermediate representation
+5. **Backend Code Generation**: Target-specific code generation
+
+### Intermediate Representation (IR)
+
+The IR (`src/ir.rs`) provides a common abstraction:
+
+```rust
+pub struct IRModule {
+    pub name: String,
+    pub functions: HashMap<String, IRFunction>,
+    pub globals: HashMap<String, IRValue>,
+    pub types: HashMap<String, IRType>,
+}
+
+pub struct IRFunction {
+    pub name: String,
+    pub parameters: Vec<(String, IRType)>,
+    pub return_type: IRType,
+    pub blocks: Vec<IRBlock>,
+    pub is_async: bool,
+    pub is_exported: bool,
+}
+```
 
 ## Interpreter Backend
 
-The interpreter backend executes TauraroLang code directly without compilation, making it ideal for development and testing.
+### Overview
+
+The interpreter backend (`src/codegen/interpreter.rs`) provides direct AST execution for rapid development and debugging.
+
+### Features
+
+- **Fast Startup**: No compilation overhead
+- **REPL Support**: Interactive development environment
+- **Full Debugging**: Complete debugging capabilities
+- **Dynamic Features**: Runtime code modification
+
+### Architecture
+
+```rust
+pub struct InterpreterCodeGenerator {
+    vm: VM,
+    debug_mode: bool,
+    profiling: bool,
+}
+```
+
+### Use Cases
+
+- **Development**: Rapid prototyping and testing
+- **Scripting**: Quick automation tasks
+- **Education**: Learning and experimentation
+- **Debugging**: Step-through debugging
 
 ### Usage
 
@@ -777,95 +851,88 @@ tauraro check program.tr --cross-platform
 
 ### Common Issues
 
-#### Compilation Errors
+#### LLVM Backend Not Available
 
-**C Backend:**
 ```
-Error: undefined reference to 'some_function'
-```
-**Solution:** Ensure all functions are defined or properly imported.
-
-**WebAssembly:**
-```
-Error: unsupported feature in WASM target
-```
-**Solution:** Check WebAssembly compatibility of used features.
-
-**LLVM:**
-```
-Error: optimization pass failed
-```
-**Solution:** Try lower optimization levels or different passes.
-
-#### Runtime Issues
-
-**Memory Errors:**
-```tauraro
-// Avoid large recursive calls
-fn safe_fibonacci(n, memo = {}) {
-    if n in memo {
-        return memo[n]
-    }
-    if n <= 1 {
-        return n
-    }
-    memo[n] = safe_fibonacci(n-1, memo) + safe_fibonacci(n-2, memo)
-    return memo[n]
-}
+Error: LLVM backend not enabled. Enable with --features llvm
 ```
 
-**Performance Issues:**
-```tauraro
-// Profile and optimize hot paths
-fn optimized_search(data, target) {
-    // Use binary search for sorted data
-    let left = 0
-    let right = len(data) - 1
-    
-    while left <= right {
-        let mid = (left + right) / 2
-        if data[mid] == target {
-            return mid
-        } else if data[mid] < target {
-            left = mid + 1
-        } else {
-            right = mid - 1
-        }
-    }
-    return -1
-}
-```
-
-### Debugging Tips
-
-1. **Use Interpreter for Debugging**
+**Solution**: Build with LLVM feature enabled:
 ```bash
-tauraro run program.tr --debug --trace
+cargo build --features llvm
 ```
 
-2. **Compare Backend Outputs**
+#### C Compiler Not Found
+
+```
+Error: No C compiler found. Please install gcc, clang, or MSVC
+```
+
+**Solutions**:
+- **Linux**: `sudo apt install gcc` or `sudo yum install gcc`
+- **macOS**: `xcode-select --install`
+- **Windows**: Install Visual Studio Build Tools or MinGW-w64
+
+#### WebAssembly Runtime Error
+
+```
+Error: WASM backend not enabled
+```
+
+**Solution**: Build with WASM feature:
 ```bash
-# Run same program on different backends
-tauraro run program.tr > interpreter_output.txt
-tauraro compile program.tr --backend c && ./program > c_output.txt
-diff interpreter_output.txt c_output.txt
+cargo build --features wasm
 ```
 
-3. **Profile Performance**
+### Performance Issues
+
+#### Slow Compilation
+
+- Use lower optimization levels during development
+- Enable incremental compilation
+- Use interpreter backend for development
+
+#### Large Binary Size
+
+- Use WebAssembly backend for size-critical applications
+- Enable link-time optimization (LTO)
+- Strip debug symbols in release builds
+
+### Debug Information
+
+Enable debug information for better error messages:
+
 ```bash
-# Profile C backend
-tauraro compile program.tr --backend c --profile
-./program
-gprof program gmon.out > profile.txt
+tauraro compile script.tr --debug --backend llvm
 ```
 
-### Getting Help
+### Profiling
 
-- Check the [Troubleshooting Guide](troubleshooting.md)
-- Review [Common Error Messages](error-reference.md)
-- Join the community discussions
-- Report backend-specific issues on GitHub
+Enable profiling to identify performance bottlenecks:
 
----
+```bash
+tauraro run script.tr --backend vm --profile
+```
 
-This comprehensive guide covers all aspects of TauraroLang's compilation backends. Choose the right backend for your use case, follow the best practices, and optimize for your specific requirements.
+## Advanced Configuration
+
+### Custom Target Triples
+
+```bash
+tauraro compile app.tr --backend llvm --target x86_64-unknown-linux-gnu
+```
+
+### Cross-Compilation
+
+```bash
+# Compile for ARM64 from x86_64
+tauraro compile app.tr --backend llvm --target aarch64-unknown-linux-gnu
+```
+
+### Link-Time Optimization
+
+```bash
+tauraro compile app.tr --backend llvm --optimization 3 --lto
+```
+
+This comprehensive backend system provides flexibility for different deployment scenarios while maintaining consistent language semantics across all targets.

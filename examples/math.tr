@@ -1,3 +1,0 @@
-let x = 5 + 3 * 2;
-dauki x matsayin 5;
-print(x);

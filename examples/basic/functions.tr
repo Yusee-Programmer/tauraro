@@ -1,0 +1,138 @@
+#!/usr/bin/env tauraro
+"""
+Example: Functions
+
+This example demonstrates function definition, parameters,
+return values, and various function patterns in TauraroLang.
+
+Features demonstrated:
+- Function definition with parameters
+- Return values
+- Function overloading
+- Recursive functions
+- Higher-order functions
+- Lambda expressions
+- Default parameters
+
+Usage:
+    tauraro run examples/basic/functions.tr
+    
+Requirements:
+    - TauraroLang compiler/interpreter
+"""
+
+// Simple function with no parameters
+fn greet() {
+    print("Hello from a function!")
+}
+
+// Function with parameters
+fn greet_person(name) {
+    print("Hello, " + name + "!")
+}
+
+// Function with return value
+fn add(a, b) {
+    return a + b
+}
+
+// Function with multiple return values
+fn divide_with_remainder(dividend, divisor) {
+    let quotient = dividend / divisor
+    let remainder = dividend % divisor
+    return [quotient, remainder]
+}
+
+// Recursive function
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+// Function with default parameters
+fn power(base, exponent = 2) {
+    let result = 1
+    let i = 0
+    while i < exponent {
+        result = result * base
+        i = i + 1
+    }
+    return result
+}
+
+// Higher-order function
+fn apply_operation(a, b, operation) {
+    return operation(a, b)
+}
+
+// Lambda functions
+fn create_multiplier(factor) {
+    return fn(x) { return x * factor }
+}
+
+fn main() {
+    print("=== Functions Demo ===")
+    
+    // Simple function call
+    greet()
+    
+    // Function with parameters
+    greet_person("Alice")
+    greet_person("Bob")
+    
+    // Function with return value
+    let sum = add(5, 3)
+    print("5 + 3 = " + str(sum))
+    
+    // Multiple return values
+    let result = divide_with_remainder(17, 5)
+    print("17 ÷ 5 = " + str(result[0]) + " remainder " + str(result[1]))
+    
+    // Recursive function
+    print("\n=== Factorial Examples ===")
+    let i = 1
+    while i <= 5 {
+        print(str(i) + "! = " + str(factorial(i)))
+        i = i + 1
+    }
+    
+    // Default parameters
+    print("\n=== Power Function ===")
+    print("2^2 = " + str(power(2)))        // Uses default exponent
+    print("2^3 = " + str(power(2, 3)))     // Explicit exponent
+    print("5^4 = " + str(power(5, 4)))
+    
+    // Higher-order functions
+    print("\n=== Higher-Order Functions ===")
+    let multiply = fn(x, y) { return x * y }
+    let subtract = fn(x, y) { return x - y }
+    
+    print("apply_operation(10, 3, multiply) = " + str(apply_operation(10, 3, multiply)))
+    print("apply_operation(10, 3, subtract) = " + str(apply_operation(10, 3, subtract)))
+    
+    // Lambda and closures
+    print("\n=== Lambda Functions ===")
+    let double = create_multiplier(2)
+    let triple = create_multiplier(3)
+    
+    print("double(5) = " + str(double(5)))
+    print("triple(4) = " + str(triple(4)))
+    
+    // Array of functions
+    let operations = [
+        fn(x) { return x * 2 },
+        fn(x) { return x + 10 },
+        fn(x) { return x * x }
+    ]
+    
+    print("\n=== Function Array ===")
+    let value = 5
+    let i = 0
+    while i < len(operations) {
+        let result = operations[i](value)
+        print("Operation " + str(i) + " on " + str(value) + " = " + str(result))
+        i = i + 1
+    }
+}
