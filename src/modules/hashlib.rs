@@ -96,10 +96,10 @@ fn create_hash_object(algorithm: &str, data: Option<&[u8]>) -> Result<Value> {
     hash_obj.insert("_raw_data".to_string(), Value::Str(String::from_utf8_lossy(&raw_data).to_string()));
     
     // Add methods
-    hash_obj.insert("update".to_string(), Value::Function("update".to_string(), vec![], vec![], None));
-    hash_obj.insert("digest".to_string(), Value::Function("digest".to_string(), vec![], vec![], None));
-    hash_obj.insert("hexdigest".to_string(), Value::Function("hexdigest".to_string(), vec![], vec![], None));
-    hash_obj.insert("copy".to_string(), Value::Function("copy".to_string(), vec![], vec![], None));
+    hash_obj.insert("update".to_string(), Value::NativeFunction(hash_update));
+    hash_obj.insert("digest".to_string(), Value::NativeFunction(hash_digest));
+    hash_obj.insert("hexdigest".to_string(), Value::NativeFunction(hash_hexdigest));
+    hash_obj.insert("copy".to_string(), Value::NativeFunction(hash_copy));
     
     Ok(Value::Object {
         class_name: format!("{}Hash", algorithm),

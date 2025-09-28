@@ -11,38 +11,38 @@ pub fn create_logging_module() -> Value {
     let mut namespace = HashMap::new();
     
     // Logging functions
-    namespace.insert("debug".to_string(), Value::Function("debug".to_string(), vec![], vec![], None));
-    namespace.insert("info".to_string(), Value::Function("info".to_string(), vec![], vec![], None));
-    namespace.insert("warning".to_string(), Value::Function("warning".to_string(), vec![], vec![], None));
-    namespace.insert("warn".to_string(), Value::Function("warn".to_string(), vec![], vec![], None));
-    namespace.insert("error".to_string(), Value::Function("error".to_string(), vec![], vec![], None));
-    namespace.insert("exception".to_string(), Value::Function("exception".to_string(), vec![], vec![], None));
-    namespace.insert("critical".to_string(), Value::Function("critical".to_string(), vec![], vec![], None));
-    namespace.insert("fatal".to_string(), Value::Function("fatal".to_string(), vec![], vec![], None));
-    namespace.insert("log".to_string(), Value::Function("log".to_string(), vec![], vec![], None));
+    namespace.insert("debug".to_string(), Value::NativeFunction(logging_debug));
+    namespace.insert("info".to_string(), Value::NativeFunction(logging_info));
+    namespace.insert("warning".to_string(), Value::NativeFunction(logging_warning));
+    namespace.insert("warn".to_string(), Value::NativeFunction(logging_warning));
+    namespace.insert("error".to_string(), Value::NativeFunction(logging_error));
+    namespace.insert("exception".to_string(), Value::NativeFunction(logging_exception));
+    namespace.insert("critical".to_string(), Value::NativeFunction(logging_critical));
+    namespace.insert("fatal".to_string(), Value::NativeFunction(logging_critical));
+    namespace.insert("log".to_string(), Value::NativeFunction(logging_log));
     
     // Configuration functions
-    namespace.insert("basicConfig".to_string(), Value::Function("basicConfig".to_string(), vec![], vec![], None));
-    namespace.insert("getLogger".to_string(), Value::Function("getLogger".to_string(), vec![], vec![], None));
-    namespace.insert("disable".to_string(), Value::Function("disable".to_string(), vec![], vec![], None));
-    namespace.insert("addLevelName".to_string(), Value::Function("addLevelName".to_string(), vec![], vec![], None));
-    namespace.insert("getLevelName".to_string(), Value::Function("getLevelName".to_string(), vec![], vec![], None));
+    namespace.insert("basicConfig".to_string(), Value::NativeFunction(logging_basic_config));
+    namespace.insert("getLogger".to_string(), Value::NativeFunction(logging_get_logger));
+    namespace.insert("disable".to_string(), Value::NativeFunction(logging_disable));
+    namespace.insert("addLevelName".to_string(), Value::NativeFunction(logging_add_level_name));
+    namespace.insert("getLevelName".to_string(), Value::NativeFunction(logging_get_level_name));
     
     // Logger and handler classes
-    namespace.insert("Logger".to_string(), Value::Function("Logger".to_string(), vec![], vec![], None));
-    namespace.insert("Handler".to_string(), Value::Function("Handler".to_string(), vec![], vec![], None));
-    namespace.insert("StreamHandler".to_string(), Value::Function("StreamHandler".to_string(), vec![], vec![], None));
-    namespace.insert("FileHandler".to_string(), Value::Function("FileHandler".to_string(), vec![], vec![], None));
-    namespace.insert("NullHandler".to_string(), Value::Function("NullHandler".to_string(), vec![], vec![], None));
+    namespace.insert("Logger".to_string(), Value::NativeFunction(logging_logger_class));
+    namespace.insert("Handler".to_string(), Value::NativeFunction(logging_handler_class));
+    namespace.insert("StreamHandler".to_string(), Value::NativeFunction(logging_stream_handler_class));
+    namespace.insert("FileHandler".to_string(), Value::NativeFunction(logging_file_handler_class));
+    namespace.insert("NullHandler".to_string(), Value::NativeFunction(logging_null_handler_class));
     
     // Formatter classes
-    namespace.insert("Formatter".to_string(), Value::Function("Formatter".to_string(), vec![], vec![], None));
+    namespace.insert("Formatter".to_string(), Value::NativeFunction(logging_formatter_class));
     
     // Filter classes
-    namespace.insert("Filter".to_string(), Value::Function("Filter".to_string(), vec![], vec![], None));
+    namespace.insert("Filter".to_string(), Value::NativeFunction(logging_filter_class));
     
     // LogRecord class
-    namespace.insert("LogRecord".to_string(), Value::Function("LogRecord".to_string(), vec![], vec![], None));
+    namespace.insert("LogRecord".to_string(), Value::NativeFunction(logging_log_record_class));
     
     // Level constants
     namespace.insert("NOTSET".to_string(), Value::Int(0));
@@ -102,22 +102,22 @@ fn create_logger(name: String, level: i64) -> Value {
     logger.insert("disabled".to_string(), Value::Bool(false));
     
     // Add methods
-    logger.insert("debug".to_string(), Value::Function("debug".to_string(), vec![], vec![], None));
-    logger.insert("info".to_string(), Value::Function("info".to_string(), vec![], vec![], None));
-    logger.insert("warning".to_string(), Value::Function("warning".to_string(), vec![], vec![], None));
-    logger.insert("warn".to_string(), Value::Function("warn".to_string(), vec![], vec![], None));
-    logger.insert("error".to_string(), Value::Function("error".to_string(), vec![], vec![], None));
-    logger.insert("exception".to_string(), Value::Function("exception".to_string(), vec![], vec![], None));
-    logger.insert("critical".to_string(), Value::Function("critical".to_string(), vec![], vec![], None));
-    logger.insert("fatal".to_string(), Value::Function("fatal".to_string(), vec![], vec![], None));
-    logger.insert("log".to_string(), Value::Function("log".to_string(), vec![], vec![], None));
-    logger.insert("isEnabledFor".to_string(), Value::Function("isEnabledFor".to_string(), vec![], vec![], None));
-    logger.insert("getEffectiveLevel".to_string(), Value::Function("getEffectiveLevel".to_string(), vec![], vec![], None));
-    logger.insert("setLevel".to_string(), Value::Function("setLevel".to_string(), vec![], vec![], None));
-    logger.insert("addHandler".to_string(), Value::Function("addHandler".to_string(), vec![], vec![], None));
-    logger.insert("removeHandler".to_string(), Value::Function("removeHandler".to_string(), vec![], vec![], None));
-    logger.insert("addFilter".to_string(), Value::Function("addFilter".to_string(), vec![], vec![], None));
-    logger.insert("removeFilter".to_string(), Value::Function("removeFilter".to_string(), vec![], vec![], None));
+    logger.insert("debug".to_string(), Value::NativeFunction(logging_debug));
+    logger.insert("info".to_string(), Value::NativeFunction(logging_info));
+    logger.insert("warning".to_string(), Value::NativeFunction(logging_warning));
+    logger.insert("warn".to_string(), Value::NativeFunction(logging_warning));
+    logger.insert("error".to_string(), Value::NativeFunction(logging_error));
+    logger.insert("exception".to_string(), Value::NativeFunction(logging_exception));
+    logger.insert("critical".to_string(), Value::NativeFunction(logging_critical));
+    logger.insert("fatal".to_string(), Value::NativeFunction(logging_critical));
+    logger.insert("log".to_string(), Value::NativeFunction(logging_log));
+    logger.insert("isEnabledFor".to_string(), Value::NativeFunction(logger_is_enabled_for));
+    logger.insert("getEffectiveLevel".to_string(), Value::NativeFunction(logger_get_effective_level));
+    logger.insert("setLevel".to_string(), Value::NativeFunction(logger_set_level));
+    logger.insert("addHandler".to_string(), Value::NativeFunction(logger_add_handler));
+    logger.insert("removeHandler".to_string(), Value::NativeFunction(logger_remove_handler));
+    logger.insert("addFilter".to_string(), Value::NativeFunction(logger_add_filter));
+    logger.insert("removeFilter".to_string(), Value::NativeFunction(logger_remove_filter));
     
     Value::Object {
         class_name: "Logger".to_string(),
@@ -136,13 +136,13 @@ fn create_handler(handler_type: String) -> Value {
     handler.insert("filters".to_string(), Value::Tuple(Vec::new()));
     
     // Add methods
-    handler.insert("emit".to_string(), Value::Function("emit".to_string(), vec![], vec![], None));
-    handler.insert("handle".to_string(), Value::Function("handle".to_string(), vec![], vec![], None));
-    handler.insert("setLevel".to_string(), Value::Function("setLevel".to_string(), vec![], vec![], None));
-    handler.insert("setFormatter".to_string(), Value::Function("setFormatter".to_string(), vec![], vec![], None));
-    handler.insert("addFilter".to_string(), Value::Function("addFilter".to_string(), vec![], vec![], None));
-    handler.insert("removeFilter".to_string(), Value::Function("removeFilter".to_string(), vec![], vec![], None));
-    handler.insert("format".to_string(), Value::Function("format".to_string(), vec![], vec![], None));
+    handler.insert("emit".to_string(), Value::NativeFunction(handler_emit));
+    handler.insert("handle".to_string(), Value::NativeFunction(handler_handle));
+    handler.insert("setLevel".to_string(), Value::NativeFunction(handler_set_level));
+    handler.insert("setFormatter".to_string(), Value::NativeFunction(handler_set_formatter));
+    handler.insert("addFilter".to_string(), Value::NativeFunction(handler_add_filter));
+    handler.insert("removeFilter".to_string(), Value::NativeFunction(handler_remove_filter));
+    handler.insert("format".to_string(), Value::NativeFunction(handler_format));
     
     Value::Object {
         class_name: handler_type,
@@ -166,9 +166,9 @@ fn create_formatter(fmt: Option<String>, datefmt: Option<String>) -> Value {
     }
     
     // Add methods
-    formatter.insert("format".to_string(), Value::Function("format".to_string(), vec![], vec![], None));
-    formatter.insert("formatTime".to_string(), Value::Function("formatTime".to_string(), vec![], vec![], None));
-    formatter.insert("formatException".to_string(), Value::Function("formatException".to_string(), vec![], vec![], None));
+    formatter.insert("format".to_string(), Value::NativeFunction(formatter_format));
+    formatter.insert("formatTime".to_string(), Value::NativeFunction(formatter_format_time));
+    formatter.insert("formatException".to_string(), Value::NativeFunction(formatter_format_exception));
     
     Value::Object {
         class_name: "Formatter".to_string(),
@@ -468,7 +468,7 @@ fn logging_filter_class(args: Vec<Value>) -> Result<Value> {
     filter.insert("nlen".to_string(), Value::Int(0));
     
     // Add methods
-    filter.insert("filter".to_string(), Value::Function("filter".to_string(), vec![], vec![], None));
+    filter.insert("filter".to_string(), Value::NativeFunction(filter_filter));
     
     Ok(Value::Object {
         class_name: "Filter".to_string(),
@@ -512,7 +512,7 @@ fn logging_log_record_class(args: Vec<Value>) -> Result<Value> {
     record.insert("process".to_string(), Value::Int(0));
     
     // Add methods
-    record.insert("getMessage".to_string(), Value::Function("getMessage".to_string(), vec![], vec![], None));
+    record.insert("getMessage".to_string(), Value::NativeFunction(log_record_get_message));
     
     Ok(Value::Object {
         class_name: "LogRecord".to_string(),
@@ -671,104 +671,121 @@ fn logger_remove_filter(args: Vec<Value>) -> Result<Value> {
     Ok(Value::None)
 }
 
-/// Handler.emit(record)
+/// Handler.emit(record) - Emit a log record
 fn handler_emit(args: Vec<Value>) -> Result<Value> {
-    if args.len() < 2 {
-        return Err(anyhow::anyhow!("emit() missing required argument: 'record'"));
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("emit() missing self argument"));
     }
-    
-    let _self = &args[0];
-    let _record = &args[1];
     
     // In a real implementation, this would emit the log record
     Ok(Value::None)
 }
 
-/// Handler.handle(record)
+/// Handler.handle(record) - Handle a log record
 fn handler_handle(args: Vec<Value>) -> Result<Value> {
-    if args.len() < 2 {
-        return Err(anyhow::anyhow!("handle() missing required argument: 'record'"));
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("handle() missing self argument"));
     }
-    
-    let _self = &args[0];
-    let _record = &args[1];
     
     // In a real implementation, this would handle the log record
     Ok(Value::None)
 }
 
-/// Handler.setFormatter(formatter)
+/// Handler.setLevel(level) - Set the handler level
+fn handler_set_level(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("setLevel() missing required argument: 'level'"));
+    }
+    
+    // In a real implementation, this would set the handler level
+    Ok(Value::None)
+}
+
+/// Handler.setFormatter(formatter) - Set the handler formatter
 fn handler_set_formatter(args: Vec<Value>) -> Result<Value> {
     if args.len() < 2 {
         return Err(anyhow::anyhow!("setFormatter() missing required argument: 'formatter'"));
     }
     
-    let _self = &args[0];
-    let _formatter = &args[1];
-    
-    // In a real implementation, this would set the handler's formatter
+    // In a real implementation, this would set the formatter
     Ok(Value::None)
 }
 
-/// Formatter.format(record)
-fn formatter_format(args: Vec<Value>) -> Result<Value> {
+/// Handler.addFilter(filter) - Add a filter to the handler
+fn handler_add_filter(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("addFilter() missing required argument: 'filter'"));
+    }
+    
+    // In a real implementation, this would add the filter
+    Ok(Value::None)
+}
+
+/// Handler.removeFilter(filter) - Remove a filter from the handler
+fn handler_remove_filter(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("removeFilter() missing required argument: 'filter'"));
+    }
+    
+    // In a real implementation, this would remove the filter
+    Ok(Value::None)
+}
+
+/// Handler.format(record) - Format a log record
+fn handler_format(args: Vec<Value>) -> Result<Value> {
     if args.len() < 2 {
         return Err(anyhow::anyhow!("format() missing required argument: 'record'"));
     }
     
-    let _self = &args[0];
-    let _record = &args[1];
-    
-    // In a real implementation, this would format the log record
-    Ok(Value::Str("Formatted log message".to_string()))
+    // In a real implementation, this would format the record
+    Ok(Value::Str("Formatted log record".to_string()))
 }
 
-/// Formatter.formatTime(record, datefmt=None)
+/// Formatter.formatTime(record, datefmt=None) - Format the time for a log record
 fn formatter_format_time(args: Vec<Value>) -> Result<Value> {
     if args.len() < 2 {
         return Err(anyhow::anyhow!("formatTime() missing required argument: 'record'"));
     }
     
-    let _self = &args[0];
-    let _record = &args[1];
-    
-    // In a real implementation, this would format the timestamp
-    Ok(Value::Str("2024-01-01 12:00:00,000".to_string()))
+    // In a real implementation, this would format the time
+    Ok(Value::Str("2024-01-01 12:00:00".to_string()))
 }
 
-/// Formatter.formatException(ei)
+/// Formatter.formatException(ei) - Format exception information
 fn formatter_format_exception(args: Vec<Value>) -> Result<Value> {
     if args.len() < 2 {
         return Err(anyhow::anyhow!("formatException() missing required argument: 'ei'"));
     }
     
-    let _self = &args[0];
-    let _ei = &args[1];
-    
-    // In a real implementation, this would format exception information
-    Ok(Value::Str("Traceback (most recent call last):\n  Exception: error".to_string()))
+    // In a real implementation, this would format exception info
+    Ok(Value::Str("Exception traceback".to_string()))
 }
 
-/// Filter.filter(record)
+/// Formatter.format(record) - Format a log record
+fn formatter_format(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("format() missing required argument: 'record'"));
+    }
+    
+    // In a real implementation, this would format the log record
+    Ok(Value::Str("Formatted log message".to_string()))
+}
+
+/// Filter.filter(record) - Filter a log record
 fn filter_filter(args: Vec<Value>) -> Result<Value> {
     if args.len() < 2 {
         return Err(anyhow::anyhow!("filter() missing required argument: 'record'"));
     }
     
-    let _self = &args[0];
-    let _record = &args[1];
-    
     // In a real implementation, this would filter the log record
     Ok(Value::Bool(true))
 }
 
-/// LogRecord.getMessage()
+/// LogRecord.getMessage() - Get the formatted message
 fn log_record_get_message(args: Vec<Value>) -> Result<Value> {
     if args.is_empty() {
         return Err(anyhow::anyhow!("getMessage() missing self argument"));
     }
-    
-    let _self = &args[0];
     
     // In a real implementation, this would format the message with args
     Ok(Value::Str("Log message".to_string()))

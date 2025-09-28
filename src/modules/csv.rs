@@ -106,8 +106,8 @@ fn csv_reader(args: Vec<Value>) -> Result<Value> {
     reader.insert("line_num".to_string(), Value::Int(0));
     
     // Add methods
-    reader.insert("__iter__".to_string(), Value::Function("__iter__".to_string(), vec![], vec![], None));
-    reader.insert("__next__".to_string(), Value::Function("__next__".to_string(), vec![], vec![], None));
+    reader.insert("__iter__".to_string(), Value::NativeFunction(csv_iter));
+    reader.insert("__next__".to_string(), Value::NativeFunction(csv_next));
     
     Ok(Value::Object {
         class_name: "reader".to_string(),
@@ -139,8 +139,8 @@ fn csv_writer(args: Vec<Value>) -> Result<Value> {
     writer.insert("dialect".to_string(), Value::Str(dialect));
     
     // Add methods
-    writer.insert("writerow".to_string(), Value::Function("writerow".to_string(), vec![], vec![], None));
-    writer.insert("writerows".to_string(), Value::Function("writerows".to_string(), vec![], vec![], None));
+    writer.insert("writerow".to_string(), Value::NativeFunction(csv_writerow));
+    writer.insert("writerows".to_string(), Value::NativeFunction(csv_writerows));
     
     Ok(Value::Object {
         class_name: "writer".to_string(),
@@ -211,8 +211,8 @@ fn csv_dict_reader(args: Vec<Value>) -> Result<Value> {
     }
     
     // Add methods
-    dict_reader.insert("__iter__".to_string(), Value::Function("__iter__".to_string(), vec![], vec![], None));
-    dict_reader.insert("__next__".to_string(), Value::Function("__next__".to_string(), vec![], vec![], None));
+    dict_reader.insert("__iter__".to_string(), Value::NativeFunction(csv_iter));
+    dict_reader.insert("__next__".to_string(), Value::NativeFunction(csv_next));
     
     Ok(Value::Object {
         class_name: "DictReader".to_string(),
@@ -267,9 +267,9 @@ fn csv_dict_writer(args: Vec<Value>) -> Result<Value> {
     dict_writer.insert("extrasaction".to_string(), Value::Str(extrasaction));
     
     // Add methods
-    dict_writer.insert("writeheader".to_string(), Value::Function("writeheader".to_string(), vec![], vec![], None));
-    dict_writer.insert("writerow".to_string(), Value::Function("writerow".to_string(), vec![], vec![], None));
-    dict_writer.insert("writerows".to_string(), Value::Function("writerows".to_string(), vec![], vec![], None));
+    dict_writer.insert("writeheader".to_string(), Value::NativeFunction(csv_writeheader));
+    dict_writer.insert("writerow".to_string(), Value::NativeFunction(csv_writerow));
+    dict_writer.insert("writerows".to_string(), Value::NativeFunction(csv_writerows));
     
     Ok(Value::Object {
         class_name: "DictWriter".to_string(),
@@ -376,8 +376,8 @@ fn csv_sniffer(_args: Vec<Value>) -> Result<Value> {
     let mut sniffer = HashMap::new();
     
     // Add methods
-    sniffer.insert("sniff".to_string(), Value::Function("sniff".to_string(), vec![], vec![], None));
-    sniffer.insert("has_header".to_string(), Value::Function("has_header".to_string(), vec![], vec![], None));
+    sniffer.insert("sniff".to_string(), Value::NativeFunction(csv_sniff));
+    sniffer.insert("has_header".to_string(), Value::NativeFunction(csv_has_header));
     
     Ok(Value::Object {
         class_name: "Sniffer".to_string(),

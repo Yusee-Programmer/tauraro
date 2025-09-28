@@ -11,16 +11,34 @@ use chrono::{DateTime, Local, Utc, NaiveDateTime, NaiveDate, NaiveTime, Datelike
 pub fn create_datetime_module() -> Value {
     let mut namespace = HashMap::new();
     
+    // Create datetime class with its methods
+    let mut datetime_class_methods = HashMap::new();
+    datetime_class_methods.insert("now".to_string(), Value::NativeFunction(datetime_now));
+    datetime_class_methods.insert("utcnow".to_string(), Value::NativeFunction(datetime_utcnow));
+    
+    let datetime_class = Value::Object {
+        class_name: "datetime".to_string(),
+        fields: datetime_class_methods,
+        base_object: crate::base_object::BaseObject::new("datetime".to_string(), vec!["object".to_string()]),
+        mro: MRO::from_linearization(vec!["datetime".to_string(), "object".to_string()]),
+    };
+    
+    // Create date class with its methods
+    let mut date_class_methods = HashMap::new();
+    date_class_methods.insert("today".to_string(), Value::NativeFunction(date_today));
+    
+    let date_class = Value::Object {
+        class_name: "date".to_string(),
+        fields: date_class_methods,
+        base_object: crate::base_object::BaseObject::new("date".to_string(), vec!["object".to_string()]),
+        mro: MRO::from_linearization(vec!["date".to_string(), "object".to_string()]),
+    };
+    
     // Classes
-    namespace.insert("datetime".to_string(), Value::NativeFunction(datetime_new));
-    namespace.insert("date".to_string(), Value::NativeFunction(date_new));
+    namespace.insert("datetime".to_string(), datetime_class);
+    namespace.insert("date".to_string(), date_class);
     namespace.insert("time".to_string(), Value::NativeFunction(time_new));
     namespace.insert("timedelta".to_string(), Value::NativeFunction(timedelta_new));
-    
-    // Module-level functions
-    namespace.insert("now".to_string(), Value::NativeFunction(datetime_now));
-    namespace.insert("today".to_string(), Value::NativeFunction(date_today));
-    namespace.insert("utcnow".to_string(), Value::NativeFunction(datetime_utcnow));
     
     // Constants
     namespace.insert("MINYEAR".to_string(), Value::Int(1));

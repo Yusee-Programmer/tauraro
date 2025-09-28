@@ -15,34 +15,32 @@ pub fn create_base64_module() -> Value {
     let mut namespace = HashMap::new();
     
     // Standard base64 functions
-    namespace.insert("b64encode".to_string(), Value::Function("b64encode".to_string(), vec![], vec![], None));
-    namespace.insert("b64decode".to_string(), Value::Function("b64decode".to_string(), vec![], vec![], None));
-    namespace.insert("standard_b64encode".to_string(), Value::Function("standard_b64encode".to_string(), vec![], vec![], None));
-    namespace.insert("standard_b64decode".to_string(), Value::Function("standard_b64decode".to_string(), vec![], vec![], None));
+    namespace.insert("b64encode".to_string(), Value::NativeFunction(b64encode));
+    namespace.insert("b64decode".to_string(), Value::NativeFunction(b64decode));
+    namespace.insert("standard_b64encode".to_string(), Value::NativeFunction(b64encode));
+    namespace.insert("standard_b64decode".to_string(), Value::NativeFunction(b64decode));
     
     // URL-safe base64 functions
-    namespace.insert("urlsafe_b64encode".to_string(), Value::Function("urlsafe_b64encode".to_string(), vec![], vec![], None));
-    namespace.insert("urlsafe_b64decode".to_string(), Value::Function("urlsafe_b64decode".to_string(), vec![], vec![], None));
+    namespace.insert("urlsafe_b64encode".to_string(), Value::NativeFunction(urlsafe_b64encode));
+    namespace.insert("urlsafe_b64decode".to_string(), Value::NativeFunction(urlsafe_b64decode));
     
     // Base32 functions
-    namespace.insert("b32encode".to_string(), Value::Function("b32encode".to_string(), vec![], vec![], None));
-    namespace.insert("b32decode".to_string(), Value::Function("b32decode".to_string(), vec![], vec![], None));
+    namespace.insert("b32encode".to_string(), Value::NativeFunction(b32encode));
+    namespace.insert("b32decode".to_string(), Value::NativeFunction(b32decode));
     
     // Base16 functions
-    namespace.insert("b16encode".to_string(), Value::Function("b16encode".to_string(), vec![], vec![], None));
-    namespace.insert("b16decode".to_string(), Value::Function("b16decode".to_string(), vec![], vec![], None));
+    namespace.insert("b16encode".to_string(), Value::NativeFunction(b16encode));
+    namespace.insert("b16decode".to_string(), Value::NativeFunction(b16decode));
     
     // Base85 functions
-    namespace.insert("a85encode".to_string(), Value::Function("a85encode".to_string(), vec![], vec![], None));
-    namespace.insert("a85decode".to_string(), Value::Function("a85decode".to_string(), vec![], vec![], None));
-    namespace.insert("b85encode".to_string(), Value::Function("b85encode".to_string(), vec![], vec![], None));
-    namespace.insert("b85decode".to_string(), Value::Function("b85decode".to_string(), vec![], vec![], None));
+    namespace.insert("b85encode".to_string(), Value::NativeFunction(b85encode));
+    namespace.insert("b85decode".to_string(), Value::NativeFunction(b85decode));
     
     // Legacy functions
-    namespace.insert("encode".to_string(), Value::Function("encode".to_string(), vec![], vec![], None));
-    namespace.insert("decode".to_string(), Value::Function("decode".to_string(), vec![], vec![], None));
-    namespace.insert("encodebytes".to_string(), Value::Function("encodebytes".to_string(), vec![], vec![], None));
-    namespace.insert("decodebytes".to_string(), Value::Function("decodebytes".to_string(), vec![], vec![], None));
+    namespace.insert("encode".to_string(), Value::NativeFunction(encode));
+    namespace.insert("decode".to_string(), Value::NativeFunction(decode));
+    namespace.insert("encodebytes".to_string(), Value::NativeFunction(encodebytes));
+    namespace.insert("decodebytes".to_string(), Value::NativeFunction(decodebytes));
     
     Value::Module("base64".to_string(), namespace)
 }
