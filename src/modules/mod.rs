@@ -7,6 +7,24 @@ use std::collections::HashMap;
 pub mod os;
 pub mod sys;
 pub mod thread;
+pub mod time;
+pub mod datetime;
+pub mod io;
+pub mod math;
+pub mod random;
+pub mod re;
+pub mod json;
+pub mod functools;
+pub mod itertools;
+pub mod collections;
+pub mod copy;
+pub mod pickle;
+pub mod base64;
+pub mod hashlib;
+pub mod urllib;
+pub mod csv;
+pub mod logging;
+pub mod unittest;
 
 /// Initialize all built-in modules and return them as a HashMap
 pub fn init_builtin_modules() -> HashMap<String, Value> {
@@ -16,6 +34,24 @@ pub fn init_builtin_modules() -> HashMap<String, Value> {
     modules.insert("os".to_string(), os::create_os_module());
     modules.insert("sys".to_string(), sys::create_sys_module());
     modules.insert("thread".to_string(), thread::create_thread_module());
+    modules.insert("time".to_string(), time::create_time_module());
+    modules.insert("datetime".to_string(), datetime::create_datetime_module());
+    modules.insert("io".to_string(), io::create_io_module());
+    modules.insert("math".to_string(), math::create_math_module());
+    modules.insert("random".to_string(), random::create_random_module());
+    modules.insert("re".to_string(), re::create_re_module());
+    modules.insert("json".to_string(), json::create_json_module());
+    modules.insert("functools".to_string(), functools::create_functools_module());
+    modules.insert("itertools".to_string(), itertools::create_itertools_module());
+    modules.insert("collections".to_string(), collections::create_collections_module());
+    modules.insert("copy".to_string(), copy::create_copy_module());
+    modules.insert("pickle".to_string(), pickle::create_pickle_module());
+    modules.insert("base64".to_string(), base64::create_base64_module());
+    modules.insert("hashlib".to_string(), hashlib::create_hashlib_module());
+    modules.insert("urllib".to_string(), urllib::create_urllib_module());
+    modules.insert("csv".to_string(), csv::create_csv_module());
+    modules.insert("logging".to_string(), logging::create_logging_module());
+    modules.insert("unittest".to_string(), unittest::create_unittest_module());
     
     modules
 }
@@ -26,13 +62,31 @@ pub fn get_builtin_module(name: &str) -> Option<Value> {
         "os" => Some(os::create_os_module()),
         "sys" => Some(sys::create_sys_module()),
         "thread" => Some(thread::create_thread_module()),
+        "time" => Some(time::create_time_module()),
+        "datetime" => Some(datetime::create_datetime_module()),
+        "io" => Some(io::create_io_module()),
+        "math" => Some(math::create_math_module()),
+        "random" => Some(random::create_random_module()),
+        "re" => Some(re::create_re_module()),
+        "json" => Some(json::create_json_module()),
+        "functools" => Some(functools::create_functools_module()),
+        "itertools" => Some(itertools::create_itertools_module()),
+        "collections" => Some(collections::create_collections_module()),
+        "copy" => Some(copy::create_copy_module()),
+        "pickle" => Some(pickle::create_pickle_module()),
+        "base64" => Some(base64::create_base64_module()),
+        "hashlib" => Some(hashlib::create_hashlib_module()),
+        "urllib" => Some(urllib::create_urllib_module()),
+        "csv" => Some(csv::create_csv_module()),
+        "logging" => Some(logging::create_logging_module()),
+        "unittest" => Some(unittest::create_unittest_module()),
         _ => None,
     }
 }
 
 /// Check if a module name is a built-in module
 pub fn is_builtin_module(name: &str) -> bool {
-    matches!(name, "os" | "sys" | "thread")
+    matches!(name, "os" | "sys" | "thread" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest")
 }
 
 /// Get list of all built-in module names
@@ -41,5 +95,23 @@ pub fn get_builtin_module_names() -> Vec<String> {
         "os".to_string(),
         "sys".to_string(),
         "thread".to_string(),
+        "time".to_string(),
+        "datetime".to_string(),
+        "io".to_string(),
+        "math".to_string(),
+        "random".to_string(),
+        "re".to_string(),
+        "json".to_string(),
+        "functools".to_string(),
+        "itertools".to_string(),
+        "collections".to_string(),
+        "copy".to_string(),
+        "pickle".to_string(),
+        "base64".to_string(),
+        "hashlib".to_string(),
+        "urllib".to_string(),
+        "csv".to_string(),
+        "logging".to_string(),
+        "unittest".to_string(),
     ]
 }

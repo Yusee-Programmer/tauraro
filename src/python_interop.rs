@@ -1,26 +1,28 @@
 //! COMPLETE Python interoperability for TauraroLang
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
-use pyo3::{Python, PyObject, PyResult, PyModule, PyErr};
+use pyo3::{Python, PyObject, PyResult};
 use pyo3::types::{PyDict, PyList, PyTuple};
 use anyhow::Result;
 use std::collections::HashMap;
+use crate::vm::VM;
+use crate::value::Value;
 
 /// Python interop manager
-pub struct PythonInterop {
-    py: Python,
+pub struct PythonInterop<'py> {
+    py: Python<'py>,
 }
 
-impl PythonInterop {
-    pub fn new() -> Result<Self> {
-        Python::with_gil(|py| {
-            Ok(Self { py })
-        })
+impl<'py> PythonInterop<'py> {
+    pub fn new(py: Python<'py>) -> Self {
+        Self { py }
     }
     
     /// Check if Python is available
     pub fn is_available() -> bool {
-        Python::with_gil(|_py| true).is_ok()
+        std::panic::catch_unwind(|| {
+            Python::with_gil(|_py| true)
+        }).is_ok()
     }
     
     /// Import Python module into TauraroLang
@@ -30,16 +32,16 @@ impl PythonInterop {
     }
     
     /// Call Python function from TauraroLang
-    pub fn call_function(&self, py_obj: &PyObject, function_name: &str, args: Vec<crate::vm::Value>) -> Result<crate::vm::Value> {
+    pub fn call_function(&self, py_obj: &PyObject, function_name: &str, args: Vec<Value>) -> Result<Value> {
         let args_py = self.tauraro_values_to_python(args)?;
-        let result = py_obj.call_method(self.py, function_name, args_py, None)?;
+        let result = py_obj.call_method(self.py, function_name, (args_py,), None)?;
         self.python_to_tauraro_value(result)
     }
     
     /// Evaluate Python code from TauraroLang
-    pub fn eval_python_code(&self, code: &str) -> Result<crate::vm::Value> {
+    pub fn eval_python_code(&self, code: &str) -> Result<Value> {
         let result = self.py.eval(code, None, None)?;
-        self.python_to_tauraro_value(result)
+        self.python_to_tauraro_value(result.into())
     }
     
     /// Execute Python script
@@ -49,66 +51,71 @@ impl PythonInterop {
     }
     
     /// Convert Tauraro values to Python objects
-    fn tauraro_values_to_python(&self, values: Vec<crate::vm::Value>) -> Result<Py<PyTuple>> {
+    fn tauraro_values_to_python(&self, values: Vec<Value>) -> Result<&PyTuple> {
         let py_values: Result<Vec<PyObject>> = values
             .into_iter()
             .map(|v| self.tauraro_value_to_python(v))
             .collect();
         
-        Ok(PyTuple::new(self.py, &py_values?).into())
+        Ok(PyTuple::new(self.py, &py_values?))
     }
     
     /// Convert single Tauraro value to Python object
-    fn tauraro_value_to_python(&self, value: crate::vm::Value) -> Result<PyObject> {
+    fn tauraro_value_to_python(&self, value: Value) -> Result<PyObject> {
         match value {
-            crate::vm::Value::Int(n) => Ok(n.to_object(self.py)),
-            crate::vm::Value::Float(n) => Ok(n.to_object(self.py)),
-            crate::vm::Value::Bool(b) => Ok(b.to_object(self.py)),
-            crate::vm::Value::String(s) => Ok(s.to_object(self.py)),
-            crate::vm::Value::List(items) => {
+            Value::Int(n) => Ok(n.into_py(self.py)),
+            Value::Float(n) => Ok(n.into_py(self.py)),
+            Value::Bool(b) => Ok(b.into_py(self.py)),
+            Value::Str(s) => Ok(s.into_py(self.py)),
+            Value::List(items) => {
                 let py_list = PyList::empty(self.py);
                 for item in items {
                     let py_item = self.tauraro_value_to_python(item)?;
                     py_list.append(py_item)?;
                 }
-                Ok(py_list.to_object(self.py))
+                Ok(py_list.into_py(self.py))
             }
-            crate::vm::Value::Dict(dict) => {
+            Value::Dict(dict) => {
                 let py_dict = PyDict::new(self.py);
                 for (k, v) in dict {
-                    let py_key = self.tauraro_value_to_python(crate::vm::Value::String(k))?;
+                    let py_key = self.tauraro_value_to_python(Value::Str(k))?;
                     let py_value = self.tauraro_value_to_python(v)?;
                     py_dict.set_item(py_key, py_value)?;
                 }
-                Ok(py_dict.to_object(self.py))
+                Ok(py_dict.into_py(self.py))
             }
-            crate::vm::Value::None => Ok(self.py.None()),
+            Value::None => Ok(self.py.None()),
+            Value::Super(current_class, parent_class) => {
+                // Convert super object to a string representation for Python
+                let super_str = format!("<super: {} -> {}>", current_class, parent_class);
+                Ok(super_str.into_py(self.py))
+            }
             _ => Err(anyhow::anyhow!("Unsupported value type for Python conversion")),
         }
     }
     
     /// Convert Python object to Tauraro value
-    fn python_to_tauraro_value(&self, obj: PyObject) -> Result<crate::vm::Value> {
+    fn python_to_tauraro_value(&self, obj: PyObject) -> Result<Value> {
         let py_obj = obj.as_ref(self.py);
         
         if py_obj.is_none() {
-            return Ok(crate::vm::Value::None);
+            return Ok(Value::None);
         }
         
         if let Ok(int_val) = py_obj.extract::<i64>() {
-            return Ok(crate::vm::Value::Int(int_val));
+            return Ok(Value::Int(int_val));
         }
         
         if let Ok(float_val) = py_obj.extract::<f64>() {
-            return Ok(crate::vm::Value::Float(float_val));
+            return Ok(Value::Float(float_val));
         }
         
         if let Ok(bool_val) = py_obj.extract::<bool>() {
-            return Ok(crate::vm::Value::Bool(bool_val));
+            return Ok(Value::Bool(bool_val));
         }
         
         if let Ok(string_val) = py_obj.extract::<String>() {
-            return Ok(crate::vm::Value::String(string_val));
+            return Ok(Value::Str(string_val));
         }
         
         if let Ok(list_val) = py_obj.downcast::<PyList>() {
@@ -116,7 +123,7 @@ impl PythonInterop {
             for item in list_val.iter() {
                 items.push(self.python_to_tauraro_value(item.to_object(self.py))?);
             }
-            return Ok(crate::vm::Value::List(items));
+            return Ok(Value::List(items));
         }
         
         if let Ok(dict_val) = py_obj.downcast::<PyDict>() {
@@ -126,11 +133,11 @@ impl PythonInterop {
                 let value_val = self.python_to_tauraro_value(value.to_object(self.py))?;
                 dict.insert(key_str, value_val);
             }
-            return Ok(crate::vm::Value::Dict(dict));
+            return Ok(Value::Dict(dict));
         }
         
         // Fallback: return as string representation
-        Ok(crate::vm::Value::String(py_obj.repr()?.extract()?))
+        Ok(Value::Str(py_obj.repr()?.extract()?))
     }
     
     /// Get Python version information
@@ -167,9 +174,8 @@ fn tauraro(_py: Python, m: &PyModule) -> PyResult<()> {
 #[pyfunction]
 fn tauraro_eval(code: &str) -> PyResult<String> {
     let mut vm = crate::vm::VM::new();
-    match vm.execute_repl(code, 1) {
-        Ok(Some(result)) => Ok(result.to_string()),
-        Ok(None) => Ok("None".to_string()),
+    match vm.execute_script(code, vec![]) {
+        Ok(result) => Ok(result.to_string()),
         Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
     }
 }
@@ -203,9 +209,8 @@ impl TauraroVM {
     }
     
     fn eval(&mut self, code: &str) -> PyResult<String> {
-        match self.vm.execute_repl(code, 1) {
-            Ok(Some(result)) => Ok(result.to_string()),
-            Ok(None) => Ok("None".to_string()),
+        match self.vm.execute_script(code, vec![]) {
+            Ok(result) => Ok(result.to_string()),
             Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
         }
     }
@@ -226,18 +231,18 @@ impl TauraroVM {
 }
 
 /// Python integration for TauraroLang standard library
-pub struct PythonIntegration {
-    interop: PythonInterop,
+pub struct PythonIntegration<'py> {
+    interop: PythonInterop<'py>,
     imported_modules: HashMap<String, PyObject>,
 }
 
-impl PythonIntegration {
-    pub fn new() -> Result<Self> {
-        let interop = PythonInterop::new()?;
-        Ok(Self {
+impl<'py> PythonIntegration<'py> {
+    pub fn new(py: Python<'py>) -> Self {
+        let interop = PythonInterop::new(py);
+        Self {
             interop,
             imported_modules: HashMap::new(),
-        })
+        }
     }
     
     /// Import Python module and make it available in TauraroLang
@@ -249,7 +254,7 @@ impl PythonIntegration {
     }
     
     /// Call Python function from TauraroLang VM
-    pub fn call_python_function(&self, vm: &mut crate::vm::VM, module_name: &str, function_name: &str, args: Vec<crate::vm::Value>) -> Result<crate::vm::Value> {
+    pub fn call_python_function(&self, _vm: &mut VM, module_name: &str, function_name: &str, args: Vec<Value>) -> Result<Value> {
         if let Some(module) = self.imported_modules.get(module_name) {
             self.interop.call_function(module, function_name, args)
         } else {
@@ -280,19 +285,21 @@ pub fn demonstrate_python_integration() -> Result<()> {
         return Ok(());
     }
     
-    let mut integration = PythonIntegration::new()?;
-    
-    // Import Python math module
-    integration.import_python_module("math", None)?;
-    
-    // Create TauraroLang VM
-    let mut vm = crate::vm::VM::new();
-    
-    // Call Python math functions from TauraroLang
-    let args = vec![crate::vm::Value::Float(3.14159)];
-    let result = integration.call_python_function(&mut vm, "math", "sin", args)?;
-    
-    println!("Python math.sin(3.14159) = {}", result.to_string());
-    
-    Ok(())
+    Python::with_gil(|py| {
+        let mut integration = PythonIntegration::new(py);
+        
+        // Import Python math module
+        integration.import_python_module("math", None)?;
+        
+        // Create TauraroLang VM
+        let mut vm = VM::new();
+        
+        // Call Python math functions from TauraroLang
+        let args = vec![Value::Float(3.14159)];
+        let result = integration.call_python_function(&mut vm, "math", "sin", args)?;
+        
+        println!("Python math.sin(3.14159) = {}", result.to_string());
+        
+        Ok(())
+    })
 }

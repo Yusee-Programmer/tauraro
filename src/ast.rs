@@ -21,6 +21,7 @@ pub enum Statement {
         body: Vec<Statement>,
         is_async: bool,
         decorators: Vec<Expr>,
+        docstring: Option<String>,
     },
     ClassDef {
         name: String,
@@ -28,6 +29,7 @@ pub enum Statement {
         body: Vec<Statement>,
         decorators: Vec<Expr>,
         metaclass: Option<Expr>,
+        docstring: Option<String>,
     },
     If {
         condition: Expr,
@@ -161,6 +163,7 @@ pub struct ExceptHandler {
 pub enum Expr {
     Literal(Literal),
     Identifier(String),
+    DocString(String),
     BinaryOp {
         left: Box<Expr>,
         op: BinaryOp,
@@ -515,6 +518,7 @@ impl Statement {
             body,
             is_async: false,
             decorators: Vec::new(),
+            docstring: None,
         }
     }
 }

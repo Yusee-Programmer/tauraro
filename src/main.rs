@@ -9,11 +9,16 @@ mod ir;
 mod codegen;
 mod value;
 mod builtins;
+mod builtins_super;
 mod vm;
 mod runtime;
 mod ffi;
 mod modules;
+mod module_system;
 mod object_system;
+mod base_object;
+mod type_hierarchy;
+mod metaclass;
 
 use crate::codegen::{CodeGen, CodegenOptions, Target, CodeGenerator};
 
@@ -42,6 +47,10 @@ enum Commands {
         /// Optimization level (0-3)
         #[arg(short, long, default_value = "0")]
         optimization: u8,
+        
+        /// Enable strict type checking
+        #[arg(long)]
+        strict_types: bool,
     },
     
     /// Compile a TauraroLang file
@@ -94,9 +103,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut interpreter = codegen::interpreter::Interpreter::new();
             interpreter.repl()?;
         }
-        Commands::Run { file, backend, optimization } => {
+        Commands::Run { file, backend, optimization, strict_types } => {
             let source = std::fs::read_to_string(&file)?;
-            vm::run_file(&source, &backend, optimization)?;
+            vm::run_file_with_options(&source, &backend, optimization, strict_types)?;
         }
         Commands::Compile { 
             file, 

@@ -282,7 +282,7 @@ impl Analyzer {
                     value: analyzed_value,
                 })
             }
-            Statement::FunctionDef { name, params, return_type, body, is_async, decorators } => {
+            Statement::FunctionDef { name, params, return_type, body, is_async, decorators, docstring: _ } => {
                 // Analyze decorators first
                 let analyzed_decorators = decorators.into_iter()
                     .map(|d| self.analyze_expression(d))
@@ -342,10 +342,11 @@ impl Analyzer {
                     return_type, 
                     body: analyzed_body, 
                     is_async, 
-                    decorators: analyzed_decorators 
+                    decorators: analyzed_decorators,
+                    docstring: None, // TODO: Extract docstring during semantic analysis
                 })
             }
-            Statement::ClassDef { name, bases, body, decorators, metaclass } => {
+            Statement::ClassDef { name, bases, body, decorators, metaclass, docstring: _ } => {
                 let analyzed_decorators = decorators.into_iter()
                     .map(|d| self.analyze_expression(d))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -389,6 +390,7 @@ impl Analyzer {
                     body: analyzed_body, 
                     decorators: analyzed_decorators,
                     metaclass: analyzed_metaclass,
+                    docstring: None, // TODO: Extract docstring during semantic analysis
                 })
             }
             Statement::If { condition, then_branch, elif_branches, else_branch } => {
@@ -783,6 +785,7 @@ impl Analyzer {
     fn infer_type(&self, expr: &Expr) -> Result<Type, SemanticError> {
         match expr {
             Expr::Literal(lit) => Ok(self.literal_type(lit)),
+            Expr::DocString(_) => Ok(Type::Simple("str".to_string())),
             Expr::Identifier(name) => {
                 if let Some(type_info) = self.symbol_table.lookup(name) {
                     Ok(Type::Simple(type_info.name.clone()))

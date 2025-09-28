@@ -346,7 +346,7 @@ impl CTranspiler {
                 let val_str = self.format_ir_value(value);
                 // Generate appropriate print call based on value type
                 match value {
-                    IRValue::ImmediateString(_) | IRValue::ConstantString(_) | IRValue::String(_) => {
+                    IRValue::ImmediateString(_) | IRValue::ConstantString(_) | IRValue::Str(_) => {
                         code.push_str(&format!("    tauraro_print({});\n", val_str));
                     }
                     IRValue::ImmediateInt(_) | IRValue::ConstantInt(_) | IRValue::Int(_) => {
@@ -590,7 +590,7 @@ impl CTranspiler {
             IRValue::ImmediateBool(b) | IRValue::ConstantBool(b) | IRValue::Bool(b) => {
                 if *b { "true" } else { "false" }.to_string()
             },
-            IRValue::ImmediateString(s) | IRValue::ConstantString(s) | IRValue::String(s) => {
+            IRValue::ImmediateString(s) | IRValue::ConstantString(s) | IRValue::Str(s) | IRValue::String(s) => {
                 format!("\"{}\"", s.replace("\"", "\\\""))
             },
             IRValue::Variable(name) => name.clone(),
@@ -615,7 +615,7 @@ impl CTranspiler {
             IRValue::ImmediateInt(_) | IRValue::ConstantInt(_) | IRValue::Int(_) => "int64_t".to_string(),
             IRValue::ImmediateFloat(_) | IRValue::ConstantFloat(_) | IRValue::Float(_) => "double".to_string(),
             IRValue::ImmediateBool(_) | IRValue::ConstantBool(_) | IRValue::Bool(_) => "bool".to_string(),
-            IRValue::ImmediateString(_) | IRValue::ConstantString(_) | IRValue::String(_) => "char*".to_string(),
+            IRValue::ImmediateString(_) | IRValue::ConstantString(_) | IRValue::Str(_) | IRValue::String(_) => "char*".to_string(),
             IRValue::Variable(_) => "void*".to_string(), // Default for variables
             IRValue::Null | IRValue::None => "void*".to_string(),
             IRValue::List(_) => "void*".to_string(),

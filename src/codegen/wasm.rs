@@ -277,7 +277,7 @@ impl WASMCodeGenerator {
             IRValue::ConstantInt(n) => n.to_string(),
             IRValue::ConstantFloat(n) => n.to_string(),
             IRValue::ConstantBool(b) => if *b { "1" } else { "0" }.to_string(),
-            IRValue::ConstantString(s) => {
+            IRValue::ConstantString(s) | IRValue::String(s) => {
                 // String constants would be stored in memory
                 format!("{}", s.as_ptr() as i32) // Simplified
             }
