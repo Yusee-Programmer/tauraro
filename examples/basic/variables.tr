@@ -1,0 +1,72 @@
+#!/usr/bin/env tauraro
+"""
+Example: Variables and Types
+
+This example demonstrates TauraroLang's variable declaration,
+type system, and basic operations.
+
+Features demonstrated:
+- Variable declaration and assignment
+- Different data types (int, float, string, bool)
+- Type inference
+- Variable reassignment
+- Basic arithmetic operations
+- String operations
+
+Usage:
+    tauraro run examples/basic/variables.tr
+    
+Requirements:
+    - TauraroLang compiler/interpreter
+"""
+
+fn main() {
+    print("=== Variables and Types Demo ===")
+    
+    // Integer variables
+    let age = 25
+    let year = 2024
+    print("Age: " + str(age))
+    print("Year: " + str(year))
+    
+    // Float variables
+    let pi = 3.14159
+    let temperature = 23.5
+    print("Pi: " + str(pi))
+    print("Temperature: " + str(temperature) + "°C")
+    
+    // String variables
+    let name = "TauraroLang"
+    let greeting = "Hello, " + name + "!"
+    print(greeting)
+    
+    // Boolean variables
+    let is_awesome = true
+    let is_difficult = false
+    print("Is TauraroLang awesome? " + str(is_awesome))
+    print("Is TauraroLang difficult? " + str(is_difficult))
+    
+    // Variable reassignment
+    let counter = 0
+    print("Initial counter: " + str(counter))
+    counter = counter + 1
+    print("After increment: " + str(counter))
+    
+    // Arithmetic operations
+    let a = 10
+    let b = 3
+    print("\n=== Arithmetic Operations ===")
+    print(str(a) + " + " + str(b) + " = " + str(a + b))
+    print(str(a) + " - " + str(b) + " = " + str(a - b))
+    print(str(a) + " * " + str(b) + " = " + str(a * b))
+    print(str(a) + " / " + str(b) + " = " + str(a / b))
+    print(str(a) + " % " + str(b) + " = " + str(a % b))
+    
+    // String operations
+    print("\n=== String Operations ===")
+    let first_name = "John"
+    let last_name = "Doe"
+    let full_name = first_name + " " + last_name
+    print("Full name: " + full_name)
+    print("Length of full name: " + str(len(full_name)))
+}

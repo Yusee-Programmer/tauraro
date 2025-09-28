@@ -1,0 +1,24 @@
+#!/usr/bin/env tauraro
+"""
+Example: Hello World
+
+This is the classic "Hello, World!" program in TauraroLang.
+It demonstrates the basic syntax and program structure.
+
+Features demonstrated:
+- Basic program structure
+- Function definition
+- Print statement
+- String literals
+
+Usage:
+    tauraro run examples/basic/hello_world.tr
+    
+Requirements:
+    - TauraroLang compiler/interpreter
+"""
+
+fn main() {
+    print("Hello, World!")
+    print("Welcome to TauraroLang! 🚀")
+}

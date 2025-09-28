@@ -1,840 +1,1564 @@
 # TauraroLang API Reference
 
-This document provides a comprehensive reference for all built-in functions, VM operations, and standard library features available in TauraroLang.
+This document provides a comprehensive reference for TauraroLang's built-in functions, VM operations, and core APIs. All functions are implemented natively in Rust for optimal performance while maintaining Python compatibility.
 
 ## Table of Contents
 
 1. [Built-in Functions](#built-in-functions)
-2. [Data Type Operations](#data-type-operations)
-3. [String Operations](#string-operations)
-4. [Array Operations](#array-operations)
-5. [Object Operations](#object-operations)
-6. [Mathematical Functions](#mathematical-functions)
-7. [I/O Operations](#io-operations)
-8. [Type System](#type-system)
-9. [Memory Management](#memory-management)
-10. [VM Operations](#vm-operations)
-11. [Error Handling](#error-handling)
+2. [Type Conversion Functions](#type-conversion-functions)
+3. [Mathematical Functions](#mathematical-functions)
+4. [String Functions](#string-functions)
+5. [Collection Functions](#collection-functions)
+6. [Object Introspection Functions](#object-introspection-functions)
+7. [I/O Functions](#io-functions)
+8. [Utility Functions](#utility-functions)
+9. [VM Operations](#vm-operations)
+10. [Error Handling](#error-handling)
+11. [FFI (Foreign Function Interface)](#ffi-foreign-function-interface)
+12. [Python Interoperability](#python-interoperability)
 
 ## Built-in Functions
 
 ### Core Functions
 
-#### `print(value)`
-Outputs a value to the console.
+#### `print(*args, sep=' ', end='\n', file=None, flush=False)`
+Print objects to the text stream file, separated by sep and followed by end.
 
 **Parameters:**
-- `value` (any): The value to print
+- `*args`: Objects to print
+- `sep`: String inserted between values (default: ' ')
+- `end`: String appended after the last value (default: '\n')
+- `file`: File object to write to (default: sys.stdout)
+- `flush`: Whether to forcibly flush the stream (default: False)
 
-**Returns:** `null`
+**Returns:** `None`
 
-**Examples:**
-```tauraro
-print("Hello, World!")          // Output: Hello, World!
-print(42)                       // Output: 42
-print([1, 2, 3])               // Output: [1, 2, 3]
-print({name: "Alice", age: 25}) // Output: {name: "Alice", age: 25}
+**Example:**
+```python
+print("Hello", "World")  # Output: Hello World
+print("A", "B", "C", sep="-")  # Output: A-B-C
+print("No newline", end="")  # Output: No newline (no \n)
 ```
 
-#### `len(collection)`
-Returns the length of a collection (string, array, or object).
+#### `input(prompt='')`
+Read a string from standard input.
 
 **Parameters:**
-- `collection` (string|array|object): The collection to measure
+- `prompt`: Optional string to display as prompt
 
-**Returns:** `integer` - The number of elements/characters
+**Returns:** `str` - The input string (without trailing newline)
 
-**Examples:**
-```tauraro
-len("Hello")        // Returns: 5
-len([1, 2, 3, 4])   // Returns: 4
-len({a: 1, b: 2})   // Returns: 2
-len("")             // Returns: 0
-len([])             // Returns: 0
+**Example:**
+```python
+name = input("Enter your name: ")
+age = int(input("Enter your age: "))
 ```
 
-#### `type(value)`
-Returns the type of a value as a string.
+#### `len(obj)`
+Return the length (number of items) of an object.
 
 **Parameters:**
-- `value` (any): The value to check
+- `obj`: Object with `__len__` method or built-in sequence/collection
 
-**Returns:** `string` - The type name
+**Returns:** `int` - The length of the object
 
-**Possible return values:**
-- `"integer"` - For integer numbers
-- `"float"` - For floating-point numbers
-- `"string"` - For text strings
-- `"boolean"` - For true/false values
-- `"array"` - For arrays/lists
-- `"object"` - For objects/dictionaries
-- `"function"` - For functions
-- `"null"` - For null values
+**Supported Types:**
+- Strings, lists, tuples, sets, dictionaries
+- Objects with `__len__` method
 
-**Examples:**
-```tauraro
-type(42)           // Returns: "integer"
-type(3.14)         // Returns: "float"
-type("hello")      // Returns: "string"
-type(true)         // Returns: "boolean"
-type([1, 2, 3])    // Returns: "array"
-type({a: 1})       // Returns: "object"
-type(null)         // Returns: "null"
+**Example:**
+```python
+len("hello")        # 5
+len([1, 2, 3])      # 3
+len({'a': 1, 'b': 2})  # 2
 ```
 
-## Data Type Operations
-
-### Type Conversion Functions
-
-#### `str(value)`
-Converts a value to its string representation.
+#### `type(obj)`
+Return the type of an object.
 
 **Parameters:**
-- `value` (any): The value to convert
+- `obj`: Any object
 
-**Returns:** `string` - String representation of the value
+**Returns:** `str` - String representation of the object's type
 
-**Examples:**
-```tauraro
-str(42)           // Returns: "42"
-str(3.14)         // Returns: "3.14"
-str(true)         // Returns: "true"
-str([1, 2, 3])    // Returns: "[1, 2, 3]"
-str({a: 1})       // Returns: "{a: 1}"
-str(null)         // Returns: "null"
+**Example:**
+```python
+type(42)        # "int"
+type("hello")   # "str"
+type([1, 2, 3]) # "list"
 ```
 
-#### `int(value)`
-Converts a value to an integer.
+#### `id(obj)`
+Return the identity of an object as an integer.
 
 **Parameters:**
-- `value` (string|float|boolean): The value to convert
+- `obj`: Any object
 
-**Returns:** `integer` - Integer representation of the value
+**Returns:** `int` - Unique identifier for the object
 
-**Conversion rules:**
-- String: Parses numeric strings, returns 0 for non-numeric
-- Float: Truncates decimal part
-- Boolean: `true` → 1, `false` → 0
-- Other types: Returns 0
-
-**Examples:**
-```tauraro
-int("42")         // Returns: 42
-int("3.14")       // Returns: 3
-int(3.14)         // Returns: 3
-int(true)         // Returns: 1
-int(false)        // Returns: 0
-int("hello")      // Returns: 0
+**Example:**
+```python
+x = [1, 2, 3]
+y = x
+id(x) == id(y)  # True (same object)
 ```
 
-#### `float(value)`
-Converts a value to a floating-point number.
+#### `hash(obj)`
+Return the hash value of an object.
 
 **Parameters:**
-- `value` (string|integer|boolean): The value to convert
+- `obj`: Hashable object
 
-**Returns:** `float` - Float representation of the value
+**Returns:** `int` - Hash value
 
-**Examples:**
-```tauraro
-float("3.14")     // Returns: 3.14
-float(42)         // Returns: 42.0
-float(true)       // Returns: 1.0
-float(false)      // Returns: 0.0
-float("hello")    // Returns: 0.0
+**Example:**
+```python
+hash("hello")   # Integer hash value
+hash(42)        # Integer hash value
+hash((1, 2, 3)) # Integer hash value
 ```
 
-#### `bool(value)`
-Converts a value to a boolean.
+## Type Conversion Functions
+
+#### `str(obj='')`
+Convert an object to its string representation.
 
 **Parameters:**
-- `value` (any): The value to convert
+- `obj`: Object to convert (default: empty string)
 
-**Returns:** `boolean` - Boolean representation of the value
+**Returns:** `str` - String representation
 
-**Truthiness rules:**
-- Numbers: 0 and 0.0 are `false`, all others are `true`
-- Strings: Empty string `""` is `false`, all others are `true`
-- Arrays: Empty array `[]` is `false`, all others are `true`
-- Objects: Empty object `{}` is `false`, all others are `true`
-- `null`: Always `false`
+**Behavior:**
+- Calls `__str__` method if available
+- Falls back to `__repr__` if `__str__` not defined
+- Uses default string conversion for built-in types
 
-**Examples:**
-```tauraro
-bool(1)           // Returns: true
-bool(0)           // Returns: false
-bool("hello")     // Returns: true
-bool("")          // Returns: false
-bool([1, 2])      // Returns: true
-bool([])          // Returns: false
-bool({a: 1})      // Returns: true
-bool({})          // Returns: false
-bool(null)        // Returns: false
+**Example:**
+```python
+str(42)         # "42"
+str(3.14)       # "3.14"
+str([1, 2, 3])  # "[1, 2, 3]"
 ```
 
-### Range Function
-
-#### `range(start, stop, step?)`
-Generates a sequence of numbers.
+#### `int(x=0, base=10)`
+Convert a number or string to an integer.
 
 **Parameters:**
-- `start` (integer): Starting value (inclusive)
-- `stop` (integer): Ending value (exclusive)
-- `step` (integer, optional): Step size (default: 1)
+- `x`: Number or string to convert (default: 0)
+- `base`: Base for string conversion (default: 10)
 
-**Returns:** `array` - Array of integers in the specified range
+**Returns:** `int` - Integer value
 
-**Examples:**
-```tauraro
-range(0, 5)       // Returns: [0, 1, 2, 3, 4]
-range(1, 6)       // Returns: [1, 2, 3, 4, 5]
-range(0, 10, 2)   // Returns: [0, 2, 4, 6, 8]
-range(5, 0, -1)   // Returns: [5, 4, 3, 2, 1]
-range(0, 0)       // Returns: []
+**Example:**
+```python
+int("42")       # 42
+int(3.14)       # 3
+int("1010", 2)  # 10 (binary)
+int("ff", 16)   # 255 (hexadecimal)
 ```
 
-## String Operations
-
-### String Methods
-
-Strings in TauraroLang support various operations through built-in functions and operators.
-
-#### String Concatenation
-```tauraro
-let greeting = "Hello" + " " + "World"  // "Hello World"
-let name = "Alice"
-let message = "Hi, " + name + "!"       // "Hi, Alice!"
-```
-
-#### String Indexing
-```tauraro
-let text = "Hello"
-let first_char = text[0]    // "H"
-let last_char = text[4]     // "o"
-```
-
-#### String Slicing (Conceptual)
-```tauraro
-// Note: Actual slicing syntax may vary in implementation
-let text = "Hello World"
-let substring = text.slice(0, 5)  // "Hello"
-```
-
-### String Utility Functions
-
-#### `split(string, delimiter)`
-Splits a string into an array of substrings.
+#### `float(x=0.0)`
+Convert a string or number to a floating point number.
 
 **Parameters:**
-- `string` (string): The string to split
-- `delimiter` (string): The delimiter to split on
+- `x`: String or number to convert (default: 0.0)
 
-**Returns:** `array` - Array of string parts
+**Returns:** `float` - Floating point value
 
-**Examples:**
-```tauraro
-split("a,b,c", ",")           // Returns: ["a", "b", "c"]
-split("hello world", " ")     // Returns: ["hello", "world"]
-split("one-two-three", "-")   // Returns: ["one", "two", "three"]
+**Example:**
+```python
+float("3.14")   # 3.14
+float(42)       # 42.0
+float("inf")    # inf
 ```
 
-#### `join(array, separator)`
-Joins an array of strings into a single string.
+#### `bool(x=False)`
+Convert a value to a Boolean.
 
 **Parameters:**
-- `array` (array): Array of strings to join
-- `separator` (string): String to use as separator
+- `x`: Value to convert (default: False)
 
-**Returns:** `string` - Joined string
+**Returns:** `bool` - Boolean value
 
-**Examples:**
-```tauraro
-join(["a", "b", "c"], ",")        // Returns: "a,b,c"
-join(["hello", "world"], " ")     // Returns: "hello world"
-join(["one", "two", "three"], "-") // Returns: "one-two-three"
+**Falsy Values:** `False`, `None`, `0`, `0.0`, `""`, `[]`, `{}`, `set()`
+
+**Example:**
+```python
+bool(1)         # True
+bool(0)         # False
+bool("hello")   # True
+bool("")        # False
 ```
 
-## Array Operations
-
-### Array Creation and Access
-
-```tauraro
-// Creating arrays
-let numbers = [1, 2, 3, 4, 5]
-let mixed = [1, "hello", true, 3.14]
-let empty = []
-
-// Accessing elements
-let first = numbers[0]      // 1
-let last = numbers[4]       // 5
-
-// Getting length
-let count = len(numbers)    // 5
-```
-
-### Array Methods
-
-#### Array Concatenation
-```tauraro
-let arr1 = [1, 2, 3]
-let arr2 = [4, 5, 6]
-let combined = arr1 + arr2  // [1, 2, 3, 4, 5, 6]
-```
-
-#### Array Appending
-```tauraro
-let numbers = [1, 2, 3]
-numbers = numbers + [4]     // [1, 2, 3, 4]
-numbers = numbers + [5, 6]  // [1, 2, 3, 4, 5, 6]
-```
-
-### Array Utility Functions
-
-#### `push(array, element)`
-Adds an element to the end of an array.
+#### `list(iterable=[])`
+Create a list from an iterable.
 
 **Parameters:**
-- `array` (array): The array to modify
-- `element` (any): The element to add
+- `iterable`: Iterable object (default: empty list)
 
-**Returns:** `array` - New array with element added
+**Returns:** `list` - New list containing items from iterable
 
-**Examples:**
-```tauraro
-let arr = [1, 2, 3]
-arr = push(arr, 4)          // [1, 2, 3, 4]
-arr = push(arr, "hello")    // [1, 2, 3, 4, "hello"]
+**Example:**
+```python
+list("hello")           # ['h', 'e', 'l', 'l', 'o']
+list((1, 2, 3))        # [1, 2, 3]
+list({1, 2, 3})        # [1, 2, 3] (order may vary)
 ```
 
-#### `pop(array)`
-Removes and returns the last element from an array.
+#### `tuple(iterable=())`
+Create a tuple from an iterable.
 
 **Parameters:**
-- `array` (array): The array to modify
+- `iterable`: Iterable object (default: empty tuple)
 
-**Returns:** `any` - The removed element
+**Returns:** `tuple` - New tuple containing items from iterable
 
-**Examples:**
-```tauraro
-let arr = [1, 2, 3, 4]
-let last = pop(arr)         // Returns: 4, arr becomes [1, 2, 3]
+**Example:**
+```python
+tuple([1, 2, 3])       # (1, 2, 3)
+tuple("hello")         # ('h', 'e', 'l', 'l', 'o')
 ```
 
-#### `slice(array, start, end?)`
-Returns a portion of an array.
+#### `set(iterable=set())`
+Create a set from an iterable.
 
 **Parameters:**
-- `array` (array): The source array
-- `start` (integer): Starting index (inclusive)
-- `end` (integer, optional): Ending index (exclusive)
+- `iterable`: Iterable object (default: empty set)
 
-**Returns:** `array` - New array containing the slice
+**Returns:** `set` - New set containing unique items from iterable
 
-**Examples:**
-```tauraro
-let arr = [1, 2, 3, 4, 5]
-slice(arr, 1, 4)    // Returns: [2, 3, 4]
-slice(arr, 2)       // Returns: [3, 4, 5]
-slice(arr, 0, 3)    // Returns: [1, 2, 3]
+**Example:**
+```python
+set([1, 2, 2, 3])      # {1, 2, 3}
+set("hello")           # {'h', 'e', 'l', 'o'}
 ```
 
-## Object Operations
-
-### Object Creation and Access
-
-```tauraro
-// Creating objects
-let person = {
-    name: "Alice",
-    age: 25,
-    city: "New York"
-}
-
-// Accessing properties
-let name = person.name      // "Alice"
-let age = person["age"]     // 25
-
-// Adding properties
-person.email = "alice@example.com"
-person["phone"] = "123-456-7890"
-```
-
-### Object Methods
-
-#### `keys(object)`
-Returns an array of all property names in an object.
+#### `dict(mapping_or_iterable=None, **kwargs)`
+Create a dictionary.
 
 **Parameters:**
-- `object` (object): The object to get keys from
+- `mapping_or_iterable`: Mapping or iterable of key-value pairs
+- `**kwargs`: Keyword arguments to add to dictionary
 
-**Returns:** `array` - Array of property names
+**Returns:** `dict` - New dictionary
 
-**Examples:**
-```tauraro
-let obj = {a: 1, b: 2, c: 3}
-keys(obj)           // Returns: ["a", "b", "c"]
-
-let person = {name: "Alice", age: 25}
-keys(person)        // Returns: ["name", "age"]
-```
-
-#### `values(object)`
-Returns an array of all property values in an object.
-
-**Parameters:**
-- `object` (object): The object to get values from
-
-**Returns:** `array` - Array of property values
-
-**Examples:**
-```tauraro
-let obj = {a: 1, b: 2, c: 3}
-values(obj)         // Returns: [1, 2, 3]
-
-let person = {name: "Alice", age: 25}
-values(person)      // Returns: ["Alice", 25]
-```
-
-#### `has_key(object, key)`
-Checks if an object has a specific property.
-
-**Parameters:**
-- `object` (object): The object to check
-- `key` (string): The property name to look for
-
-**Returns:** `boolean` - True if property exists
-
-**Examples:**
-```tauraro
-let person = {name: "Alice", age: 25}
-has_key(person, "name")     // Returns: true
-has_key(person, "email")    // Returns: false
+**Example:**
+```python
+dict([('a', 1), ('b', 2)])     # {'a': 1, 'b': 2}
+dict(a=1, b=2)                 # {'a': 1, 'b': 2}
+dict({'a': 1}, b=2)            # {'a': 1, 'b': 2}
 ```
 
 ## Mathematical Functions
 
-### Basic Math Operations
-
-```tauraro
-// Arithmetic operators
-let sum = 10 + 5        // 15
-let diff = 10 - 3       // 7
-let product = 4 * 6     // 24
-let quotient = 15 / 3   // 5
-let remainder = 17 % 5  // 2
-let power = 2 ** 3      // 8 (if supported)
-```
-
-### Advanced Math Functions
-
-#### `abs(number)`
-Returns the absolute value of a number.
+#### `abs(x)`
+Return the absolute value of a number.
 
 **Parameters:**
-- `number` (integer|float): The number
+- `x`: Number (int, float, or complex)
 
-**Returns:** `integer|float` - Absolute value
+**Returns:** Absolute value (same type as input)
 
-**Examples:**
-```tauraro
-abs(-5)         // Returns: 5
-abs(3.14)       // Returns: 3.14
-abs(-2.5)       // Returns: 2.5
+**Example:**
+```python
+abs(-5)         # 5
+abs(-3.14)      # 3.14
+abs(3+4j)       # 5.0
 ```
 
-#### `min(a, b, ...)`
-Returns the smallest of the given numbers.
+#### `min(*args, key=None, default=None)`
+Return the smallest item in an iterable or the smallest of arguments.
 
 **Parameters:**
-- `a, b, ...` (integer|float): Numbers to compare
+- `*args`: Values to compare, or single iterable
+- `key`: Function to extract comparison key
+- `default`: Value to return if iterable is empty
 
-**Returns:** `integer|float` - The minimum value
+**Returns:** Minimum value
 
-**Examples:**
-```tauraro
-min(5, 3, 8, 1)     // Returns: 1
-min(2.5, 1.8)       // Returns: 1.8
+**Example:**
+```python
+min(1, 2, 3)           # 1
+min([1, 2, 3])         # 1
+min("abc", "def")      # "abc"
+min([], default=0)     # 0
 ```
 
-#### `max(a, b, ...)`
-Returns the largest of the given numbers.
+#### `max(*args, key=None, default=None)`
+Return the largest item in an iterable or the largest of arguments.
 
 **Parameters:**
-- `a, b, ...` (integer|float): Numbers to compare
+- `*args`: Values to compare, or single iterable
+- `key`: Function to extract comparison key
+- `default`: Value to return if iterable is empty
 
-**Returns:** `integer|float` - The maximum value
+**Returns:** Maximum value
 
-**Examples:**
-```tauraro
-max(5, 3, 8, 1)     // Returns: 8
-max(2.5, 1.8)       // Returns: 2.5
+**Example:**
+```python
+max(1, 2, 3)           # 3
+max([1, 2, 3])         # 3
+max("abc", "def")      # "def"
+max([], default=0)     # 0
 ```
 
-#### `round(number, digits?)`
-Rounds a number to a specified number of decimal places.
+#### `sum(iterable, start=0)`
+Sum the items of an iterable from left to right.
 
 **Parameters:**
-- `number` (float): The number to round
-- `digits` (integer, optional): Number of decimal places (default: 0)
+- `iterable`: Iterable of numbers
+- `start`: Starting value (default: 0)
 
-**Returns:** `float` - Rounded number
+**Returns:** Sum of all items plus start value
 
-**Examples:**
-```tauraro
-round(3.14159)      // Returns: 3.0
-round(3.14159, 2)   // Returns: 3.14
-round(3.14159, 4)   // Returns: 3.1416
+**Example:**
+```python
+sum([1, 2, 3])         # 6
+sum([1, 2, 3], 10)     # 16
+sum(range(5))          # 10
 ```
 
-## I/O Operations
-
-### Console I/O
-
-#### `print(value)`
-Already documented above in Built-in Functions.
-
-#### `input(prompt?)`
-Reads a line of input from the user.
+#### `round(number, ndigits=None)`
+Round a number to a given precision in decimal digits.
 
 **Parameters:**
-- `prompt` (string, optional): Text to display as prompt
+- `number`: Number to round
+- `ndigits`: Number of decimal places (default: 0)
 
-**Returns:** `string` - User input as string
+**Returns:** Rounded number
 
-**Examples:**
-```tauraro
-let name = input("Enter your name: ")
-let age = int(input("Enter your age: "))
+**Example:**
+```python
+round(3.14159)         # 3
+round(3.14159, 2)      # 3.14
+round(1234.5, -1)      # 1230.0
 ```
 
-### File I/O (Conceptual)
-
-#### `read_file(filename)`
-Reads the contents of a file.
+#### `pow(base, exp, mod=None)`
+Return base raised to the power exp.
 
 **Parameters:**
-- `filename` (string): Path to the file
+- `base`: Base number
+- `exp`: Exponent
+- `mod`: Optional modulus for modular exponentiation
 
-**Returns:** `string` - File contents
+**Returns:** `base ** exp` or `(base ** exp) % mod`
 
-**Examples:**
-```tauraro
-let content = read_file("data.txt")
-print(content)
+**Example:**
+```python
+pow(2, 3)              # 8
+pow(2, 3, 5)           # 3 (8 % 5)
+pow(2, -1)             # 0.5
 ```
 
-#### `write_file(filename, content)`
-Writes content to a file.
+#### `divmod(a, b)`
+Return the quotient and remainder of dividing a by b.
 
 **Parameters:**
-- `filename` (string): Path to the file
-- `content` (string): Content to write
+- `a`: Dividend
+- `b`: Divisor
 
-**Returns:** `boolean` - Success status
+**Returns:** `tuple` - (quotient, remainder)
 
-**Examples:**
-```tauraro
-let success = write_file("output.txt", "Hello, World!")
-if success {
-    print("File written successfully")
-}
+**Example:**
+```python
+divmod(10, 3)          # (3, 1)
+divmod(10.5, 3)        # (3.0, 1.5)
 ```
 
-## Type System
+## String Functions
 
-### Type Checking
-
-#### `is_type(value, type_name)`
-Checks if a value is of a specific type.
+#### `ord(c)`
+Return the Unicode code point of a character.
 
 **Parameters:**
-- `value` (any): The value to check
-- `type_name` (string): The type name to check against
+- `c`: Single character string
 
-**Returns:** `boolean` - True if value is of the specified type
+**Returns:** `int` - Unicode code point
 
-**Examples:**
-```tauraro
-is_type(42, "integer")      // Returns: true
-is_type("hello", "string")  // Returns: true
-is_type([1, 2], "array")    // Returns: true
-is_type({}, "object")       // Returns: true
-is_type(null, "null")       // Returns: true
+**Example:**
+```python
+ord('A')               # 65
+ord('€')               # 8364
 ```
 
-### Type Conversion Validation
-
-#### `can_convert(value, target_type)`
-Checks if a value can be converted to a target type.
+#### `chr(i)`
+Return the character for a Unicode code point.
 
 **Parameters:**
-- `value` (any): The value to check
-- `target_type` (string): The target type
+- `i`: Unicode code point (0-1114111)
 
-**Returns:** `boolean` - True if conversion is possible
+**Returns:** `str` - Single character string
 
-**Examples:**
-```tauraro
-can_convert("42", "integer")    // Returns: true
-can_convert("hello", "integer") // Returns: false
-can_convert(3.14, "integer")    // Returns: true
+**Example:**
+```python
+chr(65)                # 'A'
+chr(8364)              # '€'
 ```
 
-## Memory Management
+#### `hex(x)`
+Convert an integer to a hexadecimal string.
 
-### Garbage Collection
+**Parameters:**
+- `x`: Integer to convert
 
-TauraroLang uses automatic memory management. Objects are automatically freed when they're no longer referenced.
+**Returns:** `str` - Hexadecimal representation with '0x' prefix
 
-#### `gc()`
-Manually triggers garbage collection (if supported).
-
-**Returns:** `null`
-
-**Examples:**
-```tauraro
-// Create many objects
-for i in range(0, 1000) {
-    let obj = {data: range(0, 100)}
-}
-
-// Manually trigger cleanup
-gc()
+**Example:**
+```python
+hex(255)               # '0xff'
+hex(16)                # '0x10'
 ```
 
-### Memory Information
+#### `oct(x)`
+Convert an integer to an octal string.
 
-#### `memory_usage()`
-Returns information about current memory usage.
+**Parameters:**
+- `x`: Integer to convert
 
-**Returns:** `object` - Memory usage statistics
+**Returns:** `str` - Octal representation with '0o' prefix
 
-**Examples:**
-```tauraro
-let stats = memory_usage()
-print("Used memory: " + str(stats.used))
-print("Total memory: " + str(stats.total))
+**Example:**
+```python
+oct(8)                 # '0o10'
+oct(64)                # '0o100'
+```
+
+#### `bin(x)`
+Convert an integer to a binary string.
+
+**Parameters:**
+- `x`: Integer to convert
+
+**Returns:** `str` - Binary representation with '0b' prefix
+
+**Example:**
+```python
+bin(8)                 # '0b1000'
+bin(255)               # '0b11111111'
+```
+
+#### `ascii(obj)`
+Return an ASCII-only representation of an object.
+
+**Parameters:**
+- `obj`: Object to represent
+
+**Returns:** `str` - ASCII representation with non-ASCII characters escaped
+
+**Example:**
+```python
+ascii('hello')         # "'hello'"
+ascii('café')          # "'caf\\xe9'"
+```
+
+#### `repr(obj)`
+Return a string representation of an object for debugging.
+
+**Parameters:**
+- `obj`: Object to represent
+
+**Returns:** `str` - Unambiguous string representation
+
+**Behavior:**
+- Calls `__repr__` method if available
+- Provides default representation for built-in types
+
+**Example:**
+```python
+repr("hello")          # "'hello'"
+repr([1, 2, 3])        # "[1, 2, 3]"
+```
+
+#### `format(value, format_spec='')`
+Format a value according to a format specification.
+
+**Parameters:**
+- `value`: Value to format
+- `format_spec`: Format specification string
+
+**Returns:** `str` - Formatted string
+
+**Example:**
+```python
+format(42, 'd')        # '42'
+format(3.14159, '.2f') # '3.14'
+format(255, 'x')       # 'ff'
+```
+
+## Collection Functions
+
+#### `range(start=0, stop, step=1)`
+Create a range object representing an arithmetic sequence.
+
+**Parameters:**
+- `start`: Starting value (default: 0)
+- `stop`: Stopping value (exclusive)
+- `step`: Step size (default: 1)
+
+**Returns:** `range` - Range object
+
+**Example:**
+```python
+list(range(5))         # [0, 1, 2, 3, 4]
+list(range(1, 6))      # [1, 2, 3, 4, 5]
+list(range(0, 10, 2))  # [0, 2, 4, 6, 8]
+```
+
+#### `enumerate(iterable, start=0)`
+Return an enumerate object yielding pairs of (index, value).
+
+**Parameters:**
+- `iterable`: Iterable to enumerate
+- `start`: Starting index (default: 0)
+
+**Returns:** `enumerate` - Enumerate object
+
+**Example:**
+```python
+list(enumerate(['a', 'b', 'c']))           # [(0, 'a'), (1, 'b'), (2, 'c')]
+list(enumerate(['a', 'b', 'c'], start=1))  # [(1, 'a'), (2, 'b'), (3, 'c')]
+```
+
+#### `zip(*iterables)`
+Combine multiple iterables element-wise.
+
+**Parameters:**
+- `*iterables`: Multiple iterable objects
+
+**Returns:** `zip` - Zip object yielding tuples
+
+**Example:**
+```python
+list(zip([1, 2, 3], ['a', 'b', 'c']))     # [(1, 'a'), (2, 'b'), (3, 'c')]
+list(zip([1, 2], ['a', 'b'], ['x', 'y'])) # [(1, 'a', 'x'), (2, 'b', 'y')]
+```
+
+#### `map(function, *iterables)`
+Apply a function to every item of iterables.
+
+**Parameters:**
+- `function`: Function to apply
+- `*iterables`: One or more iterables
+
+**Returns:** `map` - Map object yielding results
+
+**Example:**
+```python
+list(map(str, [1, 2, 3]))                  # ['1', '2', '3']
+list(map(lambda x, y: x + y, [1, 2], [3, 4]))  # [4, 6]
+```
+
+#### `filter(function, iterable)`
+Filter items from an iterable based on a predicate function.
+
+**Parameters:**
+- `function`: Predicate function (or None for truthiness)
+- `iterable`: Iterable to filter
+
+**Returns:** `filter` - Filter object yielding matching items
+
+**Example:**
+```python
+list(filter(lambda x: x > 0, [-1, 0, 1, 2]))  # [1, 2]
+list(filter(None, [0, 1, False, True, ""]))   # [1, True]
+```
+
+#### `sorted(iterable, key=None, reverse=False)`
+Return a new sorted list from an iterable.
+
+**Parameters:**
+- `iterable`: Iterable to sort
+- `key`: Function to extract comparison key
+- `reverse`: Sort in descending order if True
+
+**Returns:** `list` - New sorted list
+
+**Example:**
+```python
+sorted([3, 1, 4, 1, 5])                   # [1, 1, 3, 4, 5]
+sorted(['apple', 'pie'], key=len)         # ['pie', 'apple']
+sorted([1, 2, 3], reverse=True)           # [3, 2, 1]
+```
+
+#### `reversed(seq)`
+Return a reverse iterator over a sequence.
+
+**Parameters:**
+- `seq`: Sequence to reverse
+
+**Returns:** `reversed` - Reverse iterator
+
+**Example:**
+```python
+list(reversed([1, 2, 3]))                 # [3, 2, 1]
+list(reversed("hello"))                   # ['o', 'l', 'l', 'e', 'h']
+```
+
+#### `all(iterable)`
+Return True if all elements of the iterable are true.
+
+**Parameters:**
+- `iterable`: Iterable to check
+
+**Returns:** `bool` - True if all elements are truthy
+
+**Example:**
+```python
+all([True, True, True])                   # True
+all([True, False, True])                  # False
+all([])                                   # True (empty iterable)
+```
+
+#### `any(iterable)`
+Return True if any element of the iterable is true.
+
+**Parameters:**
+- `iterable`: Iterable to check
+
+**Returns:** `bool` - True if any element is truthy
+
+**Example:**
+```python
+any([False, True, False])                 # True
+any([False, False, False])                # False
+any([])                                   # False (empty iterable)
+```
+
+## Object Introspection Functions
+
+#### `dir(obj=None)`
+Return a list of valid attributes for an object.
+
+**Parameters:**
+- `obj`: Object to inspect (default: current scope)
+
+**Returns:** `list` - List of attribute names
+
+**Example:**
+```python
+dir([])                # List methods: ['append', 'clear', ...]
+dir(str)               # String methods: ['capitalize', 'center', ...]
+```
+
+#### `hasattr(obj, name)`
+Check if an object has a named attribute.
+
+**Parameters:**
+- `obj`: Object to check
+- `name`: Attribute name (string)
+
+**Returns:** `bool` - True if attribute exists
+
+**Example:**
+```python
+hasattr([], 'append')          # True
+hasattr([], 'nonexistent')     # False
+```
+
+#### `getattr(obj, name, default=None)`
+Get a named attribute from an object.
+
+**Parameters:**
+- `obj`: Object to get attribute from
+- `name`: Attribute name (string)
+- `default`: Default value if attribute doesn't exist
+
+**Returns:** Attribute value or default
+
+**Example:**
+```python
+getattr([], 'append')          # <built-in method append>
+getattr([], 'missing', 'N/A')  # 'N/A'
+```
+
+#### `setattr(obj, name, value)`
+Set a named attribute on an object.
+
+**Parameters:**
+- `obj`: Object to set attribute on
+- `name`: Attribute name (string)
+- `value`: Value to set
+
+**Returns:** `None`
+
+**Example:**
+```python
+class MyClass:
+    pass
+
+obj = MyClass()
+setattr(obj, 'x', 42)
+obj.x  # 42
+```
+
+#### `delattr(obj, name)`
+Delete a named attribute from an object.
+
+**Parameters:**
+- `obj`: Object to delete attribute from
+- `name`: Attribute name (string)
+
+**Returns:** `None`
+
+**Example:**
+```python
+class MyClass:
+    x = 42
+
+obj = MyClass()
+delattr(obj, 'x')  # Removes the x attribute
+```
+
+#### `isinstance(obj, classinfo)`
+Check if an object is an instance of a class or classes.
+
+**Parameters:**
+- `obj`: Object to check
+- `classinfo`: Class or tuple of classes
+
+**Returns:** `bool` - True if obj is an instance
+
+**Example:**
+```python
+isinstance(42, int)            # True
+isinstance("hello", str)       # True
+isinstance([], (list, tuple))  # True
+```
+
+#### `issubclass(class_, classinfo)`
+Check if a class is a subclass of another class.
+
+**Parameters:**
+- `class_`: Class to check
+- `classinfo`: Class or tuple of classes
+
+**Returns:** `bool` - True if class_ is a subclass
+
+**Example:**
+```python
+class Parent:
+    pass
+
+class Child(Parent):
+    pass
+
+issubclass(Child, Parent)      # True
+issubclass(Parent, Child)      # False
+```
+
+#### `callable(obj)`
+Check if an object is callable (function, method, class, etc.).
+
+**Parameters:**
+- `obj`: Object to check
+
+**Returns:** `bool` - True if object is callable
+
+**Example:**
+```python
+callable(print)                # True
+callable(42)                   # False
+callable(lambda x: x)          # True
+```
+
+#### `vars(obj=None)`
+Return the `__dict__` attribute of an object.
+
+**Parameters:**
+- `obj`: Object to inspect (default: local scope)
+
+**Returns:** `dict` - Object's namespace dictionary
+
+**Example:**
+```python
+class MyClass:
+    x = 42
+
+obj = MyClass()
+vars(obj)                      # {'x': 42}
+```
+
+## I/O Functions
+
+#### `open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None)`
+Open a file and return a file object.
+
+**Parameters:**
+- `file`: File path or file descriptor
+- `mode`: File mode ('r', 'w', 'a', 'b', 't', '+', etc.)
+- `buffering`: Buffer size (-1 for default)
+- `encoding`: Text encoding (default: platform default)
+- `errors`: Error handling strategy
+- `newline`: Newline handling
+- `closefd`: Close file descriptor when file is closed
+- `opener`: Custom opener
+
+**Returns:** File object
+
+**Common Modes:**
+- `'r'`: Read (default)
+- `'w'`: Write (truncate existing)
+- `'a'`: Append
+- `'b'`: Binary mode
+- `'t'`: Text mode (default)
+- `'+'`: Read and write
+
+**Example:**
+```python
+with open('file.txt', 'r') as f:
+    content = f.read()
+
+with open('data.bin', 'rb') as f:
+    binary_data = f.read()
+```
+
+## Utility Functions
+
+#### `iter(obj, sentinel=None)`
+Return an iterator object.
+
+**Parameters:**
+- `obj`: Iterable object or callable
+- `sentinel`: Sentinel value for callable (optional)
+
+**Returns:** Iterator object
+
+**Example:**
+```python
+it = iter([1, 2, 3])
+next(it)                       # 1
+next(it)                       # 2
+```
+
+#### `next(iterator, default=None)`
+Get the next item from an iterator.
+
+**Parameters:**
+- `iterator`: Iterator object
+- `default`: Default value if iterator is exhausted
+
+**Returns:** Next item or default
+
+**Example:**
+```python
+it = iter([1, 2])
+next(it)                       # 1
+next(it)                       # 2
+next(it, 'done')               # 'done'
+```
+
+#### `slice(start, stop, step=None)`
+Create a slice object.
+
+**Parameters:**
+- `start`: Starting index
+- `stop`: Stopping index
+- `step`: Step size
+
+**Returns:** `slice` - Slice object
+
+**Example:**
+```python
+s = slice(1, 5, 2)
+[0, 1, 2, 3, 4, 5][s]         # [1, 3]
+```
+
+#### `globals()`
+Return the global namespace dictionary.
+
+**Returns:** `dict` - Global namespace
+
+**Example:**
+```python
+x = 42
+'x' in globals()               # True
+```
+
+#### `locals()`
+Return the local namespace dictionary.
+
+**Returns:** `dict` - Local namespace
+
+**Example:**
+```python
+def func():
+    y = 10
+    return 'y' in locals()     # True
+
+func()
+```
+
+#### `eval(expression, globals=None, locals=None)`
+Evaluate a Python expression.
+
+**Parameters:**
+- `expression`: String containing Python expression
+- `globals`: Global namespace (optional)
+- `locals`: Local namespace (optional)
+
+**Returns:** Result of expression evaluation
+
+**Example:**
+```python
+eval('2 + 3')                  # 5
+eval('x + 1', {'x': 10})       # 11
+```
+
+#### `exec(object, globals=None, locals=None)`
+Execute Python code.
+
+**Parameters:**
+- `object`: String or code object containing Python code
+- `globals`: Global namespace (optional)
+- `locals`: Local namespace (optional)
+
+**Returns:** `None`
+
+**Example:**
+```python
+exec('x = 42')
+print(x)                       # 42
+```
+
+#### `compile(source, filename, mode, flags=0, dont_inherit=False, optimize=-1)`
+Compile source code into a code object.
+
+**Parameters:**
+- `source`: Source code string
+- `filename`: Filename for error reporting
+- `mode`: Compilation mode ('exec', 'eval', 'single')
+- `flags`: Compiler flags
+- `dont_inherit`: Don't inherit compiler flags
+- `optimize`: Optimization level
+
+**Returns:** Code object
+
+**Example:**
+```python
+code = compile('x + 1', '<string>', 'eval')
+eval(code, {'x': 10})          # 11
+```
+
+#### `breakpoint(*args, **kwargs)`
+Enter the debugger.
+
+**Parameters:**
+- `*args`: Arguments passed to debugger
+- `**kwargs`: Keyword arguments passed to debugger
+
+**Returns:** `None`
+
+**Example:**
+```python
+def debug_function():
+    x = 42
+    breakpoint()  # Enters debugger here
+    return x
+```
+
+## Advanced Collection Functions
+
+#### `frozenset(iterable=None)`
+Create an immutable set.
+
+**Parameters:**
+- `iterable`: Iterable to create frozenset from
+
+**Returns:** `frozenset` - Immutable set
+
+**Example:**
+```python
+fs = frozenset([1, 2, 3, 2])   # frozenset({1, 2, 3})
+fs.add(4)                      # AttributeError (immutable)
+```
+
+#### `bytearray(source=None, encoding='utf-8', errors='strict')`
+Create a mutable array of bytes.
+
+**Parameters:**
+- `source`: Source data (int, iterable, string, or bytes)
+- `encoding`: Text encoding for string source
+- `errors`: Error handling for encoding
+
+**Returns:** `bytearray` - Mutable byte array
+
+**Example:**
+```python
+bytearray(5)                   # bytearray of 5 zero bytes
+bytearray([1, 2, 3])          # bytearray from list
+bytearray('hello', 'utf-8')    # bytearray from string
+```
+
+#### `bytes(source=None, encoding='utf-8', errors='strict')`
+Create an immutable array of bytes.
+
+**Parameters:**
+- `source`: Source data (int, iterable, string, or bytes)
+- `encoding`: Text encoding for string source
+- `errors`: Error handling for encoding
+
+**Returns:** `bytes` - Immutable byte array
+
+**Example:**
+```python
+bytes(5)                       # 5 zero bytes
+bytes([1, 2, 3])              # bytes from list
+bytes('hello', 'utf-8')        # bytes from string
 ```
 
 ## VM Operations
 
-### Execution Control
+### Memory Management
 
-#### `exit(code?)`
-Terminates the program with an optional exit code.
+The TauraroLang VM provides automatic memory management with reference counting and garbage collection:
 
-**Parameters:**
-- `code` (integer, optional): Exit code (default: 0)
+- **Reference Counting**: Automatic cleanup when reference count reaches zero
+- **Garbage Collection**: Handles circular references
+- **Arena Allocation**: Efficient memory allocation for objects
+- **Memory Modes**: Automatic and manual allocation modes
 
-**Returns:** Does not return
+### Scope Management
 
-**Examples:**
-```tauraro
-if error_occurred {
-    print("An error occurred!")
-    exit(1)
-}
+The VM maintains a scope stack for variable resolution:
 
-print("Program completed successfully")
-exit(0)  // or just exit()
-```
+- **Global Scope**: Module-level variables
+- **Function Scope**: Local variables in functions
+- **Class Scope**: Variables within class definitions
+- **Nested Scopes**: Support for closures and nested functions
 
-#### `sleep(milliseconds)`
-Pauses execution for a specified time.
+### Function Calls
 
-**Parameters:**
-- `milliseconds` (integer): Time to sleep in milliseconds
+Function call mechanism supports:
 
-**Returns:** `null`
+- **User-defined Functions**: Python-style function definitions
+- **Built-in Functions**: Native Rust implementations
+- **Native Functions**: FFI-callable functions
+- **Method Calls**: Object method invocation with proper `self` binding
+- **Dunder Methods**: Special method calls (`__str__`, `__len__`, etc.)
 
-**Examples:**
-```tauraro
-print("Starting...")
-sleep(1000)  // Wait 1 second
-print("Done!")
-```
+### Class System
 
-### Runtime Information
+Object-oriented programming features:
 
-#### `version()`
-Returns the TauraroLang version information.
+- **Class Definition**: Dynamic class creation
+- **Inheritance**: Single and multiple inheritance
+- **Method Resolution Order (MRO)**: C3 linearization algorithm
+- **Metaclasses**: Custom class creation behavior
+- **Dunder Methods**: Special method support
 
-**Returns:** `object` - Version information
+### Module System
 
-**Examples:**
-```tauraro
-let ver = version()
-print("TauraroLang version: " + ver.version)
-print("Build date: " + ver.build_date)
-```
+Import and module management:
 
-#### `platform()`
-Returns information about the current platform.
-
-**Returns:** `object` - Platform information
-
-**Examples:**
-```tauraro
-let plat = platform()
-print("OS: " + plat.os)
-print("Architecture: " + plat.arch)
-```
+- **Built-in Modules**: Pre-loaded standard library modules
+- **Dynamic Imports**: Runtime module loading
+- **Module Caching**: Efficient module reuse
+- **Namespace Management**: Proper module isolation
 
 ## Error Handling
 
 ### Exception Types
 
-TauraroLang uses a result-based error handling approach rather than exceptions.
+TauraroLang supports Python-compatible exception handling:
 
-#### Error Result Pattern
-```tauraro
-fn operation_that_might_fail() {
-    if some_condition {
-        return {
-            success: true,
-            value: result_value
-        }
-    } else {
-        return {
-            success: false,
-            error: "Error message",
-            code: error_code
-        }
-    }
-}
+- **TypeError**: Type-related errors
+- **ValueError**: Value-related errors
+- **AttributeError**: Attribute access errors
+- **KeyError**: Dictionary key errors
+- **IndexError**: Sequence index errors
+- **NameError**: Name resolution errors
+- **RuntimeError**: General runtime errors
 
-// Usage
-let result = operation_that_might_fail()
-if result.success {
-    print("Success: " + str(result.value))
-} else {
-    print("Error: " + result.error)
-}
-```
+### Error Propagation
 
-### Error Utilities
+Errors are propagated through the call stack with proper cleanup:
 
-#### `is_error(result)`
-Checks if a result object represents an error.
+- **Stack Unwinding**: Automatic scope cleanup on errors
+- **Error Context**: Detailed error information with stack traces
+- **Resource Cleanup**: Proper cleanup of resources on errors
 
-**Parameters:**
-- `result` (object): Result object to check
+## Performance Characteristics
 
-**Returns:** `boolean` - True if result represents an error
+### Optimization Features
 
-**Examples:**
-```tauraro
-let result = some_operation()
-if is_error(result) {
-    print("Operation failed: " + result.error)
-} else {
-    print("Operation succeeded: " + str(result.value))
-}
-```
+- **Native Implementation**: All built-ins implemented in Rust
+- **Zero-copy Operations**: Efficient data handling where possible
+- **SIMD Optimizations**: Vectorized operations for numeric data
+- **Lazy Evaluation**: Deferred computation for iterators
+- **Inlining**: Function call optimization
 
-#### `unwrap(result)`
-Extracts the value from a successful result or terminates on error.
+### Threading Model
 
-**Parameters:**
-- `result` (object): Result object
+- **No GIL**: True parallel execution
+- **Thread Safety**: All built-ins are thread-safe
+- **Concurrent Collections**: Lock-free data structures where possible
+- **Async Support**: Native async/await implementation
 
-**Returns:** `any` - The value if successful
+### Memory Efficiency
 
-**Examples:**
-```tauraro
-let result = safe_operation()
-let value = unwrap(result)  // Terminates if result is an error
-print("Value: " + str(value))
-```
+- **Reference Counting**: Immediate cleanup of unused objects
+- **Arena Allocation**: Reduced memory fragmentation
+- **Copy-on-Write**: Efficient string and collection handling
+- **Garbage Collection**: Handles circular references efficiently
 
-## Standard Library Extensions
+## FFI (Foreign Function Interface)
 
-### Collections
+TauraroLang provides a comprehensive FFI system for calling C functions and working with native libraries. FFI support must be enabled with the `ffi` feature flag.
 
-#### `map(array, function)`
-Applies a function to each element of an array.
+### FFI Types
 
-**Parameters:**
-- `array` (array): Source array
-- `function` (function): Function to apply
+#### `FFIType` Enumeration
 
-**Returns:** `array` - New array with transformed elements
+Represents C data types for FFI operations:
 
-**Examples:**
-```tauraro
-fn double(x) { return x * 2 }
-let numbers = [1, 2, 3, 4]
-let doubled = map(numbers, double)  // [2, 4, 6, 8]
-```
+- `FFIType.Void` - C `void` type
+- `FFIType.Int8` - C `int8_t` type
+- `FFIType.Int16` - C `int16_t` type
+- `FFIType.Int32` - C `int32_t` type
+- `FFIType.Int64` - C `int64_t` type
+- `FFIType.UInt8` - C `uint8_t` type
+- `FFIType.UInt16` - C `uint16_t` type
+- `FFIType.UInt32` - C `uint32_t` type
+- `FFIType.UInt64` - C `uint64_t` type
+- `FFIType.Float32` - C `float` type
+- `FFIType.Float64` - C `double` type
+- `FFIType.Bool` - C `bool` type
+- `FFIType.Pointer` - C `void*` type
+- `FFIType.String` - C `const char*` type
+- `FFIType.Buffer` - Binary data buffer
 
-#### `filter(array, predicate)`
-Filters an array based on a predicate function.
+#### `CallingConvention` Enumeration
+
+Specifies function calling conventions:
+
+- `CallingConvention.C` - Standard C ABI (default)
+- `CallingConvention.StdCall` - Windows stdcall convention
+- `CallingConvention.FastCall` - Fast call convention
+- `CallingConvention.System` - System default convention
+
+### FFI Functions
+
+#### `load_library(path)`
+Load an external shared library.
 
 **Parameters:**
-- `array` (array): Source array
-- `predicate` (function): Function that returns boolean
+- `path`: Path to the shared library (.dll, .so, .dylib)
 
-**Returns:** `array` - New array with filtered elements
+**Returns:** Library handle or `None` on failure
 
-**Examples:**
-```tauraro
-fn is_even(x) { return x % 2 == 0 }
-let numbers = [1, 2, 3, 4, 5, 6]
-let evens = filter(numbers, is_even)  // [2, 4, 6]
+**Example:**
+```python
+# Load system C library
+libc = load_library("libc")
+
+# Load custom library
+mylib = load_library("./libmylib.so")
 ```
 
-#### `reduce(array, function, initial?)`
-Reduces an array to a single value using a function.
+#### `register_function(library, name, return_type, param_types, calling_convention=None)`
+Register a function from a loaded library.
 
 **Parameters:**
-- `array` (array): Source array
-- `function` (function): Reducer function
-- `initial` (any, optional): Initial value
+- `library`: Library handle from `load_library()`
+- `name`: Function name in the library
+- `return_type`: `FFIType` for return value
+- `param_types`: List of `FFIType` for parameters
+- `calling_convention`: Optional calling convention (default: C)
 
-**Returns:** `any` - Reduced value
+**Returns:** `None`
 
-**Examples:**
-```tauraro
-fn add(a, b) { return a + b }
-let numbers = [1, 2, 3, 4, 5]
-let sum = reduce(numbers, add, 0)  // 15
+**Example:**
+```python
+# Register strlen function
+register_function(libc, "strlen", FFIType.Int32, [FFIType.String])
+
+# Register custom function with stdcall convention
+register_function(mylib, "my_func", FFIType.Float64, 
+                 [FFIType.Int32, FFIType.Float64], 
+                 CallingConvention.StdCall)
 ```
 
-### Utility Functions
-
-#### `clone(value)`
-Creates a deep copy of a value.
+#### `call_function(library, name, args)`
+Call a registered function from a library.
 
 **Parameters:**
-- `value` (any): Value to clone
+- `library`: Library handle
+- `name`: Function name
+- `args`: List of arguments matching registered parameter types
 
-**Returns:** `any` - Cloned value
+**Returns:** Function result converted to TauraroLang value
 
-**Examples:**
-```tauraro
-let original = {a: 1, b: [2, 3, 4]}
-let copy = clone(original)
-copy.a = 10
-// original.a is still 1
+**Example:**
+```python
+# Call strlen
+length = call_function(libc, "strlen", ["Hello, World!"])  # Returns 13
+
+# Call custom function
+result = call_function(mylib, "my_func", [42, 3.14])
 ```
 
-#### `equals(a, b)`
-Performs deep equality comparison.
+#### `with_safe_ffi(callback)`
+Execute FFI operations with automatic cleanup.
 
 **Parameters:**
-- `a` (any): First value
-- `b` (any): Second value
+- `callback`: Function to execute within safe FFI context
 
-**Returns:** `boolean` - True if values are deeply equal
+**Returns:** Result of callback function
 
-**Examples:**
-```tauraro
-equals([1, 2, 3], [1, 2, 3])           // true
-equals({a: 1}, {a: 1})                 // true
-equals({a: 1, b: 2}, {b: 2, a: 1})     // true
+**Example:**
+```python
+def ffi_operations():
+    lib = load_library("mylib")
+    register_function(lib, "process", FFIType.Int32, [FFIType.Buffer])
+    return call_function(lib, "process", [b"data"])
+
+result = with_safe_ffi(ffi_operations)  # Library automatically unloaded
 ```
 
----
+### Built-in C Functions
 
-This API reference covers all the core functionality available in TauraroLang. For more advanced features and examples, see the other documentation files in this directory.
+TauraroLang provides direct access to common C standard library functions:
+
+#### `malloc(size)`
+Allocate memory block.
+
+**Parameters:**
+- `size`: Number of bytes to allocate
+
+**Returns:** Pointer to allocated memory or `None`
+
+#### `free(ptr)`
+Free allocated memory block.
+
+**Parameters:**
+- `ptr`: Pointer returned by `malloc()`
+
+**Returns:** `None`
+
+#### `strlen(str)`
+Get string length.
+
+**Parameters:**
+- `str`: String to measure
+
+**Returns:** `int` - Length of string
+
+#### `strcmp(str1, str2)`
+Compare two strings.
+
+**Parameters:**
+- `str1`: First string
+- `str2`: Second string
+
+**Returns:** `int` - 0 if equal, <0 if str1 < str2, >0 if str1 > str2
+
+## Python Interoperability
+
+TauraroLang provides bidirectional integration with Python. Python interop must be enabled with the `python-interop` feature flag.
+
+### Python Import Functions
+
+#### `python_import(module_name)`
+Import a Python module.
+
+**Parameters:**
+- `module_name`: Name of Python module to import
+
+**Returns:** Python module object or `None` on failure
+
+**Example:**
+```python
+# Import standard library modules
+math = python_import("math")
+json = python_import("json")
+os = python_import("os")
+
+# Import third-party packages
+numpy = python_import("numpy")
+requests = python_import("requests")
+```
+
+#### `python_call(module_or_object, function_name, args)`
+Call a Python function or method.
+
+**Parameters:**
+- `module_or_object`: Python module or object
+- `function_name`: Name of function/method to call
+- `args`: List of arguments
+
+**Returns:** Result converted to TauraroLang value
+
+**Example:**
+```python
+# Call module function
+result = python_call(math, "sqrt", [16])  # Returns 4.0
+pi_val = python_call(math, "pi", [])      # Access module constant
+
+# Call object method
+data = {"key": "value"}
+json_str = python_call(json, "dumps", [data])
+```
+
+#### `python_eval(code)`
+Evaluate Python expression.
+
+**Parameters:**
+- `code`: Python expression as string
+
+**Returns:** Result of expression
+
+**Example:**
+```python
+result = python_eval("2 + 3 * 4")        # Returns 14
+pi_val = python_eval("math.pi")          # Returns π value
+```
+
+#### `python_exec(code)`
+Execute Python statements.
+
+**Parameters:**
+- `code`: Python code as string
+
+**Returns:** `None`
+
+**Example:**
+```python
+python_exec("""
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+""")
+
+# Function is now available in Python namespace
+result = python_eval("fibonacci(10)")    # Returns 55
+```
+
+### Python Object Manipulation
+
+#### `python_getattr(obj, name)`
+Get attribute from Python object.
+
+**Parameters:**
+- `obj`: Python object
+- `name`: Attribute name
+
+**Returns:** Attribute value
+
+#### `python_setattr(obj, name, value)`
+Set attribute on Python object.
+
+**Parameters:**
+- `obj`: Python object
+- `name`: Attribute name
+- `value`: Value to set
+
+**Returns:** `None`
+
+#### `python_hasattr(obj, name)`
+Check if Python object has attribute.
+
+**Parameters:**
+- `obj`: Python object
+- `name`: Attribute name
+
+**Returns:** `bool` - True if attribute exists
+
+### PyO3 Integration
+
+When using TauraroLang from Python, the following classes and functions are available:
+
+#### `TauraroVM` Class
+
+Python class for running TauraroLang code.
+
+**Methods:**
+
+##### `TauraroVM()`
+Create a new TauraroLang VM instance.
+
+##### `eval(code)`
+Evaluate TauraroLang expression.
+
+**Parameters:**
+- `code`: TauraroLang expression as string
+
+**Returns:** Result as Python object
+
+##### `exec(code)`
+Execute TauraroLang statements.
+
+**Parameters:**
+- `code`: TauraroLang code as string
+
+**Returns:** `None`
+
+##### `set_strict_types(strict)`
+Enable or disable strict type checking.
+
+**Parameters:**
+- `strict`: Boolean flag for strict typing
+
+##### `get_memory_stats()`
+Get VM memory usage statistics.
+
+**Returns:** String with memory statistics
+
+**Example (Python code):**
+```python
+import tauraro
+
+# Create VM instance
+vm = tauraro.TauraroVM()
+
+# Execute TauraroLang code
+vm.exec("""
+def greet(name):
+    return f"Hello, {name}!"
+""")
+
+# Evaluate expressions
+result = vm.eval("greet('World')")  # Returns "Hello, World!"
+
+# Check memory usage
+stats = vm.get_memory_stats()
+print(stats)
+```
+
+#### Module Functions
+
+##### `tauraro_eval(code)`
+Evaluate TauraroLang expression (module-level function).
+
+##### `tauraro_exec(code)`
+Execute TauraroLang code (module-level function).
+
+##### `tauraro_call(function_name, args)`
+Call TauraroLang function (module-level function).
+
+### Type Conversion
+
+Automatic type conversion between TauraroLang and Python:
+
+#### TauraroLang → Python
+- `int` → `int`
+- `float` → `float`
+- `bool` → `bool`
+- `str` → `str`
+- `list` → `list`
+- `dict` → `dict`
+- `None` → `None`
+
+#### Python → TauraroLang
+- `int` → `int`
+- `float` → `float`
+- `bool` → `bool`
+- `str` → `str`
+- `list` → `list`
+- `dict` → `dict`
+- `None` → `None`
+- Other types → `str` (via `repr()`)
+
+## Usage Examples
+
+### Basic Operations
+```python
+# Type conversions
+x = int("42")
+y = float("3.14")
+z = str(123)
+
+# Collections
+numbers = list(range(10))
+unique = set(numbers)
+pairs = dict(enumerate(numbers))
+
+# String operations
+text = "Hello, World!"
+print(len(text))
+print(text.upper())
+print(repr(text))
+```
+
+### Advanced Features
+```python
+# Functional programming
+numbers = [1, 2, 3, 4, 5]
+squares = list(map(lambda x: x**2, numbers))
+evens = list(filter(lambda x: x % 2 == 0, numbers))
+total = sum(numbers)
+
+# Object introspection
+class MyClass:
+    def __init__(self, value):
+        self.value = value
+    
+    def __str__(self):
+        return f"MyClass({self.value})"
+
+obj = MyClass(42)
+print(type(obj))
+print(hasattr(obj, 'value'))
+print(getattr(obj, 'value'))
+```
+
+### FFI Examples
+```python
+# Load and use C library
+libc = load_library("libc")
+register_function(libc, "strlen", FFIType.Int32, [FFIType.String])
+register_function(libc, "strcmp", FFIType.Int32, [FFIType.String, FFIType.String])
+
+# Call C functions
+length = call_function(libc, "strlen", ["Hello"])  # Returns 5
+comparison = call_function(libc, "strcmp", ["apple", "banana"])  # Returns < 0
+
+# Memory management
+register_function(libc, "malloc", FFIType.Pointer, [FFIType.Int32])
+register_function(libc, "free", FFIType.Void, [FFIType.Pointer])
+
+ptr = call_function(libc, "malloc", [1024])
+if ptr:
+    call_function(libc, "free", [ptr])
+```
+
+### Python Interop Examples
+```python
+# Import and use Python modules
+math = python_import("math")
+json = python_import("json")
+
+# Call Python functions
+sqrt_result = python_call(math, "sqrt", [16])  # Returns 4.0
+pi_value = python_call(math, "pi", [])         # Returns π
+
+# Work with Python objects
+data = {"name": "TauraroLang", "version": "1.0"}
+json_string = python_call(json, "dumps", [data])
+parsed_data = python_call(json, "loads", [json_string])
+
+# Execute Python code
+python_exec("""
+import numpy as np
+arr = np.array([1, 2, 3, 4, 5])
+mean_val = np.mean(arr)
+""")
+
+mean_result = python_eval("mean_val")  # Returns 3.0
+```
+
+### File I/O
+```python
+# Reading files
+with open('data.txt', 'r') as f:
+    content = f.read()
+    lines = content.splitlines()
+
+# Writing files
+with open('output.txt', 'w') as f:
+    for i in range(10):
+        f.write(f"Line {i}\n")
+```
+
+This comprehensive API reference covers all built-in functions, FFI capabilities, Python interoperability features, and VM operations available in TauraroLang. Each function is implemented with performance and Python compatibility in mind, providing a robust foundation for application development with seamless integration to native libraries and Python ecosystems.
