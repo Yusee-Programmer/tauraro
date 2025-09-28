@@ -43,9 +43,10 @@ pub fn create_os_module() -> Value {
     namespace.insert("chmod".to_string(), Value::NativeFunction(os_chmod));
     
     // Constants
-    namespace.insert("sep".to_string(), Value::String(std::path::MAIN_SEPARATOR.to_string()));
-    namespace.insert("pathsep".to_string(), Value::String(if cfg!(windows) { ";" } else { ":" }.to_string()));
-    namespace.insert("linesep".to_string(), Value::String(if cfg!(windows) { "\r\n" } else { "\n" }.to_string()));
+    namespace.insert("name".to_string(), Value::Str(get_os_name()));
+    namespace.insert("sep".to_string(), Value::Str(std::path::MAIN_SEPARATOR.to_string()));
+    namespace.insert("pathsep".to_string(), Value::Str(if cfg!(windows) { ";" } else { ":" }.to_string()));
+    namespace.insert("linesep".to_string(), Value::Str(if cfg!(windows) { "\r\n" } else { "\n" }.to_string()));
     
     // Access mode constants
     namespace.insert("F_OK".to_string(), Value::Int(0)); // File exists
@@ -60,7 +61,7 @@ pub fn create_os_module() -> Value {
 fn create_environ() -> Value {
     let mut environ = HashMap::new();
     for (key, value) in env::vars() {
-        environ.insert(key, Value::String(value));
+        environ.insert(key, Value::Str(value));
     }
     Value::Dict(environ)
 }
@@ -87,7 +88,7 @@ fn create_path_module() -> Value {
 
 pub fn os_getcwd(_args: Vec<Value>) -> Result<Value> {
     match env::current_dir() {
-        Ok(path) => Ok(Value::String(path.to_string_lossy().to_string())),
+        Ok(path) => Ok(Value::Str(path.to_string_lossy().to_string())),
         Err(e) => Err(anyhow::anyhow!("Failed to get current directory: {}", e)),
     }
 }
@@ -98,7 +99,7 @@ pub fn os_chdir(args: Vec<Value>) -> Result<Value> {
     }
     
     let path = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("chdir() argument must be a string")),
     };
     
@@ -113,7 +114,7 @@ pub fn os_listdir(args: Vec<Value>) -> Result<Value> {
         ".".to_string()
     } else {
         match &args[0] {
-            Value::String(s) => s.clone(),
+            Value::Str(s) => s.clone(),
             _ => return Err(anyhow::anyhow!("listdir() argument must be a string")),
         }
     };
@@ -124,7 +125,7 @@ pub fn os_listdir(args: Vec<Value>) -> Result<Value> {
             for entry in entries {
                 if let Ok(entry) = entry {
                     if let Some(name) = entry.file_name().to_str() {
-                        result.push(Value::String(name.to_string()));
+                        result.push(Value::Str(name.to_string()));
                     }
                 }
             }
@@ -140,7 +141,7 @@ pub fn os_mkdir(args: Vec<Value>) -> Result<Value> {
     }
     
     let path = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("mkdir() argument must be a string")),
     };
     
@@ -156,7 +157,7 @@ pub fn os_makedirs(args: Vec<Value>) -> Result<Value> {
     }
     
     let path = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("makedirs() argument must be a string")),
     };
     
@@ -172,7 +173,7 @@ pub fn os_rmdir(args: Vec<Value>) -> Result<Value> {
     }
     
     let path = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("rmdir() argument must be a string")),
     };
     
@@ -188,7 +189,7 @@ pub fn os_remove(args: Vec<Value>) -> Result<Value> {
     }
     
     let path = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("remove() argument must be a string")),
     };
     
@@ -204,12 +205,12 @@ pub fn os_rename(args: Vec<Value>) -> Result<Value> {
     }
     
     let src = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("rename() first argument must be a string")),
     };
     
     let dst = match &args[1] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("rename() second argument must be a string")),
     };
     
@@ -225,7 +226,7 @@ pub fn os_stat(args: Vec<Value>) -> Result<Value> {
     }
     
     let path = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("stat() argument must be a string")),
     };
     
@@ -257,7 +258,7 @@ pub fn os_system(args: Vec<Value>) -> Result<Value> {
     }
     
     let command = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("system() argument must be a string")),
     };
     
@@ -279,7 +280,7 @@ pub fn os_getenv(args: Vec<Value>) -> Result<Value> {
     }
     
     let key = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("getenv() first argument must be a string")),
     };
     
@@ -290,7 +291,7 @@ pub fn os_getenv(args: Vec<Value>) -> Result<Value> {
     };
     
     match env::var(key) {
-        Ok(value) => Ok(Value::String(value)),
+        Ok(value) => Ok(Value::Str(value)),
         Err(_) => Ok(default),
     }
 }
@@ -301,12 +302,12 @@ pub fn os_putenv(args: Vec<Value>) -> Result<Value> {
     }
     
     let key = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("putenv() first argument must be a string")),
     };
     
     let value = match &args[1] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("putenv() second argument must be a string")),
     };
     
@@ -320,7 +321,7 @@ pub fn os_access(args: Vec<Value>) -> Result<Value> {
     }
     
     let path = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("access() first argument must be a string")),
     };
     
@@ -355,7 +356,7 @@ pub fn os_chmod(args: Vec<Value>) -> Result<Value> {
     }
     
     let _path = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("chmod() first argument must be a string")),
     };
     
@@ -373,18 +374,18 @@ pub fn os_chmod(args: Vec<Value>) -> Result<Value> {
 
 pub fn path_join(args: Vec<Value>) -> Result<Value> {
     if args.is_empty() {
-        return Ok(Value::String(String::new()));
+        return Ok(Value::Str(String::new()));
     }
     
     let mut path = PathBuf::new();
     for arg in args {
         match arg {
-            Value::String(s) => path.push(s),
+            Value::Str(s) => path.push(s),
             _ => return Err(anyhow::anyhow!("path.join() arguments must be strings")),
         }
     }
     
-    Ok(Value::String(path.to_string_lossy().to_string()))
+    Ok(Value::Str(path.to_string_lossy().to_string()))
 }
 
 pub fn path_split(args: Vec<Value>) -> Result<Value> {
@@ -393,7 +394,7 @@ pub fn path_split(args: Vec<Value>) -> Result<Value> {
     }
     
     let path_str = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("path.split() argument must be a string")),
     };
     
@@ -401,7 +402,7 @@ pub fn path_split(args: Vec<Value>) -> Result<Value> {
     let parent = path.parent().unwrap_or(Path::new("")).to_string_lossy().to_string();
     let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
     
-    Ok(Value::Tuple(vec![Value::String(parent), Value::String(filename)]))
+    Ok(Value::Tuple(vec![Value::Str(parent), Value::Str(filename)]))
 }
 
 pub fn path_dirname(args: Vec<Value>) -> Result<Value> {
@@ -410,14 +411,14 @@ pub fn path_dirname(args: Vec<Value>) -> Result<Value> {
     }
     
     let path_str = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("path.dirname() argument must be a string")),
     };
     
     let path = Path::new(path_str);
     let parent = path.parent().unwrap_or(Path::new("")).to_string_lossy().to_string();
     
-    Ok(Value::String(parent))
+    Ok(Value::Str(parent))
 }
 
 pub fn path_basename(args: Vec<Value>) -> Result<Value> {
@@ -426,14 +427,14 @@ pub fn path_basename(args: Vec<Value>) -> Result<Value> {
     }
     
     let path_str = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("path.basename() argument must be a string")),
     };
     
     let path = Path::new(path_str);
     let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
     
-    Ok(Value::String(filename))
+    Ok(Value::Str(filename))
 }
 
 pub fn path_exists(args: Vec<Value>) -> Result<Value> {
@@ -442,7 +443,7 @@ pub fn path_exists(args: Vec<Value>) -> Result<Value> {
     }
     
     let path_str = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("path.exists() argument must be a string")),
     };
     
@@ -455,7 +456,7 @@ pub fn path_isfile(args: Vec<Value>) -> Result<Value> {
     }
     
     let path_str = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("path.isfile() argument must be a string")),
     };
     
@@ -468,7 +469,7 @@ pub fn path_isdir(args: Vec<Value>) -> Result<Value> {
     }
     
     let path_str = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("path.isdir() argument must be a string")),
     };
     
@@ -481,17 +482,17 @@ pub fn path_abspath(args: Vec<Value>) -> Result<Value> {
     }
     
     let path_str = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("path.abspath() argument must be a string")),
     };
     
     match fs::canonicalize(path_str) {
-        Ok(abs_path) => Ok(Value::String(abs_path.to_string_lossy().to_string())),
+        Ok(abs_path) => Ok(Value::Str(abs_path.to_string_lossy().to_string())),
         Err(_) => {
             // If canonicalize fails, try to make it absolute manually
             let current_dir = env::current_dir().unwrap_or_default();
             let abs_path = current_dir.join(path_str);
-            Ok(Value::String(abs_path.to_string_lossy().to_string()))
+            Ok(Value::Str(abs_path.to_string_lossy().to_string()))
         }
     }
 }
@@ -507,12 +508,23 @@ pub fn path_getsize(args: Vec<Value>) -> Result<Value> {
     }
     
     let path_str = match &args[0] {
-        Value::String(s) => s,
+        Value::Str(s) => s,
         _ => return Err(anyhow::anyhow!("path.getsize() argument must be a string")),
     };
     
     match fs::metadata(path_str) {
         Ok(metadata) => Ok(Value::Int(metadata.len() as i64)),
         Err(e) => Err(anyhow::anyhow!("Failed to get size of '{}': {}", path_str, e)),
+    }
+}
+
+/// Get the operating system name
+fn get_os_name() -> String {
+    if cfg!(windows) {
+        "nt".to_string()
+    } else if cfg!(unix) {
+        "posix".to_string()
+    } else {
+        "unknown".to_string()
     }
 }

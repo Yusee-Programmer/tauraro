@@ -5,28 +5,39 @@ use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::env;
+use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
+use std::path::PathBuf;
+
+// Thread-local storage for additional module system paths
+thread_local! {
+    static MODULE_SYSTEM_PATHS: RefCell<Vec<PathBuf>> = RefCell::new(Vec::new());
+}
+
+/// Global sys.path storage for manipulation functions
+static mut SYS_PATH: Option<Arc<Mutex<Vec<Value>>>> = None;
 
 /// Create the sys module object with all its functions and attributes
 pub fn create_sys_module() -> Value {
     let mut namespace = HashMap::new();
     
     // System information
-    namespace.insert("version".to_string(), Value::String(format!("Tauraro {}", env!("CARGO_PKG_VERSION"))));
+    namespace.insert("version".to_string(), Value::Str(format!("Tauraro {}", env!("CARGO_PKG_VERSION"))));
     namespace.insert("version_info".to_string(), create_version_info());
-    namespace.insert("platform".to_string(), Value::String(get_platform()));
+    namespace.insert("platform".to_string(), Value::Str(get_platform()));
     
-    // Path information
-    namespace.insert("path".to_string(), create_sys_path());
+    // Path information - use a special function that returns current sys.path
+    namespace.insert("path".to_string(), get_current_sys_path());
     namespace.insert("executable".to_string(), get_executable());
     
     // Standard streams (simplified)
-    namespace.insert("stdin".to_string(), Value::String("<stdin>".to_string()));
-    namespace.insert("stdout".to_string(), Value::String("<stdout>".to_string()));
-    namespace.insert("stderr".to_string(), Value::String("<stderr>".to_string()));
+    namespace.insert("stdin".to_string(), Value::Str("<stdin>".to_string()));
+    namespace.insert("stdout".to_string(), Value::Str("<stdout>".to_string()));
+    namespace.insert("stderr".to_string(), Value::Str("<stderr>".to_string()));
     
     // System limits and configuration
     namespace.insert("maxsize".to_string(), Value::Int(i64::MAX));
-    namespace.insert("byteorder".to_string(), Value::String(if cfg!(target_endian = "little") { "little" } else { "big" }.to_string()));
+    namespace.insert("byteorder".to_string(), Value::Str(if cfg!(target_endian = "little") { "little" } else { "big" }.to_string()));
     
     // Functions
     namespace.insert("exit".to_string(), Value::NativeFunction(sys_exit));
@@ -34,17 +45,22 @@ pub fn create_sys_module() -> Value {
     namespace.insert("getsizeof".to_string(), Value::NativeFunction(sys_getsizeof));
     namespace.insert("intern".to_string(), Value::NativeFunction(sys_intern));
     
+    // Path manipulation functions
+    namespace.insert("path_append".to_string(), Value::NativeFunction(sys_path_append));
+    namespace.insert("path_insert".to_string(), Value::NativeFunction(sys_path_insert));
+    namespace.insert("path_remove".to_string(), Value::NativeFunction(sys_path_remove));
+    
     // Module information
     namespace.insert("modules".to_string(), create_modules_dict());
     namespace.insert("builtin_module_names".to_string(), create_builtin_modules());
     
     // Interpreter information
-    namespace.insert("copyright".to_string(), Value::String("Copyright (c) 2024 Tauraro Project".to_string()));
+    namespace.insert("copyright".to_string(), Value::Str("Copyright (c) 2024 Tauraro Project".to_string()));
     namespace.insert("api_version".to_string(), Value::Int(1));
     namespace.insert("dont_write_bytecode".to_string(), Value::Bool(false));
     
     // Command line arguments (empty for now)
-    namespace.insert("argv".to_string(), Value::List(vec![Value::String("tauraro".to_string())]));
+    namespace.insert("argv".to_string(), Value::List(vec![Value::Str("tauraro".to_string())]));
     
     Value::Module("sys".to_string(), namespace)
 }
@@ -62,7 +78,7 @@ fn create_version_info() -> Value {
         Value::Int(major),
         Value::Int(minor),
         Value::Int(micro),
-        Value::String("final".to_string()),
+        Value::Str("final".to_string()),
         Value::Int(0),
     ])
 }
@@ -80,22 +96,53 @@ fn get_platform() -> String {
     }
 }
 
-/// Create sys.path list
+/// Get current sys.path (returns a copy of the shared storage)
+pub fn get_current_sys_path() -> Value {
+    unsafe {
+        if let Some(ref sys_path) = SYS_PATH {
+            if let Ok(path_list) = sys_path.lock() {
+                return Value::List(path_list.clone());
+            }
+        }
+    }
+    
+    // Fallback: create initial sys.path if not initialized
+    create_sys_path()
+}
+
+/// Create sys.path list with cross-platform default paths
 fn create_sys_path() -> Value {
     let mut path_list = Vec::new();
     
-    // Add current directory
-    path_list.push(Value::String(".".to_string()));
+    // Add current directory (always first)
+    path_list.push(Value::Str(".".to_string()));
     
-    // Add standard library paths (conceptual)
-    path_list.push(Value::String("/usr/local/lib/tauraro".to_string()));
-    path_list.push(Value::String("/usr/lib/tauraro".to_string()));
+    // Add built-in package directories
+    path_list.push(Value::Str("tauraro_packages".to_string()));
+    path_list.push(Value::Str("tauraro_packages/externals".to_string()));
     
-    // Add paths from environment
+    // Add platform-specific standard library paths
+    if cfg!(target_os = "windows") {
+        path_list.push(Value::Str("C:\\tauraro\\lib".to_string()));
+        path_list.push(Value::Str("C:\\tauraro\\lib\\site-packages".to_string()));
+    } else {
+        path_list.push(Value::Str("/usr/local/lib/tauraro".to_string()));
+        path_list.push(Value::Str("/usr/lib/tauraro".to_string()));
+    }
+    
+    // Add paths from TAURARO_PATH environment variable
     if let Ok(tauraro_path) = env::var("TAURARO_PATH") {
-        for path in tauraro_path.split(if cfg!(windows) { ';' } else { ':' }) {
-            path_list.push(Value::String(path.to_string()));
+        for path in tauraro_path.split(if cfg!(target_os = "windows") { ';' } else { ':' }) {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                path_list.push(Value::Str(trimmed.to_string()));
+            }
         }
+    }
+    
+    // Initialize global sys.path storage
+    unsafe {
+        SYS_PATH = Some(Arc::new(Mutex::new(path_list.clone())));
     }
     
     Value::List(path_list)
@@ -104,8 +151,8 @@ fn create_sys_path() -> Value {
 /// Get executable path
 fn get_executable() -> Value {
     match env::current_exe() {
-        Ok(path) => Value::String(path.to_string_lossy().to_string()),
-        Err(_) => Value::String("tauraro".to_string()),
+        Ok(path) => Value::Str(path.to_string_lossy().to_string()),
+        Err(_) => Value::Str("tauraro".to_string()),
     }
 }
 
@@ -114,10 +161,10 @@ fn create_modules_dict() -> Value {
     let mut modules = HashMap::new();
     
     // Add built-in modules
-    modules.insert("sys".to_string(), Value::String("<module 'sys' (built-in)>".to_string()));
-    modules.insert("os".to_string(), Value::String("<module 'os' (built-in)>".to_string()));
-    modules.insert("thread".to_string(), Value::String("<module 'thread' (built-in)>".to_string()));
-    modules.insert("builtins".to_string(), Value::String("<module 'builtins' (built-in)>".to_string()));
+    modules.insert("sys".to_string(), Value::Str("<module 'sys' (built-in)>".to_string()));
+    modules.insert("os".to_string(), crate::modules::os::create_os_module());
+    modules.insert("thread".to_string(), crate::modules::thread::create_thread_module());
+    modules.insert("builtins".to_string(), Value::Str("<module 'builtins' (built-in)>".to_string()));
     
     Value::Dict(modules)
 }
@@ -125,10 +172,10 @@ fn create_modules_dict() -> Value {
 /// Create builtin module names tuple
 fn create_builtin_modules() -> Value {
     Value::Tuple(vec![
-        Value::String("sys".to_string()),
-        Value::String("os".to_string()),
-        Value::String("thread".to_string()),
-        Value::String("builtins".to_string()),
+        Value::Str("sys".to_string()),
+        Value::Str("os".to_string()),
+        Value::Str("thread".to_string()),
+        Value::Str("builtins".to_string()),
     ])
 }
 
@@ -168,7 +215,7 @@ pub fn sys_getsizeof(args: Vec<Value>) -> Result<Value> {
         Value::Bool(_) => 1,
         Value::Int(_) => 8,
         Value::Float(_) => 8,
-        Value::String(s) => s.len() as i64 + 24, // String overhead
+        Value::Str(s) => s.len() as i64 + 24, // String overhead
         Value::List(l) => (l.len() as i64 * 8) + 24, // List overhead
         Value::Dict(d) => (d.len() as i64 * 16) + 32, // Dict overhead
         Value::Tuple(t) => (t.len() as i64 * 8) + 16, // Tuple overhead
@@ -184,7 +231,7 @@ pub fn sys_intern(args: Vec<Value>) -> Result<Value> {
     }
     
     match &args[0] {
-        Value::String(s) => Ok(Value::String(s.clone())), // In Rust, strings are already interned in a sense
+        Value::Str(s) => Ok(Value::Str(s.clone())), // In Rust, strings are already interned in a sense
         _ => Err(anyhow::anyhow!("intern() argument must be a string")),
     }
 }
@@ -195,27 +242,27 @@ pub fn sys_intern(args: Vec<Value>) -> Result<Value> {
 pub fn get_system_info() -> HashMap<String, Value> {
     let mut info = HashMap::new();
     
-    info.insert("arch".to_string(), Value::String(env::consts::ARCH.to_string()));
-    info.insert("os".to_string(), Value::String(env::consts::OS.to_string()));
-    info.insert("family".to_string(), Value::String(env::consts::FAMILY.to_string()));
-    info.insert("dll_extension".to_string(), Value::String(env::consts::DLL_EXTENSION.to_string()));
-    info.insert("dll_prefix".to_string(), Value::String(env::consts::DLL_PREFIX.to_string()));
-    info.insert("dll_suffix".to_string(), Value::String(env::consts::DLL_SUFFIX.to_string()));
-    info.insert("exe_extension".to_string(), Value::String(env::consts::EXE_EXTENSION.to_string()));
-    info.insert("exe_suffix".to_string(), Value::String(env::consts::EXE_SUFFIX.to_string()));
+    info.insert("arch".to_string(), Value::Str(env::consts::ARCH.to_string()));
+    info.insert("os".to_string(), Value::Str(env::consts::OS.to_string()));
+    info.insert("family".to_string(), Value::Str(env::consts::FAMILY.to_string()));
+    info.insert("dll_extension".to_string(), Value::Str(env::consts::DLL_EXTENSION.to_string()));
+    info.insert("dll_prefix".to_string(), Value::Str(env::consts::DLL_PREFIX.to_string()));
+    info.insert("dll_suffix".to_string(), Value::Str(env::consts::DLL_SUFFIX.to_string()));
+    info.insert("exe_extension".to_string(), Value::Str(env::consts::EXE_EXTENSION.to_string()));
+    info.insert("exe_suffix".to_string(), Value::Str(env::consts::EXE_SUFFIX.to_string()));
     
     info
 }
 
 /// Set command line arguments
 pub fn set_argv(args: Vec<String>) -> Value {
-    let argv: Vec<Value> = args.into_iter().map(Value::String).collect();
+    let argv: Vec<Value> = args.into_iter().map(Value::Str).collect();
     Value::List(argv)
 }
 
 /// Add path to sys.path
 pub fn add_to_path(path: String, sys_path: &mut Vec<Value>) {
-    let path_value = Value::String(path);
+    let path_value = Value::Str(path);
     if !sys_path.contains(&path_value) {
         sys_path.push(path_value);
     }
@@ -225,7 +272,7 @@ pub fn add_to_path(path: String, sys_path: &mut Vec<Value>) {
 pub fn get_environ() -> Value {
     let mut environ = HashMap::new();
     for (key, value) in env::vars() {
-        environ.insert(key, Value::String(value));
+        environ.insert(key, Value::Str(value));
     }
     Value::Dict(environ)
 }
@@ -242,11 +289,113 @@ pub fn get_recursion_limit() -> i64 {
     1000 // Default recursion limit
 }
 
-/// Set the recursion limit (conceptual)
-pub fn set_recursion_limit(limit: i64) -> Result<Value> {
-    if limit < 1 {
-        return Err(anyhow::anyhow!("recursion limit must be positive"));
+/// sys.path_append function - adds a path to sys.path and module system
+fn sys_path_append(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("path_append() takes exactly one argument"));
     }
-    // In a real implementation, this would set the actual limit
-    Ok(Value::Int(limit))
+    
+    let path_str = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow::anyhow!("path_append() argument must be a string")),
+    };
+    
+    unsafe {
+        if let Some(ref sys_path) = SYS_PATH {
+            if let Ok(mut path_list) = sys_path.lock() {
+                path_list.push(Value::Str(path_str.clone()));
+            }
+        }
+    }
+    
+    // Also notify the module system about the new path
+    use std::path::PathBuf;
+    MODULE_SYSTEM_PATHS.with(|paths| {
+        if let Ok(mut paths) = paths.try_borrow_mut() {
+            paths.push(PathBuf::from(path_str));
+        }
+    });
+    
+    Ok(Value::None)
+}
+
+/// sys.path.insert(index, path) - Insert a directory at the given index in sys.path
+pub fn sys_path_insert(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("path_insert() takes exactly two arguments"));
+    }
+    
+    let index = match &args[0] {
+        Value::Int(i) => *i as usize,
+        _ => return Err(anyhow::anyhow!("path_insert() first argument must be an integer")),
+    };
+    
+    match &args[1] {
+        Value::Str(path) => {
+            unsafe {
+                if let Some(ref sys_path) = SYS_PATH {
+                    if let Ok(mut path_list) = sys_path.lock() {
+                        if index <= path_list.len() {
+                            path_list.insert(index, Value::Str(path.clone()));
+                        } else {
+                            path_list.push(Value::Str(path.clone()));
+                        }
+                    }
+                }
+            }
+            
+            // Also notify the module system about the new path
+            use std::path::PathBuf;
+            MODULE_SYSTEM_PATHS.with(|paths| {
+                if let Ok(mut paths) = paths.try_borrow_mut() {
+                    if index <= paths.len() {
+                        paths.insert(index, PathBuf::from(path.clone()));
+                    } else {
+                        paths.push(PathBuf::from(path.clone()));
+                    }
+                }
+            });
+            
+            Ok(Value::None)
+        }
+        _ => Err(anyhow::anyhow!("path_insert() second argument must be a string")),
+    }
+}
+
+/// sys.path.remove(path) - Remove the first occurrence of path from sys.path
+pub fn sys_path_remove(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("path_remove() takes exactly one argument"));
+    }
+    
+    match &args[0] {
+        Value::Str(path) => {
+            unsafe {
+                if let Some(ref sys_path) = SYS_PATH {
+                    if let Ok(mut path_list) = sys_path.lock() {
+                        if let Some(pos) = path_list.iter().position(|x| {
+                            if let Value::Str(s) = x {
+                                s == path
+                            } else {
+                                false
+                            }
+                        }) {
+                            path_list.remove(pos);
+                        }
+                    }
+                }
+            }
+            
+            // Also notify the module system about the path removal
+            use std::path::PathBuf;
+            MODULE_SYSTEM_PATHS.with(|paths| {
+                if let Ok(mut paths) = paths.try_borrow_mut() {
+                    paths.retain(|p| p != &PathBuf::from(path.clone()));
+                }
+            });
+            
+            Ok(Value::None)
+        }
+        _ => Err(anyhow::anyhow!("path_remove() argument must be a string")),
+    }
 }

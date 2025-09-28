@@ -259,10 +259,14 @@ pub enum Token {
     Indent,
     Dedent,
 
+    // Docstring literals (triple-quoted strings)
+    #[regex(r#""{3}[^"]*"{3}"#, |lex| lex.slice()[3..lex.slice().len()-3].to_string())]
+    #[regex(r#"'{3}[^']*'{3}"#, |lex| lex.slice()[3..lex.slice().len()-3].to_string())]
+    DocString(String),
+
     // Whitespace and comments
     #[regex(r"[ \t\r]+", logos::skip)]
     #[regex(r"#.*", logos::skip)]  // Line comments (Python-style)
-    #[regex(r#""{3}[^"]*"{3}"#, logos::skip)]  // Multiline comments/docstrings (using negative character class)
     #[regex(r"\\\n", logos::skip)]  // Line continuation (backslash followed by newline)
     #[regex(r"\n", |_| Token::Newline)]
     Newline,

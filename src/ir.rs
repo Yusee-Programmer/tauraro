@@ -168,6 +168,7 @@ pub enum IRValue {
     Int(i64),
     Float(f64),
     String(String),
+    Str(String),
     List(Vec<IRValue>),
     Dict(Vec<(IRValue, IRValue)>),
 }
@@ -314,7 +315,7 @@ impl Generator {
 
     fn generate_statement(&mut self, stmt: Statement, module: &mut IRModule) -> Result<(), String> {
         match stmt {
-            Statement::FunctionDef { name, params, return_type, body, is_async: _, decorators: _ } => {
+            Statement::FunctionDef { name, params, return_type, body, is_async: _, decorators: _, docstring: _ } => {
                 let ir_function = self.generate_function(name.clone(), params, return_type, body, module)?;
                 module.functions.insert(name, ir_function);
             }
@@ -618,6 +619,7 @@ impl Generator {
         match expr {
             Expr::Literal(lit) => self.literal_to_ir_value(lit),
             Expr::Identifier(name) => Ok(IRValue::Variable(name)),
+            Expr::DocString(s) => Ok(IRValue::ImmediateString(s)),
             Expr::BinaryOp { left, op, right } => {
                 let left_val = self.generate_expression(*left, current_block, module)?;
                 let right_val = self.generate_expression(*right, current_block, module)?;
@@ -847,53 +849,53 @@ impl Generator {
                 // Set literals not yet supported in IR generation
                 Err(format!("Set literals not yet supported in IR generation: {} elements", elements.len()))
             }
-            Expr::ListComp { element, generators } => {
+            Expr::ListComp { element: _, generators } => {
                 // List comprehensions not yet supported in IR generation
                 Err(format!("List comprehensions not yet supported in IR generation: {} generators", generators.len()))
             }
-            Expr::DictComp { key, value, generators } => {
+            Expr::DictComp { key: _, value: _, generators } => {
                 // Dictionary comprehensions not yet supported in IR generation
                 Err(format!("Dictionary comprehensions not yet supported in IR generation: {} generators", generators.len()))
             }
-            Expr::SetComp { element, generators } => {
+            Expr::SetComp { element: _, generators } => {
                 // Set comprehensions not yet supported in IR generation
                 Err(format!("Set comprehensions not yet supported in IR generation: {} generators", generators.len()))
             }
-            Expr::GeneratorExp { element, generators } => {
+            Expr::GeneratorExp { element: _, generators } => {
                 // Generator expressions not yet supported in IR generation
                 Err(format!("Generator expressions not yet supported in IR generation: {} generators", generators.len()))
             }
-            Expr::Lambda { params, body } => {
+            Expr::Lambda { params, body: _ } => {
                 // Lambda expressions not yet supported in IR generation
                 Err(format!("Lambda expressions not yet supported in IR generation: {} params", params.len()))
             }
-            Expr::IfExp { condition, then_expr, else_expr } => {
+            Expr::IfExp { condition: _, then_expr: _, else_expr: _ } => {
                 // Conditional expressions not yet supported in IR generation
                 Err("Conditional expressions not yet supported in IR generation".to_string())
             }
-            Expr::Yield(value) => {
+            Expr::Yield(_) => {
                 // Yield expressions not yet supported in IR generation
                 Err("Yield expressions not yet supported in IR generation".to_string())
             }
-            Expr::YieldFrom(expr) => {
+            Expr::YieldFrom(_) => {
                 // Yield from expressions not yet supported in IR generation
                 Err("Yield from expressions not yet supported in IR generation".to_string())
             }
-            Expr::Await(expr) => {
+            Expr::Await(_) => {
                 // Await expressions not yet supported in IR generation
                 Err("Await expressions not yet supported in IR generation".to_string())
             }
-            Expr::FormatString { parts } => {
-                // Format strings not yet supported in IR generation
-                Err(format!("Format strings not yet supported in IR generation: {} parts", parts.len()))
-            }
-            Expr::Starred(expr) => {
+            Expr::Starred(_) => {
                 // Starred expressions not yet supported in IR generation
                 Err("Starred expressions not yet supported in IR generation".to_string())
             }
-            Expr::NamedExpr { target, value } => {
+            Expr::NamedExpr { target: _, value: _ } => {
                 // Named expressions (walrus operator) not yet supported in IR generation
                 Err("Named expressions (walrus operator) not yet supported in IR generation".to_string())
+            }
+            Expr::FormatString { parts: _ } => {
+                // Format strings (f-strings) not yet supported in IR generation
+                Err("Format strings (f-strings) not yet supported in IR generation".to_string())
             }
         }
     }
@@ -961,6 +963,7 @@ impl Generator {
             Expr::Literal(Literal::String(_)) => Ok(IRType::Pointer(Box::new(IRType::Int8))),
             Expr::Literal(Literal::Bool(_)) => Ok(IRType::Bool),
             Expr::Literal(Literal::None) => Ok(IRType::Int64), // TODO: Proper none type
+            Expr::DocString(_) => Ok(IRType::Pointer(Box::new(IRType::Int8))), // Treat as string
             Expr::BinaryOp { left, op, right } => {
                 // For binary operations, try to infer from operands
                 match op {

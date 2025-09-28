@@ -5,6 +5,12 @@ use anyhow::{Result, anyhow};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::fs;
+use std::cell::RefCell;
+
+// Thread-local storage for additional module system paths
+thread_local! {
+    static MODULE_SYSTEM_PATHS: RefCell<Vec<PathBuf>> = RefCell::new(Vec::new());
+}
 
 /// Module system manager for handling imports, packages, and module resolution
 pub struct ModuleSystem {
@@ -57,6 +63,17 @@ impl ModuleSystem {
                 search_paths.push(PathBuf::from(path));
             }
         }
+        
+        // Add paths from sys.path thread-local storage
+        MODULE_SYSTEM_PATHS.with(|paths| {
+            if let Ok(paths) = paths.try_borrow() {
+                for path in paths.iter() {
+                    if !search_paths.contains(path) {
+                        search_paths.push(path.clone());
+                    }
+                }
+            }
+        });
         
         Self {
             loaded_modules: HashMap::new(),
@@ -209,7 +226,21 @@ impl ModuleSystem {
     fn resolve_module_path(&self, module_name: &str) -> Result<PathBuf> {
         let parts: Vec<&str> = module_name.split('.').collect();
         
-        for search_path in &self.search_paths {
+        // Create a combined search path list including thread-local paths
+        let mut all_search_paths = self.search_paths.clone();
+        
+        // Add current thread-local paths
+        MODULE_SYSTEM_PATHS.with(|paths| {
+            if let Ok(paths) = paths.try_borrow() {
+                for path in paths.iter() {
+                    if !all_search_paths.contains(path) {
+                        all_search_paths.push(path.clone());
+                    }
+                }
+            }
+        });
+        
+        for search_path in &all_search_paths {
             // Try as a single file
             let mut file_path = search_path.clone();
             for part in &parts {
@@ -310,20 +341,36 @@ impl ModuleSystem {
         vm.push_scope(Scope::new());
         
         // Set __name__ and __file__ variables
-        vm.set_variable("__name__", Value::String(module_name.to_string()));
-        vm.set_variable("__file__", Value::String(file_path.to_string_lossy().to_string()));
+        vm.set_variable("__name__", Value::Str(module_name.to_string()))?;
+        vm.set_variable("__file__", Value::Str(file_path.to_string_lossy().to_string()))?;
         
         // Execute the module in its own scope
         // First pass: register all functions and classes
         for statement in &program.statements {
-            if let Statement::FunctionDef { name, params, return_type: _, body, is_async: _, decorators: _ } = statement {
+            if let Statement::FunctionDef { name, params, return_type: _, body, is_async: _, decorators: _, docstring } = statement {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                let func_value = Value::Function(name.clone(), param_names, body.clone());
-                vm.set_variable(name, func_value);
-            } else if let Statement::ClassDef { name, bases: _, body: _, decorators: _, metaclass: _ } = statement {
-                // Create class object
-                let class_obj = Value::Object(name.clone(), HashMap::new());
-                vm.set_variable(name, class_obj);
+                let func_value = Value::Function(name.clone(), param_names, body.clone(), docstring.clone());
+                vm.set_variable(name, func_value)?;
+            } else if let Statement::ClassDef { name, bases: _, body, decorators: _, metaclass: _, docstring: _ } = statement {
+                // Create class object with methods
+                let mut class_methods = HashMap::new();
+                
+                // Process class body to extract methods
+                for stmt in body {
+                    if let Statement::FunctionDef { name: method_name, params, return_type: _, body: method_body, is_async: _, decorators: _, docstring } = stmt {
+                        let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                        let method_value = Value::Function(method_name.clone(), param_names, method_body.clone(), docstring.clone());
+                        class_methods.insert(method_name.clone(), method_value);
+                    }
+                }
+                
+                let class_obj = Value::Object {
+                    class_name: name.clone(),
+                    fields: class_methods,
+                    base_object: crate::base_object::BaseObject::new(name.clone(), vec!["object".to_string()]),
+                    mro: crate::base_object::MRO::from_linearization(vec![name.clone(), "object".to_string()]),
+                };
+                vm.set_variable(name, class_obj)?;
             }
         }
         
@@ -338,7 +385,7 @@ impl ModuleSystem {
                     };
                     let variables = self.import_module(vm, import_spec)?;
                     for (name, value) in variables {
-                        vm.set_variable(&name, value);
+                        vm.set_variable(&name, value)?;
                     }
                 } else if let Statement::FromImport { module, names } = &statement {
                     let import_spec = ImportSpec::FromImport {
@@ -347,7 +394,7 @@ impl ModuleSystem {
                     };
                     let variables = self.import_module(vm, import_spec)?;
                     for (name, value) in variables {
-                        vm.set_variable(&name, value);
+                        vm.set_variable(&name, value)?;
                     }
                 } else {
                     vm.execute_statement(&statement)?;
@@ -375,25 +422,11 @@ impl ModuleSystem {
     /// Create built-in modules
     fn create_builtin_module(&self, module_name: &str) -> Option<Value> {
         match module_name {
-            "sys" => {
-                let mut namespace = HashMap::new();
-                namespace.insert("version".to_string(), Value::String("Tauraro 0.1.0".to_string()));
-                namespace.insert("platform".to_string(), Value::String(std::env::consts::OS.to_string()));
-                namespace.insert("argv".to_string(), Value::List(vec![Value::String("tauraro".to_string())]));
-                namespace.insert("path".to_string(), Value::List(vec![
-                    Value::String(".".to_string()),
-                    Value::String("tauraro_packages".to_string()),
-                ]));
-                Some(Value::Module("sys".to_string(), namespace))
-            }
-            "os" => {
-                let mut namespace = HashMap::new();
-                namespace.insert("name".to_string(), Value::String(std::env::consts::OS.to_string()));
-                namespace.insert("sep".to_string(), Value::String(std::path::MAIN_SEPARATOR.to_string()));
-                namespace.insert("pathsep".to_string(), Value::String(std::path::MAIN_SEPARATOR.to_string()));
-                Some(Value::Module("os".to_string(), namespace))
-            }
+            "sys" => Some(crate::modules::sys::create_sys_module()),
+            "os" => Some(crate::modules::os::create_os_module()),
             "thread" => Some(crate::modules::thread::create_thread_module()),
+            "time" => Some(crate::modules::time::create_time_module()),
+            "datetime" => Some(crate::modules::datetime::create_datetime_module()),
             _ => None,
         }
     }

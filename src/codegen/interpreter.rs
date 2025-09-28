@@ -505,9 +505,9 @@ impl Interpreter {
                         // Handle variable definitions directly
                         if let Some(expr) = value {
                             let val = self.vm.execute_expression(expr)?;
-                            self.vm.set_variable(name, val);
+                            self.vm.set_variable(name, val)?;
                         } else {
-                            self.vm.set_variable(name, Value::None);
+                            self.vm.set_variable(name, Value::None)?;
                         }
                         return Ok(None);
                     }
@@ -527,27 +527,32 @@ impl Interpreter {
             if let Some(stmt) = program.statements.first() {
                 // Handle function definitions properly in REPL
                 match stmt {
-                    Statement::FunctionDef { name, params, return_type: _, body, is_async: _, decorators: _ } => {
+                    Statement::FunctionDef { name, params, return_type: _, body, is_async: _, decorators: _, docstring } => {
                         let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                        let func_value = Value::Function(name.clone(), param_names, body.clone());
-                        self.vm.set_variable(name, func_value);
+                        let func_value = Value::Function(name.clone(), param_names, body.clone(), docstring.clone());
+                        self.vm.set_variable(name, func_value)?;
                         println!("Function '{}' defined", name);
                     }
-                    Statement::ClassDef { name, bases: _, body, decorators: _, metaclass: _ } => {
+                    Statement::ClassDef { name, bases: _, body, decorators: _, metaclass: _, docstring: _ } => {
                         // Create class object with methods
                         let mut class_methods = HashMap::new();
                         
                         // Process class body to extract methods
                         for stmt in body {
-                            if let Statement::FunctionDef { name: method_name, params, return_type: _, body: method_body, is_async: _, decorators: _ } = stmt {
+                            if let Statement::FunctionDef { name: method_name, params, return_type: _, body: method_body, is_async: _, decorators: _, docstring } = stmt {
                                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                                let method_value = Value::Function(method_name.clone(), param_names, method_body.clone());
+                                let method_value = Value::Function(method_name.clone(), param_names, method_body.clone(), docstring.clone());
                                 class_methods.insert(method_name.clone(), method_value);
                             }
                         }
                         
-                        let class_obj = Value::Object(name.clone(), class_methods);
-                        self.vm.set_variable(name, class_obj);
+                        let class_obj = Value::Object {
+                            class_name: name.clone(),
+                            fields: class_methods,
+                            base_object: crate::base_object::BaseObject::new(name.clone(), vec!["object".to_string()]),
+                            mro: crate::base_object::MRO::from_linearization(vec![name.clone(), "object".to_string()]),
+                        };
+                        self.vm.set_variable(name, class_obj)?;
                         println!("Class '{}' defined", name);
                     }
                     _ => {
@@ -582,11 +587,12 @@ impl Interpreter {
                 for name in names {
                     if let Some(value) = all_vars.get(&name) {
                         let type_name = match value {
-                            Value::Function(_, _, _) => "function",
-                            Value::Object(_, _) => "class",
+                            Value::Function(_, _, _, _) => "function",
+                            Value::TypedFunction { .. } => "typed_function",
+                            Value::Object { .. } => "class",
                             Value::Int(_) => "int",
                             Value::Float(_) => "float",
-                            Value::String(_) => "str",
+                            Value::Str(_) => "str",
                             Value::Bool(_) => "bool",
                             Value::List(_) => "list",
                             Value::Dict(_) => "dict",
@@ -597,6 +603,7 @@ impl Interpreter {
                             Value::NativeFunction(_) => "native_function",
                             Value::BuiltinFunction(_, _) => "builtin_function",
                             Value::Module(_, _) => "module",
+                            Value::Super(_, _) => "super",
                             Value::TypedValue { .. } => "typed_value",
                             #[cfg(feature = "ffi")]
                             Value::ExternFunction { .. } => "extern_function",

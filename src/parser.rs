@@ -47,6 +47,15 @@ impl Parser {
         )
     }
 
+    fn is_keyword_assignment(&self) -> bool {
+        // Look ahead to see if this keyword is followed by an assignment
+        if self.current + 1 < self.tokens.len() {
+            matches!(self.tokens[self.current + 1].token, Token::Assign)
+        } else {
+            false
+        }
+    }
+
     pub fn parse(&mut self) -> Result<Program, ParseError> {
         let mut statements = Vec::new();
         
@@ -85,12 +94,16 @@ impl Parser {
             }
             
             // If it's a top-level statement that should go in main body
+            println!("DEBUG: Processing statement: {:?}", stmt);
             match &stmt {
                 Statement::Expression(_) | Statement::VariableDef { .. } | 
-                Statement::While { .. } | Statement::For { .. } | Statement::If { .. } => {
+                Statement::While { .. } | Statement::For { .. } | Statement::If { .. } |
+                Statement::AttributeAssignment { .. } => {
+                    println!("DEBUG: Adding statement to main_body");
                     main_body.push(stmt);
                 }
                 _ => {
+                    println!("DEBUG: Adding statement to top-level statements");
                     statements.push(stmt);
                 }
             }
@@ -98,6 +111,7 @@ impl Parser {
         
         // If we have main body statements and no explicit main function, create one
         if !main_body.is_empty() && !has_main_function {
+            println!("DEBUG: Creating implicit main function with {} statements", main_body.len());
             let main_function = Statement::FunctionDef {
                 name: "main".to_string(),
                 params: Vec::new(),
@@ -105,9 +119,12 @@ impl Parser {
                 body: main_body,
                 is_async: false,
                 decorators: Vec::new(),
+                docstring: None,
             };
             statements.push(main_function);
+            println!("DEBUG: Implicit main function created and added to statements");
         } else {
+            println!("DEBUG: Not creating main function - main_body.is_empty(): {}, has_main_function: {}", main_body.is_empty(), has_main_function);
             // Add main body statements to the program
             statements.extend(main_body);
         }
@@ -117,8 +134,38 @@ impl Parser {
 
     fn statement(&mut self) -> Result<Statement, ParseError> {
         match &self.peek().token {
-            Token::KwFunc | Token::KwAsync => self.function_def(),
-            Token::KwClass => self.class_def(),
+            Token::KwFunc | Token::KwAsync => {
+                // Check if this is a keyword being used as an identifier in assignment
+                if self.is_keyword_assignment() {
+                    // Treat as expression/assignment
+                    let expr = self.expression()?;
+                    if self.match_token(&[Token::Assign]) {
+                        self.variable_def(expr)
+                    } else {
+                        // Optional semicolon or newline for expression statements
+                        self.match_token(&[Token::Semicolon, Token::Newline]);
+                        Ok(Statement::Expression(expr))
+                    }
+                } else {
+                    self.function_def()
+                }
+            },
+            Token::KwClass => {
+                // Check if this is a keyword being used as an identifier in assignment
+                if self.is_keyword_assignment() {
+                    // Treat as expression/assignment
+                    let expr = self.expression()?;
+                    if self.match_token(&[Token::Assign]) {
+                        self.variable_def(expr)
+                    } else {
+                        // Optional semicolon or newline for expression statements
+                        self.match_token(&[Token::Semicolon, Token::Newline]);
+                        Ok(Statement::Expression(expr))
+                    }
+                } else {
+                    self.class_def()
+                }
+            },
             Token::KwIf => self.if_statement(),
             Token::KwFor => self.for_statement(),
             Token::KwWhile => self.while_statement(),
@@ -140,11 +187,38 @@ impl Parser {
             Token::KwPass => self.pass_statement(),
             Token::At => self.decorated_statement(),
             _ => {
+                // Check if this is a typed variable declaration (identifier : type = value)
+                if matches!(self.peek().token, Token::Identifier(_)) {
+                    let checkpoint = self.current;
+                    let name = self.consume_identifier()?;
+                    
+                    if self.match_token(&[Token::Colon]) {
+                        // This is a typed variable declaration
+                        let type_annotation = Some(self.type_annotation()?);
+                        self.consume(Token::Assign, "Expected '=' after type annotation")?;
+                        let value = self.expression()?;
+                        self.match_token(&[Token::Semicolon, Token::Newline]);
+                        
+                        return Ok(Statement::VariableDef {
+                            name,
+                            type_annotation,
+                            value: Some(value),
+                        });
+                    } else {
+                        // Reset and try normal parsing
+                        self.current = checkpoint;
+                    }
+                }
+                
                 // Try expression statement or variable definition
+                println!("DEBUG: Parsing expression in statement()");
                 let expr = self.expression()?;
+                println!("DEBUG: Parsed expression: {:?}", expr);
                 if self.match_token(&[Token::Assign]) {
+                    println!("DEBUG: Found assignment token, calling variable_def");
                     self.variable_def(expr)
                 } else {
+                    println!("DEBUG: No assignment token, treating as expression statement");
                     // Optional semicolon or newline for expression statements
                     self.match_token(&[Token::Semicolon, Token::Newline]);
                     Ok(Statement::Expression(expr))
@@ -200,6 +274,9 @@ impl Parser {
         self.consume(Token::Colon, "Expected ':' after function signature")?;
         let body = self.block()?;
         
+        // Extract docstring from the first statement if it's a string literal
+        let docstring = self.extract_docstring(&body);
+        
         Ok(Statement::FunctionDef {
             name,
             params,
@@ -207,6 +284,7 @@ impl Parser {
             body,
             is_async,
             decorators: Vec::new(),
+            docstring,
         })
     }
 
@@ -230,12 +308,16 @@ impl Parser {
         self.consume(Token::Colon, "Expected ':' after class declaration")?;
         let body = self.block()?;
         
+        // Extract docstring from the first statement if it's a string literal
+        let docstring = self.extract_docstring(&body);
+        
         Ok(Statement::ClassDef { 
             name, 
             bases, 
             body,
             decorators: Vec::new(),
             metaclass: None,
+            docstring,
         })
     }
 
@@ -376,7 +458,7 @@ impl Parser {
 
     fn pattern(&mut self) -> Result<Pattern, ParseError> {
         match &self.peek().token {
-            Token::Identifier(name) if name == "_" => {
+            Token::Identifier(name) if name.as_str() == "_" => {
                 self.advance();
                 Ok(Pattern::Wildcard)
             }
@@ -456,6 +538,20 @@ impl Parser {
             return match expr {
                 Expr::Identifier(name) => Ok(Expr::BinaryOp {
                     left: Box::new(Expr::Identifier(name)),
+                    op: match op {
+                        Token::PlusEq => BinaryOp::Add,
+                        Token::MinusEq => BinaryOp::Sub,
+                        Token::StarEq => BinaryOp::Mul,
+                        Token::SlashEq => BinaryOp::Div,
+                        Token::PercentEq => BinaryOp::Mod,
+                        Token::PowerEq => BinaryOp::Pow,
+                        Token::FloorDivEq => BinaryOp::FloorDiv,
+                        _ => unreachable!(),
+                    },
+                    right: Box::new(value),
+                }),
+                Expr::Attribute { object, name } => Ok(Expr::BinaryOp {
+                    left: Box::new(Expr::Attribute { object, name }),
                     op: match op {
                         Token::PlusEq => BinaryOp::Add,
                         Token::MinusEq => BinaryOp::Sub,
@@ -919,6 +1015,9 @@ impl Parser {
         } else if let Token::StringLit(s) = self.peek().token.clone() {
             self.advance();
             Ok(Expr::Literal(Literal::String(s)))
+        } else if let Token::DocString(s) = self.peek().token.clone() {
+            self.advance();
+            Ok(Expr::DocString(s))
         } else if let Token::FString(s) = self.peek().token.clone() {
             self.advance();
             self.parse_fstring(s)
@@ -1270,6 +1369,11 @@ impl Parser {
                     Ok(Type::Simple(name))
                 }
             }
+            Token::None => {
+                // Handle None as a type annotation
+                self.advance();
+                Ok(Type::Simple("None".to_string()))
+            }
             Token::LParen => {
                 // Tuple type
                 self.advance();
@@ -1299,7 +1403,7 @@ impl Parser {
         if !self.check(&Token::RParen) {
             loop {
                 // Check if this is a keyword argument
-                if let Token::Identifier(_) = &self.peek().token {
+                if matches!(self.peek().token, Token::Identifier(_)) {
                     let checkpoint = self.current;
                     let name = self.consume_identifier().unwrap();
                     
@@ -1338,7 +1442,7 @@ impl Parser {
         if !self.check(&Token::RParen) {
             loop {
                 // Check if this is a keyword argument
-                if let Token::Identifier(_) = &self.peek().token {
+                if matches!(self.peek().token, Token::Identifier(_)) {
                     let checkpoint = self.current;
                     let name = self.consume_identifier().unwrap();
                     
@@ -1372,7 +1476,9 @@ impl Parser {
     }
 
     fn variable_def(&mut self, target: Expr) -> Result<Statement, ParseError> {
+        println!("DEBUG: In variable_def with target: {:?}", target);
         let value = self.expression()?;
+        println!("DEBUG: Parsed value expression: {:?}", value);
         
         // Optional type annotation
         let type_annotation = if self.match_token(&[Token::Colon]) {
@@ -1384,12 +1490,16 @@ impl Parser {
         self.match_token(&[Token::Semicolon, Token::Newline]);
         
         match target {
-            Expr::Identifier(name) => Ok(Statement::VariableDef {
-                name,
-                type_annotation,
-                value: Some(value),
-            }),
+            Expr::Identifier(name) => {
+                println!("DEBUG: Creating VariableDef for identifier: {}", name);
+                Ok(Statement::VariableDef {
+                    name,
+                    type_annotation,
+                    value: Some(value),
+                })
+            },
             Expr::Attribute { object, name } => {
+                println!("DEBUG: Creating AttributeAssignment for: {:?}.{}", object, name);
                 // Handle attribute assignment like self.x = value
                 Ok(Statement::AttributeAssignment {
                     object: *object,
@@ -1557,7 +1667,7 @@ impl Parser {
 
         // Add decorators to the statement
         match stmt {
-            Statement::FunctionDef { name, params, return_type, body, is_async: _, decorators: _ } => {
+            Statement::FunctionDef { name, params, return_type, body, is_async: _, decorators: _, docstring: _ } => {
                 Ok(Statement::FunctionDef {
                     name,
                     params,
@@ -1565,15 +1675,17 @@ impl Parser {
                     body,
                     decorators,
                     is_async: false, // Default to false for now
+                    docstring: None, // Decorators don't preserve docstrings for now
                 })
             }
-            Statement::ClassDef { name, bases, body, decorators: _, metaclass: _ } => {
+            Statement::ClassDef { name, bases, body, decorators: _, metaclass: _, docstring: _ } => {
                 Ok(Statement::ClassDef { 
                     name, 
                     bases, 
                     body,
                     decorators,
                     metaclass: None,
+                    docstring: None, // Decorators don't preserve docstrings for now
                 })
             }
             _ => unreachable!(),
@@ -1880,5 +1992,18 @@ impl Parser {
         }
         
         Ok(Expr::FormatString { parts })
+    }
+
+    /// Extract docstring from the first statement in a body if it's a string literal or DocString
+    fn extract_docstring(&self, body: &[Statement]) -> Option<String> {
+        if let Some(Statement::Expression(expr)) = body.first() {
+            match expr {
+                Expr::Literal(crate::ast::Literal::String(s)) => Some(s.clone()),
+                Expr::DocString(s) => Some(s.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        }
     }
 }

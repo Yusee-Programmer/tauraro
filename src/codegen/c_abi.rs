@@ -330,7 +330,7 @@ impl CCodeGenerator {
                     IRValue::Bool(_) => {
                         local_types.insert(ptr.clone(), IRType::Bool);
                     }
-                    IRValue::String(_) => {
+                    IRValue::Str(_) | IRValue::String(_) => {
                         local_types.insert(ptr.clone(), IRType::String);
                     }
                     IRValue::Variable(var_name) => {
@@ -539,7 +539,7 @@ impl CCodeGenerator {
                 let expr = self.ir_value_to_c_expr(value)?;
                 // Handle different types for printf
                 match value {
-                    IRValue::ConstantString(_) | IRValue::String(_) => {
+                    IRValue::ConstantString(_) | IRValue::Str(_) | IRValue::String(_) => {
                         Ok(format!("    printf(\"%s\\n\", {});\n", expr))
                     }
                     IRValue::ConstantInt(_) | IRValue::Int(_) => {
@@ -890,7 +890,7 @@ impl CCodeGenerator {
             IRValue::Bool(_) => "bool",
             IRValue::Int(_) => "int64_t",
             IRValue::Float(_) => "double",
-            IRValue::String(_) => "char*",
+            IRValue::Str(_) | IRValue::String(_) => "char*",
             IRValue::List(_) => "TauraroValue*",
             IRValue::Dict(_) => "TauraroValue*",
             IRValue::ImmediateInt(_) => "int64_t",
@@ -912,7 +912,7 @@ impl CCodeGenerator {
             IRValue::Bool(b) => Ok(b.to_string()),
             IRValue::Int(i) => Ok(i.to_string()),
             IRValue::Float(f) => Ok(f.to_string()),
-            IRValue::String(s) => Ok(format!("\"{}\"", s.replace("\"", "\\\""))),
+            IRValue::Str(s) | IRValue::String(s) => Ok(format!("\"{}\"", s.replace("\"", "\\\""))),
             IRValue::List(_) => Ok("NULL".to_string()), // TODO: Implement list literals
             IRValue::Dict(_) => Ok("NULL".to_string()), // TODO: Implement dict literals
             IRValue::ImmediateInt(i) => Ok(i.to_string()),

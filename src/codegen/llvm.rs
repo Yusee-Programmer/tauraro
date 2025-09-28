@@ -379,7 +379,7 @@ impl LLVMCodeGenerator {
             IRValue::ConstantBool(b) | IRValue::ImmediateBool(b) | IRValue::Bool(b) => {
                 Ok(self.context.bool_type().const_int(*b as u64, false).into())
             }
-            IRValue::ConstantString(s) | IRValue::ImmediateString(s) | IRValue::String(s) => {
+            IRValue::ConstantString(s) | IRValue::ImmediateString(s) | IRValue::Str(s) | IRValue::String(s) => {
                 // Create global string constant
                 let string_type = self.context.i8_type().array_type(s.len() as u32);
                 let global_string = builder.get_module().add_global(string_type, None, ".str");

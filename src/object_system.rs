@@ -56,12 +56,12 @@ impl BaseObject {
             Value::Int(n) => n.to_string(),
             Value::Float(n) => format!("{}", n),
             Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
-            Value::String(s) => s.clone(),
+            Value::Str(s) => s.clone(),
             Value::None => "None".to_string(),
             Value::List(items) => {
                 let items_str: Vec<String> = items.iter().map(|v| {
                     match Self::dunder_str(v, vec![]) {
-                        Some(Value::String(s)) => s,
+                        Some(Value::Str(s)) => s,
                         _ => format!("{:?}", v),
                     }
                 }).collect();
@@ -70,7 +70,7 @@ impl BaseObject {
             Value::Tuple(items) => {
                 let items_str: Vec<String> = items.iter().map(|v| {
                     match Self::dunder_str(v, vec![]) {
-                        Some(Value::String(s)) => s,
+                        Some(Value::Str(s)) => s,
                         _ => format!("{:?}", v),
                     }
                 }).collect();
@@ -83,7 +83,7 @@ impl BaseObject {
             Value::Dict(dict) => {
                 let pairs: Vec<String> = dict.iter().map(|(k, v)| {
                     let v_str = match Self::dunder_str(v, vec![]) {
-                        Some(Value::String(s)) => s,
+                        Some(Value::Str(s)) => s,
                         _ => format!("{:?}", v),
                     };
                     format!("'{}': {}", k, v_str)
@@ -93,38 +93,38 @@ impl BaseObject {
             Value::Set(items) => {
                 let items_str: Vec<String> = items.iter().map(|v| {
                     match Self::dunder_str(v, vec![]) {
-                        Some(Value::String(s)) => s,
+                        Some(Value::Str(s)) => s,
                         _ => format!("{:?}", v),
                     }
                 }).collect();
                 format!("{{{}}}", items_str.join(", "))
             },
-            Value::Object(class_name, _) => {
+            Value::Object { class_name, .. } => {
                 format!("<{} object>", class_name)
             },
-            Value::Function(name, params, _) => {
+            Value::Function(name, params, _, _) => {
                 format!("<function {}({})>", name, params.join(", "))
             },
             _ => format!("<{} object>", obj.type_name()),
         };
-        Some(Value::String(repr))
+        Some(Value::Str(repr))
     }
     
     /// Default repr representation (more detailed than str)
     fn dunder_repr(obj: &Value, _args: Vec<Value>) -> Option<Value> {
         let repr = match obj {
-            Value::String(s) => format!("'{}'", s),
+            Value::Str(s) => format!("'{}'", s),
             Value::Bytes(bytes) => format!("b'{}'", String::from_utf8_lossy(bytes)),
             Value::ByteArray(bytes) => format!("bytearray(b'{}')", String::from_utf8_lossy(bytes)),
             _ => {
                 // For most types, repr is the same as str
                 match Self::dunder_str(obj, vec![]) {
-                    Some(Value::String(s)) => s,
+                    Some(Value::Str(s)) => s,
                     _ => format!("{:?}", obj),
                 }
             }
         };
-        Some(Value::String(repr))
+        Some(Value::Str(repr))
     }
     
     /// Default format method
@@ -133,7 +133,7 @@ impl BaseObject {
             String::new()
         } else {
             match &args[0] {
-                Value::String(s) => s.clone(),
+                Value::Str(s) => s.clone(),
                 _ => return None, // Invalid format spec
             }
         };
@@ -156,7 +156,7 @@ impl BaseObject {
             (Value::Int(a), Value::Float(b)) => *a as f64 == *b,
             (Value::Float(a), Value::Int(b)) => *a == *b as f64,
             (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Str(a), Value::Str(b)) => a == b,
             (Value::None, Value::None) => true,
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Tuple(a), Value::Tuple(b)) => a == b,
@@ -188,7 +188,7 @@ impl BaseObject {
             (Value::Float(a), Value::Float(b)) => a < b,
             (Value::Int(a), Value::Float(b)) => (*a as f64) < *b,
             (Value::Float(a), Value::Int(b)) => *a < (*b as f64),
-            (Value::String(a), Value::String(b)) => a < b,
+            (Value::Str(a), Value::Str(b)) => a < b,
             (Value::Bool(a), Value::Bool(b)) => a < b,
             _ => return None, // Unsupported comparison
         };
@@ -237,7 +237,7 @@ impl BaseObject {
             Value::Int(n) => *n as u64,
             Value::Float(n) => n.to_bits(),
             Value::Bool(b) => if *b { 1 } else { 0 },
-            Value::String(s) => {
+            Value::Str(s) => {
                 let mut hasher = DefaultHasher::new();
                 s.hash(&mut hasher);
                 hasher.finish()
@@ -272,12 +272,12 @@ impl BaseObject {
         }
         
         let attr_name = match &args[0] {
-            Value::String(s) => s,
+            Value::Str(s) => s,
             _ => return None,
         };
         
         match obj {
-            Value::Object(_, fields) => {
+            Value::Object { fields, .. } => {
                 fields.get(attr_name).cloned()
             },
             _ => None,
@@ -310,21 +310,21 @@ impl BaseObject {
         
         // Add base object methods
         for method_name in Self::get_base_methods().keys() {
-            attrs.push(Value::String(method_name.clone()));
+            attrs.push(Value::Str(method_name.clone()));
         }
         
         // Add object-specific attributes
         match obj {
-            Value::Object(_, fields) => {
+            Value::Object { fields, .. } => {
                 for field_name in fields.keys() {
-                    attrs.push(Value::String(field_name.clone()));
+                    attrs.push(Value::Str(field_name.clone()));
                 }
             },
             _ => {
                 // Add type-specific methods
                 if let Some(type_methods) = get_type_methods(obj) {
                     for method_name in type_methods.keys() {
-                        attrs.push(Value::String(method_name.clone()));
+                        attrs.push(Value::Str(method_name.clone()));
                     }
                 }
             }
@@ -332,7 +332,7 @@ impl BaseObject {
         
         attrs.sort_by(|a, b| {
             match (a, b) {
-                (Value::String(s1), Value::String(s2)) => s1.cmp(s2),
+                (Value::Str(s1), Value::Str(s2)) => s1.cmp(s2),
                 _ => std::cmp::Ordering::Equal,
             }
         });
@@ -343,10 +343,10 @@ impl BaseObject {
     /// Default class method
     fn dunder_class(obj: &Value, _args: Vec<Value>) -> Option<Value> {
         let class_name = match obj {
-            Value::Object(name, _) => name.clone(),
+            Value::Object { class_name, .. } => class_name.clone(),
             _ => obj.type_name().to_string(),
         };
-        Some(Value::String(format!("<class '{}'>", class_name)))
+        Some(Value::Str(format!("<class '{}'>", class_name)))
     }
     
     /// Default sizeof method
@@ -355,7 +355,7 @@ impl BaseObject {
             Value::Int(_) => 8,
             Value::Float(_) => 8,
             Value::Bool(_) => 1,
-            Value::String(s) => s.len(),
+            Value::Str(s) => s.len(),
             Value::List(items) => items.len() * 8, // Rough estimate
             Value::Dict(dict) => dict.len() * 16, // Rough estimate
             Value::Tuple(items) => items.len() * 8,
@@ -376,7 +376,12 @@ impl BaseObject {
         
         // For now, just return a basic object
         // Real implementation would create instances based on the class
-        Some(Value::Object("object".to_string(), HashMap::new()))
+        Some(Value::Object { 
+            class_name: "object".to_string(), 
+            fields: HashMap::new(),
+            base_object: crate::base_object::BaseObject::new("object".to_string(), vec![]),
+            mro: crate::base_object::MRO::from_linearization(vec!["object".to_string()])
+        })
     }
     
     /// Default init method (object initialization)
@@ -397,18 +402,76 @@ pub fn get_type_methods(value: &Value) -> Option<HashMap<String, DunderMethod>> 
     match value {
         Value::Int(_) => Some(get_int_methods()),
         Value::Float(_) => Some(get_float_methods()),
-        Value::String(_) => Some(get_string_methods()),
+        Value::Str(_) => Some(get_string_methods()),
         Value::List(_) => Some(get_list_methods()),
         Value::Dict(_) => Some(get_dict_methods()),
         Value::Tuple(_) => Some(get_tuple_methods()),
         Value::Set(_) => Some(get_set_methods()),
         Value::Bytes(_) => Some(get_bytes_methods()),
         Value::ByteArray(_) => Some(get_bytearray_methods()),
+        Value::Object { class_name, .. } => {
+            // For objects, we need to look up the class definition to find dunder methods
+            // This is a simplified approach - in a full implementation, we'd need VM access
+            // to look up the class definition properly
+            Some(get_basic_object_methods())
+        }
         _ => None,
     }
 }
 
-/// Integer-specific dunder methods
+/// Object-specific dunder methods (for custom classes)
+fn get_basic_object_methods() -> HashMap<String, DunderMethod> {
+    let mut methods = HashMap::new();
+    
+    // Provide basic implementations for common dunder methods
+    methods.insert("__str__".to_string(), basic_object_str as DunderMethod);
+    methods.insert("__repr__".to_string(), basic_object_repr as DunderMethod);
+    
+    // Include all base object methods (including comparison methods)
+    let base_methods = BaseObject::get_base_methods();
+    for (name, method) in base_methods {
+        methods.insert(name, method);
+    }
+    
+    methods
+}
+
+/// Basic __str__ implementation for objects
+fn basic_object_str(obj: &Value, _args: Vec<Value>) -> Option<Value> {
+    match obj {
+        Value::Object { class_name, .. } => {
+            Some(Value::Str(format!("<{} object>", class_name)))
+        }
+        _ => None,
+    }
+}
+
+/// Basic __repr__ implementation for objects
+fn basic_object_repr(obj: &Value, _args: Vec<Value>) -> Option<Value> {
+    match obj {
+        Value::Object { class_name, .. } => {
+            Some(Value::Str(format!("<{} object>", class_name)))
+        }
+        _ => None,
+    }
+}
+
+/// Wrapper function that calls object methods
+fn object_method_wrapper(obj: &Value, args: Vec<Value>) -> Option<Value> {
+    // This is a placeholder that provides basic implementations
+    // The actual method calling would need VM access to execute user-defined functions
+    
+    match obj {
+        Value::Object { class_name, fields, .. } => {
+            // For now, provide reasonable defaults for common methods
+            // In a full implementation, we would need to:
+            // 1. Look up the specific method being called
+            // 2. Execute it with proper VM context
+            Some(Value::Str(format!("<{} object>", class_name)))
+        }
+        _ => None,
+    }
+}
 fn get_int_methods() -> HashMap<String, DunderMethod> {
     let mut methods = HashMap::new();
     
@@ -692,19 +755,19 @@ fn get_bytearray_methods() -> HashMap<String, DunderMethod> {
 
 // String method implementations
 fn string_add(obj: &Value, args: Vec<Value>) -> Option<Value> {
-    if let (Value::String(a), Some(Value::String(b))) = (obj, args.get(0)) {
-        Some(Value::String(format!("{}{}", a, b)))
+    if let (Value::Str(a), Some(Value::Str(b))) = (obj, args.get(0)) {
+        Some(Value::Str(format!("{}{}", a, b)))
     } else {
         None
     }
 }
 
 fn string_mul(obj: &Value, args: Vec<Value>) -> Option<Value> {
-    if let (Value::String(s), Some(Value::Int(n))) = (obj, args.get(0)) {
+    if let (Value::Str(s), Some(Value::Int(n))) = (obj, args.get(0)) {
         if *n < 0 {
-            Some(Value::String(String::new()))
+            Some(Value::Str(String::new()))
         } else {
-            Some(Value::String(s.repeat(*n as usize)))
+            Some(Value::Str(s.repeat(*n as usize)))
         }
     } else {
         None
@@ -712,7 +775,7 @@ fn string_mul(obj: &Value, args: Vec<Value>) -> Option<Value> {
 }
 
 fn string_len(obj: &Value, _args: Vec<Value>) -> Option<Value> {
-    if let Value::String(s) = obj {
+    if let Value::Str(s) = obj {
         Some(Value::Int(s.len() as i64))
     } else {
         None
@@ -720,13 +783,13 @@ fn string_len(obj: &Value, _args: Vec<Value>) -> Option<Value> {
 }
 
 fn string_getitem(obj: &Value, args: Vec<Value>) -> Option<Value> {
-    if let (Value::String(s), Some(Value::Int(index))) = (obj, args.get(0)) {
+    if let (Value::Str(s), Some(Value::Int(index))) = (obj, args.get(0)) {
         let chars: Vec<char> = s.chars().collect();
         let len = chars.len() as i64;
         let idx = if *index < 0 { len + index } else { *index };
         
         if idx >= 0 && idx < len {
-            Some(Value::String(chars[idx as usize].to_string()))
+            Some(Value::Str(chars[idx as usize].to_string()))
         } else {
             None // Index out of bounds
         }
@@ -736,7 +799,7 @@ fn string_getitem(obj: &Value, args: Vec<Value>) -> Option<Value> {
 }
 
 fn string_contains(obj: &Value, args: Vec<Value>) -> Option<Value> {
-    if let (Value::String(s), Some(Value::String(substr))) = (obj, args.get(0)) {
+    if let (Value::Str(s), Some(Value::Str(substr))) = (obj, args.get(0)) {
         Some(Value::Bool(s.contains(substr)))
     } else {
         None
@@ -744,7 +807,7 @@ fn string_contains(obj: &Value, args: Vec<Value>) -> Option<Value> {
 }
 
 fn string_eq(obj: &Value, args: Vec<Value>) -> Option<Value> {
-    if let (Value::String(a), Some(Value::String(b))) = (obj, args.get(0)) {
+    if let (Value::Str(a), Some(Value::Str(b))) = (obj, args.get(0)) {
         Some(Value::Bool(a == b))
     } else {
         Some(Value::Bool(false))
@@ -752,7 +815,7 @@ fn string_eq(obj: &Value, args: Vec<Value>) -> Option<Value> {
 }
 
 fn string_ne(obj: &Value, args: Vec<Value>) -> Option<Value> {
-    if let (Value::String(a), Some(Value::String(b))) = (obj, args.get(0)) {
+    if let (Value::Str(a), Some(Value::Str(b))) = (obj, args.get(0)) {
         Some(Value::Bool(a != b))
     } else {
         Some(Value::Bool(true))
@@ -760,7 +823,7 @@ fn string_ne(obj: &Value, args: Vec<Value>) -> Option<Value> {
 }
 
 fn string_lt(obj: &Value, args: Vec<Value>) -> Option<Value> {
-    if let (Value::String(a), Some(Value::String(b))) = (obj, args.get(0)) {
+    if let (Value::Str(a), Some(Value::Str(b))) = (obj, args.get(0)) {
         Some(Value::Bool(a < b))
     } else {
         None
@@ -768,7 +831,7 @@ fn string_lt(obj: &Value, args: Vec<Value>) -> Option<Value> {
 }
 
 fn string_le(obj: &Value, args: Vec<Value>) -> Option<Value> {
-    if let (Value::String(a), Some(Value::String(b))) = (obj, args.get(0)) {
+    if let (Value::Str(a), Some(Value::Str(b))) = (obj, args.get(0)) {
         Some(Value::Bool(a <= b))
     } else {
         None
@@ -776,7 +839,7 @@ fn string_le(obj: &Value, args: Vec<Value>) -> Option<Value> {
 }
 
 fn string_gt(obj: &Value, args: Vec<Value>) -> Option<Value> {
-    if let (Value::String(a), Some(Value::String(b))) = (obj, args.get(0)) {
+    if let (Value::Str(a), Some(Value::Str(b))) = (obj, args.get(0)) {
         Some(Value::Bool(a > b))
     } else {
         None
@@ -784,7 +847,7 @@ fn string_gt(obj: &Value, args: Vec<Value>) -> Option<Value> {
 }
 
 fn string_ge(obj: &Value, args: Vec<Value>) -> Option<Value> {
-    if let (Value::String(a), Some(Value::String(b))) = (obj, args.get(0)) {
+    if let (Value::Str(a), Some(Value::Str(b))) = (obj, args.get(0)) {
         Some(Value::Bool(a >= b))
     } else {
         None
@@ -877,7 +940,7 @@ fn dict_getitem(obj: &Value, args: Vec<Value>) -> Option<Value> {
     if let (Value::Dict(dict), Some(key)) = (obj, args.get(0)) {
         // Convert key to string for HashMap lookup
         let key_str = match key {
-            Value::String(s) => s,
+            Value::Str(s) => s,
             _ => return None, // Only string keys are supported
         };
         dict.get(key_str).cloned()
@@ -905,7 +968,7 @@ fn dict_contains(obj: &Value, args: Vec<Value>) -> Option<Value> {
     if let (Value::Dict(dict), Some(key)) = (obj, args.get(0)) {
         // Convert key to string for HashMap lookup
         let key_str = match key {
-            Value::String(s) => s,
+            Value::Str(s) => s,
             _ => return Some(Value::Bool(false)), // Only string keys are supported
         };
         Some(Value::Bool(dict.contains_key(key_str)))
@@ -1109,7 +1172,35 @@ pub fn resolve_dunder_method(value: &Value, method_name: &str) -> Option<DunderM
     base_methods.get(method_name).copied()
 }
 
-/// Call a dunder method on a value
+/// Call a dunder method on a value with VM context for user-defined methods
+pub fn call_dunder_method_with_vm(vm: &mut crate::vm::VM, value: &Value, method_name: &str, args: Vec<Value>) -> Option<Value> {
+    // For objects, try to find user-defined dunder methods in the class definition
+    if let Value::Object { class_name, .. } = value {
+        // Look up the class definition in the VM
+        if let Some(Value::Object { fields: class_methods, .. }) = vm.get_variable(class_name) {
+            if let Some(method_value) = class_methods.get(method_name) {
+                match method_value {
+                    Value::Function(method_name, params, body, _) => {
+                        // Call the user-defined dunder method
+                        let mut method_args = vec![value.clone()];
+                        method_args.extend(args.clone());
+                        
+                        match vm.call_user_function(method_name, params, body.clone(), method_args) {
+                            Ok(result) => return Some(result),
+                            Err(_) => {} // Fall through to default implementation
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    
+    // Fall back to the original implementation for built-in types and default behavior
+    call_dunder_method(value, method_name, args)
+}
+
+/// Call a dunder method on a value (original implementation for backward compatibility)
 pub fn call_dunder_method(value: &Value, method_name: &str, args: Vec<Value>) -> Option<Value> {
     if let Some(method) = resolve_dunder_method(value, method_name) {
         method(value, args)

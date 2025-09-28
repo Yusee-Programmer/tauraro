@@ -1,154 +1,29 @@
 use crate::value::Value;
 use anyhow::Result;
-use std::collections::HashMap;
-use std::io::{self, Write};
-
-/// I/O Functions
-
-pub fn builtin_print(args: Vec<Value>) -> Result<Value> {
-    if args.is_empty() {
-        println!();
-    } else {
-        let output = args.iter()
-            .map(|v| match v {
-                Value::String(s) => s.clone(),
-                _ => v.to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        println!("{}", output);
-    }
-    Ok(Value::None)
-}
-
-pub fn builtin_input(args: Vec<Value>) -> Result<Value> {
-    // Print prompt if provided
-    if !args.is_empty() {
-        match &args[0] {
-            Value::String(prompt) => {
-                print!("{}", prompt);
-                io::stdout().flush().unwrap_or(());
-            }
-            _ => {
-                print!("{}", args[0].to_string());
-                io::stdout().flush().unwrap_or(());
-            }
-        }
-    }
-    
-    // Read input from stdin
-    let mut input = String::new();
-    match io::stdin().read_line(&mut input) {
-        Ok(_) => {
-            // Remove trailing newline
-            if input.ends_with('\n') {
-                input.pop();
-                if input.ends_with('\r') {
-                    input.pop();
-                }
-            }
-            Ok(Value::String(input))
-        }
-        Err(e) => Err(anyhow::anyhow!("Failed to read input: {}", e)),
-    }
-}
-
-/// Type Functions
-
-pub fn builtin_len(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(anyhow::anyhow!("len() takes exactly one argument"));
-    }
-    
-    match &args[0] {
-        Value::String(s) => Ok(Value::Int(s.len() as i64)),
-        Value::List(items) => Ok(Value::Int(items.len() as i64)),
-        Value::Tuple(items) => Ok(Value::Int(items.len() as i64)),
-        Value::Set(items) => Ok(Value::Int(items.len() as i64)),
-        Value::Bytes(bytes) => Ok(Value::Int(bytes.len() as i64)),
-        Value::ByteArray(bytes) => Ok(Value::Int(bytes.len() as i64)),
-        Value::Dict(dict) => Ok(Value::Int(dict.len() as i64)),
-        _ => Err(anyhow::anyhow!("object of type '{}' has no len()", type_name(&args[0]))),
-    }
-}
-
-pub fn builtin_type(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(anyhow::anyhow!("type() takes exactly one argument"));
-    }
-    Ok(Value::String(type_name(&args[0])))
-}
-
-pub fn builtin_str(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(anyhow::anyhow!("str() takes exactly one argument"));
-    }
-    
-    match &args[0] {
-        Value::String(s) => Ok(Value::String(s.clone())),
-        _ => Ok(Value::String(args[0].to_string())),
-    }
-}
-
-pub fn builtin_int(args: Vec<Value>) -> Result<Value> {
-    if args.is_empty() || args.len() > 2 {
-        return Err(anyhow::anyhow!("int() takes 1 or 2 arguments"));
-    }
-    
-    match &args[0] {
-        Value::Int(n) => Ok(Value::Int(*n)),
-        Value::Float(f) => Ok(Value::Int(*f as i64)),
-        Value::Bool(b) => Ok(Value::Int(if *b { 1 } else { 0 })),
-        Value::String(s) => {
-            let base = if args.len() == 2 {
-                match &args[1] {
-                    Value::Int(b) => *b as u32,
-                    _ => return Err(anyhow::anyhow!("int() base must be an integer")),
-                }
-            } else {
-                10
-            };
-            
-            match i64::from_str_radix(s.trim(), base) {
-                Ok(n) => Ok(Value::Int(n)),
-                Err(_) => Err(anyhow::anyhow!("invalid literal for int() with base {}: '{}'", base, s)),
-            }
-        }
-        Value::Bytes(bytes) => {
-            let s = String::from_utf8_lossy(bytes);
-            match i64::from_str_radix(s.trim(), 10) {
-                Ok(n) => Ok(Value::Int(n)),
-                Err(_) => Err(anyhow::anyhow!("invalid literal for int(): '{}'", s)),
-            }
-        }
-        Value::ByteArray(bytes) => {
-            let s = String::from_utf8_lossy(bytes);
-            match i64::from_str_radix(s.trim(), 10) {
-                Ok(n) => Ok(Value::Int(n)),
-                Err(_) => Err(anyhow::anyhow!("invalid literal for int(): '{}'", s)),
-            }
-        }
-        _ => Err(anyhow::anyhow!("int() argument must be a string, a bytes-like object or a number")),
-    }
-}
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
 
 pub fn builtin_float(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(anyhow::anyhow!("float() takes exactly one argument"));
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("float() takes at most 1 argument"));
+    }
+    
+    if args.is_empty() {
+        return Ok(Value::Float(0.0));
     }
     
     match &args[0] {
-        Value::Float(f) => Ok(Value::Float(*f)),
-        Value::Int(i) => Ok(Value::Float(*i as f64)),
-        Value::Bool(b) => Ok(Value::Float(if *b { 1.0 } else { 0.0 })),
-        Value::String(s) => {
-            match s.trim().parse::<f64>() {
-                Ok(f) => Ok(Value::Float(f)),
-                Err(_) => Err(anyhow::anyhow!("could not convert string to float: '{}'", s)),
+        Value::Int(n) => Ok(Value::Float(*n as f64)),
+        Value::Float(n) => Ok(Value::Float(*n)),
+        Value::Str(s) => {
+            if let Ok(n) = s.parse::<f64>() {
+                Ok(Value::Float(n))
+            } else {
+                Err(anyhow::anyhow!("could not convert string to float: '{}'", s))
             }
         }
-        #[cfg(feature = "ffi")]
-        Value::ExternFunction { .. } => Err(anyhow::anyhow!("float() argument must be a string or a number")),
+        Value::Bool(b) => Ok(Value::Float(if *b { 1.0 } else { 0.0 })),
         _ => Err(anyhow::anyhow!("float() argument must be a string or a number")),
     }
 }
@@ -163,6 +38,126 @@ pub fn builtin_bool(args: Vec<Value>) -> Result<Value> {
     }
     
     Ok(Value::Bool(is_truthy(&args[0])))
+}
+
+pub fn builtin_list(args: Vec<Value>) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("list() takes at most 1 argument"));
+    }
+    
+    if args.is_empty() {
+        return Ok(Value::List(vec![]));
+    }
+    
+    match &args[0] {
+        Value::List(items) => Ok(Value::List(items.clone())),
+        Value::Tuple(items) => Ok(Value::List(items.clone())),
+        Value::Set(items) => Ok(Value::List(items.iter().cloned().collect())),
+        Value::Str(s) => Ok(Value::List(s.chars().map(|c| Value::Str(c.to_string())).collect())),
+        Value::Dict(map) => Ok(Value::List(map.keys().map(|k| Value::Str(k.clone())).collect())),
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name())),
+    }
+}
+
+pub fn builtin_tuple(args: Vec<Value>) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("tuple() takes at most 1 argument"));
+    }
+    
+    if args.is_empty() {
+        return Ok(Value::Tuple(vec![]));
+    }
+    
+    match &args[0] {
+        Value::Tuple(items) => Ok(Value::Tuple(items.clone())),
+        Value::List(items) => Ok(Value::Tuple(items.clone())),
+        Value::Set(items) => Ok(Value::Tuple(items.iter().cloned().collect())),
+        Value::Str(s) => Ok(Value::Tuple(s.chars().map(|c| Value::Str(c.to_string())).collect())),
+        Value::Dict(map) => Ok(Value::Tuple(map.keys().map(|k| Value::Str(k.clone())).collect())),
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name())),
+    }
+}
+
+pub fn builtin_set(args: Vec<Value>) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("set() takes at most 1 argument"));
+    }
+    
+    if args.is_empty() {
+        return Ok(Value::Set(Vec::new()));
+    }
+    
+    match &args[0] {
+        Value::Set(items) => Ok(Value::Set(items.clone())),
+        Value::List(items) => {
+            let mut unique_items = Vec::new();
+            for item in items {
+                if !unique_items.contains(item) {
+                    unique_items.push(item.clone());
+                }
+            }
+            Ok(Value::Set(unique_items))
+        }
+        Value::Tuple(items) => {
+            let mut unique_items = Vec::new();
+            for item in items {
+                if !unique_items.contains(item) {
+                    unique_items.push(item.clone());
+                }
+            }
+            Ok(Value::Set(unique_items))
+        }
+        Value::Str(s) => {
+            let mut unique_items = Vec::new();
+            for c in s.chars() {
+                let char_value = Value::Str(c.to_string());
+                if !unique_items.contains(&char_value) {
+                    unique_items.push(char_value);
+                }
+            }
+            Ok(Value::Set(unique_items))
+        }
+        Value::Dict(map) => {
+            let mut unique_items = Vec::new();
+            for key in map.keys() {
+                let key_value = Value::Str(key.clone());
+                if !unique_items.contains(&key_value) {
+                    unique_items.push(key_value);
+                }
+            }
+            Ok(Value::Set(unique_items))
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name())),
+    }
+}
+
+pub fn builtin_dict(args: Vec<Value>) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("dict() takes at most 1 argument"));
+    }
+    
+    if args.is_empty() {
+        return Ok(Value::Dict(std::collections::HashMap::new()));
+    }
+    
+    match &args[0] {
+        Value::Dict(map) => Ok(Value::Dict(map.clone())),
+        Value::List(items) => {
+            let mut dict = std::collections::HashMap::new();
+            for (i, item) in items.iter().enumerate() {
+                dict.insert(i.to_string(), item.clone());
+            }
+            Ok(Value::Dict(dict))
+        }
+        Value::Tuple(items) => {
+            let mut dict = std::collections::HashMap::new();
+            for (i, item) in items.iter().enumerate() {
+                dict.insert(i.to_string(), item.clone());
+            }
+            Ok(Value::Dict(dict))
+        }
+        _ => Err(anyhow::anyhow!("dict() argument must be a mapping or iterable")),
+    }
 }
 
 pub fn builtin_range(args: Vec<Value>) -> Result<Value> {
@@ -217,97 +212,11 @@ pub fn builtin_isinstance(args: Vec<Value>) -> Result<Value> {
     
     let obj_type = type_name(&args[0]);
     let expected_type = match &args[1] {
-        Value::String(type_str) => type_str.clone(),
+        Value::Str(type_str) => type_str.clone(),
         _ => return Err(anyhow::anyhow!("isinstance() second argument must be a type name")),
     };
     
     Ok(Value::Bool(obj_type == expected_type))
-}
-
-/// Collection Constructors
-
-pub fn builtin_list(args: Vec<Value>) -> Result<Value> {
-    match args.len() {
-        0 => Ok(Value::List(Vec::new())),
-        1 => {
-            match &args[0] {
-                Value::List(items) => Ok(Value::List(items.clone())),
-                Value::String(s) => {
-                    let chars: Vec<Value> = s.chars()
-                        .map(|c| Value::String(c.to_string()))
-                        .collect();
-                    Ok(Value::List(chars))
-                }
-                _ => Ok(Value::List(vec![args[0].clone()])),
-            }
-        }
-        _ => Ok(Value::List(args)),
-    }
-}
-
-pub fn builtin_dict(args: Vec<Value>) -> Result<Value> {
-    match args.len() {
-        0 => Ok(Value::Dict(HashMap::new())),
-        1 => {
-            match &args[0] {
-                Value::Dict(dict) => Ok(Value::Dict(dict.clone())),
-                Value::List(items) => {
-                    let mut dict = HashMap::new();
-                    for (i, item) in items.iter().enumerate() {
-                        dict.insert(i.to_string(), item.clone());
-                    }
-                    Ok(Value::Dict(dict))
-                }
-                _ => Err(anyhow::anyhow!("dict() argument must be a dictionary or list")),
-            }
-        }
-        _ => Err(anyhow::anyhow!("dict() takes at most 1 argument")),
-    }
-}
-
-pub fn builtin_tuple(args: Vec<Value>) -> Result<Value> {
-    // Since we don't have a separate Tuple type, return a list
-    match args.len() {
-        0 => Ok(Value::List(Vec::new())),
-        1 => {
-            match &args[0] {
-                Value::List(items) => Ok(Value::List(items.clone())),
-                Value::String(s) => {
-                    let chars: Vec<Value> = s.chars()
-                        .map(|c| Value::String(c.to_string()))
-                        .collect();
-                    Ok(Value::List(chars))
-                }
-                _ => Ok(Value::List(vec![args[0].clone()])),
-            }
-        }
-        _ => Ok(Value::List(args)),
-    }
-}
-
-pub fn builtin_set(args: Vec<Value>) -> Result<Value> {
-    match args.len() {
-        0 => Ok(Value::Set(Vec::new())), // Empty set
-        1 => {
-            let items = match &args[0] {
-                Value::List(items) => items.clone(),
-                Value::String(s) => {
-                    s.chars().map(|c| Value::String(c.to_string())).collect()
-                }
-                _ => vec![args[0].clone()],
-            };
-            
-            // Remove duplicates (simple implementation)
-            let mut unique_items = Vec::new();
-            for item in items {
-                if !unique_items.iter().any(|x| values_equal(x, &item)) {
-                    unique_items.push(item);
-                }
-            }
-            Ok(Value::Set(unique_items))
-        }
-        _ => Err(anyhow::anyhow!("set() takes at most 1 argument")),
-    }
 }
 
 /// Object Introspection Functions
@@ -325,7 +234,7 @@ pub fn builtin_dir(args: Vec<Value>) -> Result<Value> {
                 "globals", "locals"
             ];
             let builtin_values: Vec<Value> = builtins.into_iter()
-                .map(|name| Value::String(name.to_string()))
+                .map(|name| Value::Str(name.to_string()))
                 .collect();
             Ok(Value::List(builtin_values))
         }
@@ -336,15 +245,15 @@ pub fn builtin_dir(args: Vec<Value>) -> Result<Value> {
                     let mut keys: Vec<String> = dict.keys().cloned().collect();
                     keys.sort();
                     let key_values: Vec<Value> = keys.into_iter()
-                        .map(|k| Value::String(k))
+                        .map(|k| Value::Str(k))
                         .collect();
                     Ok(Value::List(key_values))
                 }
-                Value::Object(_, fields) => {
+                Value::Object { fields, .. } => {
                     let mut keys: Vec<String> = fields.keys().cloned().collect();
                     keys.sort();
                     let key_values: Vec<Value> = keys.into_iter()
-                        .map(|k| Value::String(k))
+                        .map(|k| Value::Str(k))
                         .collect();
                     Ok(Value::List(key_values))
                 }
@@ -352,7 +261,7 @@ pub fn builtin_dir(args: Vec<Value>) -> Result<Value> {
                     let mut keys: Vec<String> = namespace.keys().cloned().collect();
                     keys.sort();
                     let key_values: Vec<Value> = keys.into_iter()
-                        .map(|k| Value::String(k))
+                        .map(|k| Value::Str(k))
                         .collect();
                     Ok(Value::List(key_values))
                 }
@@ -383,10 +292,10 @@ pub fn builtin_dir(args: Vec<Value>) -> Result<Value> {
                         _ => vec![],
                     };
                     let mut attr_values: Vec<Value> = attrs.into_iter()
-                        .map(|attr| Value::String(attr.to_string()))
+                        .map(|attr| Value::Str(attr.to_string()))
                         .collect();
                     attr_values.sort_by(|a, b| {
-                        if let (Value::String(s1), Value::String(s2)) = (a, b) {
+                        if let (Value::Str(s1), Value::Str(s2)) = (a, b) {
                             s1.cmp(s2)
                         } else {
                             std::cmp::Ordering::Equal
@@ -406,13 +315,13 @@ pub fn builtin_hasattr(args: Vec<Value>) -> Result<Value> {
     }
     
     let attr_name = match &args[1] {
-        Value::String(name) => name,
+        Value::Str(name) => name,
         _ => return Err(anyhow::anyhow!("hasattr() attribute name must be a string")),
     };
     
     let has_attr = match &args[0] {
         Value::Dict(dict) => dict.contains_key(attr_name),
-        Value::Object(_, fields) => fields.contains_key(attr_name),
+        Value::Object { fields, .. } => fields.contains_key(attr_name),
         _ => false, // Basic types don't have dynamic attributes in this implementation
     };
     
@@ -425,13 +334,13 @@ pub fn builtin_getattr(args: Vec<Value>) -> Result<Value> {
     }
     
     let attr_name = match &args[1] {
-        Value::String(name) => name,
+        Value::Str(name) => name,
         _ => return Err(anyhow::anyhow!("getattr() attribute name must be a string")),
     };
     
     let result = match &args[0] {
         Value::Dict(dict) => dict.get(attr_name).cloned(),
-        Value::Object(_, fields) => fields.get(attr_name).cloned(),
+        Value::Object { fields, .. } => fields.get(attr_name).cloned(),
         _ => None,
     };
     
@@ -474,7 +383,7 @@ pub fn builtin_min(args: Vec<Value>) -> Result<Value> {
             (Value::Float(a), Value::Float(b)) => if b < a { min_val = arg; },
             (Value::Int(a), Value::Float(b)) => if b < &(*a as f64) { min_val = arg; },
             (Value::Float(a), Value::Int(b)) => if (*b as f64) < *a { min_val = arg; },
-            (Value::String(a), Value::String(b)) => if b < a { min_val = arg; },
+            (Value::Str(a), Value::Str(b)) => if b < a { min_val = arg; },
             _ => return Err(anyhow::anyhow!("'<' not supported between instances of '{}' and '{}'", type_name(arg), type_name(min_val))),
         }
     }
@@ -495,7 +404,7 @@ pub fn builtin_max(args: Vec<Value>) -> Result<Value> {
             (Value::Float(a), Value::Float(b)) => if b > a { max_val = arg; },
             (Value::Int(a), Value::Float(b)) => if b > &(*a as f64) { max_val = arg; },
             (Value::Float(a), Value::Int(b)) => if (*b as f64) > *a { max_val = arg; },
-            (Value::String(a), Value::String(b)) => if b > a { max_val = arg; },
+            (Value::Str(a), Value::Str(b)) => if b > a { max_val = arg; },
             _ => return Err(anyhow::anyhow!("'>' not supported between instances of '{}' and '{}'", type_name(arg), type_name(max_val))),
         }
     }
@@ -661,9 +570,9 @@ pub fn builtin_enumerate(args: Vec<Value>) -> Result<Value> {
     
     let items = match &args[0] {
         Value::List(items) => items,
-        Value::String(s) => {
+        Value::Str(s) => {
             let chars: Vec<Value> = s.chars()
-                .map(|c| Value::String(c.to_string()))
+                .map(|c| Value::Str(c.to_string()))
                 .collect();
             return Ok(Value::List(
                 chars.into_iter()
@@ -693,9 +602,9 @@ pub fn builtin_zip(args: Vec<Value>) -> Result<Value> {
     for arg in &args {
         match arg {
             Value::List(items) => iterables.push(items.clone()),
-            Value::String(s) => {
+            Value::Str(s) => {
                 let chars: Vec<Value> = s.chars()
-                    .map(|c| Value::String(c.to_string()))
+                    .map(|c| Value::Str(c.to_string()))
                     .collect();
                 iterables.push(chars);
             }
@@ -728,9 +637,9 @@ pub fn builtin_map(args: Vec<Value>) -> Result<Value> {
     
     let items = match iterable {
         Value::List(items) => items,
-        Value::String(s) => {
+        Value::Str(s) => {
             let chars: Vec<Value> = s.chars()
-                .map(|c| Value::String(c.to_string()))
+                .map(|c| Value::Str(c.to_string()))
                 .collect();
             return apply_function_to_items(function, &chars);
         }
@@ -750,9 +659,9 @@ pub fn builtin_filter(args: Vec<Value>) -> Result<Value> {
     
     let items = match iterable {
         Value::List(items) => items,
-        Value::String(s) => {
+        Value::Str(s) => {
             let chars: Vec<Value> = s.chars()
-                .map(|c| Value::String(c.to_string()))
+                .map(|c| Value::Str(c.to_string()))
                 .collect();
             return filter_items(predicate, &chars);
         }
@@ -769,8 +678,8 @@ pub fn builtin_sorted(args: Vec<Value>) -> Result<Value> {
     
     let mut items = match &args[0] {
         Value::List(items) => items.clone(),
-        Value::String(s) => {
-            s.chars().map(|c| Value::String(c.to_string())).collect()
+        Value::Str(s) => {
+            s.chars().map(|c| Value::Str(c.to_string())).collect()
         }
         _ => return Err(anyhow::anyhow!("sorted() argument must be iterable")),
     };
@@ -780,7 +689,7 @@ pub fn builtin_sorted(args: Vec<Value>) -> Result<Value> {
         match (a, b) {
             (Value::Int(x), Value::Int(y)) => x.cmp(y),
             (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
-            (Value::String(x), Value::String(y)) => x.cmp(y),
+            (Value::Str(x), Value::Str(y)) => x.cmp(y),
             (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
             _ => std::cmp::Ordering::Equal,
         }
@@ -800,9 +709,9 @@ pub fn builtin_reversed(args: Vec<Value>) -> Result<Value> {
             reversed_items.reverse();
             Ok(Value::List(reversed_items))
         }
-        Value::String(s) => {
+        Value::Str(s) => {
             let reversed: String = s.chars().rev().collect();
-            Ok(Value::String(reversed))
+            Ok(Value::Str(reversed))
         }
         _ => Err(anyhow::anyhow!("reversed() argument must be a sequence")),
     }
@@ -844,7 +753,7 @@ pub fn builtin_hash(args: Vec<Value>) -> Result<Value> {
             b.hash(&mut hasher);
             hasher.finish() as i64
         }
-        Value::String(s) => {
+        Value::Str(s) => {
             let mut hasher = DefaultHasher::new();
             s.hash(&mut hasher);
             hasher.finish() as i64
@@ -860,8 +769,16 @@ pub fn builtin_repr(args: Vec<Value>) -> Result<Value> {
         return Err(anyhow::anyhow!("repr() takes exactly one argument"));
     }
     
+    // Try calling __repr__ dunder method first
+    if let Some(result) = crate::object_system::call_dunder_method(&args[0], "__repr__", vec![]) {
+        if let Value::Str(s) = result {
+            return Ok(Value::Str(s));
+        }
+    }
+    
+    // Fallback to original implementation
     let repr_str = match &args[0] {
-        Value::String(s) => format!("'{}'", s),
+        Value::Str(s) => format!("'{}'", s),
         Value::Int(n) => n.to_string(),
         Value::Float(f) => f.to_string(),
         Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
@@ -869,7 +786,7 @@ pub fn builtin_repr(args: Vec<Value>) -> Result<Value> {
         Value::List(items) => {
             let item_reprs: Vec<String> = items.iter()
                 .map(|item| match builtin_repr(vec![item.clone()]) {
-                    Ok(Value::String(s)) => s,
+                    Ok(Value::Str(s)) => s,
                     _ => "...".to_string(),
                 })
                 .collect();
@@ -878,7 +795,7 @@ pub fn builtin_repr(args: Vec<Value>) -> Result<Value> {
         Value::Tuple(items) => {
             let item_reprs: Vec<String> = items.iter()
                 .map(|item| match builtin_repr(vec![item.clone()]) {
-                    Ok(Value::String(s)) => s,
+                    Ok(Value::Str(s)) => s,
                     _ => "...".to_string(),
                 })
                 .collect();
@@ -887,7 +804,7 @@ pub fn builtin_repr(args: Vec<Value>) -> Result<Value> {
         Value::Set(items) => {
             let item_reprs: Vec<String> = items.iter()
                 .map(|item| match builtin_repr(vec![item.clone()]) {
-                    Ok(Value::String(s)) => s,
+                    Ok(Value::Str(s)) => s,
                     _ => "...".to_string(),
                 })
                 .collect();
@@ -902,27 +819,27 @@ pub fn builtin_repr(args: Vec<Value>) -> Result<Value> {
         Value::Dict(dict) => {
             let mut pairs = Vec::new();
             for (k, v) in dict.iter() {
-                let key_repr = builtin_repr(vec![Value::String(k.clone())]).unwrap_or(Value::String("...".to_string()));
-                let val_repr = builtin_repr(vec![v.clone()]).unwrap_or(Value::String("...".to_string()));
-                if let (Value::String(kr), Value::String(vr)) = (key_repr, val_repr) {
+                let key_repr = builtin_repr(vec![Value::Str(k.clone())]).unwrap_or(Value::Str("...".to_string()));
+                let val_repr = builtin_repr(vec![v.clone()]).unwrap_or(Value::Str("...".to_string()));
+                if let (Value::Str(kr), Value::Str(vr)) = (key_repr, val_repr) {
                     pairs.push(format!("{}: {}", kr, vr));
                 }
             }
             format!("{{{}}}", pairs.join(", "))
         }
-        Value::Function(name, params, _) => {
+        Value::Function(name, params, _, _) => {
             format!("<function {}({})>", name, params.join(", "))
         }
         Value::BuiltinFunction(name, _) => {
             format!("<built-in function {}>", name)
         }
         Value::NativeFunction(_) => "<native function>".to_string(),
-        Value::Object(name, fields) => {
-            format!("<{} object with {} fields>", name, fields.len())
+        Value::Object { class_name, fields, .. } => {
+            format!("<{} object with {} fields>", class_name, fields.len())
         }
         Value::TypedValue { value, type_info } => {
-            let inner_repr = builtin_repr(vec![value.as_ref().clone()]).unwrap_or(Value::String("...".to_string()));
-            if let Value::String(ir) = inner_repr {
+            let inner_repr = builtin_repr(vec![value.as_ref().clone()]).unwrap_or(Value::Str("...".to_string()));
+            if let Value::Str(ir) = inner_repr {
                 format!("{}: {}", ir, type_info)
             } else {
                 format!("<complex value>: {}", type_info)
@@ -931,13 +848,19 @@ pub fn builtin_repr(args: Vec<Value>) -> Result<Value> {
         Value::Module(name, namespace) => {
             format!("<module '{}' with {} items>", name, namespace.len())
         }
+        Value::TypedFunction { name, params, .. } => {
+            format!("<typed function '{}' with {} parameters>", name, params.len())
+        }
         #[cfg(feature = "ffi")]
         Value::ExternFunction { name, signature, .. } => {
             format!("<extern function '{}' with signature '{}'>", name, signature)
         }
+        Value::Super(current_class, parent_class) => {
+            format!("<super: {} -> {}>", current_class, parent_class)
+        }
     };
     
-    Ok(Value::String(repr_str))
+    Ok(Value::Str(repr_str))
 }
 
 pub fn builtin_ord(args: Vec<Value>) -> Result<Value> {
@@ -946,7 +869,7 @@ pub fn builtin_ord(args: Vec<Value>) -> Result<Value> {
     }
     
     match &args[0] {
-        Value::String(s) => {
+        Value::Str(s) => {
             if s.len() != 1 {
                 return Err(anyhow::anyhow!("ord() expected a character, but string of length {} found", s.len()));
             }
@@ -968,7 +891,7 @@ pub fn builtin_chr(args: Vec<Value>) -> Result<Value> {
                 return Err(anyhow::anyhow!("chr() arg not in range(0x110000)"));
             }
             match char::from_u32(*n as u32) {
-                Some(ch) => Ok(Value::String(ch.to_string())),
+                Some(ch) => Ok(Value::Str(ch.to_string())),
                 None => Err(anyhow::anyhow!("chr() arg not in range(0x110000)")),
             }
         }
@@ -976,27 +899,9 @@ pub fn builtin_chr(args: Vec<Value>) -> Result<Value> {
     }
 }
 
-pub fn builtin_bin(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(anyhow::anyhow!("bin() takes exactly one argument"));
-    }
-    
-    match &args[0] {
-        Value::Int(n) => Ok(Value::String(format!("0b{:b}", n))),
-        _ => Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", type_name(&args[0]))),
-    }
-}
 
-pub fn builtin_oct(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(anyhow::anyhow!("oct() takes exactly one argument"));
-    }
-    
-    match &args[0] {
-        Value::Int(n) => Ok(Value::String(format!("0o{:o}", n))),
-        _ => Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", type_name(&args[0]))),
-    }
-}
+
+
 
 pub fn builtin_hex(args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
@@ -1004,7 +909,7 @@ pub fn builtin_hex(args: Vec<Value>) -> Result<Value> {
     }
     
     match &args[0] {
-        Value::Int(n) => Ok(Value::String(format!("0x{:x}", n))),
+        Value::Int(n) => Ok(Value::Str(format!("0x{:x}", n))),
         _ => Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", type_name(&args[0]))),
     }
 }
@@ -1016,7 +921,7 @@ pub fn builtin_format(args: Vec<Value>) -> Result<Value> {
     
     // Simple format implementation - just converts to string
     // Real Python format() is much more complex with format specs
-    Ok(Value::String(args[0].to_string()))
+    Ok(Value::Str(args[0].to_string()))
 }
 
 pub fn builtin_globals(args: Vec<Value>) -> Result<Value> {
@@ -1046,16 +951,16 @@ pub fn builtin_str_join(args: Vec<Value>) -> Result<Value> {
     }
     
     match (&args[0], &args[1]) {
-        (Value::String(separator), Value::List(items)) => {
+        (Value::Str(separator), Value::List(items)) => {
             let string_items: Result<Vec<String>, _> = items.iter()
                 .map(|item| match item {
-                    Value::String(s) => Ok(s.clone()),
+                    Value::Str(s) => Ok(s.clone()),
                     _ => Ok(item.to_string()),
                 })
                 .collect();
             
             match string_items {
-                Ok(strings) => Ok(Value::String(strings.join(separator))),
+                Ok(strings) => Ok(Value::Str(strings.join(separator))),
                 Err(e) => Err(e),
             }
         }
@@ -1069,10 +974,10 @@ pub fn builtin_str_split(args: Vec<Value>) -> Result<Value> {
     }
     
     match &args[0] {
-        Value::String(s) => {
+        Value::Str(s) => {
             let separator = if args.len() == 2 {
                 match &args[1] {
-                    Value::String(sep) => sep.as_str(),
+                    Value::Str(sep) => sep.as_str(),
                     _ => return Err(anyhow::anyhow!("separator must be a string")),
                 }
             } else {
@@ -1080,7 +985,7 @@ pub fn builtin_str_split(args: Vec<Value>) -> Result<Value> {
             };
             
             let parts: Vec<Value> = s.split(separator)
-                .map(|part| Value::String(part.to_string()))
+                .map(|part| Value::Str(part.to_string()))
                 .collect();
             Ok(Value::List(parts))
         }
@@ -1094,7 +999,7 @@ pub fn builtin_str_strip(args: Vec<Value>) -> Result<Value> {
     }
     
     match &args[0] {
-        Value::String(s) => Ok(Value::String(s.trim().to_string())),
+        Value::Str(s) => Ok(Value::Str(s.trim().to_string())),
         _ => Err(anyhow::anyhow!("strip() can only be called on strings")),
     }
 }
@@ -1105,7 +1010,7 @@ pub fn builtin_str_upper(args: Vec<Value>) -> Result<Value> {
     }
     
     match &args[0] {
-        Value::String(s) => Ok(Value::String(s.to_uppercase())),
+        Value::Str(s) => Ok(Value::Str(s.to_uppercase())),
         _ => Err(anyhow::anyhow!("upper() can only be called on strings")),
     }
 }
@@ -1116,7 +1021,7 @@ pub fn builtin_str_lower(args: Vec<Value>) -> Result<Value> {
     }
     
     match &args[0] {
-        Value::String(s) => Ok(Value::String(s.to_lowercase())),
+        Value::Str(s) => Ok(Value::Str(s.to_lowercase())),
         _ => Err(anyhow::anyhow!("lower() can only be called on strings")),
     }
 }
@@ -1195,7 +1100,7 @@ pub fn builtin_dict_keys(args: Vec<Value>) -> Result<Value> {
     match &args[0] {
         Value::Dict(dict) => {
             let keys: Vec<Value> = dict.keys()
-                .map(|k| Value::String(k.clone()))
+                .map(|k| Value::Str(k.clone()))
                 .collect();
             Ok(Value::List(keys))
         }
@@ -1225,7 +1130,7 @@ pub fn builtin_dict_items(args: Vec<Value>) -> Result<Value> {
     match &args[0] {
         Value::Dict(dict) => {
             let items: Vec<Value> = dict.iter()
-                .map(|(k, v)| Value::Tuple(vec![Value::String(k.clone()), v.clone()]))
+                .map(|(k, v)| Value::Tuple(vec![Value::Str(k.clone()), v.clone()]))
                 .collect();
             Ok(Value::List(items))
         }
@@ -1241,7 +1146,7 @@ pub fn builtin_dict_get(args: Vec<Value>) -> Result<Value> {
     match &args[0] {
         Value::Dict(dict) => {
             let key = match &args[1] {
-                Value::String(s) => s,
+                Value::Str(s) => s,
                 _ => return Err(anyhow::anyhow!("dictionary key must be a string")),
             };
             
@@ -1372,7 +1277,7 @@ pub fn builtin_bytes_decode(args: Vec<Value>) -> Result<Value> {
     match &args[0] {
         Value::Bytes(bytes) => {
             match String::from_utf8(bytes.clone()) {
-                Ok(s) => Ok(Value::String(s)),
+                Ok(s) => Ok(Value::Str(s)),
                 Err(_) => Err(anyhow::anyhow!("invalid UTF-8 sequence")),
             }
         }
@@ -1405,7 +1310,7 @@ fn type_name(value: &Value) -> String {
         Value::Int(_) => "int".to_string(),
         Value::Float(_) => "float".to_string(),
         Value::Bool(_) => "bool".to_string(),
-        Value::String(_) => "str".to_string(),
+        Value::Str(_) => "str".to_string(),
         Value::List(_) => "list".to_string(),
         Value::Dict(_) => "dict".to_string(),
         Value::Tuple(_) => "tuple".to_string(),
@@ -1413,14 +1318,16 @@ fn type_name(value: &Value) -> String {
         Value::Bytes(_) => "bytes".to_string(),
         Value::ByteArray(_) => "bytearray".to_string(),
         Value::None => "NoneType".to_string(),
-        Value::Function(_, _, _) => "function".to_string(),
+        Value::Function(_, _, _, _) => "function".to_string(),
+        Value::TypedFunction { .. } => "typed_function".to_string(),
         Value::BuiltinFunction(_, _) => "builtin_function_or_method".to_string(),
         Value::NativeFunction(_) => "native_function".to_string(),
-        Value::Object(name, _) => name.clone(),
+        Value::Object { class_name, .. } => class_name.clone(),
         Value::TypedValue { type_info, .. } => format!("{}", type_info),
         Value::Module(_, _) => "module".to_string(),
         #[cfg(feature = "ffi")]
         Value::ExternFunction { .. } => "extern_function".to_string(),
+        Value::Super(_, _) => "super".to_string(),
     }
 }
 
@@ -1429,7 +1336,7 @@ fn is_truthy(value: &Value) -> bool {
         Value::Bool(b) => *b,
         Value::Int(n) => *n != 0,
         Value::Float(f) => *f != 0.0,
-        Value::String(s) => !s.is_empty(),
+        Value::Str(s) => !s.is_empty(),
         Value::List(items) => !items.is_empty(),
         Value::Dict(dict) => !dict.is_empty(),
         Value::Tuple(items) => !items.is_empty(),
@@ -1446,7 +1353,7 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Int(a), Value::Int(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
         (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::String(a), Value::String(b)) => a == b,
+        (Value::Str(a), Value::Str(b)) => a == b,
         (Value::List(a), Value::List(b)) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y)),
         (Value::Tuple(a), Value::Tuple(b)) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y)),
         (Value::Set(a), Value::Set(b)) => a.len() == b.len() && a.iter().all(|x| b.iter().any(|y| values_equal(x, y))),
@@ -1464,7 +1371,7 @@ fn apply_function_to_items(function: &Value, items: &[Value]) -> Result<Value> {
             match name.as_str() {
                 "str" => {
                     let results: Vec<Value> = items.iter()
-                        .map(|item| Value::String(item.to_string()))
+                        .map(|item| Value::Str(item.to_string()))
                         .collect();
                     Ok(Value::List(results))
                 }
@@ -1511,7 +1418,7 @@ pub fn builtin_load_library(args: Vec<Value>) -> Result<Value> {
     }
     
     let library_name = match &args[0] {
-        Value::String(name) => name,
+        Value::Str(name) => name,
         _ => return Err(anyhow::anyhow!("load_library() argument must be a string")),
     };
     
@@ -1524,6 +1431,583 @@ pub fn builtin_load_library(args: Vec<Value>) -> Result<Value> {
     // For now, we'll assume the library is loaded successfully
     
     Ok(Value::None)
+}
+
+
+
+
+
+
+
+
+
+
+
+/// String Functions
+
+pub fn builtin_oct(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("oct() takes exactly one argument"));
+    }
+    
+    match &args[0] {
+        Value::Int(n) => Ok(Value::Str(format!("0o{:o}", n))),
+        _ => Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", type_name(&args[0]))),
+    }
+}
+
+
+
+
+
+/// Helper functions for arithmetic operations
+
+pub fn builtin_open(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(anyhow::anyhow!("open() takes 1 to 3 arguments"));
+    }
+    
+    let filename = match &args[0] {
+        Value::Str(name) => name,
+        _ => return Err(anyhow::anyhow!("open() filename must be a string")),
+    };
+    
+    let mode = if args.len() > 1 {
+        match &args[1] {
+            Value::Str(m) => m.as_str(),
+            _ => return Err(anyhow::anyhow!("open() mode must be a string")),
+        }
+    } else {
+        "r"
+    };
+    
+    // Simplified implementation - would need proper file object
+    match mode {
+        "r" => {
+            match std::fs::read_to_string(filename) {
+                Ok(content) => Ok(Value::Str(content)),
+                Err(e) => Err(anyhow::anyhow!("Could not open file '{}': {}", filename, e)),
+            }
+        }
+        "w" => {
+            // Return a placeholder file object
+            Ok(Value::Str(format!("File object for '{}'", filename)))
+        }
+        _ => Err(anyhow::anyhow!("Unsupported file mode: {}", mode)),
+    }
+}
+
+pub fn builtin_bin(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("bin() takes exactly one argument"));
+    }
+    
+    match &args[0] {
+        Value::Int(n) => Ok(Value::Str(format!("0b{:b}", n))),
+        _ => Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", type_name(&args[0]))),
+    }
+}
+
+pub fn builtin_ascii(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("ascii() takes exactly one argument"));
+    }
+    
+    let repr_str = match &args[0] {
+        Value::Str(s) => {
+            let mut result = String::from("'");
+            for ch in s.chars() {
+                if ch.is_ascii() && ch.is_ascii_graphic() && ch != '\'' && ch != '\\' {
+                    result.push(ch);
+                } else {
+                    match ch {
+                        '\n' => result.push_str("\\n"),
+                        '\t' => result.push_str("\\t"),
+                        '\r' => result.push_str("\\r"),
+                        '\\' => result.push_str("\\\\"),
+                        '\'' => result.push_str("\\'"),
+                        _ => result.push_str(&format!("\\u{{{:04x}}}", ch as u32)),
+                    }
+                }
+            }
+            result.push('\'');
+            result
+        }
+        _ => format!("{:?}", args[0]),
+    };
+    
+    Ok(Value::Str(repr_str))
+}
+
+pub fn builtin_setattr(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow::anyhow!("setattr expected exactly 3 arguments, got {}", args.len()));
+    }
+    
+    let attr_name = match &args[1] {
+        Value::Str(name) => name,
+        _ => return Err(anyhow::anyhow!("setattr expected str object, not '{}'", type_name(&args[1]))),
+    };
+    
+    // Note: This is a simplified implementation. In a real implementation,
+    // we would need mutable access to the object, which requires VM context.
+    match &args[0] {
+        Value::Object { .. } => {
+            // Would need to modify the object's fields
+            println!("setattr: Setting {}.{} = {:?}", type_name(&args[0]), attr_name, args[2]);
+            Ok(Value::None)
+        }
+        Value::Dict(_) => {
+            // For dictionaries, we can simulate setting an attribute by treating it as a key
+            println!("setattr: Setting dict[{}] = {:?}", attr_name, args[2]);
+            Ok(Value::None)
+        }
+        _ => Err(anyhow::anyhow!("'{}' object has no attribute '{}'", type_name(&args[0]), attr_name)),
+    }
+}
+
+pub fn builtin_delattr(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("delattr expected exactly 2 arguments, got {}", args.len()));
+    }
+    
+    let attr_name = match &args[1] {
+        Value::Str(name) => name,
+        _ => return Err(anyhow::anyhow!("delattr expected str object, not '{}'", type_name(&args[1]))),
+    };
+    
+    // Note: This is a simplified implementation. In a real implementation,
+    // we would need mutable access to the object, which requires VM context.
+    match &args[0] {
+        Value::Object { .. } => {
+            // Would need to remove from the object's fields
+            println!("delattr: Deleting {}.{}", type_name(&args[0]), attr_name);
+            Ok(Value::None)
+        }
+        _ => Err(anyhow::anyhow!("'{}' object has no attribute '{}'", type_name(&args[0]), attr_name)),
+    }
+}
+
+pub fn builtin_issubclass(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("issubclass() takes exactly 2 arguments"));
+    }
+    
+    let class_name = match &args[0] {
+        Value::Str(name) => name.clone(),
+        Value::Object { class_name, .. } => class_name.clone(),
+        _ => return Err(anyhow::anyhow!("issubclass() arg 1 must be a class")),
+    };
+    
+    let base_class = match &args[1] {
+        Value::Str(name) => name.clone(),
+        Value::Object { class_name, .. } => class_name.clone(),
+        _ => return Err(anyhow::anyhow!("issubclass() arg 2 must be a class")),
+    };
+    
+    // Simplified implementation - would need access to class hierarchy
+    Ok(Value::Bool(class_name == base_class || base_class == "object"))
+}
+
+pub fn builtin_callable(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("callable() takes exactly one argument"));
+    }
+    
+    let is_callable = match &args[0] {
+        Value::Function(_, _, _, _) => true,
+        Value::TypedFunction { .. } => true,
+        Value::BuiltinFunction(_, _) => true,
+        Value::NativeFunction(_) => true,
+        #[cfg(feature = "ffi")]
+        Value::ExternFunction { .. } => true,
+        Value::Object { fields, .. } => fields.contains_key("__call__"),
+        _ => false,
+    };
+    
+    Ok(Value::Bool(is_callable))
+}
+
+pub fn builtin_all(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("all() takes exactly one argument"));
+    }
+    
+    let items = match &args[0] {
+        Value::List(items) => items,
+        Value::Tuple(items) => items,
+        Value::Set(items) => items,
+        _ => return Err(anyhow::anyhow!("'{}' object is not iterable", type_name(&args[0]))),
+    };
+    
+    for item in items {
+        if !is_truthy(item) {
+            return Ok(Value::Bool(false));
+        }
+    }
+    
+    Ok(Value::Bool(true))
+}
+
+pub fn builtin_any(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("any() takes exactly one argument"));
+    }
+    
+    let items = match &args[0] {
+        Value::List(items) => items,
+        Value::Tuple(items) => items,
+        Value::Set(items) => items,
+        _ => return Err(anyhow::anyhow!("'{}' object is not iterable", type_name(&args[0]))),
+    };
+    
+    for item in items {
+        if is_truthy(item) {
+            return Ok(Value::Bool(true));
+        }
+    }
+    
+    Ok(Value::Bool(false))
+}
+
+pub fn builtin_frozenset(args: Vec<Value>) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("frozenset() takes at most 1 argument"));
+    }
+    
+    if args.is_empty() {
+        return Ok(Value::Set(vec![])); // Simplified: using Set for frozenset
+    }
+    
+    match &args[0] {
+        Value::List(items) => {
+            let mut unique_items = Vec::new();
+            for item in items {
+                if !unique_items.iter().any(|existing| values_equal(existing, item)) {
+                    unique_items.push(item.clone());
+                }
+            }
+            Ok(Value::Set(unique_items))
+        }
+        Value::Set(items) => Ok(Value::Set(items.clone())),
+        Value::Str(s) => {
+            let mut unique_chars = Vec::new();
+            for ch in s.chars() {
+                let char_val = Value::Str(ch.to_string());
+                if !unique_chars.iter().any(|existing| values_equal(existing, &char_val)) {
+                    unique_chars.push(char_val);
+                }
+            }
+            Ok(Value::Set(unique_chars))
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", type_name(&args[0]))),
+    }
+}
+
+pub fn builtin_bytearray(args: Vec<Value>) -> Result<Value> {
+    match args.len() {
+        0 => Ok(Value::ByteArray(vec![])),
+        1 => {
+            match &args[0] {
+                Value::Int(size) => {
+                    if *size < 0 {
+                        return Err(anyhow::anyhow!("negative count"));
+                    }
+                    Ok(Value::ByteArray(vec![0; *size as usize]))
+                }
+                Value::Str(s) => {
+                    Ok(Value::ByteArray(s.as_bytes().to_vec()))
+                }
+                Value::List(items) => {
+                    let mut bytes = Vec::new();
+                    for item in items {
+                        match item {
+                            Value::Int(n) => {
+                                if *n < 0 || *n > 255 {
+                                    return Err(anyhow::anyhow!("bytes must be in range(0, 256)"));
+                                }
+                                bytes.push(*n as u8);
+                            }
+                            _ => return Err(anyhow::anyhow!("an integer is required")),
+                        }
+                    }
+                    Ok(Value::ByteArray(bytes))
+                }
+                Value::Bytes(bytes) => Ok(Value::ByteArray(bytes.clone())),
+                Value::ByteArray(bytes) => Ok(Value::ByteArray(bytes.clone())),
+                _ => Err(anyhow::anyhow!("cannot convert '{}' object to bytearray", type_name(&args[0]))),
+            }
+        }
+        _ => Err(anyhow::anyhow!("bytearray() takes at most 1 argument")),
+    }
+}
+
+pub fn builtin_bytes(args: Vec<Value>) -> Result<Value> {
+    match args.len() {
+        0 => Ok(Value::Bytes(vec![])),
+        1 => {
+            match &args[0] {
+                Value::Int(size) => {
+                    if *size < 0 {
+                        return Err(anyhow::anyhow!("negative count"));
+                    }
+                    Ok(Value::Bytes(vec![0; *size as usize]))
+                }
+                Value::Str(s) => {
+                    Ok(Value::Bytes(s.as_bytes().to_vec()))
+                }
+                Value::List(items) => {
+                    let mut bytes = Vec::new();
+                    for item in items {
+                        match item {
+                            Value::Int(n) => {
+                                if *n < 0 || *n > 255 {
+                                    return Err(anyhow::anyhow!("bytes must be in range(0, 256)"));
+                                }
+                                bytes.push(*n as u8);
+                            }
+                            _ => return Err(anyhow::anyhow!("an integer is required")),
+                        }
+                    }
+                    Ok(Value::Bytes(bytes))
+                }
+                Value::Bytes(bytes) => Ok(Value::Bytes(bytes.clone())),
+                Value::ByteArray(bytes) => Ok(Value::Bytes(bytes.clone())),
+                _ => Err(anyhow::anyhow!("cannot convert '{}' object to bytes", type_name(&args[0]))),
+            }
+        }
+        _ => Err(anyhow::anyhow!("bytes() takes at most 1 argument")),
+    }
+}
+
+pub fn builtin_iter(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("iter() takes exactly one argument"));
+    }
+    
+    // Simplified: just return the iterable itself
+    // In a real implementation, this would return an iterator object
+    match &args[0] {
+        Value::List(_) | Value::Tuple(_) | Value::Set(_) | Value::Str(_) | Value::Dict(_) => {
+            Ok(args[0].clone())
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", type_name(&args[0]))),
+    }
+}
+
+pub fn builtin_next(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(anyhow::anyhow!("next expected 1 or 2 arguments, got {}", args.len()));
+    }
+    
+    // Simplified implementation - would need proper iterator protocol
+    if args.len() == 2 {
+        Ok(args[1].clone()) // Return default value
+    } else {
+        Err(anyhow::anyhow!("StopIteration"))
+    }
+}
+
+pub fn builtin_slice(args: Vec<Value>) -> Result<Value> {
+    use std::collections::HashMap;
+    use crate::base_object::MRO;
+    
+    match args.len() {
+        1 => {
+            // slice(stop)
+            match &args[0] {
+                Value::Int(stop) => {
+                    let mut fields = HashMap::new();
+                    fields.insert("start".to_string(), Value::None);
+                    fields.insert("stop".to_string(), Value::Int(*stop));
+                    fields.insert("step".to_string(), Value::None);
+                    Ok(Value::Object {
+                        class_name: "slice".to_string(),
+                        fields,
+                        base_object: crate::base_object::BaseObject::new("slice".to_string(), vec!["object".to_string()]),
+                        mro: MRO::from_linearization(vec!["slice".to_string(), "object".to_string()]),
+                    })
+                }
+                _ => Err(anyhow::anyhow!("slice indices must be integers or None")),
+            }
+        }
+        2 => {
+            // slice(start, stop)
+            let mut fields = HashMap::new();
+            fields.insert("start".to_string(), args[0].clone());
+            fields.insert("stop".to_string(), args[1].clone());
+            fields.insert("step".to_string(), Value::None);
+            Ok(Value::Object {
+                class_name: "slice".to_string(),
+                fields,
+                base_object: crate::base_object::BaseObject::new("slice".to_string(), vec!["object".to_string()]),
+                mro: MRO::from_linearization(vec!["slice".to_string(), "object".to_string()]),
+            })
+        }
+        3 => {
+            // slice(start, stop, step)
+            let mut fields = HashMap::new();
+            fields.insert("start".to_string(), args[0].clone());
+            fields.insert("stop".to_string(), args[1].clone());
+            fields.insert("step".to_string(), args[2].clone());
+            Ok(Value::Object {
+                class_name: "slice".to_string(),
+                fields,
+                base_object: crate::base_object::BaseObject::new("slice".to_string(), vec!["object".to_string()]),
+                mro: MRO::from_linearization(vec!["slice".to_string(), "object".to_string()]),
+            })
+        }
+        _ => Err(anyhow::anyhow!("slice expected at most 3 arguments, got {}", args.len())),
+    }
+}
+
+pub fn builtin_vars(args: Vec<Value>) -> Result<Value> {
+    match args.len() {
+        0 => {
+            // Return empty dict - would need VM context for actual locals
+            Ok(Value::Dict(HashMap::new()))
+        }
+        1 => {
+            match &args[0] {
+                Value::Object { fields, .. } => {
+                    Ok(Value::Dict(fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
+                }
+                Value::Module(_, namespace) => {
+                    Ok(Value::Dict(namespace.clone()))
+                }
+                _ => Err(anyhow::anyhow!("vars() argument must have __dict__ attribute")),
+            }
+        }
+        _ => Err(anyhow::anyhow!("vars expected at most 1 argument, got {}", args.len())),
+    }
+}
+
+pub fn builtin_eval(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(anyhow::anyhow!("eval expected at most 3 arguments, got {}", args.len()));
+    }
+    
+    // Placeholder - would need full parser and VM integration
+    Err(anyhow::anyhow!("eval() not yet implemented"))
+}
+
+pub fn builtin_exec(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(anyhow::anyhow!("exec expected at most 3 arguments, got {}", args.len()));
+    }
+    
+    // Placeholder - would need full parser and VM integration
+    Err(anyhow::anyhow!("exec() not yet implemented"))
+}
+
+pub fn builtin_compile(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow::anyhow!("compile() takes exactly 3 arguments"));
+    }
+    
+    // Placeholder - would need full parser integration
+    Err(anyhow::anyhow!("compile() not yet implemented"))
+}
+
+pub fn builtin_breakpoint(args: Vec<Value>) -> Result<Value> {
+    println!("Breakpoint hit!");
+    if !args.is_empty() {
+        println!("Arguments: {:?}", args);
+    }
+    Ok(Value::None)
+}
+
+pub fn builtin_int(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("int() takes exactly one argument"));
+    }
+    
+    match &args[0] {
+        Value::Int(n) => Ok(Value::Int(*n)),
+        Value::Float(n) => Ok(Value::Int(*n as i64)),
+        Value::Str(s) => {
+            if let Ok(n) = s.parse::<i64>() {
+                Ok(Value::Int(n))
+            } else {
+                Err(anyhow::anyhow!("invalid literal for int(): '{}'", s))
+            }
+        }
+        Value::Bool(b) => Ok(Value::Int(if *b { 1 } else { 0 })),
+        _ => Err(anyhow::anyhow!("cannot convert '{}' to int", args[0].type_name())),
+    }
+}
+
+pub fn builtin_input(args: Vec<Value>) -> Result<Value> {
+    use std::io::{self, Write};
+    
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("input expected at most 1 argument, got {}", args.len()));
+    }
+    
+    if !args.is_empty() {
+        match &args[0] {
+            Value::Str(prompt) => print!("{}", prompt),
+            _ => print!("{}", args[0]),
+        }
+        io::stdout().flush().unwrap();
+    }
+    
+    let mut input = String::new();
+    match io::stdin().read_line(&mut input) {
+        Ok(_) => {
+            // Remove trailing newline
+            if input.ends_with('\n') {
+                input.pop();
+                if input.ends_with('\r') {
+                    input.pop();
+                }
+            }
+            Ok(Value::Str(input))
+        }
+        Err(e) => Err(anyhow::anyhow!("Failed to read input: {}", e)),
+    }
+}
+
+/// Helper functions for arithmetic operations
+
+fn compare_values(a: &Value, b: &Value) -> i32 {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y) as i32,
+        (Value::Float(x), Value::Float(y)) => {
+            if x < y { -1 } else if x > y { 1 } else { 0 }
+        }
+        (Value::Int(x), Value::Float(y)) => {
+            let x_f = *x as f64;
+            if x_f < *y { -1 } else if x_f > *y { 1 } else { 0 }
+        }
+        (Value::Float(x), Value::Int(y)) => {
+            let y_f = *y as f64;
+            if *x < y_f { -1 } else if *x > y_f { 1 } else { 0 }
+        }
+        (Value::Str(x), Value::Str(y)) => {
+            if x < y { -1 } else if x > y { 1 } else { 0 }
+        }
+        (Value::Bool(x), Value::Bool(y)) => {
+            if x < y { -1 } else if x > y { 1 } else { 0 }
+        }
+        _ => 0, // Equal for incomparable types
+    }
+}
+
+fn add_values(a: &Value, b: &Value) -> Result<Value> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
+        (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
+        (Value::Int(x), Value::Float(y)) => Ok(Value::Float(*x as f64 + y)),
+        (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x + *y as f64)),
+        (Value::Str(x), Value::Str(y)) => Ok(Value::Str(format!("{}{}", x, y))),
+        (Value::List(x), Value::List(y)) => {
+            let mut result = x.clone();
+            result.extend(y.clone());
+            Ok(Value::List(result))
+        }
+        _ => Err(anyhow::anyhow!("unsupported operand type(s) for +: '{}' and '{}'", type_name(a), type_name(b))),
+    }
 }
 
 pub fn builtin_help(args: Vec<Value>) -> Result<Value> {
@@ -1550,7 +2034,7 @@ pub fn builtin_help(args: Vec<Value>) -> Result<Value> {
     }
     
     match &args[0] {
-        Value::String(name) => {
+        Value::Str(name) => {
             match name.as_str() {
                 "print" => {
                     println!("Help on built-in function print:");
@@ -1636,10 +2120,23 @@ pub fn builtin_help(args: Vec<Value>) -> Result<Value> {
             println!("Help on built-in function {}:", name);
             println!("This is a built-in function. Use help('{}') for more details.", name);
         }
-        Value::Function(name, params, _) => {
+        Value::Function(name, params, _, docstring) => {
             println!("Help on user-defined function {}:", name);
             println!("{}({})", name, params.join(", "));
-            println!("This is a user-defined function.");
+            if let Some(doc) = docstring {
+                println!("{}", doc);
+            } else {
+                println!("This is a user-defined function.");
+            }
+        }
+        Value::TypedFunction { name, params, docstring, .. } => {
+            println!("Help on typed function {}:", name);
+            println!("{}({})", name, params.join(", "));
+            if let Some(doc) = docstring {
+                println!("{}", doc);
+            } else {
+                println!("This is a typed function.");
+            }
         }
         _ => {
             println!("Help on {}:", args[0].type_name());

@@ -206,7 +206,7 @@ pub fn thread_current_thread(_args: Vec<Value>) -> Result<Value> {
     let thread_obj = ThreadObject::new(Some("MainThread".to_string()));
     
     let mut thread_dict = HashMap::new();
-    thread_dict.insert("name".to_string(), Value::String(thread_obj.name));
+    thread_dict.insert("name".to_string(), Value::Str(thread_obj.name));
     thread_dict.insert("ident".to_string(), Value::Int(thread_obj.id as i64));
     thread_dict.insert("daemon".to_string(), Value::Bool(thread_obj.daemon));
     
@@ -221,7 +221,7 @@ pub fn thread_enumerate(_args: Vec<Value>) -> Result<Value> {
 
 pub fn thread_main_thread(_args: Vec<Value>) -> Result<Value> {
     let mut main_thread = HashMap::new();
-    main_thread.insert("name".to_string(), Value::String("MainThread".to_string()));
+    main_thread.insert("name".to_string(), Value::Str("MainThread".to_string()));
     main_thread.insert("ident".to_string(), Value::Int(1));
     main_thread.insert("daemon".to_string(), Value::Bool(false));
     
@@ -350,7 +350,7 @@ pub fn thread_thread_new(args: Vec<Value>) -> Result<Value> {
     // Extract arguments (target, args, kwargs, name, daemon)
     let name = if args.len() > 3 {
         match &args[3] {
-            Value::String(s) => Some(s.clone()),
+            Value::Str(s) => Some(s.clone()),
             _ => None,
         }
     } else {
@@ -359,7 +359,7 @@ pub fn thread_thread_new(args: Vec<Value>) -> Result<Value> {
     
     let thread_obj = ThreadObject::new(name);
     
-    thread_dict.insert("name".to_string(), Value::String(thread_obj.name.clone()));
+    thread_dict.insert("name".to_string(), Value::Str(thread_obj.name.clone()));
     thread_dict.insert("ident".to_string(), Value::Int(thread_obj.id as i64));
     thread_dict.insert("daemon".to_string(), Value::Bool(thread_obj.daemon));
     thread_dict.insert("start".to_string(), Value::NativeFunction(thread_start));

@@ -156,7 +156,7 @@ impl ClangCodeGenerator {
             IRValue::ConstantInt(i) => Ok(i.to_string()),
             IRValue::ConstantFloat(f) => Ok(f.to_string()),
             IRValue::ConstantBool(b) => Ok(if *b { "true".to_string() } else { "false".to_string() }),
-            IRValue::ConstantString(s) => Ok(format!("\"{}\"", s)),
+            IRValue::ConstantString(s) | IRValue::String(s) => Ok(format!("\"{}\"", s)),
             IRValue::None => Ok("NULL".to_string()),
             _ => Ok("0".to_string()), // Default fallback
         }
