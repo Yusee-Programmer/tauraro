@@ -1,5 +1,4 @@
 use tauraro::*;
-use tauraro::enhanced_vm::EnhancedVM;
 use anyhow::Result;
 
 /// Test CPython-style control flow constructs in TauraroLang
@@ -64,14 +63,14 @@ else:
 print("Status result:", result)
 "#;
     
-    let mut vm = EnhancedVM::new();
+    let mut vm = VM::new();
     
     let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
         .map_err(|e| anyhow::anyhow!(e))?;
     let mut parser = Parser::new(tokens);
     let program = parser.parse().map_err(|e| anyhow::anyhow!(e))?;
     
-    vm.execute_program(program)?;
+    vm.execute_program(program, false)?;
     
     // Verify conditional logic worked correctly
     assert!(matches!(vm.get_variable("grade"), Some(Value::Str(ref g)) if g == "B"));
@@ -119,14 +118,14 @@ for fruit in fruits:
 print("Total fruits processed:", fruit_count)
 "#;
     
-    let mut vm = EnhancedVM::new();
+    let mut vm = VM::new();
     
     let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
         .map_err(|e| anyhow::anyhow!(e))?;
     let mut parser = Parser::new(tokens);
     let program = parser.parse().map_err(|e| anyhow::anyhow!(e))?;
     
-    vm.execute_program(program)?;
+    vm.execute_program(program, false)?;
     
     // Verify loop calculations
     assert!(matches!(vm.get_variable("total"), Some(Value::Int(10)))); // 0+1+2+3+4 = 10
@@ -178,14 +177,14 @@ mixed_result = int_val + float_val
 print("Mixed type operation (10 + 3.5):", mixed_result)
 "#;
     
-    let mut vm = EnhancedVM::new();
+    let mut vm = VM::new();
     
     let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
         .map_err(|e| anyhow::anyhow!(e))?;
     let mut parser = Parser::new(tokens);
     let program = parser.parse().map_err(|e| anyhow::anyhow!(e))?;
     
-    vm.execute_program(program)?;
+    vm.execute_program(program, false)?;
     
     // Verify arithmetic operations
     assert!(matches!(vm.get_variable("add_result"), Some(Value::Int(19))));
@@ -257,14 +256,14 @@ avg_result = analyze_data(data)
 print("Average of data:", avg_result)
 "#;
     
-    let mut vm = EnhancedVM::new();
+    let mut vm = VM::new();
     
     let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
         .map_err(|e| anyhow::anyhow!(e))?;
     let mut parser = Parser::new(tokens);
     let program = parser.parse().map_err(|e| anyhow::anyhow!(e))?;
     
-    vm.execute_program(program)?;
+    vm.execute_program(program, false)?;
     
     // Verify function results
     if let Some(Value::Str(greeting)) = vm.get_variable("greeting") {
