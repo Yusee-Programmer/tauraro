@@ -1,9 +1,8 @@
 use crate::ast::*;
 #[cfg(feature = "ffi")]
 use crate::ffi::FFIType;
-use crate::object_system::{resolve_dunder_method, call_dunder_method};
 use crate::base_object::{BaseObject, MRO, DunderMethod};
-use crate::ast::{Param, Statement, Type};
+use crate::ast::{Param, Statement, Type, Expr, Literal};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -158,7 +157,21 @@ impl Value {
 
     /// Enhanced isinstance that uses MRO for inheritance checking
     pub fn isinstance(&self, expected_type: &str) -> bool {
-        crate::type_hierarchy::TypeHierarchy::isinstance(self, expected_type)
+        // Simple isinstance implementation - for full implementation we'd need TypeHierarchy
+        match self {
+            Value::Object { class_name, mro, .. } => {
+                // Check direct class name match
+                if class_name == expected_type {
+                    return true;
+                }
+                // Check MRO for inheritance
+                mro.get_linearization().iter().any(|class| class == expected_type)
+            }
+            _ => {
+                // For built-in types, check direct type name
+                self.type_name() == expected_type
+            }
+        }
     }
 
     /// Get a string representation for debugging
@@ -577,8 +590,19 @@ impl Value {
             Value::Dict(dict) => !dict.is_empty(),
             Value::Tuple(items) => !items.is_empty(),
             Value::Set(items) => !items.is_empty(),
+            Value::FrozenSet(items) => !items.is_empty(),
+            Value::Range { start, stop, step } => {
+                if *step > 0 {
+                    start < stop
+                } else if *step < 0 {
+                    start > stop
+                } else {
+                    false // step == 0 should not happen, but considered empty
+                }
+            },
             Value::Bytes(bytes) => !bytes.is_empty(),
             Value::ByteArray(bytes) => !bytes.is_empty(),
+            Value::MemoryView { data, .. } => !data.is_empty(),
             Value::None => false,
             Value::Object { .. } => true,
             Value::Super(_, _, _) => true,
@@ -642,11 +666,29 @@ impl fmt::Display for Value {
                 let items_str: Vec<String> = items.iter().map(|v| format!("{}", v)).collect();
                 write!(f, "{{{}}}", items_str.join(", "))
             }
+            Value::FrozenSet(items) => {
+                let items_str: Vec<String> = items.iter().map(|v| format!("{}", v)).collect();
+                if items.is_empty() {
+                    write!(f, "frozenset()")
+                } else {
+                    write!(f, "frozenset({{{}}})", items_str.join(", "))
+                }
+            }
+            Value::Range { start, stop, step } => {
+                if *step == 1 {
+                    write!(f, "range({}, {})", start, stop)
+                } else {
+                    write!(f, "range({}, {}, {})", start, stop, step)
+                }
+            }
             Value::Bytes(bytes) => {
                 write!(f, "b'{}'", String::from_utf8_lossy(bytes))
             }
             Value::ByteArray(bytes) => {
                 write!(f, "bytearray(b'{}')", String::from_utf8_lossy(bytes))
+            }
+            Value::MemoryView { data, format, shape } => {
+                write!(f, "<memory at 0x{:p} format='{}' shape={:?}>", data.as_ptr(), format, shape)
             }
             Value::Dict(dict) => {
                 let pairs: Vec<String> = dict.iter()
@@ -734,6 +776,9 @@ impl Value {
                 "append" => Some(crate::builtins::builtin_bytearray_append),
                 _ => None,
             },
+            Value::FrozenSet(_) => None, // FrozenSet methods would go here
+            Value::Range { .. } => None, // Range methods would go here  
+            Value::MemoryView { .. } => None, // MemoryView methods would go here
             Value::Complex { .. } | Value::Ellipsis | Value::NotImplemented => None,
             _ => None,
         }
@@ -782,6 +827,32 @@ impl Value {
                 Expr::Call {
                     func: Box::new(Expr::Identifier("bytearray".to_string())),
                     args: vec![Expr::Literal(Literal::String(format!("b'{}'", String::from_utf8_lossy(bytes))))],
+                    kwargs: vec![],
+                }
+            }
+            Value::FrozenSet(items) => {
+                let exprs: Vec<Expr> = items.iter().map(|v| v.to_expr()).collect();
+                Expr::Call {
+                    func: Box::new(Expr::Identifier("frozenset".to_string())),
+                    args: vec![Expr::Set(exprs)],
+                    kwargs: vec![],
+                }
+            }
+            Value::Range { start, stop, step } => {
+                Expr::Call {
+                    func: Box::new(Expr::Identifier("range".to_string())),
+                    args: vec![
+                        Expr::Literal(Literal::Int(*start)),
+                        Expr::Literal(Literal::Int(*stop)),
+                        Expr::Literal(Literal::Int(*step)),
+                    ],
+                    kwargs: vec![],
+                }
+            }
+            Value::MemoryView { data, format, shape, .. } => {
+                Expr::Call {
+                    func: Box::new(Expr::Identifier("memoryview".to_string())),
+                    args: vec![Expr::Literal(Literal::String(format!("b'{}'", String::from_utf8_lossy(data))))],
                     kwargs: vec![],
                 }
             }
@@ -913,6 +984,27 @@ impl Hash for Value {
             }
             Value::None => {
                 16u8.hash(state);
+            }
+            Value::FrozenSet(items) => {
+                22u8.hash(state);
+                // For frozensets, we need to hash in a deterministic order
+                let mut sorted_items = items.clone();
+                sorted_items.sort_by(|a, b| {
+                    format!("{:?}", a).cmp(&format!("{:?}", b))
+                });
+                sorted_items.hash(state);
+            }
+            Value::Range { start, stop, step } => {
+                23u8.hash(state);
+                start.hash(state);
+                stop.hash(state);
+                step.hash(state);
+            }
+            Value::MemoryView { data, format, shape } => {
+                24u8.hash(state);
+                data.hash(state);
+                format.hash(state);
+                shape.hash(state);
             }
             Value::TypedValue { value, type_info } => {
                 17u8.hash(state);
