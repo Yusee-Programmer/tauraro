@@ -554,7 +554,7 @@ fn singledispatchmethod_register(_args: Vec<Value>) -> Result<Value> {
 pub fn call_function(func: &Value, args: Vec<Value>) -> Result<Value> {
     match func {
         Value::NativeFunction(f) => f(args),
-        Value::Function { .. } => {
+        Value::Closure { .. } => {
             // Would need VM integration to call user-defined functions
             Err(anyhow::anyhow!("User-defined function calls not yet implemented"))
         }

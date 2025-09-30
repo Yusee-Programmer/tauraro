@@ -190,7 +190,7 @@ fn copy_error(args: Vec<Value>) -> Result<Value> {
 /// Helper function to check if an object is copyable
 pub fn is_copyable(obj: &Value) -> bool {
     match obj {
-        Value::Function(..) => false,
+        Value::Closure { .. } => false,
         Value::BuiltinFunction(_, _) => false,
         Value::NativeFunction(_) => false,
         Value::Module(..) => false,

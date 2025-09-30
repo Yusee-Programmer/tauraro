@@ -31,6 +31,10 @@ pub mod httptools;
 pub mod websockets;
 pub mod httpx;
 
+// Add memory management modules
+pub mod memory;
+pub mod gc;
+
 /// Initialize all built-in modules and return them as a HashMap
 pub fn init_builtin_modules() -> HashMap<String, Value> {
     let mut modules = HashMap::new();
@@ -62,6 +66,10 @@ pub fn init_builtin_modules() -> HashMap<String, Value> {
     modules.insert("httptools".to_string(), httptools::create_httptools_module());
     modules.insert("websockets".to_string(), websockets::create_websockets_module());
     modules.insert("httpx".to_string(), httpx::create_httpx_module());
+    
+    // Add memory management modules
+    modules.insert("memory".to_string(), memory::create_memory_module());
+    modules.insert("gc".to_string(), gc::create_gc_module());
     
     modules
 }
@@ -95,13 +103,15 @@ pub fn get_builtin_module(name: &str) -> Option<Value> {
         "httptools" => Some(httptools::create_httptools_module()),
         "websockets" => Some(websockets::create_websockets_module()),
         "httpx" => Some(httpx::create_httpx_module()),
+        "memory" => Some(memory::create_memory_module()),
+        "gc" => Some(gc::create_gc_module()),
         _ => None,
     }
 }
 
 /// Check if a module name is a built-in module
 pub fn is_builtin_module(name: &str) -> bool {
-    matches!(name, "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx")
+    matches!(name, "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx" | "memory" | "gc")
 }
 
 /// Get list of all built-in module names
@@ -133,5 +143,7 @@ pub fn get_builtin_module_names() -> Vec<String> {
         "httptools".to_string(),
         "websockets".to_string(),
         "httpx".to_string(),
+        "memory".to_string(),
+        "gc".to_string(),
     ]
 }

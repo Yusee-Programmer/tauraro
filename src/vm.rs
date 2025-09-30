@@ -5,10 +5,11 @@ use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::ast::*;
 use crate::value::Value;
-use crate::object_system::{call_dunder_method_with_vm, call_dunder_method};
+use crate::object_system::{call_dunder_method_with_vm, call_dunder_method, TypeRegistry};
 use crate::semantic;
 use crate::modules;
 use crate::module_system::{ModuleSystem, ImportSpec};
+use crate::package_manager::{PackageManager, PackageType};
 use crate::builtins_super::builtin_super;
 use crate::base_object::MRO;
 use crate::metaclass::{MROComputer, TypeCreator, MetaClass};
@@ -17,6 +18,54 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::fmt;
+
+/// Frame object inspired by CPython's PyFrameObject
+/// Properly manages local variables and execution context
+#[derive(Debug, Clone)]
+pub struct ExecutionFrame {
+    /// Local variables (like CPython's f_locals)
+    pub locals: HashMap<String, Value>,
+    /// Global variables reference
+    pub globals: HashMap<String, Value>,
+    /// Built-in variables
+    pub builtins: HashMap<String, Value>,
+    /// Code being executed
+    pub code_name: String,
+    /// Parent frame for nested calls
+    pub parent: Option<Box<ExecutionFrame>>,
+}
+
+impl ExecutionFrame {
+    pub fn new(code_name: String) -> Self {
+        Self {
+            locals: HashMap::new(),
+            globals: HashMap::new(),
+            builtins: HashMap::new(),
+            code_name,
+            parent: None,
+        }
+    }
+    
+    /// Set variable with proper scoping (like CPython's STORE_FAST/STORE_NAME)
+    pub fn set_local(&mut self, name: &str, value: Value) {
+        self.locals.insert(name.to_string(), value);
+    }
+    
+    /// Get variable with proper lookup order (like CPython's LOAD_FAST/LOAD_NAME)
+    pub fn get_variable(&self, name: &str) -> Option<Value> {
+        // LEGB rule: Local, Enclosing, Global, Built-in
+        if let Some(value) = self.locals.get(name) {
+            return Some(value.clone());
+        }
+        if let Some(value) = self.globals.get(name) {
+            return Some(value.clone());
+        }
+        if let Some(value) = self.builtins.get(name) {
+            return Some(value.clone());
+        }
+        None
+    }
+}
 
 /// Variable scope
 #[derive(Debug, Clone)]
@@ -39,8 +88,9 @@ impl Scope {
 }
 
 /// Virtual Machine state
+#[derive(Debug, Clone)]
 pub struct VM {
-    scopes: Vec<Scope>,
+    pub scopes: Vec<Scope>,
     current_scope: usize,
     memory: MemoryAPI,
     call_stack: Vec<StackFrame>,
@@ -48,6 +98,13 @@ pub struct VM {
     should_return: bool,
     return_value: Option<Value>,
     module_system: ModuleSystem,
+    
+    // CPython-inspired execution model
+    pub current_frame: ExecutionFrame,
+    pub frame_stack: Vec<ExecutionFrame>,
+    pub type_registry: TypeRegistry,
+
+    package_manager: PackageManager,
     class_registry: HashMap<String, Vec<String>>, // Track class MROs for C3 linearization
     class_defined_methods: HashMap<String, std::collections::HashSet<String>>, // Track methods defined in each class
     class_base_registry: HashMap<String, Vec<String>>, // Track base classes for each class
@@ -56,7 +113,7 @@ pub struct VM {
 }
 
 /// Stack frame for function calls
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct StackFrame {
     function_name: String,
     return_address: usize,
@@ -81,6 +138,13 @@ impl VM {
             should_return: false,
             return_value: None,
             module_system: ModuleSystem::new(),
+            
+            // CPython-inspired execution model
+            current_frame: ExecutionFrame::new("__main__".to_string()),
+            frame_stack: Vec::new(),
+            type_registry: TypeRegistry::new(),
+
+            package_manager: PackageManager::new(),
             class_registry: HashMap::new(),
             class_defined_methods: HashMap::new(),
             class_base_registry: HashMap::new(),
@@ -88,8 +152,12 @@ impl VM {
             current_executing_class: None,
         };
         
-        // Initialize built-in functions
+        // Initialize built-in modules with memory management capabilities
         vm.init_builtins();
+        
+        // Initialize package manager and integrate with module system
+        vm.init_package_system();
+        
         vm
     }
     
@@ -100,53 +168,26 @@ impl VM {
     
     /// Execute TauraroLang source code as a script
     pub fn execute_script(&mut self, source: &str, args: Vec<String>) -> Result<Value> {
-        // Parse with implicit main function support
+        self.execute_source(source, args, false)
+    }
+    
+    /// Execute TauraroLang source code in REPL mode
+    pub fn execute_repl(&mut self, source: &str, args: Vec<String>) -> Result<Value> {
+        self.execute_source(source, args, true)
+    }
+    
+    /// Execute TauraroLang source code with mode specification
+    fn execute_source(&mut self, source: &str, args: Vec<String>, is_repl: bool) -> Result<Value> {
+        // Parse the source code
         let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
         let mut parser = Parser::new(tokens);
         
-        // Try to parse as a single expression first (for simple scripts like "42")
-        let program = if let Ok(program) = parser.parse() {
-            println!("DEBUG: Initial parse succeeded with {} statements", program.statements.len());
-            for (i, stmt) in program.statements.iter().enumerate() {
-                println!("DEBUG: Statement {}: {:?}", i, stmt);
-            }
-            if program.statements.is_empty() {
-                println!("DEBUG: Empty program, creating simple one");
-                // Empty program, create a simple one that returns None
-                Program {
-                    statements: vec![Statement::Expression(Expr::Literal(Literal::None))],
-                }
-            } else if program.statements.len() == 1 {
-                println!("DEBUG: Single statement found: {:?}", program.statements[0]);
-                // Single statement - check if it's an expression or variable definition
-                match &program.statements[0] {
-                    Statement::Expression(_) | Statement::VariableDef { .. } => {
-                        println!("DEBUG: Using regular parse for single expression/variable");
-                        program
-                    },
-                    _ => {
-                        println!("DEBUG: Single statement is not expression/variable, using implicit main");
-                        // Reset parser and try with implicit main
-                        let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
-                            .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
-                        let mut parser = Parser::new(tokens);
-                        parser.parse_with_implicit_main()?
-                    }
-                }
-            } else {
-                println!("DEBUG: Multiple statements found ({}), using implicit main", program.statements.len());
-                // Multiple statements - use implicit main
-                let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
-                let mut parser = Parser::new(tokens);
-                parser.parse_with_implicit_main()?
-            }
+        let program = if is_repl {
+            // In REPL mode, parse as-is (single line at a time)
+            parser.parse()?
         } else {
-            // Parsing failed, try with implicit main
-            let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
-                .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
-            let mut parser = Parser::new(tokens);
+            // In script mode, always use implicit main to handle multiple statements correctly
             parser.parse_with_implicit_main()?
         };
         
@@ -162,33 +203,24 @@ impl VM {
         self.set_variable("args", Value::List(args.into_iter().map(Value::Str).collect()))?;
         
         // Execute the program
-        self.execute_program(program)
+        self.execute_program(program, is_repl)
     }
     
     /// Execute a complete program
-    fn execute_program(&mut self, program: Program) -> Result<Value> {
+    pub fn execute_program(&mut self, program: Program, is_repl: bool) -> Result<Value> {
         // Enter program scope
         self.enter_scope("program");
         
         // First pass: register all functions and classes
         for stmt in &program.statements {
-            if let Statement::FunctionDef { name, params, return_type, body, is_async: _, decorators, docstring } = stmt {
-                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                let param_types: Vec<Option<Type>> = params.iter().map(|p| p.type_annotation.clone()).collect();
-                
-                let mut func_value = if return_type.is_some() || param_types.iter().any(|t| t.is_some()) {
-                    // Use TypedFunction if we have type annotations
-                    Value::TypedFunction {
-                        name: name.clone(),
-                        params: param_names,
-                        param_types,
-                        return_type: return_type.clone(),
-                        body: body.clone(),
-                        docstring: docstring.clone(),
-                    }
-                } else {
-                    // Use regular Function for untyped functions
-                    Value::Function(name.clone(), param_names, body.clone(), docstring.clone())
+            if let Statement::FunctionDef { name, params, body, is_async: _, decorators, docstring, return_type: _ } = stmt {
+                let captured_scope = self.scopes[self.current_scope].variables.clone();
+                let mut func_value = Value::Closure {
+                    name: name.clone(),
+                    params: params.clone(),
+                    body: body.clone(),
+                    captured_scope,
+                    docstring: docstring.clone(),
                 };
                 
                 // Apply decorators in reverse order (bottom to top)
@@ -205,9 +237,22 @@ impl VM {
         let mut last_expression_value = Value::None;
         for stmt in program.statements {
             if !matches!(stmt, Statement::FunctionDef { .. }) {
-                if let Ok(Some(value)) = self.execute_statement(&stmt) {
-                    // Capture the value from expressions for potential return
-                    last_expression_value = value;
+                match self.execute_statement(&stmt) {
+                    Ok(Some(value)) => {
+                        // In REPL mode, capture expression values for potential return
+                        // In script mode, ignore return values to match Python behavior
+                        if is_repl {
+                            last_expression_value = value;
+                        }
+                    }
+                    Ok(None) => {
+                        // Statement executed successfully but returned no value
+                    }
+                    Err(err) => {
+                        // Statement execution failed
+                        self.exit_scope();
+                        return Err(err);
+                    }
                 }
                 
                 if self.should_return {
@@ -219,40 +264,30 @@ impl VM {
         }
         
         // Check if there's a main function and call it BEFORE exiting program scope
-        println!("DEBUG: Checking for main function...");
         if let Some(main_func) = self.get_variable("main") {
-            println!("DEBUG: Found main function: {:?}", main_func);
             match main_func {
-                Value::Function(name, params, body, _) => {
+                Value::Closure { name, params, body, captured_scope, .. } => {
                     if params.is_empty() {
-                        println!("DEBUG: Calling main function with no arguments");
                         // Call main function with no arguments
-                        let result = self.call_user_function(&name, &params, body, vec![]);
+                        let result = self.call_user_function(&name, &params, body, vec![], HashMap::new(), Some(captured_scope))?;
                         self.exit_scope();
-                        return result;
+                        return Ok(result);
                     }
                 }
-                Value::TypedFunction { name, params, body, .. } => {
-                    if params.is_empty() {
-                        println!("DEBUG: Calling typed main function with no arguments");
-                        // Call typed main function with no arguments
-                        let result = self.call_user_function(&name, &params, body, vec![]);
-                        self.exit_scope();
-                        return result;
-                    }
-                }
-                _ => {
-                    println!("DEBUG: Main is not a function: {:?}", main_func);
-                }
+                _ => {}
             }
-        } else {
-            println!("DEBUG: No main function found");
         }
         
         // Exit program scope
         self.exit_scope();
         
-        Ok(last_expression_value)
+        // In script mode, always return None (like Python)
+        // In REPL mode, return the last expression value
+        if is_repl {
+            Ok(last_expression_value)
+        } else {
+            Ok(Value::None)
+        }
     }
     
     /// Apply a decorator to a function or class
@@ -262,10 +297,10 @@ impl VM {
             Expr::Identifier(decorator_name) => {
                 if let Some(decorator_func) = self.get_variable(decorator_name) {
                     match decorator_func {
-                        Value::Function(name, params, body, _) => {
+                        Value::Closure { name, params, body, captured_scope, .. } => {
                             // Call the user-defined decorator function with the target as argument
                             let args = vec![target];
-                            self.call_user_function(&name, &params, body, args)
+                            self.call_user_function(&name, &params, body, args, HashMap::new(), Some(captured_scope))
                         }
                         Value::BuiltinFunction(name, func) => {
                             // Call the builtin decorator function
@@ -294,14 +329,14 @@ impl VM {
             // Decorator with arguments (function call)
             Expr::Call { func, args, .. } => {
                 // First evaluate the decorator function with its arguments
-                let decorator_result = self.execute_function_call(func, args)?;
+                let decorator_result = self.execute_function_call(func, args, &[])?;;
                 
                 // Then apply the result to the target
                 match decorator_result {
-                    Value::Function(name, params, body, _) => {
+                    Value::Closure { name, params, body, captured_scope, .. } => {
                         // The decorator returned a function, call it with the target
                         let args = vec![target];
-                        self.call_user_function(&name, &params, body, args)
+                        self.call_user_function(&name, &params, body, args, HashMap::new(), Some(captured_scope))
                     }
                     Value::BuiltinFunction(_, func) => {
                         func(vec![target])
@@ -319,9 +354,9 @@ impl VM {
             _ => {
                 let decorator_value = self.execute_expression(decorator)?;
                 match decorator_value {
-                    Value::Function(name, params, body, _) => {
+                    Value::Closure { name, params, body, captured_scope, .. } => {
                         let args = vec![target];
-                        self.call_user_function(&name, &params, body, args)
+                        self.call_user_function(&name, &params, body, args, HashMap::new(), Some(captured_scope))
                     }
                     Value::BuiltinFunction(_, func) => {
                         func(vec![target])
@@ -334,6 +369,153 @@ impl VM {
             }
         }
     }
+    
+    /// Execute try statement
+    fn execute_try_statement(
+        &mut self,
+        body: &[Statement],
+        except_handlers: &[ExceptHandler],
+        else_branch: &Option<Vec<Statement>>,
+        finally: &Option<Vec<Statement>>,
+    ) -> Result<Option<Value>> {
+        let mut exception_occurred = false;
+        let mut exception_value = None;
+        let mut result = None;
+        
+        // Execute try block
+        for stmt in body {
+            match self.execute_statement(stmt) {
+                Ok(value) => result = value,
+                Err(error) => {
+                    exception_occurred = true;
+                    exception_value = Some(error);
+                    break;
+                }
+            }
+            if self.should_return {
+                break;
+            }
+        }
+        
+        // Handle exceptions
+        if exception_occurred {
+            let error = exception_value.unwrap();
+            let mut handled = false;
+            
+            for handler in except_handlers {
+                // Check if this handler matches the exception type
+                let matches = if let Some(exception_type_expr) = &handler.exception_type {
+                    // For now, we'll do simple string matching
+                    // A proper implementation would check exception hierarchy
+                    let error_str = error.to_string();
+                    if let Ok(type_value) = self.execute_expression(exception_type_expr) {
+                        match type_value {
+                            Value::Str(type_name) => error_str.contains(&type_name),
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    // Bare except clause catches all exceptions
+                    true
+                };
+                
+                if matches {
+                    handled = true;
+                    
+                    // Set exception variable if specified
+                    if let Some(name) = &handler.name {
+                        let exception_obj = self.create_exception_object(&error);
+                        self.set_variable(name, exception_obj)?;
+                    }
+                    
+                    // Execute handler body
+                    for stmt in &handler.body {
+                        if let Ok(value) = self.execute_statement(stmt) {
+                            result = value;
+                        }
+                        if self.should_return {
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+            
+            // If no handler matched, re-raise the exception
+            if !handled {
+                // Execute finally block before re-raising
+                if let Some(finally_body) = finally {
+                    for stmt in finally_body {
+                        let _ = self.execute_statement(stmt);
+                    }
+                }
+                return Err(error);
+            }
+        } else {
+            // No exception occurred, execute else block if present
+            if let Some(else_body) = else_branch {
+                for stmt in else_body {
+                    if let Ok(value) = self.execute_statement(stmt) {
+                        result = value;
+                    }
+                    if self.should_return {
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Always execute finally block
+        if let Some(finally_body) = finally {
+            for stmt in finally_body {
+                let _ = self.execute_statement(stmt);
+            }
+        }
+        
+        Ok(result)
+    }
+    
+    /// Execute raise statement
+    fn execute_raise_statement(&mut self, expr: &Option<Expr>) -> Result<Option<Value>> {
+        if let Some(exception_expr) = expr {
+            let exception_value = self.execute_expression(exception_expr)?;
+            
+            let error_message = match exception_value {
+                Value::Str(msg) => msg,
+                Value::Object { class_name, fields, .. } => {
+                    // Extract message from exception object
+                    if let Some(Value::Str(msg)) = fields.get("message") {
+                        format!("{}: {}", class_name, msg)
+                    } else {
+                        class_name
+                    }
+                }
+                _ => exception_value.to_string(),
+            };
+            
+            Err(anyhow::anyhow!(error_message))
+        } else {
+            // Re-raise current exception (would need exception context)
+            Err(anyhow::anyhow!("No active exception to re-raise"))
+        }
+    }
+    
+    /// Create an exception object from an error
+    fn create_exception_object(&self, error: &anyhow::Error) -> Value {
+        let mut fields = HashMap::new();
+        fields.insert("message".to_string(), Value::Str(error.to_string()));
+        fields.insert("args".to_string(), Value::Tuple(vec![Value::Str(error.to_string())]));
+        
+        Value::Object {
+            class_name: "Exception".to_string(),
+            fields,
+            base_object: crate::base_object::BaseObject::new("Exception".to_string(), vec!["object".to_string()]),
+            mro: crate::base_object::MRO::from_linearization(vec!["Exception".to_string(), "object".to_string()]),
+        }
+    }
+    
     pub fn execute_statement(&mut self, stmt: &Statement) -> Result<Option<Value>> {
         match stmt {
             Statement::Expression(expr) => {
@@ -341,16 +523,13 @@ impl VM {
                 Ok(Some(value))
             }
             Statement::VariableDef { name, value, type_annotation } => {
-                println!("DEBUG: Executing VariableDef for '{}'", name);
                 // Handle type annotation for strict typing
                 if let Some(type_info) = type_annotation {
                     self.declare_typed_variable(name, type_info.clone())?;
                 }
                 
                 if let Some(expr) = value {
-                    println!("DEBUG: Evaluating expression for variable '{}'", name);
                     let val = self.execute_expression(expr)?;
-                    println!("DEBUG: Expression evaluated to: {:?}", val);
                     
                     // Check type compatibility if type annotation exists
                     if let Some(type_info) = type_annotation {
@@ -368,10 +547,6 @@ impl VM {
                 } else {
                     self.set_variable(name, Value::None)?;
                 }
-                Ok(None)
-            }
-            Statement::FunctionDef { name: _, params: _, return_type: _, body: _, is_async: _, decorators: _, docstring: _ } => {
-                // Function definition already handled in first pass
                 Ok(None)
             }
             Statement::Return(value) => {
@@ -396,15 +571,13 @@ impl VM {
             Statement::Import { module, alias } => {
                 self.execute_import_statement(module, alias.as_deref())
             }
-            Statement::ClassDef { name, bases, body, decorators: _, metaclass, docstring: _ } => {
+            Statement::ClassDef { name, bases, body, decorators, metaclass, docstring: _ } => {
                 // Use the new optimized metaclass system for class creation
-                println!("Processing class '{}' with {} statements in body", name, body.len());
                 
                 // Extract base class names
                 let mut base_names = Vec::new();
                 for base_expr in bases {
                     if let Expr::Identifier(base_name) = base_expr {
-                        println!("Adding base class: {}", base_name);
                         base_names.push(base_name.clone());
                         
                         // Ensure base class exists
@@ -427,22 +600,22 @@ impl VM {
                 
                 for stmt in body.iter() {
                     match stmt {
-                        Statement::FunctionDef { name: method_name, params, body: method_body, decorators: _, return_type: _, is_async: _, docstring } => {
-                            let method_value = Value::Function(
-                                method_name.clone(),
-                                params.iter().map(|p| p.name.clone()).collect(),
-                                method_body.clone(),
-                                docstring.clone()
-                            );
+                        Statement::FunctionDef { name: method_name, params, body: method_body, decorators: _, is_async: _, docstring, return_type: _ } => {
+                            let captured_scope = self.scopes[self.current_scope].variables.clone();
+                            let method_value = Value::Closure {
+                                name: method_name.clone(),
+                                params: params.clone(),
+                                body: method_body.clone(),
+                                captured_scope,
+                                docstring: docstring.clone(),
+                            };
                             class_namespace.insert(method_name.clone(), method_value);
                             defined_methods.insert(method_name.clone());
-                            println!("Added method '{}' to class '{}'", method_name, name);
                         }
                         Statement::VariableDef { name: attr_name, value, .. } => {
                             if let Some(expr) = value {
                                 let attr_value = self.execute_expression(expr)?;
                                 class_namespace.insert(attr_name.clone(), attr_value);
-                                println!("Added attribute '{}' to class '{}'", attr_name, name);
                             }
                         }
                         _ => {
@@ -476,14 +649,18 @@ impl VM {
                 };
                 
                 // Create the class using the optimized type creator
-                println!("DEBUG: Class '{}' namespace before create_type: {:?}", name, class_namespace.keys().collect::<Vec<_>>());
-                let class_value = self.type_creator.create_type(
+                let mut class_value = self.type_creator.create_type(
                     name.clone(),
                     base_names.clone(),
                     class_namespace,
                     metaclass_obj,
                     &self.class_registry,
                 )?;
+                
+                // Apply decorators in reverse order (bottom to top)
+                for decorator in decorators.iter().rev() {
+                    class_value = self.apply_decorator(decorator, class_value)?;
+                }
                 
                 // Store tracking information for compatibility with existing code
                 self.class_defined_methods.insert(name.clone(), defined_methods);
@@ -496,7 +673,6 @@ impl VM {
                 // Set the class variable
                 self.set_variable(&name, class_value);
                 
-                println!("Successfully created class '{}' with optimized MRO system", name);
                 Ok(Some(Value::None))
             }
             Statement::AttributeAssignment { object, name, value } => {
@@ -505,26 +681,19 @@ impl VM {
                 
                 // Get the object identifier to modify it in place
                 if let Expr::Identifier(obj_name) = object {
-                    println!("Attempting to assign attribute '{}' to object '{}'", name, obj_name);
-                    println!("Current scope: {}", self.current_scope);
                     
                     // Find the scope containing the variable and modify it directly
                     let mut scope_index = Some(self.current_scope);
                     let mut found = false;
                     
                     while let Some(idx) = scope_index {
-                        println!("Checking scope {} for variable '{}'", idx, obj_name);
-                        println!("Variables in scope {}: {:?}", idx, self.scopes[idx].variables.keys().collect::<Vec<_>>());
                         if self.scopes[idx].variables.contains_key(obj_name) {
-                            println!("Found variable '{}' in scope {}", obj_name, idx);
                             // Found the variable, modify it directly
                             if let Some(obj_value) = self.scopes[idx].variables.get_mut(obj_name) {
                                 match obj_value {
                                     Value::Object { ref mut fields, .. } => {
-                                        println!("Before assignment: fields = {:?}", fields);
                                         // Store the attribute in the object's fields
                                         fields.insert(name.clone(), val);
-                                        println!("After assignment: fields = {:?}", fields);
                                         found = true;
                                         break;
                                     }
@@ -538,11 +707,6 @@ impl VM {
                     }
                     
                     if !found {
-                        println!("ERROR: Variable '{}' not found in any scope!", obj_name);
-                        println!("All scopes:");
-                        for (i, scope) in self.scopes.iter().enumerate() {
-                            println!("  Scope {}: {:?}", i, scope.variables.keys().collect::<Vec<_>>());
-                        }
                         return Err(anyhow::anyhow!("Undefined variable: {}", obj_name));
                     }
                     
@@ -552,6 +716,18 @@ impl VM {
                     Err(anyhow::anyhow!("Complex attribute assignment not yet supported"))
                 }
             }
+            Statement::Try { body, except_handlers, else_branch, finally } => {
+                self.execute_try_statement(body, except_handlers, else_branch, finally)
+            },
+            Statement::Raise(expr) => {
+                self.execute_raise_statement(expr)
+            },
+            Statement::Match { value, cases } => {
+                self.execute_match_statement(value, cases)
+            },
+            Statement::With { context, alias, body } => {
+                self.execute_with_statement(context, alias.as_deref(), body)
+            },
             _ => {
                 // TODO: Implement other statement types
                 Ok(None)
@@ -569,12 +745,10 @@ impl VM {
             Expr::Literal(Literal::None) => Ok(Value::None),
             Expr::Literal(Literal::Bytes(bytes)) => Ok(Value::Bytes(bytes.clone())),
             Expr::Literal(Literal::Complex { real, imag }) => {
-                // For now, return a tuple representing the complex number
-                Ok(Value::Tuple(vec![Value::Float(*real), Value::Float(*imag)]))
+                Ok(Value::Complex { real: *real, imag: *imag })
             },
             Expr::Literal(Literal::Ellipsis) => {
-                // Return a special marker for ellipsis
-                Ok(Value::Str("...".to_string()))
+                Ok(Value::Ellipsis)
             },
             Expr::DocString(s) => Ok(Value::Str(s.clone())),
             Expr::Identifier(name) => {
@@ -586,14 +760,11 @@ impl VM {
             Expr::UnaryOp { op, operand } => {
                 self.execute_unary_op(op, operand)
             }
-            Expr::Call { func, args, .. } => {
-                self.execute_function_call(func, args)
+            Expr::Call { func, args, kwargs } => {
+                self.execute_function_call(func, args, kwargs)
             }
-            Expr::MethodCall { object, method, args, kwargs: _ } => {
-                println!("DEBUG: Executing method call '{}' on object", method);
-                let result = self.execute_method_call(object.as_ref(), method, args);
-                println!("DEBUG: Method call '{}' returned: {:?}", method, result);
-                result
+            Expr::MethodCall { object, method, args, kwargs } => {
+                self.execute_method_call(object.as_ref(), method, args, kwargs)
             }
             Expr::List(elements) => {
                 let values: Result<Vec<Value>> = elements.iter()
@@ -645,7 +816,7 @@ impl VM {
                             Err(anyhow::anyhow!("'{}' object has no attribute '{}'", "object", name))
                         }
                     }
-                    Value::Super(current_class, parent_class) => {
+                    Value::Super(current_class, parent_class, self_obj) => {
                         // Look up the method in the parent class
                         if let Some(Value::Object { fields: parent_methods, .. }) = self.get_variable(parent_class) {
                             if let Some(method) = parent_methods.get(name) {
@@ -657,16 +828,11 @@ impl VM {
                             Err(anyhow::anyhow!("Parent class '{}' not found", parent_class))
                         }
                     }
-                    Value::Module(module_name, namespace) => {
-                        // Special handling for sys.path to return dynamic content
-                        if module_name == "sys" && name == "path" {
-                            // Import the get_current_sys_path function
-                            use crate::modules::sys::get_current_sys_path;
-                            Ok(get_current_sys_path())
-                        } else if let Some(value) = namespace.get(name) {
+                    Value::Module(_module_name, namespace) => {
+                        if let Some(value) = namespace.get(name) {
                             Ok(value.clone())
                         } else {
-                            Err(anyhow::anyhow!("'module' object has no method '{}'", name))
+                            Err(anyhow::anyhow!("'module' object has no attribute '{}'", name))
                         }
                     }
                     _ => Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj_value.type_name(), name)),
@@ -735,8 +901,14 @@ impl VM {
                 self.execute_list_comprehension(element, generators)
             }
             Expr::Lambda { params, body } => {
-                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                Ok(Value::Function("lambda".to_string(), param_names, vec![Statement::Return(Some((**body).clone()))], None))
+                let captured_scope = self.scopes[self.current_scope].variables.clone();
+                Ok(Value::Closure {
+                    name: "lambda".to_string(),
+                    params: params.clone(),
+                    body: vec![Statement::Return(Some((**body).clone()))],
+                    captured_scope,
+                    docstring: None,
+                })
             }
             Expr::IfExp { condition, then_expr, else_expr } => {
                 let cond_value = self.execute_expression(condition)?;
@@ -881,20 +1053,26 @@ impl VM {
     }
     
     /// Execute function call
-    fn execute_function_call(&mut self, callee: &Expr, arguments: &[Expr]) -> Result<Value> {
+    fn execute_function_call(&mut self, callee: &Expr, arguments: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value> {
         let callee_val = self.execute_expression(callee)?;
         let arg_values: Result<Vec<Value>> = arguments
             .iter()
             .map(|arg| self.execute_expression(arg))
             .collect();
         let arg_values = arg_values?;
-        
+
+        let kwarg_values: Result<HashMap<String, Value>> = kwargs
+            .iter()
+            .map(|(name, expr)| {
+                let value = self.execute_expression(expr)?;
+                Ok((name.clone(), value))
+            })
+            .collect();
+        let kwarg_values = kwarg_values?;
+
         match callee_val {
-            Value::Function(name, params, body, _) => {
-                self.call_user_function(&name, &params, body, arg_values)
-            }
-            Value::TypedFunction { name, params, param_types, return_type, body, .. } => {
-                self.call_typed_function(&name, &params, &param_types, &return_type, body, arg_values)
+            Value::Closure { name, params, body, captured_scope, .. } => {
+                self.call_user_function(&name, &params, body, arg_values, kwarg_values, Some(captured_scope))
             }
             Value::BuiltinFunction(name, func) => {
                 // Special handling for functions that need VM context
@@ -903,6 +1081,8 @@ impl VM {
                     "repr" => self.builtin_repr_with_vm(arg_values),
                     "len" => self.builtin_len_with_vm(arg_values),
                     "super" => builtin_super(arg_values, Some(self)),
+                    "eval" => crate::builtins::builtin_eval_with_vm(self, arg_values),
+                    "exec" => crate::builtins::builtin_exec_with_vm(self, arg_values),
                     _ => func(arg_values),
                 }
             }
@@ -1009,13 +1189,22 @@ impl VM {
     }
     
     /// Execute method call
-    fn execute_method_call(&mut self, object: &Expr, method: &str, args: &[Expr]) -> Result<Value> {
+    fn execute_method_call(&mut self, object: &Expr, method: &str, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value> {
         let obj_value = self.execute_expression(object)?;
         let arg_values: Result<Vec<Value>> = args
             .iter()
             .map(|arg| self.execute_expression(arg))
             .collect();
         let arg_values = arg_values?;
+
+        let kwarg_values: Result<HashMap<String, Value>> = kwargs
+            .iter()
+            .map(|(name, expr)| {
+                let value = self.execute_expression(expr)?;
+                Ok((name.clone(), value))
+            })
+            .collect();
+        let kwarg_values = kwarg_values?;
         
         // Store the original object for super() calls
         let original_self = if let Expr::Call { func, args: call_args, .. } = object {
@@ -1040,10 +1229,10 @@ impl VM {
         match &obj_value {
             Value::Object { class_name, fields: instance_fields, base_object: _, mro } => {
                 // First check if the method is in the instance fields (unlikely but possible)
-                if let Some(Value::Function(method_name, params, body, _)) = instance_fields.get(method) {
+                if let Some(Value::Closure { params, body, captured_scope, .. }) = instance_fields.get(method) {
                     let mut method_args = vec![obj_value.clone()];
                     method_args.extend(arg_values);
-                    return self.call_user_function(method_name, params, body.clone(), method_args);
+                    return self.call_user_function(method, &params, body.clone(), method_args, kwarg_values, Some(captured_scope.clone()));
                 }
                 
                 // Use MRO to find the method in the class hierarchy
@@ -1056,7 +1245,7 @@ impl VM {
                             for (method_name, method_value) in class_methods.iter() {
                                 println!("  Method '{}': {:?}", method_name, method_value);
                             }
-                            if let Some(Value::Function(method_name, params, body, _)) = class_methods.get(method) {
+                            if let Some(Value::Closure { params, body, captured_scope, .. }) = class_methods.get(method) {
                                 println!("Found method '{}' in class '{}'", method, class_in_mro);
                                 // Create a new argument list with 'self' as the first argument
                                 let mut method_args = vec![obj_value.clone()];
@@ -1066,12 +1255,12 @@ impl VM {
                                 let previous_executing_class = self.current_executing_class.clone();
                                 self.current_executing_class = Some(class_in_mro.clone());
                                 
-                                let result = self.call_user_function(method_name, params, body.clone(), method_args);
+                                let result = self.call_user_function(method, &params, body.clone(), method_args, kwarg_values, Some(captured_scope.clone()))?;
                                 
                                 // Restore previous executing class
                                 self.current_executing_class = previous_executing_class;
                                 
-                                return result;
+                                return Ok(result);
                             } else if let Some(Value::NativeFunction(func)) = class_methods.get(method) {
                                 // Handle native function methods
                                 let mut method_args = vec![obj_value.clone()];
@@ -1086,13 +1275,12 @@ impl VM {
                 
                 Err(anyhow::anyhow!("'{}' object has no method '{}'", class_name, method))
             }
-            Value::Super(current_class, parent_class) => {
+            Value::Super(current_class, parent_class, self_obj) => {
                 // Look up the method in the parent class
                 if let Some(Value::Object { fields: parent_methods, .. }) = self.get_variable(parent_class) {
-                    if let Some(Value::Function(method_name, params, body, _)) = parent_methods.get(method) {
-                        // For super method calls, use the original self instance if available
-                        let self_arg = if let Some(original) = original_self {
-                            original
+                    if let Some(Value::Closure { params, body, captured_scope, .. }) = parent_methods.get(method) {
+                        let self_arg = if let Some(obj) = self_obj {
+                            *obj.clone()
                         } else {
                              // Fallback to getting 'self' from current scope
                              if let Some(self_val) = self.get_variable("self") {
@@ -1114,17 +1302,17 @@ impl VM {
                         let previous_executing_class = self.current_executing_class.clone();
                         self.current_executing_class = Some(parent_class.clone());
                         
-                        let result = self.call_user_function(method_name, params, body.clone(), method_args);
+                        let result = self.call_user_function(method, &params, body.clone(), method_args, kwarg_values, Some(captured_scope.clone()))?;
                         
                         // Restore previous executing class
                         self.current_executing_class = previous_executing_class;
                         
-                        return result;
+                        return Ok(result);
                     } else if let Some(Value::NativeFunction(func)) = parent_methods.get(method) {
                         // Handle native function methods
-                        let self_arg = if let Some(original) = original_self {
-                             original
-                         } else {
+                        let self_arg = if let Some(obj) = self_obj {
+                            *obj.clone()
+                        } else {
                              if let Some(self_val) = self.get_variable("self") {
                                  self_val.clone()
                              } else {
@@ -1262,16 +1450,226 @@ impl VM {
                         } else {
                             Err(anyhow::anyhow!("pop index out of range"))
                         }
-                    }
+                    },
                     _ => Err(anyhow::anyhow!("'list' object has no method '{}'", method)),
+                }
+            }
+            Value::Tuple(tuple) => {
+                // Built-in tuple methods
+                match method {
+                    "count" => {
+                        if arg_values.len() != 1 {
+                            return Err(anyhow::anyhow!("count() takes exactly 1 argument"));
+                        }
+                        let mut count = 0;
+                        for item in tuple {
+                            if self.values_equal(item.clone(), arg_values[0].clone()) {
+                                count += 1;
+                            }
+                        }
+                        Ok(Value::Int(count))
+                    }
+                    "index" => {
+                        if arg_values.len() != 1 {
+                            return Err(anyhow::anyhow!("index() takes exactly 1 argument"));
+                        }
+                        for (i, item) in tuple.iter().enumerate() {
+                            if self.values_equal(item.clone(), arg_values[0].clone()) {
+                                return Ok(Value::Int(i as i64));
+                            }
+                        }
+                        Err(anyhow::anyhow!("Item not found in tuple"))
+                    }
+                    _ => Err(anyhow::anyhow!("'tuple' object has no method '{}'", method)),
+                }
+            },
+            Value::Set(set) => {
+                // Built-in set methods
+                match method {
+                    "add" => {
+                        if arg_values.len() != 1 {
+                            return Err(anyhow::anyhow!("add() takes exactly 1 argument"));
+                        }
+                        let mut new_set = set.clone();
+                        if !new_set.iter().any(|existing: &Value| self.values_equal(existing.clone(), arg_values[0].clone())) {
+                            new_set.push(arg_values[0].clone());
+                        }
+                        Ok(Value::Set(new_set))
+                    }
+                    "remove" => {
+                        if arg_values.len() != 1 {
+                            return Err(anyhow::anyhow!("remove() takes exactly 1 argument"));
+                        }
+                        let mut new_set = set.clone();
+                        let index = new_set.iter().position(|existing: &Value| self.values_equal(existing.clone(), arg_values[0].clone()));
+                        if let Some(index) = index {
+                            new_set.remove(index);
+                            Ok(Value::Set(new_set))
+                        } else {
+                            Err(anyhow::anyhow!("Item not found in set"))
+                        }
+                    }
+                    "discard" => {
+                        if arg_values.len() != 1 {
+                            return Err(anyhow::anyhow!("discard() takes exactly 1 argument"));
+                        }
+                        let mut new_set = set.clone();
+                        let index = new_set.iter().position(|existing: &Value| self.values_equal(existing.clone(), arg_values[0].clone()));
+                        if let Some(index) = index {
+                            new_set.remove(index);
+                        }
+                        Ok(Value::Set(new_set))
+                    }
+                    "pop" => {
+                        let mut new_set = set.clone();
+                        if let Some(value) = new_set.pop() {
+                            Ok(value)
+                        } else {
+                            Err(anyhow::anyhow!("pop from an empty set"))
+                        }
+                    }
+                    "clear" => {
+                        Ok(Value::Set(Vec::new()))
+                    }
+                    "union" => {
+                        if arg_values.len() != 1 {
+                            return Err(anyhow::anyhow!("union() takes exactly 1 argument"));
+                        }
+                        if let Value::Set(other) = &arg_values[0] {
+                            let mut new_set = set.clone();
+                            for item in other {
+                                if !new_set.iter().any(|existing: &Value| self.values_equal(existing.clone(), item.clone())) {
+                                    new_set.push(item.clone());
+                                }
+                            }
+                            Ok(Value::Set(new_set))
+                        } else {
+                            Err(anyhow::anyhow!("union() argument must be a set"))
+                        }
+                    }
+                    "intersection" => {
+                        if arg_values.len() != 1 {
+                            return Err(anyhow::anyhow!("intersection() takes exactly 1 argument"));
+                        }
+                        if let Value::Set(other) = &arg_values[0] {
+                            let mut new_set = Vec::new();
+                            for item in set {
+                                if other.iter().any(|existing: &Value| self.values_equal(existing.clone(), item.clone())) {
+                                    new_set.push(item.clone());
+                                }
+                            }
+                            Ok(Value::Set(new_set))
+                        } else {
+                            Err(anyhow::anyhow!("intersection() argument must be a set"))
+                        }
+                    }
+                    "difference" => {
+                        if arg_values.len() != 1 {
+                            return Err(anyhow::anyhow!("difference() takes exactly 1 argument"));
+                        }
+                        if let Value::Set(other) = &arg_values[0] {
+                            let mut new_set = Vec::new();
+                            for item in set {
+                                if !other.iter().any(|existing: &Value| self.values_equal(existing.clone(), item.clone())) {
+                                    new_set.push(item.clone());
+                                }
+                            }
+                            Ok(Value::Set(new_set))
+                        } else {
+                            Err(anyhow::anyhow!("difference() argument must be a set"))
+                        }
+                    }
+                    "symmetric_difference" => {
+                        if arg_values.len() != 1 {
+                            return Err(anyhow::anyhow!("symmetric_difference() takes exactly 1 argument"));
+                        }
+                        if let Value::Set(other) = &arg_values[0] {
+                            let mut new_set = Vec::new();
+                            for item in set {
+                                if !other.iter().any(|existing: &Value| self.values_equal(existing.clone(), item.clone())) {
+                                    new_set.push(item.clone());
+                                }
+                            }
+                            for item in other {
+                                if !set.iter().any(|existing: &Value| self.values_equal(existing.clone(), item.clone())) {
+                                    new_set.push(item.clone());
+                                }
+                            }
+                            Ok(Value::Set(new_set))
+                        } else {
+                            Err(anyhow::anyhow!("symmetric_difference() argument must be a set"))
+                        }
+                    }
+                    _ => Err(anyhow::anyhow!("'set' object has no method '{}'", method)),
+                }
+            }
+            Value::Dict(dict) => {
+                // Built-in dictionary methods
+                match method {
+                    "keys" => {
+                        let keys = dict.keys().map(|k| Value::Str(k.clone())).collect();
+                        Ok(Value::List(keys))
+                    }
+                    "values" => {
+                        let values = dict.values().cloned().collect();
+                        Ok(Value::List(values))
+                    }
+                    "items" => {
+                        let items = dict.iter().map(|(k, v)| Value::Tuple(vec![Value::Str(k.clone()), v.clone()])).collect();
+                        Ok(Value::List(items))
+                    }
+                    "get" => {
+                        if arg_values.len() < 1 || arg_values.len() > 2 {
+                            return Err(anyhow::anyhow!("get() takes 1 or 2 arguments"));
+                        }
+                        let key = match &arg_values[0] {
+                            Value::Str(s) => s.clone(),
+                            _ => return Err(anyhow::anyhow!("get() key must be a string")),
+                        };
+                        let default = if arg_values.len() == 2 { &arg_values[1] } else { &Value::None };
+                        Ok(dict.get(&key).cloned().unwrap_or_else(|| default.clone()))
+                    }
+                    "pop" => {
+                        if arg_values.len() < 1 || arg_values.len() > 2 {
+                            return Err(anyhow::anyhow!("pop() takes 1 or 2 arguments"));
+                        }
+                        let key = match &arg_values[0] {
+                            Value::Str(s) => s.clone(),
+                            _ => return Err(anyhow::anyhow!("pop() key must be a string")),
+                        };
+                        let mut new_dict = dict.clone();
+                        if let Some(value) = new_dict.remove(&key) {
+                            Ok(value)
+                        } else if arg_values.len() == 2 {
+                            Ok(arg_values[1].clone())
+                        } else {
+                            Err(anyhow::anyhow!("Key not found: {}", key))
+                        }
+                    }
+                    "update" => {
+                        if arg_values.len() != 1 {
+                            return Err(anyhow::anyhow!("update() takes exactly 1 argument"));
+                        }
+                        if let Value::Dict(other) = &arg_values[0] {
+                            let mut new_dict = dict.clone();
+                            new_dict.extend(other.clone());
+                            Ok(Value::Dict(new_dict))
+                        } else {
+                            Err(anyhow::anyhow!("update() argument must be a dictionary"))
+                        }
+                    }
+                    "clear" => {
+                        Ok(Value::Dict(HashMap::new()))
+                    }
+                    _ => Err(anyhow::anyhow!("'dict' object has no method '{}'", method)),
                 }
             }
             Value::Module(_, namespace) => {
                 // Module method calls - look up the function in the module's namespace
                 if let Some(function_value) = namespace.get(method) {
                     match function_value {
-                        Value::Function(name, params, body, _) => {
-                            self.call_user_function(name, params, body.clone(), arg_values)
+                        Value::Closure { name, params, body, captured_scope, .. } => {
+                            self.call_user_function(name, params, body.clone(), arg_values, kwarg_values, Some(captured_scope.clone()))
                         }
                         Value::BuiltinFunction(_, func) => {
                             func(arg_values)
@@ -1432,6 +1830,252 @@ impl VM {
         Ok(())
     }
     
+    /// Execute match statement
+    fn execute_match_statement(&mut self, value: &Expr, cases: &[MatchCase]) -> Result<Option<Value>> {
+        let match_value = self.execute_expression(value)?;
+        
+        for case in cases {
+            // Check if pattern matches
+            if self.pattern_matches(&case.pattern, &match_value)? {
+                // Check guard condition if present
+                if let Some(guard) = &case.guard {
+                    let guard_value = self.execute_expression(guard)?;
+                    if !guard_value.is_truthy() {
+                        continue; // Guard failed, try next case
+                    }
+                }
+                
+                // Execute case body
+                self.enter_scope("match_case");
+                let mut result = None;
+                for stmt in &case.body {
+                    result = self.execute_statement(stmt)?;
+                    if self.should_return {
+                        break;
+                    }
+                }
+                self.exit_scope();
+                return Ok(result);
+            }
+        }
+        
+        // No case matched
+        Err(anyhow::anyhow!("No pattern matched in match statement"))
+    }
+    
+    /// Check if a pattern matches a value
+    fn pattern_matches(&mut self, pattern: &Pattern, value: &Value) -> Result<bool> {
+        match pattern {
+            Pattern::Wildcard => Ok(true),
+            Pattern::Literal(expr) => {
+                let pattern_value = self.execute_expression(expr)?;
+                Ok(self.values_equal(pattern_value, value.clone()))
+            }
+            Pattern::Variable(name) => {
+                // Variable patterns always match and bind the value
+                self.set_variable(name, value.clone())?;
+                Ok(true)
+            }
+            Pattern::Tuple(patterns) => {
+                match value {
+                    Value::Tuple(values) => {
+                        if patterns.len() != values.len() {
+                            return Ok(false);
+                        }
+                        for (pattern, val) in patterns.iter().zip(values.iter()) {
+                            if !self.pattern_matches(pattern, val)? {
+                                return Ok(false);
+                            }
+                        }
+                        Ok(true)
+                    }
+                    _ => Ok(false),
+                }
+            }
+            Pattern::List(patterns) => {
+                match value {
+                    Value::List(values) => {
+                        if patterns.len() != values.len() {
+                            return Ok(false);
+                        }
+                        for (pattern, val) in patterns.iter().zip(values.iter()) {
+                            if !self.pattern_matches(pattern, val)? {
+                                return Ok(false);
+                            }
+                        }
+                        Ok(true)
+                    }
+                    _ => Ok(false),
+                }
+            }
+            Pattern::Dict(pattern_pairs) => {
+                match value {
+                    Value::Dict(dict) => {
+                        for (key_pattern, value_pattern) in pattern_pairs {
+                            // For now, we only support literal keys in dict patterns
+                            if let Pattern::Literal(key_expr) = key_pattern {
+                                let key_value = self.execute_expression(key_expr)?;
+                                let key_string = match &key_value {
+                                    Value::Str(s) => s.clone(),
+                                    Value::Int(n) => n.to_string(),
+                                    Value::Float(n) => format!("{:.6}", n),
+                                    Value::Bool(b) => b.to_string(),
+                                    Value::None => "None".to_string(),
+                                    _ => format!("{}", key_value),
+                                };
+                                
+                                if let Some(dict_value) = dict.get(&key_string) {
+                                    if !self.pattern_matches(value_pattern, dict_value)? {
+                                        return Ok(false);
+                                    }
+                                } else {
+                                    return Ok(false);
+                                }
+                            } else {
+                                return Err(anyhow::anyhow!("Dictionary key patterns must be literals"));
+                            }
+                        }
+                        Ok(true)
+                    }
+                    _ => Ok(false),
+                }
+            }
+            Pattern::Class { name, patterns } => {
+                // Class pattern matching - check if value is instance of class
+                match value {
+                    Value::Object { class_name, .. } => {
+                        if class_name == name {
+                            // For now, simple class matching without pattern destructuring
+                            // TODO: Implement proper class pattern destructuring
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    _ => Ok(false),
+                }
+            }
+            Pattern::Or(patterns) => {
+                // OR pattern - any pattern can match
+                for pattern in patterns {
+                    if self.pattern_matches(pattern, value)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Pattern::As { pattern, name } => {
+                // AS pattern - pattern must match and value is bound to name
+                if self.pattern_matches(pattern, value)? {
+                    self.set_variable(name, value.clone())?;
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+        }
+    }
+    
+    /// Execute with statement (context manager)
+    fn execute_with_statement(&mut self, context: &Expr, alias: Option<&str>, body: &[Statement]) -> Result<Option<Value>> {
+        // Evaluate the context manager expression
+        let context_manager = self.execute_expression(context)?;
+        
+        // Call __enter__ method
+        let enter_result = self.call_context_manager_method(&context_manager, "__enter__", vec![])?;
+        
+        // Bind the result to alias if provided
+        if let Some(alias_name) = alias {
+            self.set_variable(alias_name, enter_result)?;
+        }
+        
+        self.enter_scope("with");
+        let mut result = None;
+        let mut exception_occurred = false;
+        let mut exception_value = None;
+        
+        // Execute the with body
+        for stmt in body {
+            match self.execute_statement(stmt) {
+                Ok(value) => result = value,
+                Err(error) => {
+                    exception_occurred = true;
+                    exception_value = Some(error);
+                    break;
+                }
+            }
+            if self.should_return {
+                break;
+            }
+        }
+        
+        self.exit_scope();
+        
+        // Call __exit__ method with exception info
+        let (exc_type, exc_value, exc_traceback) = if exception_occurred {
+            // In a real implementation, we'd extract proper exception info
+            let error = exception_value.as_ref().unwrap();
+            (Value::Str("Exception".to_string()), Value::Str(error.to_string()), Value::None)
+        } else {
+            (Value::None, Value::None, Value::None)
+        };
+        
+        let exit_args = vec![exc_type, exc_value, exc_traceback];
+        let exit_result = self.call_context_manager_method(&context_manager, "__exit__", exit_args)?;
+        
+        // If __exit__ returns True, suppress the exception
+        let suppress_exception = exit_result.is_truthy();
+        
+        if exception_occurred && !suppress_exception {
+            return Err(exception_value.unwrap());
+        }
+        
+        Ok(result)
+    }
+    
+    /// Helper method to call context manager methods (__enter__ and __exit__)
+    fn call_context_manager_method(&mut self, context_manager: &Value, method_name: &str, args: Vec<Value>) -> Result<Value> {
+        match context_manager {
+            Value::Object { fields, .. } => {
+                if let Some(method) = fields.get(method_name) {
+                    match method {
+                        Value::Closure { name, params, body, captured_scope, .. } => {
+                            let mut method_args = vec![context_manager.clone()];
+                            method_args.extend(args);
+                            self.call_user_function(name, params, body.clone(), method_args, HashMap::new(), Some(captured_scope.clone()))
+                        }
+                        Value::BuiltinFunction(_, func) => {
+                            let mut method_args = vec![context_manager.clone()];
+                            method_args.extend(args);
+                            func(method_args)
+                        }
+                        Value::NativeFunction(func) => {
+                            let mut method_args = vec![context_manager.clone()];
+                            method_args.extend(args);
+                            func(method_args)
+                        }
+                        _ => Err(anyhow::anyhow!("'{}' is not callable", method_name)),
+                    }
+                } else {
+                    // Use default implementation or fall back to base object methods
+                    match method_name {
+                        "__enter__" => Ok(context_manager.clone()),
+                        "__exit__" => Ok(Value::Bool(false)),
+                        _ => Err(anyhow::anyhow!("'{}' object has no attribute '{}'", context_manager.type_name(), method_name)),
+                    }
+                }
+            }
+            _ => {
+                // For non-object types, provide default behavior
+                match method_name {
+                    "__enter__" => Ok(context_manager.clone()),
+                    "__exit__" => Ok(Value::Bool(false)),
+                    _ => Err(anyhow::anyhow!("'{}' object has no attribute '{}'", context_manager.type_name(), method_name)),
+                }
+            }
+        }
+    }
+    
     /// Execute if statement
     fn execute_if_statement(
         &mut self,
@@ -1582,7 +2226,7 @@ impl VM {
         // Look for __init__ method in class methods
         if let Some(init_method) = class_methods.get("__init__") {
             match init_method {
-                Value::Function(_, params, body, _) => {
+                Value::Closure { params, body, captured_scope, .. } => {
                     // Create a new instance with empty fields (not class methods) but correct MRO
                     let base_classes = self.class_base_registry.get(class_name)
                         .cloned()
@@ -1599,14 +2243,8 @@ impl VM {
                     let mut init_args = vec![instance];
                     init_args.extend(args);
                     
-                    // Check parameter count (including self)
-                    if params.len() != init_args.len() {
-                        return Err(anyhow::anyhow!("__init__() takes {} arguments but {} were given", 
-                            params.len(), init_args.len()));
-                    }
-                    
                     // Call __init__ method
-                    let modified_instance = self.call_user_function("__init__", params, body.clone(), init_args)?;
+                    let modified_instance = self.call_user_function("__init__", &params, body.clone(), init_args, HashMap::new(), Some(captured_scope.clone()))?;
                     
                     // Return the modified instance
                     Ok(modified_instance)
@@ -1660,8 +2298,7 @@ impl VM {
             Value::Dict(_) => "dict".to_string(),
             Value::None => "None".to_string(),
             Value::Object { class_name, .. } => class_name.clone(),
-            Value::Function(name, _, _, _) => format!("function({})", name),
-            Value::TypedFunction { name, .. } => format!("function({})", name),
+            Value::Closure { name, .. } => format!("function({})", name),
             Value::BuiltinFunction(name, _) => format!("builtin({})", name),
             Value::NativeFunction(_) => format!("native function"),
             Value::TypedValue { type_info, .. } => format!("{:?}", type_info),
@@ -1669,41 +2306,63 @@ impl VM {
         }
     }
 
-    fn call_typed_function(&mut self, name: &str, params: &[String], param_types: &[Option<Type>], return_type: &Option<Type>, body: Vec<Statement>, args: Vec<Value>) -> Result<Value> {
-        if params.len() != args.len() {
-            return Err(anyhow::anyhow!("Function {} expects {} arguments, got {}", 
-                name, params.len(), args.len()));
-        }
+
+
+    pub fn call_user_function(&mut self, name: &str, params: &[Param], body: Vec<Statement>, args: Vec<Value>, kwargs: HashMap<String, Value>, captured_scope: Option<HashMap<String, Value>>) -> Result<Value> {
+        // Push new stack frame
+        self.call_stack.push(StackFrame {
+            function_name: name.to_string(),
+            return_address: self.current_scope,
+            scope_index: self.current_scope,
+        });
         
-        // Check parameter types in strict mode
-        if self.strict_types {
-            for (i, (param_type, arg)) in param_types.iter().zip(&args).enumerate() {
-                if let Some(expected_type) = param_type {
-                    if !self.check_value_type(arg, expected_type) {
-                        return Err(anyhow::anyhow!(
-                            "Function {} parameter '{}' expects type {:?}, got {:?}",
-                            name, params[i], expected_type, self.get_value_type(arg)
-                        ));
+        // Enter function scope
+        let mut new_scope = Scope::new();
+        if let Some(captured) = captured_scope {
+            new_scope.variables = captured;
+        }
+        new_scope.parent = Some(self.current_scope);
+        self.scopes.push(new_scope);
+        self.current_scope = self.scopes.len() - 1;
+
+        // Set parameters
+        let mut arg_index = 0;
+        let mut varargs = Vec::new();
+        let mut varkwargs = HashMap::new();
+
+        for param in params {
+            match param.kind {
+                ParamKind::VarArgs => {
+                    while arg_index < args.len() {
+                        varargs.push(args[arg_index].clone());
+                        arg_index += 1;
+                    }
+                    self.set_variable(&param.name, Value::List(varargs.clone()))?;
+                }
+                ParamKind::VarKwargs => {
+                    for (name, value) in &kwargs {
+                        if !params.iter().any(|p| p.name == *name) {
+                            varkwargs.insert(name.clone(), value.clone());
+                        }
+                    }
+                    self.set_variable(&param.name, Value::Dict(varkwargs.clone()))?;
+                }
+                _ => {
+                    if let Some(value) = kwargs.get(&param.name) {
+                        self.set_variable(&param.name, value.clone())?;
+                    } else if arg_index < args.len() {
+                        self.set_variable(&param.name, args[arg_index].clone())?;
+                        arg_index += 1;
+                    } else if let Some(default_expr) = &param.default {
+                        let default_value = self.execute_expression(default_expr)?;
+                        self.set_variable(&param.name, default_value)?;
+                    } else {
+                        self.set_variable(&param.name, Value::None)?;
                     }
                 }
             }
         }
         
-        // Push new stack frame
-        self.call_stack.push(StackFrame {
-            function_name: name.to_string(),
-            return_address: self.current_scope,
-            scope_index: self.current_scope,
-        });
-        
-        // Enter function scope
-        self.enter_scope("function");
-        
-        // Set parameters
-        for (param, arg) in params.iter().zip(args) {
-            self.set_variable(param, arg)?;
-        }
-        
         // Execute function body
         let mut result = Value::None;
         for stmt in body {
@@ -1720,70 +2379,7 @@ impl VM {
         
         // For __init__ methods, return the modified 'self' parameter
         if name == "__init__" && !params.is_empty() {
-            if let Some(modified_self) = self.get_variable(&params[0]) {
-                result = modified_self;
-            }
-        }
-        
-        // Check return type in strict mode
-        if self.strict_types {
-            if let Some(expected_return_type) = return_type {
-                if !self.check_value_type(&result, expected_return_type) {
-                    return Err(anyhow::anyhow!(
-                        "Function {} return type expects {:?}, got {:?}",
-                        name, expected_return_type, self.get_value_type(&result)
-                    ));
-                }
-            }
-        }
-        
-        // Exit function scope
-        self.exit_scope();
-        
-        // Pop stack frame
-        self.call_stack.pop();
-        
-        Ok(result)
-    }
-
-    pub fn call_user_function(&mut self, name: &str, params: &[String], body: Vec<Statement>, args: Vec<Value>) -> Result<Value> {
-        if params.len() != args.len() {
-            return Err(anyhow::anyhow!("Function {} expects {} arguments, got {}", 
-                name, params.len(), args.len()));
-        }
-        
-        // Push new stack frame
-        self.call_stack.push(StackFrame {
-            function_name: name.to_string(),
-            return_address: self.current_scope,
-            scope_index: self.current_scope,
-        });
-        
-        // Enter function scope
-        self.enter_scope("function");
-        
-        // Set parameters
-        for (param, arg) in params.iter().zip(args) {
-            self.set_variable(param, arg)?;
-        }
-        
-        // Execute function body
-        let mut result = Value::None;
-        for stmt in body {
-            if let Some(value) = self.execute_statement(&stmt)? {
-                result = value;
-            }
-            
-            if self.should_return {
-                result = self.return_value.take().unwrap_or(Value::None);
-                self.should_return = false;
-                break;
-            }
-        }
-        
-        // For __init__ methods, return the modified 'self' parameter
-        if name == "__init__" && !params.is_empty() {
-            if let Some(modified_self) = self.get_variable(&params[0]) {
+            if let Some(modified_self) = self.get_variable(&params[0].name) {
                 result = modified_self;
             }
         }
@@ -1882,8 +2478,30 @@ impl VM {
     
     /// Allocate value with automatic memory management
     pub fn allocate_auto(&self, value: Value) -> Value {
+        // Use the memory API for automatic allocation
+        let managed_ptr = self.memory.auto(value);
         Value::TypedValue {
-            value: Box::new(value),
+            value: Box::new(managed_ptr.get().clone()),
+            type_info: Type::Any,
+        }
+    }
+    
+    /// Allocate value with manual memory management
+    pub fn allocate_manual(&self, value: Value) -> Value {
+        // Use the memory API for manual allocation
+        let managed_ptr = self.memory.manual(value);
+        Value::TypedValue {
+            value: Box::new(managed_ptr.get().clone()),
+            type_info: Type::Any,
+        }
+    }
+    
+    /// Allocate value with hybrid memory management
+    pub fn allocate_hybrid(&self, value: Value) -> Value {
+        // Use the memory API for hybrid allocation
+        let managed_ptr = self.memory.hybrid(value);
+        Value::TypedValue {
+            value: Box::new(managed_ptr.get().clone()),
             type_info: Type::Any,
         }
     }
@@ -1893,9 +2511,29 @@ impl VM {
         self.memory.collect();
     }
     
+    /// Force tracing garbage collection
+    pub fn collect_tracing_gc(&self) {
+        self.memory.collect_tracing();
+    }
+    
     /// Get memory statistics
     pub fn memory_stats(&self) -> String {
         format!("Memory: {}", self.memory.stats())
+    }
+    
+    /// Get memory usage
+    pub fn memory_usage(&self) -> String {
+        self.memory.memory_usage()
+    }
+    
+    /// Set memory management mode
+    pub fn set_memory_mode(&self, mode: MemoryMode) {
+        self.memory.set_memory_mode(mode);
+    }
+    
+    /// Get current memory management mode
+    pub fn get_memory_mode(&self) -> MemoryMode {
+        self.memory.get_memory_mode()
     }
     
     // --- Scope Management ---
@@ -1961,18 +2599,14 @@ impl VM {
     
     /// Set variable without type checking (internal use)
     fn set_variable_unchecked(&mut self, name: &str, value: Value) {
-        println!("DEBUG: Setting variable '{}' to {:?}", name, value);
-        println!("DEBUG: Current scope: {}", self.current_scope);
         
         // First check if the variable exists in any parent scope
         let mut scope_index = Some(self.current_scope);
         
         while let Some(idx) = scope_index {
             let scope = &self.scopes[idx];
-            println!("DEBUG: Checking scope {} for variable '{}'", idx, name);
             if scope.variables.contains_key(name) {
                 // Variable exists in this scope, update it here
-                println!("DEBUG: Found variable '{}' in scope {}, updating", name, idx);
                 self.scopes[idx].variables.insert(name.to_string(), value);
                 return;
             }
@@ -1980,7 +2614,6 @@ impl VM {
         }
         
         // Variable doesn't exist in any parent scope, create it in current scope
-        println!("DEBUG: Creating new variable '{}' in scope {}", name, self.current_scope);
         self.scopes[self.current_scope].variables.insert(name.to_string(), value);
     }
     
@@ -2018,6 +2651,10 @@ impl VM {
         
         None
     }
+
+    pub fn get_current_scope(&self) -> usize {
+        self.current_scope
+    }
     
     pub fn get_global_variables(&self) -> HashMap<String, Value> {
         // Global scope is always at index 0
@@ -2026,6 +2663,11 @@ impl VM {
     
     pub fn get_local_variables(&self) -> HashMap<String, Value> {
         // Current scope variables
+        self.scopes[self.current_scope].variables.clone()
+    }
+    
+    pub fn get_current_scope_variables(&self) -> HashMap<String, Value> {
+        // Same as get_local_variables - return current scope variables
         self.scopes[self.current_scope].variables.clone()
     }
     
@@ -2043,6 +2685,21 @@ impl VM {
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + b as f64)),
+            (Value::Complex { real: a_real, imag: a_imag }, Value::Complex { real: b_real, imag: b_imag }) => {
+                Ok(Value::Complex { real: a_real + b_real, imag: a_imag + b_imag })
+            },
+            (Value::Complex { real, imag }, Value::Int(n)) => {
+                Ok(Value::Complex { real: real + n as f64, imag })
+            },
+            (Value::Complex { real, imag }, Value::Float(f)) => {
+                Ok(Value::Complex { real: real + f, imag })
+            },
+            (Value::Int(n), Value::Complex { real, imag }) => {
+                Ok(Value::Complex { real: n as f64 + real, imag })
+            },
+            (Value::Float(f), Value::Complex { real, imag }) => {
+                Ok(Value::Complex { real: f + real, imag })
+            },
             (Value::Str(a), Value::Str(b)) => Ok(Value::Str(a + &b)),
             (Value::Str(a), Value::Int(b)) => Ok(Value::Str(a + &b.to_string())),
             (Value::Str(a), Value::Float(b)) => Ok(Value::Str(a + &b.to_string())),
@@ -2066,6 +2723,21 @@ impl VM {
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 - b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a - b as f64)),
+            (Value::Complex { real: a_real, imag: a_imag }, Value::Complex { real: b_real, imag: b_imag }) => {
+                Ok(Value::Complex { real: a_real - b_real, imag: a_imag - b_imag })
+            },
+            (Value::Complex { real, imag }, Value::Int(n)) => {
+                Ok(Value::Complex { real: real - n as f64, imag })
+            },
+            (Value::Complex { real, imag }, Value::Float(f)) => {
+                Ok(Value::Complex { real: real - f, imag })
+            },
+            (Value::Int(n), Value::Complex { real, imag }) => {
+                Ok(Value::Complex { real: n as f64 - real, imag: -imag })
+            },
+            (Value::Float(f), Value::Complex { real, imag }) => {
+                Ok(Value::Complex { real: f - real, imag: -imag })
+            },
             _ => Err(anyhow::anyhow!("Invalid types for subtraction")),
         }
     }
@@ -2082,6 +2754,25 @@ impl VM {
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 * b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * b as f64)),
+            (Value::Complex { real: a_real, imag: a_imag }, Value::Complex { real: b_real, imag: b_imag }) => {
+                // (a + bi) * (c + di) = (ac - bd) + (ad + bc)i
+                Ok(Value::Complex { 
+                    real: a_real * b_real - a_imag * b_imag, 
+                    imag: a_real * b_imag + a_imag * b_real 
+                })
+            },
+            (Value::Complex { real, imag }, Value::Int(n)) => {
+                Ok(Value::Complex { real: real * n as f64, imag: imag * n as f64 })
+            },
+            (Value::Complex { real, imag }, Value::Float(f)) => {
+                Ok(Value::Complex { real: real * f, imag: imag * f })
+            },
+            (Value::Int(n), Value::Complex { real, imag }) => {
+                Ok(Value::Complex { real: n as f64 * real, imag: n as f64 * imag })
+            },
+            (Value::Float(f), Value::Complex { real, imag }) => {
+                Ok(Value::Complex { real: f * real, imag: f * imag })
+            },
             (Value::Str(a), Value::Int(b)) => Ok(Value::Str(a.repeat(b as usize))),
             (Value::List(a), Value::Int(b)) => {
                 let mut result = Vec::new();
@@ -2498,6 +3189,7 @@ impl VM {
             ("str", Self::builtin_str),
             ("int", Self::builtin_int),
             ("float", Self::builtin_float),
+            ("complex", crate::builtins::builtin_complex),
             ("bool", Self::builtin_bool),
             ("range", Self::builtin_range),
             ("list", Self::builtin_list),
@@ -2565,22 +3257,38 @@ impl VM {
             ("vars", crate::builtins::builtin_vars),
             ("globals", crate::builtins::builtin_globals),
             ("locals", crate::builtins::builtin_locals),
-            ("eval", crate::builtins::builtin_eval),
-            ("exec", crate::builtins::builtin_exec),
+            ("eval", |_args| Ok(Value::None)), // Placeholder - actual implementation handled in execute_function_call
+            ("exec", |_args| Ok(Value::None)), // Placeholder - actual implementation handled in execute_function_call
             ("compile", crate::builtins::builtin_compile),
             ("breakpoint", crate::builtins::builtin_breakpoint),
             ("input", crate::builtins::builtin_input),
             ("load_library", crate::builtins::builtin_load_library),
+            
+            // Special values
+            ("Ellipsis", |_args| Ok(Value::Ellipsis)),
+            ("NotImplemented", |_args| Ok(Value::NotImplemented)),
         ];
         
         for (name, func) in builtins {
             self.set_variable(name, Value::BuiltinFunction(name.to_string(), func));
         }
         
-        // Initialize built-in modules
-        let builtin_modules = modules::init_builtin_modules();
-        for (name, module) in builtin_modules {
-            self.set_variable(&name, module);
+        // Initialize built-in modules (but don't auto-import them)
+        // Built-in modules are only available when explicitly imported
+        // self.module_system already handles built-in module creation on-demand
+    }
+    
+    /// Initialize package system by integrating PackageManager with ModuleSystem
+    fn init_package_system(&mut self) {
+        // Initialize package directories
+        if let Err(e) = self.package_manager.init() {
+            eprintln!("Warning: Failed to initialize package directories: {}", e);
+        }
+        
+        // Add package search paths to module system
+        let package_paths = self.package_manager.get_search_paths();
+        for path in package_paths {
+            self.module_system.add_search_path(path);
         }
     }
     
@@ -2659,11 +3367,11 @@ impl VM {
             if let Some(Value::Object { fields: class_methods, .. }) = self.get_variable(class_name) {
                 if let Some(method_value) = class_methods.get("__str__") {
                     match method_value {
-                        Value::Function(method_name, params, body, _) => {
+                        Value::Closure { name: method_name, params, body, captured_scope, .. } => {
                             // Call the user-defined dunder method
-                            let mut method_args = vec![value.clone()];
+                            let method_args = vec![value.clone()];
                             
-                            match self.call_user_function(method_name, params, body.clone(), method_args) {
+                            match self.call_user_function(method_name, params, body.clone(), method_args, HashMap::new(), Some(captured_scope.clone())) {
                                 Ok(result) => {
                                     if let Value::Str(s) = result {
                                         return Ok(Value::Str(s));
@@ -2699,11 +3407,11 @@ impl VM {
             if let Some(Value::Object { fields: class_methods, .. }) = self.get_variable(class_name) {
                 if let Some(method_value) = class_methods.get("__repr__") {
                     match method_value {
-                        Value::Function(method_name, params, body, _) => {
+                        Value::Closure { name: method_name, params, body, captured_scope, .. } => {
                             // Call the user-defined dunder method
-                            let mut method_args = vec![value.clone()];
+                            let method_args = vec![value.clone()];
                             
-                            match self.call_user_function(method_name, params, body.clone(), method_args) {
+                            match self.call_user_function(method_name, params, body.clone(), method_args, HashMap::new(), Some(captured_scope.clone())) {
                                 Ok(result) => {
                                     if let Value::Str(s) = result {
                                         return Ok(Value::Str(s));
@@ -2739,11 +3447,11 @@ impl VM {
             if let Some(Value::Object { fields: class_methods, .. }) = self.get_variable(class_name) {
                 if let Some(method_value) = class_methods.get("__len__") {
                     match method_value {
-                        Value::Function(method_name, params, body, _) => {
+                        Value::Closure { name: method_name, params, body, captured_scope, .. } => {
                             // Call the user-defined dunder method
-                            let mut method_args = vec![value.clone()];
+                            let method_args = vec![value.clone()];
                             
-                            match self.call_user_function(method_name, params, body.clone(), method_args) {
+                            match self.call_user_function(method_name, params, body.clone(), method_args, HashMap::new(), Some(captured_scope.clone())) {
                                 Ok(result) => return Ok(result),
                                 Err(_) => {} // Fall through to default implementation
                             }
@@ -3041,10 +3749,8 @@ pub fn run_file_with_options(source: &str, backend: &str, optimization: u8, stri
             let mut vm = VM::new();
             vm.strict_types = strict_types;
             match vm.execute_script(source, vec![]) {
-                Ok(result) => {
-                    if !matches!(result, Value::None) {
-                        println!("{}", result);
-                    }
+                Ok(_) => {
+                    // For scripts, don't print the result (like Python)
                     Ok(())
                 }
                 Err(e) => {

@@ -85,7 +85,7 @@ impl<'py> PythonInterop<'py> {
                 Ok(py_dict.into_py(self.py))
             }
             Value::None => Ok(self.py.None()),
-            Value::Super(current_class, parent_class) => {
+            Value::Super(current_class, parent_class, _) => {
                 // Convert super object to a string representation for Python
                 let super_str = format!("<super: {} -> {}>", current_class, parent_class);
                 Ok(super_str.into_py(self.py))
@@ -148,16 +148,56 @@ impl<'py> PythonInterop<'py> {
         Ok(format!("Python {} on {}", version, platform))
     }
     
-    /// Install Python package using pip
+    /// Install Python package using pip to pysites directory
     pub fn install_package(&self, package_name: &str) -> Result<()> {
-        let code = format!("import subprocess; subprocess.check_call(['pip', 'install', '{}'])", package_name);
+        let pysites_path = std::path::Path::new("tauraro_packages/pysites");
+        
+        // Create pysites directory if it doesn't exist
+        std::fs::create_dir_all(pysites_path)
+            .map_err(|e| anyhow::anyhow!("Failed to create pysites directory: {}", e))?;
+        
+        // Install package to the pysites directory
+        let code = format!(
+            "import subprocess; subprocess.check_call(['pip', 'install', '--target', '{}', '{}'])",
+            pysites_path.display(),
+            package_name
+        );
         self.py.run(&code, None, None)?;
         Ok(())
     }
     
-    /// Check if Python package is available
+    /// Check if Python package is available in pysites or system Python
     pub fn is_package_available(&self, package_name: &str) -> bool {
+        // First check if it's available in pysites
+        let pysites_path = std::path::Path::new("tauraro_packages/pysites").join(package_name);
+        if pysites_path.exists() {
+            return true;
+        }
+        
+        // Then check if it's available in system Python
         self.py.import(package_name).is_ok()
+    }
+    
+    /// List installed packages in pysites directory
+    pub fn list_pysites_packages(&self) -> Result<Vec<String>> {
+        let pysites_path = std::path::Path::new("tauraro_packages/pysites");
+        let mut packages = Vec::new();
+        
+        if pysites_path.exists() {
+            for entry in std::fs::read_dir(pysites_path)? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        if !name.starts_with('.') && !name.ends_with(".dist-info") {
+                            packages.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        
+        packages.sort();
+        Ok(packages)
     }
 }
 

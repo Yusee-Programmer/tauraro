@@ -9,12 +9,13 @@ pub mod vm;
 pub mod runtime;
 pub mod object_system;
 pub mod module_system;
+pub mod package_manager;
 pub mod modules;
 pub mod builtins;
 pub mod builtins_super;
 pub mod base_object;
-pub mod type_hierarchy;
-pub mod metaclass;
+// pub mod type_hierarchy; // Merged into object_system
+// pub mod metaclass; // Merged into object_system
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -37,6 +38,6 @@ pub use builtins::*;
 pub use modules::*;
 pub use module_system::*;
 pub use object_system::*;
-pub use metaclass::*;
+// pub use metaclass::*; // Merged into object_system
 #[cfg(feature = "ffi")]
 pub use ffi::*;
