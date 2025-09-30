@@ -12,7 +12,7 @@ use crate::module_system::{ModuleSystem, ImportSpec};
 use crate::package_manager::{PackageManager, PackageType};
 use crate::builtins_super::builtin_super;
 use crate::base_object::MRO;
-use crate::metaclass::{MROComputer, TypeCreator, MetaClass};
+use crate::object_system::{MROComputer, TypeCreator, MetaClass};
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -88,7 +88,7 @@ impl Scope {
 }
 
 /// Virtual Machine state
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VM {
     pub scopes: Vec<Scope>,
     current_scope: usize,
@@ -110,6 +110,17 @@ pub struct VM {
     class_base_registry: HashMap<String, Vec<String>>, // Track base classes for each class
     type_creator: TypeCreator, // Optimized metaclass and MRO system
     pub current_executing_class: Option<String>, // Track which class method is currently executing for super() calls
+}
+
+impl fmt::Debug for VM {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VM")
+            .field("current_scope", &self.current_scope)
+            .field("strict_types", &self.strict_types)
+            .field("should_return", &self.should_return)
+            .field("current_executing_class", &self.current_executing_class)
+            .finish()
+    }
 }
 
 /// Stack frame for function calls
@@ -653,9 +664,8 @@ impl VM {
                     name.clone(),
                     base_names.clone(),
                     class_namespace,
-                    metaclass_obj,
                     &self.class_registry,
-                )?;
+                ).map_err(|e| anyhow::anyhow!("Class creation error: {}", e))?;
                 
                 // Apply decorators in reverse order (bottom to top)
                 for decorator in decorators.iter().rev() {
