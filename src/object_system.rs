@@ -1,6 +1,1207 @@
 use crate::value::Value;
-use anyhow::Result;
-use std::collections::HashMap;
+use crate::base_object::{BaseObject as OriginalBaseObject, MRO};
+use anyhow::{Result, anyhow};
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::cell::RefCell;
+use std::fmt;
+
+/// CPython-inspired object model for TauraroLang
+/// Provides reference counting and proper type slots
+
+/// Object inspired by CPython's PyObject
+/// Every value in TauraroLang can be wrapped in this for enhanced functionality
+#[derive(Debug, Clone)]
+pub struct TauraroObject {
+    /// Reference to the type information
+    pub type_info: Rc<TauraroType>,
+    /// Reference count for memory management (like CPython's ob_refcnt)
+    pub ref_count: RefCell<usize>,
+    /// The actual value data
+    pub value: Value,
+}
+
+/// Type object inspired by CPython's PyTypeObject
+/// Defines the behavior and characteristics of a type
+#[derive(Debug, Clone)]
+pub struct TauraroType {
+    /// Type name (like CPython's tp_name)
+    pub name: String,
+    /// Basic size of instances (like CPython's tp_basicsize)
+    pub basic_size: usize,
+    /// Type flags (like CPython's tp_flags)
+    pub flags: TypeFlags,
+    /// Type slots containing function pointers (like CPython's tp_* slots)
+    pub slots: TypeSlots,
+    /// Method resolution order
+    pub mro: Vec<String>,
+    /// Base classes
+    pub bases: Vec<String>,
+    /// Methods defined on this type
+    pub methods: HashMap<String, fn(&[Value]) -> Result<Value>>,
+}
+
+/// Type flags similar to CPython's tp_flags
+#[derive(Debug, Clone)]
+pub struct TypeFlags {
+    pub is_builtin: bool,
+    pub supports_gc: bool,
+    pub is_base_type: bool,
+    pub supports_weakrefs: bool,
+}
+
+/// Type slots structure containing function pointers for various operations
+/// Enhanced with CPython's complete protocol support
+#[derive(Clone)]
+pub struct TypeSlots {
+    /// Number protocol slots (like PyNumberMethods)
+    pub number: Option<NumberSlots>,
+    /// Sequence protocol slots (like PySequenceMethods)  
+    pub sequence: Option<SequenceSlots>,
+    /// Mapping protocol slots (like PyMappingMethods)
+    pub mapping: Option<MappingSlots>,
+    /// Iterator protocol slots
+    pub iterator: Option<IteratorSlots>,
+    /// Async protocol slots
+    pub async_: Option<AsyncSlots>,
+    /// Buffer protocol slots
+    pub buffer: Option<BufferSlots>,
+    
+    /// Basic object slots
+    pub init: Option<Rc<dyn Fn(&[Value]) -> Result<Value>>>,
+    pub repr: Option<Rc<dyn Fn(&Value) -> Result<String>>>,
+    pub str: Option<Rc<dyn Fn(&Value) -> Result<String>>>,
+    pub hash: Option<Rc<dyn Fn(&Value) -> Result<i64>>>,
+    pub call: Option<Rc<dyn Fn(&Value, &[Value]) -> Result<Value>>>,
+    pub bool_: Option<Rc<dyn Fn(&Value) -> Result<bool>>>,
+    pub len: Option<Rc<dyn Fn(&Value) -> Result<usize>>>,
+    
+    /// Rich comparison slots
+    pub eq: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub ne: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub lt: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub le: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub gt: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub ge: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    
+    /// Attribute access slots
+    pub getattr: Option<Rc<dyn Fn(&Value, &str) -> Result<Value>>>,
+    pub setattr: Option<Rc<dyn Fn(&Value, &str, &Value) -> Result<()>>>,
+    pub delattr: Option<Rc<dyn Fn(&Value, &str) -> Result<()>>>,
+    
+    /// Descriptor protocol slots
+    pub get: Option<Rc<dyn Fn(&Value, &Value, &Value) -> Result<Value>>>,
+    pub set: Option<Rc<dyn Fn(&Value, &Value, &Value) -> Result<()>>>,
+    pub delete: Option<Rc<dyn Fn(&Value, &Value) -> Result<()>>>,
+}
+
+/// Number protocol slots (like PyNumberMethods)
+#[derive(Clone)]
+pub struct NumberSlots {
+    pub add: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub subtract: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub multiply: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub divide: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub remainder: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub power: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub negative: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
+    pub positive: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
+    pub absolute: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
+    pub invert: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
+    pub lshift: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub rshift: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub and: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub xor: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub or: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+}
+
+/// Sequence protocol slots (like PySequenceMethods)
+#[derive(Clone)]
+pub struct SequenceSlots {
+    pub length: Option<Rc<dyn Fn(&Value) -> Result<usize>>>,
+    pub item: Option<Rc<dyn Fn(&Value, isize) -> Result<Value>>>,
+    pub set_item: Option<Rc<dyn Fn(&Value, isize, &Value) -> Result<()>>>,
+    pub contains: Option<Rc<dyn Fn(&Value, &Value) -> Result<bool>>>,
+    pub concat: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub repeat: Option<Rc<dyn Fn(&Value, isize) -> Result<Value>>>,
+}
+
+/// Mapping protocol slots (like PyMappingMethods)
+#[derive(Clone)]
+pub struct MappingSlots {
+    pub length: Option<Rc<dyn Fn(&Value) -> Result<usize>>>,
+    pub subscript: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub set_subscript: Option<Rc<dyn Fn(&Value, &Value, &Value) -> Result<()>>>,
+}
+
+/// Iterator protocol slots
+#[derive(Clone)]
+pub struct IteratorSlots {
+    pub iter: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
+    pub next: Option<Rc<dyn Fn(&Value) -> Result<Option<Value>>>>,
+}
+
+/// Async protocol slots
+#[derive(Clone)]
+pub struct AsyncSlots {
+    pub await_: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
+    pub aiter: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
+    pub anext: Option<Rc<dyn Fn(&Value) -> Result<Option<Value>>>>,
+}
+
+/// Buffer protocol slots
+#[derive(Clone)]
+pub struct BufferSlots {
+    pub get_buffer: Option<Rc<dyn Fn(&Value) -> Result<Vec<u8>>>>,
+    pub release_buffer: Option<Rc<dyn Fn(&Value) -> Result<()>>>,
+}
+
+/// CPython-inspired metaclass system for class creation and MRO computation
+/// Implements type() builtin and advanced metaclass functionality
+#[derive(Debug, Clone)]
+pub struct MetaClass {
+    pub name: String,
+    pub bases: Vec<String>,
+    pub namespace: HashMap<String, Value>,
+    pub mro_cache: Option<Vec<String>>,
+    pub custom_mro_method: Option<String>,
+}
+
+/// Optimized MRO computation system with caching and validation
+/// Implements C3 linearization algorithm used by CPython
+#[derive(Debug, Clone)]
+pub struct MROComputer {
+    /// Cache of computed MROs to avoid recomputation
+    cache: HashMap<String, Vec<String>>,
+    /// Validation cache to avoid re-validating the same hierarchies
+    validation_cache: HashMap<String, Result<(), String>>,
+}
+
+/// Type creation system that mimics Python's type() builtin
+/// Provides comprehensive class creation with metaclass support
+#[derive(Debug, Clone)]
+pub struct TypeCreator {
+    pub mro_computer: MROComputer,
+}
+
+/// Built-in type hierarchy system - ensures all types inherit from object
+/// Provides MRO computation for built-in types like int, str, list, etc.
+#[derive(Debug, Clone)]
+pub struct TypeHierarchy;
+
+/// Type registry for managing all types in the system
+/// This replaces the scattered type management we had before
+#[derive(Clone)]
+pub struct TypeRegistry {
+    types: HashMap<String, Rc<TauraroType>>,
+    /// MRO computer for class hierarchy operations
+    pub mro_computer: MROComputer,
+    /// Type creator for dynamic class creation
+    pub type_creator: TypeCreator,
+    /// Builtin type hierarchy manager
+    pub type_hierarchy: TypeHierarchy,
+}
+
+/// Debug implementations for complex function pointer types
+impl fmt::Debug for TypeSlots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TypeSlots")
+            .field("number", &self.number.is_some())
+            .field("sequence", &self.sequence.is_some())
+            .field("mapping", &self.mapping.is_some())
+            .field("iterator", &self.iterator.is_some())
+            .field("async_", &self.async_.is_some())
+            .field("buffer", &self.buffer.is_some())
+            .field("init", &self.init.is_some())
+            .field("repr", &self.repr.is_some())
+            .field("str", &self.str.is_some())
+            .field("hash", &self.hash.is_some())
+            .field("call", &self.call.is_some())
+            .field("bool_", &self.bool_.is_some())
+            .field("len", &self.len.is_some())
+            .field("eq", &self.eq.is_some())
+            .field("ne", &self.ne.is_some())
+            .field("lt", &self.lt.is_some())
+            .field("le", &self.le.is_some())
+            .field("gt", &self.gt.is_some())
+            .field("ge", &self.ge.is_some())
+            .field("getattr", &self.getattr.is_some())
+            .field("setattr", &self.setattr.is_some())
+            .field("delattr", &self.delattr.is_some())
+            .field("get", &self.get.is_some())
+            .field("set", &self.set.is_some())
+            .field("delete", &self.delete.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Debug for NumberSlots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NumberSlots")
+            .field("add", &self.add.is_some())
+            .field("subtract", &self.subtract.is_some())
+            .field("multiply", &self.multiply.is_some())
+            .field("divide", &self.divide.is_some())
+            .field("remainder", &self.remainder.is_some())
+            .field("power", &self.power.is_some())
+            .field("negative", &self.negative.is_some())
+            .field("positive", &self.positive.is_some())
+            .field("absolute", &self.absolute.is_some())
+            .field("invert", &self.invert.is_some())
+            .field("lshift", &self.lshift.is_some())
+            .field("rshift", &self.rshift.is_some())
+            .field("and", &self.and.is_some())
+            .field("xor", &self.xor.is_some())
+            .field("or", &self.or.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Debug for SequenceSlots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SequenceSlots")
+            .field("length", &self.length.is_some())
+            .field("item", &self.item.is_some())
+            .field("set_item", &self.set_item.is_some())
+            .field("contains", &self.contains.is_some())
+            .field("concat", &self.concat.is_some())
+            .field("repeat", &self.repeat.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Debug for MappingSlots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MappingSlots")
+            .field("length", &self.length.is_some())
+            .field("subscript", &self.subscript.is_some())
+            .field("set_subscript", &self.set_subscript.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Debug for IteratorSlots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IteratorSlots")
+            .field("iter", &self.iter.is_some())
+            .field("next", &self.next.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Debug for AsyncSlots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AsyncSlots")
+            .field("await_", &self.await_.is_some())
+            .field("aiter", &self.aiter.is_some())
+            .field("anext", &self.anext.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Debug for BufferSlots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BufferSlots")
+            .field("get_buffer", &self.get_buffer.is_some())
+            .field("release_buffer", &self.release_buffer.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Debug for TypeRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TypeRegistry")
+            .field("types", &self.types.keys().collect::<Vec<_>>())
+            .field("mro_computer", &self.mro_computer)
+            .field("type_creator", &self.type_creator)
+            .field("type_hierarchy", &self.type_hierarchy)
+            .finish()
+    }
+}
+
+impl Default for TypeSlots {
+    fn default() -> Self {
+        Self {
+            number: None,
+            sequence: None,
+            mapping: None,
+            iterator: None,
+            async_: None,
+            buffer: None,
+            init: None,
+            repr: None,
+            str: None,
+            hash: None,
+            call: None,
+            bool_: None,
+            len: None,
+            eq: None,
+            ne: None,
+            lt: None,
+            le: None,
+            gt: None,
+            ge: None,
+            getattr: None,
+            setattr: None,
+            delattr: None,
+            get: None,
+            set: None,
+            delete: None,
+        }
+    }
+}
+
+// Implementation of MetaClass
+impl MetaClass {
+    pub fn new(name: String, bases: Vec<String>, namespace: HashMap<String, Value>) -> Self {
+        Self {
+            name,
+            bases,
+            namespace,
+            mro_cache: None,
+            custom_mro_method: None,
+        }
+    }
+
+    pub fn set_custom_mro_method(&mut self, method_name: String) {
+        self.custom_mro_method = Some(method_name);
+        self.mro_cache = None;
+    }
+
+    pub fn has_custom_mro(&self) -> bool {
+        self.custom_mro_method.is_some()
+    }
+
+    pub fn invoke_custom_mro(
+        &self,
+        class_name: &str,
+        bases: &[String],
+        class_registry: &HashMap<String, Vec<String>>,
+    ) -> Result<Option<Vec<String>>, String> {
+        if let Some(method_name) = &self.custom_mro_method {
+            match method_name.as_str() {
+                "__mro__" => Ok(None),
+                "reverse_mro" => {
+                    let mut reversed_bases = bases.to_vec();
+                    reversed_bases.reverse();
+                    let mut result = vec![class_name.to_string()];
+                    result.extend(reversed_bases);
+                    result.push("object".to_string());
+                    Ok(Some(result))
+                }
+                "depth_first_mro" => {
+                    let mut result = vec![class_name.to_string()];
+                    for base in bases {
+                        if let Some(base_mro) = class_registry.get(base) {
+                            for class in base_mro {
+                                if !result.contains(class) {
+                                    result.push(class.clone());
+                                }
+                            }
+                        } else if !result.contains(base) {
+                            result.push(base.clone());
+                        }
+                    }
+                    if !result.contains(&"object".to_string()) {
+                        result.push("object".to_string());
+                    }
+                    Ok(Some(result))
+                }
+                _ => Err(format!("Unknown custom MRO method: {}", method_name))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_cached_mro(&self) -> Option<&Vec<String>> {
+        self.mro_cache.as_ref()
+    }
+
+    pub fn cache_mro(&mut self, mro: Vec<String>) {
+        self.mro_cache = Some(mro);
+    }
+
+    pub fn invalidate_mro_cache(&mut self) {
+        self.mro_cache = None;
+    }
+}
+
+// Implementation of MROComputer
+impl MROComputer {
+    pub fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+            validation_cache: HashMap::new(),
+        }
+    }
+
+    pub fn compute_optimized_c3_linearization(
+        &mut self,
+        class_name: &str,
+        bases: &[String],
+        class_registry: &HashMap<String, Vec<String>>,
+    ) -> Result<Vec<String>, String> {
+        let cache_key = format!("{}:{}", class_name, bases.join(","));
+        
+        if let Some(cached_result) = self.cache.get(&cache_key) {
+            return Ok(cached_result.clone());
+        }
+
+        self.validate_hierarchy(class_name, bases, class_registry)?;
+        let result = self.compute_c3_with_optimizations(class_name, bases, class_registry)?;
+        self.cache.insert(cache_key, result.clone());
+        
+        Ok(result)
+    }
+
+    fn compute_c3_with_optimizations(
+        &mut self,
+        class_name: &str,
+        bases: &[String],
+        class_registry: &HashMap<String, Vec<String>>,
+    ) -> Result<Vec<String>, String> {
+        if bases.is_empty() {
+            return Ok(vec![class_name.to_string(), "object".to_string()]);
+        }
+
+        let mut base_linearizations = Vec::with_capacity(bases.len() + 1);
+        
+        for base in bases {
+            let base_mro = if base == "object" {
+                vec!["object".to_string()]
+            } else if let Some(base_bases) = class_registry.get(base) {
+                self.compute_optimized_c3_linearization(base, base_bases, class_registry)?
+            } else {
+                vec![base.clone(), "object".to_string()]
+            };
+            base_linearizations.push(base_mro);
+        }
+
+        base_linearizations.push(bases.to_vec());
+        let merged = self.optimized_c3_merge(base_linearizations)?;
+        
+        let mut result = Vec::with_capacity(merged.len() + 1);
+        result.push(class_name.to_string());
+        result.extend(merged);
+        
+        Ok(result)
+    }
+
+    fn optimized_c3_merge(&self, mut sequences: Vec<Vec<String>>) -> Result<Vec<String>, String> {
+        let mut result = Vec::new();
+        
+        while !sequences.is_empty() {
+            sequences.retain(|seq| !seq.is_empty());
+            
+            if sequences.is_empty() {
+                break;
+            }
+
+            let mut candidate_found = false;
+            let mut selected_candidate: Option<String> = None;
+            
+            for seq in &sequences {
+                if seq.is_empty() {
+                    continue;
+                }
+                
+                let candidate = &seq[0];
+                let appears_in_tail = sequences.iter()
+                    .any(|other_seq| other_seq.len() > 1 && other_seq[1..].contains(candidate));
+                
+                if !appears_in_tail {
+                    result.push(candidate.clone());
+                    selected_candidate = Some(candidate.clone());
+                    candidate_found = true;
+                    break;
+                }
+            }
+            
+            if let Some(candidate) = selected_candidate {
+                for seq in &mut sequences {
+                    if !seq.is_empty() && seq[0] == candidate {
+                        seq.remove(0);
+                    }
+                }
+            }
+            
+            if !candidate_found {
+                return Err(format!(
+                    "Cannot create consistent MRO - circular dependency detected in sequences: {:?}",
+                    sequences
+                ));
+            }
+        }
+        
+        Ok(result)
+    }
+
+    fn validate_hierarchy(
+        &mut self,
+        class_name: &str,
+        bases: &[String],
+        class_registry: &HashMap<String, Vec<String>>,
+    ) -> Result<(), String> {
+        let validation_key = format!("{}:{}", class_name, bases.join(","));
+        
+        if let Some(cached_result) = self.validation_cache.get(&validation_key) {
+            return cached_result.clone();
+        }
+
+        let mut validation_result = Ok(());
+
+        if bases.contains(&class_name.to_string()) {
+            validation_result = Err(format!("Class '{}' cannot inherit from itself", class_name));
+        }
+
+        if validation_result.is_ok() {
+            let mut seen_bases = HashSet::new();
+            for base in bases {
+                if !seen_bases.insert(base) {
+                    validation_result = Err(format!("Duplicate base class '{}' in inheritance list", base));
+                    break;
+                }
+            }
+        }
+
+        if validation_result.is_ok() {
+            validation_result = self.detect_circular_inheritance(class_name, bases, class_registry);
+        }
+
+        if validation_result.is_ok() {
+            for base in bases {
+                if base != "object" && !class_registry.contains_key(base) {
+                    validation_result = Err(format!("Base class '{}' not found in registry", base));
+                    break;
+                }
+            }
+        }
+
+        self.validation_cache.insert(validation_key, validation_result.clone());
+        validation_result
+    }
+
+    fn detect_circular_inheritance(
+        &self,
+        class_name: &str,
+        bases: &[String],
+        class_registry: &HashMap<String, Vec<String>>,
+    ) -> Result<(), String> {
+        let mut visited = HashSet::new();
+        let mut path = Vec::new();
+        
+        self.dfs_circular_check(class_name, class_name, bases, class_registry, &mut visited, &mut path)
+    }
+
+    fn dfs_circular_check(
+        &self,
+        current_class: &str,
+        original_class: &str,
+        original_bases: &[String],
+        class_registry: &HashMap<String, Vec<String>>,
+        visited: &mut HashSet<String>,
+        path: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if path.contains(&current_class.to_string()) {
+            return Err(format!(
+                "Circular inheritance detected: {} -> {}",
+                path.join(" -> "),
+                current_class
+            ));
+        }
+
+        if visited.contains(current_class) {
+            return Ok(());
+        }
+
+        visited.insert(current_class.to_string());
+        path.push(current_class.to_string());
+
+        let current_bases = if current_class == original_class {
+            original_bases.to_vec()
+        } else {
+            if let Some(mro) = class_registry.get(current_class) {
+                let bases_from_mro: Vec<String> = mro.iter()
+                    .skip(1)
+                    .take_while(|&class| class != "object")
+                    .cloned()
+                    .collect();
+                bases_from_mro
+            } else {
+                vec![]
+            }
+        };
+
+        for base in &current_bases {
+            if base != "object" {
+                self.dfs_circular_check(base, original_class, original_bases, class_registry, visited, path)?;
+            }
+        }
+
+        path.pop();
+        Ok(())
+    }
+
+    pub fn invalidate_cache(&mut self) {
+        self.cache.clear();
+        self.validation_cache.clear();
+    }
+
+    pub fn get_cache_stats(&self) -> (usize, usize) {
+        (self.cache.len(), self.validation_cache.len())
+    }
+}
+
+// Implementation of TypeCreator
+impl TypeCreator {
+    pub fn new() -> Self {
+        Self {
+            mro_computer: MROComputer::new(),
+        }
+    }
+
+    pub fn create_type(
+        &mut self,
+        name: String,
+        bases: Vec<String>,
+        namespace: HashMap<String, Value>,
+        metaclass: Option<MetaClass>,
+        existing_class_registry: &HashMap<String, Vec<String>>,
+    ) -> Result<Value> {
+        let mut class_registry = existing_class_registry.clone();
+        
+        if !class_registry.contains_key("object") {
+            class_registry.insert("object".to_string(), vec!["object".to_string()]);
+        }
+        
+        let mro_linearization = if let Some(ref meta) = metaclass {
+            if meta.has_custom_mro() {
+                match meta.invoke_custom_mro(&name, &bases, &class_registry) {
+                    Ok(Some(custom_mro)) => custom_mro,
+                    Ok(None) => {
+                        self.mro_computer.compute_optimized_c3_linearization(
+                            &name,
+                            &bases,
+                            &class_registry,
+                        ).map_err(|e| anyhow!(e))?
+                    }
+                    Err(e) => {
+                        return Err(anyhow!("Custom MRO method failed: {}", e));
+                    }
+                }
+            } else {
+                self.mro_computer.compute_optimized_c3_linearization(
+                    &name,
+                    &bases,
+                    &class_registry,
+                ).map_err(|e| anyhow!(e))?
+            }
+        } else {
+            self.mro_computer.compute_optimized_c3_linearization(
+                &name,
+                &bases,
+                &class_registry,
+            ).map_err(|e| anyhow!(e))?
+        };
+        
+        if let Some(mut meta) = metaclass {
+            meta.cache_mro(mro_linearization.clone());
+        }
+        
+        let class_value = Value::Object {
+            class_name: name.clone(),
+            fields: namespace,
+            base_object: OriginalBaseObject::new(name.clone(), bases),
+            mro: MRO::from_linearization(mro_linearization),
+        };
+
+        Ok(class_value)
+    }
+
+    pub fn mro_computer(&mut self) -> &mut MROComputer {
+        &mut self.mro_computer
+    }
+
+    pub fn invalidate_caches(&mut self) {
+        self.mro_computer.invalidate_cache();
+    }
+
+    pub fn get_performance_stats(&self) -> (usize, usize) {
+        self.mro_computer.get_cache_stats()
+    }
+}
+
+// Implementation of TypeHierarchy
+impl TypeHierarchy {
+    pub fn get_builtin_mro(type_name: &str) -> MRO {
+        let class_mros = HashMap::new();
+        match type_name {
+            "int" => {
+                let linearization = MRO::compute_c3_linearization("int", &[String::from("object")], &class_mros)
+                    .unwrap_or_else(|_| vec!["int".to_string(), "object".to_string()]);
+                MRO::from_linearization(linearization)
+            },
+            "float" => {
+                let linearization = MRO::compute_c3_linearization("float", &[String::from("object")], &class_mros)
+                    .unwrap_or_else(|_| vec!["float".to_string(), "object".to_string()]);
+                MRO::from_linearization(linearization)
+            },
+            "str" => {
+                let linearization = MRO::compute_c3_linearization("str", &[String::from("object")], &class_mros)
+                    .unwrap_or_else(|_| vec!["str".to_string(), "object".to_string()]);
+                MRO::from_linearization(linearization)
+            },
+            "bool" => {
+                let linearization = MRO::compute_c3_linearization("bool", &[String::from("int"), String::from("object")], &class_mros)
+                    .unwrap_or_else(|_| vec!["bool".to_string(), "int".to_string(), "object".to_string()]);
+                MRO::from_linearization(linearization)
+            },
+            "list" | "dict" | "tuple" | "set" | "bytes" | "bytearray" | "function" | "module" | "NoneType" => {
+                let linearization = MRO::compute_c3_linearization(type_name, &[String::from("object")], &class_mros)
+                    .unwrap_or_else(|_| vec![type_name.to_string(), "object".to_string()]);
+                MRO::from_linearization(linearization)
+            },
+            "object" => MRO::from_linearization(vec!["object".to_string()]),
+            _ => MRO::from_linearization(vec!["object".to_string()]),
+        }
+    }
+
+    pub fn get_builtin_base_object(type_name: &str) -> OriginalBaseObject {
+        let parents = match type_name {
+            "bool" => vec!["int".to_string(), "object".to_string()],
+            _ => vec!["object".to_string()],
+        };
+        OriginalBaseObject::new(type_name.to_string(), parents)
+    }
+
+    pub fn is_subtype(subtype: &str, supertype: &str) -> bool {
+        if subtype == supertype {
+            return true;
+        }
+        
+        let mro = Self::get_builtin_mro(subtype);
+        mro.linearization.iter().any(|class| class == supertype)
+    }
+
+    pub fn get_parent_types(type_name: &str) -> Vec<String> {
+        let mro = Self::get_builtin_mro(type_name);
+        mro.linearization[1..].to_vec()
+    }
+
+    pub fn isinstance(value: &Value, expected_type: &str) -> bool {
+        let value_type = value.type_name();
+        Self::is_subtype(&value_type, expected_type)
+    }
+
+    pub fn get_type_info(value: &Value) -> String {
+        let type_name = value.type_name();
+        let mro = Self::get_builtin_mro(&type_name);
+        format!("{} (MRO: {})", type_name, mro.linearization.join(" -> "))
+    }
+}
+
+// Implementation of TypeRegistry
+impl TypeRegistry {
+    pub fn new() -> Self {
+        let mut registry = Self {
+            types: HashMap::new(),
+            mro_computer: MROComputer::new(),
+            type_creator: TypeCreator::new(),
+            type_hierarchy: TypeHierarchy,
+        };
+        registry.init_builtin_types();
+        registry
+    }
+    
+    fn init_builtin_types(&mut self) {
+        let int_type = self.create_int_type();
+        self.types.insert("int".to_string(), Rc::new(int_type));
+        
+        let float_type = self.create_float_type();
+        self.types.insert("float".to_string(), Rc::new(float_type));
+        
+        let str_type = self.create_str_type();
+        self.types.insert("str".to_string(), Rc::new(str_type));
+        
+        let bool_type = self.create_bool_type();
+        self.types.insert("bool".to_string(), Rc::new(bool_type));
+        
+        let list_type = self.create_list_type();
+        self.types.insert("list".to_string(), Rc::new(list_type));
+        
+        let dict_type = self.create_dict_type();
+        self.types.insert("dict".to_string(), Rc::new(dict_type));
+    }
+    
+    fn create_int_type(&self) -> TauraroType {
+        let mut int_type = TauraroType::builtin("int".to_string());
+        
+        int_type.slots.number = Some(NumberSlots {
+            add: Some(Rc::new(|left, right| {
+                match (left, right) {
+                    (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                    (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
+                    _ => Err(anyhow::anyhow!("Invalid types for int addition")),
+                }
+            })),
+            subtract: Some(Rc::new(|left, right| {
+                match (left, right) {
+                    (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+                    (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 - b)),
+                    _ => Err(anyhow::anyhow!("Invalid types for int subtraction")),
+                }
+            })),
+            multiply: None,
+            divide: None,
+            remainder: None,
+            power: None,
+            negative: None,
+            positive: None,
+            absolute: None,
+            invert: None,
+            lshift: None,
+            rshift: None,
+            and: None,
+            xor: None,
+            or: None,
+        });
+        
+        int_type
+    }
+    
+    fn create_float_type(&self) -> TauraroType {
+        let mut float_type = TauraroType::builtin("float".to_string());
+        
+        float_type.slots.number = Some(NumberSlots {
+            add: Some(Rc::new(|left, right| {
+                match (left, right) {
+                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+                    (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
+                    _ => Err(anyhow::anyhow!("Invalid types for float addition")),
+                }
+            })),
+            subtract: None,
+            multiply: None,
+            divide: None,
+            remainder: None,
+            power: None,
+            negative: None,
+            positive: None,
+            absolute: None,
+            invert: None,
+            lshift: None,
+            rshift: None,
+            and: None,
+            xor: None,
+            or: None,
+        });
+        
+        float_type
+    }
+    
+    fn create_str_type(&self) -> TauraroType {
+        let mut str_type = TauraroType::builtin("str".to_string());
+        
+        str_type.slots.sequence = Some(SequenceSlots {
+            length: Some(Rc::new(|value| {
+                match value {
+                    Value::Str(s) => Ok(s.len()),
+                    _ => Err(anyhow::anyhow!("Invalid type for str length")),
+                }
+            })),
+            item: None,
+            set_item: None,
+            contains: None,
+            concat: None,
+            repeat: None,
+        });
+        
+        str_type
+    }
+    
+    fn create_bool_type(&self) -> TauraroType {
+        TauraroType::builtin("bool".to_string())
+    }
+    
+    fn create_list_type(&self) -> TauraroType {
+        let mut list_type = TauraroType::builtin("list".to_string());
+        
+        list_type.slots.sequence = Some(SequenceSlots {
+            length: Some(Rc::new(|value| {
+                match value {
+                    Value::List(items) => Ok(items.len()),
+                    _ => Err(anyhow::anyhow!("Invalid type for list length")),
+                }
+            })),
+            item: None,
+            set_item: None,
+            contains: None,
+            concat: None,
+            repeat: None,
+        });
+        
+        list_type
+    }
+    
+    fn create_dict_type(&self) -> TauraroType {
+        let mut dict_type = TauraroType::builtin("dict".to_string());
+        
+        dict_type.slots.mapping = Some(MappingSlots {
+            length: Some(Rc::new(|value| {
+                match value {
+                    Value::Dict(map) => Ok(map.len()),
+                    _ => Err(anyhow::anyhow!("Invalid type for dict length")),
+                }
+            })),
+            subscript: None,
+            set_subscript: None,
+        });
+        
+        dict_type
+    }
+    
+    pub fn get_type(&self, name: &str) -> Option<Rc<TauraroType>> {
+        self.types.get(name).cloned()
+    }
+    
+    pub fn register_type(&mut self, name: String, type_obj: TauraroType) {
+        self.types.insert(name, Rc::new(type_obj));
+    }
+}
+
+// Implementation of TauraroObject
+impl TauraroObject {
+    pub fn new(type_info: Rc<TauraroType>, value: Value) -> Self {
+        Self {
+            type_info,
+            ref_count: RefCell::new(1),
+            value,
+        }
+    }
+    
+    pub fn incref(&self) {
+        *self.ref_count.borrow_mut() += 1;
+    }
+    
+    pub fn decref(&self) -> bool {
+        let mut count = self.ref_count.borrow_mut();
+        *count -= 1;
+        *count == 0
+    }
+    
+    pub fn ref_count(&self) -> usize {
+        *self.ref_count.borrow()
+    }
+    
+    pub fn call_method(&self, method_name: &str, args: &[Value]) -> Result<Value> {
+        if let Some(method) = self.type_info.methods.get(method_name) {
+            return method(args);
+        }
+        
+        Err(anyhow::anyhow!("'{}' object has no attribute '{}'", 
+                           self.type_info.name, method_name))
+    }
+}
+
+// Implementation of TauraroType
+impl TauraroType {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            basic_size: std::mem::size_of::<Value>(),
+            flags: TypeFlags {
+                is_builtin: false,
+                supports_gc: true,
+                is_base_type: false,
+                supports_weakrefs: false,
+            },
+            slots: TypeSlots::default(),
+            mro: vec!["object".to_string()],
+            bases: vec!["object".to_string()],
+            methods: HashMap::new(),
+        }
+    }
+    
+    pub fn builtin(name: String) -> Self {
+        let mut type_obj = Self::new(name);
+        type_obj.flags.is_builtin = true;
+        type_obj
+    }
+}
+
+
+
+                }
+            })),
+            // TODO: Implement other sequence operations
+            item: None,
+            set_item: None,
+            contains: None,
+            concat: None,
+            repeat: None,
+        });
+        
+        str_type
+    }
+    
+    fn create_bool_type(&self) -> TauraroType {
+        TauraroType::builtin("bool".to_string())
+    }
+    
+    fn create_list_type(&self) -> TauraroType {
+        let mut list_type = TauraroType::builtin("list".to_string());
+        
+        // Set up sequence slots for list
+        list_type.slots.sequence = Some(SequenceSlots {
+            length: Some(Rc::new(|value| {
+                match value {
+                    Value::List(items) => Ok(items.len()),
+                    _ => Err(anyhow::anyhow!("Invalid type for list length")),
+                }
+            })),
+            // TODO: Implement other sequence operations
+            item: None,
+            set_item: None,
+            contains: None,
+            concat: None,
+            repeat: None,
+        });
+        
+        list_type
+    }
+    
+    fn create_dict_type(&self) -> TauraroType {
+        let mut dict_type = TauraroType::builtin("dict".to_string());
+        
+        // Set up mapping slots for dict
+        dict_type.slots.mapping = Some(MappingSlots {
+            length: Some(Rc::new(|value| {
+                match value {
+                    Value::Dict(map) => Ok(map.len()),
+                    _ => Err(anyhow::anyhow!("Invalid type for dict length")),
+                }
+            })),
+            // TODO: Implement other mapping operations
+            subscript: None,
+            set_subscript: None,
+        });
+        
+        dict_type
+    }
+    
+    pub fn get_type(&self, name: &str) -> Option<Rc<TauraroType>> {
+        self.types.get(name).cloned()
+    }
+    
+    pub fn register_type(&mut self, name: String, type_obj: TauraroType) {
+        self.types.insert(name, Rc::new(type_obj));
+    }
+}
+
+impl TauraroObject {
+    /// Create a new object with reference count of 1 (like Py_INCREF)
+    pub fn new(type_info: Rc<TauraroType>, value: Value) -> Self {
+        Self {
+            type_info,
+            ref_count: RefCell::new(1),
+            value,
+        }
+    }
+    
+    /// Increment reference count (like Py_INCREF)
+    pub fn incref(&self) {
+        *self.ref_count.borrow_mut() += 1;
+    }
+    
+    /// Decrement reference count (like Py_DECREF)
+    pub fn decref(&self) -> bool {
+        let mut count = self.ref_count.borrow_mut();
+        *count -= 1;
+        *count == 0
+    }
+    
+    /// Get current reference count
+    pub fn ref_count(&self) -> usize {
+        *self.ref_count.borrow()
+    }
+    
+    /// Call a method on this object using the type's method resolution
+    pub fn call_method(&self, method_name: &str, args: &[Value]) -> Result<Value> {
+        // First check if the method exists in the type
+        if let Some(method) = self.type_info.methods.get(method_name) {
+            return method(args);
+        }
+        
+        // Then check the method resolution order
+        for base_type_name in &self.type_info.mro {
+            // This would need integration with the global type registry
+            // For now, we'll implement a simpler version
+        }
+        
+        Err(anyhow::anyhow!("'{}' object has no attribute '{}'", 
+                           self.type_info.name, method_name))
+    }
+}
+
+impl TauraroType {
+    /// Create a new type with default slots
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            basic_size: std::mem::size_of::<Value>(),
+            flags: TypeFlags {
+                is_builtin: false,
+                supports_gc: true,
+                is_base_type: false,
+                supports_weakrefs: false,
+            },
+            slots: TypeSlots::default(),
+            mro: vec!["object".to_string()],
+            bases: vec!["object".to_string()],
+            methods: HashMap::new(),
+        }
+    }
+    
+    /// Create a builtin type with specific slots
+    pub fn builtin(name: String) -> Self {
+        let mut type_obj = Self::new(name);
+        type_obj.flags.is_builtin = true;
+        type_obj
+    }
+}
+
+impl Default for TypeSlots {
+    fn default() -> Self {
+        Self {
+            number: None,
+            sequence: None,
+            mapping: None,
+            iterator: None,
+            async_: None,
+            buffer: None,
+            init: None,
+            repr: None,
+            str: None,
+            hash: None,
+            call: None,
+            bool_: None,
+            len: None,
+            eq: None,
+            ne: None,
+            lt: None,
+            le: None,
+            gt: None,
+            ge: None,
+            getattr: None,
+            setattr: None,
+            delattr: None,
+            get: None,
+            set: None,
+            delete: None,
+        }
+    }
+}
 
 /// Represents a dunder method that can be called on any object
 pub type DunderMethod = fn(&Value, Vec<Value>) -> Option<Value>;
