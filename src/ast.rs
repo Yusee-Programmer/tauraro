@@ -109,7 +109,7 @@ pub enum Statement {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Param {
     pub name: String,
     pub type_annotation: Option<Type>,
@@ -117,7 +117,7 @@ pub struct Param {
     pub kind: ParamKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ParamKind {
     Positional,
     PositionalOnly,
@@ -159,7 +159,7 @@ pub struct ExceptHandler {
     pub body: Vec<Statement>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
     Literal(Literal),
     Identifier(String),
@@ -246,7 +246,7 @@ pub enum Expr {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FormatPart {
     String(String),
     Expression {
@@ -256,7 +256,7 @@ pub enum FormatPart {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Literal {
     Int(i64),
     Float(f64),
@@ -268,7 +268,7 @@ pub enum Literal {
     Ellipsis,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -302,7 +302,7 @@ pub enum BinaryOp {
     NotIn,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CompareOp {
     Eq,
     NotEq,
@@ -331,7 +331,7 @@ pub enum AssignTarget {
     List(Vec<AssignTarget>),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UnaryOp {
     Not,
     UAdd,
@@ -349,7 +349,7 @@ pub struct Comprehension {
     pub is_async: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Type {
     Simple(String),
     Generic {

@@ -94,41 +94,27 @@ impl Parser {
             }
             
             // If it's a top-level statement that should go in main body
-            println!("DEBUG: Processing statement: {:?}", stmt);
             match &stmt {
                 Statement::Expression(_) | Statement::VariableDef { .. } | 
                 Statement::While { .. } | Statement::For { .. } | Statement::If { .. } |
                 Statement::AttributeAssignment { .. } => {
-                    println!("DEBUG: Adding statement to main_body");
                     main_body.push(stmt);
                 }
                 _ => {
-                    println!("DEBUG: Adding statement to top-level statements");
                     statements.push(stmt);
                 }
             }
         }
         
-        // If we have main body statements and no explicit main function, create one
+        // If we have main body statements and no explicit main function, execute them directly
         if !main_body.is_empty() && !has_main_function {
-            println!("DEBUG: Creating implicit main function with {} statements", main_body.len());
-            let main_function = Statement::FunctionDef {
-                name: "main".to_string(),
-                params: Vec::new(),
-                return_type: None,
-                body: main_body,
-                is_async: false,
-                decorators: Vec::new(),
-                docstring: None,
-            };
-            statements.push(main_function);
-            println!("DEBUG: Implicit main function created and added to statements");
-        } else {
-            println!("DEBUG: Not creating main function - main_body.is_empty(): {}, has_main_function: {}", main_body.is_empty(), has_main_function);
-            // Add main body statements to the program
+            // For scripts without explicit main, execute statements directly at global level
+            statements.extend(main_body);
+        } else if !main_body.is_empty() {
+            // If there's an explicit main function, still add the main body statements
             statements.extend(main_body);
         }
-        
+
         Ok(Program { statements })
     }
 
@@ -211,14 +197,12 @@ impl Parser {
                 }
                 
                 // Try expression statement or variable definition
-                println!("DEBUG: Parsing expression in statement()");
                 let expr = self.expression()?;
-                println!("DEBUG: Parsed expression: {:?}", expr);
                 if self.match_token(&[Token::Assign]) {
-                    println!("DEBUG: Found assignment token, calling variable_def");
                     self.variable_def(expr)
+                } else if self.check_compound_assignment() {
+                    self.compound_assignment(expr)
                 } else {
-                    println!("DEBUG: No assignment token, treating as expression statement");
                     // Optional semicolon or newline for expression statements
                     self.match_token(&[Token::Semicolon, Token::Newline]);
                     Ok(Statement::Expression(expr))
@@ -1031,7 +1015,7 @@ impl Parser {
         } else if self.match_token(&[Token::LParen]) {
             // Handle empty tuple
             if self.check(&Token::RParen) {
-                self.consume(Token::RParen, "Expected ')'")?;
+                self.consume(Token::RParen, "Expected ')")?;
                 return Ok(Expr::Tuple(Vec::new()));
             }
             
@@ -1476,9 +1460,7 @@ impl Parser {
     }
 
     fn variable_def(&mut self, target: Expr) -> Result<Statement, ParseError> {
-        println!("DEBUG: In variable_def with target: {:?}", target);
         let value = self.expression()?;
-        println!("DEBUG: Parsed value expression: {:?}", value);
         
         // Optional type annotation
         let type_annotation = if self.match_token(&[Token::Colon]) {
@@ -1491,7 +1473,6 @@ impl Parser {
         
         match target {
             Expr::Identifier(name) => {
-                println!("DEBUG: Creating VariableDef for identifier: {}", name);
                 Ok(Statement::VariableDef {
                     name,
                     type_annotation,
@@ -1499,7 +1480,6 @@ impl Parser {
                 })
             },
             Expr::Attribute { object, name } => {
-                println!("DEBUG: Creating AttributeAssignment for: {:?}.{}", object, name);
                 // Handle attribute assignment like self.x = value
                 Ok(Statement::AttributeAssignment {
                     object: *object,
@@ -1509,6 +1489,81 @@ impl Parser {
             },
             _ => Err(ParseError::InvalidSyntax {
                 message: "Invalid assignment target".to_string(),
+            }),
+        }
+    }
+    
+    fn check_compound_assignment(&self) -> bool {
+        matches!(self.peek().token, 
+            Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq |
+            Token::PercentEq | Token::PowerEq | Token::FloorDivEq
+        )
+    }
+    
+    fn compound_assignment(&mut self, target: Expr) -> Result<Statement, ParseError> {
+        let op_token = self.advance().token.clone();
+        let value = self.expression()?;
+        
+        self.match_token(&[Token::Semicolon, Token::Newline]);
+        
+        match target {
+            Expr::Identifier(name) => {
+                // Convert compound assignment to regular assignment with binary operation
+                // e.g., x += 5 becomes x = x + 5
+                let binary_op = match op_token {
+                    Token::PlusEq => BinaryOp::Add,
+                    Token::MinusEq => BinaryOp::Sub,
+                    Token::StarEq => BinaryOp::Mul,
+                    Token::SlashEq => BinaryOp::Div,
+                    Token::PercentEq => BinaryOp::Mod,
+                    Token::PowerEq => BinaryOp::Pow,
+                    Token::FloorDivEq => BinaryOp::FloorDiv,
+                    _ => return Err(ParseError::InvalidSyntax {
+                        message: "Invalid compound assignment operator".to_string(),
+                    }),
+                };
+                
+                let combined_value = Expr::BinaryOp {
+                    left: Box::new(Expr::Identifier(name.clone())),
+                    op: binary_op,
+                    right: Box::new(value),
+                };
+                
+                Ok(Statement::VariableDef {
+                    name,
+                    type_annotation: None,
+                    value: Some(combined_value),
+                })
+            },
+            Expr::Attribute { object, name: attr_name } => {
+                // Handle attribute compound assignment like self.x += value
+                let binary_op = match op_token {
+                    Token::PlusEq => BinaryOp::Add,
+                    Token::MinusEq => BinaryOp::Sub,
+                    Token::StarEq => BinaryOp::Mul,
+                    Token::SlashEq => BinaryOp::Div,
+                    Token::PercentEq => BinaryOp::Mod,
+                    Token::PowerEq => BinaryOp::Pow,
+                    Token::FloorDivEq => BinaryOp::FloorDiv,
+                    _ => return Err(ParseError::InvalidSyntax {
+                        message: "Invalid compound assignment operator".to_string(),
+                    }),
+                };
+                
+                let combined_value = Expr::BinaryOp {
+                    left: Box::new(Expr::Attribute { object: object.clone(), name: attr_name.clone() }),
+                    op: binary_op,
+                    right: Box::new(value),
+                };
+                
+                Ok(Statement::AttributeAssignment {
+                    object: *object,
+                    name: attr_name,
+                    value: combined_value,
+                })
+            },
+            _ => Err(ParseError::InvalidSyntax {
+                message: "Invalid assignment target for compound assignment".to_string(),
             }),
         }
     }

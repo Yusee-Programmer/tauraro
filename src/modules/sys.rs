@@ -117,9 +117,10 @@ fn create_sys_path() -> Value {
     // Add current directory (always first)
     path_list.push(Value::Str(".".to_string()));
     
-    // Add built-in package directories
+    // Add built-in package directories in proper order
     path_list.push(Value::Str("tauraro_packages".to_string()));
     path_list.push(Value::Str("tauraro_packages/externals".to_string()));
+    path_list.push(Value::Str("tauraro_packages/pysites".to_string()));
     
     // Add platform-specific standard library paths
     if cfg!(target_os = "windows") {

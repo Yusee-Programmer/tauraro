@@ -53,16 +53,30 @@ impl Default for ModuleSystem {
 impl ModuleSystem {
     pub fn new() -> Self {
         let mut search_paths = vec![
-            PathBuf::from("."),                         // Current directory
-            PathBuf::from("tauraro_packages"),          // Built-in packages
-            PathBuf::from("tauraro_packages/externals"), // Downloaded packages
+            PathBuf::from("."),                          // Current directory
+            PathBuf::from("tauraro_packages"),           // Built-in Tauraro packages
+            PathBuf::from("tauraro_packages/externals"),  // External Tauraro packages
+            PathBuf::from("tauraro_packages/pysites"),    // Python packages from PyPI
         ];
         
         // Add system paths if they exist
         if let Ok(tauraro_path) = std::env::var("TAURARO_PATH") {
-            for path in tauraro_path.split(';') {
-                search_paths.push(PathBuf::from(path));
+            let separator = if cfg!(target_os = "windows") { ';' } else { ':' };
+            for path in tauraro_path.split(separator) {
+                let trimmed = path.trim();
+                if !trimmed.is_empty() {
+                    search_paths.push(PathBuf::from(trimmed));
+                }
             }
+        }
+        
+        // Add platform-specific standard library paths
+        if cfg!(target_os = "windows") {
+            search_paths.push(PathBuf::from("C:\\tauraro\\lib"));
+            search_paths.push(PathBuf::from("C:\\tauraro\\lib\\site-packages"));
+        } else {
+            search_paths.push(PathBuf::from("/usr/local/lib/tauraro"));
+            search_paths.push(PathBuf::from("/usr/lib/tauraro"));
         }
         
         // Add paths from sys.path thread-local storage
@@ -205,10 +219,16 @@ impl ModuleSystem {
     
     /// Internal module loading logic
     fn load_module_internal(&mut self, vm: &mut VM, module_name: &str) -> Result<Value> {
-        // Handle built-in modules first
+        // Handle built-in modules first (only when explicitly imported)
         if let Some(builtin) = self.create_builtin_module(module_name) {
             self.loaded_modules.insert(module_name.to_string(), builtin.clone());
             return Ok(builtin);
+        }
+        
+        // Try to find Python package in pysites first
+        if let Ok(python_module) = self.try_load_python_package(module_name) {
+            self.loaded_modules.insert(module_name.to_string(), python_module.clone());
+            return Ok(python_module);
         }
         
         // Try to find the module file or package
@@ -242,7 +262,7 @@ impl ModuleSystem {
         });
         
         for search_path in &all_search_paths {
-            // Try as a single file
+            // Try as a Tauraro single file (.tr extension)
             let mut file_path = search_path.clone();
             for part in &parts {
                 file_path.push(part);
@@ -253,6 +273,19 @@ impl ModuleSystem {
                 return Ok(file_path);
             }
             
+            // Try as a Python file (.py extension) in pysites
+            if search_path.ends_with("pysites") {
+                let mut py_file_path = search_path.clone();
+                for part in &parts {
+                    py_file_path.push(part);
+                }
+                py_file_path.set_extension("py");
+                
+                if py_file_path.exists() {
+                    return Ok(py_file_path);
+                }
+            }
+            
             // Try as a package directory
             let mut package_path = search_path.clone();
             for part in &parts {
@@ -260,11 +293,59 @@ impl ModuleSystem {
             }
             
             if package_path.is_dir() {
-                return Ok(package_path);
+                // Check for Tauraro package (__init__.tr)
+                let mut init_path = package_path.clone();
+                init_path.push("__init__.tr");
+                if init_path.exists() {
+                    return Ok(package_path);
+                }
+                
+                // Check for Python package (__init__.py) in pysites
+                if search_path.ends_with("pysites") {
+                    let mut py_init_path = package_path.clone();
+                    py_init_path.push("__init__.py");
+                    if py_init_path.exists() {
+                        return Ok(package_path);
+                    }
+                }
             }
         }
         
         Err(anyhow!("No module named '{}'", module_name))
+    }
+    
+    /// Try to load a Python package from pysites directory
+    fn try_load_python_package(&self, module_name: &str) -> Result<Value> {
+        #[cfg(feature = "python-interop")]
+        {
+            use crate::python_interop::PythonInterop;
+            
+            // Check if the module exists in pysites
+            let pysites_path = PathBuf::from("tauraro_packages/pysites");
+            let mut module_path = pysites_path.clone();
+            module_path.push(module_name);
+            
+            if module_path.exists() {
+                // Try to create a Python interop wrapper
+                let python_gil = pyo3::Python::acquire_gil();
+                let py = python_gil.python();
+                let interop = PythonInterop::new(py);
+                
+                match interop.import_module(module_name) {
+                    Ok(py_module) => {
+                        // Create a Tauraro module wrapper for the Python module
+                        let mut namespace = std::collections::HashMap::new();
+                        namespace.insert("__python_module__".to_string(), crate::value::Value::Str("true".to_string()));
+                        namespace.insert("__module_name__".to_string(), crate::value::Value::Str(module_name.to_string()));
+                        
+                        return Ok(crate::value::Value::Module(module_name.to_string(), namespace));
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        
+        Err(anyhow!("Python package '{}' not found", module_name))
     }
     
     /// Load a package (directory with __init__.tr)
@@ -349,8 +430,13 @@ impl ModuleSystem {
         // First pass: register all functions and classes
         for statement in &program.statements {
             if let Statement::FunctionDef { name, params, return_type: _, body, is_async: _, decorators: _, docstring } = statement {
-                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                let func_value = Value::Function(name.clone(), param_names, body.clone(), docstring.clone());
+                let func_value = Value::Closure {
+                    name: name.clone(),
+                    params: params.clone(),
+                    body: body.clone(),
+                    captured_scope: HashMap::new(),
+                    docstring: docstring.clone(),
+                };
                 vm.set_variable(name, func_value)?;
             } else if let Statement::ClassDef { name, bases: _, body, decorators: _, metaclass: _, docstring: _ } = statement {
                 // Create class object with methods
@@ -359,8 +445,13 @@ impl ModuleSystem {
                 // Process class body to extract methods
                 for stmt in body {
                     if let Statement::FunctionDef { name: method_name, params, return_type: _, body: method_body, is_async: _, decorators: _, docstring } = stmt {
-                        let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                        let method_value = Value::Function(method_name.clone(), param_names, method_body.clone(), docstring.clone());
+                        let method_value = Value::Closure {
+                            name: method_name.clone(),
+                            params: params.clone(),
+                            body: method_body.clone(),
+                            captured_scope: HashMap::new(),
+                            docstring: docstring.clone(),
+                        };
                         class_methods.insert(method_name.clone(), method_value);
                     }
                 }
