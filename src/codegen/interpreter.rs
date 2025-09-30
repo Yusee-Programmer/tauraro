@@ -13,6 +13,7 @@ use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use std::io::{self, Write};
+use rustyline::validate::{Validator, ValidationResult};
 use rustyline::error::ReadlineError;
 use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::Highlighter;
@@ -408,8 +409,8 @@ impl BytecodeInterpreter {
             let mut new_locals = vec![Value::None; function.local_count];
 
             let mut arg_index = 0;
-            let mut varargs = Vec::new();
-            let mut varkwargs = HashMap::new();
+            let mut varargs: Vec<Value> = Vec::new();
+            let mut varkwargs: HashMap<String, Value> = HashMap::new();
 
             for param in &function.params {
                 // match param.kind {
@@ -636,7 +637,6 @@ impl BytecodeInterpreter {
         }
     }
 }
-use rustyline::validate::{Validator, ValidationResult};
 
 #[derive(Helper)]
 struct REPLHelper {
@@ -752,7 +752,7 @@ impl Interpreter {
         println!("Type 'exit' or 'quit' to exit, 'help()' for help");
 
         let helper = REPLHelper { vm: self.vm.clone() };
-        let mut editor = Editor::<()>::new()?;
+        let mut editor = Editor::<REPLHelper>::new()?;
         editor.set_helper(Some(helper));
         let mut buffer = String::new();
         
@@ -831,21 +831,34 @@ impl Interpreter {
 
     /// Execute REPL input (expressions or statements) with proper function persistence
     pub fn execute_repl_line(&mut self, input: &str) -> Result<Option<Value>> {
-        let tokens = Lexer::new(input).collect::<Result<Vec<_>, _>>()
-            .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
-        let mut parser = Parser::new(tokens);
-        let program = parser.parse()?;
-
-        let mut ir_generator = crate::ir::Generator::new();
-        let ir_module = ir_generator.generate(program).map_err(|e| anyhow::anyhow!(e))?;
-
-        let codegen = InterpreterCodeGenerator::new();
-        let bytecode_module = codegen.compile_to_bytecode(ir_module)?;
-
-        let mut interpreter = BytecodeInterpreter::new();
-        let result = interpreter.execute(&bytecode_module)?;
-
-        Ok(Some(result))
+        // Use the VM's built-in REPL execution which handles state persistence
+        match self.vm.execute_repl(input, vec![]) {
+            Ok(result) => {
+                // Check if this was an expression by parsing
+                let tokens = Lexer::new(input).collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+                
+                if !tokens.is_empty() {
+                    let mut parser = Parser::new(tokens);
+                    if let Ok(program) = parser.parse() {
+                        // If it's a single expression statement, return its value
+                        if program.statements.len() == 1 {
+                            if let Statement::Expression(_) = &program.statements[0] {
+                                return Ok(Some(result));
+                            }
+                        }
+                    }
+                }
+                
+                // For non-expression statements, don't show the result unless it's meaningful
+                if !matches!(result, Value::None) {
+                    Ok(Some(result))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(e) => Err(e)
+        }
     }
 
     /// Handle built-in REPL commands
@@ -867,7 +880,8 @@ impl Interpreter {
                     if let Some(value) = all_vars.get(&name) {
                                             let type_name = match value {
                                                 Value::Closure { .. } => "function",
-                                                Value::Object { .. } => "class",                            Value::Int(_) => "int",
+                                                Value::Object { .. } => "class",
+                            Value::Int(_) => "int",
                             Value::Float(_) => "float",
                             Value::Str(_) => "str",
                             Value::Bool(_) => "bool",
@@ -875,13 +889,19 @@ impl Interpreter {
                             Value::Dict(_) => "dict",
                             Value::Tuple(_) => "tuple",
                             Value::Set(_) => "set",
+                            Value::FrozenSet(_) => "frozenset",
+                            Value::Range { .. } => "range",
                             Value::Bytes(_) => "bytes",
                             Value::ByteArray(_) => "bytearray",
+                            Value::MemoryView { .. } => "memoryview",
                             Value::NativeFunction(_) => "native_function",
                             Value::BuiltinFunction(_, _) => "builtin_function",
                             Value::Module(_, _) => "module",
                             Value::Super(_, _, _) => "super",
                             Value::TypedValue { .. } => "typed_value",
+                            Value::Complex { .. } => "complex",
+                            Value::Ellipsis => "ellipsis",
+                            Value::NotImplemented => "NotImplementedType",
                             #[cfg(feature = "ffi")]
                             Value::ExternFunction { .. } => "extern_function",
                             Value::None => "NoneType",

@@ -16,11 +16,14 @@ mod ffi;
 mod modules;
 mod module_system;
 mod object_system;
+mod package_manager;
 mod base_object;
 mod type_hierarchy;
 mod metaclass;
 
+use crate::value::Value;
 use crate::codegen::{CodeGen, CodegenOptions, Target, CodeGenerator};
+use crate::codegen::interpreter::Interpreter;
 
 #[derive(Parser)]
 #[command(name = "tauraro")]
@@ -99,8 +102,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Repl => {
-            println!("Starting TauraroLang REPL...");
-            let mut interpreter = codegen::interpreter::Interpreter::new();
+            // Use the advanced interpreter REPL instead of basic VM REPL
+            let mut interpreter = Interpreter::new();
             interpreter.repl()?;
         }
         Commands::Run { file, backend, optimization, strict_types } => {
@@ -120,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             compile_file(
                 &file, 
-                output.as_ref().map(|p| p.as_path()).map(|p| PathBuf::from(p)).as_ref(), 
+                output.as_ref(), 
                 &backend, 
                 &target, 
                 optimization, 
@@ -139,8 +142,8 @@ fn compile_file(
     file: &PathBuf,
     output: Option<&PathBuf>,
     backend: &str,
-    target: &str,
-    optimization: u8,
+    _target: &str,
+    _optimization: u8,
     export: bool,
     generate_header: bool,
     strict_types: bool,
@@ -168,14 +171,13 @@ fn compile_file(
             {
                 let output_path = output.map_or_else(|| PathBuf::from("a.out"), |p| p.clone());
                 codegen::llvm::LLVMCodeGen::new()
-                    .compile(ir_module, &output_path, optimization, export)?;
+                    .compile(ir_module, &output_path, 0, export)?;
             }
             #[cfg(not(feature = "llvm"))]
             return Err("LLVM backend not enabled".into());
         }
         "c" => {
             let output_path = output.map_or_else(|| PathBuf::from("output.c"), |p| {
-                // Ensure the C file has a .c extension
                 if p.extension().is_none() || p.extension() != Some(std::ffi::OsStr::new("c")) {
                     let mut c_path = p.clone();
                     c_path.set_extension("c");
@@ -187,7 +189,6 @@ fn compile_file(
             codegen::c_abi::CCodeGen::new()
                 .compile(ir_module.clone(), &output_path, export, generate_header)?;
             
-            // If native flag is set, compile the generated C code to native binary
             if native {
                 use codegen::native::{NativeCompiler, OutputType};
                 use codegen::{CodegenOptions, Target};
@@ -199,17 +200,15 @@ fn compile_file(
                     OutputType::Executable
                 };
                 
-                // Create minimal codegen options for native compilation
                 let options = CodegenOptions {
                     target: Target::C,
                     export_symbols: export,
-                    enable_async: false,  // Disable async to avoid pthread.h
-                    enable_ffi: false,    // Disable FFI to avoid dlfcn.h
+                    enable_async: false,
+                    enable_ffi: false,
                     output_path: Some(output_path.to_string_lossy().to_string()),
                     ..Default::default()
                 };
                 
-                // Regenerate C code without async/FFI features for native compilation
                 let mut generator = codegen::c_abi::CCodeGenerator::new();
                 if generate_header {
                     generator = generator.with_header(true);
@@ -217,9 +216,7 @@ fn compile_file(
                 let c_code = generator.generate(ir_module.clone(), &options)?;
                 std::fs::write(&output_path, c_code)?;
                 
-                // Determine native output path
                 let native_output = if let Some(orig_output) = output {
-                    // If user specified output, use it but change extension appropriately
                     let stem = orig_output.file_stem()
                         .unwrap_or_else(|| std::ffi::OsStr::new("output"))
                         .to_string_lossy();
@@ -237,7 +234,6 @@ fn compile_file(
                         PathBuf::from(format!("{}.{}", stem, extension))
                     }
                 } else {
-                    // Let the native compiler determine the output path
                     PathBuf::new()
                 };
                 
