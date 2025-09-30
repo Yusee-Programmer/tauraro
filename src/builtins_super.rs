@@ -23,7 +23,7 @@ pub fn builtin_super(args: Vec<Value>, vm: Option<&VM>) -> Result<Value> {
                         if let Some(pos) = linearization.iter().position(|c| c == current_executing_class) {
                             if pos + 1 < linearization.len() {
                                 let parent_class = linearization[pos + 1].clone();
-                                return Ok(Value::Super(current_executing_class.clone(), parent_class));
+                                return Ok(Value::Super(current_executing_class.clone(), parent_class, Some(Box::new(self_value.clone()))));
                             } else {
                                 return Err(anyhow::anyhow!("No parent class found in MRO after '{}'", current_executing_class));
                             }
@@ -41,20 +41,16 @@ pub fn builtin_super(args: Vec<Value>, vm: Option<&VM>) -> Result<Value> {
             }
         }
         2 => {
-            // super(current_class, parent_class) - explicit form
+            // super(current_class, obj) - explicit form
             let current_class = match &args[0] {
                 Value::Str(s) => s.clone(),
                 Value::Object { class_name, .. } => class_name.clone(),
                 _ => return Err(anyhow::anyhow!("super() first argument must be a class name or object")),
             };
             
-            let parent_class = match &args[1] {
-                Value::Str(s) => s.clone(),
-                Value::Object { class_name, .. } => class_name.clone(),
-                _ => return Err(anyhow::anyhow!("super() second argument must be a class name or object")),
-            };
+            let obj = &args[1];
             
-            Ok(Value::Super(current_class, parent_class))
+            Ok(Value::Super(current_class, obj.type_name().to_string(), Some(Box::new(obj.clone()))))
         }
         _ => {
             Err(anyhow::anyhow!("super() takes 0 or 2 arguments, got {}", args.len()))

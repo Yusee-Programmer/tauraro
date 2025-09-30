@@ -467,7 +467,7 @@ impl Drop for Arena {
 }
 
 /// Memory management API exposed to TauraroLang code
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MemoryAPI {
     runtime: Arc<Runtime>,
 }

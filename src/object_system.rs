@@ -102,9 +102,6 @@ impl BaseObject {
             Value::Object { class_name, .. } => {
                 format!("<{} object>", class_name)
             },
-            Value::Function(name, params, _, _) => {
-                format!("<function {}({})>", name, params.join(", "))
-            },
             _ => format!("<{} object>", obj.type_name()),
         };
         Some(Value::Str(repr))
@@ -1180,12 +1177,12 @@ pub fn call_dunder_method_with_vm(vm: &mut crate::vm::VM, value: &Value, method_
         if let Some(Value::Object { fields: class_methods, .. }) = vm.get_variable(class_name) {
             if let Some(method_value) = class_methods.get(method_name) {
                 match method_value {
-                    Value::Function(method_name, params, body, _) => {
+                    Value::Closure { name: method_name, params, body, captured_scope, .. } => {
                         // Call the user-defined dunder method
                         let mut method_args = vec![value.clone()];
                         method_args.extend(args.clone());
                         
-                        match vm.call_user_function(method_name, params, body.clone(), method_args) {
+                        match vm.call_user_function(method_name, params, body.clone(), method_args, HashMap::new(), Some(captured_scope.clone())) {
                             Ok(result) => return Some(result),
                             Err(_) => {} // Fall through to default implementation
                         }

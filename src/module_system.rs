@@ -13,6 +13,7 @@ thread_local! {
 }
 
 /// Module system manager for handling imports, packages, and module resolution
+#[derive(Debug, Clone)]
 pub struct ModuleSystem {
     /// Cache of loaded modules (module_path -> module_object)
     loaded_modules: HashMap<String, Value>,

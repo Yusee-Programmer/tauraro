@@ -26,16 +26,14 @@ pub enum Value {
         base_object: BaseObject,
         mro: MRO,
     },
-    Super(String, String), // current class name, parent class name
-    Function(String, Vec<String>, Vec<Statement>, Option<String>), // name, parameters, body, docstring
-    TypedFunction {
+    Super(String, String, Option<Box<Value>>), // current class name, parent class name, object instance
+    Closure {
         name: String,
-        params: Vec<String>,
-        param_types: Vec<Option<Type>>,
-        return_type: Option<Type>,
+        params: Vec<Param>,
         body: Vec<Statement>,
+        captured_scope: HashMap<String, Value>,
         docstring: Option<String>,
-    }, // Enhanced function with type information
+    },
     NativeFunction(fn(Vec<Value>) -> anyhow::Result<Value>),
     BuiltinFunction(String, fn(Vec<Value>) -> anyhow::Result<Value>),
     Module(String, HashMap<String, Value>), // module name, namespace
@@ -212,11 +210,8 @@ impl Value {
                 format!("{{{}}}", pairs.join(", "))
             }
             Value::None => "None".to_string(),
-            Value::Function(name, params, _, _) => {
-                format!("<function {}({})>", name, params.join(", "))
-            }
-            Value::TypedFunction { name, params, .. } => {
-                format!("<typed function {}({})>", name, params.join(", "))
+            Value::Closure { name, params, .. } => {
+                format!("<function {}({})>", name, params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", "))
             }
             Value::BuiltinFunction(name, _) => {
                 format!("<built-in function {}>", name)
@@ -225,7 +220,7 @@ impl Value {
             Value::Object { class_name, fields, .. } => {
                  format!("<{} object with {} fields>", class_name, fields.len())
              }
-             Value::Super(current_class, parent_class) => {
+             Value::Super(current_class, parent_class, _) => {
                  format!("<super: {} -> {}>", current_class, parent_class)
              }
              Value::Module(name, namespace) => {
@@ -264,9 +259,8 @@ impl Value {
             Value::Bytes(_) => "bytes",
             Value::ByteArray(_) => "bytearray",
             Value::Object { class_name, .. } => class_name,
-            Value::Super(_, _) => "super",
-            Value::Function(_, _, _, _) => "function",
-            Value::TypedFunction { .. } => "typed function",
+            Value::Super(_, _, _) => "super",
+            Value::Closure { .. } => "function",
             Value::BuiltinFunction(_, _) => "builtin function",
             Value::NativeFunction(_) => "native function",
             Value::Module(_, _) => "module",
@@ -291,8 +285,7 @@ impl Value {
             (Value::Bytes(_), Type::Simple(name)) if name == "bytes" => true,
             (Value::ByteArray(_), Type::Simple(name)) if name == "bytearray" => true,
             (Value::Module(_,_), Type::Simple(name)) if name == "module" => true,
-            (Value::Function(_, _, _, _), Type::Simple(name)) if name == "function" => true,
-            (Value::TypedFunction { .. }, Type::Simple(name)) if name == "function" => true,
+            (Value::Closure { .. }, Type::Simple(name)) if name == "function" => true,
             (Value::BuiltinFunction(_, _), Type::Simple(name)) if name == "function" => true,
             (Value::NativeFunction(_), Type::Simple(name)) if name == "function" => true,
             (Value::Object { class_name, .. }, Type::Simple(name)) if class_name == name => true,
@@ -323,8 +316,7 @@ impl Value {
             Value::Bytes(_) => Type::Simple("bytes".to_string()),
             Value::ByteArray(_) => Type::Simple("bytearray".to_string()),
             Value::Module(_, _) => Type::Simple("module".to_string()),
-            Value::Function(_, _, _, _) => Type::Simple("function".to_string()),
-            Value::TypedFunction { .. } => Type::Simple("function".to_string()),
+            Value::Closure { .. } => Type::Simple("function".to_string()),
             Value::BuiltinFunction(_, _) => Type::Simple("function".to_string()),
             Value::NativeFunction(_) => Type::Simple("function".to_string()),
             Value::Object { class_name, .. } => Type::Simple(class_name.clone()),
@@ -332,7 +324,7 @@ impl Value {
             Value::TypedValue { type_info, .. } => type_info.clone(),
             #[cfg(feature = "ffi")]
             Value::ExternFunction { .. } => Type::Simple("function".to_string()),
-            Value::Super(_, _) => Type::Simple("super".to_string()),
+            Value::Super(_, _, _) => Type::Simple("super".to_string()),
         }
     }
 
@@ -513,9 +505,8 @@ impl Value {
             Value::ByteArray(bytes) => !bytes.is_empty(),
             Value::None => false,
             Value::Object { .. } => true,
-            Value::Super(_, _) => true,
-            Value::Function(_, _, _, _) => true,
-            Value::TypedFunction { .. } => true,
+            Value::Super(_, _, _) => true,
+            Value::Closure { .. } => true,
             Value::BuiltinFunction(_, _) => true,
             Value::NativeFunction(_) => true,
             Value::Module(_, _) => true,
@@ -576,20 +567,17 @@ impl fmt::Display for Value {
                 write!(f, "{{{}}}", pairs.join(", "))
             }
             Value::None => write!(f, "None"),
-            Value::Function(name, params, _, _) => {
-                write!(f, "<function {}({})>", name, params.join(", "))
-            }
-            Value::TypedFunction { name, params, .. } => {
-                write!(f, "<typed function {}({})>", name, params.join(", "))
+            Value::Closure { name, params, .. } => {
+                write!(f, "<function {}({})>", name, params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", "))
             }
             Value::BuiltinFunction(name, _) => {
                 write!(f, "<built-in function {}>", name)
             }
             Value::NativeFunction(_) => write!(f, "<native function>"),
             Value::Object { class_name, fields, .. } => {
-                 write!(f, "<{} object with {} fields>", class_name, fields.len())
-             }
-            Value::Super(current_class, parent_class) => {
+                write!(f, "<{} object with {} fields>", class_name, fields.len())
+            }
+            Value::Super(current_class, parent_class, _) => {
                 write!(f, "<super: {} -> {}>", current_class, parent_class)
             }
             Value::Module(name, namespace) => {
@@ -601,9 +589,6 @@ impl fmt::Display for Value {
             }
             Value::TypedValue { value, type_info } => {
                 write!(f, "{}: {}", value, type_info)
-            }
-            Value::Super(current_class, parent_class) => {
-                write!(f, "<super: {} -> {}>", current_class, parent_class)
             }
         }
     }
@@ -691,8 +676,7 @@ impl Value {
                 let exprs: Vec<Expr> = items.iter().map(|v| v.to_expr()).collect();
                 Expr::Set(exprs)
             }
-            Value::Function(name, _, _, _) => Expr::Identifier(name.clone()),
-            Value::TypedFunction { name, .. } => Expr::Identifier(name.clone()),
+            Value::Closure { name, .. } => Expr::Identifier(name.clone()),
             Value::BuiltinFunction(name, _) => Expr::Identifier(name.clone()),
             Value::NativeFunction(_) => Expr::Identifier("native_function".to_string()),
             Value::Object { class_name, .. } => Expr::Identifier(class_name.clone()),
@@ -712,7 +696,7 @@ impl Value {
             Value::TypedValue { value, .. } => value.to_expr(),
             #[cfg(feature = "ffi")]
             Value::ExternFunction { name, .. } => Expr::Identifier(name.clone()),
-            Value::Super(current_class, _) => Expr::Identifier(format!("super_{}", current_class)),
+            Value::Super(current_class, _, _) => Expr::Identifier(format!("super_{}", current_class)),
         }
     }
 }
@@ -789,22 +773,15 @@ impl Hash for Value {
                  pairs.sort_by_key(|(k, _)| *k);
                  pairs.hash(state);
              }
-            Value::Super(current_class, parent_class) => {
+            Value::Super(current_class, parent_class, _) => {
                 19u8.hash(state);
                 current_class.hash(state);
                 parent_class.hash(state);
             }
-            Value::Function(name, params, _, _) => {
+            Value::Closure { name, params, .. } => {
                 11u8.hash(state);
                 name.hash(state);
                 params.hash(state);
-                // We can't hash the body (statements) easily, so we just use name and params
-            }
-            Value::TypedFunction { name, params, .. } => {
-                18u8.hash(state);
-                name.hash(state);
-                params.hash(state);
-                // We can't hash the body or types easily, so we just use name and params
             }
             Value::NativeFunction(_) => {
                 12u8.hash(state);

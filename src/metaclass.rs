@@ -115,6 +115,7 @@ impl MetaClass {
 }
 
 /// Optimized MRO computation system with caching and validation
+#[derive(Debug, Clone)]
 pub struct MROComputer {
     /// Cache of computed MROs to avoid recomputation
     cache: HashMap<String, Vec<String>>,
@@ -402,6 +403,7 @@ impl MROComputer {
 }
 
 /// Type creation system that mimics Python's type() builtin
+#[derive(Debug, Clone)]
 pub struct TypeCreator {
     pub mro_computer: MROComputer,
 }
