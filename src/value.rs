@@ -3,6 +3,7 @@ use crate::ast::*;
 use crate::ffi::FFIType;
 use crate::object_system::{resolve_dunder_method, call_dunder_method};
 use crate::base_object::{BaseObject, MRO, DunderMethod};
+use crate::ast::{Param, Statement, Type};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -12,14 +13,20 @@ use std::hash::{Hash, Hasher};
 pub enum Value {
     Int(i64),
     Float(f64),
+    Complex { real: f64, imag: f64 },
     Bool(bool),
     Str(String),
     List(Vec<Value>),
     Dict(HashMap<String, Value>),
     Tuple(Vec<Value>),
     Set(Vec<Value>), // Using Vec for simplicity, should be HashSet in production
+    FrozenSet(Vec<Value>), // Immutable set
+    Range { start: i64, stop: i64, step: i64 }, // Arithmetic sequence
     Bytes(Vec<u8>),
     ByteArray(Vec<u8>),
+    MemoryView { data: Vec<u8>, format: String, shape: Vec<usize> }, // Memory buffer view
+    Ellipsis,
+    NotImplemented,
     Object {
         class_name: String,
         fields: HashMap<String, Value>,
@@ -92,8 +99,28 @@ impl Value {
         Value::None
     }
 
-    pub fn new_dict(items: HashMap<String, Value>) -> Self {
-        Value::Dict(items)
+    pub fn new_set(items: Vec<Value>) -> Self {
+        Value::Set(items)
+    }
+
+    pub fn new_frozenset(items: Vec<Value>) -> Self {
+        Value::FrozenSet(items)
+    }
+
+    pub fn new_range(start: i64, stop: i64, step: i64) -> Self {
+        Value::Range { start, stop, step }
+    }
+
+    pub fn new_bytes(data: Vec<u8>) -> Self {
+        Value::Bytes(data)
+    }
+
+    pub fn new_bytearray(data: Vec<u8>) -> Self {
+        Value::ByteArray(data)
+    }
+
+    pub fn new_memoryview(data: Vec<u8>, format: String, shape: Vec<usize>) -> Self {
+        Value::MemoryView { data, format, shape }
     }
 
     /// Get dunder method for this value type with inheritance support
@@ -139,8 +166,11 @@ impl Value {
         match self {
             Value::Int(n) => n.to_string(),
             Value::Float(n) => format!("{:.6}", n),
+            Value::Complex { real, imag } => format!("({:.6}{:+.6}i)", real, imag),
             Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
             Value::Str(s) => format!("\"{}\"", s),
+            Value::Ellipsis => "...".to_string(),
+            Value::NotImplemented => "NotImplemented".to_string(),
             Value::List(items) => {
                 let items_str: Vec<String> = items.iter()
                     .take(5) // Limit to prevent deep recursion
@@ -185,6 +215,31 @@ impl Value {
                     .collect();
                 let suffix = if items.len() > 5 { ", ..." } else { "" };
                 format!("{{{}{}}}", items_str.join(", "), suffix)
+            }
+            Value::FrozenSet(items) => {
+                let items_str: Vec<String> = items.iter()
+                    .take(5) // Limit to prevent deep recursion
+                    .map(|v| match v {
+                        Value::Str(s) => format!("\"{}\"", s),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(n) => format!("{:.6}", n),
+                        Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+                        Value::None => "None".to_string(),
+                        _ => "<complex value>".to_string(), // Avoid deep recursion
+                    })
+                    .collect();
+                let suffix = if items.len() > 5 { ", ..." } else { "" };
+                format!("frozenset({{{}{}}})", items_str.join(", "), suffix)
+            }
+            Value::Range { start, stop, step } => {
+                if *step == 1 {
+                    format!("range({}, {})", start, stop)
+                } else {
+                    format!("range({}, {}, {})", start, stop, step)
+                }
+            }
+            Value::MemoryView { data, format, shape } => {
+                format!("<memory at 0x{:x}, format: {}, shape: {:?}>", data.as_ptr() as usize, format, shape)
             }
             Value::Bytes(bytes) => {
                 format!("b\"{}\"", String::from_utf8_lossy(bytes))
@@ -250,14 +305,20 @@ impl Value {
         match self {
             Value::Int(_) => "int",
             Value::Float(_) => "float",
+            Value::Complex { .. } => "complex",
             Value::Bool(_) => "bool",
             Value::Str(_) => "str",
+            Value::Ellipsis => "ellipsis",
+            Value::NotImplemented => "NotImplementedType",
             Value::List(_) => "list",
             Value::Dict(_) => "dict",
             Value::Tuple(_) => "tuple",
             Value::Set(_) => "set",
+            Value::FrozenSet(_) => "frozenset",
+            Value::Range { .. } => "range",
             Value::Bytes(_) => "bytes",
             Value::ByteArray(_) => "bytearray",
+            Value::MemoryView { .. } => "memoryview",
             Value::Object { class_name, .. } => class_name,
             Value::Super(_, _, _) => "super",
             Value::Closure { .. } => "function",
@@ -276,14 +337,20 @@ impl Value {
         match (self, expected) {
             (Value::Int(_), Type::Simple(name)) if name == "int" => true,
             (Value::Float(_), Type::Simple(name)) if name == "float" => true,
+            (Value::Complex { .. }, Type::Simple(name)) if name == "complex" => true,
             (Value::Bool(_), Type::Simple(name)) if name == "bool" => true,
             (Value::Str(_), Type::Simple(name)) if name == "str" => true,
+            (Value::Ellipsis, Type::Simple(name)) if name == "ellipsis" => true,
+            (Value::NotImplemented, Type::Simple(name)) if name == "NotImplementedType" => true,
             (Value::List(_), Type::Simple(name)) if name == "list" => true,
             (Value::Dict(_), Type::Simple(name)) if name == "dict" => true,
             (Value::Tuple(_), Type::Simple(name)) if name == "tuple" => true,
             (Value::Set(_), Type::Simple(name)) if name == "set" => true,
+            (Value::FrozenSet(_), Type::Simple(name)) if name == "frozenset" => true,
+            (Value::Range { .. }, Type::Simple(name)) if name == "range" => true,
             (Value::Bytes(_), Type::Simple(name)) if name == "bytes" => true,
             (Value::ByteArray(_), Type::Simple(name)) if name == "bytearray" => true,
+            (Value::MemoryView { .. }, Type::Simple(name)) if name == "memoryview" => true,
             (Value::Module(_,_), Type::Simple(name)) if name == "module" => true,
             (Value::Closure { .. }, Type::Simple(name)) if name == "function" => true,
             (Value::BuiltinFunction(_, _), Type::Simple(name)) if name == "function" => true,
@@ -307,14 +374,20 @@ impl Value {
         match self {
             Value::Int(_) => Type::Simple("int".to_string()),
             Value::Float(_) => Type::Simple("float".to_string()),
+            Value::Complex { .. } => Type::Simple("complex".to_string()),
             Value::Bool(_) => Type::Simple("bool".to_string()),
             Value::Str(_) => Type::Simple("str".to_string()),
+            Value::Ellipsis => Type::Simple("ellipsis".to_string()),
+            Value::NotImplemented => Type::Simple("NotImplementedType".to_string()),
             Value::List(_) => Type::Simple("list".to_string()),
             Value::Dict(_) => Type::Simple("dict".to_string()),
             Value::Tuple(_) => Type::Simple("tuple".to_string()),
             Value::Set(_) => Type::Simple("set".to_string()),
+            Value::FrozenSet(_) => Type::Simple("frozenset".to_string()),
+            Value::Range { .. } => Type::Simple("range".to_string()),
             Value::Bytes(_) => Type::Simple("bytes".to_string()),
             Value::ByteArray(_) => Type::Simple("bytearray".to_string()),
+            Value::MemoryView { .. } => Type::Simple("memoryview".to_string()),
             Value::Module(_, _) => Type::Simple("module".to_string()),
             Value::Closure { .. } => Type::Simple("function".to_string()),
             Value::BuiltinFunction(_, _) => Type::Simple("function".to_string()),
@@ -496,7 +569,10 @@ impl Value {
             Value::Bool(b) => *b,
             Value::Int(n) => *n != 0,
             Value::Float(n) => *n != 0.0,
+            Value::Complex { real, imag } => *real != 0.0 || *imag != 0.0,
             Value::Str(s) => !s.is_empty(),
+            Value::Ellipsis => true,
+            Value::NotImplemented => true,
             Value::List(items) => !items.is_empty(),
             Value::Dict(dict) => !dict.is_empty(),
             Value::Tuple(items) => !items.is_empty(),
@@ -526,6 +602,9 @@ impl PartialOrd for Value {
             (Value::Float(a), Value::Int(b)) => a.partial_cmp(&(*b as f64)),
             (Value::Str(a), Value::Str(b)) => a.partial_cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.partial_cmp(b),
+            (Value::Complex { .. }, _) | (_, Value::Complex { .. }) => None, // Complex numbers can't be ordered
+            (Value::Ellipsis, Value::Ellipsis) => Some(std::cmp::Ordering::Equal),
+            (Value::NotImplemented, Value::NotImplemented) => Some(std::cmp::Ordering::Equal),
             _ => None,
         }
     }
@@ -536,8 +615,17 @@ impl fmt::Display for Value {
         match self {
             Value::Int(n) => write!(f, "{}", n),
             Value::Float(n) => write!(f, "{:.6}", n),
+            Value::Complex { real, imag } => {
+                if *imag >= 0.0 {
+                    write!(f, "({:.6}+{:.6}j)", real, imag)
+                } else {
+                    write!(f, "({:.6}{:.6}j)", real, imag)
+                }
+            },
             Value::Bool(b) => write!(f, "{}", if *b { "True" } else { "False" }),
             Value::Str(s) => write!(f, "{}", s), // No quotes for display
+            Value::Ellipsis => write!(f, "..."),
+            Value::NotImplemented => write!(f, "NotImplemented"),
             Value::List(items) => {
                 let items_str: Vec<String> = items.iter().map(|v| format!("{}", v)).collect();
                 write!(f, "[{}]", items_str.join(", "))
@@ -646,6 +734,7 @@ impl Value {
                 "append" => Some(crate::builtins::builtin_bytearray_append),
                 _ => None,
             },
+            Value::Complex { .. } | Value::Ellipsis | Value::NotImplemented => None,
             _ => None,
         }
     }
@@ -655,8 +744,11 @@ impl Value {
         match self {
             Value::Int(n) => Expr::Literal(Literal::Int(*n)),
             Value::Float(n) => Expr::Literal(Literal::Float(*n)),
+            Value::Complex { real, imag } => Expr::Literal(Literal::Complex { real: *real, imag: *imag }),
             Value::Bool(b) => Expr::Literal(Literal::Bool(*b)),
             Value::Str(s) => Expr::Literal(Literal::String(s.clone())),
+            Value::Ellipsis => Expr::Literal(Literal::Ellipsis),
+            Value::NotImplemented => Expr::Identifier("NotImplemented".to_string()),
             Value::None => Expr::Literal(Literal::None),
             Value::List(items) => {
                 let exprs: Vec<Expr> = items.iter().map(|v| v.to_expr()).collect();
@@ -725,6 +817,11 @@ impl Hash for Value {
                     f.to_bits().hash(state);
                 }
             }
+            Value::Complex { real, imag } => {
+                18u8.hash(state);
+                real.to_bits().hash(state);
+                imag.to_bits().hash(state);
+            }
             Value::Bool(b) => {
                 2u8.hash(state);
                 b.hash(state);
@@ -732,6 +829,14 @@ impl Hash for Value {
             Value::Str(s) => {
                 3u8.hash(state);
                 s.hash(state);
+            }
+            Value::Ellipsis => {
+                20u8.hash(state);
+                "ellipsis".hash(state);
+            }
+            Value::NotImplemented => {
+                21u8.hash(state);
+                "NotImplemented".hash(state);
             }
             Value::List(items) => {
                 4u8.hash(state);
@@ -781,7 +886,8 @@ impl Hash for Value {
             Value::Closure { name, params, .. } => {
                 11u8.hash(state);
                 name.hash(state);
-                params.hash(state);
+                // We can't easily hash params, so we use their count
+                params.len().hash(state);
             }
             Value::NativeFunction(_) => {
                 12u8.hash(state);
