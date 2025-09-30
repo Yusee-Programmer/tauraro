@@ -18,8 +18,9 @@ mod module_system;
 mod object_system;
 mod package_manager;
 mod base_object;
-mod type_hierarchy;
-mod metaclass;
+// Merged into object_system
+// mod type_hierarchy;
+// mod metaclass;
 
 use crate::value::Value;
 use crate::codegen::{CodeGen, CodegenOptions, Target, CodeGenerator};
