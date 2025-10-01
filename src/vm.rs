@@ -219,8 +219,19 @@ impl VM {
     
     /// Execute a complete program
     pub fn execute_program(&mut self, program: Program, is_repl: bool) -> Result<Value> {
-        // Enter program scope
-        self.enter_scope("program");
+        // DEBUG: Add logging to help debug REPL issues
+        if is_repl {
+            
+
+        }
+        
+        // In REPL mode, don't create a new scope - use global scope for persistence
+        // In script mode, enter program scope
+        if !is_repl {
+            self.enter_scope("program");
+        } else {
+            
+        }
         
         // First pass: register all functions and classes
         for stmt in &program.statements {
@@ -261,14 +272,18 @@ impl VM {
                     }
                     Err(err) => {
                         // Statement execution failed
-                        self.exit_scope();
+                        if !is_repl {
+                            self.exit_scope();
+                        }
                         return Err(err);
                     }
                 }
                 
                 if self.should_return {
                     let result = self.return_value.take().unwrap_or(Value::None);
-                    self.exit_scope();
+                    if !is_repl {
+                        self.exit_scope();
+                    }
                     return Ok(result);
                 }
             }
@@ -281,7 +296,9 @@ impl VM {
                     if params.is_empty() {
                         // Call main function with no arguments
                         let result = self.call_user_function(&name, &params, body, vec![], HashMap::new(), Some(captured_scope))?;
-                        self.exit_scope();
+                        if !is_repl {
+                            self.exit_scope();
+                        }
                         return Ok(result);
                     }
                 }
@@ -289,8 +306,10 @@ impl VM {
             }
         }
         
-        // Exit program scope
-        self.exit_scope();
+        // Exit program scope only in script mode
+        if !is_repl {
+            self.exit_scope();
+        }
         
         // In script mode, always return None (like Python)
         // In REPL mode, return the last expression value
@@ -532,6 +551,25 @@ impl VM {
             Statement::Expression(expr) => {
                 let value = self.execute_expression(expr)?;
                 Ok(Some(value))
+            }
+            Statement::FunctionDef { name, params, body, is_async: _, decorators, docstring, return_type: _ } => {
+                // Handle function definitions in REPL/statement context
+                let captured_scope = self.scopes[self.current_scope].variables.clone();
+                let mut func_value = Value::Closure {
+                    name: name.clone(),
+                    params: params.clone(),
+                    body: body.clone(),
+                    captured_scope,
+                    docstring: docstring.clone(),
+                };
+                
+                // Apply decorators in reverse order (bottom to top)
+                for decorator in decorators.iter().rev() {
+                    func_value = self.apply_decorator(decorator, func_value)?;
+                }
+                
+                self.set_variable(name, func_value)?;
+                Ok(None)
             }
             Statement::VariableDef { name, value, type_annotation } => {
                 // Handle type annotation for strict typing
@@ -819,11 +857,22 @@ impl VM {
                 let obj_value = self.execute_expression(object)?;
                 
                 match &obj_value {
-                    Value::Object { fields, .. } => {
+                    Value::Object { fields, class_name, mro, .. } => {
+                        // First check instance fields
                         if let Some(value) = fields.get(name) {
                             Ok(value.clone())
                         } else {
-                            Err(anyhow::anyhow!("'{}' object has no attribute '{}'", "object", name))
+                            // Look for class attributes/methods using MRO
+                            for class_in_mro in &mro.linearization {
+                                if let Some(class_value) = self.get_variable(class_in_mro) {
+                                    if let Value::Object { fields: class_methods, .. } = class_value {
+                                        if let Some(attr_value) = class_methods.get(name) {
+                                            return Ok(attr_value.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            Err(anyhow::anyhow!("'{}' object has no attribute '{}'", class_name, name))
                         }
                     }
                     Value::Super(current_class, parent_class, self_obj) => {
@@ -1090,6 +1139,20 @@ impl VM {
                     "str" => self.builtin_str_with_vm(arg_values),
                     "repr" => self.builtin_repr_with_vm(arg_values),
                     "len" => self.builtin_len_with_vm(arg_values),
+                    "dir" => self.builtin_dir_with_vm(&arg_values),
+                    "globals" => {
+                        if !arg_values.is_empty() {
+                            return Err(anyhow::anyhow!("globals() takes no arguments"));
+                        }
+                        self.builtin_globals_with_vm()
+                    },
+                    "locals" => {
+                        if !arg_values.is_empty() {
+                            return Err(anyhow::anyhow!("locals() takes no arguments"));
+                        }
+                        self.builtin_locals_with_vm()
+                    },
+                    "vars" => self.builtin_vars_with_vm(&arg_values),
                     "super" => builtin_super(arg_values, Some(self)),
                     "eval" => crate::builtins::builtin_eval_with_vm(self, arg_values),
                     "exec" => crate::builtins::builtin_exec_with_vm(self, arg_values),
@@ -1239,24 +1302,18 @@ impl VM {
         match &obj_value {
             Value::Object { class_name, fields: instance_fields, base_object: _, mro } => {
                 // First check if the method is in the instance fields (unlikely but possible)
-                if let Some(Value::Closure { params, body, captured_scope, .. }) = instance_fields.get(method) {
+                if let Some(Value::Closure { params, body, captured_scope: _, .. }) = instance_fields.get(method) {
                     let mut method_args = vec![obj_value.clone()];
                     method_args.extend(arg_values);
-                    return self.call_user_function(method, &params, body.clone(), method_args, kwarg_values, Some(captured_scope.clone()));
+                    // For instance methods, don't use captured scope - use fresh scope
+                    return self.call_user_function(method, &params, body.clone(), method_args, kwarg_values, None);
                 }
                 
                 // Use MRO to find the method in the class hierarchy
-                println!("Looking for method '{}' in MRO: {:?}", method, mro.linearization);
                 for class_in_mro in &mro.linearization {
-                    println!("Checking class '{}' for method '{}'", class_in_mro, method);
                     if let Some(class_value) = self.get_variable(class_in_mro) {
                         if let Value::Object { fields: class_methods, .. } = class_value {
-                            println!("Class '{}' has methods: {:?}", class_in_mro, class_methods.keys().collect::<Vec<_>>());
-                            for (method_name, method_value) in class_methods.iter() {
-                                println!("  Method '{}': {:?}", method_name, method_value);
-                            }
-                            if let Some(Value::Closure { params, body, captured_scope, .. }) = class_methods.get(method) {
-                                println!("Found method '{}' in class '{}'", method, class_in_mro);
+                            if let Some(Value::Closure { params, body, captured_scope: _, .. }) = class_methods.get(method) {
                                 // Create a new argument list with 'self' as the first argument
                                 let mut method_args = vec![obj_value.clone()];
                                 method_args.extend(arg_values);
@@ -1265,7 +1322,9 @@ impl VM {
                                 let previous_executing_class = self.current_executing_class.clone();
                                 self.current_executing_class = Some(class_in_mro.clone());
                                 
-                                let result = self.call_user_function(method, &params, body.clone(), method_args, kwarg_values, Some(captured_scope.clone()))?;
+                                // For method calls, don't use captured scope - use fresh scope
+                                // The method should execute in a new scope with proper self parameter
+                                let result = self.call_user_function(method, &params, body.clone(), method_args, kwarg_values, None)?;
                                 
                                 // Restore previous executing class
                                 self.current_executing_class = previous_executing_class;
@@ -1278,8 +1337,6 @@ impl VM {
                                 return func(method_args);
                             }
                         }
-                    } else {
-                        println!("Class '{}' not found in variables", class_in_mro);
                     }
                 }
                 
@@ -1292,18 +1349,18 @@ impl VM {
                         let self_arg = if let Some(obj) = self_obj {
                             *obj.clone()
                         } else {
-                             // Fallback to getting 'self' from current scope
-                             if let Some(self_val) = self.get_variable("self") {
-                                 self_val.clone()
-                             } else {
-                                 Value::Object {
-                        class_name: current_class.clone(),
-                        fields: HashMap::new(),
-                        base_object: crate::base_object::BaseObject::new(current_class.clone(), vec!["object".to_string()]),
-                        mro: crate::base_object::MRO::from_linearization(vec![current_class.clone(), "object".to_string()]),
-                    }
-                             }
-                         };
+                            // Fallback to getting 'self' from current scope
+                            if let Some(self_val) = self.get_variable("self") {
+                                self_val.clone()
+                            } else {
+                                Value::Object {
+                                    class_name: current_class.clone(),
+                                    fields: HashMap::new(),
+                                    base_object: crate::base_object::BaseObject::new(current_class.clone(), vec!["object".to_string()]),
+                                    mro: crate::base_object::MRO::from_linearization(vec![current_class.clone(), "object".to_string()]),
+                                }
+                            }
+                        };
                         
                         let mut method_args = vec![self_arg];
                         method_args.extend(arg_values);
@@ -1323,17 +1380,17 @@ impl VM {
                         let self_arg = if let Some(obj) = self_obj {
                             *obj.clone()
                         } else {
-                             if let Some(self_val) = self.get_variable("self") {
-                                 self_val.clone()
-                             } else {
-                                 Value::Object {
-                    class_name: current_class.clone(),
-                    fields: HashMap::new(),
-                    base_object: crate::base_object::BaseObject::new(current_class.clone(), vec!["object".to_string()]),
-                    mro: crate::base_object::MRO::from_linearization(vec![current_class.clone(), "object".to_string()]),
-                }
-                             }
-                         };
+                            if let Some(self_val) = self.get_variable("self") {
+                                self_val.clone()
+                            } else {
+                                Value::Object {
+                                    class_name: current_class.clone(),
+                                    fields: HashMap::new(),
+                                    base_object: crate::base_object::BaseObject::new(current_class.clone(), vec!["object".to_string()]),
+                                    mro: crate::base_object::MRO::from_linearization(vec![current_class.clone(), "object".to_string()]),
+                                }
+                            }
+                        };
                         
                         let mut method_args = vec![self_arg];
                         method_args.extend(arg_values);
@@ -2168,6 +2225,27 @@ impl VM {
         
         let items = match iter_value {
             Value::List(items) => items,
+            Value::Tuple(items) => items,
+            Value::Set(items) => items,
+            Value::FrozenSet(items) => items,
+            Value::Range { start, stop, step } => {
+                let mut result = Vec::new();
+                let mut current = start;
+                
+                if step > 0 {
+                    while current < stop {
+                        result.push(Value::Int(current));
+                        current += step;
+                    }
+                } else if step < 0 {
+                    while current > stop {
+                        result.push(Value::Int(current));
+                        current += step;
+                    }
+                }
+                
+                result
+            }
             Value::Str(s) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
             _ => return Err(anyhow::anyhow!("'{}' object is not iterable", iter_value.type_name())),
         };
@@ -2230,8 +2308,6 @@ impl VM {
             &base_classes,
             &self.class_registry,
         ).map_err(|e| anyhow::anyhow!("Failed to compute MRO for instance: {}", e))?;
-        
-        println!("Creating instance of '{}' with MRO: {:?}", class_name, mro_linearization);
         
         // Look for __init__ method in class methods
         if let Some(init_method) = class_methods.get("__init__") {
@@ -2361,12 +2437,14 @@ impl VM {
                     if let Some(value) = kwargs.get(&param.name) {
                         self.set_variable(&param.name, value.clone())?;
                     } else if arg_index < args.len() {
+                        // This should set the first parameter (self) to the instance object
                         self.set_variable(&param.name, args[arg_index].clone())?;
                         arg_index += 1;
                     } else if let Some(default_expr) = &param.default {
                         let default_value = self.execute_expression(default_expr)?;
                         self.set_variable(&param.name, default_value)?;
                     } else {
+                        // This should not happen for required parameters
                         self.set_variable(&param.name, Value::None)?;
                     }
                 }
@@ -2609,14 +2687,13 @@ impl VM {
     
     /// Set variable without type checking (internal use)
     fn set_variable_unchecked(&mut self, name: &str, value: Value) {
-        
         // First check if the variable exists in any parent scope
         let mut scope_index = Some(self.current_scope);
         
         while let Some(idx) = scope_index {
             let scope = &self.scopes[idx];
             if scope.variables.contains_key(name) {
-                // Variable exists in this scope, update it here
+                // Variable exists in this scope, update it in the CORRECT scope (idx, not current_scope)
                 self.scopes[idx].variables.insert(name.to_string(), value);
                 return;
             }
@@ -2636,7 +2713,7 @@ impl VM {
     /// Get the declared type of a variable
     pub fn get_variable_type(&self, name: &str) -> Option<Type> {
         let mut scope_index = Some(self.current_scope);
-        
+    
         while let Some(idx) = scope_index {
             let scope = &self.scopes[idx];
             if let Some(type_info) = scope.variable_types.get(name) {
@@ -2664,6 +2741,13 @@ impl VM {
 
     pub fn get_current_scope(&self) -> usize {
         self.current_scope
+    }
+    
+    /// Set the current scope (primarily for REPL usage)
+    pub fn set_current_scope(&mut self, scope_index: usize) {
+        if scope_index < self.scopes.len() {
+            self.current_scope = scope_index;
+        }
     }
     
     pub fn get_global_variables(&self) -> HashMap<String, Value> {
@@ -3189,6 +3273,124 @@ impl VM {
         Ok(())
     }
     
+    /// Get VM-aware dir() implementation  
+    pub fn builtin_dir_with_vm(&self, args: &[Value]) -> Result<Value> {
+        if args.is_empty() {
+            // Return all variables in current scope
+            let mut names = Vec::new();
+            for name in self.scopes[self.current_scope].variables.keys() {
+                names.push(Value::Str(name.clone()));
+            }
+            names.sort_by(|a, b| {
+                if let (Value::Str(a_str), Value::Str(b_str)) = (a, b) {
+                    a_str.cmp(b_str)
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            });
+            Ok(Value::List(names))
+        } else {
+            // Get attributes of the object
+            let obj = &args[0];
+            match obj {
+                Value::Object { fields, class_name, .. } => {
+                    let mut names = Vec::new();
+                    
+                    // Add instance attributes
+                    for name in fields.keys() {
+                        names.push(Value::Str(name.clone()));
+                    }
+                    
+                    // Add class methods by looking up the class
+                    if let Some(Value::Object { fields: class_methods, .. }) = self.get_variable(class_name) {
+                        for name in class_methods.keys() {
+                            if !names.iter().any(|n| matches!(n, Value::Str(s) if s == name)) {
+                                names.push(Value::Str(name.clone()));
+                            }
+                        }
+                    }
+                    
+                    names.sort_by(|a, b| {
+                        if let (Value::Str(a_str), Value::Str(b_str)) = (a, b) {
+                            a_str.cmp(b_str)
+                        } else {
+                            std::cmp::Ordering::Equal
+                        }
+                    });
+                    Ok(Value::List(names))
+                }
+                Value::Str(_) => {
+                    // String methods
+                    let methods = vec![
+                        "upper", "lower", "title", "capitalize", "strip", "replace", "split", "join"
+                    ];
+                    let method_values: Vec<Value> = methods.into_iter()
+                        .map(|m| Value::Str(m.to_string()))
+                        .collect();
+                    Ok(Value::List(method_values))
+                }
+                Value::List(_) => {
+                    // List methods
+                    let methods = vec![
+                        "append", "extend", "pop", "remove", "insert", "clear", "index", "count", "sort", "reverse"
+                    ];
+                    let method_values: Vec<Value> = methods.into_iter()
+                        .map(|m| Value::Str(m.to_string()))
+                        .collect();
+                    Ok(Value::List(method_values))
+                }
+                _ => Ok(Value::List(vec![]))
+            }
+        }
+    }
+    
+    /// Get VM-aware globals() implementation
+    pub fn builtin_globals_with_vm(&self) -> Result<Value> {
+        let mut globals = HashMap::new();
+        
+        // Get global scope (scope 0)
+        for (name, value) in &self.scopes[0].variables {
+            let key = name.clone();
+            globals.insert(key, value.clone());
+        }
+        
+        Ok(Value::Dict(globals))
+    }
+    
+    /// Get VM-aware locals() implementation
+    pub fn builtin_locals_with_vm(&self) -> Result<Value> {
+        let mut locals = HashMap::new();
+        
+        // Get current scope variables
+        for (name, value) in &self.scopes[self.current_scope].variables {
+            let key = name.clone();
+            locals.insert(key, value.clone());
+        }
+        
+        Ok(Value::Dict(locals))
+    }
+    
+    /// Get VM-aware vars() implementation
+    pub fn builtin_vars_with_vm(&self, args: &[Value]) -> Result<Value> {
+        if args.is_empty() {
+            // Return locals when no arguments
+            self.builtin_locals_with_vm()
+        } else {
+            // Return object's __dict__ equivalent
+            let obj = &args[0];
+            match obj {
+                Value::Object { fields, .. } => {
+                    let mut obj_dict = HashMap::new();
+                    for (name, value) in fields {
+                        obj_dict.insert(name.clone(), value.clone());
+                    }
+                    Ok(Value::Dict(obj_dict))
+                }
+                _ => Err(anyhow::anyhow!("vars() argument must be an object"))
+            }
+        }
+    }
+
     // --- Built-in Functions ---
     
     fn init_builtins(&mut self) {
@@ -3207,7 +3409,14 @@ impl VM {
             ("set", crate::builtins::builtin_set),
             ("dict", crate::builtins::builtin_dict),
             ("sum", Self::builtin_sum),
-            ("dir", crate::builtins::builtin_dir),
+            ("dir", |args| {
+                if args.is_empty() {
+                    // Return empty list as placeholder - proper implementation needs VM context
+                    Ok(Value::List(vec![]))
+                } else {
+                    crate::builtins::builtin_dir(args)
+                }
+            }),
             ("help", crate::builtins::builtin_help),
             ("open", crate::builtins::builtin_open),
             ("repr", crate::builtins::builtin_repr),
@@ -3264,15 +3473,32 @@ impl VM {
             ("iter", crate::builtins::builtin_iter),
             ("next", crate::builtins::builtin_next),
             ("slice", crate::builtins::builtin_slice),
-            ("vars", crate::builtins::builtin_vars),
-            ("globals", crate::builtins::builtin_globals),
-            ("locals", crate::builtins::builtin_locals),
+            ("globals", |_args| {
+                // Placeholder - proper implementation needs VM context
+                Ok(Value::Dict(HashMap::new()))
+            }),
+            ("locals", |_args| {
+                // Placeholder - proper implementation needs VM context  
+                Ok(Value::Dict(HashMap::new()))
+            }),
+            ("vars", |args| {
+                if args.is_empty() {
+                    // Return locals() when no args
+                    Ok(Value::Dict(HashMap::new()))
+                } else {
+                    crate::builtins::builtin_vars(args)
+                }
+            }),
             ("eval", |_args| Ok(Value::None)), // Placeholder - actual implementation handled in execute_function_call
             ("exec", |_args| Ok(Value::None)), // Placeholder - actual implementation handled in execute_function_call
             ("compile", crate::builtins::builtin_compile),
             ("breakpoint", crate::builtins::builtin_breakpoint),
             ("input", crate::builtins::builtin_input),
             ("load_library", crate::builtins::builtin_load_library),
+            
+            // REPL convenience functions
+            ("exit", |_args| std::process::exit(0)),
+            ("quit", |_args| std::process::exit(0)),
             
             // Special values
             ("Ellipsis", |_args| Ok(Value::Ellipsis)),
@@ -3281,6 +3507,13 @@ impl VM {
         
         for (name, func) in builtins {
             self.set_variable(name, Value::BuiltinFunction(name.to_string(), func));
+        }
+        
+        // Add commonly used modules directly to the global scope for REPL convenience
+        // Note: This is different from Python which requires explicit imports
+        // But makes REPL more user-friendly for testing
+        if let Some(os_module) = crate::modules::os::create_os_module().into() {
+            // Don't auto-import, but make available via import
         }
         
         // Initialize built-in modules (but don't auto-import them)
@@ -3541,13 +3774,34 @@ impl VM {
             1 => {
                 match &args[0] {
                     Value::List(items) => Ok(Value::List(items.clone())),
+                    Value::Tuple(items) => Ok(Value::List(items.clone())),
+                    Value::Set(items) => Ok(Value::List(items.clone())),
+                    Value::FrozenSet(items) => Ok(Value::List(items.clone())),
+                    Value::Range { start, stop, step } => {
+                        let mut result = Vec::new();
+                        let mut current = *start;
+                        
+                        if *step > 0 {
+                            while current < *stop {
+                                result.push(Value::Int(current));
+                                current += step;
+                            }
+                        } else if *step < 0 {
+                            while current > *stop {
+                                result.push(Value::Int(current));
+                                current += step;
+                            }
+                        }
+                        
+                        Ok(Value::List(result))
+                    }
                     Value::Str(s) => {
                         let chars: Vec<Value> = s.chars()
                             .map(|c| Value::Str(c.to_string()))
                             .collect();
                         Ok(Value::List(chars))
                     }
-                    _ => Ok(Value::List(vec![args[0].clone()])),
+                    _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name()))
                 }
             }
             _ => Ok(Value::List(args)),

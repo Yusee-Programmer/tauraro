@@ -65,7 +65,8 @@ impl Parser {
                 self.advance();
                 continue;
             }
-            statements.push(self.statement()?);
+            let stmt = self.statement()?;
+            statements.push(stmt);
         }
         
         Ok(Program { statements })
@@ -121,20 +122,9 @@ impl Parser {
     fn statement(&mut self) -> Result<Statement, ParseError> {
         match &self.peek().token {
             Token::KwFunc | Token::KwAsync => {
-                // Check if this is a keyword being used as an identifier in assignment
-                if self.is_keyword_assignment() {
-                    // Treat as expression/assignment
-                    let expr = self.expression()?;
-                    if self.match_token(&[Token::Assign]) {
-                        self.variable_def(expr)
-                    } else {
-                        // Optional semicolon or newline for expression statements
-                        self.match_token(&[Token::Semicolon, Token::Newline]);
-                        Ok(Statement::Expression(expr))
-                    }
-                } else {
-                    self.function_def()
-                }
+                // For function definitions, always call function_def() directly
+                // Don't check for keyword assignment for function definitions
+                self.function_def()
             },
             Token::KwClass => {
                 // Check if this is a keyword being used as an identifier in assignment
@@ -215,7 +205,7 @@ impl Parser {
         let is_async = self.match_token(&[Token::KwAsync]);
         self.consume(Token::KwFunc, "Expected 'func', 'def', or 'aiki'")?;
         
-        let name = self.consume_identifier()?;
+        let name = self.consume_identifier_or_keyword()?;
         
         // Optional parentheses for parameters
         let mut params = Vec::new();
@@ -274,7 +264,7 @@ impl Parser {
 
     fn class_def(&mut self) -> Result<Statement, ParseError> {
         self.consume(Token::KwClass, "Expected 'class' or 'iri'")?;
-        let name = self.consume_identifier()?;
+        let name = self.consume_identifier_or_keyword()?;
         
         let mut bases = Vec::new();
         if self.match_token(&[Token::LParen]) {
@@ -850,15 +840,16 @@ impl Parser {
                 expr = self.finish_call(expr)?;
             } else if self.match_token(&[Token::Dot]) {
                 let attr = self.consume_identifier()?;
-                // Always create an attribute expression first
-                expr = Expr::Attribute {
-                    object: Box::new(expr),
-                    name: attr,
-                };
-                // If there's a parenthesis after the attribute, it's a function call on that attribute
+                // Check if there's a parenthesis after the attribute for method calls
                 if self.check(&Token::LParen) {
                     self.advance(); // consume the '('
-                    expr = self.finish_call(expr)?;
+                    expr = self.finish_method_call(expr, attr)?;
+                } else {
+                    // Just attribute access
+                    expr = Expr::Attribute {
+                        object: Box::new(expr),
+                        name: attr,
+                    };
                 }
             } else if self.match_token(&[Token::LBracket]) {
                 // Check if this is a slice or subscript

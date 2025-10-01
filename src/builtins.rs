@@ -350,7 +350,38 @@ pub fn builtin_list(args: Vec<Value>) -> Result<Value> {
     if args.is_empty() {
         return Ok(Value::List(vec![]));
     }
-    Ok(Value::List(vec![args[0].clone()]))
+    
+    match &args[0] {
+        Value::List(items) => Ok(Value::List(items.clone())),
+        Value::Tuple(items) => Ok(Value::List(items.clone())),
+        Value::Set(items) => Ok(Value::List(items.clone())),
+        Value::FrozenSet(items) => Ok(Value::List(items.clone())),
+        Value::Range { start, stop, step } => {
+            let mut result = Vec::new();
+            let mut current = *start;
+            
+            if *step > 0 {
+                while current < *stop {
+                    result.push(Value::Int(current));
+                    current += step;
+                }
+            } else if *step < 0 {
+                while current > *stop {
+                    result.push(Value::Int(current));
+                    current += step;
+                }
+            }
+            
+            Ok(Value::List(result))
+        }
+        Value::Str(s) => {
+            let chars: Vec<Value> = s.chars()
+                .map(|c| Value::Str(c.to_string()))
+                .collect();
+            Ok(Value::List(chars))
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name()))
+    }
 }
 
 pub fn builtin_tuple(args: Vec<Value>) -> Result<Value> {

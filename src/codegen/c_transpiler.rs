@@ -23,7 +23,7 @@ impl CTranspiler {
     }
 
     pub fn transpile(&mut self, module: &IRModule) -> anyhow::Result<String> {
-        eprintln!("DEBUG: Starting C transpilation with {} functions", module.functions.len());
+        
         
         // Generate includes
         writeln!(self.output, "#include <stdio.h>")?;
@@ -119,7 +119,7 @@ impl CTranspiler {
 
     fn transpile_instruction(&mut self, instruction: &IRInstruction, module: &IRModule) -> anyhow::Result<String> {
         let mut code = String::new();
-        eprintln!("DEBUG: Processing instruction: {:?}", instruction);
+        
         
         match instruction {
             IRInstruction::Alloca { dest, ty } => {
@@ -217,7 +217,7 @@ impl CTranspiler {
                     // Declare destination variable if it's a temporary
                     if dest_var.starts_with("tmp_") {
                         let c_type = self.infer_return_type_from_function(func, module);
-                        eprintln!("DEBUG: Declaring temp var {} with type {}", dest_var, c_type);
+                        
                         code.push_str(&format!("    {} {} = {}({});\n", c_type, dest_var, func, args_str.join(", ")));
                     } else {
                         code.push_str(&format!("    {} = {}({});\n", dest_var, func, args_str.join(", ")));

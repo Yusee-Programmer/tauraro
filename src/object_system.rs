@@ -395,7 +395,7 @@ impl TauraroType {
 }
 
 /// Represents a dunder method that can be called on any object
-pub type DunderMethod = fn(&Value, Vec<Value>) -> Option<Value>;
+pub type DunderMethod = fn(&Value, &[Value]) -> Result<Value, String>;
 
 /// Get type-specific methods for built-in types
 pub fn get_type_methods(value: &Value) -> Option<HashMap<String, DunderMethod>> {
@@ -415,15 +415,25 @@ pub fn get_type_methods(value: &Value) -> Option<HashMap<String, DunderMethod>> 
 }
 
 fn get_int_methods() -> HashMap<String, DunderMethod> {
-    HashMap::new()
+    let mut methods = HashMap::new();
+    methods.insert("__str__".to_string(), int_str as DunderMethod);
+    methods.insert("__repr__".to_string(), int_repr as DunderMethod);
+    methods
 }
 
 fn get_float_methods() -> HashMap<String, DunderMethod> {
-    HashMap::new()
+    let mut methods = HashMap::new();
+    methods.insert("__str__".to_string(), float_str as DunderMethod);
+    methods.insert("__repr__".to_string(), float_repr as DunderMethod);
+    methods
 }
 
 fn get_string_methods() -> HashMap<String, DunderMethod> {
-    HashMap::new()
+    let mut methods = HashMap::new();
+    methods.insert("__str__".to_string(), str_str as DunderMethod);
+    methods.insert("__repr__".to_string(), str_repr as DunderMethod);
+    methods.insert("__len__".to_string(), str_len as DunderMethod);
+    methods
 }
 
 fn get_list_methods() -> HashMap<String, DunderMethod> {
@@ -435,7 +445,11 @@ fn get_dict_methods() -> HashMap<String, DunderMethod> {
 }
 
 fn get_tuple_methods() -> HashMap<String, DunderMethod> {
-    HashMap::new()
+    let mut methods = HashMap::new();
+    methods.insert("__str__".to_string(), tuple_str as DunderMethod);
+    methods.insert("__repr__".to_string(), tuple_repr as DunderMethod);
+    methods.insert("__len__".to_string(), tuple_len as DunderMethod);
+    methods
 }
 
 fn get_set_methods() -> HashMap<String, DunderMethod> {
@@ -450,6 +464,13 @@ fn get_bytearray_methods() -> HashMap<String, DunderMethod> {
     HashMap::new()
 }
 
+fn get_bool_methods() -> HashMap<String, DunderMethod> {
+    let mut methods = HashMap::new();
+    methods.insert("__str__".to_string(), bool_str as DunderMethod);
+    methods.insert("__repr__".to_string(), bool_repr as DunderMethod);
+    methods
+}
+
 fn get_basic_object_methods() -> HashMap<String, DunderMethod> {
     let mut methods = HashMap::new();
     methods.insert("__str__".to_string(), basic_object_str as DunderMethod);
@@ -457,28 +478,138 @@ fn get_basic_object_methods() -> HashMap<String, DunderMethod> {
     methods
 }
 
-fn basic_object_str(obj: &Value, _args: Vec<Value>) -> Option<Value> {
+fn basic_object_str(obj: &Value, _args: &[Value]) -> Result<Value, String> {
     match obj {
         Value::Object { class_name, .. } => {
-            Some(Value::Str(format!("<{} object>", class_name)))
+            Ok(Value::Str(format!("<{} object>", class_name)))
         }
-        _ => None,
+        _ => Ok(Value::Str(format!("<{} object>", obj.type_name())))
     }
 }
 
-fn basic_object_repr(obj: &Value, _args: Vec<Value>) -> Option<Value> {
-    basic_object_str(obj, _args)
+fn basic_object_repr(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    basic_object_str(obj, args)
 }
 
-pub fn resolve_dunder_method(_value: &Value, _method_name: &str) -> Option<DunderMethod> {
-    // Simple stub implementation - the function signatures don't match
-    // This would need proper implementation matching the DunderMethod signature
-    None
+pub fn resolve_dunder_method(value: &Value, method_name: &str) -> Option<DunderMethod> {
+    // Get methods for the specific value type
+    let methods = match value {
+        Value::Object { .. } => get_basic_object_methods(),
+        Value::List(_) => get_list_methods(), 
+        Value::Dict(_) => get_dict_methods(),
+        Value::Str(_) => get_string_methods(),
+        Value::Int(_) => get_int_methods(),
+        Value::Float(_) => get_float_methods(),
+        Value::Bool(_) => get_bool_methods(),
+        Value::Tuple(_) => get_tuple_methods(),
+        Value::Set(_) => get_set_methods(),
+        Value::Bytes(_) => get_bytes_methods(),
+        Value::ByteArray(_) => get_bytearray_methods(),
+        _ => HashMap::new(),
+    };
+    
+    methods.get(method_name).copied()
+}
+
+
+
+// Method implementations for built-in types
+fn str_str(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Str(s) = obj {
+        Ok(Value::Str(s.clone()))
+    } else {
+        Err("Expected string".to_string())
+    }
+}
+
+fn str_repr(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Str(s) = obj {
+        Ok(Value::Str(format!("\"{}\"", s)))
+    } else {
+        Err("Expected string".to_string())
+    }
+}
+
+fn str_len(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Str(s) = obj {
+        Ok(Value::Int(s.len() as i64))
+    } else {
+        Err("Expected string".to_string())
+    }
+}
+
+fn int_str(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Int(n) = obj {
+        Ok(Value::Str(n.to_string()))
+    } else {
+        Err("Expected int".to_string())
+    }
+}
+
+fn int_repr(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Int(n) = obj {
+        Ok(Value::Str(n.to_string()))
+    } else {
+        Err("Expected int".to_string())
+    }
+}
+
+fn float_str(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Float(f) = obj {
+        Ok(Value::Str(f.to_string()))
+    } else {
+        Err("Expected float".to_string())
+    }
+}
+
+fn float_repr(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Float(f) = obj {
+        Ok(Value::Str(f.to_string()))
+    } else {
+        Err("Expected float".to_string())
+    }
+}
+
+fn bool_str(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Bool(b) = obj {
+        Ok(Value::Str(if *b { "True".to_string() } else { "False".to_string() }))
+    } else {
+        Err("Expected bool".to_string())
+    }
+}
+
+fn bool_repr(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Bool(b) = obj {
+        Ok(Value::Str(if *b { "True".to_string() } else { "False".to_string() }))
+    } else {
+        Err("Expected bool".to_string())
+    }
+}
+
+fn tuple_str(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Tuple(items) = obj {
+        let items_str: Vec<String> = items.iter().map(|v| format!("{}", v)).collect();
+        Ok(Value::Str(format!("({})", items_str.join(", "))))
+    } else {
+        Err("Expected tuple".to_string())
+    }
+}
+
+fn tuple_repr(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    tuple_str(obj, _args)
+}
+
+fn tuple_len(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Tuple(items) = obj {
+        Ok(Value::Int(items.len() as i64))
+    } else {
+        Err("Expected tuple".to_string())
+    }
 }
 
 pub fn call_dunder_method(value: &Value, method_name: &str, args: Vec<Value>) -> Option<Value> {
     if let Some(method) = resolve_dunder_method(value, method_name) {
-        method(value, args)
+        method(value, &args).ok()
     } else {
         None
     }

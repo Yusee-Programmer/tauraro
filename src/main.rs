@@ -103,9 +103,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Repl => {
-            // Use the advanced interpreter REPL instead of basic VM REPL
-            let mut interpreter = Interpreter::new();
-            interpreter.repl()?;
+            // Use the enhanced REPL from interpreter module
+            crate::codegen::interpreter::run_repl()?;
         }
         Commands::Run { file, backend, optimization, strict_types } => {
             let source = std::fs::read_to_string(&file)?;

@@ -83,7 +83,3 @@ http = ["dep:hyper", "dep:reqwest", "dep:tungstenite", "dep:tokio-tungstenite"] 
 
 [dev-dependencies]
 pretty_assertions = "1.4"
-
-[[bin]]
-name = "test_cpython_control_flow"
-path = "test_cpython_control_flow.rs"
