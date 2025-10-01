@@ -185,3 +185,49 @@ fn main() {
         print("Number 7 not found")
     }
 }
+
+
+# control_flow.tr - Control flow examples in Tauraro
+# Demonstrates if statements, loops, and conditionals
+
+# If-elif-else statements
+age = 25
+
+if age < 18:
+    print("Minor")
+elif age < 65:
+    print("Adult")
+else:
+    print("Senior")
+
+# For loops
+print("\nCounting from 1 to 5:")
+for i in range(1, 6):
+    print(f"Number: {i}")
+
+# For loop with list
+fruits = ["apple", "banana", "cherry"]
+print("\nFruits:")
+for fruit in fruits:
+    print(f"- {fruit}")
+
+# While loop
+print("\nCountdown:")
+count = 5
+while count > 0:
+    print(count)
+    count -= 1
+print("Blast off!")
+
+# Loop control statements
+print("\nEven numbers from 1 to 10 (using continue):")
+for i in range(1, 11):
+    if i % 2 != 0:
+        continue
+    print(i)
+
+print("\nBreaking at 5:")
+for i in range(1, 11):
+    if i > 5:
+        break
+    print(i)

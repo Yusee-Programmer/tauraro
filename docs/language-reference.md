@@ -12,21 +12,22 @@
 6. [Control Flow](#control-flow)
 7. [Functions](#functions)
 8. [Classes and Objects](#classes-and-objects)
-9. [Collections](#collections)
-10. [Error Handling](#error-handling)
-11. [Async Programming](#async-programming)
-12. [Type System](#type-system)
-13. [Memory Management](#memory-management)
-14. [Modules and Imports](#modules-and-imports)
+9. [Method Calls](#method-calls)
+10. [Collections](#collections)
+11. [Error Handling](#error-handling)
+12. [Async Programming](#async-programming)
+13. [Type System](#type-system)
+14. [Memory Management](#memory-management)
+15. [Modules and Imports](#modules-and-imports)
 
 ## Overview
 
-TauraroLang is a dynamically typed programming language with optional static typing support. It features a clean, expressive syntax inspired by modern programming languages while maintaining simplicity and readability.
+TauraroLang is a dynamically typed programming language that uses 100% Python syntax. It features a clean, expressive syntax inspired by Python while maintaining simplicity and readability. Tauraro files use the .tr extension.
 
 ### Key Characteristics
 
 - **Dynamic Typing**: Variables can hold values of any type
-- **Optional Static Typing**: Add type annotations for better tooling and performance
+- **Python Syntax**: 100% compatible with Python syntax
 - **Expression-Based**: Most constructs are expressions that return values
 - **Memory Safe**: Automatic memory management with manual control options
 - **Interoperable**: Seamless integration with C and Python
@@ -35,23 +36,25 @@ TauraroLang is a dynamically typed programming language with optional static typ
 
 ### Comments
 
-```tauraro
-// Single-line comment
+```python
+# Single-line comment
 
-/*
-   Multi-line comment
-   Can span multiple lines
-*/
+"""
+Multi-line comment
+Can span multiple lines
+"""
 
-/// Documentation comment
-/// Used for generating documentation
+"""
+Documentation comment
+Used for generating documentation
+"""
 ```
 
 ### Identifiers
 
 Identifiers must start with a letter or underscore, followed by letters, digits, or underscores:
 
-```tauraro
+```python
 valid_identifier
 _private_var
 MyClass
@@ -60,59 +63,44 @@ variable123
 
 ### Keywords
 
-Reserved keywords in TauraroLang:
+Reserved keywords in TauraroLang (Python keywords):
 
 ```
-aiki        // function definition
-fitar       // return statement
-idan        // if statement
-kuma        // else statement
-don         // for loop
-yayin       // while loop
-dauki       // assignment/let
-matsayin    // type assertion
-async       // async function
-await       // await expression
-extern      // external function
-export      // export declaration
-import      // import statement
-class       // class definition
-struct      // structure definition
-enum        // enumeration
-match       // pattern matching
-try         // exception handling
-catch       // exception handler
-finally     // cleanup block
-break       // loop break
-continue    // loop continue
-true        // boolean true
-false       // boolean false
-null        // null value
-none        // none value
+and         def         exec        not         yield
+as          elif        finally     or
+assert      else        for         pass
+break       except      from        print
+class       exec        global      raise
+continue    finally     if          return
+def         for         import      try
+del         from        in          while
+elif        global      is          with
+else        if          lambda      yield
+except      import      nonlocal
 ```
 
 ### Literals
 
 #### Integer Literals
-```tauraro
-42          // decimal
-0x2A        // hexadecimal
-0o52        // octal
-0b101010    // binary
-1_000_000   // with separators
+```python
+42          # decimal
+0x2A        # hexadecimal
+0o52        # octal
+0b101010    # binary
+1_000_000   # with separators
 ```
 
 #### Float Literals
-```tauraro
+```python
 3.14
 2.5e10
 1.5E-5
-.5          // 0.5
-5.          // 5.0
+.5          # 0.5
+5.          # 5.0
 ```
 
 #### String Literals
-```tauraro
+```python
 "Hello, World!"
 'Single quotes'
 """
@@ -124,11 +112,10 @@ r"Raw string with \n literal backslashes"
 ```
 
 #### Boolean and Special Literals
-```tauraro
-true
-false
-null
-none
+```python
+True
+False
+None
 ```
 
 ## Data Types
@@ -137,213 +124,212 @@ none
 
 #### Integer (`int`)
 64-bit signed integers:
-```tauraro
-let age = 25
-let negative = -100
-let large = 9223372036854775807
+```python
+age = 25
+negative = -100
+large = 9223372036854775807
 ```
 
 #### Float (`float`)
 64-bit floating-point numbers:
-```tauraro
-let pi = 3.14159
-let scientific = 1.23e-4
-let infinity = float("inf")
+```python
+pi = 3.14159
+scientific = 1.23e-4
+infinity = float("inf")
 ```
 
 #### Boolean (`bool`)
-```tauraro
-let is_active = true
-let is_complete = false
+```python
+is_active = True
+is_complete = False
 ```
 
 #### String (`str`)
 UTF-8 encoded strings:
-```tauraro
-let name = "TauraroLang"
-let greeting = f"Hello, {name}!"
-let multiline = """
+```python
+name = "TauraroLang"
+greeting = f"Hello, {name}!"
+multiline = """
     This is a
     multi-line string
 """
 ```
 
 #### None Type
-```tauraro
-let empty = none
-let uninitialized = null
+```python
+empty = None
 ```
 
 ### Collection Types
 
 #### List (`list`)
 Ordered, mutable collections:
-```tauraro
-let numbers = [1, 2, 3, 4, 5]
-let mixed = [1, "hello", true, 3.14]
-let empty_list = []
+```python
+numbers = [1, 2, 3, 4, 5]
+mixed = [1, "hello", True, 3.14]
+empty_list = []
 
-// List operations
+# List operations
 numbers.append(6)
 numbers[0] = 10
-let first = numbers[0]
-let length = len(numbers)
+first = numbers[0]
+length = len(numbers)
 ```
 
 #### Dictionary (`dict`)
 Key-value mappings:
-```tauraro
-let person = {
+```python
+person = {
     "name": "Alice",
     "age": 30,
     "city": "New York"
 }
 
-// Dictionary operations
+# Dictionary operations
 person["email"] = "alice@example.com"
-let name = person["name"]
-let keys = person.keys()
+name = person["name"]
+keys = person.keys()
 ```
 
 #### Tuple
 Immutable ordered collections:
-```tauraro
-let coordinates = (10, 20)
-let rgb = (255, 128, 0)
-let single = (42,)  // Single element tuple
+```python
+coordinates = (10, 20)
+rgb = (255, 128, 0)
+single = (42,)  # Single element tuple
 
-// Tuple unpacking
-let (x, y) = coordinates
+# Tuple unpacking
+x, y = coordinates
 ```
 
 ## Variables and Constants
 
 ### Variable Declaration
 
-```tauraro
-// Basic declaration
-let x = 42
-let name = "TauraroLang"
+```python
+# Basic declaration
+x = 42
+name = "TauraroLang"
 
-// Multiple assignment
-let a, b, c = 1, 2, 3
-let (x, y) = (10, 20)
+# Multiple assignment
+a, b, c = 1, 2, 3
+x, y = (10, 20)
 
-// Type annotations (optional)
-let age: int = 25
-let pi: float = 3.14159
-let active: bool = true
+# Type annotations (optional)
+age: int = 25
+pi: float = 3.14159
+active: bool = True
 ```
 
 ### Assignment Operators
 
-```tauraro
-let x = 10
+```python
+x = 10
 
-// Compound assignment
-x += 5      // x = x + 5
-x -= 3      // x = x - 3
-x *= 2      // x = x * 2
-x /= 4      // x = x / 4
-x %= 3      // x = x % 3
-x **= 2     // x = x ** 2
+# Compound assignment
+x += 5      # x = x + 5
+x -= 3      # x = x - 3
+x *= 2      # x = x * 2
+x /= 4      # x = x / 4
+x %= 3      # x = x % 3
+x **= 2     # x = x ** 2
 ```
 
 ### Constants
 
-```tauraro
-// Constants (by convention, use UPPER_CASE)
-let PI = 3.14159
-let MAX_SIZE = 1000
+```python
+# Constants (by convention, use UPPER_CASE)
+PI = 3.14159
+MAX_SIZE = 1000
 ```
 
 ## Operators
 
 ### Arithmetic Operators
 
-```tauraro
-let a = 10
-let b = 3
+```python
+a = 10
+b = 3
 
-let sum = a + b         // 13
-let diff = a - b        // 7
-let product = a * b     // 30
-let quotient = a / b    // 3.333...
-let remainder = a % b   // 1
-let power = a ** b      // 1000
+sum = a + b         # 13
+diff = a - b        # 7
+product = a * b     # 30
+quotient = a / b    # 3.333...
+remainder = a % b   # 1
+power = a ** b      # 1000
 
-// Unary operators
-let neg = -a            // -10
-let pos = +a            // 10
+# Unary operators
+neg = -a            # -10
+pos = +a            # 10
 ```
 
 ### Comparison Operators
 
-```tauraro
-let x = 10
-let y = 20
+```python
+x = 10
+y = 20
 
-x == y      // false (equality)
-x != y      // true (inequality)
-x < y       // true (less than)
-x <= y      // true (less than or equal)
-x > y       // false (greater than)
-x >= y      // false (greater than or equal)
+x == y      # False (equality)
+x != y      # True (inequality)
+x < y       # True (less than)
+x <= y      # True (less than or equal)
+x > y       # False (greater than)
+x >= y      # False (greater than or equal)
 ```
 
 ### Logical Operators
 
-```tauraro
-let a = true
-let b = false
+```python
+a = True
+b = False
 
-a && b      // false (logical AND)
-a || b      // true (logical OR)
-!a          // false (logical NOT)
+a and b     # False (logical AND)
+a or b      # True (logical OR)
+not a       # False (logical NOT)
 
-// Short-circuit evaluation
-let result = a && expensive_function()  // Only calls function if a is true
+# Short-circuit evaluation
+result = a and expensive_function()  # Only calls function if a is True
 ```
 
 ### Bitwise Operators
 
-```tauraro
-let x = 12  // 1100 in binary
-let y = 10  // 1010 in binary
+```python
+x = 12  # 1100 in binary
+y = 10  # 1010 in binary
 
-x & y       // 8 (1000) - bitwise AND
-x | y       // 14 (1110) - bitwise OR
-x ^ y       // 6 (0110) - bitwise XOR
-~x          // -13 - bitwise NOT
-x << 2      // 48 (110000) - left shift
-x >> 2      // 3 (11) - right shift
+x & y       # 8 (1000) - bitwise AND
+x | y       # 14 (1110) - bitwise OR
+x ^ y       # 6 (0110) - bitwise XOR
+~x          # -13 - bitwise NOT
+x << 2      # 48 (110000) - left shift
+x >> 2      # 3 (11) - right shift
 ```
 
 ### String Operators
 
-```tauraro
-let first = "Hello"
-let second = "World"
+```python
+first = "Hello"
+second = "World"
 
-let greeting = first + " " + second  // "Hello World"
-let repeated = "Ha" * 3              // "HaHaHa"
+greeting = first + " " + second  # "Hello World"
+repeated = "Ha" * 3              # "HaHaHa"
 
-// String formatting
-let name = "Alice"
-let age = 30
-let message = f"My name is {name} and I'm {age} years old"
+# String formatting
+name = "Alice"
+age = 30
+message = f"My name is {name} and I'm {age} years old"
 ```
 
 ### Membership Operators
 
-```tauraro
-let numbers = [1, 2, 3, 4, 5]
-let text = "Hello, World!"
+```python
+numbers = [1, 2, 3, 4, 5]
+text = "Hello, World!"
 
-2 in numbers        // true
-6 in numbers        // false
-"Hello" in text     // true
-"Goodbye" in text   // false
+2 in numbers        # True
+6 in numbers        # False
+"Hello" in text     # True
+"Goodbye" in text   # False
 ```
 
 ## Control Flow
@@ -351,85 +337,94 @@ let text = "Hello, World!"
 ### Conditional Statements
 
 #### If-Else
-```tauraro
-let age = 18
+```python
+age = 18
 
-idan age >= 18:
+if age >= 18:
     print("Adult")
-kuma idan age >= 13:
+elif age >= 13:
     print("Teenager")
-kuma:
+else:
     print("Child")
 
-// Ternary operator
-let status = age >= 18 ? "Adult" : "Minor"
+# Ternary operator
+status = "Adult" if age >= 18 else "Minor"
 ```
 
 #### Match Expressions
-```tauraro
-let value = 42
+```python
+value = 42
 
-let result = match value:
-    0 -> "zero"
-    1 -> "one"
-    2..10 -> "small"
-    11..100 -> "medium"
-    _ -> "large"
+result = match value:
+    case 0:
+        "zero"
+    case 1:
+        "one"
+    case 2..10:
+        "small"
+    case 11..100:
+        "medium"
+    case _:
+        "large"
 
-// Pattern matching with types
-let data = [1, 2, 3]
+# Pattern matching with types
+data = [1, 2, 3]
 match data:
-    [] -> print("Empty list")
-    [x] -> print(f"Single element: {x}")
-    [x, y] -> print(f"Two elements: {x}, {y}")
-    [x, ...rest] -> print(f"First: {x}, Rest: {rest}")
+    case []:
+        print("Empty list")
+    case [x]:
+        print(f"Single element: {x}")
+    case [x, y]:
+        print(f"Two elements: {x}, {y}")
+    case [x, *rest]:
+        print(f"First: {x}, Rest: {rest}")
 ```
 
 ### Loops
 
 #### For Loops
-```tauraro
-// Iterate over range
-don i in range(5):
-    print(i)  // 0, 1, 2, 3, 4
+```python
+# Iterate over range
+for i in range(5):
+    print(i)  # 0, 1, 2, 3, 4
 
-// Iterate over collection
-let fruits = ["apple", "banana", "orange"]
-don fruit in fruits:
+# Iterate over collection
+fruits = ["apple", "banana", "orange"]
+for fruit in fruits:
     print(fruit)
 
-// Enumerate with index
-don i, fruit in enumerate(fruits):
+# Enumerate with index
+for i, fruit in enumerate(fruits):
     print(f"{i}: {fruit}")
 
-// Dictionary iteration
-let person = {"name": "Alice", "age": 30}
-don key, value in person.items():
+# Dictionary iteration
+person = {"name": "Alice", "age": 30}
+for key, value in person.items():
     print(f"{key}: {value}")
 ```
 
 #### While Loops
-```tauraro
-let count = 0
-yayin count < 5:
+```python
+count = 0
+while count < 5:
     print(count)
     count += 1
 
-// Infinite loop with break
-yayin true:
-    let input = get_input()
-    idan input == "quit":
+# Infinite loop with break
+while True:
+    input = get_input()
+    if input == "quit":
         break
     process(input)
 ```
 
 #### Loop Control
-```tauraro
-don i in range(10):
-    idan i == 3:
-        continue  // Skip iteration
-    idan i == 7:
-        break     // Exit loop
+```python
+for i in range(10):
+    if i == 3:
+        continue  # Skip iteration
+    if i == 7:
+        break     # Exit loop
     print(i)
 ```
 
@@ -437,29 +432,29 @@ don i in range(10):
 
 ### Function Definition
 
-```tauraro
-// Basic function
-aiki greet(name):
-    fitar f"Hello, {name}!"
+```python
+# Basic function
+def greet(name):
+    return f"Hello, {name}!"
 
-// Function with default parameters
-aiki power(base, exponent = 2):
-    fitar base ** exponent
+# Function with default parameters
+def power(base, exponent=2):
+    return base ** exponent
 
-// Function with type annotations
-aiki add(a: int, b: int) -> int:
-    fitar a + b
+# Function with type annotations
+def add(a: int, b: int) -> int:
+    return a + b
 
-// Variable arguments
-aiki sum_all(*args):
-    let total = 0
-    don arg in args:
+# Variable arguments
+def sum_all(*args):
+    total = 0
+    for arg in args:
         total += arg
-    fitar total
+    return total
 
-// Keyword arguments
-aiki create_person(**kwargs):
-    fitar {
+# Keyword arguments
+def create_person(**kwargs):
+    return {
         "name": kwargs.get("name", "Unknown"),
         "age": kwargs.get("age", 0)
     }
@@ -467,188 +462,364 @@ aiki create_person(**kwargs):
 
 ### Function Calls
 
-```tauraro
-// Basic call
-let message = greet("Alice")
+```python
+# Basic call
+message = greet("Alice")
 
-// Named arguments
-let result = power(base=2, exponent=3)
+# Named arguments
+result = power(base=2, exponent=3)
 
-// Unpacking arguments
-let numbers = [1, 2, 3, 4, 5]
-let total = sum_all(*numbers)
+# Unpacking arguments
+numbers = [1, 2, 3, 4, 5]
+total = sum_all(*numbers)
 
-// Unpacking keyword arguments
-let person_data = {"name": "Bob", "age": 25}
-let person = create_person(**person_data)
+# Unpacking keyword arguments
+person_data = {"name": "Bob", "age": 25}
+person = create_person(**person_data)
 ```
 
 ### Lambda Functions
 
-```tauraro
-// Anonymous functions
-let square = lambda x: x * x
-let add = lambda a, b: a + b
+```python
+# Anonymous functions
+square = lambda x: x * x
+add = lambda a, b: a + b
 
-// Higher-order functions
-let numbers = [1, 2, 3, 4, 5]
-let squares = map(lambda x: x * x, numbers)
-let evens = filter(lambda x: x % 2 == 0, numbers)
+# Higher-order functions
+numbers = [1, 2, 3, 4, 5]
+squares = map(lambda x: x * x, numbers)
+evens = filter(lambda x: x % 2 == 0, numbers)
 ```
 
 ### Closures
 
-```tauraro
-aiki make_counter():
-    let count = 0
+```python
+def make_counter():
+    count = 0
     
-    aiki increment():
+    def increment():
+        nonlocal count
         count += 1
-        fitar count
+        return count
     
-    fitar increment
+    return increment
 
-let counter = make_counter()
-print(counter())  // 1
-print(counter())  // 2
+counter = make_counter()
+print(counter())  # 1
+print(counter())  # 2
 ```
 
 ## Classes and Objects
 
 ### Class Definition
 
-```tauraro
+```python
 class Person:
-    // Class variable
+    # Class variable
     species = "Homo sapiens"
     
-    // Constructor
-    aiki __init__(self, name, age):
+    # Constructor
+    def __init__(self, name, age):
         self.name = name
         self.age = age
     
-    // Instance method
-    aiki greet(self):
-        fitar f"Hello, I'm {self.name}"
+    # Instance method
+    def greet(self):
+        return f"Hello, I'm {self.name}"
     
-    // Class method
+    # Class method
     @classmethod
-    aiki from_string(cls, person_str):
+    def from_string(cls, person_str):
         name, age = person_str.split(",")
-        fitar cls(name, int(age))
+        return cls(name, int(age))
     
-    // Static method
+    # Static method
     @staticmethod
-    aiki is_adult(age):
-        fitar age >= 18
+    def is_adult(age):
+        return age >= 18
     
-    // Property
+    # Property
     @property
-    aiki description(self):
-        fitar f"{self.name} is {self.age} years old"
+    def description(self):
+        return f"{self.name} is {self.age} years old"
 ```
 
 ### Inheritance
 
-```tauraro
+```python
 class Student(Person):
-    aiki __init__(self, name, age, student_id):
+    def __init__(self, name, age, student_id):
         super().__init__(name, age)
         self.student_id = student_id
     
-    aiki greet(self):
-        fitar f"Hi, I'm {self.name}, student #{self.student_id}"
+    def greet(self):
+        return f"Hi, I'm {self.name}, student #{self.student_id}"
     
-    aiki study(self, subject):
-        fitar f"{self.name} is studying {subject}"
+    def study(self, subject):
+        return f"{self.name} is studying {subject}"
 ```
 
 ### Object Usage
 
-```tauraro
-// Create instances
-let person = Person("Alice", 30)
-let student = Student("Bob", 20, "S12345")
+```python
+# Create instances
+person = Person("Alice", 30)
+student = Student("Bob", 20, "S12345")
 
-// Method calls
+# Method calls
 print(person.greet())
 print(student.study("Mathematics"))
 
-// Property access
+# Property access
 print(person.description)
 
-// Class and static methods
-let person2 = Person.from_string("Charlie,25")
-print(Person.is_adult(17))  // false
+# Class and static methods
+person2 = Person.from_string("Charlie,25")
+print(Person.is_adult(17))  # False
 ```
+
+## Method Calls
+
+TauraroLang supports both function calls and method calls with proper object-oriented semantics. Method calls are distinguished from function calls by the dot notation and are handled differently in the parser and virtual machine.
+
+### Basic Method Calls
+
+Methods are called on objects using the dot notation followed by parentheses:
+
+```python
+my_list = [1, 2, 3, 4, 5]
+
+# Method call with no arguments
+my_list.append(6)
+
+# Method call with arguments
+my_list.insert(0, 0)
+
+# Method call with keyword arguments
+my_dict.get("key", default="default_value")
+```
+
+### Method Call Syntax
+
+Method calls in TauraroLang follow the same syntax as function calls but are invoked on objects:
+
+```python
+object.method()                    # No arguments
+object.method(arg1, arg2)         # Positional arguments
+object.method(name=value)         # Keyword arguments
+object.method(arg1, name=value)   # Mixed arguments
+```
+
+### Instance Methods
+
+When calling instance methods on class objects, the instance is automatically passed as the first argument (conventionally named `self`):
+
+```python
+class Calculator:
+    def __init__(self, initial_value=0):
+        self.value = initial_value
+    
+    def add(self, number):
+        self.value += number
+        return self.value
+    
+    def get_value(self):
+        return self.value
+
+# Create an instance
+calc = Calculator(10)
+
+# Method calls - 'self' is automatically passed
+calc.add(5)        # self.value becomes 15
+result = calc.get_value()  # Returns 15
+```
+
+### Method Resolution Order (MRO)
+
+TauraroLang uses the C3 linearization algorithm for method resolution, ensuring proper inheritance handling:
+
+```python
+class Animal:
+    def speak(self):
+        return "Some generic sound"
+
+class Mammal(Animal):
+    def speak(self):
+        return "Mammal sound"
+
+class Dog(Mammal):
+    def speak(self):
+        return "Woof!"
+
+class Pet(Dog):
+    def play(self):
+        return "Playing!"
+
+my_pet = Pet()
+my_pet.speak()  # Returns "Woof!" - follows MRO
+my_pet.play()   # Returns "Playing!"
+```
+
+### Built-in Method Calls
+
+All built-in types support method calls:
+
+```python
+# String methods
+text = "Hello, World!"
+upper_text = text.upper()
+lower_text = text.lower()
+
+# List methods
+numbers = [1, 2, 3]
+numbers.append(4)
+numbers.extend([5, 6])
+popped = numbers.pop()
+
+# Dictionary methods
+person = {"name": "Alice", "age": 30}
+keys = person.keys()
+values = person.values()
+person.update({"city": "New York"})
+```
+
+### Chained Method Calls
+
+Methods can be chained when they return objects that have methods:
+
+```python
+class StringBuilder:
+    def __init__(self):
+        self.content = ""
+    
+    def add(self, text):
+        self.content += text
+        return self  # Return self for chaining
+    
+    def get(self):
+        return self.content
+
+builder = StringBuilder()
+result = builder.add("Hello").add(" ").add("World!").get()
+# result is "Hello World!"
+```
+
+### Special Method Calls
+
+TauraroLang supports calling special methods (dunder methods) that define object behavior:
+
+```python
+class Vector:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    
+    def __add__(self, other):
+        return Vector(self.x + other.x, self.y + other.y)
+    
+    def __str__(self):
+        return f"Vector({self.x}, {self.y})"
+
+v1 = Vector(1, 2)
+v2 = Vector(3, 4)
+v3 = v1 + v2  # Calls __add__ method
+print(v3)     # Calls __str__ method
+```
+
+### Super Method Calls
+
+The `super()` function allows calling parent class methods:
+
+```python
+class Animal:
+    def __init__(self, name):
+        self.name = name
+    
+    def speak(self):
+        return f"{self.name} makes a sound"
+
+class Dog(Animal):
+    def __init__(self, name, breed):
+        super().__init__(name)  # Call parent constructor
+        self.breed = breed
+    
+    def speak(self):
+        parent_speak = super().speak()  # Call parent method
+        return f"{parent_speak} and barks"
+
+dog = Dog("Buddy", "Golden Retriever")
+dog.speak()  # Returns "Buddy makes a sound and barks"
+```
+
+Method calls in TauraroLang are fully compatible with Python's method call semantics, providing a familiar and powerful object-oriented programming experience.
 
 ## Collections
 
 ### List Operations
 
-```tauraro
-let numbers = [1, 2, 3, 4, 5]
+```python
+numbers = [1, 2, 3, 4, 5]
 
-// Access and modification
+# Access and modification
 numbers[0] = 10
 numbers.append(6)
 numbers.insert(2, 99)
 numbers.remove(3)
-let popped = numbers.pop()
+popped = numbers.pop()
 
-// Slicing
-let subset = numbers[1:4]    // [2, 99, 4]
-let reversed = numbers[::-1] // Reverse order
+# Slicing
+subset = numbers[1:4]    # [2, 99, 4]
+reversed = numbers[::-1] # Reverse order
 
-// List comprehensions
-let squares = [x * x for x in range(10)]
-let evens = [x for x in numbers if x % 2 == 0]
+# List comprehensions
+squares = [x * x for x in range(10)]
+evens = [x for x in numbers if x % 2 == 0]
 ```
 
 ### Dictionary Operations
 
-```tauraro
-let person = {"name": "Alice", "age": 30}
+```python
+person = {"name": "Alice", "age": 30}
 
-// Access and modification
+# Access and modification
 person["city"] = "New York"
-let name = person.get("name", "Unknown")
+name = person.get("name", "Unknown")
 person.update({"email": "alice@example.com", "phone": "123-456-7890"})
 
-// Dictionary comprehensions
-let squares = {x: x*x for x in range(5)}
-let filtered = {k: v for k, v in person.items() if len(str(v)) > 3}
+# Dictionary comprehensions
+squares = {x: x*x for x in range(5)}
+filtered = {k: v for k, v in person.items() if len(str(v)) > 3}
 ```
 
 ### Set Operations
 
-```tauraro
-let set1 = {1, 2, 3, 4, 5}
-let set2 = {4, 5, 6, 7, 8}
+```python
+set1 = {1, 2, 3, 4, 5}
+set2 = {4, 5, 6, 7, 8}
 
-// Set operations
-let union = set1 | set2         // {1, 2, 3, 4, 5, 6, 7, 8}
-let intersection = set1 & set2  // {4, 5}
-let difference = set1 - set2    // {1, 2, 3}
-let symmetric_diff = set1 ^ set2 // {1, 2, 3, 6, 7, 8}
+# Set operations
+union = set1 | set2         # {1, 2, 3, 4, 5, 6, 7, 8}
+intersection = set1 & set2  # {4, 5}
+difference = set1 - set2    # {1, 2, 3}
+symmetric_diff = set1 ^ set2 # {1, 2, 3, 6, 7, 8}
 
-// Set methods
+# Set methods
 set1.add(9)
 set1.remove(1)
-let is_subset = set1.issubset(set2)
+is_subset = set1.issubset(set2)
 ```
 
 ## Error Handling
 
-### Try-Catch Blocks
+### Try-Except Blocks
 
-```tauraro
+```python
 try:
-    let result = risky_operation()
+    result = risky_operation()
     print(f"Success: {result}")
-catch ValueError as e:
+except ValueError as e:
     print(f"Value error: {e}")
-catch Exception as e:
+except Exception as e:
     print(f"General error: {e}")
 finally:
     print("Cleanup code")
@@ -656,30 +827,30 @@ finally:
 
 ### Raising Exceptions
 
-```tauraro
-aiki divide(a, b):
-    idan b == 0:
+```python
+def divide(a, b):
+    if b == 0:
         raise ValueError("Cannot divide by zero")
-    fitar a / b
+    return a / b
 
-aiki validate_age(age):
-    idan age < 0:
+def validate_age(age):
+    if age < 0:
         raise ValueError("Age cannot be negative")
-    idan age > 150:
+    if age > 150:
         raise ValueError("Age seems unrealistic")
 ```
 
 ### Custom Exceptions
 
-```tauraro
+```python
 class CustomError(Exception):
-    aiki __init__(self, message, code):
+    def __init__(self, message, code):
         super().__init__(message)
         self.code = code
 
 try:
     raise CustomError("Something went wrong", 500)
-catch CustomError as e:
+except CustomError as e:
     print(f"Error {e.code}: {e}")
 ```
 
@@ -687,43 +858,43 @@ catch CustomError as e:
 
 ### Async Functions
 
-```tauraro
-async aiki fetch_data(url):
-    let response = await http_get(url)
-    let data = await response.json()
-    fitar data
+```python
+async def fetch_data(url):
+    response = await http_get(url)
+    data = await response.json()
+    return data
 
-async aiki process_urls(urls):
-    let tasks = []
-    don url in urls:
+async def process_urls(urls):
+    tasks = []
+    for url in urls:
         tasks.append(fetch_data(url))
     
-    let results = await gather(*tasks)
-    fitar results
+    results = await gather(*tasks)
+    return results
 ```
 
 ### Async Context Managers
 
-```tauraro
-async aiki async_file_operation():
+```python
+async def async_file_operation():
     async with open_async("file.txt") as f:
-        let content = await f.read()
-        fitar content
+        content = await f.read()
+        return content
 ```
 
 ### Generators and Async Generators
 
-```tauraro
-// Generator function
-aiki fibonacci():
-    let a, b = 0, 1
-    yayin true:
+```python
+# Generator function
+def fibonacci():
+    a, b = 0, 1
+    while True:
         yield a
         a, b = b, a + b
 
-// Async generator
-async aiki async_counter(max_count):
-    don i in range(max_count):
+# Async generator
+async def async_counter(max_count):
+    for i in range(max_count):
         await sleep(1)
         yield i
 ```
@@ -732,66 +903,66 @@ async aiki async_counter(max_count):
 
 ### Type Annotations
 
-```tauraro
-// Variable annotations
-let name: str = "Alice"
-let age: int = 30
-let scores: list[int] = [85, 92, 78]
-let person: dict[str, any] = {"name": "Bob", "age": 25}
+```python
+# Variable annotations
+name: str = "Alice"
+age: int = 30
+scores: list[int] = [85, 92, 78]
+person: dict[str, any] = {"name": "Bob", "age": 25}
 
-// Function annotations
-aiki process_data(data: list[dict[str, any]]) -> dict[str, int]:
-    let result: dict[str, int] = {}
-    don item in data:
+# Function annotations
+def process_data(data: list[dict[str, any]]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for item in data:
         result[item["name"]] = item["score"]
-    fitar result
+    return result
 ```
 
 ### Generic Types
 
-```tauraro
-// Generic function
-aiki identity<T>(value: T) -> T:
-    fitar value
+```python
+# Generic function
+def identity[T](value: T) -> T:
+    return value
 
-// Generic class
-class Container<T>:
-    aiki __init__(self, value: T):
+# Generic class
+class Container[T]:
+    def __init__(self, value: T):
         self.value = value
     
-    aiki get(self) -> T:
-        fitar self.value
+    def get(self) -> T:
+        return self.value
 
-let int_container = Container<int>(42)
-let str_container = Container<str>("hello")
+int_container = Container[int](42)
+str_container = Container[str]("hello")
 ```
 
 ### Union Types
 
-```tauraro
-// Union type annotation
-aiki process_id(id: int | str) -> str:
-    idan type(id) == int:
-        fitar f"ID: {id:06d}"
-    kuma:
-        fitar f"ID: {id.upper()}"
+```python
+# Union type annotation
+def process_id(id: int | str) -> str:
+    if type(id) == int:
+        return f"ID: {id:06d}"
+    else:
+        return f"ID: {id.upper()}"
 
-// Optional types
-aiki find_user(name: str) -> User | none:
-    // Search logic here
-    fitar found_user or none
+# Optional types
+def find_user(name: str) -> User | None:
+    # Search logic here
+    return found_user or None
 ```
 
 ### Type Checking
 
-```tauraro
-// Runtime type checking
-aiki safe_divide(a: any, b: any) -> float:
-    idan not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+```python
+# Runtime type checking
+def safe_divide(a: any, b: any) -> float:
+    if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
         raise TypeError("Arguments must be numbers")
-    idan b == 0:
+    if b == 0:
         raise ValueError("Cannot divide by zero")
-    fitar float(a) / float(b)
+    return float(a) / float(b)
 ```
 
 ## Memory Management
@@ -800,42 +971,42 @@ aiki safe_divide(a: any, b: any) -> float:
 
 TauraroLang uses automatic garbage collection for most memory management:
 
-```tauraro
-// Objects are automatically cleaned up when no longer referenced
-aiki create_large_data():
-    let data = [i for i in range(1000000)]
-    fitar data  // Memory will be freed when data goes out of scope
+```python
+# Objects are automatically cleaned up when no longer referenced
+def create_large_data():
+    data = [i for i in range(1000000)]
+    return data  # Memory will be freed when data goes out of scope
 ```
 
 ### Manual Memory Control
 
 For performance-critical code, manual memory management is available:
 
-```tauraro
-// Explicit memory allocation
-let buffer = allocate(1024)  // Allocate 1KB
+```python
+# Explicit memory allocation
+buffer = allocate(1024)  # Allocate 1KB
 buffer.write(0, b"Hello")
-let data = buffer.read(0, 5)
-deallocate(buffer)  // Explicit cleanup
+data = buffer.read(0, 5)
+deallocate(buffer)  # Explicit cleanup
 
-// RAII-style resource management
+# RAII-style resource management
 with managed_resource() as resource:
     resource.use()
-    // Resource automatically cleaned up
+    # Resource automatically cleaned up
 ```
 
 ### Weak References
 
-```tauraro
+```python
 import weakref
 
 class Parent:
-    aiki __init__(self):
+    def __init__(self):
         self.children = []
 
 class Child:
-    aiki __init__(self, parent):
-        self.parent = weakref.ref(parent)  // Weak reference to avoid cycles
+    def __init__(self, parent):
+        self.parent = weakref.ref(parent)  # Weak reference to avoid cycles
         parent.children.append(self)
 ```
 
@@ -843,39 +1014,39 @@ class Child:
 
 ### Module Definition
 
-```tauraro
-// math_utils.tr
-export aiki add(a, b):
-    fitar a + b
+```python
+# math_utils.tr
+def add(a, b):
+    return a + b
 
-export aiki multiply(a, b):
-    fitar a * b
+def multiply(a, b):
+    return a * b
 
-export let PI = 3.14159
+PI = 3.14159
 
-// Private function (not exported)
-aiki _internal_helper():
-    fitar "helper"
+# Private function (not exported)
+def _internal_helper():
+    return "helper"
 ```
 
 ### Import Statements
 
-```tauraro
-// Import entire module
+```python
+# Import entire module
 import math_utils
-let result = math_utils.add(2, 3)
+result = math_utils.add(2, 3)
 
-// Import specific functions
-import {add, multiply} from math_utils
-let sum = add(5, 7)
-let product = multiply(3, 4)
+# Import specific functions
+from math_utils import add, multiply
+sum = add(5, 7)
+product = multiply(3, 4)
 
-// Import with alias
+# Import with alias
 import math_utils as math
-let pi_value = math.PI
+pi_value = math.PI
 
-// Import all exports
-import * from math_utils
+# Import all exports
+from math_utils import *
 ```
 
 ### Package Structure
@@ -892,10 +1063,10 @@ my_package/
     └── test_core.tr
 ```
 
-```tauraro
-// Import from package
+```python
+# Import from package
 import my_package.core
-import {validate_email} from my_package.utils.validators
+from my_package.utils.validators import validate_email
 ```
 
 ---

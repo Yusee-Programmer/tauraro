@@ -1,6 +1,6 @@
 # TauraroLang Examples
 
-This directory contains comprehensive examples and tutorials demonstrating TauraroLang's features and capabilities.
+This directory contains comprehensive examples and tutorials demonstrating TauraroLang's features and capabilities. All examples use Python syntax with .tr file extensions.
 
 ## Directory Structure
 
@@ -11,12 +11,12 @@ examples/
 ├── advanced/                    # Advanced programming concepts
 ├── backends/                    # Backend-specific examples
 ├── interop/                     # FFI and Python interoperability
-├── async/                       # Asynchronous programming
-├── web/                         # Web development examples
-├── data-science/                # Data analysis and scientific computing
-├── games/                       # Game development examples
-├── cli-tools/                   # Command-line applications
-└── tutorials/                   # Step-by-step tutorials
+├── async/                      # Asynchronous programming
+├── web/                        # Web development examples
+├── data-science/              # Data analysis and scientific computing
+├── games/                     # Game development examples
+├── cli-tools/                 # Command-line applications
+└── tutorials/                 # Step-by-step tutorials
 ```
 
 ## Getting Started
@@ -56,21 +56,23 @@ tauraro run --backend vm examples/basic/variables.tr
 tauraro compile --backend c examples/basic/functions.tr -o output.c
 
 # Compile to LLVM IR
-tauraro compile --backend llvm examples/advanced/classes.tr -o output.ll
+tauraro compile --backend llvm examples/basic/classes.tr -o output.ll
 
 # Compile to WebAssembly
-tauraro compile --backend wasm examples/web/calculator.tr -o calculator.wasm
+tauraro compile --backend wasm examples/basic/data_structures.tr -o data_structures.wasm
 ```
 
 ## Example Categories
 
 ### Basic Examples (`basic/`)
-- **Hello World**: Simple program introduction
-- **Variables and Types**: Variable declaration and type system
-- **Control Flow**: If statements, loops, and conditionals
-- **Functions**: Function definition and calling
-- **Data Structures**: Arrays, dictionaries, and objects
-- **Error Handling**: Exception handling and error management
+- **Hello World**: Simple program introduction (`hello_world.tr`)
+- **Variables and Types**: Variable declaration and type system (`variables.tr`)
+- **Control Flow**: If statements, loops, and conditionals (`control_flow.tr`)
+- **Functions**: Function definition and calling (`functions.tr`)
+- **Classes and Objects**: Object-oriented programming (`classes.tr`)
+- **Method Calls**: Object method calling and chaining (`method_calls.tr`)
+- **Data Structures**: Arrays, dictionaries, tuples, and sets (`data_structures.tr`)
+- **Error Handling**: Exception handling and error management (`error_handling.tr`)
 
 ### Advanced Examples (`advanced/`)
 - **Object-Oriented Programming**: Classes, inheritance, and polymorphism
@@ -141,7 +143,7 @@ We welcome contributions of new examples! Please follow these guidelines:
 
 ### Example Template
 
-```tauraro
+```python
 #!/usr/bin/env tauraro
 """
 Example: [Brief Description]
@@ -162,9 +164,11 @@ Requirements:
 """
 
 # Your example code here
-fn main() {
+def main():
     print("Hello, TauraroLang!")
-}
+
+if __name__ == "__main__":
+    main()
 ```
 
 ## Learning Path
@@ -172,10 +176,11 @@ fn main() {
 For beginners, we recommend following this learning path:
 
 1. **Start with Basics**: `basic/hello_world.tr` → `basic/variables.tr` → `basic/functions.tr`
-2. **Control Flow**: `basic/conditionals.tr` → `basic/loops.tr`
-3. **Data Structures**: `basic/arrays.tr` → `basic/dictionaries.tr`
-4. **Object-Oriented**: `advanced/classes.tr` → `advanced/inheritance.tr`
-5. **Advanced Features**: Choose based on your interests (async, web, data science, etc.)
+2. **Control Flow**: `basic/control_flow.tr`
+3. **Data Structures**: `basic/data_structures.tr`
+4. **Object-Oriented**: `basic/classes.tr` → `basic/method_calls.tr`
+5. **Error Handling**: `basic/error_handling.tr`
+6. **Advanced Features**: Choose based on your interests (async, web, data science, etc.)
 
 ## Performance Benchmarks
 

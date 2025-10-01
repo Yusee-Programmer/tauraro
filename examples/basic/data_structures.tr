@@ -196,3 +196,79 @@ fn main() {
     }
     print("Scores >= " + str(passing_threshold) + ": " + str(passing_count))
 }
+
+# data_structures.tr - Data structures in Tauraro
+# Demonstrates lists, dictionaries, tuples, and sets
+
+# Lists
+print("=== Lists ===")
+numbers = [1, 2, 3, 4, 5]
+print(f"Original list: {numbers}")
+
+# List operations
+numbers.append(6)
+numbers.insert(0, 0)
+print(f"After append and insert: {numbers}")
+
+# List slicing
+print(f"First three elements: {numbers[:3]}")
+print(f"Last three elements: {numbers[-3:]}")
+
+# List comprehension
+squares = [x**2 for x in range(1, 6)]
+print(f"Squares: {squares}")
+
+# Dictionaries
+print("\n=== Dictionaries ===")
+person = {
+    "name": "Alice",
+    "age": 30,
+    "city": "New York"
+}
+print(f"Person: {person}")
+
+# Dictionary operations
+person["email"] = "alice@example.com"
+print(f"After adding email: {person}")
+
+# Dictionary methods
+print(f"Keys: {list(person.keys())}")
+print(f"Values: {list(person.values())}")
+
+# Dictionary comprehension
+squared_dict = {x: x**2 for x in range(1, 6)}
+print(f"Squared dict: {squared_dict}")
+
+# Tuples
+print("\n=== Tuples ===")
+coordinates = (10, 20)
+rgb = (255, 128, 0)
+single = (42,)  # Single element tuple
+
+print(f"Coordinates: {coordinates}")
+print(f"RGB: {rgb}")
+
+# Tuple unpacking
+x, y = coordinates
+print(f"Unpacked coordinates: x={x}, y={y}")
+
+# Sets
+print("\n=== Sets ===")
+set1 = {1, 2, 3, 4, 5}
+set2 = {4, 5, 6, 7, 8}
+
+print(f"Set 1: {set1}")
+print(f"Set 2: {set2}")
+
+# Set operations
+union = set1 | set2
+intersection = set1 & set2
+difference = set1 - set2
+
+print(f"Union: {union}")
+print(f"Intersection: {intersection}")
+print(f"Difference: {difference}")
+
+# Set methods
+set1.add(6)
+print(f"After adding 6: {set1}")
