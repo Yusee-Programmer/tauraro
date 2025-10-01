@@ -1,6 +1,6 @@
 # Tauraro Programming Language
 
-Tauraro is a modern, flexible programming language with 100% Python syntax compatibility and enhanced features. It supports multiple compilation backends and provides advanced memory management capabilities.
+Tauraro is a modern, flexible programming language with 100% Python syntax compatibility and enhanced features. It supports multiple compilation backends and provides advanced memory management capabilities. Tauraro files use the .tr extension.
 
 ## Features
 
@@ -23,16 +23,16 @@ Tauraro provides sophisticated memory management with three modes:
 2. **Manual**: Explicit allocation/deallocation for performance-critical code
 3. **Hybrid**: Combination of automatic and manual management with conversion capabilities
 
-```tauraro
+```python
 # Automatic memory management (default)
-let data = [1, 2, 3, 4, 5]  # Automatically managed
+data = [1, 2, 3, 4, 5]  # Automatically managed
 
 # Manual memory management
 import memory
-let manual_data = memory.manual([6, 7, 8, 9, 10])  # Manually managed
+manual_data = memory.manual([6, 7, 8, 9, 10])  # Manually managed
 
 # Hybrid memory management
-let hybrid_obj = memory.hybrid({"key": "value"})  # Can switch between modes
+hybrid_obj = memory.hybrid({"key": "value"})  # Can switch between modes
 ```
 
 ## Installation
@@ -49,7 +49,7 @@ cargo build --release
 cargo run
 
 # Run a Tauraro script
-cargo run -- run examples/memory_management.tr
+cargo run -- run examples/basic/hello_world.tr
 ```
 
 ## Usage
@@ -71,16 +71,25 @@ tauraro compile script.tr --backend wasm
 
 Check out the [examples](examples/) directory for sample code:
 
-- [Memory Management](examples/memory_management.tr): Demonstrates automatic, manual, and hybrid memory management
-- [Basic Syntax](examples/basic_syntax.tr): Python-like syntax examples
-- [Async Programming](examples/async_example.tr): Async/await usage
+- [Hello World](examples/basic/hello_world.tr): Simple program introduction
+- [Variables and Types](examples/basic/variables.tr): Variable declaration and type system
+- [Control Flow](examples/basic/control_flow.tr): If statements, loops, and conditionals
+- [Functions](examples/basic/functions.tr): Function definition and calling
+- [Classes](examples/basic/classes.tr): Object-oriented programming
+- [Method Calls](examples/basic/method_calls.tr): Object method calling and chaining
+- [Data Structures](examples/basic/data_structures.tr): Lists, dictionaries, tuples, and sets
+- [Error Handling](examples/basic/error_handling.tr): Exception handling
 
 ## Documentation
 
-- [Compiler Design](docs/compiler_design.md): Technical architecture
+Comprehensive documentation is available in the [docs](docs/) directory:
+
+- [Getting Started Guide](docs/getting-started.md): Installation and first steps
+- [Language Reference](docs/language-reference.md): Complete syntax and semantics (100% Python compatible)
+- [API Reference](docs/api-reference.md): Built-in functions and standard library
 - [Advanced Features](docs/advanced-features.md): Memory management, JIT compilation, parallel execution
-- [Standard Library](docs/stdlib.md): Built-in modules documentation
-- [Language Reference](docs/language-reference.md): Syntax and semantics
+- [Compilation Backends](docs/compilation-backends.md): Multi-target compilation guide
+- [Compiler Design](docs/compiler_design.md): Technical architecture
 
 ## Contributing
 

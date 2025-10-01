@@ -1,6 +1,6 @@
 # Getting Started with TauraroLang
 
-Welcome to TauraroLang! This guide will walk you through everything you need to know to start programming in Tauraro, from installation to writing your first programs.
+Welcome to TauraroLang! This guide will walk you through everything you need to know to start programming in Tauraro, from installation to writing your first programs. TauraroLang uses 100% Python syntax with .tr file extensions.
 
 ## Table of Contents
 
@@ -57,8 +57,8 @@ Let's start with the traditional "Hello, World!" program.
 
 Create a file named `hello.tr`:
 
-```tauraro
-// hello.tr - Your first Tauraro program
+```python
+# hello.tr - Your first Tauraro program
 print("Hello, World!")
 ```
 
@@ -90,15 +90,15 @@ tauraro repl
 
 Try these commands in the REPL:
 
-```tauraro
+```python
 >>> print("Welcome to Tauraro!")
 Welcome to Tauraro!
 
->>> let x = 42
+>>> x = 42
 >>> print(x)
 42
 
->>> let name = "Developer"
+>>> name = "Developer"
 >>> print("Hello, " + name + "!")
 Hello, Developer!
 
@@ -109,43 +109,43 @@ Hello, Developer!
 
 ### Variables and Data Types
 
-```tauraro
-// Variables
-let name = "Alice"          // String
-let age = 25               // Integer
-let height = 5.8           // Float
-let is_student = true      // Boolean
+```python
+# Variables
+name = "Alice"          # String
+age = 25               # Integer
+height = 5.8           # Float
+is_student = True      # Boolean
 
-// Arrays
-let numbers = [1, 2, 3, 4, 5]
-let mixed = [1, "hello", true, 3.14]
+# Lists
+numbers = [1, 2, 3, 4, 5]
+mixed = [1, "hello", True, 3.14]
 
-// Objects
-let person = {
-    name: "Bob",
-    age: 30,
-    city: "New York"
+# Dictionaries
+person = {
+    "name": "Bob",
+    "age": 30,
+    "city": "New York"
 }
 ```
 
 ### Basic Operations
 
-```tauraro
-// Arithmetic
-let sum = 10 + 5           // 15
-let difference = 10 - 3    // 7
-let product = 4 * 6        // 24
-let quotient = 15 / 3      // 5
-let remainder = 17 % 5     // 2
+```python
+# Arithmetic
+sum = 10 + 5           # 15
+difference = 10 - 3    # 7
+product = 4 * 6        # 24
+quotient = 15 / 3      # 5
+remainder = 17 % 5     # 2
 
-// String operations
-let greeting = "Hello" + " " + "World"  // "Hello World"
-let length = len("Tauraro")             // 7
+# String operations
+greeting = "Hello" + " " + "World"  # "Hello World"
+length = len("Tauraro")             # 7
 
-// Comparisons
-let is_equal = (5 == 5)        // true
-let is_greater = (10 > 5)      // true
-let is_not_equal = (3 != 7)    // true
+# Comparisons
+is_equal = (5 == 5)        # True
+is_greater = (10 > 5)      # True
+is_not_equal = (3 != 7)    # True
 ```
 
 ## Step-by-Step Tutorials
@@ -156,39 +156,34 @@ Let's build a simple calculator that performs basic arithmetic operations.
 
 **Step 1:** Create `calculator.tr`
 
-```tauraro
-// calculator.tr - A simple calculator
+```python
+# calculator.tr - A simple calculator
 
-// Function to add two numbers
-fn add(a, b) {
+# Function to add two numbers
+def add(a, b):
     return a + b
-}
 
-// Function to subtract two numbers
-fn subtract(a, b) {
+# Function to subtract two numbers
+def subtract(a, b):
     return a - b
-}
 
-// Function to multiply two numbers
-fn multiply(a, b) {
+# Function to multiply two numbers
+def multiply(a, b):
     return a * b
-}
 
-// Function to divide two numbers
-fn divide(a, b) {
-    if b == 0 {
+# Function to divide two numbers
+def divide(a, b):
+    if b == 0:
         print("Error: Division by zero!")
         return 0
-    }
     return a / b
-}
 
-// Main calculator logic
-fn main() {
+# Main calculator logic
+def main():
     print("=== Tauraro Calculator ===")
     
-    let num1 = 10
-    let num2 = 5
+    num1 = 10
+    num2 = 5
     
     print("Number 1: " + str(num1))
     print("Number 2: " + str(num2))
@@ -198,13 +193,12 @@ fn main() {
     print("Subtraction: " + str(num1) + " - " + str(num2) + " = " + str(subtract(num1, num2)))
     print("Multiplication: " + str(num1) + " * " + str(num2) + " = " + str(multiply(num1, num2)))
     print("Division: " + str(num1) + " / " + str(num2) + " = " + str(divide(num1, num2)))
-}
 
-// Call main function
-main()
+if __name__ == "__main__":
+    main()
 ```
 
-**Step 2:** Run the calculator
+### Running the Calculator
 
 ```bash
 tauraro run calculator.tr
@@ -219,418 +213,189 @@ Number 2: 5
 Addition: 10 + 5 = 15
 Subtraction: 10 - 5 = 5
 Multiplication: 10 * 5 = 50
-Division: 10 / 5 = 2
+Division: 10 / 5 = 2.0
 ```
 
-### Tutorial 2: Working with Arrays and Loops
+### Tutorial 2: Working with Classes
 
-Let's create a program that processes arrays of data.
+Let's create a simple class-based program to manage a library.
 
-**Step 1:** Create `array_demo.tr`
+**Step 1:** Create `library.tr`
 
-```tauraro
-// array_demo.tr - Working with arrays and loops
+```python
+# library.tr - A simple library management system
 
-fn main() {
-    print("=== Array Processing Demo ===")
+class Book:
+    def __init__(self, title, author, isbn):
+        self.title = title
+        self.author = author
+        self.isbn = isbn
+        self.is_borrowed = False
     
-    // Create an array of numbers
-    let numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    def borrow(self):
+        if not self.is_borrowed:
+            self.is_borrowed = True
+            return f"Book '{self.title}' borrowed successfully"
+        else:
+            return f"Book '{self.title}' is already borrowed"
     
-    print("Original array: " + str(numbers))
-    print("Array length: " + str(len(numbers)))
+    def return_book(self):
+        if self.is_borrowed:
+            self.is_borrowed = False
+            return f"Book '{self.title}' returned successfully"
+        else:
+            return f"Book '{self.title}' was not borrowed"
     
-    // Calculate sum
-    let sum = 0
-    let i = 0
-    while i < len(numbers) {
-        sum = sum + numbers[i]
-        i = i + 1
-    }
-    
-    print("Sum of all elements: " + str(sum))
-    
-    // Find maximum
-    let max = numbers[0]
-    i = 1
-    while i < len(numbers) {
-        if numbers[i] > max {
-            max = numbers[i]
-        }
-        i = i + 1
-    }
-    
-    print("Maximum element: " + str(max))
-    
-    // Create array of even numbers
-    let evens = []
-    i = 0
-    while i < len(numbers) {
-        if numbers[i] % 2 == 0 {
-            evens = evens + [numbers[i]]  // Append to array
-        }
-        i = i + 1
-    }
-    
-    print("Even numbers: " + str(evens))
-}
+    def __str__(self):
+        status = "Borrowed" if self.is_borrowed else "Available"
+        return f"'{self.title}' by {self.author} (ISBN: {self.isbn}) - {status}"
 
-main()
+class Library:
+    def __init__(self):
+        self.books = []
+    
+    def add_book(self, book):
+        self.books.append(book)
+        return f"Book '{book.title}' added to library"
+    
+    def find_book(self, title):
+        for book in self.books:
+            if book.title.lower() == title.lower():
+                return book
+        return None
+    
+    def list_books(self):
+        if not self.books:
+            print("No books in library")
+            return
+        
+        print("Library Books:")
+        for i, book in enumerate(self.books, 1):
+            print(f"{i}. {book}")
+
+# Main program
+def main():
+    print("=== Library Management System ===")
+    
+    # Create library
+    library = Library()
+    
+    # Add some books
+    book1 = Book("The Python Guide", "Guido van Rossum", "978-0134853987")
+    book2 = Book("Clean Code", "Robert Martin", "978-0132350884")
+    book3 = Book("Design Patterns", "Gang of Four", "978-0201633612")
+    
+    print(library.add_book(book1))
+    print(library.add_book(book2))
+    print(library.add_book(book3))
+    
+    print("\n--- All Books ---")
+    library.list_books()
+    
+    print("\n--- Borrowing a Book ---")
+    book = library.find_book("The Python Guide")
+    if book:
+        print(book.borrow())
+    
+    print("\n--- After Borrowing ---")
+    library.list_books()
+    
+    print("\n--- Returning a Book ---")
+    if book:
+        print(book.return_book())
+    
+    print("\n--- After Returning ---")
+    library.list_books()
+
+if __name__ == "__main__":
+    main()
 ```
 
-**Step 2:** Run the program
+### Running the Library Program
 
 ```bash
-tauraro run array_demo.tr
+tauraro run library.tr
 ```
 
-### Tutorial 3: Object-Oriented Programming
-
-Let's create a simple class-based program.
-
-**Step 1:** Create `person_demo.tr`
-
-```tauraro
-// person_demo.tr - Object-oriented programming demo
-
-class Person {
-    // Constructor
-    fn init(name, age) {
-        self.name = name
-        self.age = age
-    }
-    
-    // Method to introduce the person
-    fn introduce() {
-        print("Hi, I'm " + self.name + " and I'm " + str(self.age) + " years old.")
-    }
-    
-    // Method to have a birthday
-    fn birthday() {
-        self.age = self.age + 1
-        print(self.name + " is now " + str(self.age) + " years old!")
-    }
-    
-    // Method to check if person is adult
-    fn is_adult() {
-        return self.age >= 18
-    }
-}
-
-fn main() {
-    print("=== Person Demo ===")
-    
-    // Create person objects
-    let alice = Person("Alice", 25)
-    let bob = Person("Bob", 17)
-    
-    // Introduce both people
-    alice.introduce()
-    bob.introduce()
-    
-    print("")
-    
-    // Check if they're adults
-    if alice.is_adult() {
-        print(alice.name + " is an adult.")
-    } else {
-        print(alice.name + " is not an adult.")
-    }
-    
-    if bob.is_adult() {
-        print(bob.name + " is an adult.")
-    } else {
-        print(bob.name + " is not an adult.")
-    }
-    
-    print("")
-    
-    // Bob has a birthday
-    print("It's Bob's birthday!")
-    bob.birthday()
-    
-    // Check again
-    if bob.is_adult() {
-        print("Now Bob is an adult!")
-    }
-}
-
-main()
-```
-
-### Tutorial 4: Error Handling
-
-Learn how to handle errors gracefully in your programs.
-
-**Step 1:** Create `error_handling.tr`
-
-```tauraro
-// error_handling.tr - Error handling demonstration
-
-fn safe_divide(a, b) {
-    if b == 0 {
-        return {
-            success: false,
-            error: "Division by zero",
-            result: 0
-        }
-    }
-    
-    return {
-        success: true,
-        error: "",
-        result: a / b
-    }
-}
-
-fn safe_array_access(arr, index) {
-    if index < 0 || index >= len(arr) {
-        return {
-            success: false,
-            error: "Index out of bounds",
-            result: null
-        }
-    }
-    
-    return {
-        success: true,
-        error: "",
-        result: arr[index]
-    }
-}
-
-fn main() {
-    print("=== Error Handling Demo ===")
-    
-    // Test safe division
-    let result1 = safe_divide(10, 2)
-    if result1.success {
-        print("10 / 2 = " + str(result1.result))
-    } else {
-        print("Error: " + result1.error)
-    }
-    
-    let result2 = safe_divide(10, 0)
-    if result2.success {
-        print("10 / 0 = " + str(result2.result))
-    } else {
-        print("Error: " + result2.error)
-    }
-    
-    print("")
-    
-    // Test safe array access
-    let numbers = [1, 2, 3, 4, 5]
-    
-    let access1 = safe_array_access(numbers, 2)
-    if access1.success {
-        print("numbers[2] = " + str(access1.result))
-    } else {
-        print("Error: " + access1.error)
-    }
-    
-    let access2 = safe_array_access(numbers, 10)
-    if access2.success {
-        print("numbers[10] = " + str(access2.result))
-    } else {
-        print("Error: " + access2.error)
-    }
-}
-
-main()
-```
+This will demonstrate:
+- Class definition and instantiation
+- Method calls
+- Object state management
+- String representation methods
 
 ## Working with Files
 
-### Creating a Project Structure
+Tauraro supports standard file operations:
 
-For larger projects, organize your code into multiple files:
+```python
+# file_operations.tr - Working with files
 
-```
-my_project/
-├── main.tr          # Entry point
-├── utils.tr         # Utility functions
-├── models.tr        # Data models/classes
-└── config.tr        # Configuration
-```
+# Writing to a file
+with open("example.txt", "w") as file:
+    file.write("Hello, Tauraro!\n")
+    file.write("This is a test file.\n")
 
-### Example Multi-File Project
+# Reading from a file
+with open("example.txt", "r") as file:
+    content = file.read()
+    print("File content:")
+    print(content)
 
-**main.tr:**
-```tauraro
-// Import other modules (conceptual - actual import syntax may vary)
-// include "utils.tr"
-// include "models.tr"
-
-fn main() {
-    print("=== Multi-File Project Demo ===")
-    
-    // Use functions from other files
-    let result = calculate_area(5, 10)
-    print("Area: " + str(result))
-    
-    let user = User("John", "john@example.com")
-    user.display_info()
-}
-
-main()
+# Reading lines
+with open("example.txt", "r") as file:
+    lines = file.readlines()
+    for i, line in enumerate(lines, 1):
+        print(f"Line {i}: {line.strip()}")
 ```
 
 ## Compilation Backends
 
-TauraroLang supports multiple compilation backends for different use cases:
+Tauraro supports multiple compilation backends:
 
-### 1. Interpreter (Default)
-Best for development and testing:
+### Interpreter Mode (Default)
 ```bash
 tauraro run program.tr
 ```
 
-### 2. C Transpilation
-Generates C code for maximum performance:
+### C Transpilation
 ```bash
-# Compile to C
 tauraro compile program.tr --backend c
-
-# This generates program.c and compiles to executable
 ./program
 ```
 
-### 3. WebAssembly
-For web applications:
+### LLVM Compilation
 ```bash
-# Compile to WebAssembly
-tauraro compile program.tr --backend wasm
-
-# Generates program.wasm
+tauraro compile program.tr --backend llvm
+./program
 ```
 
-### 4. LLVM IR
-For advanced optimization:
+### WebAssembly
 ```bash
-# Generate LLVM IR
-tauraro compile program.tr --backend llvm
-
-# Generates program.ll
+tauraro compile program.tr --backend wasm
 ```
 
 ## Next Steps
 
-Now that you've learned the basics, here are some suggestions for continuing your TauraroLang journey:
+Now that you've completed the getting started guide, here are some recommended next steps:
 
-### 1. Explore Advanced Features
-- Read the [Language Reference](language-reference.md)
-- Learn about [FFI and Interoperability](ffi-guide.md)
-- Study [Advanced Features](advanced-features.md)
+1. **Explore Examples**: Check the `examples/` directory for more comprehensive examples
+2. **Read Documentation**: Dive into the [Language Reference](language-reference.md) for detailed syntax information
+3. **Practice**: Try implementing your own programs using the concepts learned
+4. **Join Community**: Connect with other Tauraro developers for support and collaboration
 
-### 2. Build Real Projects
-- Create a command-line tool
-- Build a web server
-- Write a game or simulation
-- Develop a data processing pipeline
+### Recommended Learning Path
 
-### 3. Learn Best Practices
-- Read the [Best Practices Guide](best-practices.md)
-- Study the [API Documentation](api-reference.md)
-- Check out [Example Projects](../examples/)
+1. **Basic Syntax**: Variables, control flow, functions
+2. **Data Structures**: Lists, dictionaries, sets, tuples
+3. **Object-Oriented Programming**: Classes, inheritance, polymorphism
+4. **Advanced Features**: Error handling, file I/O, modules
+5. **Performance Optimization**: Profiling and optimization techniques
 
-### 4. Get Help
-- Join the community discussions
-- Report bugs and request features
-- Contribute to the project
+### Resources
 
-### 5. Practice Exercises
+- **[Language Reference](language-reference.md)**: Complete syntax and feature documentation
+- **[API Reference](api-reference.md)**: Built-in functions and standard library
+- **[Examples Directory](../examples/)**: Practical code samples
+- **[Community Forum](https://github.com/yourusername/tauraro/discussions)**: Ask questions and share knowledge
 
-Try these exercises to reinforce your learning:
-
-1. **Number Guessing Game**: Create a game where the computer picks a random number and the user guesses it.
-
-2. **Text Processor**: Write a program that counts words, lines, and characters in a text file.
-
-3. **Simple Web Server**: Use FFI to create a basic HTTP server.
-
-4. **Data Analyzer**: Process CSV data and generate statistics.
-
-5. **Mini Database**: Implement a simple key-value store with file persistence.
-
-## Common Patterns
-
-### Pattern 1: Configuration Object
-```tauraro
-let config = {
-    debug: true,
-    max_connections: 100,
-    timeout: 30
-}
-
-fn setup_server(cfg) {
-    if cfg.debug {
-        print("Debug mode enabled")
-    }
-    // ... setup logic
-}
-```
-
-### Pattern 2: Result Type
-```tauraro
-fn operation_that_might_fail() {
-    // ... some logic
-    if success {
-        return { ok: true, value: result }
-    } else {
-        return { ok: false, error: "Something went wrong" }
-    }
-}
-```
-
-### Pattern 3: Builder Pattern
-```tauraro
-class QueryBuilder {
-    fn init() {
-        self.query = ""
-        self.conditions = []
-    }
-    
-    fn select(fields) {
-        self.query = "SELECT " + fields
-        return self
-    }
-    
-    fn from(table) {
-        self.query = self.query + " FROM " + table
-        return self
-    }
-    
-    fn where(condition) {
-        self.conditions = self.conditions + [condition]
-        return self
-    }
-    
-    fn build() {
-        let result = self.query
-        if len(self.conditions) > 0 {
-            result = result + " WHERE " + join(self.conditions, " AND ")
-        }
-        return result
-    }
-}
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Syntax Errors**: Check for missing semicolons, unmatched brackets, or typos
-2. **Type Errors**: Ensure you're using the correct data types
-3. **Runtime Errors**: Use error handling patterns to catch and handle errors gracefully
-
-### Getting Help
-
-- Check the [Troubleshooting Guide](troubleshooting.md)
-- Look at [Common Error Messages](error-reference.md)
-- Search existing issues on GitHub
-- Ask questions in community forums
-
----
-
-**Congratulations!** You now have a solid foundation in TauraroLang. Keep practicing, building projects, and exploring the language's features. Happy coding!
+Happy coding with TauraroLang! 🚀

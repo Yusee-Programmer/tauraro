@@ -1,6 +1,6 @@
 # TauraroLang Documentation
 
-Welcome to the comprehensive documentation for TauraroLang! This directory contains all the resources you need to learn, use, and master the TauraroLang programming language.
+Welcome to the comprehensive documentation for TauraroLang! This directory contains all the resources you need to learn, use, and master the TauraroLang programming language. TauraroLang uses 100% Python syntax with .tr file extensions.
 
 ## 📖 Documentation Structure
 
@@ -14,7 +14,7 @@ Welcome to the comprehensive documentation for TauraroLang! This directory conta
 
 ### 📚 Core Language Documentation
 - **[Language Reference](language-reference.md)** - Complete language specification
-  - Syntax and grammar
+  - Syntax and grammar (100% Python compatible)
   - Data types and variables
   - Control flow and functions
   - Object-oriented programming
@@ -70,9 +70,6 @@ Welcome to the comprehensive documentation for TauraroLang! This directory conta
   - Code generation backends
   - Optimization passes
 
-- **[Syntax Reference](syntax.md)** - Legacy syntax documentation
-- **[FFI Implementation](ffi.md)** - Legacy FFI documentation
-
 ## 🎯 Quick Navigation
 
 ### New to TauraroLang?
@@ -104,7 +101,7 @@ Welcome to the comprehensive documentation for TauraroLang! This directory conta
 All documentation in this directory follows these standards:
 
 - **Markdown Format**: All files use GitHub-flavored Markdown
-- **Code Examples**: Extensive, runnable code samples
+- **Code Examples**: Extensive, runnable code samples using Python syntax
 - **Cross-References**: Links between related topics
 - **Practical Focus**: Real-world examples and use cases
 - **Beginner Friendly**: Clear explanations for all skill levels

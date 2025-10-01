@@ -22,3 +22,9 @@ fn main() {
     print("Hello, World!")
     print("Welcome to TauraroLang! 🚀")
 }
+# hello_world.tr - Simple Hello World program in Tauraro
+# Demonstrates basic print functionality
+
+print("Hello, Tauraro World!")
+print("Welcome to the Tauraro programming language!")
+print("This file uses Python syntax with a .tr extension.")
