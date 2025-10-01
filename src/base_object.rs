@@ -22,20 +22,16 @@ impl MRO {
     /// Compute C3 linearization for multiple inheritance
     /// Based on Python's C3 linearization algorithm
     pub fn compute_c3_linearization(
-        class_name: &str, 
+        class_name: &str,
         bases: &[String],
         class_mros: &HashMap<String, Vec<String>>
     ) -> Result<Vec<String>, String> {
-        println!("Computing C3 linearization for class '{}' with bases: {:?}", class_name, bases);
-        println!("Available class MROs in registry: {:?}", class_mros.keys().collect::<Vec<_>>());
-        
         // C3 linearization algorithm implementation
         // L(C) = C + merge(L(B1), L(B2), ..., L(Bn), B1B2...Bn)
         
         if bases.is_empty() {
             // Base case: only inherits from object
             let result = vec![class_name.to_string(), "object".to_string()];
-            println!("Base case for '{}': {:?}", class_name, result);
             return Ok(result);
         }
 
@@ -43,7 +39,6 @@ impl MRO {
         let mut base_linearizations = Vec::new();
         for base in bases {
             if let Some(base_mro) = class_mros.get(base) {
-                println!("Found MRO for base '{}': {:?}", base, base_mro);
                 base_linearizations.push(base_mro.clone());
             } else {
                 // If base MRO not found, create appropriate fallback
@@ -54,15 +49,12 @@ impl MRO {
                     // Other classes inherit from object
                     vec![base.clone(), "object".to_string()]
                 };
-                println!("No MRO found for base '{}', using fallback: {:?}", base, fallback_mro);
                 base_linearizations.push(fallback_mro);
             }
         }
 
         // Add the list of bases as the last sequence to merge
         base_linearizations.push(bases.to_vec());
-        
-        println!("Sequences to merge for '{}': {:?}", class_name, base_linearizations);
 
         // Perform C3 merge
         let merged = Self::c3_merge(base_linearizations)?;
@@ -71,7 +63,6 @@ impl MRO {
         let mut result = vec![class_name.to_string()];
         result.extend(merged);
         
-        println!("Final C3 linearization for '{}': {:?}", class_name, result);
         Ok(result)
     }
 
@@ -82,8 +73,6 @@ impl MRO {
     /// 3. If no head can be taken, the hierarchy is inconsistent
     fn c3_merge(mut sequences: Vec<Vec<String>>) -> Result<Vec<String>, String> {
         let mut result = Vec::new();
-        
-        println!("Starting C3 merge with sequences: {:?}", sequences);
         
         while !sequences.is_empty() {
             // Remove empty sequences
@@ -103,20 +92,17 @@ impl MRO {
                 }
                 
                 let candidate = &seq[0];
-                println!("Trying candidate '{}' from sequence {}: {:?}", candidate, i, seq);
                 
                 // Check if this candidate appears in the tail of any other sequence
                 let mut appears_in_tail = false;
                 for other_seq in &sequences {
                     if other_seq.len() > 1 && other_seq[1..].contains(candidate) {
-                        println!("Candidate '{}' appears in tail of sequence: {:?}", candidate, other_seq);
                         appears_in_tail = true;
                         break;
                     }
                 }
                 
                 if !appears_in_tail {
-                    println!("Candidate '{}' is good - adding to result", candidate);
                     result.push(candidate.clone());
                     candidate_to_remove = Some(candidate.clone());
                     candidate_found = true;
@@ -131,16 +117,13 @@ impl MRO {
                         seq.remove(0);
                     }
                 }
-                println!("After removing '{}', sequences: {:?}", candidate, sequences);
             }
             
             if !candidate_found {
-                println!("No valid candidate found - MRO is inconsistent");
                 return Err("Cannot create a consistent method resolution order (MRO)".to_string());
             }
         }
         
-        println!("C3 merge result: {:?}", result);
         Ok(result)
     }
 

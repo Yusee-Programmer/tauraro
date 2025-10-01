@@ -720,7 +720,7 @@ impl Generator {
                     Ok(IRValue::Null) // print doesn't return a value
                 } else {
                     let temp_var = self.new_temp_var();
-                    eprintln!("DEBUG: Creating Call instruction with dest: {}", temp_var);
+                    
                     // Generate call instruction for function calls
                     current_block.instructions.push(IRInstruction::Call {
                         dest: Some(temp_var.clone()),

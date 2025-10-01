@@ -82,7 +82,7 @@ impl BuiltinRegistry {
             base_object: crate::base_object::BaseObject::new("object".to_string(), vec![]),
             mro: crate::base_object::MRO::from_linearization(vec!["object".to_string()]),
         }));
-        self.functions.insert("super".to_string(), |_args| Ok(Value::Super("object".to_string(), "object".to_string(), HashMap::new())));
+        self.functions.insert("super".to_string(), |_args| Ok(Value::Super("object".to_string(), "object".to_string(), None)));
         self.functions.insert("memoryview".to_string(), |_args| Ok(Value::None));
         self.functions.insert("slice".to_string(), builtin_slice);
         
@@ -114,9 +114,9 @@ impl BuiltinRegistry {
         self.functions.insert("int".to_string(), builtin_int);
         self.functions.insert("float".to_string(), builtin_float);
         self.functions.insert("bool".to_string(), builtin_bool);
-        self.functions.insert("complex".to_string(), builtin_complex);
-        self.functions.insert("bytes".to_string(), builtin_bytes);
-        self.functions.insert("bytearray".to_string(), builtin_bytearray);
+        self.functions.insert("complex".to_string(), crate::builtins::builtin_complex);
+        self.functions.insert("bytes".to_string(), crate::builtins::builtin_bytes);
+        self.functions.insert("bytearray".to_string(), crate::builtins::builtin_bytearray);
         self.functions.insert("list".to_string(), builtin_list);
         self.functions.insert("tuple".to_string(), builtin_tuple);
         self.functions.insert("dict".to_string(), builtin_dict);
@@ -296,19 +296,7 @@ pub fn builtin_type(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Str(format!("<class '{}'>", type_name(&args[0]))))
 }
 
-pub fn builtin_range(args: Vec<Value>) -> Result<Value> {
-    match args.len() {
-        1 => {
-            if let Value::Int(stop) = &args[0] {
-                let range_values: Vec<Value> = (0..*stop).map(Value::Int).collect();
-                Ok(Value::List(range_values))
-            } else {
-                Err(anyhow::anyhow!("range() argument must be an integer"))
-            }
-        }
-        _ => Err(anyhow::anyhow!("range expected 1 argument, got {}", args.len())),
-    }
-}
+
 
 pub fn builtin_str(args: Vec<Value>) -> Result<Value> {
     if args.is_empty() {
@@ -362,7 +350,38 @@ pub fn builtin_list(args: Vec<Value>) -> Result<Value> {
     if args.is_empty() {
         return Ok(Value::List(vec![]));
     }
-    Ok(Value::List(vec![args[0].clone()]))
+    
+    match &args[0] {
+        Value::List(items) => Ok(Value::List(items.clone())),
+        Value::Tuple(items) => Ok(Value::List(items.clone())),
+        Value::Set(items) => Ok(Value::List(items.clone())),
+        Value::FrozenSet(items) => Ok(Value::List(items.clone())),
+        Value::Range { start, stop, step } => {
+            let mut result = Vec::new();
+            let mut current = *start;
+            
+            if *step > 0 {
+                while current < *stop {
+                    result.push(Value::Int(current));
+                    current += step;
+                }
+            } else if *step < 0 {
+                while current > *stop {
+                    result.push(Value::Int(current));
+                    current += step;
+                }
+            }
+            
+            Ok(Value::List(result))
+        }
+        Value::Str(s) => {
+            let chars: Vec<Value> = s.chars()
+                .map(|c| Value::Str(c.to_string()))
+                .collect();
+            Ok(Value::List(chars))
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name()))
+    }
 }
 
 pub fn builtin_tuple(args: Vec<Value>) -> Result<Value> {
@@ -413,13 +432,7 @@ pub fn builtin_max(args: Vec<Value>) -> Result<Value> {
     Ok(args[0].clone())
 }
 
-pub fn builtin_round(_args: Vec<Value>) -> Result<Value> { Ok(Value::Int(0)) }
-pub fn builtin_pow(_args: Vec<Value>) -> Result<Value> { Ok(Value::Int(0)) }
-pub fn builtin_divmod(_args: Vec<Value>) -> Result<Value> { Ok(Value::Tuple(vec![Value::Int(0), Value::Int(0)])) }
 
-// String functions
-pub fn builtin_chr(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
-pub fn builtin_ord(_args: Vec<Value>) -> Result<Value> { Ok(Value::Int(0)) }
 pub fn builtin_hex(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
 pub fn builtin_oct(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
 pub fn builtin_bin(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
@@ -531,38 +544,17 @@ pub fn builtin_range(args: Vec<Value>) -> Result<Value> {
     }
 }
 
-pub fn builtin_memoryview(args: Vec<Value>) -> Result<Value> {
-    match args.len() {
-        1 => {
-            match &args[0] {
-                Value::Bytes(data) => {
-                    Ok(Value::MemoryView {
-                        data: data.clone(),
-                        format: "B".to_string(), // unsigned byte
-                        shape: vec![data.len()],
-                    })
-                }
-                Value::ByteArray(data) => {
-                    Ok(Value::MemoryView {
-                        data: data.clone(),
-                        format: "B".to_string(), // unsigned byte
-                        shape: vec![data.len()],
-                    })
-                }
-                _ => Err(anyhow!("memoryview: a bytes-like object is required, not '{}'", args[0].type_name()))
-            }
-        }
-        _ => Err(anyhow!("memoryview() takes exactly one argument ({} given)", args.len()))
-    }
-}
-pub fn builtin_bytearray(_args: Vec<Value>) -> Result<Value> { Ok(Value::ByteArray(vec![])) }
-pub fn builtin_bytes(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bytes(vec![])) }
-pub fn builtin_complex(_args: Vec<Value>) -> Result<Value> { Ok(Value::Complex { real: 0.0, imag: 0.0 }) }
+
 
 // I/O functions
 pub fn builtin_open(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
 pub fn builtin_format(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
 pub fn builtin_callable(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bool(false)) }
+
+// Built-in type constructors that were missing
+pub fn builtin_bytearray(_args: Vec<Value>) -> Result<Value> { Ok(Value::ByteArray(vec![])) }
+pub fn builtin_bytes(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bytes(vec![])) }
+pub fn builtin_complex(_args: Vec<Value>) -> Result<Value> { Ok(Value::Complex { real: 0.0, imag: 0.0 }) }
 
 // Method implementations for built-in types
 pub fn builtin_str_join(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
@@ -657,20 +649,33 @@ pub fn builtin_object(_args: Vec<Value>) -> Result<Value> {
     })
 }
 
-pub fn builtin_super(_args: Vec<Value>) -> Result<Value> {
+pub fn builtin_super(args: Vec<Value>) -> Result<Value> {
     // Simplified super() implementation
-    Ok(Value::Super("object".to_string(), "object".to_string(), HashMap::new()))
+    Ok(Value::Super("object".to_string(), "object".to_string(), None))
 }
 
-pub fn builtin_memoryview(_args: Vec<Value>) -> Result<Value> {
-    // Memory view of bytes-like objects
-    if args.is_empty() {
-        return Err(anyhow::anyhow!("memoryview() missing required argument 'object'"));
-    }
-    match &args[0] {
-        Value::Bytes(bytes) => Ok(Value::Bytes(bytes.clone())),
-        Value::ByteArray(bytes) => Ok(Value::ByteArray(bytes.clone())),
-        _ => Err(anyhow::anyhow!("a bytes-like object is required, not '{}'", type_name(&args[0]))),
+pub fn builtin_memoryview(args: Vec<Value>) -> Result<Value> {
+    match args.len() {
+        1 => {
+            match &args[0] {
+                Value::Bytes(data) => {
+                    Ok(Value::MemoryView {
+                        data: data.clone(),
+                        format: "B".to_string(), // unsigned byte
+                        shape: vec![data.len()],
+                    })
+                }
+                Value::ByteArray(data) => {
+                    Ok(Value::MemoryView {
+                        data: data.clone(),
+                        format: "B".to_string(), // unsigned byte
+                        shape: vec![data.len()],
+                    })
+                }
+                _ => Err(anyhow!("memoryview: a bytes-like object is required, not '{}'", args[0].type_name()))
+            }
+        }
+        _ => Err(anyhow!("memoryview() takes exactly one argument ({} given)", args.len()))
     }
 }
 

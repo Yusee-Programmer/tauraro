@@ -18,8 +18,9 @@ mod module_system;
 mod object_system;
 mod package_manager;
 mod base_object;
-mod type_hierarchy;
-mod metaclass;
+// Merged into object_system
+// mod type_hierarchy;
+// mod metaclass;
 
 use crate::value::Value;
 use crate::codegen::{CodeGen, CodegenOptions, Target, CodeGenerator};
@@ -102,9 +103,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Repl => {
-            // Use the advanced interpreter REPL instead of basic VM REPL
-            let mut interpreter = Interpreter::new();
-            interpreter.repl()?;
+            // Use the enhanced REPL from interpreter module
+            crate::codegen::interpreter::run_repl()?;
         }
         Commands::Run { file, backend, optimization, strict_types } => {
             let source = std::fs::read_to_string(&file)?;
