@@ -1,38 +1,45 @@
-# Loop Performance Benchmark for Python
-# Tests various loop constructs and control flow
+# Loop Operations Benchmark for Python
+# Tests loop performance with different constructs
 
 print("Starting Python Loop Benchmark...")
 
-# Simple loop benchmark
-iterations = 5000
-i = 0
-while i < iterations:
-    i = i + 1
+# Loop operations benchmark
+iterations = 10000
 
-print("Simple loop completed")
-
-# Nested loop benchmark
-outer_iterations = 50
-inner_iterations = 50
-i = 0
-while i < outer_iterations:
-    j = 0
-    while j < inner_iterations:
-        result = i * j
-        j = j + 1
-    i = i + 1
-
-print("Nested loop completed")
-
-# Loop with conditional benchmark
+# While loop benchmark
 i = 0
 count = 0
 while i < iterations:
-    if i % 2 == 0:
-        count = count + 1
+    count = count + 1
     i = i + 1
 
-print("Conditional loop completed")
+print("While loop completed. Count:", count)
 
-print("Loop benchmark completed. Count:", count)
+# For loop with range benchmark
+count = 0
+for i in range(iterations):
+    count = count + 1
+
+print("For loop completed. Count:", count)
+
+# Nested loops benchmark
+count = 0
+for i in range(100):
+    for j in range(50):
+        count = count + 1
+
+print("Nested loops completed. Count:", count)
+
+# List iteration benchmark
+numbers = []
+for i in range(1000):
+    numbers.append(i)
+
+count = 0
+for num in numbers:
+    count = count + 1
+
+print("List iteration completed. Count:", count)
+
+print("Loop benchmark completed")
 print("Python Loop Benchmark finished!")

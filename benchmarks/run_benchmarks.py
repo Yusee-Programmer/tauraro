@@ -14,10 +14,10 @@ from pathlib import Path
 class BenchmarkRunner:
     def __init__(self):
         self.results = {}
-        self.tauraro_exe = Path("../target/release/tauraro.exe")
-        self.tauraro_dir = Path("tauraro")
-        self.python_dir = Path("python")
-        self.results_dir = Path("results")
+        self.tauraro_exe = Path("./target/debug/tauraro.exe")
+        self.tauraro_dir = Path("benchmarks/tauraro")
+        self.python_dir = Path("benchmarks/python")
+        self.results_dir = Path("benchmarks/results")
         
         # Ensure results directory exists
         self.results_dir.mkdir(exist_ok=True)
@@ -33,7 +33,7 @@ class BenchmarkRunner:
         try:
             start_time = time.time()
             result = subprocess.run(
-                [str(self.tauraro_exe), "run", str(benchmark_file)],
+                [str(self.tauraro_exe), "run", "--optimization", "3", str(benchmark_file)],
                 capture_output=True,
                 text=True,
                 timeout=60
@@ -189,7 +189,7 @@ class BenchmarkRunner:
     
     def run_all_benchmarks(self):
         """Run all available benchmarks"""
-        benchmarks = ["arithmetic", "string", "loop", "function"]
+        benchmarks = ["arithmetic", "string", "loop", "function", "sorting", "math"]
         
         print("Starting Tauraro vs Python Benchmark Suite")
         print(f"Running {len(benchmarks)} benchmark categories...")

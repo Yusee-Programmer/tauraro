@@ -1,5 +1,6 @@
 use crate::value::Value;
 use std::collections::HashMap;
+use crate::modules::hplist::HPList;
 
 #[cfg(feature = "http")]
 use httparse::{Request, Response, Header, Status};
@@ -196,7 +197,7 @@ pub fn create_httptools_module() -> Value {
     namespace.insert("HttpParserUpgrade".to_string(), Value::BuiltinFunction("HttpParserUpgrade".to_string(), http_parser_upgrade_wrapper));
 
     // Constants
-    namespace.insert("HTTP_METHODS".to_string(), Value::List(vec![
+    namespace.insert("HTTP_METHODS".to_string(), Value::List(HPList::from_values(vec![
         Value::Str("GET".to_string()),
         Value::Str("POST".to_string()),
         Value::Str("PUT".to_string()),
@@ -206,7 +207,7 @@ pub fn create_httptools_module() -> Value {
         Value::Str("PATCH".to_string()),
         Value::Str("TRACE".to_string()),
         Value::Str("CONNECT".to_string()),
-    ]));
+    ])));
 
     Value::Module("httptools".to_string(), namespace)
 }

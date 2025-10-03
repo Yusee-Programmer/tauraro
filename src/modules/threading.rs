@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, RwLock, Condvar};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+// Import HPList
+use crate::modules::hplist::HPList;
 
 /// Thread-safe counter for generating unique thread IDs
 static THREAD_COUNTER: AtomicUsize = AtomicUsize::new(1);
@@ -221,7 +223,7 @@ pub fn thread_current_thread(_args: Vec<Value>) -> Result<Value> {
 pub fn thread_enumerate(_args: Vec<Value>) -> Result<Value> {
     // Return list of active threads (simplified)
     let main_thread = thread_current_thread(vec![])?;
-    Ok(Value::List(vec![main_thread]))
+    Ok(Value::List(HPList::from_values(vec![main_thread])))
 }
 
 pub fn thread_main_thread(_args: Vec<Value>) -> Result<Value> {

@@ -1,4 +1,0 @@
-async fn task() {
-    await sleep(1);
-    print("Done!");
-}

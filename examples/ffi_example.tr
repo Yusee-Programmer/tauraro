@@ -1,2 +1,0 @@
-extern fn c_add(a: int, b: int) -> int;
-print(c_add(2, 3));

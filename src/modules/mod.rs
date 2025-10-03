@@ -30,10 +30,16 @@ pub mod asyncio;
 pub mod httptools;
 pub mod websockets;
 pub mod httpx;
+pub mod hplist;
 
 // Add memory management modules
 pub mod memory;
 pub mod gc;
+
+// Add exceptions module
+pub mod exceptions;
+
+// Note: HPList is now the default list implementation and not exported as a separate module
 
 /// Initialize all built-in modules and return them as a HashMap
 pub fn init_builtin_modules() -> HashMap<String, Value> {
@@ -71,6 +77,9 @@ pub fn init_builtin_modules() -> HashMap<String, Value> {
     modules.insert("memory".to_string(), memory::create_memory_module());
     modules.insert("gc".to_string(), gc::create_gc_module());
     
+    // Add exceptions module
+    modules.insert("exceptions".to_string(), exceptions::create_exceptions_module());
+    
     modules
 }
 
@@ -105,13 +114,14 @@ pub fn get_builtin_module(name: &str) -> Option<Value> {
         "httpx" => Some(httpx::create_httpx_module()),
         "memory" => Some(memory::create_memory_module()),
         "gc" => Some(gc::create_gc_module()),
+        "exceptions" => Some(exceptions::create_exceptions_module()),
         _ => None,
     }
 }
 
 /// Check if a module name is a built-in module
 pub fn is_builtin_module(name: &str) -> bool {
-    matches!(name, "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx" | "memory" | "gc")
+    matches!(name, "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx" | "memory" | "gc" | "exceptions")
 }
 
 /// Get list of all built-in module names
@@ -145,5 +155,6 @@ pub fn get_builtin_module_names() -> Vec<String> {
         "httpx".to_string(),
         "memory".to_string(),
         "gc".to_string(),
+        "exceptions".to_string(),
     ]
 }

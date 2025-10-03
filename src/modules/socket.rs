@@ -2,8 +2,8 @@ use crate::value::Value;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream, UdpSocket, SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
-use std::io::{Read, Write};
-use std::time::Duration;
+// use std::io::{Read, Write};
+// use std::time::Duration;
 
 /// Create the socket module
 pub fn create_socket_module() -> Value {

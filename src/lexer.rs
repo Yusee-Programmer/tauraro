@@ -112,7 +112,7 @@ pub enum Token {
     KwCase,
 
     #[token("in")]
-    #[token("cikin")]    // Hausa: in/inside
+    #[token("acikin")]    // Hausa: in/inside
     KwIn,
 
     #[token("is")]

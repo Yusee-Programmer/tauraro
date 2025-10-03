@@ -1,5 +1,8 @@
+//! Main entry point for Tauraro with full bytecode implementation
+
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use anyhow::{Result, anyhow}; // Add this line
 
 mod lexer;
 mod parser;
@@ -18,9 +21,7 @@ mod module_system;
 mod object_system;
 mod package_manager;
 mod base_object;
-// Merged into object_system
-// mod type_hierarchy;
-// mod metaclass;
+mod bytecode; // Our new full bytecode implementation
 
 use crate::value::Value;
 use crate::codegen::{CodeGen, CodegenOptions, Target, CodeGenerator};
@@ -108,7 +109,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Run { file, backend, optimization, strict_types } => {
             let source = std::fs::read_to_string(&file)?;
-            vm::run_file_with_options(&source, &backend, optimization, strict_types)?;
+            
+            // Use our new full bytecode compiler for better performance when backend is "vm" and optimization > 0
+            if backend == "vm" && optimization > 0 {
+                if let Err(e) = run_file_bytecode(&source) {
+                    eprintln!("Traceback (most recent call last):");
+                    eprintln!("  File \"{}\", line 1, in <module>", file.display());
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            } else {
+                if let Err(e) = vm::run_file_with_options(&source, &backend, optimization, strict_types) {
+                    eprintln!("Traceback (most recent call last):");
+                    eprintln!("  File \"{}\", line 1, in <module>", file.display());
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Compile { 
             file, 
@@ -138,6 +155,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Run a TauraroLang file with our new full bytecode implementation
+pub fn run_file_bytecode(source: &str) -> Result<()> {
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+    use crate::bytecode::{SuperCompiler, SuperBytecodeVM}; // Updated to use our new implementation
+    
+    // Parse the source code
+    let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow!("Lexer error: {}", e))?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse()?;
+    
+    // Compile to bytecode using our new full implementation
+    let mut compiler = SuperCompiler::new("<stdin>".to_string()); // Updated to use our new compiler
+    let code = compiler.compile(program)?;
+    
+    // Execute bytecode using our new VM
+    let mut vm = SuperBytecodeVM::new(); // Updated to use our new VM
+    vm.execute(code)?;
+    
+    Ok(())
+}
+
 fn compile_file(
     file: &PathBuf,
     output: Option<&PathBuf>,
@@ -152,10 +192,22 @@ fn compile_file(
     let source = std::fs::read_to_string(file)?;
     
     // Lexical analysis
-    let tokens = lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()?;
+    let tokens = lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            eprintln!("Error in lexer:");
+            eprintln!("  File \"{}\", line 1", file.display());
+            e
+        })?;
     
     // Parsing
-    let ast = parser::Parser::new(tokens).parse()?;
+    let mut parser = parser::Parser::new(tokens);
+    let ast = parser.parse().map_err(|e| {
+        // Create a more detailed error message with location information
+        eprintln!("Error in parser:");
+        // For now, we'll just show a generic location since we don't have detailed line info in the error
+        eprintln!("  File \"{}\", line 1", file.display());
+        e
+    })?;
     
     // Semantic analysis
     let semantic_ast = semantic::Analyzer::new(strict_types).analyze(ast)

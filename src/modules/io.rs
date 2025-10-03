@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, BufWriter};
 use std::path::Path;
+// Import HPList
+use crate::modules::hplist::HPList;
 
 /// Create the io module object with all its functions and classes
 pub fn create_io_module() -> Value {
@@ -213,7 +215,7 @@ fn file_readlines(args: Vec<Value>) -> Result<Value> {
     };
     
     // Implementation would read all lines from file
-    Ok(Value::List(vec![]))
+    Ok(Value::List(HPList::new()))
 }
 
 /// File writelines method

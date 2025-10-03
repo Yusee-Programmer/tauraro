@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::value::Value;
+use crate::modules::hplist::HPList;
 
 /// Method Resolution Order implementation for multiple inheritance
 #[derive(Debug, Clone, PartialEq)]
@@ -74,7 +75,13 @@ impl MRO {
     fn c3_merge(mut sequences: Vec<Vec<String>>) -> Result<Vec<String>, String> {
         let mut result = Vec::new();
         
-        while !sequences.is_empty() {
+        // Add a guard to prevent infinite loops
+        let mut iterations = 0;
+        let max_iterations = 1000; // Prevent infinite loops
+        
+        while !sequences.is_empty() && iterations < max_iterations {
+            iterations += 1;
+            
             // Remove empty sequences
             sequences.retain(|seq| !seq.is_empty());
             
@@ -83,10 +90,10 @@ impl MRO {
             }
 
             let mut candidate_found = false;
-            let mut candidate_to_remove: Option<String> = None;
+            let mut selected_candidate: Option<String> = None;
             
             // Try each sequence's head as a candidate
-            for (i, seq) in sequences.iter().enumerate() {
+            for (_i, seq) in sequences.iter().enumerate() {
                 if seq.is_empty() {
                     continue;
                 }
@@ -95,7 +102,10 @@ impl MRO {
                 
                 // Check if this candidate appears in the tail of any other sequence
                 let mut appears_in_tail = false;
-                for other_seq in &sequences {
+                for (_j, other_seq) in sequences.iter().enumerate() {
+                    if _i == _j {
+                        continue; // Skip the same sequence
+                    }
                     if other_seq.len() > 1 && other_seq[1..].contains(candidate) {
                         appears_in_tail = true;
                         break;
@@ -103,14 +113,15 @@ impl MRO {
                 }
                 
                 if !appears_in_tail {
-                    result.push(candidate.clone());
-                    candidate_to_remove = Some(candidate.clone());
+                    selected_candidate = Some(candidate.clone());
                     candidate_found = true;
                     break;
                 }
             }
             
-            if let Some(candidate) = candidate_to_remove {
+            if let Some(candidate) = selected_candidate {
+                result.push(candidate.clone());
+                
                 // Remove this candidate from all sequences
                 for seq in &mut sequences {
                     if !seq.is_empty() && seq[0] == candidate {
@@ -122,6 +133,10 @@ impl MRO {
             if !candidate_found {
                 return Err("Cannot create a consistent method resolution order (MRO)".to_string());
             }
+        }
+        
+        if iterations >= max_iterations {
+            return Err("MRO computation exceeded maximum iterations - possible cycle".to_string());
         }
         
         Ok(result)
@@ -176,7 +191,15 @@ impl BaseObject {
         // Compute MRO using C3 linearization
         let class_mros = HashMap::new(); // This would be populated from a class registry
         let linearization = MRO::compute_c3_linearization(&class_name, &bases, &class_mros)
-            .unwrap_or_else(|_| vec![class_name.clone(), "object".to_string()]);
+            .unwrap_or_else(|_| {
+                // Fallback to simple linearization if C3 fails
+                let mut result = vec![class_name.clone()];
+                result.extend_from_slice(&bases);
+                if !result.contains(&"object".to_string()) {
+                    result.push("object".to_string());
+                }
+                result
+            });
         
         let mro = MRO::from_linearization(linearization);
         let dunder_methods = Self::get_default_dunder_methods();
@@ -467,7 +490,7 @@ fn dunder_delattr(_self: &Value, _args: &[Value]) -> Result<Value, String> {
 }
 
 fn dunder_dir(_self: &Value, _args: &[Value]) -> Result<Value, String> {
-    Ok(Value::List(vec![]))
+    Ok(Value::List(HPList::new()))
 }
 
 // Container methods (placeholder implementations)

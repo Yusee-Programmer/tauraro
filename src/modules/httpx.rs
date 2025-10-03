@@ -1,5 +1,6 @@
 use crate::value::Value;
 use std::collections::HashMap;
+use crate::modules::hplist::HPList;
 
 #[cfg(feature = "http")]
 use reqwest::{Client, Method, Response as ReqwestResponse};
@@ -534,17 +535,17 @@ extern "C" fn client_close(_args: *const Value, _argc: usize) -> Value {
 // Stream methods
 extern "C" fn stream_iter_bytes(_args: *const Value, _argc: usize) -> Value {
     // Mock byte iterator
-    Value::List(vec![Value::Bytes(b"chunk1".to_vec()), Value::Bytes(b"chunk2".to_vec())])
+    Value::List(HPList::from_values(vec![Value::Bytes(b"chunk1".to_vec()), Value::Bytes(b"chunk2".to_vec())]))
 }
 
 extern "C" fn stream_iter_text(_args: *const Value, _argc: usize) -> Value {
     // Mock text iterator
-    Value::List(vec![Value::Str("line1".to_string()), Value::Str("line2".to_string())])
+    Value::List(HPList::from_values(vec![Value::Str("line1".to_string()), Value::Str("line2".to_string())]))
 }
 
 extern "C" fn stream_iter_lines(_args: *const Value, _argc: usize) -> Value {
     // Mock line iterator
-    Value::List(vec![Value::Str("line1\n".to_string()), Value::Str("line2\n".to_string())])
+    Value::List(HPList::from_values(vec![Value::Str("line1\n".to_string()), Value::Str("line2\n".to_string())]))
 }
 
 // Request and Response classes

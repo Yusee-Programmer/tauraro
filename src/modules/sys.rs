@@ -8,6 +8,9 @@ use std::env;
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::fs;
+// Import HPList
+use crate::modules::hplist::HPList;
 
 // Thread-local storage for additional module system paths
 thread_local! {
@@ -60,7 +63,7 @@ pub fn create_sys_module() -> Value {
     namespace.insert("dont_write_bytecode".to_string(), Value::Bool(false));
     
     // Command line arguments (empty for now)
-    namespace.insert("argv".to_string(), Value::List(vec![Value::Str("tauraro".to_string())]));
+    namespace.insert("argv".to_string(), Value::List(HPList::from_values(vec![Value::Str("tauraro".to_string())])));
     
     Value::Module("sys".to_string(), namespace)
 }
@@ -101,7 +104,7 @@ pub fn get_current_sys_path() -> Value {
     unsafe {
         if let Some(ref sys_path) = SYS_PATH {
             if let Ok(path_list) = sys_path.lock() {
-                return Value::List(path_list.clone());
+                return Value::List(HPList::from_values(path_list.clone()));
             }
         }
     }
@@ -114,13 +117,20 @@ pub fn get_current_sys_path() -> Value {
 fn create_sys_path() -> Value {
     let mut path_list = Vec::new();
     
-    // Add current directory (always first)
-    path_list.push(Value::Str(".".to_string()));
+    // First search built-in modules in src/modules/*
+    // (These are handled separately as built-in modules, not through file system search)
     
-    // Add built-in package directories in proper order
+    // Then search directories in tauraro_packages/*
     path_list.push(Value::Str("tauraro_packages".to_string()));
+    
+    // Then search tauraro_packages/externals
     path_list.push(Value::Str("tauraro_packages/externals".to_string()));
+    
+    // Then search tauraro_packages/pysites
     path_list.push(Value::Str("tauraro_packages/pysites".to_string()));
+    
+    // Finally fallback to "." (current directory)
+    path_list.push(Value::Str(".".to_string()));
     
     // Add platform-specific standard library paths
     if cfg!(target_os = "windows") {
@@ -146,7 +156,7 @@ fn create_sys_path() -> Value {
         SYS_PATH = Some(Arc::new(Mutex::new(path_list.clone())));
     }
     
-    Value::List(path_list)
+    Value::List(HPList::from_values(path_list))
 }
 
 /// Get executable path
@@ -172,12 +182,59 @@ fn create_modules_dict() -> Value {
 
 /// Create builtin module names tuple
 fn create_builtin_modules() -> Value {
-    Value::Tuple(vec![
-        Value::Str("sys".to_string()),
-        Value::Str("os".to_string()),
-        Value::Str("thread".to_string()),
-        Value::Str("builtins".to_string()),
-    ])
+    // Start with the built-in modules from src/modules
+    let mut module_names = vec![
+        "sys".to_string(),
+        "os".to_string(),
+        "threading".to_string(),
+        "time".to_string(),
+        "datetime".to_string(),
+        "io".to_string(),
+        "math".to_string(),
+        "random".to_string(),
+        "re".to_string(),
+        "json".to_string(),
+        "functools".to_string(),
+        "itertools".to_string(),
+        "collections".to_string(),
+        "copy".to_string(),
+        "pickle".to_string(),
+        "base64".to_string(),
+        "hashlib".to_string(),
+        "urllib".to_string(),
+        "csv".to_string(),
+        "logging".to_string(),
+        "unittest".to_string(),
+        "socket".to_string(),
+        "asyncio".to_string(),
+        "httptools".to_string(),
+        "websockets".to_string(),
+        "httpx".to_string(),
+        "memory".to_string(),
+        "gc".to_string(),
+    ];
+    
+    // Add modules from tauraro_packages directory if they exist
+    // but exclude internals and pysites directories
+    let tauraro_packages_path = std::path::Path::new("tauraro_packages");
+    if tauraro_packages_path.exists() && tauraro_packages_path.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(tauraro_packages_path) {
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.is_dir() {
+                    let dir_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    // Exclude internals and pysites directories
+                    if dir_name != "internals" && dir_name != "pysites" {
+                        module_names.push(dir_name);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Convert to Value::Tuple
+    let tuple_values: Vec<Value> = module_names.into_iter().map(Value::Str).collect();
+    Value::Tuple(tuple_values)
 }
 
 // SYS Functions Implementation
@@ -258,7 +315,7 @@ pub fn get_system_info() -> HashMap<String, Value> {
 /// Set command line arguments
 pub fn set_argv(args: Vec<String>) -> Value {
     let argv: Vec<Value> = args.into_iter().map(Value::Str).collect();
-    Value::List(argv)
+    Value::List(HPList::from_values(argv))
 }
 
 /// Add path to sys.path
@@ -308,6 +365,7 @@ fn sys_path_append(args: Vec<Value>) -> Result<Value> {
             }
         }
     }
+    
     
     // Also notify the module system about the new path
     use std::path::PathBuf;

@@ -4,6 +4,8 @@
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
+// Import HPList
+use crate::modules::hplist::HPList;
 
 /// Create the json module object with all its functions and constants
 pub fn create_json_module() -> Value {
@@ -121,7 +123,7 @@ fn encoder_encode(args: Vec<Value>) -> Result<Value> {
 
 fn encoder_iterencode(_args: Vec<Value>) -> Result<Value> {
     // Placeholder implementation
-    Ok(Value::List(vec![]))
+    Ok(Value::List(HPList::new()))
 }
 
 // Decoder methods
@@ -203,7 +205,7 @@ fn parse_json_value(s: &str) -> Result<Value> {
 fn parse_json_array(s: &str) -> Result<Value> {
     let s = s.trim();
     if s.is_empty() {
-        return Ok(Value::List(vec![]));
+        return Ok(Value::List(HPList::new()));
     }
     
     // Simple comma splitting (doesn't handle nested structures properly)
@@ -253,7 +255,7 @@ fn parse_json_array(s: &str) -> Result<Value> {
         items.push(parse_json_value(current.trim())?);
     }
     
-    Ok(Value::List(items))
+    Ok(Value::List(HPList::from_values(items)))
 }
 
 /// Parse JSON object (simplified implementation)
@@ -460,7 +462,7 @@ fn serialize_to_json(value: &Value, indent: Option<usize>, current_depth: usize)
         }
         Value::Tuple(items) => {
             // Serialize tuples as arrays
-            let list_value = Value::List(items.clone());
+            let list_value = Value::List(HPList::from_values(items.clone()));
             return serialize_to_json(&list_value, indent, current_depth);
         }
         _ => {
