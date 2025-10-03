@@ -8,6 +8,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+// Import HPList
+use crate::modules::hplist::HPList;
 
 /// Create the os module object with all its functions and attributes
 pub fn create_os_module() -> Value {
@@ -129,7 +131,7 @@ pub fn os_listdir(args: Vec<Value>) -> Result<Value> {
                     }
                 }
             }
-            Ok(Value::List(result))
+            Ok(Value::List(HPList::from_values(result)))
         }
         Err(e) => Err(anyhow::anyhow!("Failed to list directory '{}': {}", path, e)),
     }

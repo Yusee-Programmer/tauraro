@@ -1,32 +1,44 @@
-# Function Call Benchmark for Python
-# Tests function definition and calling performance
+# Function Operations Benchmark for Python
+# Tests function call performance
 
 print("Starting Python Function Benchmark...")
 
-# Simple function definition
-def simple_add(a, b):
+# Define test functions
+def simple_function():
+    return 42
+
+def function_with_params(a, b):
     return a + b
 
-# Recursive function definition
-def factorial(n):
+def recursive_function(n):
     if n <= 1:
         return 1
-    else:
-        return n * factorial(n - 1)
+    return n * recursive_function(n - 1)
 
 # Function call benchmark
-iterations = 5000
+iterations = 10000
+
+# Simple function call benchmark
 i = 0
+result = 0
 while i < iterations:
-    result = simple_add(10, 5)
+    result = simple_function()
     i = i + 1
 
 print("Simple function calls completed")
 
-# Recursive function benchmark
+# Function with parameters benchmark
 i = 0
-while i < 100:
-    result = factorial(10)
+while i < iterations:
+    result = function_with_params(10, 20)
+    i = i + 1
+
+print("Function with parameters completed")
+
+# Recursive function benchmark (smaller iteration count to avoid stack overflow)
+i = 0
+while i < 10000:
+    result = recursive_function(5)
     i = i + 1
 
 print("Recursive function calls completed")

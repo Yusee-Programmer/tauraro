@@ -1,13 +1,14 @@
 use crate::value::Value;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use crate::modules::hplist::HPList;
+// use std::sync::{Arc, Mutex};
 
-#[cfg(feature = "async")]
-use tokio::runtime::Runtime;
-#[cfg(feature = "async")]
-use tokio::time::{sleep, Duration, Instant};
-#[cfg(feature = "async")]
-use futures::future::BoxFuture;
+// #[cfg(feature = "async")]
+// use tokio::runtime::Runtime;
+// #[cfg(feature = "async")]
+// use tokio::time::{sleep, Duration, Instant};
+// #[cfg(feature = "async")]
+// use futures::future::BoxFuture;
 
 // Wrapper functions for extern "C" functions
 fn get_event_loop_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -352,7 +353,7 @@ extern "C" fn create_task(_args: *const Value, _argc: usize) -> Value {
 
 extern "C" fn gather(_args: *const Value, _argc: usize) -> Value {
     // Mock implementation - would normally gather multiple coroutines
-    Value::List(vec![])
+    Value::List(HPList::new())
 }
 
 extern "C" fn wait_for(_args: *const Value, _argc: usize) -> Value {

@@ -11,6 +11,9 @@ pub mod gcc;
 #[cfg(feature = "clang")]
 pub mod clang;
 
+#[cfg(feature = "jit")]
+pub mod jit;
+
 pub mod wasm;
 pub mod c_abi;
 pub mod c_transpiler;
@@ -28,6 +31,7 @@ pub enum Target {
     Interpreter,
     GCC,
     Clang,
+    JIT,
 }
 
 /// Optimization levels
@@ -146,6 +150,12 @@ impl CodeGen {
         
         generators.insert(Target::C, Box::new(c_abi::CCodeGenerator::new()));
         generators.insert(Target::Interpreter, Box::new(interpreter::InterpreterCodeGenerator::new()));
+        
+        // Register JIT compiler if available
+        #[cfg(feature = "jit")]
+        {
+            generators.insert(Target::JIT, Box::new(jit::JITCodeGenerator::new()));
+        }
         
         // Add C transpiler as a fallback for native code generation
         if !generators.contains_key(&Target::Native) {

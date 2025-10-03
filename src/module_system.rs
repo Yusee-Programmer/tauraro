@@ -53,10 +53,20 @@ impl Default for ModuleSystem {
 impl ModuleSystem {
     pub fn new() -> Self {
         let mut search_paths = vec![
-            PathBuf::from("."),                          // Current directory
-            PathBuf::from("tauraro_packages"),           // Built-in Tauraro packages
-            PathBuf::from("tauraro_packages/externals"),  // External Tauraro packages
-            PathBuf::from("tauraro_packages/pysites"),    // Python packages from PyPI
+            // First search built-in modules in src/modules/*
+            // (These are handled separately as built-in modules, not through file system search)
+            
+            // Then search directories in tauraro_packages/*
+            PathBuf::from("tauraro_packages"),
+            
+            // Then search tauraro_packages/externals
+            PathBuf::from("tauraro_packages/externals"),
+            
+            // Then search tauraro_packages/pysites
+            PathBuf::from("tauraro_packages/pysites"),
+            
+            // Finally fallback to "." (current directory)
+            PathBuf::from("."),
         ];
         
         // Add system paths if they exist
@@ -514,17 +524,54 @@ impl ModuleSystem {
     /// Create built-in modules
     fn create_builtin_module(&self, module_name: &str) -> Option<Value> {
         match module_name {
+            // Core system modules
             "sys" => Some(crate::modules::sys::create_sys_module()),
             "os" => Some(crate::modules::os::create_os_module()),
-            "thread" => Some(crate::modules::threading::create_thread_module()),
-            "threading" => Some(crate::modules::threading::create_threading_module()),
+            "io" => Some(crate::modules::io::create_io_module()),
+            
+            // Math and computation modules
+            "math" => Some(crate::modules::math::create_math_module()),
+            "random" => Some(crate::modules::random::create_random_module()),
+            
+            // Date and time modules
             "time" => Some(crate::modules::time::create_time_module()),
             "datetime" => Some(crate::modules::datetime::create_datetime_module()),
+            
+            // Text processing and data formats
+            "json" => Some(crate::modules::json::create_json_module()),
+            "re" => Some(crate::modules::re::create_re_module()),
+            "csv" => Some(crate::modules::csv::create_csv_module()),
+            "base64" => Some(crate::modules::base64::create_base64_module()),
+            
+            // Collections and functional programming
+            "collections" => Some(crate::modules::collections::create_collections_module()),
+            "itertools" => Some(crate::modules::itertools::create_itertools_module()),
+            "functools" => Some(crate::modules::functools::create_functools_module()),
+            "copy" => Some(crate::modules::copy::create_copy_module()),
+            
+            // Serialization and encoding
+            "pickle" => Some(crate::modules::pickle::create_pickle_module()),
+            "hashlib" => Some(crate::modules::hashlib::create_hashlib_module()),
+            
+            // Network and web modules
             "socket" => Some(crate::modules::socket::create_socket_module()),
-            "asyncio" => Some(crate::modules::asyncio::create_asyncio_module()),
+            "urllib" => Some(crate::modules::urllib::create_urllib_module()),
+            "httpx" => Some(crate::modules::httpx::create_httpx_module()),
             "httptools" => Some(crate::modules::httptools::create_httptools_module()),
             "websockets" => Some(crate::modules::websockets::create_websockets_module()),
-            "httpx" => Some(crate::modules::httpx::create_httpx_module()),
+            
+            // Concurrency modules
+            "threading" => Some(crate::modules::threading::create_threading_module()),
+            "asyncio" => Some(crate::modules::asyncio::create_asyncio_module()),
+            
+            // Memory management modules
+            "memory" => Some(crate::modules::memory::create_memory_module()),
+            "gc" => Some(crate::modules::gc::create_gc_module()),
+            
+            // Development and testing modules
+            "logging" => Some(crate::modules::logging::create_logging_module()),
+            "unittest" => Some(crate::modules::unittest::create_unittest_module()),
+            
             _ => None,
         }
     }

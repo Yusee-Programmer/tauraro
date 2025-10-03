@@ -1,5 +1,6 @@
 use crate::value::Value;
 use std::collections::HashMap;
+use crate::modules::hplist::HPList;
 
 #[cfg(feature = "http")]
 use tungstenite::{WebSocket, Message, Error as WsError};
@@ -131,7 +132,7 @@ extern "C" fn ws_connect(args: *const Value, argc: usize) -> Value {
         ws_obj.insert("state".to_string(), Value::Int(1)); // OPEN
         ws_obj.insert("uri".to_string(), Value::Str(uri.clone()));
         ws_obj.insert("subprotocol".to_string(), Value::None);
-        ws_obj.insert("extensions".to_string(), Value::List(vec![]));
+        ws_obj.insert("extensions".to_string(), Value::List(HPList::new()));
         
         Value::Object {
             class_name: "WebSocket".to_string(),

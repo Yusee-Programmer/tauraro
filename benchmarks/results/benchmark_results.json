@@ -1,21 +1,29 @@
 {
-  "timestamp": "2025-09-25 09:27:20",
+  "timestamp": "2025-10-03 22:08:54",
   "benchmarks": {
     "arithmetic": {
-      "tauraro": 0.022669315338134766,
-      "python": 0.07297086715698242
+      "tauraro": null,
+      "python": 0.06193375587463379
     },
     "string": {
-      "tauraro": 0.020786523818969727,
-      "python": 0.13648343086242676
+      "tauraro": null,
+      "python": 0.05651068687438965
     },
     "loop": {
-      "tauraro": 0.018564939498901367,
-      "python": 0.06397509574890137
+      "tauraro": null,
+      "python": 0.047361135482788086
     },
     "function": {
-      "tauraro": 0.02509617805480957,
-      "python": 0.054001569747924805
+      "tauraro": null,
+      "python": 0.060016632080078125
+    },
+    "sorting": {
+      "tauraro": null,
+      "python": 11.303352117538452
+    },
+    "math": {
+      "tauraro": null,
+      "python": 0.1955738067626953
     }
   }
 }

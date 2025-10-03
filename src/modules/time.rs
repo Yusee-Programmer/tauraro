@@ -138,7 +138,7 @@ pub fn time_strftime(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("strftime() timestamp must be a number or struct_time")),
     };
     
-    let dt = Utc.timestamp_opt(timestamp as i64, ((timestamp.fract() * 1_000_000_000.0) as u32))
+    let dt = Utc.timestamp_opt(timestamp as i64, (timestamp.fract() * 1_000_000_000.0) as u32)
         .single()
         .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?;
     
@@ -232,7 +232,7 @@ pub fn time_gmtime(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("gmtime() argument must be a number")),
     };
     
-    let dt = Utc.timestamp_opt(timestamp as i64, ((timestamp.fract() * 1_000_000_000.0) as u32))
+    let dt = Utc.timestamp_opt(timestamp as i64, (timestamp.fract() * 1_000_000_000.0) as u32)
         .single()
         .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?;
     

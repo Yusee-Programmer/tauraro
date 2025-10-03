@@ -1,6 +1,7 @@
 use crate::lexer::{Token, TokenInfo};
 use crate::ast::*;
 use thiserror::Error;
+use std::fmt;
 
 #[derive(Error, Debug)]
 pub enum ParseError {
@@ -12,6 +13,31 @@ pub enum ParseError {
     InvalidSyntax { message: String },
     #[error("Indentation error: {message}")]
     IndentationError { message: String },
+}
+
+impl ParseError {
+    pub fn with_location(self, line: usize, column: usize, file_name: &str) -> ParseErrorWithLocation {
+        ParseErrorWithLocation {
+            error: self,
+            line,
+            column,
+            file_name: file_name.to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ParseErrorWithLocation {
+    pub error: ParseError,
+    pub line: usize,
+    pub column: usize,
+    pub file_name: String,
+}
+
+impl fmt::Display for ParseErrorWithLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "  File \"{}\", line {}, column {}\n{}", self.file_name, self.line, self.column, self.error)
+    }
 }
 
 pub struct Parser {

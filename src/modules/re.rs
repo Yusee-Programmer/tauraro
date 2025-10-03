@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use regex::{Regex, RegexBuilder, Captures, Match};
 use lazy_static::lazy_static;
 use std::sync::Mutex;
+// Import HPList
+use crate::modules::hplist::HPList;
 
 // Regex cache for compiled patterns
 lazy_static! {
@@ -247,7 +249,7 @@ fn re_findall(args: Vec<Value>) -> Result<Value> {
         .map(|mat| Value::Str(mat.as_str().to_string()))
         .collect();
     
-    Ok(Value::List(matches))
+    Ok(Value::List(HPList::from_values(matches)))
 }
 
 /// Find all matches as iterator
@@ -284,7 +286,7 @@ fn re_finditer(args: Vec<Value>) -> Result<Value> {
         })
         .collect();
     
-    Ok(Value::List(matches))
+    Ok(Value::List(HPList::from_values(matches)))
 }
 
 /// Substitute occurrences of pattern
@@ -436,7 +438,7 @@ fn re_split(args: Vec<Value>) -> Result<Value> {
             .collect()
     };
     
-    Ok(Value::List(parts))
+    Ok(Value::List(HPList::from_values(parts)))
 }
 
 /// Escape special characters in pattern
@@ -476,12 +478,12 @@ fn pattern_match(_args: Vec<Value>) -> Result<Value> {
 
 fn pattern_findall(_args: Vec<Value>) -> Result<Value> {
     // Placeholder implementation
-    Ok(Value::List(vec![]))
+    Ok(Value::List(HPList::new()))
 }
 
 fn pattern_finditer(_args: Vec<Value>) -> Result<Value> {
     // Placeholder implementation
-    Ok(Value::List(vec![]))
+    Ok(Value::List(HPList::new()))
 }
 
 fn pattern_sub(_args: Vec<Value>) -> Result<Value> {
@@ -496,7 +498,7 @@ fn pattern_subn(_args: Vec<Value>) -> Result<Value> {
 
 fn pattern_split(_args: Vec<Value>) -> Result<Value> {
     // Placeholder implementation
-    Ok(Value::List(vec![]))
+    Ok(Value::List(HPList::new()))
 }
 
 /// Create a match object from a regex Match

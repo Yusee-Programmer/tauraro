@@ -8,6 +8,8 @@ use rand::{Rng, SeedableRng, thread_rng};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use std::sync::Mutex;
+// Import HPList
+use crate::modules::hplist::HPList;
 
 // Global random number generator
 lazy_static::lazy_static! {
@@ -69,9 +71,9 @@ fn value_to_int(value: &Value) -> Result<i64> {
 }
 
 // Helper function to convert Value to list
-fn value_to_list(value: &Value) -> Result<&Vec<Value>> {
+fn value_to_list(value: &Value) -> Result<Vec<Value>> {
     match value {
-        Value::List(list) => Ok(list),
+        Value::List(list) => Ok(list.as_vec().clone()),
         _ => Err(anyhow!("Expected a list")),
     }
 }
@@ -197,7 +199,7 @@ fn random_choices(args: Vec<Value>) -> Result<Value> {
         1
     };
     
-    if let Some(w) = weights {
+    if let Some(ref w) = weights {
         if w.len() != population.len() {
             return Err(anyhow!("weights must have same length as population"));
         }
@@ -207,7 +209,7 @@ fn random_choices(args: Vec<Value>) -> Result<Value> {
     let mut result = Vec::new();
     
     for _ in 0..k {
-        let index = if let Some(weights) = weights {
+        let index = if let Some(ref weights) = weights {
             // Weighted selection (simplified)
             let total_weight: f64 = weights.iter()
                 .map(|w| value_to_float(w).unwrap_or(0.0))
@@ -232,7 +234,7 @@ fn random_choices(args: Vec<Value>) -> Result<Value> {
         result.push(population[index].clone());
     }
     
-    Ok(Value::List(result))
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Shuffle a sequence in place: shuffle(x)
@@ -241,15 +243,13 @@ fn random_shuffle(args: Vec<Value>) -> Result<Value> {
         return Err(anyhow!("shuffle() takes exactly 1 argument"));
     }
     
-    // Note: In a real implementation, this would modify the list in place
-    // For now, we'll return a shuffled copy
     let seq = value_to_list(&args[0])?;
     let mut shuffled = seq.clone();
     
     let mut rng = GLOBAL_RNG.lock().unwrap();
     shuffled.shuffle(&mut *rng);
     
-    Ok(Value::List(shuffled))
+    Ok(Value::List(HPList::from_values(shuffled)))
 }
 
 /// Sample k unique elements: sample(population, k)
@@ -268,7 +268,7 @@ fn random_sample(args: Vec<Value>) -> Result<Value> {
     let mut rng = GLOBAL_RNG.lock().unwrap();
     let sample: Vec<Value> = population.choose_multiple(&mut *rng, k).cloned().collect();
     
-    Ok(Value::List(sample))
+    Ok(Value::List(HPList::from_values(sample)))
 }
 
 /// Gaussian distribution: gauss(mu, sigma)

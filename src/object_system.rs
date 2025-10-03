@@ -1,10 +1,13 @@
 use crate::base_object::{BaseObject as OriginalBaseObject, MRO};
 use crate::value::Value;
 use anyhow::{Result, anyhow};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+// use std::collections::HashSet;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::fmt;
+// Import HPList
+use crate::modules::hplist::HPList;
 
 /// CPython-inspired object model for TauraroLang
 /// Provides reference counting and proper type slots
@@ -38,7 +41,7 @@ pub struct TauraroType {
     /// Base classes
     pub bases: Vec<String>,
     /// Methods defined on this type
-    pub methods: HashMap<String, fn(&[Value]) -> Result<Value>>,
+    pub methods: HashMap<String, fn(&[Value]) -> Result<Value, anyhow::Error>>,
 }
 
 /// Type flags similar to CPython's tp_flags
@@ -68,92 +71,92 @@ pub struct TypeSlots {
     pub buffer: Option<BufferSlots>,
     
     /// Basic object slots
-    pub init: Option<Rc<dyn Fn(&[Value]) -> Result<Value>>>,
-    pub repr: Option<Rc<dyn Fn(&Value) -> Result<String>>>,
-    pub str: Option<Rc<dyn Fn(&Value) -> Result<String>>>,
-    pub hash: Option<Rc<dyn Fn(&Value) -> Result<i64>>>,
-    pub call: Option<Rc<dyn Fn(&Value, &[Value]) -> Result<Value>>>,
-    pub bool_: Option<Rc<dyn Fn(&Value) -> Result<bool>>>,
-    pub len: Option<Rc<dyn Fn(&Value) -> Result<usize>>>,
+    pub init: Option<Rc<dyn Fn(&[Value]) -> Result<Value, anyhow::Error>>>,
+    pub repr: Option<Rc<dyn Fn(&Value) -> Result<String, anyhow::Error>>>,
+    pub str: Option<Rc<dyn Fn(&Value) -> Result<String, anyhow::Error>>>,
+    pub hash: Option<Rc<dyn Fn(&Value) -> Result<i64, anyhow::Error>>>,
+    pub call: Option<Rc<dyn Fn(&Value, &[Value]) -> Result<Value, anyhow::Error>>>,
+    pub bool_: Option<Rc<dyn Fn(&Value) -> Result<bool, anyhow::Error>>>,
+    pub len: Option<Rc<dyn Fn(&Value) -> Result<usize, anyhow::Error>>>,
     
     /// Rich comparison slots
-    pub eq: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub ne: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub lt: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub le: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub gt: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub ge: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub eq: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub ne: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub lt: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub le: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub gt: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub ge: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
     
     /// Attribute access slots
-    pub getattr: Option<Rc<dyn Fn(&Value, &str) -> Result<Value>>>,
-    pub setattr: Option<Rc<dyn Fn(&Value, &str, &Value) -> Result<()>>>,
-    pub delattr: Option<Rc<dyn Fn(&Value, &str) -> Result<()>>>,
+    pub getattr: Option<Rc<dyn Fn(&Value, &str) -> Result<Value, anyhow::Error>>>,
+    pub setattr: Option<Rc<dyn Fn(&Value, &str, &Value) -> Result<(), anyhow::Error>>>,
+    pub delattr: Option<Rc<dyn Fn(&Value, &str) -> Result<(), anyhow::Error>>>,
     
     /// Descriptor protocol slots
-    pub get: Option<Rc<dyn Fn(&Value, &Value, &Value) -> Result<Value>>>,
-    pub set: Option<Rc<dyn Fn(&Value, &Value, &Value) -> Result<()>>>,
-    pub delete: Option<Rc<dyn Fn(&Value, &Value) -> Result<()>>>,
+    pub get: Option<Rc<dyn Fn(&Value, &Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub set: Option<Rc<dyn Fn(&Value, &Value, &Value) -> Result<(), anyhow::Error>>>,
+    pub delete: Option<Rc<dyn Fn(&Value, &Value) -> Result<(), anyhow::Error>>>,
 }
 
 /// Number protocol slots (like PyNumberMethods)
 #[derive(Clone)]
 pub struct NumberSlots {
-    pub add: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub subtract: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub multiply: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub divide: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub remainder: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub power: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub negative: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
-    pub positive: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
-    pub absolute: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
-    pub invert: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
-    pub lshift: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub rshift: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub and: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub xor: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub or: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
+    pub add: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub subtract: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub multiply: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub divide: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub remainder: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub power: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub negative: Option<Rc<dyn Fn(&Value) -> Result<Value, anyhow::Error>>>,
+    pub positive: Option<Rc<dyn Fn(&Value) -> Result<Value, anyhow::Error>>>,
+    pub absolute: Option<Rc<dyn Fn(&Value) -> Result<Value, anyhow::Error>>>,
+    pub invert: Option<Rc<dyn Fn(&Value) -> Result<Value, anyhow::Error>>>,
+    pub lshift: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub rshift: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub and: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub xor: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub or: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
 }
 
 /// Sequence protocol slots (like PySequenceMethods)
 #[derive(Clone)]
 pub struct SequenceSlots {
-    pub length: Option<Rc<dyn Fn(&Value) -> Result<usize>>>,
-    pub item: Option<Rc<dyn Fn(&Value, isize) -> Result<Value>>>,
-    pub set_item: Option<Rc<dyn Fn(&Value, isize, &Value) -> Result<()>>>,
-    pub contains: Option<Rc<dyn Fn(&Value, &Value) -> Result<bool>>>,
-    pub concat: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub repeat: Option<Rc<dyn Fn(&Value, isize) -> Result<Value>>>,
+    pub length: Option<Rc<dyn Fn(&Value) -> Result<usize, anyhow::Error>>>,
+    pub item: Option<Rc<dyn Fn(&Value, isize) -> Result<Value, anyhow::Error>>>,
+    pub set_item: Option<Rc<dyn Fn(&Value, isize, &Value) -> Result<(), anyhow::Error>>>,
+    pub contains: Option<Rc<dyn Fn(&Value, &Value) -> Result<bool, anyhow::Error>>>,
+    pub concat: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub repeat: Option<Rc<dyn Fn(&Value, isize) -> Result<Value, anyhow::Error>>>,
 }
 
 /// Mapping protocol slots (like PyMappingMethods)
 #[derive(Clone)]
 pub struct MappingSlots {
-    pub length: Option<Rc<dyn Fn(&Value) -> Result<usize>>>,
-    pub subscript: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value>>>,
-    pub set_subscript: Option<Rc<dyn Fn(&Value, &Value, &Value) -> Result<()>>>,
+    pub length: Option<Rc<dyn Fn(&Value) -> Result<usize, anyhow::Error>>>,
+    pub subscript: Option<Rc<dyn Fn(&Value, &Value) -> Result<Value, anyhow::Error>>>,
+    pub set_subscript: Option<Rc<dyn Fn(&Value, &Value, &Value) -> Result<(), anyhow::Error>>>,
 }
 
 /// Iterator protocol slots
 #[derive(Clone)]
 pub struct IteratorSlots {
-    pub iter: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
-    pub next: Option<Rc<dyn Fn(&Value) -> Result<Option<Value>>>>,
+    pub iter: Option<Rc<dyn Fn(&Value) -> Result<Value, anyhow::Error>>>,
+    pub next: Option<Rc<dyn Fn(&Value) -> Result<Option<Value>, anyhow::Error>>>,
 }
 
 /// Async protocol slots
 #[derive(Clone)]
 pub struct AsyncSlots {
-    pub await_: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
-    pub aiter: Option<Rc<dyn Fn(&Value) -> Result<Value>>>,
-    pub anext: Option<Rc<dyn Fn(&Value) -> Result<Option<Value>>>>,
+    pub await_: Option<Rc<dyn Fn(&Value) -> Result<Value, anyhow::Error>>>,
+    pub aiter: Option<Rc<dyn Fn(&Value) -> Result<Value, anyhow::Error>>>,
+    pub anext: Option<Rc<dyn Fn(&Value) -> Result<Option<Value>, anyhow::Error>>>,
 }
 
 /// Buffer protocol slots
 #[derive(Clone)]
 pub struct BufferSlots {
-    pub get_buffer: Option<Rc<dyn Fn(&Value) -> Result<Vec<u8>>>>,
-    pub release_buffer: Option<Rc<dyn Fn(&Value) -> Result<()>>>,
+    pub get_buffer: Option<Rc<dyn Fn(&Value) -> Result<Vec<u8>, anyhow::Error>>>,
+    pub release_buffer: Option<Rc<dyn Fn(&Value) -> Result<(), anyhow::Error>>>,
 }
 
 /// CPython-inspired metaclass system for class creation and MRO computation
@@ -290,15 +293,44 @@ impl MROComputer {
         &mut self,
         class_name: &str,
         bases: &[String],
-        _class_registry: &HashMap<String, Vec<String>>,
+        class_registry: &HashMap<String, Vec<String>>,
     ) -> Result<Vec<String>, String> {
-        // Simple implementation for now
-        let mut result = vec![class_name.to_string()];
-        result.extend_from_slice(bases);
-        if !result.contains(&"object".to_string()) {
-            result.push("object".to_string());
+        // Use the proper C3 linearization implementation from base_object
+        let mut class_mros = HashMap::new();
+        
+        // Populate class_mros with existing MROs from registry
+        for (class, base_classes) in class_registry {
+            // For each base class, we need its MRO
+            // For simplicity, we'll assume base classes have been processed already
+            let base_mro = if class == "object" {
+                vec!["object".to_string()]
+            } else {
+                let mut mro = vec![class.clone()];
+                mro.extend_from_slice(base_classes);
+                if !mro.contains(&"object".to_string()) && class != "object" {
+                    mro.push("object".to_string());
+                }
+                mro
+            };
+            class_mros.insert(class.clone(), base_mro);
         }
-        Ok(result)
+        
+        // Add the base classes themselves with their MROs
+        for base in bases {
+            if !class_mros.contains_key(base) {
+                // If base class MRO not found, create appropriate fallback
+                let fallback_mro = if base == "object" {
+                    vec!["object".to_string()]
+                } else {
+                    // For other classes, assume they inherit from object
+                    vec![base.clone(), "object".to_string()]
+                };
+                class_mros.insert(base.clone(), fallback_mro);
+            }
+        }
+        
+        // Compute the proper C3 linearization
+        crate::base_object::MRO::compute_c3_linearization(class_name, bases, &class_mros)
     }
 }
 
@@ -316,13 +348,14 @@ impl TypeCreator {
         namespace: HashMap<String, Value>,
         class_registry: &HashMap<String, Vec<String>>,
     ) -> Result<Value, String> {
+        // Make sure all base classes exist in the registry or are "object"
         let mro = self.mro_computer.compute_optimized_c3_linearization(&name, &bases, class_registry)?;
         
         Ok(Value::Object {
             class_name: name.clone(),
             fields: namespace,
-            base_object: crate::base_object::BaseObject::new(name, bases),
-            mro: MRO::from_linearization(mro),
+            base_object: crate::base_object::BaseObject::new(name.clone(), bases.clone()),
+            mro: crate::base_object::MRO::from_linearization(mro.clone()),
         })
     }
 }
@@ -418,7 +451,71 @@ fn get_int_methods() -> HashMap<String, DunderMethod> {
     let mut methods = HashMap::new();
     methods.insert("__str__".to_string(), int_str as DunderMethod);
     methods.insert("__repr__".to_string(), int_repr as DunderMethod);
+    methods.insert("to_bytes".to_string(), int_to_bytes as DunderMethod);
+    methods.insert("bit_length".to_string(), int_bit_length as DunderMethod);
+    methods.insert("from_bytes".to_string(), int_from_bytes as DunderMethod);
     methods
+}
+
+fn int_from_bytes(_obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if args.len() < 2 {
+        return Err("from_bytes() takes at least 2 arguments".to_string());
+    }
+    
+    let bytes = match &args[0] {
+        Value::Bytes(b) => b.clone(),
+        _ => return Err("first argument must be bytes".to_string()),
+    };
+    
+    let byteorder = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err("byteorder must be a string".to_string()),
+    };
+    
+    // Handle signed parameter (optional)
+    let signed = if args.len() > 2 {
+        match &args[2] {
+            Value::Bool(b) => *b,
+            _ => false,
+        }
+    } else {
+        false
+    };
+    
+    // Convert bytes to integer
+    let result = if byteorder == "big" {
+        if signed && !bytes.is_empty() && bytes[0] & 0x80 != 0 {
+            // Negative signed integer (two's complement)
+            let mut array = [0u8; 8];
+            let start = 8usize.saturating_sub(bytes.len());
+            array[start..].copy_from_slice(&bytes);
+            i64::from_be_bytes(array)
+        } else {
+            // Positive integer
+            let mut array = [0u8; 8];
+            let start = 8usize.saturating_sub(bytes.len());
+            array[start..].copy_from_slice(&bytes);
+            i64::from_be_bytes(array)
+        }
+    } else if byteorder == "little" {
+        if signed && !bytes.is_empty() && bytes.last().unwrap() & 0x80 != 0 {
+            // Negative signed integer (two's complement)
+            let mut array = [0u8; 8];
+            let copy_len = std::cmp::min(bytes.len(), 8);
+            array[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            i64::from_le_bytes(array)
+        } else {
+            // Positive integer
+            let mut array = [0u8; 8];
+            let copy_len = std::cmp::min(bytes.len(), 8);
+            array[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            i64::from_le_bytes(array)
+        }
+    } else {
+        return Err("byteorder must be 'big' or 'little'".to_string());
+    };
+    
+    Ok(Value::Int(result))
 }
 
 fn get_float_methods() -> HashMap<String, DunderMethod> {
@@ -433,11 +530,27 @@ fn get_string_methods() -> HashMap<String, DunderMethod> {
     methods.insert("__str__".to_string(), str_str as DunderMethod);
     methods.insert("__repr__".to_string(), str_repr as DunderMethod);
     methods.insert("__len__".to_string(), str_len as DunderMethod);
+    methods.insert("upper".to_string(), str_upper as DunderMethod);
+    methods.insert("lower".to_string(), str_lower as DunderMethod);
+    methods.insert("strip".to_string(), str_strip as DunderMethod);
+    methods.insert("split".to_string(), str_split as DunderMethod);
+    methods.insert("replace".to_string(), str_replace as DunderMethod);
     methods
 }
 
 fn get_list_methods() -> HashMap<String, DunderMethod> {
-    HashMap::new()
+    let mut methods = HashMap::new();
+    methods.insert("append".to_string(), list_append as DunderMethod);
+    methods.insert("extend".to_string(), list_extend as DunderMethod);
+    methods.insert("pop".to_string(), list_pop as DunderMethod);
+    methods.insert("insert".to_string(), list_insert as DunderMethod);
+    methods.insert("remove".to_string(), list_remove as DunderMethod);
+    methods.insert("index".to_string(), list_index as DunderMethod);
+    methods.insert("count".to_string(), list_count as DunderMethod);
+    methods.insert("sort".to_string(), list_sort as DunderMethod);
+    methods.insert("reverse".to_string(), list_reverse as DunderMethod);
+    methods.insert("__len__".to_string(), list_len as DunderMethod);
+    methods
 }
 
 fn get_dict_methods() -> HashMap<String, DunderMethod> {
@@ -538,6 +651,294 @@ fn str_len(obj: &Value, _args: &[Value]) -> Result<Value, String> {
     }
 }
 
+fn str_upper(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Str(s) = obj {
+        Ok(Value::Str(s.to_uppercase()))
+    } else {
+        Err("Expected string".to_string())
+    }
+}
+
+fn str_lower(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Str(s) = obj {
+        Ok(Value::Str(s.to_lowercase()))
+    } else {
+        Err("Expected string".to_string())
+    }
+}
+
+fn str_strip(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::Str(s) = obj {
+        let chars_to_strip = if args.is_empty() {
+            None
+        } else if let Value::Str(chars) = &args[0] {
+            Some(chars.as_str())
+        } else {
+            return Err("strip() argument must be a string".to_string());
+        };
+        
+        let stripped = if let Some(chars) = chars_to_strip {
+            s.trim_matches(|c| chars.contains(c))
+        } else {
+            s.trim()
+        };
+        
+        Ok(Value::Str(stripped.to_string()))
+    } else {
+        Err("Expected string".to_string())
+    }
+}
+
+fn str_split(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::Str(s) = obj {
+        let separator = if args.is_empty() {
+            " "
+        } else if let Value::Str(sep) = &args[0] {
+            sep.as_str()
+        } else {
+            return Err("split() separator must be a string".to_string());
+        };
+        
+        let maxsplit = if args.len() > 1 {
+            if let Value::Int(n) = &args[1] {
+                *n as usize
+            } else {
+                return Err("split() maxsplit must be an integer".to_string());
+            }
+        } else {
+            usize::MAX
+        };
+        
+        let parts: Vec<Value> = s.split(separator)
+            .take(maxsplit)
+            .map(|part| Value::Str(part.to_string()))
+            .collect();
+        
+        Ok(Value::List(HPList::from_values(parts)))
+    } else {
+        Err("Expected string".to_string())
+    }
+}
+
+fn str_replace(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::Str(s) = obj {
+        if args.len() < 2 {
+            return Err("replace() requires at least 2 arguments".to_string());
+        }
+        
+        let old_str = if let Value::Str(old) = &args[0] {
+            old.as_str()
+        } else {
+            return Err("replace() old string must be a string".to_string());
+        };
+        
+        let new_str = if let Value::Str(new) = &args[1] {
+            new.as_str()
+        } else {
+            return Err("replace() new string must be a string".to_string());
+        };
+        
+        let count = if args.len() > 2 {
+            if let Value::Int(n) = &args[2] {
+                *n as usize
+            } else {
+                return Err("replace() count must be an integer".to_string());
+            }
+        } else {
+            usize::MAX
+        };
+        
+        let replaced = if count == usize::MAX {
+            s.replace(old_str, new_str)
+        } else {
+            let mut result = String::new();
+            let mut remaining = s.as_str();
+            let mut replacements = 0;
+            
+            while replacements < count {
+                if let Some(pos) = remaining.find(old_str) {
+                    result.push_str(&remaining[..pos]);
+                    result.push_str(new_str);
+                    remaining = &remaining[pos + old_str.len()..];
+                    replacements += 1;
+                } else {
+                    break;
+                }
+            }
+            result.push_str(remaining);
+            result
+        };
+        
+        Ok(Value::Str(replaced))
+    } else {
+        Err("Expected string".to_string())
+    }
+}
+
+fn list_append(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::List(list) = obj {
+        if args.is_empty() {
+            return Err("append() requires an argument".to_string());
+        }
+        // For list.append(), we create a new list with the appended item
+        // This is not ideal as it doesn't modify the original list in-place
+        // But it's the best we can do with immutable values
+        let mut new_list = list.clone();
+        new_list.push(args[0].clone());
+        Ok(Value::List(new_list))
+    } else {
+        Err("Expected list".to_string())
+    }
+}
+
+fn list_extend(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::List(list) = obj {
+        if args.is_empty() {
+            return Err("extend() requires an argument".to_string());
+        }
+        let mut new_list = list.clone();
+        if let Value::List(other_list) = &args[0] {
+            new_list.extend(other_list.iter().cloned());
+            Ok(Value::List(new_list))
+        } else {
+            Err("extend() argument must be a list".to_string())
+        }
+    } else {
+        Err("Expected list".to_string())
+    }
+}
+
+fn list_pop(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::List(list) = obj {
+        let mut new_list = list.clone();
+        let index = if args.is_empty() {
+            new_list.len() as isize - 1
+        } else if let Value::Int(i) = &args[0] {
+            *i as isize
+        } else {
+            return Err("pop() index must be an integer".to_string());
+        };
+        
+        if index >= new_list.len() as isize || index < -(new_list.len() as isize) {
+            return Err("pop index out of range".to_string());
+        }
+        
+        let normalized_index = if index < 0 {
+            new_list.len() as isize + index
+        } else {
+            index
+        } as usize;
+        
+        let popped = new_list.pop_at(normalized_index as isize);
+        match popped {
+            Ok(value) => Ok(value),
+            Err(_) => Err("pop index out of range".to_string())
+        }
+    } else {
+        Err("Expected list".to_string())
+    }
+}
+
+fn list_insert(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::List(list) = obj {
+        if args.len() < 2 {
+            return Err("insert() requires 2 arguments".to_string());
+        }
+        
+        let index = if let Value::Int(i) = &args[0] {
+            *i as isize
+        } else {
+            return Err("insert() index must be an integer".to_string());
+        };
+        
+        let mut new_list = list.clone();
+        match new_list.insert(index, args[1].clone()) {
+            Ok(()) => Ok(Value::List(new_list)),
+            Err(_) => Err("insert index out of range".to_string())
+        }
+    } else {
+        Err("Expected list".to_string())
+    }
+}
+
+fn list_remove(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::List(list) = obj {
+        if args.is_empty() {
+            return Err("remove() requires an argument".to_string());
+        }
+        
+        let mut new_list = list.clone();
+        let value_to_remove = &args[0];
+        
+        match new_list.remove(value_to_remove) {
+            Ok(()) => Ok(Value::List(new_list)),
+            Err(_) => Err("value not found in list".to_string())
+        }
+    } else {
+        Err("Expected list".to_string())
+    }
+}
+
+fn list_index(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::List(list) = obj {
+        if args.is_empty() {
+            return Err("index() requires an argument".to_string());
+        }
+        
+        let value_to_find = &args[0];
+        
+        if let Some(pos) = list.iter().position(|x| x == value_to_find) {
+            Ok(Value::Int(pos as i64))
+        } else {
+            Err("value not found in list".to_string())
+        }
+    } else {
+        Err("Expected list".to_string())
+    }
+}
+
+fn list_count(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::List(list) = obj {
+        if args.is_empty() {
+            return Err("count() requires an argument".to_string());
+        }
+        
+        let value_to_count = &args[0];
+        let count = list.iter().filter(|&x| x == value_to_count).count();
+        Ok(Value::Int(count as i64))
+    } else {
+        Err("Expected list".to_string())
+    }
+}
+
+fn list_sort(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::List(list) = obj {
+        let mut new_list = list.clone();
+        new_list.sort();
+        Ok(Value::List(new_list))
+    } else {
+        Err("Expected list".to_string())
+    }
+}
+
+fn list_reverse(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::List(list) = obj {
+        let mut new_list = list.clone();
+        new_list.reverse();
+        Ok(Value::List(new_list))
+    } else {
+        Err("Expected list".to_string())
+    }
+}
+
+fn list_len(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::List(list) = obj {
+        Ok(Value::Int(list.len() as i64))
+    } else {
+        Err("Expected list".to_string())
+    }
+}
+
 fn int_str(obj: &Value, _args: &[Value]) -> Result<Value, String> {
     if let Value::Int(n) = obj {
         Ok(Value::Str(n.to_string()))
@@ -549,6 +950,103 @@ fn int_str(obj: &Value, _args: &[Value]) -> Result<Value, String> {
 fn int_repr(obj: &Value, _args: &[Value]) -> Result<Value, String> {
     if let Value::Int(n) = obj {
         Ok(Value::Str(n.to_string()))
+    } else {
+        Err("Expected int".to_string())
+    }
+}
+
+fn int_to_bytes(obj: &Value, args: &[Value]) -> Result<Value, String> {
+    if let Value::Int(n) = obj {
+        if args.len() < 2 {
+            return Err("to_bytes() takes at least 2 arguments".to_string());
+        }
+        
+        let length = match &args[0] {
+            Value::Int(i) => *i as usize,
+            _ => return Err("length must be an integer".to_string()),
+        };
+        
+        let byteorder = match &args[1] {
+            Value::Str(s) => s.clone(),
+            _ => return Err("byteorder must be a string".to_string()),
+        };
+        
+        // Handle signed parameter (optional)
+        let signed = if args.len() > 2 {
+            match &args[2] {
+                Value::Bool(b) => *b,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        
+        // Convert integer to bytes
+        let bytes = if byteorder == "big" {
+            if signed && *n < 0 {
+                // For negative signed integers, we need to use two's complement
+                let unsigned_val = *n as u64;
+                unsigned_val.to_be_bytes().to_vec()
+            } else if signed {
+                // For positive signed integers
+                let unsigned_val = *n as u64;
+                unsigned_val.to_be_bytes().to_vec()
+            } else {
+                // For unsigned integers
+                let unsigned_val = (*n as u64) & 0xFFFFFFFFFFFFFFFF;
+                unsigned_val.to_be_bytes().to_vec()
+            }
+        } else if byteorder == "little" {
+            if signed && *n < 0 {
+                // For negative signed integers, we need to use two's complement
+                let unsigned_val = *n as u64;
+                unsigned_val.to_le_bytes().to_vec()
+            } else if signed {
+                // For positive signed integers
+                let unsigned_val = *n as u64;
+                unsigned_val.to_le_bytes().to_vec()
+            } else {
+                // For unsigned integers
+                let unsigned_val = (*n as u64) & 0xFFFFFFFFFFFFFFFF;
+                unsigned_val.to_le_bytes().to_vec()
+            }
+        } else {
+            return Err("byteorder must be 'big' or 'little'".to_string());
+        };
+
+        
+        // Truncate or pad to desired length
+        let result_bytes = if bytes.len() > length {
+            // Truncate
+            bytes[bytes.len() - length..].to_vec()
+        } else if bytes.len() < length {
+            // Pad
+            let mut padded = vec![0; length - bytes.len()];
+            if byteorder == "big" {
+                padded.extend(&bytes);
+            } else {
+                padded = bytes;
+                padded.extend(vec![0; length - padded.len()]);
+            }
+            padded
+        } else {
+            bytes
+        };
+        
+        Ok(Value::Bytes(result_bytes))
+    } else {
+        Err("Expected int".to_string())
+    }
+}
+
+fn int_bit_length(obj: &Value, _args: &[Value]) -> Result<Value, String> {
+    if let Value::Int(n) = obj {
+        if *n == 0 {
+            Ok(Value::Int(0))
+        } else {
+            let abs_n = (*n).abs() as u64;
+            Ok(Value::Int(64 - abs_n.leading_zeros() as i64))
+        }
     } else {
         Err("Expected int".to_string())
     }

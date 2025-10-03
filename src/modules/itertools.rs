@@ -1,10 +1,14 @@
-/// Itertools module - provides utilities for creating and working with iterators
-/// Similar to Python's itertools module
+//! itertools - Functional programming tools
+//! Similar to Python's itertools module
 
 use crate::value::Value;
-use crate::modules::functools::call_function;
 use anyhow::Result;
 use std::collections::HashMap;
+
+// Import HPList
+use crate::modules::hplist::HPList;
+// Import call_function from functools
+use crate::modules::functools::call_function;
 
 /// Create the itertools module object with all its functions
 pub fn create_itertools_module() -> Value {
@@ -99,7 +103,7 @@ fn itertools_cycle(args: Vec<Value>) -> Result<Value> {
     let iterable = to_list(&args[0])?;
     
     let mut cycle_obj = HashMap::new();
-    cycle_obj.insert("iterable".to_string(), Value::List(iterable));
+    cycle_obj.insert("iterable".to_string(), Value::List(HPList::from_values(iterable)));
     cycle_obj.insert("index".to_string(), Value::Int(0));
     cycle_obj.insert("__iter__".to_string(), Value::NativeFunction(cycle_iter));
     cycle_obj.insert("__next__".to_string(), Value::NativeFunction(cycle_next));
@@ -177,7 +181,7 @@ fn itertools_accumulate(args: Vec<Value>) -> Result<Value> {
     let iterable = to_list(&args[0])?;
     
     // For now, just return the original list (simplified implementation)
-    Ok(Value::List(iterable))
+    Ok(Value::List(HPList::from_values(iterable)))
 }
 
 /// Chain - make an iterator that returns elements from the first iterable until it is exhausted
@@ -189,7 +193,7 @@ fn itertools_chain(args: Vec<Value>) -> Result<Value> {
         result.extend(items);
     }
     
-    Ok(Value::List(result))
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Compress - make an iterator that filters elements from data returning only those that have a corresponding element in selectors that evaluates to True
@@ -208,7 +212,7 @@ fn itertools_compress(args: Vec<Value>) -> Result<Value> {
         }
     }
     
-    Ok(Value::List(result))
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Dropwhile - make an iterator that drops elements from the iterable as long as the predicate is true
@@ -236,7 +240,7 @@ fn itertools_dropwhile(args: Vec<Value>) -> Result<Value> {
         }
     }
     
-    Ok(Value::List(result))
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Filterfalse - make an iterator that filters elements from iterable returning only those for which the predicate is False
@@ -257,7 +261,7 @@ fn itertools_filterfalse(args: Vec<Value>) -> Result<Value> {
         }
     }
     
-    Ok(Value::List(result))
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Groupby - make an iterator that returns consecutive keys and groups from the iterable
@@ -274,7 +278,7 @@ fn itertools_groupby(args: Vec<Value>) -> Result<Value> {
     };
     
     if iterable.is_empty() {
-        return Ok(Value::List(vec![]));
+        return Ok(Value::List(HPList::new()));
     }
     
     let mut result = Vec::new();
@@ -292,7 +296,7 @@ fn itertools_groupby(args: Vec<Value>) -> Result<Value> {
             if !current_group.is_empty() {
                 result.push(Value::Tuple(vec![
                     current_key.unwrap(),
-                    Value::List(current_group)
+                    Value::List(HPList::from_values(current_group))
                 ]));
             }
             current_key = Some(key);
@@ -306,11 +310,11 @@ fn itertools_groupby(args: Vec<Value>) -> Result<Value> {
     if !current_group.is_empty() {
         result.push(Value::Tuple(vec![
             current_key.unwrap(),
-            Value::List(current_group)
+            Value::List(HPList::from_values(current_group))
         ]));
     }
     
-    Ok(Value::List(result))
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Islice - make an iterator that returns selected elements from the iterable
@@ -368,7 +372,7 @@ fn itertools_islice(args: Vec<Value>) -> Result<Value> {
         i += step;
     }
     
-    Ok(Value::List(result))
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Starmap - make an iterator that computes the function using arguments obtained from the iterable
@@ -384,7 +388,7 @@ fn itertools_starmap(args: Vec<Value>) -> Result<Value> {
     
     for item in iterable {
         let args_list = match item {
-            Value::List(args) => args,
+            Value::List(args) => args.to_vec(),
             Value::Tuple(args) => args,
             _ => return Err(anyhow::anyhow!("starmap() iterable must contain lists or tuples")),
         };
@@ -393,7 +397,7 @@ fn itertools_starmap(args: Vec<Value>) -> Result<Value> {
         result.push(call_result);
     }
     
-    Ok(Value::List(result))
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Takewhile - make an iterator that returns elements from the iterable as long as the predicate is true
@@ -416,7 +420,7 @@ fn itertools_takewhile(args: Vec<Value>) -> Result<Value> {
         }
     }
     
-    Ok(Value::List(result))
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Tee - return n independent iterators from a single iterable
@@ -438,7 +442,7 @@ fn itertools_tee(args: Vec<Value>) -> Result<Value> {
     // Return n copies of the iterable
     let mut result = Vec::new();
     for _ in 0..n {
-        result.push(Value::List(iterable.clone()));
+        result.push(Value::List(HPList::from_values(iterable.clone())));
     }
     
     Ok(Value::Tuple(result))
@@ -460,7 +464,7 @@ fn itertools_zip_longest(args: Vec<Value>) -> Result<Value> {
     }
     
     if iterables.is_empty() {
-        return Ok(Value::List(vec![]));
+        return Ok(Value::List(HPList::new()));
     }
     
     let max_len = iterables.iter().map(|it| it.len()).max().unwrap_or(0);
@@ -478,13 +482,13 @@ fn itertools_zip_longest(args: Vec<Value>) -> Result<Value> {
         result.push(Value::Tuple(tuple_items));
     }
     
-    Ok(Value::List(result))
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Product - cartesian product of input iterables
 fn itertools_product(args: Vec<Value>) -> Result<Value> {
     if args.is_empty() {
-        return Ok(Value::List(vec![]));
+        return Ok(Value::List(HPList::new()));
     }
     
     let mut iterables = Vec::new();
@@ -501,11 +505,11 @@ fn itertools_product(args: Vec<Value>) -> Result<Value> {
                 result.push(Value::Tuple(vec![item1.clone(), item2.clone()]));
             }
         }
-        return Ok(Value::List(result));
+        return Ok(Value::List(HPList::from_values(result)));
     }
     
     // For more complex cases, return empty for now
-    Ok(Value::List(vec![]))
+    Ok(Value::List(HPList::new()))
 }
 
 /// Permutations - return successive r length permutations of elements in the iterable
@@ -525,7 +529,7 @@ fn itertools_permutations(args: Vec<Value>) -> Result<Value> {
     };
     
     // Simplified implementation - just return empty for now
-    Ok(Value::List(vec![]))
+    Ok(Value::List(HPList::new()))
 }
 
 /// Combinations - return r length subsequences of elements from the input iterable
@@ -541,7 +545,7 @@ fn itertools_combinations(args: Vec<Value>) -> Result<Value> {
     };
     
     if r > iterable.len() {
-        return Ok(Value::List(vec![]));
+        return Ok(Value::List(HPList::new()));
     }
     
     // Simple implementation for r=2
@@ -552,11 +556,11 @@ fn itertools_combinations(args: Vec<Value>) -> Result<Value> {
                 result.push(Value::Tuple(vec![iterable[i].clone(), iterable[j].clone()]));
             }
         }
-        return Ok(Value::List(result));
+        return Ok(Value::List(HPList::from_values(result)));
     }
     
     // For other cases, return empty for now
-    Ok(Value::List(vec![]))
+    Ok(Value::List(HPList::new()))
 }
 
 /// Combinations with replacement - return r length subsequences of elements from the input iterable allowing individual elements to be repeated more than once
@@ -572,11 +576,11 @@ fn itertools_combinations_with_replacement(args: Vec<Value>) -> Result<Value> {
     };
     
     if r == 0 {
-        return Ok(Value::List(vec![]));
+        return Ok(Value::List(HPList::new()));
     }
     
     if iterable.is_empty() {
-        return Ok(Value::List(vec![]));
+        return Ok(Value::List(HPList::new()));
     }
     
     // Simple implementation for r=1
@@ -585,7 +589,7 @@ fn itertools_combinations_with_replacement(args: Vec<Value>) -> Result<Value> {
         for item in &iterable {
             result.push(Value::Tuple(vec![item.clone()]));
         }
-        return Ok(Value::List(result));
+        return Ok(Value::List(HPList::from_values(result)));
     }
     
     // Simple implementation for r=2
@@ -596,17 +600,17 @@ fn itertools_combinations_with_replacement(args: Vec<Value>) -> Result<Value> {
                 result.push(Value::Tuple(vec![iterable[i].clone(), iterable[j].clone()]));
             }
         }
-        return Ok(Value::List(result));
+        return Ok(Value::List(HPList::from_values(result)));
     }
     
     // For higher r values, return empty for now
-    Ok(Value::List(vec![]))
+    Ok(Value::List(HPList::new()))
 }
 
 /// Helper function to convert a Value to a list
 fn to_list(value: &Value) -> Result<Vec<Value>> {
     match value {
-        Value::List(items) => Ok(items.clone()),
+        Value::List(items) => Ok(items.as_vec().clone()),
         Value::Tuple(items) => Ok(items.clone()),
         Value::Str(s) => Ok(s.chars().map(|c| Value::Str(c.to_string())).collect()),
         _ => Err(anyhow::anyhow!("Object is not iterable")),

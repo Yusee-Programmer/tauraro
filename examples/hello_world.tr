@@ -1,8 +1,0 @@
-print("Hello, World!")
-fitarda("")
-
-aiki gaisuwa(name):
-    fitar f"Hello {name}"
-
-
-gaisuwa "Sani"

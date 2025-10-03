@@ -7,15 +7,18 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
+// Import HPList
+use crate::modules::hplist::HPList;
+
 /// Dynamic value supporting optional types with inheritance
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Value {
     Int(i64),
     Float(f64),
     Complex { real: f64, imag: f64 },
     Bool(bool),
     Str(String),
-    List(Vec<Value>),
+    List(HPList),  // Changed from Vec<Value> to HPList
     Dict(HashMap<String, Value>),
     Tuple(Vec<Value>),
     Set(Vec<Value>), // Using Vec for simplicity, should be HashSet in production
@@ -43,6 +46,10 @@ pub enum Value {
     NativeFunction(fn(Vec<Value>) -> anyhow::Result<Value>),
     BuiltinFunction(String, fn(Vec<Value>) -> anyhow::Result<Value>),
     Module(String, HashMap<String, Value>), // module name, namespace
+    BoundMethod {
+        object: Box<Value>,
+        method_name: String,
+    },
     #[cfg(feature = "ffi")]
     ExternFunction {
         name: String,
@@ -53,6 +60,79 @@ pub enum Value {
     None,
     // For optional static typing
     TypedValue { value: Box<Value>, type_info: Type },
+}
+
+// Manual implementation of Debug trait for Value enum
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Int(n) => write!(f, "Int({})", n),
+            Value::Float(n) => write!(f, "Float({})", n),
+            Value::Complex { real, imag } => write!(f, "Complex {{ real: {}, imag: {} }}", real, imag),
+            Value::Bool(b) => write!(f, "Bool({})", b),
+            Value::Str(s) => write!(f, "Str(\"{}\")", s),
+            Value::List(items) => write!(f, "List({:?})", items),
+            Value::Dict(dict) => write!(f, "Dict({:?})", dict),
+            Value::Tuple(items) => write!(f, "Tuple({:?})", items),
+            Value::Set(items) => write!(f, "Set({:?})", items),
+            Value::FrozenSet(items) => write!(f, "FrozenSet({:?})", items),
+            Value::Range { start, stop, step } => write!(f, "Range {{ start: {}, stop: {}, step: {} }}", start, stop, step),
+            Value::Bytes(data) => write!(f, "Bytes({:?})", data),
+            Value::ByteArray(data) => write!(f, "ByteArray({:?})", data),
+            Value::MemoryView { data, format, shape } => write!(f, "MemoryView {{ data: {:?}, format: {}, shape: {:?} }}", data, format, shape),
+            Value::Ellipsis => write!(f, "Ellipsis"),
+            Value::NotImplemented => write!(f, "NotImplemented"),
+            Value::Object { class_name, fields, base_object, mro } => {
+                f.debug_struct("Object")
+                    .field("class_name", class_name)
+                    .field("fields", fields)
+                    .field("base_object", base_object)
+                    .field("mro", mro)
+                    .finish()
+            },
+            Value::Super(current_class, parent_class, obj) => {
+                f.debug_tuple("Super")
+                    .field(current_class)
+                    .field(parent_class)
+                    .field(obj)
+                    .finish()
+            },
+            Value::Closure { name, params, body, captured_scope, docstring } => {
+                f.debug_struct("Closure")
+                    .field("name", name)
+                    .field("params", params)
+                    .field("body", body)
+                    .field("captured_scope", captured_scope)
+                    .field("docstring", docstring)
+                    .finish()
+            },
+            Value::NativeFunction(_) => write!(f, "NativeFunction"),
+            Value::BuiltinFunction(name, _) => write!(f, "BuiltinFunction({})", name),
+            Value::Module(name, namespace) => write!(f, "Module({}, {:?})", name, namespace),
+            Value::BoundMethod { object, method_name } => {
+                f.debug_struct("BoundMethod")
+                    .field("object", object)
+                    .field("method_name", method_name)
+                    .finish()
+            },
+            #[cfg(feature = "ffi")]
+            Value::ExternFunction { name, signature, return_type, param_types } => {
+                f.debug_struct("ExternFunction")
+                    .field("name", name)
+                    .field("signature", signature)
+                    .field("return_type", return_type)
+                    .field("param_types", param_types)
+                    .finish()
+            },
+            Value::None => write!(f, "None"),
+            Value::TypedValue { value, type_info } => {
+                f.debug_struct("TypedValue")
+                    .field("value", value)
+                    .field("type_info", type_info)
+                    .finish()
+            },
+        }
+    }
 }
 
 impl Value {
@@ -87,7 +167,7 @@ impl Value {
     }
 
     pub fn new_list(items: Vec<Value>) -> Self {
-        Value::List(items)
+        Value::List(HPList::from_values(items))
     }
 
     pub fn new_bool(value: bool) -> Self {
@@ -310,6 +390,9 @@ impl Value {
              Value::ExternFunction { name, .. } => {
                  format!("<extern function {}>", name)
              }
+             Value::BoundMethod { object, method_name } => {
+                 format!("<bound method '{}' of {}>", method_name, object.debug_string())
+             }
         }
     }
     
@@ -342,6 +425,7 @@ impl Value {
             Value::ExternFunction { .. } => "extern function",
             Value::None => "None",
             Value::TypedValue { value, .. } => value.type_name(),
+            Value::BoundMethod { .. } => "bound method",
         }
     }
     
@@ -411,6 +495,7 @@ impl Value {
             #[cfg(feature = "ffi")]
             Value::ExternFunction { .. } => Type::Simple("function".to_string()),
             Value::Super(_, _, _) => Type::Simple("super".to_string()),
+            Value::BoundMethod { .. } => Type::Simple("bound method".to_string()),
         }
     }
 
@@ -498,20 +583,41 @@ impl Value {
     pub fn to_list(&self) -> anyhow::Result<Value> {
         match self {
             Value::List(items) => Ok(Value::List(items.clone())),
-            Value::Tuple(items) => Ok(Value::List(items.clone())),
-            Value::Set(items) => Ok(Value::List(items.clone())),
+            Value::Tuple(items) => {
+                let mut hplist = HPList::new();
+                for item in items {
+                    hplist.append(item.clone());
+                }
+                Ok(Value::List(hplist))
+            },
+            Value::Set(items) => {
+                let mut hplist = HPList::new();
+                for item in items {
+                    hplist.append(item.clone());
+                }
+                Ok(Value::List(hplist))
+            },
             Value::Str(s) => {
-                let chars: Vec<Value> = s.chars().map(|c| Value::Str(c.to_string())).collect();
-                Ok(Value::List(chars))
-            }
+                let mut hplist = HPList::new();
+                for c in s.chars() {
+                    hplist.append(Value::Str(c.to_string()));
+                }
+                Ok(Value::List(hplist))
+            },
             Value::Bytes(bytes) => {
-                let items: Vec<Value> = bytes.iter().map(|&b| Value::Int(b as i64)).collect();
-                Ok(Value::List(items))
-            }
+                let mut hplist = HPList::new();
+                for &b in bytes {
+                    hplist.append(Value::Int(b as i64));
+                }
+                Ok(Value::List(hplist))
+            },
             Value::ByteArray(bytes) => {
-                let items: Vec<Value> = bytes.iter().map(|&b| Value::Int(b as i64)).collect();
-                Ok(Value::List(items))
-            }
+                let mut hplist = HPList::new();
+                for &b in bytes {
+                    hplist.append(Value::Int(b as i64));
+                }
+                Ok(Value::List(hplist))
+            },
             _ => Err(anyhow::anyhow!("'{}' object is not iterable", self.type_name())),
         }
     }
@@ -520,20 +626,23 @@ impl Value {
     pub fn to_tuple(&self) -> anyhow::Result<Value> {
         match self {
             Value::Tuple(items) => Ok(Value::Tuple(items.clone())),
-            Value::List(items) => Ok(Value::Tuple(items.clone())),
+            Value::List(items) => {
+                let vec_items = items.as_vec().clone();
+                Ok(Value::Tuple(vec_items))
+            },
             Value::Set(items) => Ok(Value::Tuple(items.clone())),
             Value::Str(s) => {
                 let chars: Vec<Value> = s.chars().map(|c| Value::Str(c.to_string())).collect();
                 Ok(Value::Tuple(chars))
-            }
+            },
             Value::Bytes(bytes) => {
                 let items: Vec<Value> = bytes.iter().map(|&b| Value::Int(b as i64)).collect();
                 Ok(Value::Tuple(items))
-            }
+            },
             Value::ByteArray(bytes) => {
                 let items: Vec<Value> = bytes.iter().map(|&b| Value::Int(b as i64)).collect();
                 Ok(Value::Tuple(items))
-            }
+            },
             _ => Err(anyhow::anyhow!("'{}' object is not iterable", self.type_name())),
         }
     }
@@ -545,13 +654,13 @@ impl Value {
             Value::List(items) => {
                 // Remove duplicates (simple implementation)
                 let mut unique_items = Vec::new();
-                for item in items {
+                for item in items.as_vec() {
                     if !unique_items.contains(item) {
                         unique_items.push(item.clone());
                     }
                 }
                 Ok(Value::Set(unique_items))
-            }
+            },
             Value::Tuple(items) => {
                 // Remove duplicates (simple implementation)
                 let mut unique_items = Vec::new();
@@ -561,7 +670,7 @@ impl Value {
                     }
                 }
                 Ok(Value::Set(unique_items))
-            }
+            },
             Value::Str(s) => {
                 let mut unique_chars = Vec::new();
                 for c in s.chars() {
@@ -571,7 +680,7 @@ impl Value {
                     }
                 }
                 Ok(Value::Set(unique_chars))
-            }
+            },
             _ => Err(anyhow::anyhow!("'{}' object is not iterable", self.type_name())),
         }
     }
@@ -613,6 +722,7 @@ impl Value {
             #[cfg(feature = "ffi")]
             Value::ExternFunction { .. } => true,
             Value::TypedValue { value, .. } => value.is_truthy(),
+            Value::BoundMethod { .. } => true,
         }
     }
 }
@@ -719,6 +829,9 @@ impl fmt::Display for Value {
             }
             Value::TypedValue { value, type_info } => {
                 write!(f, "{}: {}", value, type_info)
+            }
+            Value::BoundMethod { object, method_name } => {
+                write!(f, "<bound method '{}' of {}>", method_name, object)
             }
         }
     }
@@ -860,6 +973,16 @@ impl Value {
             #[cfg(feature = "ffi")]
             Value::ExternFunction { name, .. } => Expr::Identifier(name.clone()),
             Value::Super(current_class, _, _) => Expr::Identifier(format!("super_{}", current_class)),
+            Value::BoundMethod { object, method_name } => {
+                Expr::Call {
+                    func: Box::new(Expr::Attribute {
+                        object: Box::new(object.to_expr()),
+                        name: method_name.clone(),
+                    }),
+                    args: vec![],
+                    kwargs: vec![],
+                }
+            }
         }
     }
 }
@@ -1011,6 +1134,11 @@ impl Hash for Value {
                 value.hash(state);
                 // We can't easily hash type_info, so we use its debug representation
                 format!("{:?}", type_info).hash(state);
+            }
+            Value::BoundMethod { object, method_name } => {
+                25u8.hash(state);
+                object.hash(state);
+                method_name.hash(state);
             }
         }
     }

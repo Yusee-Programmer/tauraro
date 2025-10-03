@@ -4,7 +4,7 @@
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
-use std::time;
+
 
 /// Create the functools module object with all its functions and classes
 pub fn create_functools_module() -> Value {
@@ -45,7 +45,7 @@ fn functools_reduce(args: Vec<Value>) -> Result<Value> {
     
     // Convert iterable to vector
     let items = match iterable {
-        Value::List(items) => items.clone(),
+        Value::List(items) => items.as_vec().clone(),
         Value::Tuple(items) => items.clone(),
         Value::Str(s) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
         _ => return Err(anyhow::anyhow!("reduce() argument 2 must be iterable")),

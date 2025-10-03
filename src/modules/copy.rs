@@ -3,6 +3,7 @@
 
 use crate::value::Value;
 use std::collections::HashMap;
+use crate::modules::hplist::HPList;
 
 type Result<T> = anyhow::Result<T>;
 
@@ -122,7 +123,7 @@ fn deepcopy_recursive(obj: &Value, memo: &mut HashMap<String, Value>) -> Result<
             for item in items {
                 new_items.push(deepcopy_recursive(item, memo)?);
             }
-            Ok(Value::List(new_items))
+            Ok(Value::List(HPList::from_values(new_items)))
         },
         Value::Dict(map) => {
             let mut new_map = HashMap::new();
