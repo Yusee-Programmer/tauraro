@@ -23,6 +23,9 @@ mod package_manager;
 mod base_object;
 mod bytecode; // Our new full bytecode implementation
 
+#[cfg(feature = "test-llvm")]
+mod test_llvm;
+
 use crate::value::Value;
 use crate::codegen::{CodeGen, CodegenOptions, Target, CodeGenerator};
 use crate::codegen::interpreter::Interpreter;
@@ -95,6 +98,12 @@ enum Commands {
         #[arg(long)]
         native: bool,
     },
+    
+    /// Debug AST parsing
+    DebugAst {
+        /// Input file
+        file: PathBuf,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -102,6 +111,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let cli = Cli::parse();
 
+    // Add a test command for LLVM backend
+    #[cfg(feature = "test-llvm")]
+    {
+        if let Err(e) = test_llvm::test_simple_llvm_backend() {
+            eprintln!("LLVM test failed: {}", e);
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    
     match cli.command {
         Commands::Repl => {
             // Use the enhanced REPL from interpreter module
@@ -119,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
             } else {
-                if let Err(e) = vm::run_file_with_options(&source, &backend, optimization, strict_types) {
+                if let Err(e) = crate::vm::core::VM::run_file_with_options(&source, &backend, optimization, strict_types) {
                     eprintln!("Traceback (most recent call last):");
                     eprintln!("  File \"{}\", line 1, in <module>", file.display());
                     eprintln!("{}", e);
@@ -150,6 +169,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 native,
             )?;
         }
+        Commands::DebugAst { file } => {
+            debug_ast(&file)?;
+        }
     }
 
     Ok(())
@@ -159,7 +181,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 pub fn run_file_bytecode(source: &str) -> Result<()> {
     use crate::lexer::Lexer;
     use crate::parser::Parser;
-    use crate::bytecode::{SuperCompiler, SuperBytecodeVM}; // Updated to use our new implementation
+    use crate::bytecode::arithmetic::{SuperCompiler, SuperBytecodeVM}; // Updated to use our new implementation
+    
+    // Debug output to see if this function is being called
+    eprintln!("DEBUG: run_file_bytecode called");
     
     // Parse the source code
     let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
@@ -171,7 +196,14 @@ pub fn run_file_bytecode(source: &str) -> Result<()> {
     let mut compiler = SuperCompiler::new("<stdin>".to_string()); // Updated to use our new compiler
     let code = compiler.compile(program)?;
     
+    // Debug output to see the compiled code
+    eprintln!("DEBUG: Main module compiled with {} instructions", code.instructions.len());
+    for (i, instruction) in code.instructions.iter().enumerate() {
+        eprintln!("DEBUG: Instruction {}: {:?}", i, instruction);
+    }
+    
     // Execute bytecode using our new VM
+    eprintln!("DEBUG: Creating VM and executing code");
     let mut vm = SuperBytecodeVM::new(); // Updated to use our new VM
     vm.execute(code)?;
     
@@ -209,6 +241,9 @@ fn compile_file(
         e
     })?;
     
+    // Print AST for debugging
+    println!("AST: {:#?}", ast);
+    
     // Semantic analysis
     let semantic_ast = semantic::Analyzer::new(strict_types).analyze(ast)
         .map_err(|errors| format!("Semantic errors: {:?}", errors))?;
@@ -226,7 +261,28 @@ fn compile_file(
                     .compile(ir_module, &output_path, 0, export)?;
             }
             #[cfg(not(feature = "llvm"))]
-            return Err("LLVM backend not enabled".into());
+            {
+                // Use our simple LLVM backend as a fallback
+                let output_path = output.map_or_else(|| PathBuf::from("a.out.ll"), |p| {
+                    let mut ll_path = p.clone();
+                    if ll_path.extension().is_none() {
+                        ll_path.set_extension("ll");
+                    }
+                    ll_path
+                });
+                
+                use crate::codegen::{CodeGen, CodegenOptions, Target};
+                let codegen = CodeGen::new();
+                let options = CodegenOptions {
+                    target: Target::Native,
+                    export_symbols: export,
+                    ..Default::default()
+                };
+                
+                let llvm_ir = codegen.generate(ir_module, &options)?;
+                std::fs::write(&output_path, llvm_ir)?;
+                println!("Generated LLVM IR to {}", output_path.display());
+            }
         }
         "c" => {
             let output_path = output.map_or_else(|| PathBuf::from("output.c"), |p| {
@@ -312,5 +368,32 @@ fn compile_file(
     }
     
     println!("Compilation successful!");
+    Ok(())
+}
+
+fn debug_ast(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let source = std::fs::read_to_string(file)?;
+    
+    // Lexical analysis
+    let tokens = lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            eprintln!("Error in lexer:");
+            eprintln!("  File \"{}\", line 1", file.display());
+            e
+        })?;
+    
+    // Parsing
+    let mut parser = parser::Parser::new(tokens);
+    let ast = parser.parse().map_err(|e| {
+        // Create a more detailed error message with location information
+        eprintln!("Error in parser:");
+        // For now, we'll just show a generic location since we don't have detailed line info in the error
+        eprintln!("  File \"{}\", line 1", file.display());
+        e
+    })?;
+    
+    // Print AST for debugging
+    println!("AST: {:#?}", ast);
+    
     Ok(())
 }

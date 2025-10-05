@@ -32,6 +32,7 @@ impl CTranspiler {
         writeln!(self.output, "#include <stdbool.h>")?;
         writeln!(self.output, "#include <stdint.h>")?;
         writeln!(self.output, "#include <math.h>")?;
+        writeln!(self.output, "#include <setjmp.h>")?;
         writeln!(self.output)?;
 
         // Generate runtime support functions
@@ -43,6 +44,266 @@ impl CTranspiler {
         writeln!(self.output, "void tauraro_print_int(int64_t val) {{ printf(\"%lld\\n\", val); }}")?;
         writeln!(self.output, "void tauraro_print_float(double val) {{ printf(\"%f\\n\", val); }}")?;
         writeln!(self.output, "void tauraro_print_bool(bool val) {{ printf(\"%s\\n\", val ? \"true\" : \"false\"); }}")?;
+        writeln!(self.output, "void* tauraro_super() {{ return (void*)0x1; /* Special value for super calls */ }}")?;
+        writeln!(self.output, "void* tauraro_super_method_call(const char* method_name, void* self_obj, void** args, int arg_count) {{")?;
+        writeln!(self.output, "    // In a full implementation, this would resolve the method according to the MRO")?;
+        writeln!(self.output, "    // For now, we'll just return NULL to indicate the method wasn't found")?;
+        writeln!(self.output, "    printf(\"Super method call: %s\\n\", method_name);")?;
+        writeln!(self.output, "    return NULL;")?;
+        writeln!(self.output, "}}")?;
+        
+        // Data structure runtime functions
+        writeln!(self.output, "// List support")?;
+        writeln!(self.output, "typedef struct {{")?;
+        writeln!(self.output, "    int size;")?;
+        writeln!(self.output, "    int capacity;")?;
+        writeln!(self.output, "    void** elements;")?;
+        writeln!(self.output, "}} TauraroList;")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void* tauraro_create_list(int size) {{")?;
+        writeln!(self.output, "    TauraroList* list = (TauraroList*)malloc(sizeof(TauraroList));")?;
+        writeln!(self.output, "    list->size = size;")?;
+        writeln!(self.output, "    list->capacity = size > 4 ? size : 4;")?;
+        writeln!(self.output, "    list->elements = (void**)malloc(list->capacity * sizeof(void*));")?;
+        writeln!(self.output, "    return (void*)list;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void tauraro_list_set(void* list_ptr, int index, void* value) {{")?;
+        writeln!(self.output, "    TauraroList* list = (TauraroList*)list_ptr;")?;
+        writeln!(self.output, "    if (index >= 0 && index < list->size) {{")?;
+        writeln!(self.output, "        list->elements[index] = value;")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void* tauraro_list_get(void* list_ptr, int index) {{")?;
+        writeln!(self.output, "    TauraroList* list = (TauraroList*)list_ptr;")?;
+        writeln!(self.output, "    if (index >= 0 && index < list->size) {{")?;
+        writeln!(self.output, "        return list->elements[index];")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    return NULL;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void tauraro_list_append(void* list_ptr, void* value) {{")?;
+        writeln!(self.output, "    TauraroList* list = (TauraroList*)list_ptr;")?;
+        writeln!(self.output, "    if (list->size >= list->capacity) {{")?;
+        writeln!(self.output, "        list->capacity *= 2;")?;
+        writeln!(self.output, "        list->elements = (void**)realloc(list->elements, list->capacity * sizeof(void*));")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    list->elements[list->size] = value;")?;
+        writeln!(self.output, "    list->size++;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        
+        writeln!(self.output, "// Dictionary support")?;
+        writeln!(self.output, "typedef struct {{")?;
+        writeln!(self.output, "    int size;")?;
+        writeln!(self.output, "    int capacity;")?;
+        writeln!(self.output, "    void** keys;")?;
+        writeln!(self.output, "    void** values;")?;
+        writeln!(self.output, "}} TauraroDict;")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void* tauraro_create_dict(int size) {{")?;
+        writeln!(self.output, "    TauraroDict* dict = (TauraroDict*)malloc(sizeof(TauraroDict));")?;
+        writeln!(self.output, "    dict->size = 0;")?;
+        writeln!(self.output, "    dict->capacity = size > 4 ? size : 4;")?;
+        writeln!(self.output, "    dict->keys = (void**)malloc(dict->capacity * sizeof(void*));")?;
+        writeln!(self.output, "    dict->values = (void**)malloc(dict->capacity * sizeof(void*));")?;
+        writeln!(self.output, "    return (void*)dict;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void tauraro_dict_set(void* dict_ptr, void* key, void* value) {{")?;
+        writeln!(self.output, "    TauraroDict* dict = (TauraroDict*)dict_ptr;")?;
+        writeln!(self.output, "    // Simple linear search for key (inefficient but works for now)")?;
+        writeln!(self.output, "    int index = -1;")?;
+        writeln!(self.output, "    for (int i = 0; i < dict->size; i++) {{")?;
+        writeln!(self.output, "        if (dict->keys[i] == key) {{")?;
+        writeln!(self.output, "            index = i;")?;
+        writeln!(self.output, "            break;")?;
+        writeln!(self.output, "        }}")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    if (index == -1) {{")?;
+        writeln!(self.output, "        // Key not found, add new entry")?;
+        writeln!(self.output, "        if (dict->size >= dict->capacity) {{")?;
+        writeln!(self.output, "            dict->capacity *= 2;")?;
+        writeln!(self.output, "            dict->keys = (void**)realloc(dict->keys, dict->capacity * sizeof(void*));")?;
+        writeln!(self.output, "            dict->values = (void**)realloc(dict->values, dict->capacity * sizeof(void*));")?;
+        writeln!(self.output, "        }}")?;
+        writeln!(self.output, "        index = dict->size;")?;
+        writeln!(self.output, "        dict->size++;")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    dict->keys[index] = key;")?;
+        writeln!(self.output, "    dict->values[index] = value;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void* tauraro_dict_get(void* dict_ptr, void* key) {{")?;
+        writeln!(self.output, "    TauraroDict* dict = (TauraroDict*)dict_ptr;")?;
+        writeln!(self.output, "    for (int i = 0; i < dict->size; i++) {{")?;
+        writeln!(self.output, "        if (dict->keys[i] == key) {{")?;
+        writeln!(self.output, "            return dict->values[i];")?;
+        writeln!(self.output, "        }}")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    return NULL;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        
+        writeln!(self.output, "// Tuple support")?;
+        writeln!(self.output, "typedef struct {{")?;
+        writeln!(self.output, "    int size;")?;
+        writeln!(self.output, "    void** elements;")?;
+        writeln!(self.output, "}} TauraroTuple;")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void* tauraro_create_tuple(int size) {{")?;
+        writeln!(self.output, "    TauraroTuple* tuple = (TauraroTuple*)malloc(sizeof(TauraroTuple));")?;
+        writeln!(self.output, "    tuple->size = size;")?;
+        writeln!(self.output, "    tuple->elements = (void**)malloc(size * sizeof(void*));")?;
+        writeln!(self.output, "    return (void*)tuple;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void tauraro_tuple_set(void* tuple_ptr, int index, void* value) {{")?;
+        writeln!(self.output, "    TauraroTuple* tuple = (TauraroTuple*)tuple_ptr;")?;
+        writeln!(self.output, "    if (index >= 0 && index < tuple->size) {{")?;
+        writeln!(self.output, "        tuple->elements[index] = value;")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void* tauraro_tuple_get(void* tuple_ptr, int index) {{")?;
+        writeln!(self.output, "    TauraroTuple* tuple = (TauraroTuple*)tuple_ptr;")?;
+        writeln!(self.output, "    if (index >= 0 && index < tuple->size) {{")?;
+        writeln!(self.output, "        return tuple->elements[index];")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    return NULL;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        
+        writeln!(self.output, "// Set support")?;
+        writeln!(self.output, "typedef struct {{")?;
+        writeln!(self.output, "    int size;")?;
+        writeln!(self.output, "    int capacity;")?;
+        writeln!(self.output, "    void** elements;")?;
+        writeln!(self.output, "}} TauraroSet;")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void* tauraro_create_set(int size) {{")?;
+        writeln!(self.output, "    TauraroSet* set = (TauraroSet*)malloc(sizeof(TauraroSet));")?;
+        writeln!(self.output, "    set->size = 0;")?;
+        writeln!(self.output, "    set->capacity = size > 4 ? size : 4;")?;
+        writeln!(self.output, "    set->elements = (void**)malloc(set->capacity * sizeof(void*));")?;
+        writeln!(self.output, "    return (void*)set;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void tauraro_set_add(void* set_ptr, void* value) {{")?;
+        writeln!(self.output, "    TauraroSet* set = (TauraroSet*)set_ptr;")?;
+        writeln!(self.output, "    // Check if value already exists")?;
+        writeln!(self.output, "    for (int i = 0; i < set->size; i++) {{")?;
+        writeln!(self.output, "        if (set->elements[i] == value) {{")?;
+        writeln!(self.output, "            return; // Already exists")?;
+        writeln!(self.output, "        }}")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    // Add new value")?;
+        writeln!(self.output, "    if (set->size >= set->capacity) {{")?;
+        writeln!(self.output, "        set->capacity *= 2;")?;
+        writeln!(self.output, "        set->elements = (void**)realloc(set->elements, set->capacity * sizeof(void*));")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    set->elements[set->size] = value;")?;
+        writeln!(self.output, "    set->size++;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "int tauraro_set_contains(void* set_ptr, void* value) {{")?;
+        writeln!(self.output, "    TauraroSet* set = (TauraroSet*)set_ptr;")?;
+        writeln!(self.output, "    for (int i = 0; i < set->size; i++) {{")?;
+        writeln!(self.output, "        if (set->elements[i] == value) {{")?;
+        writeln!(self.output, "            return 1;")?;
+        writeln!(self.output, "        }}")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    return 0;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        
+        // Object-oriented programming support
+        writeln!(self.output, "// OOP support")?;
+        writeln!(self.output, "typedef struct {{")?;
+        writeln!(self.output, "    char* class_name;")?;
+        writeln!(self.output, "    TauraroDict* attributes;")?;
+        writeln!(self.output, "    TauraroDict* methods;")?;
+        writeln!(self.output, "}} TauraroObject;")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void* tauraro_create_object(const char* class_name) {{")?;
+        writeln!(self.output, "    TauraroObject* obj = (TauraroObject*)malloc(sizeof(TauraroObject));")?;
+        writeln!(self.output, "    obj->class_name = strdup(class_name);")?;
+        writeln!(self.output, "    obj->attributes = (TauraroDict*)tauraro_create_dict(4);")?;
+        writeln!(self.output, "    obj->methods = (TauraroDict*)tauraro_create_dict(4);")?;
+        writeln!(self.output, "    return (void*)obj;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void tauraro_set_attr(void* obj_ptr, const char* attr, void* value) {{")?;
+        writeln!(self.output, "    TauraroObject* obj = (TauraroObject*)obj_ptr;")?;
+        writeln!(self.output, "    char* attr_key = strdup(attr);")?;
+        writeln!(self.output, "    tauraro_dict_set((void*)obj->attributes, (void*)attr_key, value);")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void* tauraro_get_attr(void* obj_ptr, const char* attr) {{")?;
+        writeln!(self.output, "    TauraroObject* obj = (TauraroObject*)obj_ptr;")?;
+        writeln!(self.output, "    // In a real implementation, we would search the class hierarchy")?;
+        writeln!(self.output, "    // For now, just search in the object's attributes")?;
+        writeln!(self.output, "    for (int i = 0; i < obj->attributes->size; i++) {{")?;
+        writeln!(self.output, "        char* key = (char*)obj->attributes->keys[i];")?;
+        writeln!(self.output, "        if (strcmp(key, attr) == 0) {{")?;
+        writeln!(self.output, "            return obj->attributes->values[i];")?;
+        writeln!(self.output, "        }}")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    return NULL;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void* tauraro_get_item(void* obj_ptr, void* index) {{")?;
+        writeln!(self.output, "    // For now, assume obj is a list or similar")?;
+        writeln!(self.output, "    return tauraro_list_get(obj_ptr, (int)(intptr_t)index);")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void tauraro_set_item(void* obj_ptr, void* index, void* value) {{")?;
+        writeln!(self.output, "    // For now, assume obj is a list or similar")?;
+        writeln!(self.output, "    tauraro_list_set(obj_ptr, (int)(intptr_t)index, value);")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        
+        // Exception handling support
+        writeln!(self.output, "// Exception handling support")?;
+        writeln!(self.output, "jmp_buf tauraro_exception_jmp;")?;
+        writeln!(self.output, "void* tauraro_current_exception = NULL;")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void tauraro_exception_setup() {{")?;
+        writeln!(self.output, "    // Initialize exception handling")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        writeln!(self.output, "void tauraro_raise_exception(void* exception) {{")?;
+        writeln!(self.output, "    tauraro_current_exception = exception;")?;
+        writeln!(self.output, "    longjmp(tauraro_exception_jmp, 1);")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        
+        // String operations
+        writeln!(self.output, "// String operations")?;
+        writeln!(self.output, "char* tauraro_str_concat(const char* s1, const char* s2) {{")?;
+        writeln!(self.output, "    if (s1 == NULL || s2 == NULL) return NULL;")?;
+        writeln!(self.output, "    size_t len1 = strlen(s1);")?;
+        writeln!(self.output, "    size_t len2 = strlen(s2);")?;
+        writeln!(self.output, "    char* result = (char*)malloc(len1 + len2 + 1);")?;
+        writeln!(self.output, "    strcpy(result, s1);")?;
+        writeln!(self.output, "    strcat(result, s2);")?;
+        writeln!(self.output, "    return result;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        
+        writeln!(self.output, "char* tauraro_str_multiply(const char* s, int n) {{")?;
+        writeln!(self.output, "    if (s == NULL || n <= 0) return strdup(\"\");")?;
+        writeln!(self.output, "    size_t len = strlen(s);")?;
+        writeln!(self.output, "    char* result = (char*)malloc(len * n + 1);")?;
+        writeln!(self.output, "    result[0] = '\\0';")?;
+        writeln!(self.output, "    for (int i = 0; i < n; i++) {{")?;
+        writeln!(self.output, "        strcat(result, s);")?;
+        writeln!(self.output, "    }}")?;
+        writeln!(self.output, "    return result;")?;
+        writeln!(self.output, "}}")?;
+        writeln!(self.output, "")?;
+        
         writeln!(self.output)?;
 
         // Collect function declarations first
@@ -149,7 +410,19 @@ impl CTranspiler {
                     let c_type = self.infer_c_type_from_binary_op(left, right);
                     code.push_str(&format!("    {} {};\n", c_type, dest));
                 }
-                code.push_str(&format!("    {} = {} + {};\n", dest, left_str, right_str));
+                
+                // Check if this is string concatenation (string + string)
+                match (left, right) {
+                    (IRValue::String(_) | IRValue::Str(_) | IRValue::ImmediateString(_) | IRValue::ConstantString(_), 
+                     IRValue::String(_) | IRValue::Str(_) | IRValue::ImmediateString(_) | IRValue::ConstantString(_)) => {
+                        // String + string case
+                        code.push_str(&format!("    {} = tauraro_str_concat({}, {});\n", dest, left_str, right_str));
+                    }
+                    _ => {
+                        // Regular addition
+                        code.push_str(&format!("    {} = {} + {};\n", dest, left_str, right_str));
+                    }
+                }
             }
             IRInstruction::Sub { dest, left, right } => {
                 let left_str = self.format_ir_value(left);
@@ -169,7 +442,24 @@ impl CTranspiler {
                     let c_type = self.infer_c_type_from_binary_op(left, right);
                     code.push_str(&format!("    {} {};\n", c_type, dest));
                 }
-                code.push_str(&format!("    {} = {} * {};\n", dest, left_str, right_str));
+                
+                // Check if this is string multiplication (string * int or int * string)
+                match (left, right) {
+                    (IRValue::String(_) | IRValue::Str(_) | IRValue::ImmediateString(_) | IRValue::ConstantString(_), 
+                     IRValue::Int(_) | IRValue::ImmediateInt(_) | IRValue::ConstantInt(_)) => {
+                        // String * int case
+                        code.push_str(&format!("    {} = tauraro_str_multiply({}, {});\n", dest, left_str, right_str));
+                    }
+                    (IRValue::Int(_) | IRValue::ImmediateInt(_) | IRValue::ConstantInt(_),
+                     IRValue::String(_) | IRValue::Str(_) | IRValue::ImmediateString(_) | IRValue::ConstantString(_)) => {
+                        // int * String case
+                        code.push_str(&format!("    {} = tauraro_str_multiply({}, {});\n", dest, right_str, left_str));
+                    }
+                    _ => {
+                        // Regular multiplication
+                        code.push_str(&format!("    {} = {} * {};\n", dest, left_str, right_str));
+                    }
+                }
             }
             IRInstruction::Div { dest, left, right } => {
                 let left_str = self.format_ir_value(left);
@@ -211,19 +501,37 @@ impl CTranspiler {
                 }
                 code.push_str(&format!("    {} = floor({} / {});\n", dest, left_str, right_str));
             }
+            // Function calls
             IRInstruction::Call { dest, func, args } => {
                 let args_str: Vec<String> = args.iter().map(|arg| self.format_ir_value(arg)).collect();
-                if let Some(dest_var) = dest {
-                    // Declare destination variable if it's a temporary
-                    if dest_var.starts_with("tmp_") {
-                        let c_type = self.infer_return_type_from_function(func, module);
-                        
-                        code.push_str(&format!("    {} {} = {}({});\n", c_type, dest_var, func, args_str.join(", ")));
+                let args_list = args_str.join(", ");
+                
+                // Check if this is a super method call
+                if func.starts_with("super_") {
+                    // Handle super method calls
+                    let method_name = &func[6..]; // Remove "super_" prefix
+                    code.push_str(&format!("    // Super method call: {}\n", method_name));
+                    if let Some(dest_var) = dest {
+                        // Declare destination variable if it's a temporary
+                        if dest_var.starts_with("tmp_") {
+                            code.push_str(&format!("    void* {};\n", dest_var));
+                        }
+                        code.push_str(&format!("    {} = tauraro_super_method_call(\"{}\", NULL, NULL, 0);\n", dest_var, method_name));
                     } else {
-                        code.push_str(&format!("    {} = {}({});\n", dest_var, func, args_str.join(", ")));
+                        code.push_str(&format!("    tauraro_super_method_call(\"{}\", NULL, NULL, 0);\n", method_name));
                     }
                 } else {
-                    code.push_str(&format!("    {}({});\n", func, args_str.join(", ")));
+                    // Regular function call
+                    if let Some(dest_var) = dest {
+                        // Declare destination variable if it's a temporary
+                        if dest_var.starts_with("tmp_") {
+                            let return_type = self.infer_return_type_from_function(func, &IRModule::default()); // TODO: Pass actual module
+                            code.push_str(&format!("    {} {};\n", return_type, dest_var));
+                        }
+                        code.push_str(&format!("    {} = {}({});\n", dest_var, func, args_list));
+                    } else {
+                        code.push_str(&format!("    {}({});\n", func, args_list));
+                    }
                 }
             }
             IRInstruction::Ret { value } => {
@@ -359,7 +667,13 @@ impl CTranspiler {
                         code.push_str(&format!("    tauraro_print_bool({});\n", val_str));
                     }
                     _ => {
-                        code.push_str(&format!("    printf(\"%p\\n\", (void*){});\n", val_str));
+                        // For variables and other values, try to infer the type
+                        // If it's a temporary variable, it might be an int
+                        if val_str.starts_with("tmp_") {
+                            code.push_str(&format!("    tauraro_print_int({});\n", val_str));
+                        } else {
+                            code.push_str(&format!("    printf(\"%p\\n\", (void*){});\n", val_str));
+                        }
                     }
                  }
              }
@@ -546,6 +860,122 @@ impl CTranspiler {
             IRInstruction::DocString { text } => {
                 code.push_str(&format!("    /* {} */\n", text));
             }
+            
+            // Data structure instructions
+            IRInstruction::BuildList { dest, elements } => {
+                let elements_str: Vec<String> = elements.iter().map(|e| self.format_ir_value(e)).collect();
+                // Declare destination variable if it's a temporary
+                if dest.starts_with("tmp_") {
+                    code.push_str(&format!("    void* {};\n", dest));
+                }
+                code.push_str(&format!("    {} = tauraro_create_list({});\n", dest, elements.len()));
+                for (i, element_str) in elements_str.iter().enumerate() {
+                    code.push_str(&format!("    tauraro_list_set({}, {}, {});\n", dest, i, element_str));
+                }
+            }
+            IRInstruction::BuildDict { dest, pairs } => {
+                // Declare destination variable if it's a temporary
+                if dest.starts_with("tmp_") {
+                    code.push_str(&format!("    void* {};\n", dest));
+                }
+                code.push_str(&format!("    {} = tauraro_create_dict({});\n", dest, pairs.len()));
+                for (key, value) in pairs {
+                    let key_str = self.format_ir_value(key);
+                    let value_str = self.format_ir_value(value);
+                    code.push_str(&format!("    tauraro_dict_set({}, {}, {});\n", dest, key_str, value_str));
+                }
+            }
+            IRInstruction::BuildTuple { dest, elements } => {
+                let elements_str: Vec<String> = elements.iter().map(|e| self.format_ir_value(e)).collect();
+                // Declare destination variable if it's a temporary
+                if dest.starts_with("tmp_") {
+                    code.push_str(&format!("    void* {};\n", dest));
+                }
+                code.push_str(&format!("    {} = tauraro_create_tuple({});\n", dest, elements.len()));
+                for (i, element_str) in elements_str.iter().enumerate() {
+                    code.push_str(&format!("    tauraro_tuple_set({}, {}, {});\n", dest, i, element_str));
+                }
+            }
+            IRInstruction::BuildSet { dest, elements } => {
+                let elements_str: Vec<String> = elements.iter().map(|e| self.format_ir_value(e)).collect();
+                // Declare destination variable if it's a temporary
+                if dest.starts_with("tmp_") {
+                    code.push_str(&format!("    void* {};\n", dest));
+                }
+                code.push_str(&format!("    {} = tauraro_create_set({});\n", dest, elements.len()));
+                for (i, element_str) in elements_str.iter().enumerate() {
+                    code.push_str(&format!("    tauraro_set_add({}, {});\n", dest, element_str));
+                }
+            }
+            
+            // Object-oriented programming instructions
+            IRInstruction::GetAttr { dest, obj, attr } => {
+                let obj_str = self.format_ir_value(obj);
+                // Declare destination variable if it's a temporary
+                if dest.starts_with("tmp_") {
+                    code.push_str(&format!("    void* {};\n", dest));
+                }
+                // For simple attribute access like self.name, we use the runtime function
+                code.push_str(&format!("    {} = tauraro_get_attr({}, \"{}\");\n", dest, obj_str, attr));
+            }
+            IRInstruction::SetAttr { obj, attr, value } => {
+                let obj_str = self.format_ir_value(obj);
+                let value_str = self.format_ir_value(value);
+                code.push_str(&format!("    tauraro_set_attr({}, \"{}\", {});\n", obj_str, attr, value_str));
+            }
+            IRInstruction::GetItem { dest, obj, index } => {
+                let obj_str = self.format_ir_value(obj);
+                let index_str = self.format_ir_value(index);
+                // Declare destination variable if it's a temporary
+                if dest.starts_with("tmp_") {
+                    code.push_str(&format!("    void* {};\n", dest));
+                }
+                code.push_str(&format!("    {} = tauraro_get_item({}, {});\n", dest, obj_str, index_str));
+            }
+            IRInstruction::SetItem { obj, index, value } => {
+                let obj_str = self.format_ir_value(obj);
+                let index_str = self.format_ir_value(index);
+                let value_str = self.format_ir_value(value);
+                code.push_str(&format!("    tauraro_set_item({}, {}, {});\n", obj_str, index_str, value_str));
+            }
+            
+            // Exception handling instructions
+            IRInstruction::Try { body_label, except_label, finally_label } => {
+                code.push_str("    tauraro_exception_setup();\n");
+                code.push_str(&format!("    if (setjmp(tauraro_exception_jmp) == 0) {{\n"));
+                code.push_str(&format!("        goto {};\n", body_label));
+                code.push_str("    } else {\n");
+                code.push_str(&format!("        goto {};\n", except_label));
+                code.push_str("    }\n");
+                if let Some(finally) = finally_label {
+                    code.push_str(&format!("    goto {};\n", finally));
+                }
+            }
+            IRInstruction::Raise { exception } => {
+                let exception_str = self.format_ir_value(exception);
+                code.push_str(&format!("    tauraro_raise_exception({});\n", exception_str));
+            }
+            
+            // String operations
+            IRInstruction::StrConcat { dest, left, right } => {
+                let left_str = self.format_ir_value(left);
+                let right_str = self.format_ir_value(right);
+                // Declare destination variable if it's a temporary
+                if dest.starts_with("tmp_") {
+                    code.push_str(&format!("    char* {};\n", dest));
+                }
+                code.push_str(&format!("    {} = tauraro_str_concat({}, {});\n", dest, left_str, right_str));
+            }
+            
+            // Super call support
+            IRInstruction::SuperCall { dest } => {
+                // For super calls, we need to generate appropriate C code
+                // In Python, super() returns a proxy object that can be used to call parent methods
+                // For our implementation, we'll create a function that returns a special value
+                // that the method call handler can recognize and resolve appropriately
+                code.push_str(&format!("    {} = tauraro_super();\n", dest));
+            }
+            
             _ => {
                 code.push_str(&format!("    // TODO: Implement {:?}\n", instruction));
             }
@@ -591,7 +1021,13 @@ impl CTranspiler {
                 if *b { "true" } else { "false" }.to_string()
             },
             IRValue::ImmediateString(s) | IRValue::ConstantString(s) | IRValue::Str(s) | IRValue::String(s) => {
-                format!("\"{}\"", s.replace("\"", "\\\""))
+                // Properly escape string literals for C
+                let escaped = s.replace("\\", "\\\\")
+                              .replace("\"", "\\\"")
+                              .replace("\n", "\\n")
+                              .replace("\r", "\\r")
+                              .replace("\t", "\\t");
+                format!("\"{}\"", escaped)
             },
             IRValue::Variable(name) => name.clone(),
             IRValue::Null | IRValue::None => "NULL".to_string(),

@@ -21,7 +21,10 @@ pub mod bytecode; // Export our new bytecode module
 
 // Re-export commonly used items
 pub use value::Value;
-pub use bytecode::{SuperBytecodeVM, SuperCompiler, CodeObject, Instruction, OpCode};
+// Update the re-exports to use the new modular structure
+pub use bytecode::arithmetic::{SuperBytecodeVM, SuperCompiler, CodeObject, Frame, RcValue};
+pub use bytecode::instructions::{Instruction, OpCode};
+
 // pub mod type_hierarchy; // Merged into object_system
 // pub mod metaclass; // Merged into object_system
 
@@ -46,7 +49,14 @@ pub use builtins::*;
 pub use modules::*;
 pub use module_system::*;
 pub use object_system::*;
-pub use bytecode::*;
+// Update the bytecode re-export
+pub use bytecode::arithmetic::*;
+pub use bytecode::instructions::*;
+// Update the VM re-export
+pub use vm::core::VM;
+// pub use vm::frame::ExecutionFrame;
+// pub use vm::stack::StackFrame;
+// pub use vm::memory::Scope;
 // pub use metaclass::*; // Merged into object_system
 #[cfg(feature = "ffi")]
 pub use ffi::*;

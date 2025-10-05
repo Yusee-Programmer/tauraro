@@ -1504,6 +1504,14 @@ impl Parser {
                     value,
                 })
             },
+            Expr::Subscript { object, index } => {
+                // Handle subscript assignment like arr[index] = value
+                Ok(Statement::SubscriptAssignment {
+                    object: *object,
+                    index: *index,
+                    value,
+                })
+            },
             _ => Err(ParseError::InvalidSyntax {
                 message: "Invalid assignment target".to_string(),
             }),
@@ -1576,6 +1584,33 @@ impl Parser {
                 Ok(Statement::AttributeAssignment {
                     object: *object,
                     name: attr_name,
+                    value: combined_value,
+                })
+            },
+            Expr::Subscript { object, index } => {
+                // Handle subscript compound assignment like arr[index] += value
+                let binary_op = match op_token {
+                    Token::PlusEq => BinaryOp::Add,
+                    Token::MinusEq => BinaryOp::Sub,
+                    Token::StarEq => BinaryOp::Mul,
+                    Token::SlashEq => BinaryOp::Div,
+                    Token::PercentEq => BinaryOp::Mod,
+                    Token::PowerEq => BinaryOp::Pow,
+                    Token::FloorDivEq => BinaryOp::FloorDiv,
+                    _ => return Err(ParseError::InvalidSyntax {
+                        message: "Invalid compound assignment operator".to_string(),
+                    }),
+                };
+                
+                let combined_value = Expr::BinaryOp {
+                    left: Box::new(Expr::Subscript { object: object.clone(), index: index.clone() }),
+                    op: binary_op,
+                    right: Box::new(value),
+                };
+                
+                Ok(Statement::SubscriptAssignment {
+                    object: *object,
+                    index: *index,
                     value: combined_value,
                 })
             },

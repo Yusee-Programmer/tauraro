@@ -11,7 +11,7 @@ use std::hash::{Hash, Hasher};
 use crate::modules::hplist::HPList;
 
 /// Dynamic value supporting optional types with inheritance
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub enum Value {
     Int(i64),
     Float(f64),
@@ -24,6 +24,7 @@ pub enum Value {
     Set(Vec<Value>), // Using Vec for simplicity, should be HashSet in production
     FrozenSet(Vec<Value>), // Immutable set
     Range { start: i64, stop: i64, step: i64 }, // Arithmetic sequence
+    RangeIterator { start: i64, stop: i64, step: i64, current: i64 }, // Range iterator
     Bytes(Vec<u8>),
     ByteArray(Vec<u8>),
     MemoryView { data: Vec<u8>, format: String, shape: Vec<usize> }, // Memory buffer view
@@ -42,7 +43,10 @@ pub enum Value {
         body: Vec<Statement>,
         captured_scope: HashMap<String, Value>,
         docstring: Option<String>,
+        // Add a field to store the compiled code directly in the Closure
+        compiled_code: Option<Box<crate::bytecode::arithmetic::CodeObject>>,
     },
+    Code(Box<crate::bytecode::arithmetic::CodeObject>), // Compiled function code
     NativeFunction(fn(Vec<Value>) -> anyhow::Result<Value>),
     BuiltinFunction(String, fn(Vec<Value>) -> anyhow::Result<Value>),
     Module(String, HashMap<String, Value>), // module name, namespace
@@ -62,6 +66,44 @@ pub enum Value {
     TypedValue { value: Box<Value>, type_info: Type },
 }
 
+// Manual implementation of PartialEq trait for Value enum
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Complex { real: real_a, imag: imag_a }, Value::Complex { real: real_b, imag: imag_b }) => real_a == real_b && imag_a == imag_b,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::List(a), Value::List(b)) => a == b,
+            (Value::Dict(a), Value::Dict(b)) => a == b,
+            (Value::Tuple(a), Value::Tuple(b)) => a == b,
+            (Value::Set(a), Value::Set(b)) => a == b,
+            (Value::FrozenSet(a), Value::FrozenSet(b)) => a == b,
+            (Value::Range { start: start_a, stop: stop_a, step: step_a }, Value::Range { start: start_b, stop: stop_b, step: step_b }) => start_a == start_b && stop_a == stop_b && step_a == step_b,
+            (Value::Bytes(a), Value::Bytes(b)) => a == b,
+            (Value::ByteArray(a), Value::ByteArray(b)) => a == b,
+            (Value::MemoryView { data: data_a, format: format_a, shape: shape_a }, Value::MemoryView { data: data_b, format: format_b, shape: shape_b }) => data_a == data_b && format_a == format_b && shape_a == shape_b,
+            (Value::Ellipsis, Value::Ellipsis) => true,
+            (Value::NotImplemented, Value::NotImplemented) => true,
+            (Value::Object { class_name: class_name_a, fields: fields_a, base_object: base_object_a, mro: mro_a }, Value::Object { class_name: class_name_b, fields: fields_b, base_object: base_object_b, mro: mro_b }) => class_name_a == class_name_b && fields_a == fields_b && base_object_a == base_object_b && mro_a == mro_b,
+            (Value::Super(current_class_a, parent_class_a, obj_a), Value::Super(current_class_b, parent_class_b, obj_b)) => current_class_a == current_class_b && parent_class_a == parent_class_b && obj_a == obj_b,
+            // For Closure, we compare name, params, and compiled_code
+            (Value::Closure { name: name_a, params: params_a, compiled_code: code_a, .. }, Value::Closure { name: name_b, params: params_b, compiled_code: code_b, .. }) => name_a == name_b && params_a == params_b && code_a == code_b,
+            (Value::Code(a), Value::Code(b)) => a == b,
+            (Value::NativeFunction(_), Value::NativeFunction(_)) => false, // Function pointers can't be compared
+            (Value::BuiltinFunction(name_a, _), Value::BuiltinFunction(name_b, _)) => name_a == name_b,
+            (Value::Module(name_a, namespace_a), Value::Module(name_b, namespace_b)) => name_a == name_b && namespace_a == namespace_b,
+            (Value::BoundMethod { object: object_a, method_name: method_name_a }, Value::BoundMethod { object: object_b, method_name: method_name_b }) => object_a == object_b && method_name_a == method_name_b,
+            #[cfg(feature = "ffi")]
+            (Value::ExternFunction { name: name_a, signature: signature_a, return_type: return_type_a, param_types: param_types_a }, Value::ExternFunction { name: name_b, signature: signature_b, return_type: return_type_b, param_types: param_types_b }) => name_a == name_b && signature_a == signature_b && return_type_a == return_type_b && param_types_a == param_types_b,
+            (Value::None, Value::None) => true,
+            (Value::TypedValue { value: value_a, type_info: type_info_a }, Value::TypedValue { value: value_b, type_info: type_info_b }) => value_a == value_b && type_info_a == type_info_b,
+            _ => false, // Different variants are not equal
+        }
+    }
+}
+
 // Manual implementation of Debug trait for Value enum
 impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -77,6 +119,7 @@ impl fmt::Debug for Value {
             Value::Set(items) => write!(f, "Set({:?})", items),
             Value::FrozenSet(items) => write!(f, "FrozenSet({:?})", items),
             Value::Range { start, stop, step } => write!(f, "Range {{ start: {}, stop: {}, step: {} }}", start, stop, step),
+            Value::RangeIterator { start, stop, step, current } => write!(f, "RangeIterator {{ start: {}, stop: {}, step: {}, current: {} }}", start, stop, step, current),
             Value::Bytes(data) => write!(f, "Bytes({:?})", data),
             Value::ByteArray(data) => write!(f, "ByteArray({:?})", data),
             Value::MemoryView { data, format, shape } => write!(f, "MemoryView {{ data: {:?}, format: {}, shape: {:?} }}", data, format, shape),
@@ -97,15 +140,17 @@ impl fmt::Debug for Value {
                     .field(obj)
                     .finish()
             },
-            Value::Closure { name, params, body, captured_scope, docstring } => {
+            Value::Closure { name, params, body, captured_scope, docstring, compiled_code } => {
                 f.debug_struct("Closure")
                     .field("name", name)
                     .field("params", params)
                     .field("body", body)
                     .field("captured_scope", captured_scope)
                     .field("docstring", docstring)
+                    .field("compiled_code", &compiled_code.as_ref().map(|code| format!("Some({} instructions)", code.instructions.len())))
                     .finish()
             },
+            Value::Code(code_obj) => write!(f, "Code({})", code_obj.name),
             Value::NativeFunction(_) => write!(f, "NativeFunction"),
             Value::BuiltinFunction(name, _) => write!(f, "BuiltinFunction({})", name),
             Value::Module(name, namespace) => write!(f, "Module({}, {:?})", name, namespace),
@@ -331,6 +376,9 @@ impl Value {
                     format!("range({}, {}, {})", start, stop, step)
                 }
             }
+            Value::RangeIterator { start, stop, step, current } => {
+                format!("range_iterator({}, {}, {}, {})", start, stop, step, current)
+            }
             Value::MemoryView { data, format, shape } => {
                 format!("<memory at 0x{:x}, format: {}, shape: {:?}>", data.as_ptr() as usize, format, shape)
             }
@@ -361,9 +409,13 @@ impl Value {
             Value::Closure { name, params, .. } => {
                 format!("<function {}({})>", name, params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", "))
             }
+            Value::Code(code_obj) => {
+                format!("<code object {}>", code_obj.name)
+            }
             Value::BuiltinFunction(name, _) => {
                 format!("<built-in function {}>", name)
             }
+
             Value::NativeFunction(_) => "<native function>".to_string(),
             Value::Object { class_name, fields, .. } => {
                  format!("<{} object with {} fields>", class_name, fields.len())
@@ -412,6 +464,7 @@ impl Value {
             Value::Set(_) => "set",
             Value::FrozenSet(_) => "frozenset",
             Value::Range { .. } => "range",
+            Value::RangeIterator { .. } => "range_iterator",
             Value::Bytes(_) => "bytes",
             Value::ByteArray(_) => "bytearray",
             Value::MemoryView { .. } => "memoryview",
@@ -426,6 +479,7 @@ impl Value {
             Value::None => "None",
             Value::TypedValue { value, .. } => value.type_name(),
             Value::BoundMethod { .. } => "bound method",
+            Value::Code(_) => "code",
         }
     }
     
@@ -482,6 +536,7 @@ impl Value {
             Value::Set(_) => Type::Simple("set".to_string()),
             Value::FrozenSet(_) => Type::Simple("frozenset".to_string()),
             Value::Range { .. } => Type::Simple("range".to_string()),
+            Value::RangeIterator { .. } => Type::Simple("range_iterator".to_string()),
             Value::Bytes(_) => Type::Simple("bytes".to_string()),
             Value::ByteArray(_) => Type::Simple("bytearray".to_string()),
             Value::MemoryView { .. } => Type::Simple("memoryview".to_string()),
@@ -496,6 +551,7 @@ impl Value {
             Value::ExternFunction { .. } => Type::Simple("function".to_string()),
             Value::Super(_, _, _) => Type::Simple("super".to_string()),
             Value::BoundMethod { .. } => Type::Simple("bound method".to_string()),
+            Value::Code(_) => Type::Simple("code".to_string()),
         }
     }
 
@@ -709,6 +765,15 @@ impl Value {
                     false // step == 0 should not happen, but considered empty
                 }
             },
+            Value::RangeIterator { start, stop, step, current } => {
+                if *step > 0 {
+                    current < stop
+                } else if *step < 0 {
+                    current > stop
+                } else {
+                    false // step == 0 should not happen, but considered empty
+                }
+            },
             Value::Bytes(bytes) => !bytes.is_empty(),
             Value::ByteArray(bytes) => !bytes.is_empty(),
             Value::MemoryView { data, .. } => !data.is_empty(),
@@ -723,6 +788,7 @@ impl Value {
             Value::ExternFunction { .. } => true,
             Value::TypedValue { value, .. } => value.is_truthy(),
             Value::BoundMethod { .. } => true,
+            Value::Code(_) => true,
         }
     }
 }
@@ -739,6 +805,7 @@ impl PartialOrd for Value {
             (Value::Complex { .. }, _) | (_, Value::Complex { .. }) => None, // Complex numbers can't be ordered
             (Value::Ellipsis, Value::Ellipsis) => Some(std::cmp::Ordering::Equal),
             (Value::NotImplemented, Value::NotImplemented) => Some(std::cmp::Ordering::Equal),
+            (Value::RangeIterator { .. }, _) | (_, Value::RangeIterator { .. }) => None, // RangeIterator can't be ordered
             _ => None,
         }
     }
@@ -791,6 +858,9 @@ impl fmt::Display for Value {
                     write!(f, "range({}, {}, {})", start, stop, step)
                 }
             }
+            Value::RangeIterator { start, stop, step, current } => {
+                write!(f, "range_iterator({}, {}, {}, {})", start, stop, step, current)
+            }
             Value::Bytes(bytes) => {
                 write!(f, "b'{}'", String::from_utf8_lossy(bytes))
             }
@@ -832,6 +902,9 @@ impl fmt::Display for Value {
             }
             Value::BoundMethod { object, method_name } => {
                 write!(f, "<bound method '{}' of {}>", method_name, object)
+            }
+            Value::Code(code_obj) => {
+                write!(f, "<code object {}>", code_obj.name)
             }
         }
     }
@@ -962,6 +1035,18 @@ impl Value {
                     kwargs: vec![],
                 }
             }
+            Value::RangeIterator { start, stop, step, current } => {
+                Expr::Call {
+                    func: Box::new(Expr::Identifier("range_iterator".to_string())),
+                    args: vec![
+                        Expr::Literal(Literal::Int(*start)),
+                        Expr::Literal(Literal::Int(*stop)),
+                        Expr::Literal(Literal::Int(*step)),
+                        Expr::Literal(Literal::Int(*current)),
+                    ],
+                    kwargs: vec![],
+                }
+            }
             Value::MemoryView { data, format, shape, .. } => {
                 Expr::Call {
                     func: Box::new(Expr::Identifier("memoryview".to_string())),
@@ -983,6 +1068,7 @@ impl Value {
                     kwargs: vec![],
                 }
             }
+            Value::Code(_) => Expr::Identifier("code".to_string()),
         }
     }
 }
@@ -1077,11 +1163,20 @@ impl Hash for Value {
                 current_class.hash(state);
                 parent_class.hash(state);
             }
-            Value::Closure { name, params, .. } => {
+            Value::Closure { name, params, compiled_code, .. } => {
                 11u8.hash(state);
                 name.hash(state);
                 // We can't easily hash params, so we use their count
                 params.len().hash(state);
+                // Also hash whether we have compiled_code and its name if it exists
+                match compiled_code {
+                    Some(code) => {
+                        true.hash(state);
+                        code.name.hash(state);
+                        code.instructions.len().hash(state);
+                    }
+                    None => false.hash(state),
+                }
             }
             Value::NativeFunction(_) => {
                 12u8.hash(state);
@@ -1105,6 +1200,10 @@ impl Hash for Value {
                 name.hash(state);
                 signature.hash(state);
             }
+            Value::Code(code_obj) => {
+                26u8.hash(state);
+                code_obj.name.hash(state);
+            }
             Value::None => {
                 16u8.hash(state);
             }
@@ -1122,6 +1221,13 @@ impl Hash for Value {
                 start.hash(state);
                 stop.hash(state);
                 step.hash(state);
+            }
+            Value::RangeIterator { start, stop, step, current } => {
+                27u8.hash(state);
+                start.hash(state);
+                stop.hash(state);
+                step.hash(state);
+                current.hash(state);
             }
             Value::MemoryView { data, format, shape } => {
                 24u8.hash(state);

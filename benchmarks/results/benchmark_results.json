@@ -1,29 +1,17 @@
 {
-  "timestamp": "2025-10-03 22:08:54",
+  "timestamp": "2025-10-05 01:22:58",
   "benchmarks": {
-    "arithmetic": {
-      "tauraro": null,
-      "python": 0.06193375587463379
-    },
-    "string": {
-      "tauraro": null,
-      "python": 0.05651068687438965
-    },
-    "loop": {
-      "tauraro": null,
-      "python": 0.047361135482788086
+    "sorting": {
+      "tauraro": 0.13980412483215332,
+      "python": 15.321300983428955
     },
     "function": {
-      "tauraro": null,
-      "python": 0.060016632080078125
+      "tauraro": 1.2217745780944824,
+      "python": 1.3795843124389648
     },
-    "sorting": {
-      "tauraro": null,
-      "python": 11.303352117538452
-    },
-    "math": {
-      "tauraro": null,
-      "python": 0.1955738067626953
+    "loop": {
+      "tauraro": 33.16636419296265,
+      "python": 0.0541384220123291
     }
   }
 }
