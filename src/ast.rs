@@ -103,6 +103,11 @@ pub enum Statement {
         name: String,
         value: Expr,
     },
+    SubscriptAssignment {
+        object: Expr,
+        index: Expr,
+        value: Expr,
+    },
     TypeAlias {
         name: String,
         type_def: Type,

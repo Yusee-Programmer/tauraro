@@ -17,6 +17,7 @@ pub mod jit;
 pub mod wasm;
 pub mod c_abi;
 pub mod c_transpiler;
+pub mod simple_llvm; // Add our new simple LLVM backend
 
 use crate::ir::IRModule;
 use anyhow::Result;
@@ -155,6 +156,11 @@ impl CodeGen {
         #[cfg(feature = "jit")]
         {
             generators.insert(Target::JIT, Box::new(jit::JITCodeGenerator::new()));
+        }
+        
+        // Add our simple LLVM backend as a fallback when full LLVM is not available
+        if !generators.contains_key(&Target::Native) {
+            generators.insert(Target::Native, Box::new(simple_llvm::SimpleLLVMCodeGenerator::new()));
         }
         
         // Add C transpiler as a fallback for native code generation

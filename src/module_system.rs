@@ -440,13 +440,24 @@ impl ModuleSystem {
         // First pass: register all functions and classes
         for statement in &program.statements {
             if let Statement::FunctionDef { name, params, return_type: _, body, is_async: _, decorators: _, docstring } = statement {
+                // Compile the function to get the bytecode
+                let func_code = crate::bytecode::arithmetic::SuperCompiler::compile_function(name.clone(), params, body)?;
+                
                 let func_value = Value::Closure {
                     name: name.clone(),
                     params: params.clone(),
-                    body: body.clone(),
+                    body: vec![], // Body is encoded in the bytecode, not stored as AST
                     captured_scope: HashMap::new(),
                     docstring: docstring.clone(),
+                    compiled_code: Some(Box::new(func_code)), // Store the compiled code directly in the Closure
                 };
+                // Debug output to see if compiled_code is set
+                if let Value::Closure { ref name, ref params, ref body, captured_scope: _, docstring: _, ref compiled_code } = func_value {
+                    eprintln!("DEBUG: Module system created Closure '{}' with compiled_code: {}", name, compiled_code.is_some());
+                    if let Some(ref code) = compiled_code {
+                        eprintln!("DEBUG: Module system created Closure '{}' has {} instructions", name, code.instructions.len());
+                    }
+                }
                 vm.set_variable(name, func_value)?;
             } else if let Statement::ClassDef { name, bases: _, body, decorators: _, metaclass: _, docstring: _ } = statement {
                 // Create class object with methods
@@ -455,12 +466,16 @@ impl ModuleSystem {
                 // Process class body to extract methods
                 for stmt in body {
                     if let Statement::FunctionDef { name: method_name, params, return_type: _, body: method_body, is_async: _, decorators: _, docstring } = stmt {
+                        // Compile the method to get the bytecode
+                        let method_code = crate::bytecode::arithmetic::SuperCompiler::compile_function(method_name.clone(), params, method_body)?;
+                        
                         let method_value = Value::Closure {
                             name: method_name.clone(),
                             params: params.clone(),
-                            body: method_body.clone(),
+                            body: vec![], // Body is encoded in the bytecode, not stored as AST
                             captured_scope: HashMap::new(),
                             docstring: docstring.clone(),
+                            compiled_code: Some(Box::new(method_code)), // Store the compiled code directly in the Closure
                         };
                         class_methods.insert(method_name.clone(), method_value);
                     }

@@ -219,6 +219,69 @@ impl Analyzer {
                 is_async: false,
                 decorators: Vec::new(),
             }),
+            ("str", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
+            ("repr", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
+            ("isinstance", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
+            ("hasattr", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
+            ("len", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
+            ("getattr", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
+            ("setattr", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
+            ("delattr", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
+            ("super", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
         ];
 
         for (name, type_info) in builtins {
@@ -768,6 +831,26 @@ impl Analyzer {
                     kwargs: analyzed_kwargs,
                 })
             }
+            Expr::MethodCall { object, method, args, kwargs } => {
+                // Analyze the object expression
+                let analyzed_object = self.analyze_expression(*object)?;
+                
+                // Analyze the arguments
+                let analyzed_args = args.into_iter()
+                    .map(|arg| self.analyze_expression(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                    
+                let analyzed_kwargs = kwargs.into_iter()
+                    .map(|(k, v)| Ok((k, self.analyze_expression(v)?)))
+                    .collect::<Result<Vec<_>, _>>()?;
+                
+                Ok(Expr::MethodCall {
+                    object: Box::new(analyzed_object),
+                    method,
+                    args: analyzed_args,
+                    kwargs: analyzed_kwargs,
+                })
+            }
             Expr::Await(expr) => {
                 if !self.symbol_table.is_in_async_context() {
                     return Err(SemanticError::AsyncError {
@@ -826,6 +909,24 @@ impl Analyzer {
             (Type::Simple(l), BinaryOp::Add, Type::Simple(r)) if l == "str" && r == "str" => {
                 Type::Simple("str".to_string())
             }
+            (Type::Simple(l), BinaryOp::Mul, Type::Simple(r)) if l == "str" && r == "int" => {
+                Type::Simple("str".to_string())
+            }
+            (Type::Simple(l), BinaryOp::Mul, Type::Simple(r)) if l == "int" && r == "str" => {
+                Type::Simple("str".to_string())
+            }
+            (Type::Simple(l), BinaryOp::FloorDiv, Type::Simple(r)) if l == "int" && r == "int" => {
+                Type::Simple("int".to_string())
+            }
+            (Type::Simple(l), BinaryOp::FloorDiv, Type::Simple(r)) if l == "float" || r == "float" => {
+                Type::Simple("float".to_string())
+            }
+            (Type::Simple(l), BinaryOp::Pow, Type::Simple(r)) if l == "int" && r == "int" => {
+                Type::Simple("int".to_string())
+            }
+            (Type::Simple(l), BinaryOp::Pow, Type::Simple(r)) if l == "float" || r == "float" => {
+                Type::Simple("float".to_string())
+            }
             _ => Type::Simple("any".to_string()),
         }
     }
@@ -871,7 +972,17 @@ impl Analyzer {
                         l == "any" || r == "any"  // Allow any type for dynamic typing
                 )
             }
-            BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+            BinaryOp::Mul => {
+                matches!((left, right), 
+                    (Type::Simple(l), Type::Simple(r)) if 
+                        (l == "int" && r == "int") ||
+                        (l == "float" || r == "float") ||
+                        (l == "str" && r == "int") ||  // String multiplication: str * int
+                        (l == "int" && r == "str") ||  // String multiplication: int * str
+                        l == "any" || r == "any"  // Allow any type for dynamic typing
+                )
+            }
+            BinaryOp::Sub | BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Pow => {
                 matches!((left, right), 
                     (Type::Simple(l), Type::Simple(r)) if 
                         (l == "int" && r == "int") ||
