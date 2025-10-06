@@ -3,19 +3,7 @@ use std::collections::HashMap;
 use crate::modules::hplist::HPList;
 
 #[cfg(feature = "http")]
-#[cfg(feature = "http")]
-#[cfg(feature = "http")]
-#[cfg(feature = "http")]
-#[cfg(feature = "http")]
-#[cfg(feature = "http")]
-#[cfg(feature = "http")]
-#[cfg(feature = "http")]
-#[cfg(feature = "http")]
-#[cfg(feature = "http")]
-#[cfg(feature = "http")]
 use tungstenite::{WebSocket, Message, Error as WsError};
-#[cfg(feature = "http")]
-use std::net::TcpStream;
 
 /// Create the websockets module
 // Wrapper functions to match NativeFunction and BuiltinFunction signatures

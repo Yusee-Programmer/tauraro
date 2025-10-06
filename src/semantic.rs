@@ -247,6 +247,13 @@ impl Analyzer {
                 is_async: false,
                 decorators: Vec::new(),
             }),
+            ("dir", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
             ("len", TypeInfo {
                 name: "function".to_string(),
                 fields: HashMap::new(),
@@ -276,6 +283,13 @@ impl Analyzer {
                 decorators: Vec::new(),
             }),
             ("super", TypeInfo {
+                name: "function".to_string(),
+                fields: HashMap::new(),
+                methods: HashMap::new(),
+                is_async: false,
+                decorators: Vec::new(),
+            }),
+            ("dir", TypeInfo {
                 name: "function".to_string(),
                 fields: HashMap::new(),
                 methods: HashMap::new(),
@@ -675,6 +689,34 @@ impl Analyzer {
                 }
                 let analyzed_expr = self.analyze_expression(expr)?;
                 Ok(Statement::Expression(Expr::Await(Box::new(analyzed_expr))))
+            }
+            Statement::Import { module, alias } => {
+                // Add the imported module to the symbol table
+                let module_name = alias.clone().unwrap_or_else(|| module.clone());
+                let module_type = TypeInfo {
+                    name: "module".to_string(),
+                    fields: HashMap::new(),
+                    methods: HashMap::new(),
+                    is_async: false,
+                    decorators: Vec::new(),
+                };
+                self.symbol_table.define(module_name, module_type)?;
+                Ok(Statement::Import { module, alias })
+            }
+            Statement::FromImport { module, names } => {
+                // Add the imported names to the symbol table
+                for (name, alias) in &names {
+                    let var_name = alias.clone().unwrap_or_else(|| name.clone());
+                    let var_type = TypeInfo {
+                        name: "any".to_string(),
+                        fields: HashMap::new(),
+                        methods: HashMap::new(),
+                        is_async: false,
+                        decorators: Vec::new(),
+                    };
+                    self.symbol_table.define(var_name, var_type)?;
+                }
+                Ok(Statement::FromImport { module, names })
             }
             // Handle other statements...
             _ => Ok(stmt), // For now, pass through other statements

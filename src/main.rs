@@ -214,7 +214,7 @@ fn compile_file(
     file: &PathBuf,
     output: Option<&PathBuf>,
     backend: &str,
-    _target: &str,
+    target: &str,
     _optimization: u8,
     export: bool,
     generate_header: bool,
@@ -241,15 +241,22 @@ fn compile_file(
         e
     })?;
     
-    // Print AST for debugging
-    println!("AST: {:#?}", ast);
-    
     // Semantic analysis
     let semantic_ast = semantic::Analyzer::new(strict_types).analyze(ast)
         .map_err(|errors| format!("Semantic errors: {:?}", errors))?;
     
     // Generate IR
     let ir_module = ir::Generator::new().generate(semantic_ast)?;
+    
+    // Check if IR module has imports
+    let has_imports = ir_module.functions.iter().any(|(_, function)| {
+        function.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(instruction, crate::ir::IRInstruction::Import { .. } | 
+                                  crate::ir::IRInstruction::ImportFrom { .. })
+            })
+        })
+    });
     
     // Code generation based on backend
     match backend {
@@ -285,28 +292,35 @@ fn compile_file(
             }
         }
         "c" => {
-            let output_path = output.map_or_else(|| PathBuf::from("output.c"), |p| {
-                if p.extension().is_none() || p.extension() != Some(std::ffi::OsStr::new("c")) {
-                    let mut c_path = p.clone();
-                    c_path.set_extension("c");
-                    c_path
-                } else {
-                    p.clone()
-                }
-            });
-            codegen::c_abi::CCodeGen::new()
-                .compile(ir_module.clone(), &output_path, export, generate_header)?;
+            // Determine output path based on whether there are imports and if destination is specified
+            let output_path = if let Some(output_file) = output {
+                // Use specified output path
+                output_file.clone()
+            } else if has_imports {
+                // If there are imports, create build directory automatically and compile there
+                let build_dir = PathBuf::from("build");
+                std::fs::create_dir_all(&build_dir)?;
+                build_dir.join(format!("{}.c", file.file_stem().and_then(|s| s.to_str()).unwrap_or("main")))
+            } else {
+                // If no imports and no destination specified, compile in current directory
+                PathBuf::from(format!("{}.c", file.file_stem().and_then(|s| s.to_str()).unwrap_or("output")))
+            };
             
+            // Use import-aware compilation if requested
             if native {
-                use codegen::native::{NativeCompiler, OutputType};
+                use codegen::native::{NativeCompiler, OutputType, TargetPlatform};
                 use codegen::{CodegenOptions, Target};
+                use codegen::imports::ImportCompiler;
                 
-                let compiler = NativeCompiler::new();
-                let output_type = if export {
-                    OutputType::SharedLibrary
+                // Determine build directory based on whether there are imports
+                let build_dir = if has_imports {
+                    PathBuf::from("build")
                 } else {
-                    OutputType::Executable
+                    // For files without imports, we don't need a build directory
+                    std::env::current_dir()?
                 };
+                
+                let mut import_compiler = ImportCompiler::new(build_dir.clone());
                 
                 let options = CodegenOptions {
                     target: Target::C,
@@ -317,41 +331,50 @@ fn compile_file(
                     ..Default::default()
                 };
                 
-                let mut generator = codegen::c_abi::CCodeGenerator::new();
-                if generate_header {
-                    generator = generator.with_header(true);
+                // Compile main module and all imports
+                let compiled_files = import_compiler.compile_with_imports(&file, &options)?;
+                
+                // Determine output type based on target and export flag
+                let output_type = if !target.is_empty() && target != "native" {
+                    // If target is specified, use it to determine output type
+                    OutputType::from_target_string(target)
+                } else if export {
+                    // If export flag is set, create shared library
+                    OutputType::SharedLibrary
+                } else {
+                    // Default to executable when --native is used without --target
+                    OutputType::Executable
+                };
+                
+                // Compile to native
+                let main_module_name = file.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("main")
+                    .to_string();
+                    
+                let executable_path = import_compiler.compile_to_native_with_options(
+                    &compiled_files, 
+                    &main_module_name, 
+                    &options,
+                    output_type,
+                    target,
+                )?;
+                
+                if has_imports {
+                    println!("Generated C files in {:?}", PathBuf::from("build"));
                 }
-                let c_code = generator.generate(ir_module.clone(), &options)?;
-                std::fs::write(&output_path, c_code)?;
-                
-                let native_output = if let Some(orig_output) = output {
-                    let stem = orig_output.file_stem()
-                        .unwrap_or_else(|| std::ffi::OsStr::new("output"))
-                        .to_string_lossy();
+                println!("Compiled to native target: {}", executable_path.display());
+            } else {
+                // Original single-file compilation
+                codegen::c_abi::CCodeGen::new()
+                    .compile(ir_module.clone(), &output_path, export, generate_header)?;
                     
-                    let platform = codegen::native::TargetPlatform::detect();
-                    let extension = match output_type {
-                        OutputType::Executable => platform.executable_extension(),
-                        OutputType::SharedLibrary => platform.library_extension(),
-                        _ => "",
-                    };
-                    
-                    if extension.is_empty() {
-                        PathBuf::from(stem.as_ref())
-                    } else {
-                        PathBuf::from(format!("{}.{}", stem, extension))
-                    }
+                // Print appropriate message based on whether build directory was created
+                if has_imports {
+                    println!("Generated C file in {:?}", PathBuf::from("build"));
                 } else {
-                    PathBuf::new()
-                };
-                
-                let final_output = if native_output == PathBuf::new() {
-                    None
-                } else {
-                    Some(native_output.as_path())
-                };
-                
-                compiler.compile_c_to_native(&output_path, final_output, output_type, export)?;
+                    println!("Generated C file: {}", output_path.display());
+                }
             }
         }
         "wasm" => {
