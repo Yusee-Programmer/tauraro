@@ -1,6 +1,5 @@
 //! Core bytecode instruction set (opcodes, enums)
 
-use crate::value::Value;
 use std::fmt::Debug;
 
 /// Register-based bytecode instruction opcodes with specialized fast paths

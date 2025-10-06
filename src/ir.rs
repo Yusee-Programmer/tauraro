@@ -1,5 +1,5 @@
 use crate::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -8,6 +8,7 @@ pub struct IRModule {
     pub functions: HashMap<String, IRFunction>,
     pub globals: Vec<IRGlobal>,
     pub types: HashMap<String, IRType>,
+    pub imported_modules: HashSet<String>,
 }
 
 impl Default for IRModule {
@@ -17,6 +18,7 @@ impl Default for IRModule {
             functions: HashMap::new(),
             globals: Vec::new(),
             types: HashMap::new(),
+            imported_modules: HashSet::new(),
         }
     }
 }
@@ -468,6 +470,7 @@ impl Generator {
             functions: HashMap::new(),
             globals: Vec::new(),
             types: HashMap::new(),
+            imported_modules: std::collections::HashSet::new(),
         };
 
         // Add basic types
@@ -482,10 +485,28 @@ impl Generator {
         // Collect all top-level statements for main function
         let mut main_statements = Vec::new();
         
+        // First pass: collect import statements
+        for stmt in &program.statements {
+            if let Statement::Import { module: import_module, alias } = stmt {
+                let module_name = alias.as_ref().unwrap_or(import_module);
+                module.imported_modules.insert(module_name.clone());
+            }
+        }
+        
+        // Second pass: process all statements
         for stmt in program.statements {
             match stmt {
-                Statement::FunctionDef { .. } | Statement::ClassDef { .. } => {
-                    // Handle function and class definitions separately
+                Statement::FunctionDef { name, params, return_type, body, is_async, decorators, docstring } => {
+                    if name == "main" {
+                        // For main function, add its body statements to main_statements
+                        main_statements.extend(body);
+                    } else {
+                        // Handle other function definitions separately
+                        self.generate_statement(Statement::FunctionDef { name, params, return_type, body, is_async, decorators, docstring }, &mut module)?;
+                    }
+                }
+                Statement::ClassDef { .. } => {
+                    // Handle class definitions separately
                     self.generate_statement(stmt, &mut module)?;
                 }
                 _ => {
@@ -744,6 +765,18 @@ impl Generator {
                 // In a full implementation, we would merge methods from all base classes
                 // according to the MRO, but for now we'll just note the inheritance relationship
             }
+            Statement::Import { module: import_module, alias } => {
+                // Add import instruction to module
+                // For now, we'll just add a placeholder - in a full implementation we would
+                // need to actually load and process the imported module
+                println!("Importing module: {} with alias: {:?}", import_module, alias);
+            }
+            Statement::FromImport { module: import_module, names } => {
+                // Add from import instruction to module
+                // For now, we'll just add a placeholder - in a full implementation we would
+                // need to actually load and process the imported module
+                println!("Importing from module: {} names: {:?}", import_module, names);
+            }
             _ => {
                 // TODO: Implement other statement types
             }
@@ -969,6 +1002,25 @@ impl Generator {
                     IRValue::Null
                 };
                 current_block.instructions.push(IRInstruction::Ret { value: Some(return_value) });
+            }
+            Statement::Import { module: import_module, alias } => {
+                // Add import instruction to current block
+                current_block.instructions.push(IRInstruction::Import {
+                    module: import_module.clone(),
+                    alias: alias.clone(),
+                });
+            }
+            Statement::FromImport { module: import_module, names } => {
+                // Convert names to a simpler format for the IR instruction
+                let simple_names: Vec<String> = names.iter()
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                
+                // Add from import instruction to current block
+                current_block.instructions.push(IRInstruction::ImportFrom {
+                    module: import_module.clone(),
+                    names: simple_names,
+                });
             }
             _ => {
                 // TODO: Implement other statement types
@@ -1293,17 +1345,23 @@ impl Generator {
                     // Try to determine the class name from the object type
                     let method_name = match &object_val {
                         IRValue::Variable(var_name) => {
-                            // If the object is a variable, we might be able to infer its type
-                            // For now, we'll use a simple heuristic - if the variable name matches a class name,
-                            // we'll use that as the prefix
+                            // Check if this is an imported module
+                            // If the variable name matches an imported module, we should generate
+                            // a call to "module_function" instead of "variable_method"
                             if module.types.contains_key(var_name) {
                                 format!("{}_{}", var_name, method)
                             } else {
-                                // Check if this is an instantiation of a class (e.g., rect1 = Rectangle(...))
-                                // In that case, we need to track the type of rect1
-                                // For now, we'll try to infer from the variable name
-                                // If the variable was assigned from a class constructor, use that class name
-                                format!("{}_{}", var_name, method)
+                                // Check if this is a call on an imported module
+                                // Look for the variable name in the imported_modules set
+                                let is_imported_module = module.imported_modules.contains(var_name);
+                                
+                                if is_imported_module {
+                                    // This is a call on an imported module, generate "module_function" call
+                                    format!("{}_{}", var_name, method)
+                                } else {
+                                    // Regular method call on an object
+                                    format!("{}_{}", var_name, method)
+                                }
                             }
                         }
                         _ => method.clone()
@@ -1433,8 +1491,13 @@ impl Generator {
                 });
                 Ok(IRValue::Variable(temp_var))
             }
+
+            _ => {
+                // TODO: Implement other expression types
+                Err("Unsupported expression type".to_string())
+            }
         }
-    }  // Added missing closing brace for generate_expression function
+    }
 
     fn literal_to_ir_value(&self, lit: Literal) -> Result<IRValue, String> {
         match lit {
@@ -1459,8 +1522,17 @@ impl Generator {
                 if let Some(ir_type) = module.types.get(name) {
                     Ok(ir_type.clone())
                 } else {
-                    // For unknown types, default to int64
-                    Ok(IRType::Int64)
+                    // Handle common string type names
+                    match name.as_str() {
+                        "str" | "string" => Ok(IRType::Pointer(Box::new(IRType::Int8))),
+                        "int" => Ok(IRType::Int64),
+                        "float" => Ok(IRType::Float64),
+                        "bool" => Ok(IRType::Bool),
+                        _ => {
+                            // For unknown types, default to int64
+                            Ok(IRType::Int64)
+                        }
+                    }
                 }
             }
             Type::Generic { name, args } => {

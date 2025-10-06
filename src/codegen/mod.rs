@@ -18,6 +18,7 @@ pub mod wasm;
 pub mod c_abi;
 pub mod c_transpiler;
 pub mod simple_llvm; // Add our new simple LLVM backend
+pub mod imports; // Import handling for C backend
 
 use crate::ir::IRModule;
 use anyhow::Result;

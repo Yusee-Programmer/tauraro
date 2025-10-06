@@ -3,9 +3,6 @@ use std::collections::HashMap;
 use crate::modules::hplist::HPList;
 
 #[cfg(feature = "http")]
-use reqwest::{Client, Method, Response as ReqwestResponse};
-#[cfg(feature = "http")]
-use std::time::Duration;
 
 // Wrapper functions to match NativeFunction and BuiltinFunction signatures
 fn httpx_get_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {

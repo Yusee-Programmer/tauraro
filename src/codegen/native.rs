@@ -7,6 +7,7 @@ pub enum TargetPlatform {
     Windows,
     Linux,
     MacOS,
+    Android,
 }
 
 #[derive(Debug, Clone)]
@@ -14,6 +15,18 @@ pub enum OutputType {
     Executable,
     SharedLibrary,
     StaticLibrary,
+    ObjectFile, // .o file
+}
+
+impl OutputType {
+    pub fn from_target_string(target: &str) -> Self {
+        match target {
+            "so" | "dll" | "dylib" => OutputType::SharedLibrary,
+            "a" | "lib" => OutputType::StaticLibrary,
+            "o" | "obj" => OutputType::ObjectFile,
+            _ => OutputType::Executable, // Default to executable
+        }
+    }
 }
 
 impl PartialEq for TargetPlatform {
@@ -46,6 +59,7 @@ impl TargetPlatform {
             TargetPlatform::Windows => "dll",
             TargetPlatform::Linux => "so",
             TargetPlatform::MacOS => "dylib",
+            TargetPlatform::Android => "so",
         }
     }
 
@@ -53,6 +67,13 @@ impl TargetPlatform {
         match self {
             TargetPlatform::Windows => "exe",
             _ => "",
+        }
+    }
+
+    pub fn object_extension(&self) -> &'static str {
+        match self {
+            TargetPlatform::Windows => "obj",
+            _ => "o",
         }
     }
 }
@@ -68,21 +89,29 @@ impl NativeCompiler {
         }
     }
 
-    pub fn compile_c_to_native(
+    pub fn compile_multiple_c_to_native(
         &self,
-        c_file: &Path,
+        c_files: &[&Path],
         output_path: Option<&Path>,
         output_type: OutputType,
         export: bool,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        if c_files.is_empty() {
+            return Err("No C files provided for compilation".into());
+        }
+        
         let compiler = self.detect_c_compiler()?;
         
-        let final_output_path = self.determine_output_path(c_file, output_path, &output_type)?;
+        // Use the first file to determine the output path if not specified
+        let first_file = c_files[0];
+        let final_output_path = self.determine_output_path(first_file, output_path, &output_type)?;
         
         let mut cmd = Command::new(&compiler);
         
-        // Add input file
-        cmd.arg(c_file);
+        // Add all input files
+        for c_file in c_files {
+            cmd.arg(c_file);
+        }
         
         match compiler.as_str() {
             "cl" => {
@@ -99,6 +128,10 @@ impl NativeCompiler {
                     },
                     OutputType::StaticLibrary => {
                         return Err("Static library compilation not yet implemented".into());
+                    }
+                    OutputType::ObjectFile => {
+                        cmd.arg(format!("/Fo:{}", final_output_path.display()));
+                        cmd.arg("/c"); // Compile only, don't link
                     }
                 }
             },
@@ -122,6 +155,9 @@ impl NativeCompiler {
                     OutputType::StaticLibrary => {
                         return Err("Static library compilation not yet implemented".into());
                     }
+                    OutputType::ObjectFile => {
+                        cmd.arg("-c"); // Compile only, don't link
+                    }
                 }
                 
                 // Platform-specific linking for gcc/clang
@@ -136,6 +172,10 @@ impl NativeCompiler {
                     TargetPlatform::MacOS => {
                         cmd.args(&["-lm", "-lpthread"]);
                     },
+                    TargetPlatform::Android => {
+                        // Android-specific linking
+                        cmd.arg("-lm");
+                    },
                 }
             },
             _ => {
@@ -143,7 +183,7 @@ impl NativeCompiler {
             }
         }
         
-        println!("Compiling C code to native binary: {:?}", cmd);
+        println!("Compiling multiple C files to native binary: {:?}", cmd);
         
         let output = cmd.output()?;
         
@@ -156,6 +196,16 @@ impl NativeCompiler {
         Ok(final_output_path)
     }
 
+    pub fn compile_c_to_native(
+        &self,
+        c_file: &Path,
+        output_path: Option<&Path>,
+        output_type: OutputType,
+        export: bool,
+    ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        self.compile_multiple_c_to_native(&[c_file], output_path, output_type, export)
+    }
+
     fn detect_c_compiler(&self) -> Result<String, Box<dyn std::error::Error>> {
         let compilers = match self.platform {
             TargetPlatform::Windows => {
@@ -166,7 +216,9 @@ impl NativeCompiler {
                     vec!["gcc", "clang", "cl"]
                 }
             },
-            _ => vec!["clang", "gcc", "cc"],
+            TargetPlatform::Android | TargetPlatform::Linux | TargetPlatform::MacOS => {
+                vec!["clang", "gcc", "cc"]
+            },
         };
         
         for compiler in compilers {
@@ -181,6 +233,7 @@ impl NativeCompiler {
             TargetPlatform::Windows => "Please install MinGW-w64, MSVC Build Tools, or Clang. You can install MinGW-w64 via MSYS2 or install Visual Studio Build Tools.",
             TargetPlatform::Linux => "Please install gcc or clang using your package manager (e.g., apt install gcc, yum install gcc, or pacman -S gcc)",
             TargetPlatform::MacOS => "Please install Xcode Command Line Tools by running 'xcode-select --install'",
+            TargetPlatform::Android => "Please install Android NDK with Clang compiler",
         };
         
         Err(format!("No C compiler found. {}", install_msg).into())
@@ -204,6 +257,7 @@ impl NativeCompiler {
             OutputType::Executable => self.platform.executable_extension(),
             OutputType::SharedLibrary => self.platform.library_extension(),
             OutputType::StaticLibrary => "a", // Static library extension
+            OutputType::ObjectFile => self.platform.object_extension(), // Add this case
         };
         
         let filename = if extension.is_empty() {

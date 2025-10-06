@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::cell::RefCell;
+// Add module cache
+use crate::module_cache::ModuleCache;
 
 // Thread-local storage for additional module system paths
 thread_local! {
@@ -23,6 +25,8 @@ pub struct ModuleSystem {
     importing: HashSet<String>,
     /// Package cache (package_path -> package_info)
     packages: HashMap<String, PackageInfo>,
+    /// Module cache for built-in modules
+    module_cache: ModuleCache,
 }
 
 /// Information about a package
@@ -100,12 +104,26 @@ impl ModuleSystem {
             }
         });
         
+        // Initialize module cache
+        let module_cache = ModuleCache::new().unwrap_or_default();
+        
         Self {
             loaded_modules: HashMap::new(),
             search_paths,
             importing: HashSet::new(),
             packages: HashMap::new(),
+            module_cache,
         }
+    }
+    
+    /// Get reference to module cache
+    pub fn module_cache(&self) -> &ModuleCache {
+        &self.module_cache
+    }
+    
+    /// Get mutable reference to module cache
+    pub fn module_cache_mut(&mut self) -> &mut ModuleCache {
+        &mut self.module_cache
     }
     
     /// Add a search path for modules
@@ -254,7 +272,7 @@ impl ModuleSystem {
     }
     
     /// Resolve module name to file path
-    fn resolve_module_path(&self, module_name: &str) -> Result<PathBuf> {
+    pub fn resolve_module_path(&self, module_name: &str) -> Result<PathBuf> {
         let parts: Vec<&str> = module_name.split('.').collect();
         
         // Create a combined search path list including thread-local paths
