@@ -206,97 +206,240 @@ impl BuiltinModuleCompiler {
         Ok(())
     }
 
+    /// Get the list of module functions and their signatures
+    fn get_module_function_signatures(&self, module_name: &str) -> Vec<(&str, &str, Vec<&str>)> {
+        // Returns (function_name, return_type, param_types)
+        match module_name {
+            "math" => vec![
+                ("tauraro_math_sin", "double", vec!["double"]),
+                ("tauraro_math_cos", "double", vec!["double"]),
+                ("tauraro_math_tan", "double", vec!["double"]),
+                ("tauraro_math_sqrt", "double", vec!["double"]),
+                ("tauraro_math_asin", "double", vec!["double"]),
+                ("tauraro_math_acos", "double", vec!["double"]),
+                ("tauraro_math_atan", "double", vec!["double"]),
+                ("tauraro_math_atan2", "double", vec!["double", "double"]),
+                ("tauraro_math_sinh", "double", vec!["double"]),
+                ("tauraro_math_cosh", "double", vec!["double"]),
+                ("tauraro_math_tanh", "double", vec!["double"]),
+                ("tauraro_math_pow", "double", vec!["double", "double"]),
+                ("tauraro_math_exp", "double", vec!["double"]),
+                ("tauraro_math_log", "double", vec!["double"]),
+                ("tauraro_math_log2", "double", vec!["double"]),
+                ("tauraro_math_log10", "double", vec!["double"]),
+                ("tauraro_math_ceil", "double", vec!["double"]),
+                ("tauraro_math_floor", "double", vec!["double"]),
+                ("tauraro_math_fabs", "double", vec!["double"]),
+                ("tauraro_math_fmod", "double", vec!["double", "double"]),
+            ],
+            "time" => vec![
+                ("tauraro_time_time", "double", vec![]),
+                ("tauraro_time_sleep", "void", vec!["double"]),
+                ("tauraro_time_perf_counter", "double", vec![]),
+            ],
+            "random" => vec![
+                ("tauraro_random_random", "double", vec![]),
+                ("tauraro_random_uniform", "double", vec!["double", "double"]),
+                ("tauraro_random_randint", "int64_t", vec!["int64_t", "int64_t"]),
+            ],
+            "os" => vec![
+                ("tauraro_os_getenv", "const char*", vec!["const char*"]),
+                ("tauraro_os_system", "int", vec!["const char*"]),
+            ],
+            "sys" => vec![
+                ("tauraro_sys_exit", "void", vec!["int"]),
+            ],
+            "io" => vec![
+                ("tauraro_io_open", "void*", vec!["const char*", "const char*"]),
+                ("tauraro_io_read", "char*", vec!["void*"]),
+                ("tauraro_io_write", "void", vec!["void*", "const char*"]),
+                ("tauraro_io_close", "void", vec!["void*"]),
+            ],
+            "json" => vec![
+                ("tauraro_json_dumps", "char*", vec!["void*"]),
+                ("tauraro_json_loads", "void*", vec!["const char*"]),
+            ],
+            _ => vec![],
+        }
+    }
+
     /// Generate C code for a built-in module that exports functions and constants
     fn generate_builtin_module_c_code(&self, module_name: &str) -> Result<String> {
         let mut c_code = String::new();
-        
+
         // Standard includes
         c_code.push_str("#include <stdio.h>\n");
         c_code.push_str("#include <stdlib.h>\n");
         c_code.push_str("#include <stdint.h>\n");
         c_code.push_str("#include <stdbool.h>\n");
         c_code.push_str("#include <math.h>\n");
-        c_code.push_str("#include <string.h>\n\n");
-        
+        c_code.push_str("#include <string.h>\n");
+        c_code.push_str("#include <time.h>\n\n");
+
+        // Platform detection for exports
+        c_code.push_str("// Platform-specific export macros\n");
+        c_code.push_str("#ifdef _WIN32\n");
+        c_code.push_str("    #ifdef BUILD_DLL\n");
+        c_code.push_str("        #define EXPORT __declspec(dllexport)\n");
+        c_code.push_str("    #else\n");
+        c_code.push_str("        #define EXPORT __declspec(dllimport)\n");
+        c_code.push_str("    #endif\n");
+        c_code.push_str("#else\n");
+        c_code.push_str("    #define EXPORT __attribute__((visibility(\"default\")))\n");
+        c_code.push_str("#endif\n\n");
+
         // Module-specific code
         match module_name {
             "math" => {
-                // Math module constants
-                c_code.push_str("// Math module constants\n");
-                c_code.push_str("double TAURARO_MATH_PI = 3.141592653589793;\n");
-                c_code.push_str("double TAURARO_MATH_E = 2.718281828459045;\n");
-                c_code.push_str("double TAURARO_MATH_TAU = 6.283185307179586;\n\n");
-                
-                // Math module functions
-                c_code.push_str("// Math module functions\n");
-                c_code.push_str("double tauraro_math_sin(double x) { return sin(x); }\n");
-                c_code.push_str("double tauraro_math_cos(double x) { return cos(x); }\n");
-                c_code.push_str("double tauraro_math_sqrt(double x) { return sqrt(x); }\n");
-                c_code.push_str("double tauraro_math_tan(double x) { return tan(x); }\n");
-                c_code.push_str("double tauraro_math_asin(double x) { return asin(x); }\n");
-                c_code.push_str("double tauraro_math_acos(double x) { return acos(x); }\n");
-                c_code.push_str("double tauraro_math_atan(double x) { return atan(x); }\n");
-                c_code.push_str("double tauraro_math_atan2(double y, double x) { return atan2(y, x); }\n");
-                c_code.push_str("double tauraro_math_sinh(double x) { return sinh(x); }\n");
-                c_code.push_str("double tauraro_math_cosh(double x) { return cosh(x); }\n");
-                c_code.push_str("double tauraro_math_tanh(double x) { return tanh(x); }\n");
-                c_code.push_str("double tauraro_math_pow(double x, double y) { return pow(x, y); }\n");
-                c_code.push_str("double tauraro_math_exp(double x) { return exp(x); }\n");
-                c_code.push_str("double tauraro_math_log(double x) { return log(x); }\n");
-                c_code.push_str("double tauraro_math_log2(double x) { return log2(x); }\n");
-                c_code.push_str("double tauraro_math_log10(double x) { return log10(x); }\n");
-                c_code.push_str("double tauraro_math_ceil(double x) { return ceil(x); }\n");
-                c_code.push_str("double tauraro_math_floor(double x) { return floor(x); }\n");
-                c_code.push_str("double tauraro_math_fabs(double x) { return fabs(x); }\n");
-                c_code.push_str("double tauraro_math_fmod(double x, double y) { return fmod(x, y); }\n");
+                // Math module constants - exported for C linkage
+                c_code.push_str("// Math module constants (exported for C linkage)\n");
+                c_code.push_str("EXPORT const double TAURARO_MATH_PI = 3.141592653589793;\n");
+                c_code.push_str("EXPORT const double TAURARO_MATH_E = 2.718281828459045;\n");
+                c_code.push_str("EXPORT const double TAURARO_MATH_TAU = 6.283185307179586;\n\n");
+
+                // Math module functions - exported for C linkage
+                c_code.push_str("// Math module functions (exported for C linkage)\n");
+                c_code.push_str("EXPORT double tauraro_math_sin(double x) { return sin(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_cos(double x) { return cos(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_sqrt(double x) { return sqrt(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_tan(double x) { return tan(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_asin(double x) { return asin(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_acos(double x) { return acos(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_atan(double x) { return atan(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_atan2(double y, double x) { return atan2(y, x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_sinh(double x) { return sinh(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_cosh(double x) { return cosh(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_tanh(double x) { return tanh(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_pow(double x, double y) { return pow(x, y); }\n");
+                c_code.push_str("EXPORT double tauraro_math_exp(double x) { return exp(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_log(double x) { return log(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_log2(double x) { return log2(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_log10(double x) { return log10(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_ceil(double x) { return ceil(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_floor(double x) { return floor(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_fabs(double x) { return fabs(x); }\n");
+                c_code.push_str("EXPORT double tauraro_math_fmod(double x, double y) { return fmod(x, y); }\n");
             },
             "os" => {
-                // OS module constants and functions
-                c_code.push_str("// OS module constants\n");
+                // OS module constants and functions - exported for C linkage
+                c_code.push_str("// OS module constants (exported for C linkage)\n");
                 c_code.push_str("#ifdef _WIN32\n");
-                c_code.push_str("const char* TAURARO_OS_NAME = \"Windows\";\n");
+                c_code.push_str("EXPORT const char* TAURARO_OS_NAME = \"Windows\";\n");
                 c_code.push_str("#elif __APPLE__\n");
-                c_code.push_str("const char* TAURARO_OS_NAME = \"macOS\";\n");
+                c_code.push_str("EXPORT const char* TAURARO_OS_NAME = \"macOS\";\n");
                 c_code.push_str("#elif __linux__\n");
-                c_code.push_str("const char* TAURARO_OS_NAME = \"Linux\";\n");
+                c_code.push_str("EXPORT const char* TAURARO_OS_NAME = \"Linux\";\n");
                 c_code.push_str("#else\n");
-                c_code.push_str("const char* TAURARO_OS_NAME = \"Unknown\";\n");
+                c_code.push_str("EXPORT const char* TAURARO_OS_NAME = \"Unknown\";\n");
                 c_code.push_str("#endif\n\n");
-                
-                c_code.push_str("// OS module functions\n");
-                c_code.push_str("const char* tauraro_os_getenv(const char* name) { return getenv(name); }\n");
-                c_code.push_str("int tauraro_os_system(const char* command) { return system(command); }\n");
+
+                c_code.push_str("// OS module functions (exported for C linkage)\n");
+                c_code.push_str("EXPORT const char* tauraro_os_getenv(const char* name) { return getenv(name); }\n");
+                c_code.push_str("EXPORT int tauraro_os_system(const char* command) { return system(command); }\n");
             },
             "sys" => {
-                // Sys module constants and functions
-                c_code.push_str("// Sys module constants\n");
+                // Sys module constants and functions - exported for C linkage
+                c_code.push_str("// Sys module constants (exported for C linkage)\n");
                 c_code.push_str("#ifdef _WIN32\n");
-                c_code.push_str("const char* TAURARO_SYS_PLATFORM = \"Windows\";\n");
+                c_code.push_str("EXPORT const char* TAURARO_SYS_PLATFORM = \"Windows\";\n");
                 c_code.push_str("#elif __APPLE__\n");
-                c_code.push_str("const char* TAURARO_SYS_PLATFORM = \"Darwin\";\n");
+                c_code.push_str("EXPORT const char* TAURARO_SYS_PLATFORM = \"Darwin\";\n");
                 c_code.push_str("#elif __linux__\n");
-                c_code.push_str("const char* TAURARO_SYS_PLATFORM = \"Linux\";\n");
+                c_code.push_str("EXPORT const char* TAURARO_SYS_PLATFORM = \"Linux\";\n");
                 c_code.push_str("#else\n");
-                c_code.push_str("const char* TAURARO_SYS_PLATFORM = \"Unknown\";\n");
+                c_code.push_str("EXPORT const char* TAURARO_SYS_PLATFORM = \"Unknown\";\n");
                 c_code.push_str("#endif\n\n");
-                
-                c_code.push_str("const char* TAURARO_SYS_VERSION = \"Tauraro 1.0\";\n\n");
-                
-                c_code.push_str("// Sys module functions\n");
-                c_code.push_str("void tauraro_sys_exit(int status) { exit(status); }\n");
+
+                c_code.push_str("EXPORT const char* TAURARO_SYS_VERSION = \"Tauraro 1.0\";\n\n");
+
+                c_code.push_str("// Sys module functions (exported for C linkage)\n");
+                c_code.push_str("EXPORT void tauraro_sys_exit(int status) { exit(status); }\n");
+            },
+            "time" => {
+                // Time module functions - exported for C linkage
+                c_code.push_str("// Time module functions (exported for C linkage)\n");
+                c_code.push_str("EXPORT double tauraro_time_time() {\n");
+                c_code.push_str("    return (double)time(NULL);\n");
+                c_code.push_str("}\n\n");
+
+                c_code.push_str("EXPORT void tauraro_time_sleep(double seconds) {\n");
+                c_code.push_str("#ifdef _WIN32\n");
+                c_code.push_str("    Sleep((DWORD)(seconds * 1000));\n");
+                c_code.push_str("#else\n");
+                c_code.push_str("    usleep((useconds_t)(seconds * 1000000));\n");
+                c_code.push_str("#endif\n");
+                c_code.push_str("}\n\n");
+
+                c_code.push_str("EXPORT double tauraro_time_perf_counter() {\n");
+                c_code.push_str("    return (double)clock() / CLOCKS_PER_SEC;\n");
+                c_code.push_str("}\n");
+            },
+            "random" => {
+                // Random module functions - exported for C linkage
+                c_code.push_str("// Random module functions (exported for C linkage)\n");
+                c_code.push_str("EXPORT double tauraro_random_random() {\n");
+                c_code.push_str("    return (double)rand() / RAND_MAX;\n");
+                c_code.push_str("}\n\n");
+
+                c_code.push_str("EXPORT double tauraro_random_uniform(double a, double b) {\n");
+                c_code.push_str("    return a + (b - a) * tauraro_random_random();\n");
+                c_code.push_str("}\n\n");
+
+                c_code.push_str("EXPORT int64_t tauraro_random_randint(int64_t a, int64_t b) {\n");
+                c_code.push_str("    return a + (int64_t)(tauraro_random_random() * (b - a + 1));\n");
+                c_code.push_str("}\n");
+            },
+            "io" => {
+                // IO module functions - exported for C linkage
+                c_code.push_str("// IO module functions (exported for C linkage)\n");
+                c_code.push_str("EXPORT void* tauraro_io_open(const char* filename, const char* mode) {\n");
+                c_code.push_str("    return fopen(filename, mode);\n");
+                c_code.push_str("}\n\n");
+
+                c_code.push_str("EXPORT char* tauraro_io_read(void* file) {\n");
+                c_code.push_str("    if (!file) return NULL;\n");
+                c_code.push_str("    fseek((FILE*)file, 0, SEEK_END);\n");
+                c_code.push_str("    long size = ftell((FILE*)file);\n");
+                c_code.push_str("    fseek((FILE*)file, 0, SEEK_SET);\n");
+                c_code.push_str("    char* buffer = malloc(size + 1);\n");
+                c_code.push_str("    fread(buffer, 1, size, (FILE*)file);\n");
+                c_code.push_str("    buffer[size] = '\\0';\n");
+                c_code.push_str("    return buffer;\n");
+                c_code.push_str("}\n\n");
+
+                c_code.push_str("EXPORT void tauraro_io_write(void* file, const char* data) {\n");
+                c_code.push_str("    if (file && data) fprintf((FILE*)file, \"%s\", data);\n");
+                c_code.push_str("}\n\n");
+
+                c_code.push_str("EXPORT void tauraro_io_close(void* file) {\n");
+                c_code.push_str("    if (file) fclose((FILE*)file);\n");
+                c_code.push_str("}\n");
+            },
+            "json" => {
+                // JSON module basic stubs - full implementation would require a JSON library
+                c_code.push_str("// JSON module basic stubs (exported for C linkage)\n");
+                c_code.push_str("EXPORT char* tauraro_json_dumps(void* obj) {\n");
+                c_code.push_str("    // Basic stub - full implementation requires JSON library\n");
+                c_code.push_str("    return strdup(\"{}\");\n");
+                c_code.push_str("}\n\n");
+
+                c_code.push_str("EXPORT void* tauraro_json_loads(const char* json_str) {\n");
+                c_code.push_str("    // Basic stub - full implementation requires JSON library\n");
+                c_code.push_str("    return NULL;\n");
+                c_code.push_str("}\n");
             },
             _ => {
                 // Generic module - implementations will be linked from object files
                 c_code.push_str("// Generic built-in module - implementations will be linked from object files\n");
             }
         }
-        
+
         // Add a module initialization function
         c_code.push_str("\n// Module initialization\n");
-        c_code.push_str(&format!("void tauraro_{}_init() {{\n", module_name));
+        c_code.push_str(&format!("EXPORT void tauraro_{}_init() {{\n", module_name));
         c_code.push_str("    // Module initialization code would go here\n");
         c_code.push_str("}\n");
-        
+
         Ok(c_code)
     }
 

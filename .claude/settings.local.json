@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo:*)",
+      "Bash(./target/debug/tauraro.exe repl:*)",
+      "Bash(python:*)",
+      "Bash(cat:*)",
+      "Bash(time:*)",
+      "Bash(git checkout:*)",
+      "Bash(perl:*)",
+      "Bash(./target/release/tauraro.exe run:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
