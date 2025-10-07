@@ -25,21 +25,22 @@ impl CCodeGenerator {
     /// Generate C code from IR module
     fn generate_c_code(&self, module: &IRModule, options: &CodegenOptions) -> Result<String> {
         let mut c_code = String::new();
-        
+
         // Determine target platform - default to current platform if not specified
         let is_windows = if let Some(ref triple) = options.target_triple {
             triple.contains("windows")
         } else {
             cfg!(windows)
         };
-        
+
         // Generate includes
         c_code.push_str("#include <stdio.h>\n");
         c_code.push_str("#include <stdlib.h>\n");
         c_code.push_str("#include <stdint.h>\n");
         c_code.push_str("#include <stdbool.h>\n");
         c_code.push_str("#include <string.h>\n");
-        
+        c_code.push_str("#include <math.h>\n"); // For math functions
+
         // Add platform-specific includes only when needed
         if options.enable_async {
             if is_windows {
@@ -50,21 +51,28 @@ impl CCodeGenerator {
                 c_code.push_str("#include <ucontext.h>\n");
             }
         }
-        
+
         // Add FFI support if enabled (Unix/Linux only)
         if options.enable_ffi {
             if !is_windows {
                 c_code.push_str("#include <dlfcn.h>\n");
             }
         }
-        
+
         // Collect and add import includes at the top
         let import_includes = self.collect_import_includes(module);
         if !import_includes.is_empty() {
             c_code.push_str("\n// Import includes\n");
             c_code.push_str(&import_includes);
         }
-        
+
+        // Generate extern declarations for built-in modules
+        let extern_declarations = self.generate_builtin_extern_declarations(module)?;
+        if !extern_declarations.is_empty() {
+            c_code.push_str("\n// Built-in module extern declarations\n");
+            c_code.push_str(&extern_declarations);
+        }
+
         c_code.push_str("\n");
         
         // Generate type definitions
@@ -230,16 +238,16 @@ impl CCodeGenerator {
     /// Collect import includes from the IR module
     fn collect_import_includes(&self, module: &IRModule) -> String {
         let mut includes = String::new();
-        
+
         // List of built-in modules that don't need header files
         let builtin_modules = [
-            "os", "sys", "io", "math", "random", "time", "datetime", 
-            "json", "re", "csv", "base64", "collections", "itertools", 
-            "functools", "copy", "pickle", "hashlib", "urllib", 
-            "socket", "threading", "asyncio", "memory", "gc", 
+            "os", "sys", "io", "math", "random", "time", "datetime",
+            "json", "re", "csv", "base64", "collections", "itertools",
+            "functools", "copy", "pickle", "hashlib", "urllib",
+            "socket", "threading", "asyncio", "memory", "gc",
             "logging", "unittest", "httptools", "websockets", "httpx"
         ];
-        
+
         // Look for import instructions in all functions
         for (_, function) in &module.functions {
             for block in &function.blocks {
@@ -250,7 +258,7 @@ impl CCodeGenerator {
                             if builtin_modules.contains(&import_module.as_str()) {
                                 continue;
                             }
-                            
+
                             let module_name = alias.as_ref().unwrap_or(import_module);
                             // Convert dotted module names to path format (e.g., "extra.utils" -> "extra/utils.h")
                             let header_path = if import_module.contains('.') {
@@ -266,7 +274,7 @@ impl CCodeGenerator {
                             if builtin_modules.contains(&import_module.as_str()) {
                                 continue;
                             }
-                            
+
                             // Convert dotted module names to path format (e.g., "extra.utils" -> "extra/utils.h")
                             let header_path = if import_module.contains('.') {
                                 let parts: Vec<&str> = import_module.split('.').collect();
@@ -281,8 +289,116 @@ impl CCodeGenerator {
                 }
             }
         }
-        
+
         includes
+    }
+
+    /// Generate extern declarations for built-in modules detected in the IR
+    fn generate_builtin_extern_declarations(&self, module: &IRModule) -> Result<String> {
+        use std::collections::HashSet;
+
+        let mut declarations = String::new();
+        let mut imported_builtins = HashSet::new();
+
+        // List of built-in modules
+        let builtin_modules = [
+            "os", "sys", "io", "math", "random", "time", "datetime",
+            "json", "re", "csv", "base64", "collections", "itertools",
+            "functools", "copy", "pickle", "hashlib", "urllib",
+            "socket", "threading", "asyncio", "memory", "gc",
+            "logging", "unittest", "httptools", "websockets", "httpx"
+        ];
+
+        // Detect which built-in modules are imported
+        for (_, function) in &module.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    match instruction {
+                        IRInstruction::Import { module: import_module, .. } |
+                        IRInstruction::ImportFrom { module: import_module, .. } => {
+                            if builtin_modules.contains(&import_module.as_str()) {
+                                imported_builtins.insert(import_module.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Generate extern declarations for each imported built-in module
+        for builtin in &imported_builtins {
+            match builtin.as_str() {
+                "math" => {
+                    declarations.push_str("// Math module extern declarations\n");
+                    declarations.push_str("extern const double TAURARO_MATH_PI;\n");
+                    declarations.push_str("extern const double TAURARO_MATH_E;\n");
+                    declarations.push_str("extern const double TAURARO_MATH_TAU;\n\n");
+                    declarations.push_str("extern double tauraro_math_sin(double x);\n");
+                    declarations.push_str("extern double tauraro_math_cos(double x);\n");
+                    declarations.push_str("extern double tauraro_math_sqrt(double x);\n");
+                    declarations.push_str("extern double tauraro_math_tan(double x);\n");
+                    declarations.push_str("extern double tauraro_math_asin(double x);\n");
+                    declarations.push_str("extern double tauraro_math_acos(double x);\n");
+                    declarations.push_str("extern double tauraro_math_atan(double x);\n");
+                    declarations.push_str("extern double tauraro_math_atan2(double y, double x);\n");
+                    declarations.push_str("extern double tauraro_math_sinh(double x);\n");
+                    declarations.push_str("extern double tauraro_math_cosh(double x);\n");
+                    declarations.push_str("extern double tauraro_math_tanh(double x);\n");
+                    declarations.push_str("extern double tauraro_math_pow(double x, double y);\n");
+                    declarations.push_str("extern double tauraro_math_exp(double x);\n");
+                    declarations.push_str("extern double tauraro_math_log(double x);\n");
+                    declarations.push_str("extern double tauraro_math_log2(double x);\n");
+                    declarations.push_str("extern double tauraro_math_log10(double x);\n");
+                    declarations.push_str("extern double tauraro_math_ceil(double x);\n");
+                    declarations.push_str("extern double tauraro_math_floor(double x);\n");
+                    declarations.push_str("extern double tauraro_math_fabs(double x);\n");
+                    declarations.push_str("extern double tauraro_math_fmod(double x, double y);\n\n");
+                },
+                "os" => {
+                    declarations.push_str("// OS module extern declarations\n");
+                    declarations.push_str("extern const char* TAURARO_OS_NAME;\n\n");
+                    declarations.push_str("extern const char* tauraro_os_getenv(const char* name);\n");
+                    declarations.push_str("extern int tauraro_os_system(const char* command);\n\n");
+                },
+                "sys" => {
+                    declarations.push_str("// Sys module extern declarations\n");
+                    declarations.push_str("extern const char* TAURARO_SYS_PLATFORM;\n");
+                    declarations.push_str("extern const char* TAURARO_SYS_VERSION;\n\n");
+                    declarations.push_str("extern void tauraro_sys_exit(int status);\n\n");
+                },
+                "time" => {
+                    declarations.push_str("// Time module extern declarations\n");
+                    declarations.push_str("extern double tauraro_time_time();\n");
+                    declarations.push_str("extern void tauraro_time_sleep(double seconds);\n");
+                    declarations.push_str("extern double tauraro_time_perf_counter();\n\n");
+                },
+                "random" => {
+                    declarations.push_str("// Random module extern declarations\n");
+                    declarations.push_str("extern double tauraro_random_random();\n");
+                    declarations.push_str("extern double tauraro_random_uniform(double a, double b);\n");
+                    declarations.push_str("extern int64_t tauraro_random_randint(int64_t a, int64_t b);\n\n");
+                },
+                "io" => {
+                    declarations.push_str("// IO module extern declarations\n");
+                    declarations.push_str("extern void* tauraro_io_open(const char* filename, const char* mode);\n");
+                    declarations.push_str("extern char* tauraro_io_read(void* file);\n");
+                    declarations.push_str("extern void tauraro_io_write(void* file, const char* data);\n");
+                    declarations.push_str("extern void tauraro_io_close(void* file);\n\n");
+                },
+                "json" => {
+                    declarations.push_str("// JSON module extern declarations\n");
+                    declarations.push_str("extern char* tauraro_json_dumps(void* obj);\n");
+                    declarations.push_str("extern void* tauraro_json_loads(const char* json_str);\n\n");
+                },
+                _ => {
+                    // Generic module - extern declarations will be linked from object files
+                    declarations.push_str(&format!("// {} module extern declarations - will be linked from object files\n\n", builtin));
+                }
+            }
+        }
+
+        Ok(declarations)
     }
 
     fn generate_function_declaration(&self, function: &IRFunction) -> Result<String> {

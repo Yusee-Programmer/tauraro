@@ -1,16 +1,18 @@
 func main():
     start_time = 0
     end_time = 0
-    
+
     a = 100000
     b = 0
-    
+
     for i in range(0, a):
         b = b + i
         b = b * 2
         b = b - i
         b = b / 2
-    
+
     print("Tauraro arithmetic benchmark completed")
     print("Final result: ", b)
     print("Iterations completed: ", a)
+
+main()

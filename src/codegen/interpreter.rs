@@ -126,12 +126,18 @@ impl Hinter for REPLHelper {
 
 /// Enhanced REPL with full language support and Python-like behavior
 pub fn run_repl() -> Result<()> {
-    println!("TauraroLang Interactive Interpreter v0.1.0 🔥");
-    println!("Python-compatible syntax with multi-language support");
-    println!("Type 'exit' or press Ctrl+C to quit\n");
+    // Print Python-like banner
+    println!("Tauraro 1.0.0 (main, Jan 2025)");
+    println!("[Rust-based VM] on {}", std::env::consts::OS);
+    println!("Type \"help\", \"copyright\", \"credits\" or \"license\" for more information.");
 
     let mut interpreter = Interpreter::new();
-    let mut rl = Editor::<()>::new().map_err(|e| anyhow::anyhow!("Failed to start REPL: {}", e))?;
+    let config = rustyline::Config::builder()
+        .auto_add_history(true)
+        .build();
+
+    let mut rl = Editor::<()>::with_config(config)
+        .map_err(|e| anyhow::anyhow!("Failed to start REPL: {}", e))?;
 
     let mut buffer = String::new();
     let mut in_multiline = false;
@@ -142,11 +148,8 @@ pub fn run_repl() -> Result<()> {
 
         match readline {
             Ok(line) => {
-                let _ = rl.add_history_entry(&line);
-
                 // Check for exit commands
-                if line.trim() == "exit" || line.trim() == "quit" {
-                    println!("Goodbye! 👋");
+                if line.trim() == "exit()" || line.trim() == "quit()" || line.trim() == "exit" || line.trim() == "quit" {
                     break;
                 }
 
@@ -156,11 +159,59 @@ pub fn run_repl() -> Result<()> {
                     continue;
                 }
 
+                if line.trim() == "copyright" {
+                    println!("Copyright (c) 2025 Tauraro Programming Language");
+                    println!("All rights reserved.");
+                    continue;
+                }
+
+                if line.trim() == "credits" {
+                    println!("Thanks to the Rust community and all contributors!");
+                    continue;
+                }
+
+                if line.trim() == "license" {
+                    println!("Tauraro is licensed under the MIT License");
+                    continue;
+                }
+
+                // Handle dir() built-in function
+                if line.trim().starts_with("dir(") {
+                    show_variables(&interpreter);
+                    continue;
+                }
+
+                // Handle globals() built-in function
+                if line.trim().starts_with("globals(") {
+                    show_globals(&interpreter);
+                    continue;
+                }
+
+                // Handle locals() built-in function
+                if line.trim().starts_with("locals(") {
+                    show_locals(&interpreter);
+                    continue;
+                }
+
                 // Handle multiline input like Python
                 if buffer.is_empty() {
                     // Starting fresh - check if this line starts a multiline construct
                     let trimmed = line.trim();
-                    if trimmed.ends_with(':') || trimmed.starts_with('@') {
+
+                    // Check for multiline constructs
+                    if trimmed.ends_with(':') ||
+                       trimmed.starts_with('@') ||
+                       trimmed.starts_with("def ") ||
+                       trimmed.starts_with("class ") ||
+                       trimmed.starts_with("if ") ||
+                       trimmed.starts_with("elif ") ||
+                       trimmed.starts_with("else:") ||
+                       trimmed.starts_with("for ") ||
+                       trimmed.starts_with("while ") ||
+                       trimmed.starts_with("try:") ||
+                       trimmed.starts_with("except ") ||
+                       trimmed.starts_with("finally:") ||
+                       trimmed.starts_with("with ") {
                         in_multiline = true;
                         buffer.push_str(&line);
                         buffer.push('\n');
@@ -169,7 +220,7 @@ pub fn run_repl() -> Result<()> {
                         // Empty line at top level, ignore
                         continue;
                     } else {
-                        // Single line - try to execute immediately
+                        // Single line - check if it's an expression or statement
                         buffer.push_str(&line);
                         buffer.push('\n');
                     }
@@ -191,13 +242,39 @@ pub fn run_repl() -> Result<()> {
                 if !buffer.trim().is_empty() {
                     match interpreter.run_line(buffer.clone()) {
                         Ok(Some(value)) if !matches!(value, Value::None) => {
-                            println!("{}", value);
+                            // Pretty print the value like Python
+                            match &value {
+                                Value::Str(s) => println!("{:?}", s), // Print strings with quotes
+                                Value::List(_) => println!("{}", format_value(&value)),
+                                Value::Dict(_) => println!("{}", format_value(&value)),
+                                _ => println!("{}", value),
+                            }
                         }
                         Ok(_) => {
                             // No value to print, or None
                         }
                         Err(e) => {
-                            eprintln!("Runtime Error: {}", e);
+                            // Print traceback-like error
+                            eprintln!("Traceback (most recent call last):");
+                            eprintln!("  File \"<stdin>\", line 1, in <module>");
+
+                            // Parse error message to get error type
+                            let error_str = e.to_string();
+                            if error_str.contains("not found") || error_str.contains("not defined") {
+                                eprintln!("NameError: {}", error_str);
+                            } else if error_str.contains("type") {
+                                eprintln!("TypeError: {}", error_str);
+                            } else if error_str.contains("syntax") {
+                                eprintln!("SyntaxError: {}", error_str);
+                            } else if error_str.contains("division by zero") {
+                                eprintln!("ZeroDivisionError: {}", error_str);
+                            } else if error_str.contains("index") {
+                                eprintln!("IndexError: {}", error_str);
+                            } else if error_str.contains("key") {
+                                eprintln!("KeyError: {}", error_str);
+                            } else {
+                                eprintln!("RuntimeError: {}", error_str);
+                            }
                         }
                     }
                 }
@@ -205,68 +282,139 @@ pub fn run_repl() -> Result<()> {
                 in_multiline = false;
             }
             Err(ReadlineError::Interrupted) => {
-                println!("(To exit, type 'exit' or press Ctrl+D)");
+                println!("KeyboardInterrupt");
                 buffer.clear();
+                in_multiline = false;
                 continue;
             }
             Err(ReadlineError::Eof) => {
-                println!("\nGoodbye! 👋");
+                // Ctrl+D pressed
                 break;
             }
             Err(err) => {
-                eprintln!("REPL Error: {:?}", err);
+                eprintln!("Error: {:?}", err);
                 break;
             }
         }
     }
-    
+
     Ok(())
+}
+
+/// Format a value for display (Python-like)
+fn format_value(value: &Value) -> String {
+    match value {
+        Value::None => "None".to_string(),
+        Value::Bool(b) => if *b { "True" } else { "False" }.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => {
+            if f.fract() == 0.0 && f.abs() < 1e10 {
+                format!("{:.1}", f)
+            } else {
+                f.to_string()
+            }
+        }
+        Value::Str(s) => format!("'{}'", s),
+        Value::List(list) => {
+            let items: Vec<String> = (0..list.len())
+                .filter_map(|i| list.get(i as isize))
+                .map(|v| format_value(&v))
+                .collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::Dict(map) => {
+            let items: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{}: {}", format_value(&Value::Str(k.clone())), format_value(v)))
+                .collect();
+            format!("{{{}}}", items.join(", "))
+        }
+        _ => format!("{:?}", value),
+    }
 }
 
 /// Show help information
 fn show_help() {
-    println!("TauraroLang Interactive Help");
-    println!("============================");
-    println!("Available commands:");
-    println!("  help       - Show this help message");
-    println!("  dir()      - List all variables and functions");
-    println!("  globals()  - Show global variables");
-    println!("  locals()   - Show local variables");
-    println!("  exit/quit  - Exit the interpreter");
+    println!("\nWelcome to Tauraro!");
     println!();
-    println!("Features:");
-    println!("  - Full Python-compatible syntax");
-    println!("  - Multi-language keywords (def/func/aiki)");
-    println!("  - Classes, functions, loops, conditionals");
-    println!("  - Expression evaluation and statement execution");
+    println!("Tauraro is a Python-compatible programming language with Rust-like performance.");
     println!();
-    println!("Example:");
-    println!("  >>> a = 42");
-    println!("  >>> def greet(name):");
-    println!("  ...     return f'Hello, ' + name + '!'");
-    println!("  >>> greet('TauraroLang')");
-    println!("  'Hello, TauraroLang!'");
+    println!("Type help() for interactive help, or help(object) for help about object.");
+    println!();
+    println!("Quick Reference:");
+    println!("  Variables:    x = 10");
+    println!("  Functions:    def greet(name): return f'Hello, {{name}}'");
+    println!("  Classes:      class MyClass: pass");
+    println!("  Loops:        for i in range(10): print(i)");
+    println!("  Conditions:   if x > 5: print('big')");
+    println!("  Import:       import math");
+    println!();
+    println!("Built-in Functions:");
+    println!("  print()       Print values to stdout");
+    println!("  input()       Read input from stdin");
+    println!("  len()         Get length of sequence");
+    println!("  range()       Generate range of numbers");
+    println!("  type()        Get type of object");
+    println!("  dir()         List attributes");
+    println!("  help()        Show this help");
+    println!("  exit()        Exit the REPL");
+    println!();
+    println!("REPL Commands:");
+    println!("  copyright     Show copyright information");
+    println!("  credits       Show credits");
+    println!("  license       Show license information");
+    println!();
 }
 
 /// Show variables in current scope
-fn show_variables(_interpreter: &Interpreter) {
-    println!("Variables and functions in current scope:");
-    // This would need to be implemented to query the VM's scope
-    println!("[Variable listing not yet implemented]");
+fn show_variables(interpreter: &Interpreter) {
+    // Get all variables from the current scope
+    if let Some(scope) = interpreter.vm.scopes.last() {
+        let mut vars: Vec<&String> = scope.variables.keys().collect();
+        vars.sort();
+
+        println!("[");
+        for var in vars {
+            println!("  '{}',", var);
+        }
+        println!("]");
+    } else {
+        println!("[]");
+    }
 }
 
 /// Show global variables
-fn show_globals(_interpreter: &Interpreter) {
-    println!("Global variables:");
-    // This would need to be implemented to query the VM's global scope
-    println!("[Global variable listing not yet implemented]");
+fn show_globals(interpreter: &Interpreter) {
+    // Get variables from the global scope (first scope)
+    if let Some(scope) = interpreter.vm.scopes.first() {
+        println!("{{");
+        let mut vars: Vec<(&String, &Value)> = scope.variables.iter().collect();
+        vars.sort_by_key(|(k, _)| *k);
+
+        for (name, value) in vars {
+            println!("  '{}': {},", name, format_value(value));
+        }
+        println!("}}");
+    } else {
+        println!("{{}}");
+    }
 }
 
 /// Show local variables
 fn show_locals(interpreter: &Interpreter) {
-    println!("Local variables:");
-    // This would need to be implemented to query the VM's local scope
-    println!("[Local variable listing not yet implemented]");
+    // Get variables from the current scope
+    if let Some(scope) = interpreter.vm.scopes.last() {
+        println!("{{");
+        let mut vars: Vec<(&String, &Value)> = scope.variables.iter().collect();
+        vars.sort_by_key(|(k, _)| *k);
+
+        for (name, value) in vars {
+            println!("  '{}': {},", name, format_value(value));
+        }
+        println!("}}");
+    } else {
+        println!("{{}}");
+    }
 }
 
 /// Code generator implementation for interpreter target
