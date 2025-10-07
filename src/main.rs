@@ -18,6 +18,7 @@ mod runtime;
 mod ffi;
 mod modules;
 mod module_system;
+mod module_cache;
 mod object_system;
 mod package_manager;
 mod base_object;
@@ -104,6 +105,9 @@ enum Commands {
         /// Input file
         file: PathBuf,
     },
+    
+    /// Clear the module cache
+    ClearCache,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -171,6 +175,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::DebugAst { file } => {
             debug_ast(&file)?;
+        }
+        Commands::ClearCache => {
+            clear_cache()?;
         }
     }
 
@@ -418,5 +425,15 @@ fn debug_ast(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     // Print AST for debugging
     println!("AST: {:#?}", ast);
     
+    Ok(())
+}
+
+/// Clear the module cache
+fn clear_cache() -> Result<(), Box<dyn std::error::Error>> {
+    use tauraro::module_cache::ModuleCache;
+    
+    let cache = ModuleCache::new()?;
+    cache.clear_cache()?;
+    println!("Module cache cleared successfully");
     Ok(())
 }

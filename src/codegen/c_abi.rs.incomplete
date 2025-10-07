@@ -330,8 +330,10 @@ impl CCodeGenerator {
         for local in &locals {
             let c_type = if let Some(ir_type) = local_types.get(local) {
                 self.ir_type_to_c(ir_type).to_string()
+            } else if local.starts_with("tmp_") {
+                // For temporary variables, try to infer type from context
+                "int32_t".to_string() // Default to int32_t for now
             } else {
-                // For all local variables, use TauraroValue to ensure consistent access patterns
                 "TauraroValue".to_string()
             };
             code.push_str(&format!("    {} {};\n", c_type, local));
@@ -510,8 +512,6 @@ impl CCodeGenerator {
                      // Handle imported functions from our enhanced import compiler
                      "greet" => IRType::Pointer(Box::new(IRType::Int8)), // char* (string)
                      "calculate_area" => IRType::Int64, // int64_t
-                     // Handle math functions
-                     f if f.starts_with("tauraro_math_") => IRType::Float64, // Math functions return double
                      _ => IRType::Int64, // Default assumption
                  };
                  local_types.insert(dest.clone(), return_type);
@@ -888,9 +888,9 @@ impl CCodeGenerator {
                     IRValue::ConstantBool(_) | IRValue::Bool(_) => {
                         Ok(format!("    printf(\"%s\\n\", {} ? \"true\" : \"false\");\n", expr))
                     }
-                    IRValue::Variable(var_name) => {
+                    IRValue::Variable(_) => {
                         // For TauraroValue variables, we need to check the type_tag and access the appropriate data member
-                        Ok(format!("    switch ({}.type_tag) {{\n    case 0: printf(\"%lld\\n\", (long long){}.data.int_val); break;\n    case 1: printf(\"%f\\n\", {}.data.float_val); break;\n    case 2: printf(\"%s\\n\", {}.data.string_val); break;\n    case 3: printf(\"%s\\n\", {}.data.bool_val ? \"true\" : \"false\"); break;\n    default: printf(\"%s\\n\", \"<unknown>\"); break;\n    }}\n", var_name, var_name, var_name, var_name, var_name))
+                        Ok(format!("    switch ({}.type_tag) {{\n    case 0: printf(\"%lld\\n\", (long long){}.data.int_val); break;\n    case 1: printf(\"%f\\n\", {}.data.float_val); break;\n    case 2: printf(\"%s\\n\", {}.data.string_val); break;\n    case 3: printf(\"%s\\n\", {}.data.bool_val ? \"true\" : \"false\"); break;\n    default: printf(\"%s\\n\", \"<unknown>\"); break;\n    }}\n", expr, expr, expr, expr, expr))
                     }
                     _ => {
                         Ok(format!("    printf(\"%s\\n\", {});\n", expr))
@@ -917,9 +917,9 @@ impl CCodeGenerator {
                         IRValue::ConstantBool(_) | IRValue::Bool(_) => {
                             code.push_str(&format!("    printf(\"%s\", {} ? \"true\" : \"false\");\n", expr));
                         }
-                        IRValue::Variable(var_name) => {
+                        IRValue::Variable(_) => {
                             // For TauraroValue variables, we need to check the type_tag and access the appropriate data member
-                            code.push_str(&format!("    switch ({}.type_tag) {{\n    case 0: printf(\"%lld\", (long long){}.data.int_val); break;\n    case 1: printf(\"%f\", {}.data.float_val); break;\n    case 2: printf(\"%s\", {}.data.string_val); break;\n    case 3: printf(\"%s\", {}.data.bool_val ? \"true\" : \"false\"); break;\n    default: printf(\"%s\", \"<unknown\"); break;\n    }}\n", var_name, var_name, var_name, var_name, var_name));
+                            code.push_str(&format!("    switch ({}.type_tag) {{\n    case 0: printf(\"%lld\", (long long){}.data.int_val); break;\n    case 1: printf(\"%f\", {}.data.float_val); break;\n    case 2: printf(\"%s\", {}.data.string_val); break;\n    case 3: printf(\"%s\", {}.data.bool_val ? \"true\" : \"false\"); break;\n    default: printf(\"%s\", \"<unknown\"); break;\n    }}\n", expr, expr, expr, expr, expr));
                         }
                         _ => {
                             code.push_str(&format!("    printf(\"%s\", {});\n", expr));
@@ -1578,89 +1578,3 @@ impl CCodeGenerator {
         }
         
         header.push_str("\n#endif // ");
-        header.push_str(&guard_name);
-        header.push_str("\n");
-        
-        let header_path = output_path.with_extension("h");
-        std::fs::write(header_path, header)?;
-        
-        Ok(())
-    }
-}
-
-impl CodeGenerator for CCodeGenerator {
-    fn generate(&self, module: IRModule, options: &CodegenOptions) -> Result<Vec<u8>> {
-        let c_code = self.generate_c_code(&module, options)?;
-        
-        // Generate header if requested
-        if self.generate_header {
-            if let Some(output_path) = &options.output_path {
-                let path = Path::new(output_path);
-                self.generate_header(&module, path)?;
-            }
-        }
-        
-        Ok(c_code.into_bytes())
-    }
-    
-    fn get_target(&self) -> Target {
-        Target::C
-    }
-    
-    fn supports_optimization(&self) -> bool {
-        false // C compiler handles optimization
-    }
-    
-    fn get_supported_features(&self) -> Vec<&'static str> {
-        vec![
-            "ffi",
-            "cross_platform",
-            "static_linking",
-            "dynamic_linking",
-        ]
-    }
-}
-
-impl Default for CCodeGenerator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// Legacy compatibility
-pub struct CCodeGen;
-
-impl CCodeGen {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn compile(
-        &self,
-        module: IRModule,
-        output_path: &Path,
-        export: bool,
-        generate_header: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let generator = CCodeGenerator::new().with_header(generate_header);
-        let options = CodegenOptions {
-            target: Target::C,
-            export_symbols: export,
-            enable_async: false, // Disable async by default for C backend
-            enable_ffi: false,   // Disable FFI by default for C backend
-            output_path: Some(output_path.to_string_lossy().to_string()),
-            ..Default::default()
-        };
-        
-        let code = generator.generate(module.clone(), &options)?;
-        std::fs::write(output_path, code)?;
-        
-        // Also generate header file if requested
-        if generate_header {
-            let generator = CCodeGenerator::new();
-            generator.generate_header(&module, output_path)?;
-        }
-        
-        Ok(())
-    }
-}

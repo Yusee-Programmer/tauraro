@@ -4,7 +4,7 @@
 use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
-use rand::{Rng, SeedableRng, thread_rng};
+use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use std::sync::Mutex;

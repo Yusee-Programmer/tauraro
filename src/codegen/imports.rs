@@ -2,25 +2,27 @@
 //! This module handles recursive compilation of imported Tauraro modules to C
 
 use crate::ir::IRModule;
-use crate::codegen::{CodeGenerator, CodegenOptions, Target};
-use crate::codegen::native::{OutputType, TargetPlatform};
-use crate::module_system::{ModuleSystem, ImportSpec};
+use crate::codegen::{CodeGenerator, CodegenOptions};
+use crate::codegen::native::OutputType;
+use crate::codegen::builtin_modules::BuiltinModuleCompiler;
+use crate::module_system::ModuleSystem;
 use crate::parser::Parser;
 use crate::lexer::Lexer;
 use crate::semantic::Analyzer;
 use crate::ast::Program;
-use crate::vm::VM;
-use crate::value::Value;
-use anyhow::{Result, anyhow, Error};
+use crate::module_cache::ModuleCache;
+use anyhow::{Result, anyhow};
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::collections::{HashMap, HashSet};
+use std::process::Command;
 
 /// Import compiler for C backend
 pub struct ImportCompiler {
     module_system: ModuleSystem,
     compiled_modules: HashSet<String>,
     build_dir: PathBuf,
+    builtin_compiler: BuiltinModuleCompiler, // Add this field
 }
 
 impl ImportCompiler {
@@ -29,10 +31,14 @@ impl ImportCompiler {
         // Add test_imports directory to the module search path
         module_system.add_search_path(PathBuf::from("test_imports"));
         
+        // Create the builtin module compiler
+        let builtin_compiler = BuiltinModuleCompiler::new().expect("Failed to create builtin module compiler");
+        
         Self {
             module_system,
             compiled_modules: HashSet::new(),
             build_dir,
+            builtin_compiler, // Initialize the new field
         }
     }
 
@@ -61,10 +67,18 @@ impl ImportCompiler {
             fs::create_dir_all(&self.build_dir)?;
         }
 
+        // Detect imported built-in modules
+        let imported_builtins = self.builtin_compiler.detect_imported_builtins(&main_ir);
+        
+        // Compile imported built-in modules
+        if !imported_builtins.is_empty() {
+            self.builtin_compiler.compile_imported_builtins(&imported_builtins)?;
+        }
+
         let mut compiled_files = HashMap::new();
 
-        // Generate C code for main module
-        let main_c_code = self.generate_c_code(&main_ir, output_options)?;
+        // Generate C code for main module with extern declarations for built-in modules
+        let main_c_code = self.generate_c_code_with_builtins(&main_ir, output_options, &imported_builtins)?;
         
         if has_imports {
             // Write to build directory if there are imports
@@ -138,6 +152,38 @@ impl ImportCompiler {
         generator.generate(ir_module.clone(), options)
     }
 
+    /// Generate C code from IR module with built-in module extern declarations
+    fn generate_c_code_with_builtins(&self, ir_module: &IRModule, options: &CodegenOptions, imported_builtins: &HashSet<String>) -> Result<Vec<u8>> {
+        let generator = crate::codegen::c_abi::CCodeGenerator::new();
+        
+        // Generate the base C code
+        let mut c_code = generator.generate(ir_module.clone(), options)?;
+        
+        // Generate extern declarations for built-in modules
+        if !imported_builtins.is_empty() {
+            let extern_declarations = self.builtin_compiler.generate_extern_declarations(imported_builtins)?;
+            
+            // Convert to string and insert extern declarations at the top
+            let c_code_str = String::from_utf8(c_code)?;
+            
+            // Find the position to insert extern declarations (after includes)
+            let insert_pos = if let Some(pos) = c_code_str.find("\n\n") {
+                pos + 2
+            } else {
+                0
+            };
+            
+            // Insert extern declarations
+            let mut new_c_code = c_code_str.clone();
+            new_c_code.insert_str(insert_pos, &extern_declarations);
+            
+            // Convert back to bytes
+            c_code = new_c_code.into_bytes();
+        }
+        
+        Ok(c_code)
+    }
+
     /// Recursively compile all imported modules
     fn compile_imported_modules(
         &mut self,
@@ -177,16 +223,9 @@ impl ImportCompiler {
             return Ok(());
         }
 
-        // Check if this is a built-in module - if so, we don't need to compile it
-        let builtin_modules = [
-            "os", "sys", "io", "math", "random", "time", "datetime", 
-            "json", "re", "csv", "base64", "collections", "itertools", 
-            "functools", "copy", "pickle", "hashlib", "urllib", 
-            "socket", "threading", "asyncio", "memory", "gc", 
-            "logging", "unittest", "httptools", "websockets", "httpx"
-        ];
-        
-        if builtin_modules.contains(&module_name) {
+        // Check if this is a built-in module
+        if self.module_system.module_cache().should_cache_module(module_name) {
+            // For built-in modules, we now handle them in the main compilation process
             // Mark as compiled to prevent circular dependencies
             self.compiled_modules.insert(module_name.to_string());
             return Ok(());
@@ -666,6 +705,194 @@ impl ImportCompiler {
         Ok(output_path)
     }
 
+    /// Compile a built-in module to an object file and cache it
+    fn compile_builtin_module_to_cache(&mut self, module_name: &str) -> Result<()> {
+        // Check if module is already cached and up to date
+        if self.is_builtin_module_cached(module_name)? {
+            return Ok(());
+        }
+        
+        // Get the object file path in cache
+        let obj_path = self.module_system.module_cache().get_module_obj_path(module_name);
+        
+        // Compile the built-in module to object file and cache it
+        self.compile_builtin_module_to_obj(module_name, &obj_path)?;
+        
+        Ok(())
+    }
+    
+    /// Check if a built-in module is already cached and up to date
+    fn is_builtin_module_cached(&self, module_name: &str) -> Result<bool> {
+        let module_source_path = PathBuf::from("src").join("modules").join(format!("{}.rs", module_name));
+        let obj_path = self.module_system.module_cache().get_module_obj_path(module_name);
+        
+        // If object file doesn't exist, it's not cached
+        if !obj_path.exists() {
+            return Ok(false);
+        }
+        
+        // Check if source file is newer than object file
+        let source_metadata = fs::metadata(&module_source_path)?;
+        let obj_metadata = fs::metadata(&obj_path)?;
+        
+        let source_modified = source_metadata.modified()?;
+        let obj_modified = obj_metadata.modified()?;
+        
+        // If source is newer, cache is outdated
+        if source_modified > obj_modified {
+            return Ok(false);
+        }
+        
+        // Also check if any dependencies have changed
+        // For now, we'll just check the main Cargo.toml file as a simple dependency check
+        let cargo_toml_path = PathBuf::from("Cargo.toml");
+        if cargo_toml_path.exists() {
+            let cargo_metadata = fs::metadata(&cargo_toml_path)?;
+            let cargo_modified = cargo_metadata.modified()?;
+            
+            // If Cargo.toml is newer than the object file, rebuild
+            if cargo_modified > obj_modified {
+                return Ok(false);
+            }
+        }
+        
+        Ok(true)
+    }
+    
+    /// Compile a built-in module to an object file
+    fn compile_builtin_module_to_obj(&self, module_name: &str, obj_path: &Path) -> Result<()> {
+        // Create the cache directory if it doesn't exist
+        if let Some(parent) = obj_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        
+        // For built-in modules that are part of the Tauraro crate, we need to generate
+        // a standalone C file that exports the functions and constants
+        let c_code = self.generate_builtin_module_c_code(module_name)?;
+        
+        // Write C code to a temporary file
+        let temp_dir = std::env::temp_dir();
+        let c_file_path = temp_dir.join(format!("{}_module.c", module_name));
+        fs::write(&c_file_path, c_code)?;
+        
+        // Use the native compiler to detect available C compiler and compile to object file
+        let compiler = crate::codegen::native::NativeCompiler::new();
+        let c_compiler = compiler.detect_c_compiler()
+            .map_err(|e| anyhow!("Failed to detect C compiler: {}", e))?;
+        
+        let output = Command::new(&c_compiler)
+            .arg("-c")  // Compile only, don't link
+            .arg(&c_file_path)
+            .arg("-o")
+            .arg(obj_path)
+            .output()
+            .map_err(|e| anyhow!("Failed to execute C compiler: {}", e))?;
+            
+        // Clean up temporary file
+        let _ = fs::remove_file(&c_file_path);
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("Failed to compile built-in module to object file: {}", stderr));
+        }
+        
+        Ok(())
+    }
+    
+    /// Generate C code for a built-in module that exports functions and constants
+    fn generate_builtin_module_c_code(&self, module_name: &str) -> Result<String> {
+        let mut c_code = String::new();
+        
+        // Standard includes
+        c_code.push_str("#include <stdio.h>\n");
+        c_code.push_str("#include <stdlib.h>\n");
+        c_code.push_str("#include <stdint.h>\n");
+        c_code.push_str("#include <stdbool.h>\n");
+        c_code.push_str("#include <math.h>\n");
+        c_code.push_str("#include <string.h>\n\n");
+        
+        // Module-specific code
+        match module_name {
+            "math" => {
+                // Math module constants
+                c_code.push_str("// Math module constants\n");
+                c_code.push_str("double TAURARO_MATH_PI = 3.141592653589793;\n");
+                c_code.push_str("double TAURARO_MATH_E = 2.718281828459045;\n");
+                c_code.push_str("double TAURARO_MATH_TAU = 6.283185307179586;\n\n");
+                
+                // Math module functions
+                c_code.push_str("// Math module functions\n");
+                c_code.push_str("double tauraro_math_sin(double x) { return sin(x); }\n");
+                c_code.push_str("double tauraro_math_cos(double x) { return cos(x); }\n");
+                c_code.push_str("double tauraro_math_sqrt(double x) { return sqrt(x); }\n");
+                c_code.push_str("double tauraro_math_tan(double x) { return tan(x); }\n");
+                c_code.push_str("double tauraro_math_asin(double x) { return asin(x); }\n");
+                c_code.push_str("double tauraro_math_acos(double x) { return acos(x); }\n");
+                c_code.push_str("double tauraro_math_atan(double x) { return atan(x); }\n");
+                c_code.push_str("double tauraro_math_atan2(double y, double x) { return atan2(y, x); }\n");
+                c_code.push_str("double tauraro_math_sinh(double x) { return sinh(x); }\n");
+                c_code.push_str("double tauraro_math_cosh(double x) { return cosh(x); }\n");
+                c_code.push_str("double tauraro_math_tanh(double x) { return tanh(x); }\n");
+                c_code.push_str("double tauraro_math_pow(double x, double y) { return pow(x, y); }\n");
+                c_code.push_str("double tauraro_math_exp(double x) { return exp(x); }\n");
+                c_code.push_str("double tauraro_math_log(double x) { return log(x); }\n");
+                c_code.push_str("double tauraro_math_log2(double x) { return log2(x); }\n");
+                c_code.push_str("double tauraro_math_log10(double x) { return log10(x); }\n");
+                c_code.push_str("double tauraro_math_ceil(double x) { return ceil(x); }\n");
+                c_code.push_str("double tauraro_math_floor(double x) { return floor(x); }\n");
+                c_code.push_str("double tauraro_math_fabs(double x) { return fabs(x); }\n");
+                c_code.push_str("double tauraro_math_fmod(double x, double y) { return fmod(x, y); }\n");
+            },
+            "os" => {
+                // OS module constants and functions
+                c_code.push_str("// OS module constants\n");
+                c_code.push_str("#ifdef _WIN32\n");
+                c_code.push_str("const char* TAURARO_OS_NAME = \"Windows\";\n");
+                c_code.push_str("#elif __APPLE__\n");
+                c_code.push_str("const char* TAURARO_OS_NAME = \"macOS\";\n");
+                c_code.push_str("#elif __linux__\n");
+                c_code.push_str("const char* TAURARO_OS_NAME = \"Linux\";\n");
+                c_code.push_str("#else\n");
+                c_code.push_str("const char* TAURARO_OS_NAME = \"Unknown\";\n");
+                c_code.push_str("#endif\n\n");
+                
+                c_code.push_str("// OS module functions\n");
+                c_code.push_str("const char* tauraro_os_getenv(const char* name) { return getenv(name); }\n");
+                c_code.push_str("int tauraro_os_system(const char* command) { return system(command); }\n");
+            },
+            "sys" => {
+                // Sys module constants and functions
+                c_code.push_str("// Sys module constants\n");
+                c_code.push_str("#ifdef _WIN32\n");
+                c_code.push_str("const char* TAURARO_SYS_PLATFORM = \"Windows\";\n");
+                c_code.push_str("#elif __APPLE__\n");
+                c_code.push_str("const char* TAURARO_SYS_PLATFORM = \"Darwin\";\n");
+                c_code.push_str("#elif __linux__\n");
+                c_code.push_str("const char* TAURARO_SYS_PLATFORM = \"Linux\";\n");
+                c_code.push_str("#else\n");
+                c_code.push_str("const char* TAURARO_SYS_PLATFORM = \"Unknown\";\n");
+                c_code.push_str("#endif\n\n");
+                
+                c_code.push_str("const char* TAURARO_SYS_VERSION = \"Tauraro 1.0\";\n\n");
+                
+                c_code.push_str("// Sys module functions\n");
+                c_code.push_str("void tauraro_sys_exit(int status) { exit(status); }\n");
+            },
+            _ => {
+                // Generic module - implementations will be linked from object files
+                c_code.push_str("// Generic built-in module - implementations will be linked from object files\n");
+            }
+        }
+        
+        // Add a module initialization function
+        c_code.push_str("\n// Module initialization\n");
+        c_code.push_str(&format!("void tauraro_{}_init() {{\n", module_name));
+        c_code.push_str("    // Module initialization code would go here\n");
+        c_code.push_str("}\n");
+        
+        Ok(c_code)
+    }
+
     /// Compile all modules to native with specific options
     pub fn compile_to_native_with_options(
         &self,
@@ -751,8 +978,13 @@ impl ImportCompiler {
             PathBuf::from(&output_name)
         };
         
+        // Convert built-in object files to path references
+        let obj_file_refs: Vec<PathBuf> = self.builtin_compiler.get_object_files();
+        let obj_file_refs: Vec<&Path> = obj_file_refs.iter().map(|p| p.as_path()).collect();
+        
         compiler.compile_multiple_c_to_native(
             &c_file_refs,
+            &obj_file_refs,
             Some(&output_path),
             output_type,
             output_options.export_symbols,

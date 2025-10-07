@@ -1,0 +1,24 @@
+import math
+import os
+import sys
+
+def main():
+    # Test math functions
+    x = math.pi
+    y = math.sqrt(16)
+    
+    # Test OS functions
+    env = os.getenv("PATH")
+    
+    # Test sys functions
+    platform = sys.platform
+    
+    print("Math PI:", x)
+    print("Square root of 16:", y)
+    print("OS Environment PATH:", env)
+    print("System Platform:", platform)
+    
+    return 0
+
+if __name__ == "__main__":
+    main()

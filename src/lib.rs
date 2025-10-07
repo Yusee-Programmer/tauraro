@@ -14,6 +14,7 @@ pub mod runtime;
 pub mod ffi;
 pub mod modules;
 pub mod module_system;
+pub mod module_cache; // Add module cache
 pub mod object_system;
 pub mod package_manager;
 pub mod base_object;

@@ -4,9 +4,8 @@
 use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, BufWriter};
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
 // Import HPList
 use crate::modules::hplist::HPList;
 
