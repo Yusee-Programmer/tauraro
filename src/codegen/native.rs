@@ -92,6 +92,7 @@ impl NativeCompiler {
     pub fn compile_multiple_c_to_native(
         &self,
         c_files: &[&Path],
+        object_files: &[&Path],
         output_path: Option<&Path>,
         output_type: OutputType,
         export: bool,
@@ -111,6 +112,11 @@ impl NativeCompiler {
         // Add all input files
         for c_file in c_files {
             cmd.arg(c_file);
+        }
+        
+        // Add object files to link
+        for obj_file in object_files {
+            cmd.arg(obj_file);
         }
         
         match compiler.as_str() {
@@ -203,10 +209,10 @@ impl NativeCompiler {
         output_type: OutputType,
         export: bool,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        self.compile_multiple_c_to_native(&[c_file], output_path, output_type, export)
+        self.compile_multiple_c_to_native(&[c_file], &[], output_path, output_type, export)
     }
 
-    fn detect_c_compiler(&self) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn detect_c_compiler(&self) -> Result<String, Box<dyn std::error::Error>> {
         let compilers = match self.platform {
             TargetPlatform::Windows => {
                 // Check if we're in a Visual Studio environment first

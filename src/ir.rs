@@ -158,7 +158,15 @@ pub enum IRInstruction {
     DocString { text: String },
     
     // Built-in functions
-    Print { value: IRValue },
+    Print { 
+        value: IRValue 
+    },
+    
+    /// Print multiple values to stdout
+    PrintMulti { 
+        values: Vec<IRValue> 
+    },
+    
     Len { dest: String, obj: IRValue },
     Type { dest: String, obj: IRValue },
     
@@ -1163,13 +1171,20 @@ impl Generator {
                 
                 // Special handling for print function - it doesn't return a value
                 if func_name == "print" {
-                    current_block.instructions.push(IRInstruction::Print {
-                        value: if arg_values.is_empty() {
-                            IRValue::ImmediateString("".to_string())
-                        } else {
-                            arg_values[0].clone()
-                        }
-                    });
+                    if arg_values.is_empty() {
+                        current_block.instructions.push(IRInstruction::Print {
+                            value: IRValue::ImmediateString("".to_string())
+                        });
+                    } else if arg_values.len() == 1 {
+                        current_block.instructions.push(IRInstruction::Print {
+                            value: arg_values[0].clone()
+                        });
+                    } else {
+                        // Handle multiple arguments
+                        current_block.instructions.push(IRInstruction::PrintMulti {
+                            values: arg_values.clone()
+                        });
+                    }
                     Ok(IRValue::Null) // print doesn't return a value
                 } else if func_name == "super" {
                     // Special handling for super() calls
@@ -1337,8 +1352,29 @@ impl Generator {
                     });
                 } else {
                     // For method calls, we need to pass the object as the first argument (self)
-                    let mut call_args = vec![object_val.clone()];
-                    call_args.extend(arg_values);
+                    // But for built-in module functions, we don't pass the module object
+                    let call_args = match &object_val {
+                        IRValue::Variable(var_name) => {
+                            // Check if this is a call on an imported module
+                            let is_imported_module = module.imported_modules.contains(var_name);
+                            
+                            if is_imported_module {
+                                // This is a call on an imported module, don't pass the module object
+                                arg_values.clone()
+                            } else {
+                                // Regular method call on an object, pass the object as first argument
+                                let mut args = vec![object_val.clone()];
+                                args.extend(arg_values);
+                                args
+                            }
+                        }
+                        _ => {
+                            // For other cases, pass the object as first argument
+                            let mut args = vec![object_val.clone()];
+                            args.extend(arg_values);
+                            args
+                        }
+                    };
                     
                     // Generate call instruction for method calls
                     // We'll use a special naming convention: "Class_method" for method resolution
@@ -1356,8 +1392,8 @@ impl Generator {
                                 let is_imported_module = module.imported_modules.contains(var_name);
                                 
                                 if is_imported_module {
-                                    // This is a call on an imported module, generate "module_function" call
-                                    format!("{}_{}", var_name, method)
+                                    // This is a call on an imported module, generate "tauraro_module_function" call
+                                    format!("tauraro_{}_{}", var_name, method)
                                 } else {
                                     // Regular method call on an object
                                     format!("{}_{}", var_name, method)

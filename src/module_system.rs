@@ -3,7 +3,7 @@ use crate::value::Value;
 use crate::vm::{VM, Scope};
 use anyhow::{Result, anyhow};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::fs;
 use std::cell::RefCell;
 // Add module cache

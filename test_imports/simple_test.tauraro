@@ -1,0 +1,12 @@
+import math
+
+def calculate_area(radius):
+    return math.pi * radius * radius
+
+def main():
+    area = calculate_area(5.0)
+    print("Area of circle with radius 5:", area)
+    return 0
+
+if __name__ == "__main__":
+    main()

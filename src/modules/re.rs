@@ -4,7 +4,7 @@
 use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
-use regex::{Regex, RegexBuilder, Captures, Match};
+use regex::{Regex, RegexBuilder, Match};
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 // Import HPList
