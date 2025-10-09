@@ -139,6 +139,7 @@ fn re_compile(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "Pattern".to_string(),
         fields: pattern_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Pattern".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Pattern".to_string(), "object".to_string()]),
     })
@@ -519,6 +520,7 @@ fn create_match_object_from_match(regex: &Regex, string: &str, mat: Match) -> Re
     Ok(Value::Object {
         class_name: "Match".to_string(),
         fields: match_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Match".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Match".to_string(), "object".to_string()]),
     })
@@ -541,6 +543,7 @@ fn create_match_object(pattern: &str, string: &str, start: usize) -> Result<Valu
     Ok(Value::Object {
         class_name: "Match".to_string(),
         fields: match_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Match".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Match".to_string(), "object".to_string()]),
     })

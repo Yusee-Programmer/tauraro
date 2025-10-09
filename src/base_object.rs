@@ -356,6 +356,7 @@ fn dunder_new(_self: &Value, _args: &[Value]) -> Result<Value, String> {
     Ok(crate::value::Value::Object {
             class_name: "object".to_string(),
             fields: HashMap::new(),
+            class_methods: HashMap::new(),
             base_object: BaseObject::new("object".to_string(), vec![]),
             mro: MRO::from_linearization(vec!["object".to_string()])
         })

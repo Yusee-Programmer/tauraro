@@ -354,6 +354,7 @@ impl TypeCreator {
         Ok(Value::Object {
             class_name: name.clone(),
             fields: namespace,
+            class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new(name.clone(), bases.clone()),
             mro: crate::base_object::MRO::from_linearization(mro.clone()),
         })

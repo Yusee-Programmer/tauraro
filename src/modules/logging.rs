@@ -122,6 +122,7 @@ fn create_logger(name: String, level: i64) -> Value {
     Value::Object {
         class_name: "Logger".to_string(),
         fields: logger,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Logger".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Logger".to_string(), "object".to_string()]),
     }
@@ -147,6 +148,7 @@ fn create_handler(handler_type: String) -> Value {
     Value::Object {
         class_name: handler_type,
         fields: handler,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Handler".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Handler".to_string(), "object".to_string()]),
     }
@@ -173,6 +175,7 @@ fn create_formatter(fmt: Option<String>, datefmt: Option<String>) -> Value {
     Value::Object {
         class_name: "Formatter".to_string(),
         fields: formatter,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Formatter".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Formatter".to_string(), "object".to_string()]),
     }
@@ -473,6 +476,7 @@ fn logging_filter_class(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "Filter".to_string(),
         fields: filter,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Filter".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Filter".to_string(), "object".to_string()]),
     })
@@ -517,6 +521,7 @@ fn logging_log_record_class(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "LogRecord".to_string(),
         fields: record,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("LogRecord".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["LogRecord".to_string(), "object".to_string()]),
     })

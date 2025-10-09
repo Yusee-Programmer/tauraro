@@ -898,6 +898,44 @@ impl CompleteExecutor for VM {
                 self.set_variable_internal(name, func_value)?;
                 Ok(())
             }
+            Statement::Import { module, alias } => {
+                // Handle import statements
+                // Check if it's a built-in module first
+                if crate::builtins::is_builtin_module(module) {
+                    if let Some(module_obj) = crate::builtins::get_builtin_module(module) {
+                        let var_name = alias.as_ref().unwrap_or(module);
+                        self.set_variable_internal(var_name, module_obj)?;
+                        return Ok(());
+                    }
+                }
+                
+                // For non-built-in modules, we need to handle the borrow checker issue properly
+                // Since we can't easily pass self to load_module, let's create a simpler approach
+                // For now, we'll just return an error for non-built-in modules
+                Err(anyhow::anyhow!("Import of non-built-in modules not yet fully supported: {}", module))
+            }
+            Statement::FromImport { module, names } => {
+                // Handle from import statements
+                // Check if it's a built-in module first
+                if crate::builtins::is_builtin_module(module) {
+                    if let Some(module_obj) = crate::builtins::get_builtin_module(module) {
+                        if let Value::Module(_, namespace) = &module_obj {
+                            for (name, alias) in names {
+                                if let Some(value) = namespace.get(name) {
+                                    let var_name = alias.as_ref().unwrap_or(name);
+                                    self.set_variable_internal(var_name, value.clone())?;
+                                } else {
+                                    return Err(anyhow::anyhow!("cannot import name '{}' from '{}' (module has no attribute '{}')", name, module, name));
+                                }
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+                
+                // For non-built-in modules, return an error for now
+                Err(anyhow::anyhow!("Import from non-built-in modules not yet fully supported: {}", module))
+            }
             _ => {
                 // For other statements, use the existing implementation
                 self.execute_statement(statement)

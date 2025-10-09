@@ -331,10 +331,23 @@ pub fn run_repl() -> Result<()> {
                                 Value::List(_) => println!("{}", format_value(&value)),
                                 Value::Dict(_) => println!("{}", format_value(&value)),
                                 Value::Closure { name, .. } => {
-                                    println!("<function {} at {:p}>", name, &value as *const _);
+                                    println!("<function {}>", name);
                                 }
                                 Value::Bool(b) => println!("{}", if *b { "True" } else { "False" }),
                                 Value::None => {}, // Don't print None
+                                // For objects, classes, and modules, show concise representation like Python
+                                Value::Object { class_name, .. } => {
+                                    println!("<{} object>", class_name);
+                                }
+                                Value::Class { name, .. } => {
+                                    println!("<class '{}'>", name);
+                                }
+                                Value::Module(name, _) => {
+                                    println!("<module '{}'>", name);
+                                }
+                                Value::BuiltinFunction(name, _) => {
+                                    println!("<built-in function {}>", name);
+                                }
                                 _ => println!("{}", format_value(&value)),
                             }
                         }

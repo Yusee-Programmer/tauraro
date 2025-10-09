@@ -379,10 +379,10 @@ pub struct MethodCache {
 
 /// Register-based bytecode virtual machine with computed GOTOs for maximum performance
 pub struct SuperBytecodeVM {
-    frames: Vec<Frame>,
-    builtins: HashMap<String, RcValue>,
-    globals: HashMap<String, RcValue>,
-    globals_version: u32,
+    pub frames: Vec<Frame>,
+    pub builtins: HashMap<String, RcValue>,
+    pub globals: HashMap<String, RcValue>,
+    pub globals_version: u32,
     
     // Cache compiled code objects for closures to avoid recompiling on each call
     function_code_cache: HashMap<Value, CodeObject>,
@@ -671,10 +671,13 @@ impl SuperBytecodeVM {
         // Computed GOTOs implementation for maximum performance
         // eprintln!("DEBUG: execute_instruction_fast - opcode: {:?}", opcode);
         match opcode {
+            // --- Basic Operations ---
             OpCode::NOP => {
                 // No operation; proceed to next instruction
                 Ok(None)
             }
+            
+            // --- Variable Access Operations ---
             OpCode::LoadFast => {
                 // Fast load from local variable by index - no bounds checking for maximum performance
                 let local_idx = arg1 as usize;
@@ -841,6 +844,8 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].cache_version = self.globals_version;
                 Ok(None)
             }
+            
+            // --- Arithmetic Operations ---
             OpCode::BinaryAddRR => {
                 // Register-Register addition
                 let left_reg = arg1;
@@ -915,17 +920,6 @@ impl SuperBytecodeVM {
                 };
                 
                 self.frames[frame_idx].registers[result_reg as usize] = RcValue::new(result);
-                Ok(None)
-            }
-            OpCode::CompareEqualRR => {
-                // Register-Register equality comparison
-                let left_reg = arg1;
-                let right_reg = arg2;
-                let result_reg = arg3;
-                let left = self.frames[frame_idx].registers[left_reg as usize].clone();
-                let right = self.frames[frame_idx].registers[right_reg as usize].clone();
-                let result = left == right;
-                self.frames[frame_idx].registers[result_reg as usize] = RcValue::new(Value::Bool(result));
                 Ok(None)
             }
             OpCode::BinaryMulRR => {
@@ -1624,155 +1618,9 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].registers[result_reg as usize] = RcValue::new(result);
                 Ok(None)
             }
-            OpCode::ReturnValue => {
-                let reg = arg1;
-                // eprintln!("DEBUG: ReturnValue - reg: {}, frame_idx: {}, frames.len(): {}", reg, frame_idx, self.frames.len());
-                if reg as usize >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("ReturnValue: register index out of bounds"));
-                }
-                let value = self.frames[frame_idx].registers[reg as usize].clone();
-                // eprintln!("DEBUG: ReturnValue - value: {:?}", value);
-
-                // Check if we need to store the return value in a caller's register
-                let return_info = self.frames[frame_idx].return_register;
-                // eprintln!("DEBUG: ReturnValue - return_info: {:?}", return_info);
-                // Update globals before popping any frame (REPL needs this)
-                self.globals = self.frames[frame_idx].globals.clone();
-                self.frames.pop();
-                // eprintln!("DEBUG: ReturnValue - after pop, frames.len(): {}", self.frames.len());
-
-                if let Some((caller_frame_idx, result_reg)) = return_info {
-                    // Store return value in caller's register
-                    if caller_frame_idx < self.frames.len() {
-                        self.frames[caller_frame_idx].set_register(result_reg, value);
-                    }
-                    Ok(None) // Continue execution in caller
-                } else {
-                    Ok(Some(value.value)) // Top-level return
-                }
-            }
-            OpCode::CallFunction => {
-                // Call a function with arguments
-                let func_reg = arg1;
-                let arg_count = arg2 as usize;
-                let result_reg = arg3;
-
-                // eprintln!("DEBUG: CallFunction - func_reg: {}, arg_count: {}, result_reg: {}", func_reg, arg_count, result_reg);
-
-                // Get the function from the register
-                if func_reg as usize >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("CallFunction: function register index out of bounds"));
-                }
-                let func_value = self.frames[frame_idx].registers[func_reg as usize].clone();
-                // eprintln!("DEBUG: CallFunction - func_value: {:?}", func_value);
-
-                // Collect arguments from consecutive registers
-                let mut args = Vec::new();
-                for i in 0..arg_count {
-                    let arg_reg = func_reg + 1 + i as u32;
-                    if arg_reg as usize >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("CallFunction: argument register index out of bounds"));
-                    }
-                    args.push(self.frames[frame_idx].registers[arg_reg as usize].value.clone());
-                }
-                // eprintln!("DEBUG: CallFunction - args: {:?}", args);
-
-                // CRITICAL FIX: Check if a new frame was pushed BEFORE calling the function
-                let frames_before = self.frames.len();
-
-                // Call the function with caller frame info
-                let result = self.call_function_fast(func_value.value, args, Some(frame_idx), Some(result_reg))?;
-
-                // Check if a new frame was actually pushed (not just if result is None)
-                let frames_after = self.frames.len();
-                if frames_after > frames_before {
-                    // A new frame was pushed (user-defined function), increment caller's PC
-                    // This ensures when the function returns, execution continues at the next instruction
-                    self.frames[frame_idx].pc += 1;
-                } else {
-                    // Builtin function returned directly (no frame pushed), store result
-                    // PC will be incremented by main loop
-                    self.frames[frame_idx].set_register(result_reg, RcValue::new(result));
-                }
-                Ok(None)
-            }
-            OpCode::CallMethod => {
-                // Call a method on an object using the new comprehensive call_method implementation
-                let object_reg = arg1;
-                let arg_count = arg2 as usize;
-                let method_name_idx = arg3 as usize;
-
-                // Get the object from the register
-                if object_reg as usize >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("CallMethod: object register index out of bounds"));
-                }
-
-                // Get the method name
-                if method_name_idx >= self.frames[frame_idx].code.names.len() {
-                    return Err(anyhow!("CallMethod: method name index out of bounds"));
-                }
-                let method_name = self.frames[frame_idx].code.names[method_name_idx].clone();
-
-                // Collect arguments from consecutive registers following the object register
-                let mut args = Vec::new();
-                for i in 0..arg_count {
-                    let arg_reg = object_reg + 1 + (i as u32);
-                    if arg_reg as usize >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("CallMethod: argument register {} out of bounds", arg_reg));
-                    }
-                    args.push(self.frames[frame_idx].registers[arg_reg as usize].value.clone());
-                }
-
-                // Clone the object value to call methods on it
-                // For mutating methods, we'll update the register after the call
-                let mut object_value = self.frames[frame_idx].registers[object_reg as usize].value.clone();
-
-                // Call the method using the comprehensive call_method implementation
-                // Note: call_method may mutate object_value for mutating methods like append()
-                match object_value.call_method(&method_name, args) {
-                    Ok(result) => {
-                        // Determine if this is a mutating method that returns None
-                        let is_pure_mutating = matches!(
-                            (&object_value, method_name.as_str(), &result),
-                            (Value::List(_), "append" | "extend" | "insert" | "remove" | "clear" | "sort" | "reverse", Value::None) |
-                            (Value::Dict(_), "clear" | "update", Value::None) |
-                            (Value::Set(_), "add" | "remove" | "discard" | "clear", Value::None) |
-                            (Value::ByteArray(_), "append" | "extend", Value::None)
-                        );
-
-                        if is_pure_mutating {
-                            // For pure mutating methods (mutate AND return None):
-                            // Store the mutated object in the register so StoreGlobal can save it
-                            self.frames[frame_idx].registers[object_reg as usize] = RcValue::new(object_value);
-                        } else {
-                            // For all other methods:
-                            // - Non-mutating methods: store the result (e.g., upper() returns new string)
-                            // - Mutating methods that return a value: store the result (e.g., pop() returns value)
-                            //   Note: For pop(), the mutated object will be saved by call_method, but we need to
-                            //   also store it in the register for StoreGlobal. Let's do both:
-                            if matches!((&object_value, method_name.as_str()),
-                                (Value::List(_), "pop") |
-                                (Value::Dict(_), "pop" | "setdefault" | "popitem") |
-                                (Value::Set(_), "pop")
-                            ) {
-                                // First store the mutated object (will be saved by StoreGlobal)
-                                // But wait - we need BOTH the mutated object AND the result!
-                                // The trick: StoreGlobal happens AFTER this, so we need to store mutated object now
-                                // Then after StoreGlobal in the generated code, LoadLocal will get the result
-                                // But StoreGlobal reads the register, so it will see what we store here
-                                // Solution: Store the mutated object for StoreGlobal to see
-                                // The result will be "lost" but that's okay because these methods return a value
-                                // Actually, the compiler should handle this differently. For now, let's store the mutated object
-                                self.frames[frame_idx].registers[object_reg as usize] = RcValue::new(object_value.clone());
-                            }
-                            // Now store the result for LoadLocal to retrieve
-                            self.frames[frame_idx].registers[object_reg as usize] = RcValue::new(result);
-                        }
-
-                        Ok(None)
-                    }
-                    Err(e) => Err(anyhow!("CallMethod error: {}", e)),
-                }
+            // Delegate function-related opcodes to functions module
+            OpCode::CallFunction | OpCode::CallMethod | OpCode::ReturnValue => {
+                return self.execute_function_op(frame_idx, opcode, arg1, arg2, arg3);
             }
             OpCode::BuildList => {
                 // Build a list from items in consecutive registers

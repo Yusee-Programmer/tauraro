@@ -502,6 +502,7 @@ impl ModuleSystem {
                 let class_obj = Value::Object {
                     class_name: name.clone(),
                     fields: class_methods,
+                    class_methods: HashMap::new(),
                     base_object: crate::base_object::BaseObject::new(name.clone(), vec!["object".to_string()]),
                     mro: crate::base_object::MRO::from_linearization(vec![name.clone(), "object".to_string()]),
                 };

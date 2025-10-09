@@ -209,6 +209,7 @@ pub fn create_collections_module() -> Value {
             Ok(Value::Object {
                 class_name: "HighPerfList".to_string(),
                 fields: HashMap::new(),
+                class_methods: HashMap::new(),
                 base_object: crate::base_object::BaseObject::new("HighPerfList".to_string(), vec!["object".to_string()]),
                 mro: crate::base_object::MRO::from_linearization(vec!["HighPerfList".to_string(), "object".to_string()]),
             })

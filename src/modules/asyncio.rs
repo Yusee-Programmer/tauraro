@@ -259,9 +259,10 @@ extern "C" fn get_event_loop(_args: *const Value, _argc: usize) -> Value {
     loop_obj.insert("is_running".to_string(), Value::NativeFunction(is_running_wrapper));
     loop_obj.insert("is_closed".to_string(), Value::NativeFunction(is_closed_wrapper));
     
-    Value::Object { 
+    Value::Object {
         class_name: "EventLoop".to_string(),
         fields: loop_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("EventLoop".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["EventLoop".to_string(), "object".to_string()])
     }
@@ -340,9 +341,10 @@ extern "C" fn create_task(_args: *const Value, _argc: usize) -> Value {
         task_obj.insert("add_done_callback".to_string(), Value::NativeFunction(add_done_callback_wrapper));
         task_obj.insert("remove_done_callback".to_string(), Value::NativeFunction(remove_done_callback_wrapper));
         
-        Value::Object { 
+        Value::Object {
             class_name: "Task".to_string(),
             fields: task_obj,
+            class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new("Task".to_string(), vec!["object".to_string()]),
             mro: crate::base_object::MRO::from_linearization(vec!["Task".to_string(), "object".to_string()])
         }
@@ -382,9 +384,10 @@ extern "C" fn asyncio_sleep(_args: *const Value, _argc: usize) -> Value {
             // Mock implementation - would normally create a sleep coroutine
             let mut sleep_obj = HashMap::new();
             sleep_obj.insert("__await__".to_string(), Value::NativeFunction(sleep_await_wrapper));
-            Value::Object { 
+            Value::Object {
                 class_name: "Sleep".to_string(),
                 fields: sleep_obj,
+                class_methods: HashMap::new(),
                 base_object: crate::base_object::BaseObject::new("Sleep".to_string(), vec!["object".to_string()]),
                 mro: crate::base_object::MRO::from_linearization(vec!["Sleep".to_string(), "object".to_string()])
             }
@@ -443,9 +446,10 @@ extern "C" fn create_lock(_args: *const Value, _argc: usize) -> Value {
     lock_obj.insert("release".to_string(), Value::NativeFunction(lock_release_wrapper));
     lock_obj.insert("locked".to_string(), Value::NativeFunction(lock_locked_wrapper));
     
-    Value::Object { 
+    Value::Object {
         class_name: "Lock".to_string(),
         fields: lock_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Lock".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Lock".to_string(), "object".to_string()])
     }
@@ -458,9 +462,10 @@ extern "C" fn create_event(_args: *const Value, _argc: usize) -> Value {
     event_obj.insert("is_set".to_string(), Value::NativeFunction(event_is_set_wrapper));
     event_obj.insert("wait".to_string(), Value::NativeFunction(event_wait_wrapper));
     
-    Value::Object { 
+    Value::Object {
         class_name: "Event".to_string(),
         fields: event_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Event".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Event".to_string(), "object".to_string()])
     }
@@ -471,9 +476,10 @@ extern "C" fn create_semaphore(_args: *const Value, _argc: usize) -> Value {
     semaphore_obj.insert("acquire".to_string(), Value::NativeFunction(semaphore_acquire_wrapper));
     semaphore_obj.insert("release".to_string(), Value::NativeFunction(semaphore_release_wrapper));
     
-    Value::Object { 
+    Value::Object {
         class_name: "Semaphore".to_string(),
         fields: semaphore_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Semaphore".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Semaphore".to_string(), "object".to_string()])
     }
@@ -487,9 +493,10 @@ extern "C" fn create_queue(_args: *const Value, _argc: usize) -> Value {
     queue_obj.insert("full".to_string(), Value::NativeFunction(queue_full_wrapper));
     queue_obj.insert("qsize".to_string(), Value::NativeFunction(queue_qsize_wrapper));
     
-    Value::Object { 
+    Value::Object {
         class_name: "Queue".to_string(),
         fields: queue_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Queue".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Queue".to_string(), "object".to_string()])
     }
@@ -585,6 +592,7 @@ extern "C" fn cancelled_error(_args: *const Value, _argc: usize) -> Value {
     Value::Object {
             class_name: "CancelledError".to_string(),
             fields: error_obj,
+            class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new("CancelledError".to_string(), vec!["Exception".to_string(), "object".to_string()]),
             mro: crate::base_object::MRO::from_linearization(vec!["CancelledError".to_string(), "Exception".to_string(), "object".to_string()])
         }

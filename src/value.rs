@@ -33,6 +33,7 @@ pub enum Value {
     Object {
         class_name: String,
         fields: HashMap<String, Value>,
+        class_methods: HashMap<String, Value>,
         base_object: BaseObject,
         mro: MRO,
     },
@@ -94,7 +95,7 @@ impl PartialEq for Value {
             (Value::MemoryView { data: data_a, format: format_a, shape: shape_a }, Value::MemoryView { data: data_b, format: format_b, shape: shape_b }) => data_a == data_b && format_a == format_b && shape_a == shape_b,
             (Value::Ellipsis, Value::Ellipsis) => true,
             (Value::NotImplemented, Value::NotImplemented) => true,
-            (Value::Object { class_name: class_name_a, fields: fields_a, base_object: base_object_a, mro: mro_a }, Value::Object { class_name: class_name_b, fields: fields_b, base_object: base_object_b, mro: mro_b }) => class_name_a == class_name_b && fields_a == fields_b && base_object_a == base_object_b && mro_a == mro_b,
+            (Value::Object { class_name: class_name_a, fields: fields_a, class_methods: class_methods_a, base_object: base_object_a, mro: mro_a }, Value::Object { class_name: class_name_b, fields: fields_b, class_methods: class_methods_b, base_object: base_object_b, mro: mro_b }) => class_name_a == class_name_b && fields_a == fields_b && class_methods_a == class_methods_b && base_object_a == base_object_b && mro_a == mro_b,
             (Value::Class { name: name_a, bases: bases_a, methods: methods_a, metaclass: metaclass_a, mro: mro_a, base_object: base_object_a }, Value::Class { name: name_b, bases: bases_b, methods: methods_b, metaclass: metaclass_b, mro: mro_b, base_object: base_object_b }) => name_a == name_b && bases_a == bases_b && methods_a == methods_b && metaclass_a == metaclass_b && mro_a == mro_b && base_object_a == base_object_b,
             (Value::Super(current_class_a, parent_class_a, obj_a), Value::Super(current_class_b, parent_class_b, obj_b)) => current_class_a == current_class_b && parent_class_a == parent_class_b && obj_a == obj_b,
             // For Closure, we compare name, params, and compiled_code
@@ -134,10 +135,11 @@ impl fmt::Debug for Value {
             Value::MemoryView { data, format, shape } => write!(f, "MemoryView {{ data: {:?}, format: {}, shape: {:?} }}", data, format, shape),
             Value::Ellipsis => write!(f, "Ellipsis"),
             Value::NotImplemented => write!(f, "NotImplemented"),
-            Value::Object { class_name, fields, base_object, mro } => {
+            Value::Object { class_name, fields, class_methods, base_object, mro } => {
                 f.debug_struct("Object")
                     .field("class_name", class_name)
                     .field("fields", fields)
+                    .field("class_methods", class_methods)
                     .field("base_object", base_object)
                     .field("mro", mro)
                     .finish()
@@ -206,10 +208,11 @@ impl Value {
         let linearization = MRO::compute_c3_linearization(&class_name, &parents, &class_mros)
             .unwrap_or_else(|_| vec![class_name.clone(), "object".to_string()]);
         let mro = MRO::from_linearization(linearization);
-        
+
         Value::Object {
             class_name: class_name.clone(),
             fields,
+            class_methods: HashMap::new(),
             base_object: BaseObject::new(class_name, parents),
             mro,
         }
@@ -436,8 +439,8 @@ impl Value {
             }
 
             Value::NativeFunction(_) => "<native function>".to_string(),
-            Value::Object { class_name, fields, .. } => {
-                 format!("<{} object with {} fields>", class_name, fields.len())
+            Value::Object { class_name, .. } => {
+                 format!("<{} object>", class_name)
              }
              Value::Class { name, bases, methods, .. } => {
                  if bases.is_empty() {
@@ -913,8 +916,8 @@ impl fmt::Display for Value {
                 write!(f, "<built-in function {}>", name)
             }
             Value::NativeFunction(_) => write!(f, "<native function>"),
-            Value::Object { class_name, fields, .. } => {
-                write!(f, "<{} object with {} fields>", class_name, fields.len())
+            Value::Object { class_name, .. } => {
+                write!(f, "<{} object>", class_name)
             }
             Value::Class { name, bases, methods, .. } => {
                 if bases.is_empty() {
@@ -960,6 +963,16 @@ impl Value {
             Value::Float(f) => Self::call_float_method_static(*f, method_name, args),
             Value::Bytes(bytes) => Self::call_bytes_method_static(bytes.clone(), method_name, args),
             Value::ByteArray(ref mut ba) => Self::call_bytearray_method_static(ba, method_name, args),
+            Value::Object { class_methods, .. } => {
+                // For custom objects, check if the method exists in class_methods
+                if let Some(method) = class_methods.get(method_name) {
+                    // Method exists, but we can't call it directly from here
+                    // This error indicates the VM should handle it
+                    Err(anyhow::anyhow!("Method '{}' exists but needs to be called through VM", method_name))
+                } else {
+                    Err(anyhow::anyhow!("'{}' object has no attribute '{}'", self.type_name(), method_name))
+                }
+            },
             _ => Err(anyhow::anyhow!("'{}' object has no attribute '{}'", self.type_name(), method_name)),
         }
     }
@@ -1741,12 +1754,15 @@ impl Hash for Value {
                 9u8.hash(state);
                 bytes.hash(state);
             }
-            Value::Object { class_name, fields, .. } => {
+            Value::Object { class_name, fields, class_methods, .. } => {
                  10u8.hash(state);
                  class_name.hash(state);
                  let mut pairs: Vec<_> = fields.iter().collect();
                  pairs.sort_by_key(|(k, _)| *k);
                  pairs.hash(state);
+                 let mut method_pairs: Vec<_> = class_methods.iter().collect();
+                 method_pairs.sort_by_key(|(k, _)| *k);
+                 method_pairs.hash(state);
              }
             Value::Class { name, bases, methods, metaclass, .. } => {
                  27u8.hash(state);

@@ -135,6 +135,7 @@ extern "C" fn ws_connect(args: *const Value, argc: usize) -> Value {
         Value::Object {
             class_name: "WebSocket".to_string(),
             fields: ws_obj,
+            class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new("WebSocket".to_string(), vec!["object".to_string()]),
             mro: crate::base_object::MRO::from_linearization(vec!["WebSocket".to_string(), "object".to_string()]),
         }
@@ -177,6 +178,7 @@ extern "C" fn ws_serve(args: *const Value, argc: usize) -> Value {
         Value::Object {
         class_name: "WebSocketServer".to_string(),
         fields: server_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("WebSocketServer".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["WebSocketServer".to_string(), "object".to_string()]),
     }
@@ -303,6 +305,7 @@ extern "C" fn create_server_protocol(_args: *const Value, _argc: usize) -> Value
     Value::Object {
         class_name: "WebSocketServerProtocol".to_string(),
         fields: protocol_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("WebSocketServerProtocol".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["WebSocketServerProtocol".to_string(), "object".to_string()]),
     }
@@ -325,6 +328,7 @@ extern "C" fn create_client_protocol(_args: *const Value, _argc: usize) -> Value
     Value::Object {
         class_name: "WebSocketClientProtocol".to_string(),
         fields: protocol_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("WebSocketClientProtocol".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["WebSocketClientProtocol".to_string(), "object".to_string()]),
     }

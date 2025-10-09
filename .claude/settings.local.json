@@ -73,7 +73,16 @@
       "Bash(\"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\target\\release\\tauraro.exe\" run \"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\test_traceback.tr\")",
       "Bash(\"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\target\\release\\tauraro.exe\" run \"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\test_traceback_simple.tr\")",
       "Bash(\"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\target\\release\\tauraro.exe\" run \"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\test_builtin_access.tr\")",
-      "Bash(targetreleasetauraro.exe run:*)"
+      "Bash(targetreleasetauraro.exe run:*)",
+      "Bash(for file in asyncio.rs exceptions.rs datetime.rs hashlib.rs functools.rs csv.rs io.rs json.rs copy.rs itertools.rs httpx.rs httptools.rs logging.rs re.rs websockets.rs pickle.rs time.rs socket.rs)",
+      "Bash(do echo \"Processing $file...\")",
+      "Bash(python3:*)",
+      "Bash(node:*)",
+      "Bash(\"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\target\\release\\tauraro.exe\" run \"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\test_no_init.tr\")",
+      "Bash(\"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\target\\release\\tauraro.exe\" run \"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\test_no_assign.tr\")",
+      "Bash(\"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\target\\release\\tauraro.exe\" run \"C:\\Users\\Yusee Habibu\\Downloads\\tauraro\\test_void_method.tr\")",
+      "Bash(pgrep:*)",
+      "Bash(/dev/null)"
     ],
     "deny": [],
     "ask": []

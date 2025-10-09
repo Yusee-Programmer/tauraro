@@ -120,6 +120,10 @@ pub enum OpCode {
     SubscrStore,    // Store item to sequence (obj[key] = value)
     SubscrDelete,   // Delete item from sequence (del obj[key])
     
+    // Attribute operations
+    LoadAttr,       // Load attribute from object (obj.attr)
+    StoreAttr,      // Store attribute to object (obj.attr = value)
+    
     // Functions
     MakeFunction,
     LoadClassDeref,
@@ -129,6 +133,10 @@ pub enum OpCode {
     CallMethod,     // Call method with caching
     LoadMethodCached, // Load method from cache
     CallMethodCached, // Call method from cache
+    
+    // Import operations
+    ImportModule,   // Import a module
+    ImportFrom,     // Import specific names from a module
     
     // Exceptions
     Raise,

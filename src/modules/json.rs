@@ -93,6 +93,7 @@ fn create_json_encoder(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "JSONEncoder".to_string(),
         fields: encoder,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("JSONEncoder".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["JSONEncoder".to_string(), "object".to_string()]),
     })
@@ -107,6 +108,7 @@ fn create_json_decoder(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "JSONDecoder".to_string(),
         fields: decoder,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("JSONDecoder".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["JSONDecoder".to_string(), "object".to_string()]),
     })

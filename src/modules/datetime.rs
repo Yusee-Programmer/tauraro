@@ -19,6 +19,7 @@ pub fn create_datetime_module() -> Value {
     let datetime_class = Value::Object {
         class_name: "datetime".to_string(),
         fields: datetime_class_methods,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("datetime".to_string(), vec!["object".to_string()]),
         mro: MRO::from_linearization(vec!["datetime".to_string(), "object".to_string()]),
     };
@@ -30,6 +31,7 @@ pub fn create_datetime_module() -> Value {
     let date_class = Value::Object {
         class_name: "date".to_string(),
         fields: date_class_methods,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("date".to_string(), vec!["object".to_string()]),
         mro: MRO::from_linearization(vec!["date".to_string(), "object".to_string()]),
     };
@@ -273,6 +275,7 @@ fn create_datetime_object(dt: NaiveDateTime, tzinfo: Option<String>) -> Result<V
     Ok(Value::Object {
         class_name: "datetime".to_string(),
         fields,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("datetime".to_string(), vec!["object".to_string()]),
         mro: MRO::from_linearization(vec!["datetime".to_string(), "object".to_string()]),
     })
@@ -300,6 +303,7 @@ fn create_date_object(date: NaiveDate) -> Result<Value> {
     Ok(Value::Object {
         class_name: "date".to_string(),
         fields,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("date".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["date".to_string(), "object".to_string()]),
     })
@@ -326,6 +330,7 @@ fn create_time_object(time: NaiveTime) -> Result<Value> {
     Ok(Value::Object {
         class_name: "time".to_string(),
         fields,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("time".to_string(), vec!["object".to_string()]),
         mro: MRO::from_linearization(vec!["time".to_string(), "object".to_string()]),
     })
@@ -355,6 +360,7 @@ fn create_timedelta_object(days: i64, seconds: i64, microseconds: i64) -> Result
     Ok(Value::Object {
         class_name: "timedelta".to_string(),
         fields,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("timedelta".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["timedelta".to_string(), "object".to_string()]),
     })
