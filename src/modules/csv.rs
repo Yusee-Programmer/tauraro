@@ -43,6 +43,7 @@ pub fn create_csv_module() -> Value {
     namespace.insert("excel".to_string(), Value::Object {
         class_name: "excel".to_string(),
         fields: excel_dialect,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("excel".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["excel".to_string(), "object".to_string()]),
     });
@@ -58,6 +59,7 @@ pub fn create_csv_module() -> Value {
     namespace.insert("excel_tab".to_string(), Value::Object {
         class_name: "excel_tab".to_string(),
         fields: excel_tab_dialect,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("excel_tab".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["excel_tab".to_string(), "object".to_string()]),
     });
@@ -112,6 +114,7 @@ fn csv_reader(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "reader".to_string(),
         fields: reader,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("reader".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["reader".to_string(), "object".to_string()]),
     })
@@ -145,6 +148,7 @@ fn csv_writer(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "writer".to_string(),
         fields: writer,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("writer".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["writer".to_string(), "object".to_string()]),
     })
@@ -217,6 +221,7 @@ fn csv_dict_reader(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "DictReader".to_string(),
         fields: dict_reader,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("DictReader".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["DictReader".to_string(), "object".to_string()]),
     })
@@ -274,6 +279,7 @@ fn csv_dict_writer(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "DictWriter".to_string(),
         fields: dict_writer,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("DictWriter".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["DictWriter".to_string(), "object".to_string()]),
     })
@@ -336,6 +342,7 @@ fn csv_get_dialect(args: Vec<Value>) -> Result<Value> {
             Ok(Value::Object {
                 class_name: "excel".to_string(),
                 fields: excel_dialect,
+                class_methods: HashMap::new(),
                 base_object: crate::base_object::BaseObject::new("excel".to_string(), vec!["object".to_string()]),
                 mro: crate::base_object::MRO::from_linearization(vec!["excel".to_string(), "object".to_string()]),
             })
@@ -352,6 +359,7 @@ fn csv_get_dialect(args: Vec<Value>) -> Result<Value> {
             Ok(Value::Object {
                 class_name: "excel_tab".to_string(),
                 fields: excel_tab_dialect,
+                class_methods: HashMap::new(),
                 base_object: crate::base_object::BaseObject::new("excel_tab".to_string(), vec!["object".to_string()]),
                 mro: crate::base_object::MRO::from_linearization(vec!["excel_tab".to_string(), "object".to_string()]),
             })
@@ -382,6 +390,7 @@ fn csv_sniffer(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "Sniffer".to_string(),
         fields: sniffer,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Sniffer".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Sniffer".to_string(), "object".to_string()]),
     })
@@ -432,6 +441,7 @@ fn csv_error(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "Error".to_string(),
         fields: error,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Error".to_string(), vec!["Exception".to_string(), "BaseException".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Error".to_string(), "Exception".to_string(), "BaseException".to_string(), "object".to_string()]),
     })
@@ -541,6 +551,7 @@ fn csv_sniff(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "excel".to_string(),
         fields: excel_dialect,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("excel".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["excel".to_string(), "object".to_string()]),
     })

@@ -33,8 +33,17 @@ pub enum Value {
     Object {
         class_name: String,
         fields: HashMap<String, Value>,
+        class_methods: HashMap<String, Value>,
         base_object: BaseObject,
         mro: MRO,
+    },
+    Class {
+        name: String,
+        bases: Vec<String>, // Base class names
+        methods: HashMap<String, Value>, // Class methods, attributes, and __init__, __new__, etc.
+        metaclass: Option<String>, // Metaclass name (usually 'type')
+        mro: MRO,
+        base_object: BaseObject,
     },
     Super(String, String, Option<Box<Value>>), // current class name, parent class name, object instance
     Closure {
@@ -86,7 +95,8 @@ impl PartialEq for Value {
             (Value::MemoryView { data: data_a, format: format_a, shape: shape_a }, Value::MemoryView { data: data_b, format: format_b, shape: shape_b }) => data_a == data_b && format_a == format_b && shape_a == shape_b,
             (Value::Ellipsis, Value::Ellipsis) => true,
             (Value::NotImplemented, Value::NotImplemented) => true,
-            (Value::Object { class_name: class_name_a, fields: fields_a, base_object: base_object_a, mro: mro_a }, Value::Object { class_name: class_name_b, fields: fields_b, base_object: base_object_b, mro: mro_b }) => class_name_a == class_name_b && fields_a == fields_b && base_object_a == base_object_b && mro_a == mro_b,
+            (Value::Object { class_name: class_name_a, fields: fields_a, class_methods: class_methods_a, base_object: base_object_a, mro: mro_a }, Value::Object { class_name: class_name_b, fields: fields_b, class_methods: class_methods_b, base_object: base_object_b, mro: mro_b }) => class_name_a == class_name_b && fields_a == fields_b && class_methods_a == class_methods_b && base_object_a == base_object_b && mro_a == mro_b,
+            (Value::Class { name: name_a, bases: bases_a, methods: methods_a, metaclass: metaclass_a, mro: mro_a, base_object: base_object_a }, Value::Class { name: name_b, bases: bases_b, methods: methods_b, metaclass: metaclass_b, mro: mro_b, base_object: base_object_b }) => name_a == name_b && bases_a == bases_b && methods_a == methods_b && metaclass_a == metaclass_b && mro_a == mro_b && base_object_a == base_object_b,
             (Value::Super(current_class_a, parent_class_a, obj_a), Value::Super(current_class_b, parent_class_b, obj_b)) => current_class_a == current_class_b && parent_class_a == parent_class_b && obj_a == obj_b,
             // For Closure, we compare name, params, and compiled_code
             (Value::Closure { name: name_a, params: params_a, compiled_code: code_a, .. }, Value::Closure { name: name_b, params: params_b, compiled_code: code_b, .. }) => name_a == name_b && params_a == params_b && code_a == code_b,
@@ -125,12 +135,23 @@ impl fmt::Debug for Value {
             Value::MemoryView { data, format, shape } => write!(f, "MemoryView {{ data: {:?}, format: {}, shape: {:?} }}", data, format, shape),
             Value::Ellipsis => write!(f, "Ellipsis"),
             Value::NotImplemented => write!(f, "NotImplemented"),
-            Value::Object { class_name, fields, base_object, mro } => {
+            Value::Object { class_name, fields, class_methods, base_object, mro } => {
                 f.debug_struct("Object")
                     .field("class_name", class_name)
                     .field("fields", fields)
+                    .field("class_methods", class_methods)
                     .field("base_object", base_object)
                     .field("mro", mro)
+                    .finish()
+            },
+            Value::Class { name, bases, methods, metaclass, mro, base_object } => {
+                f.debug_struct("Class")
+                    .field("name", name)
+                    .field("bases", bases)
+                    .field("methods", methods)
+                    .field("metaclass", metaclass)
+                    .field("mro", mro)
+                    .field("base_object", base_object)
                     .finish()
             },
             Value::Super(current_class, parent_class, obj) => {
@@ -187,10 +208,11 @@ impl Value {
         let linearization = MRO::compute_c3_linearization(&class_name, &parents, &class_mros)
             .unwrap_or_else(|_| vec![class_name.clone(), "object".to_string()]);
         let mro = MRO::from_linearization(linearization);
-        
+
         Value::Object {
             class_name: class_name.clone(),
             fields,
+            class_methods: HashMap::new(),
             base_object: BaseObject::new(class_name, parents),
             mro,
         }
@@ -417,8 +439,15 @@ impl Value {
             }
 
             Value::NativeFunction(_) => "<native function>".to_string(),
-            Value::Object { class_name, fields, .. } => {
-                 format!("<{} object with {} fields>", class_name, fields.len())
+            Value::Object { class_name, .. } => {
+                 format!("<{} object>", class_name)
+             }
+             Value::Class { name, bases, methods, .. } => {
+                 if bases.is_empty() {
+                     format!("<class '{}' with {} methods>", name, methods.len())
+                 } else {
+                     format!("<class '{}' bases: ({}) with {} methods>", name, bases.join(", "), methods.len())
+                 }
              }
              Value::Super(current_class, parent_class, _) => {
                  format!("<super: {} -> {}>", current_class, parent_class)
@@ -469,6 +498,7 @@ impl Value {
             Value::ByteArray(_) => "bytearray",
             Value::MemoryView { .. } => "memoryview",
             Value::Object { class_name, .. } => class_name,
+            Value::Class { .. } => "type",
             Value::Super(_, _, _) => "super",
             Value::Closure { .. } => "function",
             Value::BuiltinFunction(_, _) => "builtin function",
@@ -545,6 +575,7 @@ impl Value {
             Value::BuiltinFunction(_, _) => Type::Simple("function".to_string()),
             Value::NativeFunction(_) => Type::Simple("function".to_string()),
             Value::Object { class_name, .. } => Type::Simple(class_name.clone()),
+            Value::Class { .. } => Type::Simple("type".to_string()),
             Value::None => Type::Simple("None".to_string()),
             Value::TypedValue { type_info, .. } => type_info.clone(),
             #[cfg(feature = "ffi")]
@@ -779,6 +810,7 @@ impl Value {
             Value::MemoryView { data, .. } => !data.is_empty(),
             Value::None => false,
             Value::Object { .. } => true,
+            Value::Class { .. } => true,
             Value::Super(_, _, _) => true,
             Value::Closure { .. } => true,
             Value::BuiltinFunction(_, _) => true,
@@ -884,8 +916,15 @@ impl fmt::Display for Value {
                 write!(f, "<built-in function {}>", name)
             }
             Value::NativeFunction(_) => write!(f, "<native function>"),
-            Value::Object { class_name, fields, .. } => {
-                write!(f, "<{} object with {} fields>", class_name, fields.len())
+            Value::Object { class_name, .. } => {
+                write!(f, "<{} object>", class_name)
+            }
+            Value::Class { name, bases, methods, .. } => {
+                if bases.is_empty() {
+                    write!(f, "<class '{}'>", name)
+                } else {
+                    write!(f, "<class '{}' bases: ({})>", name, bases.join(", "))
+                }
             }
             Value::Super(current_class, parent_class, _) => {
                 write!(f, "<super: {} -> {}>", current_class, parent_class)
@@ -911,7 +950,570 @@ impl fmt::Display for Value {
 }
 
 impl Value {
-    /// Get method for a value type
+    /// Call a method on this value with the given arguments
+    /// This is the main entry point for method calls on builtin types
+    pub fn call_method(&mut self, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+        match self {
+            Value::Str(s) => Self::call_str_method_static(s.clone(), method_name, args),
+            Value::List(ref mut list) => Self::call_list_method_static(list, method_name, args),
+            Value::Dict(ref mut dict) => Self::call_dict_method_static(dict, method_name, args),
+            Value::Set(ref mut set) => Self::call_set_method_static(set, method_name, args),
+            Value::Tuple(tuple) => Self::call_tuple_method_static(tuple.clone(), method_name, args),
+            Value::Int(n) => Self::call_int_method_static(*n, method_name, args),
+            Value::Float(f) => Self::call_float_method_static(*f, method_name, args),
+            Value::Bytes(bytes) => Self::call_bytes_method_static(bytes.clone(), method_name, args),
+            Value::ByteArray(ref mut ba) => Self::call_bytearray_method_static(ba, method_name, args),
+            Value::Object { class_methods, .. } => {
+                // For custom objects, check if the method exists in class_methods
+                if let Some(method) = class_methods.get(method_name) {
+                    // Method exists, but we can't call it directly from here
+                    // This error indicates the VM should handle it
+                    Err(anyhow::anyhow!("Method '{}' exists but needs to be called through VM", method_name))
+                } else {
+                    Err(anyhow::anyhow!("'{}' object has no attribute '{}'", self.type_name(), method_name))
+                }
+            },
+            _ => Err(anyhow::anyhow!("'{}' object has no attribute '{}'", self.type_name(), method_name)),
+        }
+    }
+
+    /// String method implementations
+    fn call_str_method_static(s: String, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+        match method_name {
+            "upper" => Ok(Value::Str(s.to_uppercase())),
+            "lower" => Ok(Value::Str(s.to_lowercase())),
+            "capitalize" => {
+                let mut chars = s.chars();
+                match chars.next() {
+                    None => Ok(Value::Str(String::new())),
+                    Some(first) => Ok(Value::Str(first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase())),
+                }
+            }
+            "title" => {
+                let mut result = String::new();
+                let mut capitalize_next = true;
+                for ch in s.chars() {
+                    if ch.is_whitespace() {
+                        capitalize_next = true;
+                        result.push(ch);
+                    } else if capitalize_next {
+                        result.push_str(&ch.to_uppercase().to_string());
+                        capitalize_next = false;
+                    } else {
+                        result.push_str(&ch.to_lowercase().to_string());
+                    }
+                }
+                Ok(Value::Str(result))
+            }
+            "swapcase" => {
+                let result: String = s.chars().map(|c| {
+                    if c.is_uppercase() {
+                        c.to_lowercase().to_string()
+                    } else {
+                        c.to_uppercase().to_string()
+                    }
+                }).collect();
+                Ok(Value::Str(result))
+            }
+            "strip" => Ok(Value::Str(s.trim().to_string())),
+            "lstrip" => Ok(Value::Str(s.trim_start().to_string())),
+            "rstrip" => Ok(Value::Str(s.trim_end().to_string())),
+            "split" => {
+                let sep = if args.is_empty() {
+                    None
+                } else {
+                    match &args[0] {
+                        Value::Str(sep) => Some(sep.as_str()),
+                        _ => return Err(anyhow::anyhow!("split() separator must be str")),
+                    }
+                };
+
+                let parts: Vec<Value> = if let Some(sep) = sep {
+                    s.split(sep).map(|p| Value::Str(p.to_string())).collect()
+                } else {
+                    s.split_whitespace().map(|p| Value::Str(p.to_string())).collect()
+                };
+
+                Ok(Value::List(HPList::from_values(parts)))
+            }
+            "join" => {
+                if args.is_empty() {
+                    return Err(anyhow::anyhow!("join() takes exactly one argument"));
+                }
+                match &args[0] {
+                    Value::List(items) => {
+                        let strings: Result<Vec<String>, _> = items.iter().map(|v| {
+                            match v {
+                                Value::Str(s) => Ok(s.clone()),
+                                _ => Err(anyhow::anyhow!("join() requires all items to be strings")),
+                            }
+                        }).collect();
+                        Ok(Value::Str(strings?.join(&s)))
+                    }
+                    Value::Tuple(items) => {
+                        let strings: Result<Vec<String>, _> = items.iter().map(|v| {
+                            match v {
+                                Value::Str(s) => Ok(s.clone()),
+                                _ => Err(anyhow::anyhow!("join() requires all items to be strings")),
+                            }
+                        }).collect();
+                        Ok(Value::Str(strings?.join(&s)))
+                    }
+                    _ => Err(anyhow::anyhow!("join() argument must be an iterable")),
+                }
+            }
+            "replace" => {
+                if args.len() < 2 {
+                    return Err(anyhow::anyhow!("replace() takes at least 2 arguments"));
+                }
+                let old = match &args[0] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(anyhow::anyhow!("replace() argument 1 must be str")),
+                };
+                let new = match &args[1] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(anyhow::anyhow!("replace() argument 2 must be str")),
+                };
+                Ok(Value::Str(s.replace(&old, &new)))
+            }
+            "find" => {
+                if args.is_empty() {
+                    return Err(anyhow::anyhow!("find() takes at least 1 argument"));
+                }
+                let sub = match &args[0] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(anyhow::anyhow!("find() argument must be str")),
+                };
+                match s.find(&sub) {
+                    Some(pos) => Ok(Value::Int(pos as i64)),
+                    None => Ok(Value::Int(-1)),
+                }
+            }
+            "startswith" => {
+                if args.is_empty() {
+                    return Err(anyhow::anyhow!("startswith() takes at least 1 argument"));
+                }
+                let prefix = match &args[0] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(anyhow::anyhow!("startswith() argument must be str")),
+                };
+                Ok(Value::Bool(s.starts_with(&prefix)))
+            }
+            "endswith" => {
+                if args.is_empty() {
+                    return Err(anyhow::anyhow!("endswith() takes at least 1 argument"));
+                }
+                let suffix = match &args[0] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(anyhow::anyhow!("endswith() argument must be str")),
+                };
+                Ok(Value::Bool(s.ends_with(&suffix)))
+            }
+            "isdigit" => Ok(Value::Bool(s.chars().all(|c| c.is_numeric()))),
+            "isalpha" => Ok(Value::Bool(s.chars().all(|c| c.is_alphabetic()))),
+            "isalnum" => Ok(Value::Bool(s.chars().all(|c| c.is_alphanumeric()))),
+            "isspace" => Ok(Value::Bool(s.chars().all(|c| c.is_whitespace()))),
+            "islower" => Ok(Value::Bool(s.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_lowercase()))),
+            "isupper" => Ok(Value::Bool(s.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase()))),
+            _ => Err(anyhow::anyhow!("'str' object has no attribute '{}'", method_name)),
+        }
+    }
+
+    /// List method implementations
+    fn call_list_method_static(list: &mut HPList, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+        match method_name {
+            "append" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("append() takes exactly one argument"));
+                }
+                list.append(args[0].clone());
+                Ok(Value::None)
+            }
+            "extend" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("extend() takes exactly one argument"));
+                }
+                match &args[0] {
+                    Value::List(other) => {
+                        list.extend(other.clone());
+                        Ok(Value::None)
+                    }
+                    Value::Tuple(items) => {
+                        list.extend(items.iter().cloned());
+                        Ok(Value::None)
+                    }
+                    _ => Err(anyhow::anyhow!("extend() argument must be iterable")),
+                }
+            }
+            "insert" => {
+                if args.len() != 2 {
+                    return Err(anyhow::anyhow!("insert() takes exactly 2 arguments"));
+                }
+                let index = match &args[0] {
+                    Value::Int(i) => *i as isize,
+                    _ => return Err(anyhow::anyhow!("insert() index must be int")),
+                };
+                list.insert(index, args[1].clone())?;
+                Ok(Value::None)
+            }
+            "remove" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("remove() takes exactly one argument"));
+                }
+                list.remove(&args[0])?;
+                Ok(Value::None)
+            }
+            "pop" => {
+                if args.is_empty() {
+                    // Pop from end
+                    match list.pop() {
+                        Some(v) => Ok(v),
+                        None => Err(anyhow::anyhow!("pop from empty list")),
+                    }
+                } else {
+                    // Pop from specific index
+                    let index = match &args[0] {
+                        Value::Int(i) => *i as isize,
+                        _ => return Err(anyhow::anyhow!("pop() index must be int")),
+                    };
+                    list.pop_at(index)
+                }
+            }
+            "clear" => {
+                list.clear();
+                Ok(Value::None)
+            }
+            "sort" => {
+                list.sort();
+                Ok(Value::None)
+            }
+            "reverse" => {
+                list.reverse();
+                Ok(Value::None)
+            }
+            "index" => {
+                if args.is_empty() {
+                    return Err(anyhow::anyhow!("index() takes at least 1 argument"));
+                }
+                let pos = list.index(&args[0], None, None)?;
+                Ok(Value::Int(pos as i64))
+            }
+            "count" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("count() takes exactly one argument"));
+                }
+                let count = list.count(&args[0]);
+                Ok(Value::Int(count as i64))
+            }
+            "copy" => {
+                Ok(Value::List(list.clone()))
+            }
+            _ => Err(anyhow::anyhow!("'list' object has no attribute '{}'", method_name)),
+        }
+    }
+
+    /// Dict method implementations
+    fn call_dict_method_static(dict: &mut HashMap<String, Value>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+        match method_name {
+            "keys" => {
+                let keys: Vec<Value> = dict.keys().map(|k| Value::Str(k.clone())).collect();
+                Ok(Value::List(HPList::from_values(keys)))
+            }
+            "values" => {
+                let values: Vec<Value> = dict.values().cloned().collect();
+                Ok(Value::List(HPList::from_values(values)))
+            }
+            "items" => {
+                let items: Vec<Value> = dict.iter()
+                    .map(|(k, v)| Value::Tuple(vec![Value::Str(k.clone()), v.clone()]))
+                    .collect();
+                Ok(Value::List(HPList::from_values(items)))
+            }
+            "get" => {
+                if args.is_empty() {
+                    return Err(anyhow::anyhow!("get() takes at least 1 argument"));
+                }
+                let key = match &args[0] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(anyhow::anyhow!("dict key must be str")),
+                };
+                let default = if args.len() > 1 {
+                    args[1].clone()
+                } else {
+                    Value::None
+                };
+                Ok(dict.get(&key).cloned().unwrap_or(default))
+            }
+            "pop" => {
+                if args.is_empty() {
+                    return Err(anyhow::anyhow!("pop() takes at least 1 argument"));
+                }
+                let key = match &args[0] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(anyhow::anyhow!("dict key must be str")),
+                };
+                let default = if args.len() > 1 {
+                    Some(args[1].clone())
+                } else {
+                    None
+                };
+                match dict.remove(&key) {
+                    Some(value) => Ok(value),
+                    None => default.ok_or_else(|| anyhow::anyhow!("KeyError: '{}'", key)),
+                }
+            }
+            "clear" => {
+                dict.clear();
+                Ok(Value::None)
+            }
+            "update" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("update() takes exactly one argument"));
+                }
+                match &args[0] {
+                    Value::Dict(other) => {
+                        for (k, v) in other {
+                            dict.insert(k.clone(), v.clone());
+                        }
+                        Ok(Value::None)
+                    }
+                    _ => Err(anyhow::anyhow!("update() argument must be dict")),
+                }
+            }
+            "copy" => {
+                Ok(Value::Dict(dict.clone()))
+            }
+            "setdefault" => {
+                if args.is_empty() {
+                    return Err(anyhow::anyhow!("setdefault() takes at least 1 argument"));
+                }
+                let key = match &args[0] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(anyhow::anyhow!("dict key must be str")),
+                };
+                let default = if args.len() > 1 {
+                    args[1].clone()
+                } else {
+                    Value::None
+                };
+                Ok(dict.entry(key).or_insert(default.clone()).clone())
+            }
+            "popitem" => {
+                match dict.iter().next() {
+                    Some((k, v)) => {
+                        let key = k.clone();
+                        let value = v.clone();
+                        dict.remove(&key);
+                        Ok(Value::Tuple(vec![Value::Str(key), value]))
+                    }
+                    None => Err(anyhow::anyhow!("popitem(): dictionary is empty")),
+                }
+            }
+            _ => Err(anyhow::anyhow!("'dict' object has no attribute '{}'", method_name)),
+        }
+    }
+
+    /// Set method implementations
+    fn call_set_method_static(set: &mut Vec<Value>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+        match method_name {
+            "add" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("add() takes exactly one argument"));
+                }
+                if !set.contains(&args[0]) {
+                    set.push(args[0].clone());
+                }
+                Ok(Value::None)
+            }
+            "remove" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("remove() takes exactly one argument"));
+                }
+                if let Some(pos) = set.iter().position(|x| x == &args[0]) {
+                    set.remove(pos);
+                    Ok(Value::None)
+                } else {
+                    Err(anyhow::anyhow!("KeyError"))
+                }
+            }
+            "discard" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("discard() takes exactly one argument"));
+                }
+                if let Some(pos) = set.iter().position(|x| x == &args[0]) {
+                    set.remove(pos);
+                }
+                Ok(Value::None)
+            }
+            "pop" => {
+                if set.is_empty() {
+                    Err(anyhow::anyhow!("pop from an empty set"))
+                } else {
+                    Ok(set.remove(0))
+                }
+            }
+            "clear" => {
+                set.clear();
+                Ok(Value::None)
+            }
+            "union" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("union() takes exactly one argument"));
+                }
+                match &args[0] {
+                    Value::Set(other) => {
+                        let mut result = set.clone();
+                        for item in other {
+                            if !result.contains(item) {
+                                result.push(item.clone());
+                            }
+                        }
+                        Ok(Value::Set(result))
+                    }
+                    _ => Err(anyhow::anyhow!("union() argument must be set")),
+                }
+            }
+            "intersection" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("intersection() takes exactly one argument"));
+                }
+                match &args[0] {
+                    Value::Set(other) => {
+                        let result: Vec<Value> = set.iter()
+                            .filter(|item| other.contains(item))
+                            .cloned()
+                            .collect();
+                        Ok(Value::Set(result))
+                    }
+                    _ => Err(anyhow::anyhow!("intersection() argument must be set")),
+                }
+            }
+            "difference" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("difference() takes exactly one argument"));
+                }
+                match &args[0] {
+                    Value::Set(other) => {
+                        let result: Vec<Value> = set.iter()
+                            .filter(|item| !other.contains(item))
+                            .cloned()
+                            .collect();
+                        Ok(Value::Set(result))
+                    }
+                    _ => Err(anyhow::anyhow!("difference() argument must be set")),
+                }
+            }
+            "copy" => {
+                Ok(Value::Set(set.clone()))
+            }
+            _ => Err(anyhow::anyhow!("'set' object has no attribute '{}'", method_name)),
+        }
+    }
+
+    /// Tuple method implementations
+    fn call_tuple_method_static(tuple: Vec<Value>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+        match method_name {
+            "count" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("count() takes exactly one argument"));
+                }
+                let count = tuple.iter().filter(|x| *x == &args[0]).count();
+                Ok(Value::Int(count as i64))
+            }
+            "index" => {
+                if args.is_empty() {
+                    return Err(anyhow::anyhow!("index() takes at least 1 argument"));
+                }
+                match tuple.iter().position(|x| x == &args[0]) {
+                    Some(pos) => Ok(Value::Int(pos as i64)),
+                    None => Err(anyhow::anyhow!("tuple.index(x): x not in tuple")),
+                }
+            }
+            _ => Err(anyhow::anyhow!("'tuple' object has no attribute '{}'", method_name)),
+        }
+    }
+
+    /// Int method implementations
+    fn call_int_method_static(n: i64, method_name: &str, _args: Vec<Value>) -> anyhow::Result<Value> {
+        match method_name {
+            "bit_length" => {
+                let bits = if n == 0 { 0 } else { (n.abs() as f64).log2().floor() as i64 + 1 };
+                Ok(Value::Int(bits))
+            }
+            _ => Err(anyhow::anyhow!("'int' object has no attribute '{}'", method_name)),
+        }
+    }
+
+    /// Float method implementations
+    fn call_float_method_static(f: f64, method_name: &str, _args: Vec<Value>) -> anyhow::Result<Value> {
+        match method_name {
+            "is_integer" => Ok(Value::Bool(f.fract() == 0.0)),
+            _ => Err(anyhow::anyhow!("'float' object has no attribute '{}'", method_name)),
+        }
+    }
+
+    /// Bytes method implementations
+    fn call_bytes_method_static(bytes: Vec<u8>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+        match method_name {
+            "decode" => {
+                let encoding = if args.is_empty() {
+                    "utf-8"
+                } else {
+                    match &args[0] {
+                        Value::Str(s) => s.as_str(),
+                        _ => return Err(anyhow::anyhow!("decode() encoding must be str")),
+                    }
+                };
+                match encoding {
+                    "utf-8" | "utf8" => {
+                        match String::from_utf8(bytes) {
+                            Ok(s) => Ok(Value::Str(s)),
+                            Err(_) => Err(anyhow::anyhow!("'utf-8' codec can't decode bytes")),
+                        }
+                    }
+                    _ => Err(anyhow::anyhow!("unknown encoding: {}", encoding)),
+                }
+            }
+            _ => Err(anyhow::anyhow!("'bytes' object has no attribute '{}'", method_name)),
+        }
+    }
+
+    /// ByteArray method implementations
+    fn call_bytearray_method_static(ba: &mut Vec<u8>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+        match method_name {
+            "append" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("append() takes exactly one argument"));
+                }
+                let byte = match &args[0] {
+                    Value::Int(i) => {
+                        if *i < 0 || *i > 255 {
+                            return Err(anyhow::anyhow!("byte must be in range(0, 256)"));
+                        }
+                        *i as u8
+                    }
+                    _ => return Err(anyhow::anyhow!("an integer is required")),
+                };
+                ba.push(byte);
+                Ok(Value::None)
+            }
+            "extend" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("extend() takes exactly one argument"));
+                }
+                match &args[0] {
+                    Value::ByteArray(other) | Value::Bytes(other) => {
+                        ba.extend(other);
+                        Ok(Value::None)
+                    }
+                    _ => Err(anyhow::anyhow!("extend() argument must be bytes-like")),
+                }
+            }
+            _ => Err(anyhow::anyhow!("'bytearray' object has no attribute '{}'", method_name)),
+        }
+    }
+
+    /// Get method for a value type (kept for backwards compatibility)
     pub fn get_method(&self, method_name: &str) -> Option<fn(Vec<Value>) -> anyhow::Result<Value>> {
         match self {
             Value::Str(_) => match method_name {
@@ -963,7 +1565,7 @@ impl Value {
                 _ => None,
             },
             Value::FrozenSet(_) => None, // FrozenSet methods would go here
-            Value::Range { .. } => None, // Range methods would go here  
+            Value::Range { .. } => None, // Range methods would go here
             Value::MemoryView { .. } => None, // MemoryView methods would go here
             Value::Complex { .. } | Value::Ellipsis | Value::NotImplemented => None,
             _ => None,
@@ -1003,6 +1605,7 @@ impl Value {
             Value::BuiltinFunction(name, _) => Expr::Identifier(name.clone()),
             Value::NativeFunction(_) => Expr::Identifier("native_function".to_string()),
             Value::Object { class_name, .. } => Expr::Identifier(class_name.clone()),
+            Value::Class { name, .. } => Expr::Identifier(name.clone()),
             Value::Module(name, _) => Expr::Identifier(name.clone()),
             Value::Bytes(bytes) => {
                 // Convert bytes to a bytes literal expression
@@ -1151,12 +1754,24 @@ impl Hash for Value {
                 9u8.hash(state);
                 bytes.hash(state);
             }
-            Value::Object { class_name, fields, .. } => {
+            Value::Object { class_name, fields, class_methods, .. } => {
                  10u8.hash(state);
                  class_name.hash(state);
                  let mut pairs: Vec<_> = fields.iter().collect();
                  pairs.sort_by_key(|(k, _)| *k);
                  pairs.hash(state);
+                 let mut method_pairs: Vec<_> = class_methods.iter().collect();
+                 method_pairs.sort_by_key(|(k, _)| *k);
+                 method_pairs.hash(state);
+             }
+            Value::Class { name, bases, methods, metaclass, .. } => {
+                 27u8.hash(state);
+                 name.hash(state);
+                 bases.hash(state);
+                 let mut pairs: Vec<_> = methods.iter().collect();
+                 pairs.sort_by_key(|(k, _)| *k);
+                 pairs.hash(state);
+                 metaclass.hash(state);
              }
             Value::Super(current_class, parent_class, _) => {
                 19u8.hash(state);

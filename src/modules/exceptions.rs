@@ -215,6 +215,7 @@ fn create_exception_class_with_inheritance(class_name: &str, base_classes: Vec<S
     Value::Object {
         class_name: class_name.to_string(),
         fields,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new(class_name.to_string(), base_classes),
         mro: crate::base_object::MRO::from_linearization(
             std::iter::once(class_name.to_string())
@@ -624,6 +625,7 @@ pub fn create_exception(class_name: &str, message: &str, args: Vec<Value>) -> Va
     Value::Object {
         class_name: class_name.to_string(),
         fields,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new(class_name.to_string(), base_classes),
         mro: crate::base_object::MRO::from_linearization(
             std::iter::once(class_name.to_string())

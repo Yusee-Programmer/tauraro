@@ -16,6 +16,8 @@ pub enum OpCode {
     StoreGlobal,    // Store to global namespace
     LoadClosure,    // Load from closure
     StoreClosure,   // Store to closure
+    LoadFast,       // Load from fast local variable (indexed access)
+    StoreFast,      // Store to fast local variable (indexed access)
     
     // Stack manipulation (for compatibility)
     PopTop,
@@ -39,16 +41,19 @@ pub enum OpCode {
     BinaryAddRRInPlace, // In-place Register-Register addition (when left is unique)
     BinaryAddRRFastInt, // Fast path for integer Register-Register addition
     BinaryAddRIFastInt, // Fast path for integer Register-Immediate addition
+    BinaryAddRRFast,    // Fast path for Register-Register addition
     BinarySubRR,    // Register-Register subtraction
     BinarySubRI,    // Register-Immediate subtraction
     BinarySubIR,    // Immediate-Register subtraction
     BinarySubRRFastInt, // Fast path for integer Register-Register subtraction
     BinarySubRIFastInt, // Fast path for integer Register-Immediate subtraction
+    BinarySubRRFast,    // Fast path for Register-Register subtraction
     BinaryMulRR,    // Register-Register multiplication
     BinaryMulRI,    // Register-Immediate multiplication
     BinaryMulIR,    // Immediate-Register multiplication
     BinaryMulRRFastInt, // Fast path for integer Register-Register multiplication
     BinaryMulRIFastInt, // Fast path for integer Register-Immediate multiplication
+    BinaryMulRRFast,    // Fast path for Register-Register multiplication
     BinaryDivRR,    // Register-Register division
     BinaryDivRI,    // Register-Immediate division
     BinaryDivIR,    // Immediate-Register division
@@ -64,6 +69,7 @@ pub enum OpCode {
     BinaryPowIR,    // Immediate-Register power
     BinaryPowRRFastInt, // Fast path for integer Register-Register power
     BinaryPowRIFastInt, // Fast path for integer Register-Immediate power
+    BinaryPowRRFast,    // Fast path for Register-Register power
     
     // Unary operations
     UnaryPositive,
@@ -114,6 +120,10 @@ pub enum OpCode {
     SubscrStore,    // Store item to sequence (obj[key] = value)
     SubscrDelete,   // Delete item from sequence (del obj[key])
     
+    // Attribute operations
+    LoadAttr,       // Load attribute from object (obj.attr)
+    StoreAttr,      // Store attribute to object (obj.attr = value)
+    
     // Functions
     MakeFunction,
     LoadClassDeref,
@@ -123,6 +133,10 @@ pub enum OpCode {
     CallMethod,     // Call method with caching
     LoadMethodCached, // Load method from cache
     CallMethodCached, // Call method from cache
+    
+    // Import operations
+    ImportModule,   // Import a module
+    ImportFrom,     // Import specific names from a module
     
     // Exceptions
     Raise,
@@ -153,6 +167,11 @@ pub enum OpCode {
     FastListAppend, // Fast list append
     FastIntCompare, // Fast integer comparison
     FastIntArithmetic, // Fast integer arithmetic operations
+    FastIntAdd,     // Ultra-fast integer addition
+    FastIntSub,     // Ultra-fast integer subtraction
+    FastIntMul,     // Ultra-fast integer multiplication
+    FastIntDiv,     // Ultra-fast integer division
+    FastIntMod,     // Ultra-fast integer modulo
     
     // Miscellaneous
     PrintExpr,

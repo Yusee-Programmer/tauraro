@@ -23,7 +23,7 @@ def create_test_data(size):
     return data
 
 # Sorting benchmark
-test_sizes = [100, 10000]
+test_sizes = [100, 500]  # Matched with Tauraro for fair comparison
 
 for size in test_sizes:
     print("Testing with array size:", size)

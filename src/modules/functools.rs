@@ -93,6 +93,7 @@ fn functools_partial(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "partial".to_string(),
         fields: partial_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("partial".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["partial".to_string(), "object".to_string()]),
     })
@@ -140,6 +141,7 @@ fn functools_partialmethod(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "partialmethod".to_string(),
         fields: partial_method,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("partialmethod".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["partialmethod".to_string(), "object".to_string()]),
     })
@@ -172,6 +174,7 @@ fn partialmethod_get(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "bound_partialmethod".to_string(),
         fields: bound_method,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("bound_partialmethod".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["bound_partialmethod".to_string(), "object".to_string()]),
     })
@@ -219,6 +222,7 @@ fn functools_wraps(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "wraps_decorator".to_string(),
         fields: decorator,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("wraps_decorator".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["wraps_decorator".to_string(), "object".to_string()]),
     })
@@ -275,6 +279,7 @@ fn functools_lru_cache(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "lru_cache_decorator".to_string(),
         fields: cache_decorator,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("lru_cache_decorator".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["lru_cache_decorator".to_string(), "object".to_string()]),
     })
@@ -299,6 +304,7 @@ fn lru_cache_decorator(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "cached_function".to_string(),
         fields: cached_func,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("cached_function".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["cached_function".to_string(), "object".to_string()]),
     })
@@ -365,6 +371,7 @@ fn functools_cached_property(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "cached_property".to_string(),
         fields: cached_prop,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("cached_property".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["cached_property".to_string(), "object".to_string()]),
     })
@@ -424,6 +431,7 @@ fn functools_cmp_to_key(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "cmp_to_key".to_string(),
         fields: key_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("cmp_to_key".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["cmp_to_key".to_string(), "object".to_string()]),
     })
@@ -477,6 +485,7 @@ fn functools_singledispatch(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "singledispatch".to_string(),
         fields: registry,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("singledispatch".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["singledispatch".to_string(), "object".to_string()]),
     })
@@ -522,6 +531,7 @@ fn functools_singledispatchmethod(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "singledispatchmethod".to_string(),
         fields: registry,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("singledispatchmethod".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["singledispatchmethod".to_string(), "object".to_string()]),
     })

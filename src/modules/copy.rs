@@ -75,11 +75,12 @@ fn copy_copy(args: Vec<Value>) -> Result<Value> {
             // Shallow copy of set
             Ok(Value::Set(items.clone()))
         },
-        Value::Object { class_name, fields, base_object, mro } => {
+        Value::Object { class_name, fields, base_object, mro, .. } => {
             // Shallow copy of object
             Ok(Value::Object {
                 class_name: class_name.clone(),
                 fields: fields.clone(),
+                class_methods: HashMap::new(),
                 base_object: base_object.clone(),
                 mro: mro.clone(),
             })
@@ -146,7 +147,7 @@ fn deepcopy_recursive(obj: &Value, memo: &mut HashMap<String, Value>) -> Result<
             }
             Ok(Value::Set(new_items))
         },
-        Value::Object { class_name, fields, base_object, mro } => {
+        Value::Object { class_name, fields, base_object, mro, .. } => {
             let mut new_fields = HashMap::new();
             for (key, value) in fields {
                 new_fields.insert(key.clone(), deepcopy_recursive(value, memo)?);
@@ -154,6 +155,7 @@ fn deepcopy_recursive(obj: &Value, memo: &mut HashMap<String, Value>) -> Result<
             Ok(Value::Object {
                 class_name: class_name.clone(),
                 fields: new_fields,
+                class_methods: HashMap::new(),
                 base_object: base_object.clone(),
                 mro: mro.clone(),
             })
@@ -183,6 +185,7 @@ fn copy_error(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "Error".to_string(),
         fields: error_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Error".to_string(), vec!["Exception".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Error".to_string(), "Exception".to_string(), "object".to_string()]),
     })

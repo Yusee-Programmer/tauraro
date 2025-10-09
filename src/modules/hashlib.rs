@@ -104,6 +104,7 @@ fn create_hash_object(algorithm: &str, data: Option<&[u8]>) -> Result<Value> {
     Ok(Value::Object {
         class_name: format!("{}Hash", algorithm),
         fields: hash_obj,
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new(format!("{}Hash", algorithm), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec![format!("{}Hash", algorithm), "object".to_string()]),
     })
@@ -512,6 +513,7 @@ fn hash_update(args: Vec<Value>) -> Result<Value> {
         return Ok(Value::Object {
             class_name: algorithm.to_string() + "Hash",
             fields: updated_fields,
+            class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new(algorithm.to_string() + "Hash", vec!["object".to_string()]),
             mro: crate::base_object::MRO::from_linearization(vec![algorithm.to_string() + "Hash", "object".to_string()]),
         });

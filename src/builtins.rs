@@ -5,6 +5,7 @@
 use crate::value::Value;
 use crate::modules;
 use crate::ast::*;
+use crate::base_object::BaseObject;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::io::Write;
@@ -67,6 +68,9 @@ impl BuiltinRegistry {
         self.functions.insert("hash".to_string(), builtin_hash);
         self.functions.insert("repr".to_string(), builtin_repr);
         self.functions.insert("dir".to_string(), builtin_dir);
+        self.functions.insert("globals".to_string(), builtin_globals);
+        self.functions.insert("locals".to_string(), builtin_locals);
+        self.functions.insert("vars".to_string(), builtin_vars);
         self.functions.insert("help".to_string(), builtin_help);
         
         // Core utility functions
@@ -74,6 +78,41 @@ impl BuiltinRegistry {
         self.functions.insert("iter".to_string(), builtin_iter);
         self.functions.insert("next".to_string(), builtin_next);
         self.functions.insert("range".to_string(), builtin_range);
+
+        // String and numeric functions
+        self.functions.insert("ord".to_string(), builtin_ord);
+        self.functions.insert("chr".to_string(), builtin_chr);
+        self.functions.insert("abs".to_string(), builtin_abs);
+        self.functions.insert("sum".to_string(), builtin_sum);
+        self.functions.insert("min".to_string(), builtin_min);
+        self.functions.insert("max".to_string(), builtin_max);
+        self.functions.insert("round".to_string(), builtin_round);
+        self.functions.insert("pow".to_string(), builtin_pow);
+        self.functions.insert("divmod".to_string(), builtin_divmod);
+
+        // Sequence and iteration functions
+        self.functions.insert("all".to_string(), builtin_all);
+        self.functions.insert("any".to_string(), builtin_any);
+        self.functions.insert("enumerate".to_string(), builtin_enumerate);
+        self.functions.insert("filter".to_string(), builtin_filter);
+        self.functions.insert("map".to_string(), builtin_map);
+        self.functions.insert("zip".to_string(), builtin_zip);
+        self.functions.insert("sorted".to_string(), builtin_sorted);
+        self.functions.insert("reversed".to_string(), builtin_reversed);
+
+        // Other utility functions
+        self.functions.insert("isinstance".to_string(), builtin_isinstance);
+        self.functions.insert("issubclass".to_string(), builtin_issubclass);
+        self.functions.insert("hasattr".to_string(), builtin_hasattr);
+        self.functions.insert("getattr".to_string(), builtin_getattr);
+        self.functions.insert("setattr".to_string(), builtin_setattr);
+        self.functions.insert("delattr".to_string(), builtin_delattr);
+        self.functions.insert("ascii".to_string(), builtin_ascii);
+        self.functions.insert("bin".to_string(), builtin_bin);
+        self.functions.insert("hex".to_string(), builtin_hex);
+        self.functions.insert("oct".to_string(), builtin_oct);
+        self.functions.insert("format".to_string(), builtin_format);
+        self.functions.insert("open".to_string(), builtin_open);
         
         // Advanced iteration functions (temporary placeholders)
         self.functions.insert("aiter".to_string(), |_args| Ok(Value::None));
@@ -83,6 +122,7 @@ impl BuiltinRegistry {
         self.functions.insert("object".to_string(), |_args| Ok(Value::Object {
             class_name: "object".to_string(),
             fields: HashMap::new(),
+            class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new("object".to_string(), vec![]),
             mro: crate::base_object::MRO::from_linearization(vec!["object".to_string()]),
         }));
@@ -499,31 +539,136 @@ pub fn builtin_dir(args: Vec<Value>) -> Result<Value> {
     } else {
         let mut names = Vec::new();
         match &args[0] {
-            Value::Str(s) => {
-                names.push(Value::Str(s.clone()));
+            Value::Str(_) => {
+                // For strings, show only string methods (no inherited dunder methods)
+                names.extend([
+                    "capitalize", "casefold", "center", "count", "encode", "endswith",
+                    "expandtabs", "find", "format", "format_map", "index", "isalnum",
+                    "isalpha", "isascii", "isdecimal", "isdigit", "isidentifier",
+                    "islower", "isnumeric", "isprintable", "isspace", "istitle",
+                    "isupper", "join", "ljust", "lower", "lstrip", "maketrans",
+                    "partition", "removeprefix", "removesuffix", "replace", "rfind",
+                    "rindex", "rjust", "rpartition", "rsplit", "rstrip", "split",
+                    "splitlines", "startswith", "strip", "swapcase", "title",
+                    "translate", "upper", "zfill"
+                ].iter().map(|s| Value::Str(s.to_string())));
             },
-            Value::Object { class_name, fields, .. } => {
-                names.push(Value::Str(class_name.clone()));
+            Value::List(_) => {
+                // For lists, show only list methods (no inherited dunder methods)
+                names.extend([
+                    "append", "clear", "copy", "count", "extend", "index", "insert",
+                    "pop", "remove", "reverse", "sort"
+                ].iter().map(|s| Value::Str(s.to_string())));
+            },
+            Value::Dict(_) => {
+                // For dicts, show only dict methods (no inherited dunder methods)
+                names.extend([
+                    "clear", "copy", "fromkeys", "get", "items", "keys", "pop",
+                    "popitem", "setdefault", "update", "values"
+                ].iter().map(|s| Value::Str(s.to_string())));
+            },
+            Value::Set(_) => {
+                // For sets, show only set methods (no inherited dunder methods)
+                names.extend([
+                    "add", "clear", "copy", "difference", "difference_update",
+                    "discard", "intersection", "intersection_update", "isdisjoint",
+                    "issubset", "issuperset", "pop", "remove", "symmetric_difference",
+                    "symmetric_difference_update", "union", "update"
+                ].iter().map(|s| Value::Str(s.to_string())));
+            },
+            Value::Tuple(_) => {
+                // For tuples, show only tuple methods (no inherited dunder methods)
+                names.extend([
+                    "count", "index"
+                ].iter().map(|s| Value::Str(s.to_string())));
+            },
+            Value::Int(_) => {
+                // For ints, show only int methods (no inherited dunder methods)
+                names.extend([
+                    "bit_length", "conjugate", "denominator", "from_bytes",
+                    "numerator", "to_bytes"
+                ].iter().map(|s| Value::Str(s.to_string())));
+            },
+            Value::Float(_) => {
+                // For floats, show only float methods (no inherited dunder methods)
+                names.extend([
+                    "as_integer_ratio", "conjugate", "fromhex", "hex", "is_integer"
+                ].iter().map(|s| Value::Str(s.to_string())));
+            },
+            Value::Object { fields, class_methods, base_object, .. } => {
+                // For custom objects, show user-defined attributes (fields), class methods, and only overridden dunder methods
+
+                // Add instance attributes (fields)
                 for (field_name, _) in fields {
                     names.push(Value::Str(field_name.clone()));
                 }
+
+                // Add class methods (non-dunder methods defined in the class)
+                for (method_name, _) in class_methods {
+                    if !method_name.starts_with("__") || !method_name.ends_with("__") {
+                        names.push(Value::Str(method_name.clone()));
+                    }
+                }
+
+                // Add only overridden dunder methods from class_methods
+                for (method_name, _) in class_methods {
+                    if method_name.starts_with("__") && method_name.ends_with("__") {
+                        names.push(Value::Str(method_name.clone()));
+                    }
+                }
+
+                // Note: We don't add dunder methods from base_object because in Python,
+                // dir() only shows dunders that are explicitly defined/overridden in the class
             },
             Value::Module(_, namespace) => {
+                // For modules, show all attributes
                 for (name, _) in namespace {
                     names.push(Value::Str(name.clone()));
                 }
             },
             _ => {
-                // Try to get attributes from the object
-                names.push(Value::Str("__class__".to_string()));
-                names.push(Value::Str("__dict__".to_string()));
+                // For other types, return empty list (no inherited dunder methods)
             }
         }
+
+        // Sort the names alphabetically like Python does
+        names.sort_by(|a, b| {
+            match (a, b) {
+                (Value::Str(s1), Value::Str(s2)) => s1.cmp(s2),
+                _ => std::cmp::Ordering::Equal,
+            }
+        });
+
         let mut hplist = HPList::new();
         for name in names {
             hplist.append(name);
         }
         Ok(Value::List(hplist))
+    }
+}
+
+// Introspection functions - placeholders that will be overridden by VM's special handling
+pub fn builtin_globals(_args: Vec<Value>) -> Result<Value> {
+    // Placeholder - actual implementation requires VM context
+    // The VM intercepts this in call_function_fast and provides the real globals dict
+    Ok(Value::Dict(HashMap::new()))
+}
+
+pub fn builtin_locals(_args: Vec<Value>) -> Result<Value> {
+    // Placeholder - actual implementation requires VM context
+    // The VM intercepts this in call_function_fast and provides the real locals dict
+    Ok(Value::Dict(HashMap::new()))
+}
+
+pub fn builtin_vars(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        // Placeholder - actual implementation requires VM context
+        // The VM intercepts this in call_function_fast and provides the real locals dict
+        Ok(Value::Dict(HashMap::new()))
+    } else {
+        // vars(object) - return object's __dict__
+        // For now, just return empty dict as placeholder
+        Ok(Value::Dict(HashMap::new()))
     }
 }
 
@@ -557,10 +702,176 @@ pub fn builtin_bin(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("0b0".to_
 pub fn builtin_ascii(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
 
 // Object functions
-pub fn builtin_hasattr(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bool(false)) }
-pub fn builtin_getattr(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
-pub fn builtin_setattr(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
-pub fn builtin_delattr(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
+pub fn builtin_hasattr(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("hasattr expected 2 arguments, got {}", args.len()));
+    }
+    
+    let obj = &args[0];
+    let attr_name = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(anyhow::anyhow!("hasattr(): attribute name must be string")),
+    };
+    
+    // Check if object has the attribute
+    let has_attr = match obj {
+        Value::Object { fields, base_object, .. } => {
+            // For custom objects, check both user-defined fields and dunder methods
+            fields.contains_key(attr_name) || base_object.dunder_methods.contains_key(attr_name)
+        },
+        Value::Module(_, namespace) => {
+            namespace.contains_key(attr_name)
+        },
+        Value::Dict(dict) => {
+            dict.contains_key(attr_name)
+        },
+        // For other types, check if they have methods with this name or inherit dunder methods
+        _ => {
+            // Check if it's a built-in method or a dunder method from base object
+            obj.get_method(attr_name).is_some() || 
+            // Check if it's a dunder method that all objects inherit
+            BaseObject::get_base_methods().contains_key(attr_name)
+        }
+    };
+    
+    Ok(Value::Bool(has_attr))
+}
+pub fn builtin_getattr(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err(anyhow::anyhow!("getattr expected 2 or 3 arguments, got {}", args.len()));
+    }
+    
+    let obj = &args[0];
+    let attr_name = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(anyhow::anyhow!("getattr(): attribute name must be string")),
+    };
+    
+    // Try to get the attribute
+    match obj {
+        Value::Object { fields, base_object, .. } => {
+            if let Some(value) = fields.get(attr_name) {
+                Ok(value.clone())
+            } else if base_object.dunder_methods.contains_key(attr_name) {
+                // Create a bound method object for dunder methods
+                Ok(Value::BoundMethod {
+                    object: Box::new(obj.clone()),
+                    method_name: attr_name.clone(),
+                })
+            } else if args.len() == 3 {
+                // Return default value
+                Ok(args[2].clone())
+            } else {
+                Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
+            }
+        },
+        Value::Module(_, namespace) => {
+            if let Some(value) = namespace.get(attr_name) {
+                Ok(value.clone())
+            } else if args.len() == 3 {
+                // Return default value
+                Ok(args[2].clone())
+            } else {
+                Err(anyhow::anyhow!("module '{}' has no attribute '{}'", obj.type_name(), attr_name))
+            }
+        },
+        Value::Dict(dict) => {
+            if let Some(value) = dict.get(attr_name) {
+                Ok(value.clone())
+            } else if args.len() == 3 {
+                // Return default value
+                Ok(args[2].clone())
+            } else {
+                Err(anyhow::anyhow!("'dict' object has no attribute '{}'", attr_name))
+            }
+        },
+        // For other types, try to get method
+        _ => {
+            // First check if there's a method with this name
+            if let Some(_) = obj.get_method(attr_name) {
+                // Create a bound method object
+                Ok(Value::BoundMethod {
+                    object: Box::new(obj.clone()),
+                    method_name: attr_name.clone(),
+                })
+            } else if BaseObject::get_base_methods().contains_key(attr_name) {
+                // Create a bound method object for inherited dunder methods
+                Ok(Value::BoundMethod {
+                    object: Box::new(obj.clone()),
+                    method_name: attr_name.clone(),
+                })
+            } else if args.len() == 3 {
+                // Return default value
+                Ok(args[2].clone())
+            } else {
+                Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
+            }
+        }
+    }
+}
+pub fn builtin_setattr(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow::anyhow!("setattr expected 3 arguments, got {}", args.len()));
+    }
+    
+    let obj = &args[0];
+    let attr_name = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(anyhow::anyhow!("setattr(): attribute name must be string")),
+    };
+    let value = &args[2];
+    
+    // Set the attribute based on object type
+    match obj {
+        Value::Object { fields, .. } => {
+            // This is a bit tricky since we can't mutate the object directly
+            // In a real implementation, we'd need to handle this differently
+            Err(anyhow::anyhow!("setattr not fully implemented for objects"))
+        },
+        Value::Module(_, namespace) => {
+            // This is also tricky for the same reason
+            Err(anyhow::anyhow!("setattr not fully implemented for modules"))
+        },
+        Value::Dict(dict) => {
+            // For dicts, we can insert the key-value pair
+            // But again, we can't mutate directly
+            Err(anyhow::anyhow!("setattr not fully implemented for dicts"))
+        },
+        _ => {
+            Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
+        }
+    }
+}
+pub fn builtin_delattr(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("delattr expected 2 arguments, got {}", args.len()));
+    }
+    
+    let obj = &args[0];
+    let attr_name = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(anyhow::anyhow!("delattr(): attribute name must be string")),
+    };
+    
+    // Delete the attribute based on object type
+    match obj {
+        Value::Object { .. } => {
+            // Can't mutate directly
+            Err(anyhow::anyhow!("delattr not fully implemented for objects"))
+        },
+        Value::Module(_, _) => {
+            // Can't mutate directly
+            Err(anyhow::anyhow!("delattr not fully implemented for modules"))
+        },
+        Value::Dict(dict) => {
+            // Can't mutate directly
+            Err(anyhow::anyhow!("delattr not fully implemented for dicts"))
+        },
+        _ => {
+            Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
+        }
+    }
+}
 pub fn builtin_isinstance(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bool(false)) }
 pub fn builtin_issubclass(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bool(false)) }
 
@@ -803,6 +1114,7 @@ pub fn builtin_object(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Object {
         class_name: "object".to_string(),
         fields: HashMap::new(),
+        class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("object".to_string(), vec![]),
         mro: crate::base_object::MRO::from_linearization(vec!["object".to_string()]),
     })

@@ -84,7 +84,7 @@ impl Parser {
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
         let mut statements = Vec::new();
-        
+
         while !self.is_at_end() && !self.check(&Token::Eof) {
             // Skip newlines at the top level
             if self.check(&Token::Newline) {
@@ -94,8 +94,68 @@ impl Parser {
             let stmt = self.statement()?;
             statements.push(stmt);
         }
-        
+
         Ok(Program { statements })
+    }
+
+    /// Parse a single REPL line - returns value for expressions like Python
+    pub fn parse_repl_line(&mut self) -> Result<(Program, bool), ParseError> {
+        let mut statements = Vec::new();
+        let mut is_expression = false;
+
+        // Skip leading newlines
+        while self.check(&Token::Newline) {
+            self.advance();
+        }
+
+        if self.is_at_end() || self.check(&Token::Eof) {
+            return Ok((Program { statements }, false));
+        }
+
+        // Check if it's a statement keyword
+        let is_statement_keyword = matches!(
+            self.peek().token,
+            Token::KwFunc | Token::KwClass | Token::KwIf | Token::KwFor | Token::KwWhile |
+            Token::KwTry | Token::KwWith | Token::KwImport | Token::KwFrom | Token::KwReturn |
+            Token::KwBreak | Token::KwContinue | Token::KwPass | Token::KwRaise | Token::KwAssert |
+            Token::KwDel | Token::KwGlobal | Token::KwNonlocal | Token::KwAsync
+        );
+
+        // Check if it's an assignment (look ahead for = token)
+        let mut is_assignment = false;
+        let mut temp_pos = self.current;
+        while temp_pos < self.tokens.len() {
+            match &self.tokens[temp_pos].token {
+                Token::Assign => {
+                    is_assignment = true;
+                    break;
+                }
+                Token::Newline | Token::Eof => break,
+                Token::LParen | Token::LBracket | Token::Dot => {
+                    temp_pos += 1;
+                }
+                _ => temp_pos += 1,
+            }
+        }
+
+        if is_statement_keyword || is_assignment {
+            // Parse as regular statement
+            let stmt = self.statement()?;
+            statements.push(stmt);
+        } else {
+            // It's an expression - parse and mark it for auto-print
+            let expr = self.expression()?;
+
+            // Consume optional trailing newline
+            if self.check(&Token::Newline) {
+                self.advance();
+            }
+
+            statements.push(Statement::Expression(expr));
+            is_expression = true;
+        }
+
+        Ok((Program { statements }, is_expression))
     }
 
     /// Parse with implicit main function support for scripts
@@ -528,47 +588,9 @@ impl Parser {
             };
         }
         
-        if self.match_token(&[
-            Token::PlusEq, Token::MinusEq, Token::StarEq,
-            Token::SlashEq, Token::PercentEq, Token::PowerEq, Token::FloorDivEq,
-        ]) {
-            let op = self.previous().token.clone();
-            let value = self.assignment()?;
-            
-            return match expr {
-                Expr::Identifier(name) => Ok(Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(name)),
-                    op: match op {
-                        Token::PlusEq => BinaryOp::Add,
-                        Token::MinusEq => BinaryOp::Sub,
-                        Token::StarEq => BinaryOp::Mul,
-                        Token::SlashEq => BinaryOp::Div,
-                        Token::PercentEq => BinaryOp::Mod,
-                        Token::PowerEq => BinaryOp::Pow,
-                        Token::FloorDivEq => BinaryOp::FloorDiv,
-                        _ => unreachable!(),
-                    },
-                    right: Box::new(value),
-                }),
-                Expr::Attribute { object, name } => Ok(Expr::BinaryOp {
-                    left: Box::new(Expr::Attribute { object, name }),
-                    op: match op {
-                        Token::PlusEq => BinaryOp::Add,
-                        Token::MinusEq => BinaryOp::Sub,
-                        Token::StarEq => BinaryOp::Mul,
-                        Token::SlashEq => BinaryOp::Div,
-                        Token::PercentEq => BinaryOp::Mod,
-                        Token::PowerEq => BinaryOp::Pow,
-                        Token::FloorDivEq => BinaryOp::FloorDiv,
-                        _ => unreachable!(),
-                    },
-                    right: Box::new(value),
-                }),
-                _ => Err(ParseError::InvalidSyntax {
-                    message: "Invalid assignment target".to_string(),
-                }),
-            };
-        }
+        // Regular assignments (=) and compound assignments (+=, -=, etc.) 
+        // should be handled by the statement parser, not here in the expression parser
+        // Only handle them here if we're in an expression context where assignment is allowed
         
         Ok(expr)
     }
@@ -1833,6 +1855,9 @@ impl Parser {
     }
 
     fn list_or_comp(&mut self) -> Result<Expr, ParseError> {
+        // Skip newlines after opening bracket
+        while self.match_token(&[Token::Newline]) {}
+        
         if self.check(&Token::RBracket) {
             self.consume(Token::RBracket, "Expected ']'")?;
             return Ok(Expr::List(vec![]));
@@ -1877,12 +1902,17 @@ impl Parser {
             let mut elements = vec![first_element];
             
             while self.match_token(&[Token::Comma]) {
+                // Skip newlines after comma
+                while self.match_token(&[Token::Newline]) {}
+                
                 if self.check(&Token::RBracket) {
                     break; // Trailing comma
                 }
                 elements.push(self.expression()?);
             }
             
+            // Skip newlines before closing bracket
+            while self.match_token(&[Token::Newline]) {}
             self.consume(Token::RBracket, "Expected ']' after list")?;
             Ok(Expr::List(elements))
         }
