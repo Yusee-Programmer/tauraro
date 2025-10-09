@@ -132,22 +132,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Run { file, backend, optimization, strict_types } => {
             let source = std::fs::read_to_string(&file)?;
-            
-            // Use our new full bytecode compiler for better performance when backend is "vm" and optimization > 0
-            if backend == "vm" && optimization > 0 {
-                if let Err(e) = run_file_bytecode(&source) {
-                    eprintln!("Traceback (most recent call last):");
-                    eprintln!("  File \"{}\", line 1, in <module>", file.display());
-                    eprintln!("{}", e);
-                    std::process::exit(1);
-                }
-            } else {
-                if let Err(e) = crate::vm::core::VM::run_file_with_options(&source, &backend, optimization, strict_types) {
-                    eprintln!("Traceback (most recent call last):");
-                    eprintln!("  File \"{}\", line 1, in <module>", file.display());
-                    eprintln!("{}", e);
-                    std::process::exit(1);
-                }
+
+            // Always use VM for now
+            if let Err(e) = crate::vm::core::VM::run_file_with_options(&source, &backend, optimization, strict_types) {
+                // Error message already includes traceback information from the VM
+                eprintln!("{}", e);
+                std::process::exit(1);
             }
         }
         Commands::Compile { 
@@ -184,38 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Run a TauraroLang file with our new full bytecode implementation
-pub fn run_file_bytecode(source: &str) -> Result<()> {
-    use crate::lexer::Lexer;
-    use crate::parser::Parser;
-    use crate::bytecode::arithmetic::{SuperCompiler, SuperBytecodeVM}; // Updated to use our new implementation
-    
-    // Debug output to see if this function is being called
-    eprintln!("DEBUG: run_file_bytecode called");
-    
-    // Parse the source code
-    let tokens = Lexer::new(source).collect::<Result<Vec<_>, _>>()
-        .map_err(|e| anyhow!("Lexer error: {}", e))?;
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse()?;
-    
-    // Compile to bytecode using our new full implementation
-    let mut compiler = SuperCompiler::new("<stdin>".to_string()); // Updated to use our new compiler
-    let code = compiler.compile(program)?;
-    
-    // Debug output to see the compiled code
-    eprintln!("DEBUG: Main module compiled with {} instructions", code.instructions.len());
-    for (i, instruction) in code.instructions.iter().enumerate() {
-        eprintln!("DEBUG: Instruction {}: {:?}", i, instruction);
-    }
-    
-    // Execute bytecode using our new VM
-    eprintln!("DEBUG: Creating VM and executing code");
-    let mut vm = SuperBytecodeVM::new(); // Updated to use our new VM
-    vm.execute(code)?;
-    
-    Ok(())
-}
+
 
 fn compile_file(
     file: &PathBuf,

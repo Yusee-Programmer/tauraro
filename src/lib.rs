@@ -11,7 +11,7 @@ pub mod builtins;
 pub mod builtins_super;
 pub mod vm;
 pub mod runtime;
-pub mod ffi;
+pub mod runtime_error;
 pub mod modules;
 pub mod module_system;
 pub mod module_cache; // Add module cache

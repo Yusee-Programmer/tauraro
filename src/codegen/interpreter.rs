@@ -111,8 +111,98 @@ impl Completer for REPLHelper {
 
 impl Highlighter for REPLHelper {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
-        // Disable syntax highlighting to avoid character display issues
-        std::borrow::Cow::Borrowed(line)
+        // Implement syntax highlighting with ANSI color codes
+        use std::borrow::Cow;
+
+        // Force highlighting to update immediately
+        let keywords = [
+            "def", "class", "if", "elif", "else", "for", "while", "return",
+            "import", "from", "as", "try", "except", "finally", "with",
+            "break", "continue", "pass", "raise", "assert", "yield",
+            "async", "await", "lambda", "in", "is", "not", "and", "or",
+        ];
+
+        let builtins = [
+            "print", "len", "range", "type", "int", "float", "str", "list",
+            "dict", "set", "tuple", "bool", "None", "True", "False",
+            "input", "open", "help", "dir", "vars", "globals", "locals",
+        ];
+
+        let mut highlighted = String::new();
+        let mut chars = line.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '"' || ch == '\'' {
+                // String literal
+                highlighted.push_str("\x1b[32m"); // Green
+                highlighted.push(ch);
+                let quote = ch;
+                while let Some(ch) = chars.next() {
+                    highlighted.push(ch);
+                    if ch == '\\' {
+                        if let Some(next) = chars.next() {
+                            highlighted.push(next);
+                        }
+                    } else if ch == quote {
+                        break;
+                    }
+                }
+                highlighted.push_str("\x1b[0m"); // Reset
+            } else if ch == '#' {
+                // Comment
+                highlighted.push_str("\x1b[90m"); // Gray
+                highlighted.push(ch);
+                for ch in chars.by_ref() {
+                    highlighted.push(ch);
+                }
+                highlighted.push_str("\x1b[0m"); // Reset
+                break;
+            } else if ch.is_ascii_digit() {
+                // Number
+                highlighted.push_str("\x1b[36m"); // Cyan
+                highlighted.push(ch);
+                while let Some(&next_ch) = chars.peek() {
+                    if next_ch.is_ascii_digit() || next_ch == '.' || next_ch == '_' {
+                        highlighted.push(chars.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+                highlighted.push_str("\x1b[0m"); // Reset
+            } else if ch.is_alphabetic() || ch == '_' {
+                // Identifier or keyword
+                let mut word = String::new();
+                word.push(ch);
+                while let Some(&next_ch) = chars.peek() {
+                    if next_ch.is_alphanumeric() || next_ch == '_' {
+                        word.push(chars.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+
+                if keywords.contains(&word.as_str()) {
+                    highlighted.push_str("\x1b[35m"); // Magenta for keywords
+                    highlighted.push_str(&word);
+                    highlighted.push_str("\x1b[0m");
+                } else if builtins.contains(&word.as_str()) {
+                    highlighted.push_str("\x1b[33m"); // Yellow for builtins
+                    highlighted.push_str(&word);
+                    highlighted.push_str("\x1b[0m");
+                } else {
+                    highlighted.push_str(&word);
+                }
+            } else {
+                highlighted.push(ch);
+            }
+        }
+
+        Cow::Owned(highlighted)
+    }
+
+    fn highlight_char(&self, _line: &str, _pos: usize) -> bool {
+        // Return true to trigger highlighting on every character
+        true
     }
 }
 
@@ -134,10 +224,18 @@ pub fn run_repl() -> Result<()> {
     let mut interpreter = Interpreter::new();
     let config = rustyline::Config::builder()
         .auto_add_history(true)
+        .tab_stop(4)  // Use 4 spaces for tabs
+        .completion_type(rustyline::CompletionType::Circular)
+        .edit_mode(rustyline::EditMode::Emacs)
         .build();
 
-    let mut rl = Editor::<()>::with_config(config)
+    let helper = REPLHelper::new();
+    let mut rl = Editor::with_config(config)
         .map_err(|e| anyhow::anyhow!("Failed to start REPL: {}", e))?;
+    rl.set_helper(Some(helper));
+
+    // Bind Tab key to insert literal tab character (4 spaces)
+    rl.bind_sequence(rustyline::KeyEvent::new('\t', rustyline::Modifiers::NONE), rustyline::Cmd::Insert(1, "    ".to_string()));
 
     let mut buffer = String::new();
     let mut in_multiline = false;
@@ -175,23 +273,8 @@ pub fn run_repl() -> Result<()> {
                     continue;
                 }
 
-                // Handle dir() built-in function
-                if line.trim().starts_with("dir(") {
-                    show_variables(&interpreter);
-                    continue;
-                }
-
-                // Handle globals() built-in function
-                if line.trim().starts_with("globals(") {
-                    show_globals(&interpreter);
-                    continue;
-                }
-
-                // Handle locals() built-in function
-                if line.trim().starts_with("locals(") {
-                    show_locals(&interpreter);
-                    continue;
-                }
+                // Let VM handle dir(), globals(), locals() introspection functions
+                // (removed REPL-specific handlers to use VM's implementation)
 
                 // Handle multiline input like Python
                 if buffer.is_empty() {
@@ -242,12 +325,17 @@ pub fn run_repl() -> Result<()> {
                 if !buffer.trim().is_empty() {
                     match interpreter.run_line(buffer.clone()) {
                         Ok(Some(value)) if !matches!(value, Value::None) => {
-                            // Pretty print the value like Python
+                            // Pretty print the value like Python REPL
                             match &value {
-                                Value::Str(s) => println!("{:?}", s), // Print strings with quotes
+                                Value::Str(s) => println!("'{}'", s), // Print strings with quotes
                                 Value::List(_) => println!("{}", format_value(&value)),
                                 Value::Dict(_) => println!("{}", format_value(&value)),
-                                _ => println!("{}", value),
+                                Value::Closure { name, .. } => {
+                                    println!("<function {} at {:p}>", name, &value as *const _);
+                                }
+                                Value::Bool(b) => println!("{}", if *b { "True" } else { "False" }),
+                                Value::None => {}, // Don't print None
+                                _ => println!("{}", format_value(&value)),
                             }
                         }
                         Ok(_) => {
