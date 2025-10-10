@@ -1,9 +1,10 @@
 //! Builtin functions implementation
 
-use crate::ast::*;
+
 use crate::value::Value;
 use crate::modules::hplist::HPList;
-use crate::bytecode::arithmetic::{RcValue, SuperBytecodeVM};
+use crate::bytecode::vm::SuperBytecodeVM;
+use crate::bytecode::objects::RcValue;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 

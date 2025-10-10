@@ -459,7 +459,7 @@ impl ModuleSystem {
         for statement in &program.statements {
             if let Statement::FunctionDef { name, params, return_type: _, body, is_async: _, decorators: _, docstring } = statement {
                 // Compile the function to get the bytecode
-                let func_code = crate::bytecode::arithmetic::SuperCompiler::compile_function(name.clone(), params, body)?;
+                let func_code = crate::bytecode::compiler::SuperCompiler::compile_function(name.clone(), params, body)?;
                 
                 let func_value = Value::Closure {
                     name: name.clone(),
@@ -485,7 +485,7 @@ impl ModuleSystem {
                 for stmt in body {
                     if let Statement::FunctionDef { name: method_name, params, return_type: _, body: method_body, is_async: _, decorators: _, docstring } = stmt {
                         // Compile the method to get the bytecode
-                        let method_code = crate::bytecode::arithmetic::SuperCompiler::compile_function(method_name.clone(), params, method_body)?;
+                        let method_code = crate::bytecode::compiler::SuperCompiler::compile_function(method_name.clone(), params, method_body)?;
                         
                         let method_value = Value::Closure {
                             name: method_name.clone(),

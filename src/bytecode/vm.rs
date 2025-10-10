@@ -1,379 +1,15 @@
-//! Core VM data structures and main execution loop
+//! Virtual machine implementation
 
-use crate::ast::*;
+
 use crate::value::Value;
 use crate::modules::hplist::HPList;
 use crate::bytecode::instructions::{OpCode, Instruction};
+use crate::bytecode::objects::{RcValue, RangeIterator};
+use crate::bytecode::memory::{CodeObject, Frame, InlineCache, MethodCache, Block, BlockType};
+use crate::bytecode::arithmetic; // Import the arithmetic module
+use crate::ast::{Param, Literal, Expr}; // Import necessary types for Closure handling
 use anyhow::{Result, anyhow};
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
-use smallvec::SmallVec;
-
-/// Reference counted value for optimized memory management
-#[derive(Debug, Clone)]
-pub struct RcValue {
-    pub value: Value,
-    pub ref_count: usize,
-}
-
-/// Simple iterator for Range values
-#[derive(Debug, Clone)]
-pub struct RangeIterator {
-    pub start: i64,
-    pub stop: i64,
-    pub step: i64,
-    pub current: i64,
-}
-
-impl PartialEq for RcValue {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl Eq for RcValue {}
-
-impl Hash for RcValue {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.value.hash(state);
-    }
-}
-
-impl RcValue {
-    pub fn new(value: Value) -> Self {
-        Self {
-            value,
-            ref_count: 1,
-        }
-    }
-    
-    pub fn clone_rc(&self) -> Self {
-        Self {
-            value: self.value.clone(),
-            ref_count: self.ref_count + 1,
-        }
-    }
-    
-    pub fn is_unique(&self) -> bool {
-        self.ref_count == 1
-    }
-    
-    pub fn is_truthy(&self) -> bool {
-        self.value.is_truthy()
-    }
-}
-
-/// Register-based compiled code object
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodeObject {
-    pub instructions: Vec<Instruction>,
-    pub constants: Vec<Value>,
-    pub names: Vec<String>,
-    pub varnames: Vec<String>,
-    pub freevars: Vec<String>,
-    pub cellvars: Vec<String>,
-    pub filename: String,
-    pub name: String,
-    pub first_line: u32,
-    pub argcount: u32,
-    pub kwonlyargcount: u32,
-    pub nlocals: u32,
-    pub stacksize: u32,
-    pub flags: u32,
-    pub registers: u32,         // Number of registers needed
-    pub inline_caches: Vec<InlineCache>, // Inline caches for specialization
-}
-
-impl CodeObject {
-    pub fn new(filename: String, name: String, first_line: u32) -> Self {
-        Self {
-            instructions: Vec::new(),
-            constants: Vec::new(),
-            names: Vec::new(),
-            varnames: Vec::new(),
-            freevars: Vec::new(),
-            cellvars: Vec::new(),
-            filename,
-            name,
-            first_line,
-            argcount: 0,
-            kwonlyargcount: 0,
-            nlocals: 0,
-            stacksize: 0,
-            flags: 0,
-            registers: 0,
-            inline_caches: Vec::new(),
-        }
-    }
-    
-    pub fn add_instruction(&mut self, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32, line: u32) {
-        self.instructions.push(Instruction { opcode, arg1, arg2, arg3, line });
-    }
-    
-    pub fn add_constant(&mut self, value: Value) -> u32 {
-        self.constants.push(value);
-        (self.constants.len() - 1) as u32
-    }
-    
-    pub fn add_name(&mut self, name: String) -> u32 {
-        if let Some(pos) = self.names.iter().position(|n| n == &name) {
-            pos as u32
-        } else {
-            let pos = self.names.len() as u32;
-            self.names.push(name);
-            pos
-        }
-    }
-    
-    pub fn add_varname(&mut self, name: String) -> u32 {
-        if let Some(pos) = self.varnames.iter().position(|n| n == &name) {
-            pos as u32
-        } else {
-            let pos = self.varnames.len() as u32;
-            self.varnames.push(name);
-            pos
-        }
-    }
-    
-    pub fn add_freevar(&mut self, name: String) -> u32 {
-        if let Some(pos) = self.freevars.iter().position(|n| n == &name) {
-            pos as u32
-        } else {
-            let pos = self.freevars.len() as u32;
-            self.freevars.push(name);
-            pos
-        }
-    }
-    
-    pub fn add_cellvar(&mut self, name: String) -> u32 {
-        if let Some(pos) = self.cellvars.iter().position(|n| n == &name) {
-            pos as u32
-        } else {
-            let pos = self.cellvars.len() as u32;
-            self.cellvars.push(name);
-            pos
-        }
-    }
-    
-    /// Add an inline cache for specialization
-    pub fn add_inline_cache(&mut self) -> u32 {
-        let index = self.inline_caches.len() as u32;
-        self.inline_caches.push(InlineCache {
-            counter: 0,
-            version: 0,
-            data: None,
-            type_info: None,
-        });
-        index
-    }
-}
-
-/// Inline cache for speeding up attribute and global lookups
-#[derive(Debug, Clone)]
-pub struct InlineCache {
-    pub counter: u32,           // Execution counter for specialization
-    pub version: u32,           // Version for cache invalidation
-    pub data: Option<Value>,    // Cached value
-    pub type_info: Option<String>, // Type information for specialization
-}
-
-impl PartialEq for InlineCache {
-    fn eq(&self, other: &Self) -> bool {
-        self.counter == other.counter &&
-        self.version == other.version &&
-        self.type_info == other.type_info
-        // We don't compare data because Value may not be Eq
-    }
-}
-
-impl Eq for InlineCache {}
-
-/// Execution frame for register-based VM with reference counting and method caching
-pub struct Frame {
-    pub code: CodeObject,
-    pub pc: usize,                          // Program counter
-    pub registers: SmallVec<[RcValue; 64]>, // Register file with reference counting
-    pub locals: Vec<RcValue>,               // Local variables with direct indexing (faster than HashMap)
-    pub locals_map: HashMap<String, usize>, // Maps variable names to indices for debugging
-    pub globals: HashMap<String, RcValue>,  // Global variables with reference counting
-    pub builtins: HashMap<String, RcValue>, // Builtin functions with reference counting
-    pub free_vars: Vec<RcValue>,            // Free variables for closures with reference counting
-    pub block_stack: Vec<Block>,            // Block stack for control flow
-    pub cache_version: u32,                 // Current cache version
-    pub method_cache: HashMap<(String, String), MethodCache>, // Method cache for object-oriented code
-    pub return_register: Option<(usize, u32)>, // (caller_frame_idx, result_reg) where return value should be stored
-}
-
-/// Block for control flow
-#[derive(Debug, Clone)]
-pub struct Block {
-    pub block_type: BlockType,
-    pub handler: usize,
-    pub level: usize,
-}
-
-#[derive(Debug, Clone)]
-pub enum BlockType {
-    Loop,
-    Except,
-    Finally,
-    With,
-}
-
-impl Frame {
-    pub fn new(code: CodeObject, globals: HashMap<String, Value>, builtins: HashMap<String, Value>) -> Self {
-        // Debug output to see the code object being used
-        // eprintln!("DEBUG: Frame::new creating frame with code object '{}' with {} instructions", code.name, code.instructions.len());
-        
-        // Initialize registers
-        let mut registers = SmallVec::new();
-        registers.resize(code.registers as usize, RcValue::new(Value::None));
-        
-        // Initialize locals vector with None values
-        let mut locals = Vec::new();
-        locals.resize(code.varnames.len(), RcValue::new(Value::None));
-        
-        // Create mapping from variable names to indices
-        let mut locals_map = HashMap::new();
-        for (i, name) in code.varnames.iter().enumerate() {
-            locals_map.insert(name.clone(), i);
-        }
-        
-        // Convert globals and builtins to RcValue
-        let rc_globals = globals.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect();
-        let rc_builtins = builtins.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect();
-        
-        Self {
-            code,
-            pc: 0,
-            registers,
-            locals,
-            locals_map,
-            globals: rc_globals,
-            builtins: rc_builtins,
-            free_vars: Vec::new(),
-            block_stack: Vec::new(),
-            cache_version: 0,
-            method_cache: HashMap::new(),
-            return_register: None,
-        }
-    }
-
-    /// Create a frame optimized for function calls with pre-allocated registers
-    pub fn new_function_frame(code: CodeObject, globals: HashMap<String, Value>, builtins: HashMap<String, Value>, args: Vec<Value>) -> Self {
-        // Initialize registers
-        let mut registers = SmallVec::new();
-        registers.resize(code.registers as usize, RcValue::new(Value::None));
-        
-        // Initialize locals vector
-        let mut locals = Vec::new();
-        locals.resize(code.varnames.len(), RcValue::new(Value::None));
-        
-        // Create mapping from variable names to indices
-        let mut locals_map = HashMap::new();
-        for (i, name) in code.varnames.iter().enumerate() {
-            locals_map.insert(name.clone(), i);
-        }
-        
-        // Copy arguments to locals
-        for (i, (arg, param_name)) in args.into_iter().zip(code.varnames.iter()).enumerate() {
-            if i < locals.len() {
-                let rc_arg = RcValue::new(arg);
-                locals[i] = rc_arg;
-            }
-        }
-        
-        // Convert globals and builtins to RcValue
-        let rc_globals = globals.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect();
-        let rc_builtins = builtins.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect();
-        
-        Self {
-            code,
-            pc: 0,
-            registers,
-            locals,
-            locals_map,
-            globals: rc_globals,
-            builtins: rc_builtins,
-            free_vars: Vec::new(),
-            block_stack: Vec::new(),
-            cache_version: 0,
-            method_cache: HashMap::new(),
-            return_register: None,
-        }
-    }
-    
-    /// Get value from register
-    pub fn get_register(&self, reg: u32) -> &RcValue {
-        &self.registers[reg as usize]
-    }
-    
-    /// Set value in register
-    pub fn set_register(&mut self, reg: u32, value: RcValue) {
-        self.registers[reg as usize] = value;
-    }
-    
-    /// Get mutable reference to register value
-    pub fn get_register_mut(&mut self, reg: u32) -> &mut RcValue {
-        &mut self.registers[reg as usize]
-    }
-    
-    /// Get local variable by index (fast path)
-    pub fn get_local(&self, index: usize) -> &RcValue {
-        &self.locals[index]
-    }
-    
-    /// Set local variable by index (fast path)
-    pub fn set_local(&mut self, index: usize, value: RcValue) {
-        self.locals[index] = value;
-    }
-    
-    /// Get local variable index by name (for compiler use)
-    pub fn get_local_index(&self, name: &str) -> Option<usize> {
-        self.locals_map.get(name).copied()
-    }
-    
-    /// Lookup method in cache
-    pub fn lookup_method_cache(&self, class_name: &str, method_name: &str) -> Option<&MethodCache> {
-        self.method_cache.get(&(class_name.to_string(), method_name.to_string()))
-    }
-    
-    /// Update method cache
-    pub fn update_method_cache(&mut self, class_name: String, method_name: String, method: Option<Value>) {
-        let cache_entry = MethodCache {
-            class_name: class_name.clone(),
-            method_name: method_name.clone(),
-            method,
-            version: self.cache_version,
-        };
-        self.method_cache.insert((class_name, method_name), cache_entry);
-    }
-}
-
-// Manual implementation of Debug trait for Frame struct
-impl std::fmt::Debug for Frame {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Frame")
-            .field("code", &self.code)
-            .field("pc", &self.pc)
-            .field("registers", &self.registers)
-            .field("locals", &self.locals)
-            .field("globals", &self.globals)
-            .field("builtins", &self.builtins)
-            .field("block_stack", &self.block_stack)
-            .finish()
-    }
-}
-
-/// Method cache for object-oriented code performance
-#[derive(Debug, Clone)]
-pub struct MethodCache {
-    pub class_name: String,
-    pub method_name: String,
-    pub method: Option<Value>,
-    pub version: u32,
-}
+use std::collections::HashMap;
 
 /// Register-based bytecode virtual machine with computed GOTOs for maximum performance
 pub struct SuperBytecodeVM {
@@ -522,4 +158,591 @@ impl SuperBytecodeVM {
 
         Ok(result)
     }
+    
+    /// Optimized frame execution using computed GOTOs for maximum performance
+    #[inline(always)]
+    fn run_frame(&mut self) -> Result<Value> {
+        let mut frame_idx;
+        
+        loop {
+            // Fast path: check if we have frames
+            if self.frames.is_empty() {
+                // eprintln!("DEBUG: run_frame - no frames, returning None");
+                return Ok(Value::None);
+            }
+            
+            // Update frame index in case frames were added/removed
+            frame_idx = self.frames.len() - 1;
+            
+            // Debug output to see the frame being executed
+            // eprintln!("DEBUG: run_frame executing frame {} with code object '{}' with {} instructions",
+            //           frame_idx, self.frames[frame_idx].code.name, self.frames[frame_idx].code.instructions.len());
+            
+            // Safety check: if there are no instructions, return None immediately
+            if self.frames[frame_idx].code.instructions.is_empty() {
+                // eprintln!("DEBUG: Code object '{}' has no instructions, returning None", self.frames[frame_idx].code.name);
+                // Update globals before popping any frame (REPL needs this)
+                if let Some(frame) = self.frames.last() {
+                    self.globals = frame.globals.clone();
+                }
+                self.frames.pop();
+                return Ok(Value::None);
+            }
+            
+            // Fast path: check bounds
+            let pc = self.frames[frame_idx].pc;
+            let instructions_len = self.frames[frame_idx].code.instructions.len();
+            
+            // eprintln!("DEBUG: PC: {}, Instructions len: {}", pc, instructions_len);
+
+            if pc >= instructions_len {
+                // eprintln!("DEBUG: PC >= instructions_len, breaking");
+                break;
+            }
+            
+            // Direct access to instruction without cloning when possible
+            // Get the instruction details without borrowing self
+            let (opcode, arg1, arg2, arg3, function_name, line_num, filename) = {
+                let frame = &self.frames[frame_idx];
+                let instruction = &frame.code.instructions[pc];
+                (instruction.opcode, instruction.arg1, instruction.arg2, instruction.arg3,
+                 frame.code.name.clone(), instruction.line, frame.code.filename.clone())
+            };
+
+            // Track instruction execution for profiling and JIT compilation
+            self.track_instruction_execution(&function_name, pc);
+
+            // eprintln!("DEBUG: Executing instruction at pc {}: {:?} (arg1: {}, arg2: {}, arg3: {})", pc, opcode, arg1, arg2, arg3);
+            // Execute instruction using computed GOTOs for maximum performance
+            match self.execute_instruction_fast(frame_idx, opcode, arg1, arg2, arg3) {
+                Ok(Some(value)) => {
+                    // eprintln!("DEBUG: Instruction returned value: {:?}", value);
+                    // Check if we have more frames to execute
+                    if self.frames.is_empty() {
+                        return Ok(value);
+                    }
+                    // If we still have frames, continue execution with the next frame
+                    continue;
+                },
+                Ok(None) => {
+                    // eprintln!("DEBUG: Instruction completed, frame_idx: {}, frames.len(): {}", frame_idx, self.frames.len());
+                    // Check if a new frame was pushed during execution
+                    if self.frames.len() > frame_idx + 1 {
+                        // eprintln!("DEBUG: New frame was pushed, continuing");
+                        // A new frame was pushed, continue execution with the new frame
+                        continue;
+                    }
+                    // eprintln!("DEBUG: No new frame, checking PC");
+                    // Only increment PC if frame still exists and PC hasn't changed
+                    if frame_idx < self.frames.len() {
+                        // Check if PC has changed (e.g., due to a jump)
+                        // eprintln!("DEBUG: PC before: {}, PC after: {}", pc, self.frames[frame_idx].pc);
+                        if self.frames[frame_idx].pc == pc {
+                            self.frames[frame_idx].pc += 1;
+                            // eprintln!("DEBUG: Incremented PC to {}", self.frames[frame_idx].pc);
+                        } else {
+                            // eprintln!("DEBUG: PC was changed by instruction, now {}", self.frames[frame_idx].pc);
+                        }
+                        // If PC has changed, we don't increment it
+                    }
+                },
+                Err(e) => {
+                    // eprintln!("DEBUG: Instruction failed with error: {}", e);
+                    // Snapshot needed info without holding borrows across mutations
+                    let (top_exc, handler_pos_opt) = {
+                        let frame = &self.frames[frame_idx];
+                        let top = if !frame.registers.is_empty() {
+                            Some(frame.registers.last().unwrap().clone())
+                        } else {
+                            None
+                        };
+                        let handler_pos = frame
+                            .block_stack
+                            .iter()
+                            .rfind(|b| matches!(b.block_type, BlockType::Except))
+                            .map(|b| b.handler);
+                        (top, handler_pos)
+                    };
+
+                    if let Some(handler_pos) = handler_pos_opt {
+                        // Use existing exception value if present, otherwise push error string
+                        let exc_val = top_exc.unwrap_or_else(|| RcValue::new(Value::Str(format!("{}", e))));
+                        // Store exception in first register
+                        if !self.frames[frame_idx].registers.is_empty() {
+                            self.frames[frame_idx].registers[0] = exc_val;
+                        }
+                        // Set PC to handler
+                        self.frames[frame_idx].pc = handler_pos;
+                        // Pop the most recent Except block so nested exceptions can unwind further
+                        if let Some(pos) = self.frames[frame_idx]
+                            .block_stack
+                            .iter()
+                            .rposition(|b| matches!(b.block_type, BlockType::Except))
+                        {
+                            self.frames[frame_idx].block_stack.remove(pos);
+                        }
+                        // Continue execution
+                        continue;
+                    } else {
+                        // Format error with line number context for Python-like traceback
+                        let error_msg = format!(
+                            "Traceback (most recent call last):\n  File \"{}\", line {}, in {}\n{}",
+                            filename, line_num, function_name, e
+                        );
+                        return Err(anyhow!(error_msg));
+                    }
+                },
+            }
+        }
+        
+        // eprintln!("DEBUG: run_frame - completed, returning None");
+        Ok(Value::None)
+    }
+
+    /// Optimized instruction execution with computed GOTOs for maximum performance
+    #[inline(always)]
+    fn execute_instruction_fast(&mut self, frame_idx: usize, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // For now, we'll just return an error
+        // In a complete implementation, this would dispatch to the appropriate handler
+        match opcode {
+            // Delegate function-related opcodes to the functions module
+            OpCode::CallFunction | OpCode::CallMethod | OpCode::ReturnValue => {
+                self.execute_function_op(frame_idx, opcode, arg1, arg2, arg3)
+            }
+            OpCode::LoadConst => {
+                let const_idx = arg1 as usize;
+                let result_reg = arg2;
+                
+                if const_idx >= self.frames[frame_idx].code.constants.len() {
+                    return Err(anyhow!("LoadConst: constant index {} out of bounds (len: {})", const_idx, self.frames[frame_idx].code.constants.len()));
+                }
+                let value = RcValue::new(self.frames[frame_idx].code.constants[const_idx].clone());
+                self.frames[frame_idx].set_register(result_reg, value);
+                Ok(None)
+            }
+            OpCode::BinaryAddRR => {
+                // Register-Register addition
+                let left_reg = arg1;
+                let right_reg = arg2;
+                let result_reg = arg3;
+                
+                if left_reg as usize >= self.frames[frame_idx].registers.len() || 
+                   right_reg as usize >= self.frames[frame_idx].registers.len() ||
+                   result_reg as usize >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryAddRR: register index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].registers[left_reg as usize];
+                let right = &self.frames[frame_idx].registers[right_reg as usize];
+                
+                // Fast path for common operations
+                let result = match (&left.value, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                    (Value::Str(a), Value::Str(b)) => {
+                        // Preallocate capacity for string concatenation to avoid intermediate formatting allocations
+                        let mut s = String::with_capacity(a.len() + b.len());
+                        s.push_str(a);
+                        s.push_str(b);
+                        Value::Str(s)
+                    },
+                    (Value::List(a), Value::List(b)) => {
+                        // Avoid intermediate clones; allocate exact capacity and clone elements once
+                        let mut c = HPList::with_capacity(a.len() + b.len());
+                        for item in a {
+                            c.append((*item).clone());
+                        }
+                        for item in b {
+                            c.append((*item).clone());
+                        }
+                        Value::List(c)
+                    },
+                    _ => {
+                        // For less common cases, use the general implementation
+                        // Try to convert values to strings if they're not already
+                        let left_val = left.value.clone();
+                        let right_val = right.value.clone();
+                        
+                        match (&left_val, &right_val) {
+                            // If either is a string, convert both to strings
+                            (Value::Str(_), _) | (_, Value::Str(_)) => {
+                                let left_str = match left_val {
+                                    Value::Str(s) => s,
+                                    _ => format!("{}", left_val),
+                                };
+                                let right_str = match right_val {
+                                    Value::Str(s) => s,
+                                    _ => format!("{}", right_val),
+                                };
+                                let mut s = String::with_capacity(left_str.len() + right_str.len());
+                                s.push_str(&left_str);
+                                s.push_str(&right_str);
+                                Value::Str(s)
+                            },
+                            // Otherwise, use the general arithmetic implementation
+                            _ => {
+                                self.add_values(left_val, right_val)
+                                    .map_err(|e| anyhow!("Error in BinaryAddRR: {}", e))?
+                            }
+                        }
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg as usize] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::StoreGlobal => {
+                // Store value from register to global namespace
+                let name_idx = arg1 as usize;
+                let value_reg = arg2;
+                
+                if name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("StoreGlobal: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
+                }
+                
+                if value_reg as usize >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("StoreGlobal: register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                // Clone the values first to avoid borrowing issues
+                let name = self.frames[frame_idx].code.names[name_idx].clone();
+                let value = self.frames[frame_idx].registers[value_reg as usize].clone();
+                
+                // Store in both frame globals and VM globals
+                self.frames[frame_idx].globals.insert(name.clone(), value.clone());
+                self.globals.insert(name, value);
+                
+                Ok(None)
+            }
+            OpCode::LoadGlobal => {
+                // Load value from global namespace to register
+                let name_idx = arg1 as usize;
+                let cache_idx = arg2 as usize; // Not used in this simple implementation
+                let result_reg = arg3;
+                
+                if name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("LoadGlobal: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
+                }
+                
+                let name = &self.frames[frame_idx].code.names[name_idx];
+                
+                // Try to get from frame globals first, then VM globals
+                let value = if let Some(value) = self.frames[frame_idx].globals.get(name) {
+                    value.clone()
+                } else if let Some(value) = self.globals.get(name) {
+                    value.clone()
+                } else {
+                    return Err(anyhow!("LoadGlobal: name '{}' not found in global namespace", name));
+                };
+                
+                self.frames[frame_idx].set_register(result_reg, value);
+                Ok(None)
+            }
+            OpCode::LoadFast => {
+                // Load value from local variable (fast access) to register
+                let local_idx = arg1 as usize;
+                let result_reg = arg2;
+                
+                if local_idx >= self.frames[frame_idx].locals.len() {
+                    return Err(anyhow!("LoadFast: local index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
+                }
+                
+                let value = self.frames[frame_idx].locals[local_idx].clone();
+                self.frames[frame_idx].set_register(result_reg, value);
+                Ok(None)
+            }
+            OpCode::LoadLocal => {
+                // Load value from local register (same as LoadFast)
+                let local_idx = arg1 as usize;
+                let result_reg = arg2;
+                
+                if local_idx >= self.frames[frame_idx].locals.len() {
+                    return Err(anyhow!("LoadLocal: local index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
+                }
+                
+                let value = self.frames[frame_idx].locals[local_idx].clone();
+                self.frames[frame_idx].set_register(result_reg, value);
+                Ok(None)
+            }
+            OpCode::StoreFast => {
+                // Store value from register to local variable (fast access)
+                let local_idx = arg1 as usize;
+                let value_reg = arg2;
+                
+                if local_idx >= self.frames[frame_idx].locals.len() {
+                    return Err(anyhow!("StoreFast: local index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
+                }
+                
+                if value_reg as usize >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("StoreFast: register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                let value = self.frames[frame_idx].registers[value_reg as usize].clone();
+                self.frames[frame_idx].locals[local_idx] = value;
+                Ok(None)
+            }
+            OpCode::FastIntAdd => {
+                // Ultra-fast integer addition without cloning
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                // Direct access to integer values without cloning for maximum performance
+                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
+                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
+                        // Create result directly without intermediate allocations
+                        self.frames[frame_idx].registers[result_reg] = RcValue {
+                            value: Value::Int(left_val + right_val),
+                            ref_count: 1,
+                        };
+                        return Ok(None);
+                    }
+                }
+                // Fallback to regular addition using the arithmetic module
+                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
+                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
+                let result = self.add_values(left_val, right_val)
+                    .map_err(|e| anyhow!("Error in FastIntAdd: {}", e))?;
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::FastIntSub => {
+                // Ultra-fast integer subtraction without cloning
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                // Direct access to integer values without cloning for maximum performance
+                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
+                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
+                        // Create result directly without intermediate allocations
+                        self.frames[frame_idx].registers[result_reg] = RcValue {
+                            value: Value::Int(left_val - right_val),
+                            ref_count: 1,
+                        };
+                        return Ok(None);
+                    }
+                }
+                // Fallback to regular subtraction using the arithmetic module
+                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
+                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
+                let result = self.sub_values(left_val, right_val)
+                    .map_err(|e| anyhow!("Error in FastIntSub: {}", e))?;
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::FastIntMul => {
+                // Ultra-fast integer multiplication without cloning
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                // Direct access to integer values without cloning for maximum performance
+                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
+                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
+                        // Create result directly without intermediate allocations
+                        self.frames[frame_idx].registers[result_reg] = RcValue {
+                            value: Value::Int(left_val * right_val),
+                            ref_count: 1,
+                        };
+                        return Ok(None);
+                    }
+                }
+                // Fallback to regular multiplication using the arithmetic module
+                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
+                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
+                let result = self.mul_values(left_val, right_val)
+                    .map_err(|e| anyhow!("Error in FastIntMul: {}", e))?;
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::FastIntDiv => {
+                // Ultra-fast integer division without cloning
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                // Direct access to integer values without cloning for maximum performance
+                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
+                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
+                        // Check for division by zero
+                        if right_val == 0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        // Create result directly without intermediate allocations
+                        self.frames[frame_idx].registers[result_reg] = RcValue {
+                            value: Value::Int(left_val / right_val),
+                            ref_count: 1,
+                        };
+                        return Ok(None);
+                    }
+                }
+                // Fallback to regular division using the arithmetic module
+                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
+                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
+                let result = self.div_values(left_val, right_val)
+                    .map_err(|e| anyhow!("Error in FastIntDiv: {}", e))?;
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::FastIntMod => {
+                // Ultra-fast integer modulo without cloning
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                // Direct access to integer values without cloning for maximum performance
+                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
+                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
+                        // Check for modulo by zero
+                        if right_val == 0 {
+                            return Err(anyhow!("Modulo by zero"));
+                        }
+                        // Create result directly without intermediate allocations
+                        self.frames[frame_idx].registers[result_reg] = RcValue {
+                            value: Value::Int(left_val % right_val),
+                            ref_count: 1,
+                        };
+                        return Ok(None);
+                    }
+                }
+                // Fallback to regular modulo using the arithmetic module
+                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
+                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
+                let result = self.mod_values(left_val, right_val)
+                    .map_err(|e| anyhow!("Error in FastIntMod: {}", e))?;
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            _ => {
+                // For unimplemented opcodes, return an error
+                Err(anyhow!("Unimplemented opcode: {:?}", opcode))
+            }
+        }
+    }
+    
+
+    
+    /// Optimized function call path
+    pub fn call_function_fast(&mut self, func: Value, args: Vec<Value>, caller_frame_idx: Option<usize>, result_reg: Option<u32>) -> Result<Value> {
+        match func {
+            Value::BuiltinFunction(_, fptr) => {
+                // Direct call to builtin function - fastest path
+                (fptr)(args)
+            }
+            Value::Closure { name, params, body, captured_scope, docstring, compiled_code } => {
+                // Handle user-defined functions (closures)
+                if let Some(code_obj) = compiled_code {
+                    // Create a new frame for the function execution
+                    let mut locals = HashMap::new();
+                    
+                    // Set up function parameters
+                    for (i, param) in params.iter().enumerate() {
+                        if i < args.len() {
+                            locals.insert(param.name.clone(), args[i].clone());
+                        } else if let Some(default_expr) = &param.default {
+                            // Evaluate default expression
+                            match default_expr {
+                                Expr::Literal(lit) => {
+                                    match lit {
+                                        Literal::Int(n) => {
+                                            locals.insert(param.name.clone(), Value::Int(*n));
+                                        }
+                                        Literal::Float(n) => {
+                                            locals.insert(param.name.clone(), Value::Float(*n));
+                                        }
+                                        Literal::String(s) => {
+                                            locals.insert(param.name.clone(), Value::Str(s.clone()));
+                                        }
+                                        Literal::Bool(b) => {
+                                            locals.insert(param.name.clone(), Value::Bool(*b));
+                                        }
+                                        Literal::None => {
+                                            locals.insert(param.name.clone(), Value::None);
+                                        }
+                                        Literal::Bytes(b) => {
+                                            locals.insert(param.name.clone(), Value::Bytes(b.clone()));
+                                        }
+                                        Literal::Complex { real, imag } => {
+                                            locals.insert(param.name.clone(), Value::Complex { real: *real, imag: *imag });
+                                        }
+                                        Literal::Ellipsis => {
+                                            locals.insert(param.name.clone(), Value::Ellipsis);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    // For complex expressions, we'd need to evaluate them
+                                    // For now, just use None as a fallback
+                                    locals.insert(param.name.clone(), Value::None);
+                                }
+                            }
+                        } else {
+                            // No default value and no argument provided
+                            locals.insert(param.name.clone(), Value::None);
+                        }
+                    }
+                    
+                    // Add captured scope variables to locals
+                    for (var_name, var_value) in captured_scope {
+                        locals.insert(var_name, var_value);
+                    }
+                    
+                    // Get globals from the caller frame if available
+                    let globals: HashMap<String, Value> = if let Some(frame_idx) = caller_frame_idx {
+                        if frame_idx < self.frames.len() {
+                            self.frames[frame_idx].globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect()
+                        } else {
+                            HashMap::new()
+                        }
+                    } else {
+                        HashMap::new()
+                    };
+                    
+                    // Get builtins from the caller frame if available
+                    let builtins: HashMap<String, Value> = if let Some(frame_idx) = caller_frame_idx {
+                        if frame_idx < self.frames.len() {
+                            self.frames[frame_idx].builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect()
+                        } else {
+                            HashMap::new()
+                        }
+                    } else {
+                        HashMap::new()
+                    };
+                    
+                    // Create new frame using the function frame constructor
+                    let mut frame = Frame::new_function_frame(*code_obj, globals, builtins, vec![]);
+                    
+                    // Set up the locals in the frame
+                    for (var_name, var_value) in locals {
+                        if let Some(index) = frame.get_local_index(&var_name) {
+                            frame.locals[index] = RcValue::new(var_value);
+                        }
+                    }
+                    
+                    // Set the return register so the return value can be stored in the caller frame
+                    if let Some(caller_idx) = caller_frame_idx {
+                        if let Some(result_reg_idx) = result_reg {
+                            frame.return_register = Some((caller_idx, result_reg_idx));
+                        }
+                    }
+                    
+                    self.frames.push(frame);
+                    // Return Ok(None) to indicate that execution should continue in the new frame
+                    Ok(Value::None)
+                } else {
+                    Err(anyhow!("Closure '{}' has no compiled code", name))
+                }
+            }
+            _ => Err(anyhow!("Function call not fully implemented for type: {:?}", func)),
+        }
+    }
+    
+    /// Get attribute implementation
+    pub fn getattr_impl(&self, obj: &Value, attr: &str) -> Result<Value> {
+        // Simple implementation for now
+        Err(anyhow!("getattr not fully implemented"))
+    }
+    
+
 }

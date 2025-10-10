@@ -1,5 +1,64 @@
 //! Object handling (dict, list, string, etc.)
 
+use crate::value::Value;
+use crate::modules::hplist::HPList;
+use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
+
+/// Reference counted value for optimized memory management
+#[derive(Debug, Clone)]
+pub struct RcValue {
+    pub value: Value,
+    pub ref_count: usize,
+}
+
+/// Simple iterator for Range values
+#[derive(Debug, Clone)]
+pub struct RangeIterator {
+    pub start: i64,
+    pub stop: i64,
+    pub step: i64,
+    pub current: i64,
+}
+
+impl PartialEq for RcValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl Eq for RcValue {}
+
+impl Hash for RcValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
+    }
+}
+
+impl RcValue {
+    pub fn new(value: Value) -> Self {
+        Self {
+            value,
+            ref_count: 1,
+        }
+    }
+    
+    pub fn clone_rc(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            ref_count: self.ref_count + 1,
+        }
+    }
+    
+    pub fn is_unique(&self) -> bool {
+        self.ref_count == 1
+    }
+    
+    pub fn is_truthy(&self) -> bool {
+        self.value.is_truthy()
+    }
+}
+
 /// Object handling operations
 pub struct ObjectOps;
 

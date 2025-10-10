@@ -1,12 +1,11 @@
 //! Control flow (JUMP, IF, CALL, RETURN)
 
-use crate::ast::*;
+
 use crate::value::Value;
-use crate::modules::hplist::HPList;
-use crate::bytecode::instructions::{OpCode, Instruction};
-use crate::bytecode::arithmetic::{RcValue, Frame, SuperBytecodeVM};
+use crate::bytecode::instructions::OpCode;
+use crate::bytecode::vm::SuperBytecodeVM;
+use crate::bytecode::objects::RcValue;
 use anyhow::{Result, anyhow};
-use std::collections::HashMap;
 
 impl SuperBytecodeVM {
     /// Execute control flow opcodes

@@ -53,9 +53,9 @@ pub enum Value {
         captured_scope: HashMap<String, Value>,
         docstring: Option<String>,
         // Add a field to store the compiled code directly in the Closure
-        compiled_code: Option<Box<crate::bytecode::arithmetic::CodeObject>>,
+        compiled_code: Option<Box<crate::bytecode::memory::CodeObject>>,
     },
-    Code(Box<crate::bytecode::arithmetic::CodeObject>), // Compiled function code
+    Code(Box<crate::bytecode::memory::CodeObject>), // Compiled function code
     NativeFunction(fn(Vec<Value>) -> anyhow::Result<Value>),
     BuiltinFunction(String, fn(Vec<Value>) -> anyhow::Result<Value>),
     Module(String, HashMap<String, Value>), // module name, namespace

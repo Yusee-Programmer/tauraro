@@ -23,7 +23,7 @@ pub mod bytecode; // Export our new bytecode module
 // Re-export commonly used items
 pub use value::Value;
 // Update the re-exports to use the new modular structure
-pub use bytecode::arithmetic::{SuperBytecodeVM, SuperCompiler, CodeObject, Frame, RcValue};
+pub use bytecode::{SuperBytecodeVM, SuperCompiler, CodeObject, Frame, RcValue};
 pub use bytecode::instructions::{Instruction, OpCode};
 pub use vm::memory::Scope; // Add this export
 

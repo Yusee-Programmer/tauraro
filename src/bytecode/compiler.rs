@@ -1,9 +1,17 @@
 //! SuperCompiler - Register-based bytecode compiler with advanced optimizations
 
-use crate::ast::*;
+
+use crate::ast::Param;
+use crate::ast::Statement;
+use crate::ast::Program;
+use crate::ast::Expr;
+use crate::ast::Literal;
+use crate::ast::BinaryOp;
+use crate::ast::CompareOp;
+use crate::ast::UnaryOp;
 use crate::value::Value;
 use crate::bytecode::instructions::{OpCode, Instruction};
-use crate::bytecode::arithmetic::CodeObject;
+use crate::bytecode::memory::CodeObject;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
@@ -725,6 +733,54 @@ impl SuperCompiler {
                 let none_const = self.code.add_constant(Value::None);
                 self.emit(OpCode::LoadConst, none_const, result_reg, 0, self.current_line);
                 Ok(result_reg)
+            }
+            Expr::FormatString { parts } => {
+                // Handle f-string formatting by compiling each part and concatenating
+                let mut part_regs = Vec::new();
+                
+                for part in parts {
+                    match part {
+                        crate::ast::FormatPart::String(s) => {
+                            // Compile string literal part
+                            let const_idx = self.code.add_constant(Value::Str(s));
+                            let reg = self.allocate_register();
+                            self.emit(OpCode::LoadConst, const_idx, reg, 0, self.current_line);
+                            part_regs.push(reg);
+                        }
+                        crate::ast::FormatPart::Expression { expr, format_spec: _, conversion: _ } => {
+                            // Compile expression part and convert to string
+                            let expr_reg = self.compile_expression(expr)?;
+                            
+                            // Call str() builtin on the expression result
+                            // For now, we'll use a simplified approach
+                            // In a full implementation, we would call the str() builtin function
+                            part_regs.push(expr_reg);
+                        }
+                    }
+                }
+                
+                // Concatenate all parts
+                if part_regs.is_empty() {
+                    // Empty f-string
+                    let result_reg = self.allocate_register();
+                    let const_idx = self.code.add_constant(Value::Str(String::new()));
+                    self.emit(OpCode::LoadConst, const_idx, result_reg, 0, self.current_line);
+                    Ok(result_reg)
+                } else if part_regs.len() == 1 {
+                    // Single part, just return it
+                    Ok(part_regs[0])
+                } else {
+                    // Multiple parts, concatenate them
+                    let mut current_reg = part_regs[0];
+                    
+                    for &next_reg in &part_regs[1..] {
+                        let result_reg = self.allocate_register();
+                        self.emit(OpCode::BinaryAddRR, current_reg, next_reg, result_reg, self.current_line);
+                        current_reg = result_reg;
+                    }
+                    
+                    Ok(current_reg)
+                }
             }
             _ => Err(anyhow!("Unsupported expression type: {:?}", expr)),
         }
