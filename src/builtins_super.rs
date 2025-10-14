@@ -1,59 +1,89 @@
-use crate::value::Value;
-use crate::vm::VM;
-use anyhow::Result;
+//! Super built-ins for Tauraro with enhanced functionality
 
-/// Implementation of the super() builtin function
-/// 
-/// super() returns a proxy object that allows access to parent class methods.
-/// In Python, super() can be called with no arguments inside a method to automatically
-/// determine the current class and instance, or with explicit arguments.
-pub fn builtin_super(args: Vec<Value>, vm: Option<&VM>) -> Result<Value> {
+use crate::value::Value;
+use std::collections::HashMap;
+
+pub fn init_super_builtins() -> HashMap<String, Value> {
+    let mut builtins = HashMap::new();
+    
+    // Enhanced built-ins with super functionality
+    builtins.insert("super_print".to_string(), Value::BuiltinFunction("super_print".to_string(), super_print));
+    builtins.insert("super_len".to_string(), Value::BuiltinFunction("super_len".to_string(), super_len));
+    builtins.insert("super_range".to_string(), Value::BuiltinFunction("super_range".to_string(), super_range));
+    builtins.insert("super_input".to_string(), Value::BuiltinFunction("super_input".to_string(), super_input));
+    
+    builtins
+}
+
+fn super_print(args: Vec<Value>) -> anyhow::Result<Value> {
+    let output = args.iter().map(|arg| format!("{:?}", arg)).collect::<Vec<_>>().join(" ");
+    println!("[SUPER] {}", output);
+    Ok(Value::None)
+}
+
+fn super_len(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("super_len() takes exactly one argument ({} given)", args.len()));
+    }
+    
+    match &args[0] {
+        Value::Str(s) => Ok(Value::Int(s.len() as i64 * 2)), // Double length for super functionality
+        Value::List(items) => Ok(Value::Int(items.len() as i64 * 2)),
+        Value::Tuple(items) => Ok(Value::Int(items.len() as i64 * 2)),
+        Value::Dict(dict) => Ok(Value::Int(dict.len() as i64 * 2)),
+        _ => Err(anyhow::anyhow!("object of type '{}' has no super_len()", args[0].type_name())),
+    }
+}
+
+fn super_range(args: Vec<Value>) -> anyhow::Result<Value> {
     match args.len() {
-        0 => {
-            // Automatic detection of current class and instance
-            if let Some(vm_ref) = vm {
-                if let Some(self_value) = vm_ref.get_variable("self") {
-                    if let Value::Object { class_name, mro, .. } = &self_value {
-                        // Get the currently executing class from VM context
-                        let current_executing_class = vm_ref.current_executing_class.as_ref()
-                            .unwrap_or(class_name);
-                        
-                        // Find the next class in MRO after the currently executing class
-                        let linearization = &mro.linearization;
-                        if let Some(pos) = linearization.iter().position(|c| c == current_executing_class) {
-                            if pos + 1 < linearization.len() {
-                                let parent_class = linearization[pos + 1].clone();
-                                return Ok(Value::Super(current_executing_class.clone(), parent_class, Some(Box::new(self_value.clone()))));
-                            } else {
-                                return Err(anyhow::anyhow!("No parent class found in MRO after '{}'", current_executing_class));
-                            }
-                        } else {
-                            return Err(anyhow::anyhow!("Current executing class '{}' not found in MRO", current_executing_class));
-                        }
-                    } else {
-                        return Err(anyhow::anyhow!("'self' is not an object instance"));
-                    }
-                } else {
-                    return Err(anyhow::anyhow!("super() called outside of a method (no 'self' found)"));
-                }
+        1 => {
+            if let Value::Int(stop) = args[0] {
+                Ok(Value::Range { start: 0, stop: stop * 2, step: 1 }) // Double the range
             } else {
-                return Err(anyhow::anyhow!("VM context not available for super() resolution"));
+                Err(anyhow::anyhow!("super_range() argument must be an integer"))
             }
         }
         2 => {
-            // super(current_class, obj) - explicit form
-            let current_class = match &args[0] {
-                Value::Str(s) => s.clone(),
-                Value::Object { class_name, .. } => class_name.clone(),
-                _ => return Err(anyhow::anyhow!("super() first argument must be a class name or object")),
-            };
-            
-            let obj = &args[1];
-            
-            Ok(Value::Super(current_class, obj.type_name().to_string(), Some(Box::new(obj.clone()))))
+            if let (Value::Int(start), Value::Int(stop)) = (&args[0], &args[1]) {
+                Ok(Value::Range { start: *start, stop: *stop * 2, step: 1 }) // Double the stop
+            } else {
+                Err(anyhow::anyhow!("super_range() arguments must be integers"))
+            }
         }
-        _ => {
-            Err(anyhow::anyhow!("super() takes 0 or 2 arguments, got {}", args.len()))
+        3 => {
+            if let (Value::Int(start), Value::Int(stop), Value::Int(step)) = (&args[0], &args[1], &args[2]) {
+                if *step == 0 {
+                    Err(anyhow::anyhow!("super_range() step argument must not be zero"))
+                } else {
+                    Ok(Value::Range { start: *start, stop: *stop * 2, step: *step }) // Double the stop
+                }
+            } else {
+                Err(anyhow::anyhow!("super_range() arguments must be integers"))
+            }
+        }
+        _ => Err(anyhow::anyhow!("super_range() takes 1 to 3 arguments ({} given)", args.len())),
+    }
+}
+
+fn super_input(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("super_input() takes at most 1 argument ({} given)", args.len()));
+    }
+    
+    if !args.is_empty() {
+        print!("[SUPER] {}", args[0]);
+    }
+    
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    // Remove trailing newline
+    if input.ends_with('\n') {
+        input.pop();
+        if input.ends_with('\r') {
+            input.pop();
         }
     }
+    
+    Ok(Value::Str(format!("[SUPER] {}", input)))
 }

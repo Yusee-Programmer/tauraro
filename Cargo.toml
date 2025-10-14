@@ -1,8 +1,8 @@
 [package]
 name = "tauraro"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "A flexible programming language with multiple compilation backends"
+description = "Tauraro Programming Language - A modern, high-performance programming language with 100% Python syntax compatibility and multilingual support"
 license = "MIT OR Apache-2.0"
 authors = ["TauraroLang Team"]
 repository = "https://github.com/taurarolang/tauraro"
@@ -87,6 +87,7 @@ async = ["dep:tokio", "dep:futures"]  # Async/await support
 http = ["dep:hyper", "dep:reqwest", "dep:tungstenite", "dep:tokio-tungstenite"]  # HTTP and WebSocket support
 jit = ["dep:cranelift", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit"]  # JIT compilation with Cranelift
 test-llvm = []  # Feature for testing LLVM backend
+type_checking = []  # Runtime type checking support
 
 [dev-dependencies]
 pretty_assertions = "1.4"

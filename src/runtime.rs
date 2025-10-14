@@ -1,4 +1,6 @@
-//! COMPLETE TauraroLang Runtime - Innovative memory management with automatic GC and optional manual control
+//! Runtime system for Tauraro
+
+use crate::value::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, OnceLock};
 use std::ptr;

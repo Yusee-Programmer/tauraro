@@ -1,20 +1,15 @@
 //! Memory management (alloc, free, refcount, GC hooks)
 
-
 use crate::value::Value;
 use crate::bytecode::instructions::{OpCode, Instruction};
-use crate::bytecode::objects::{RcValue, RangeIterator};
-use crate::modules::hplist::HPList;
-use anyhow::{Result, anyhow};
-use std::collections::{HashMap, HashSet};
+use crate::bytecode::objects::RcValue;
+use crate::ast::Param;
+use std::collections::HashMap;
 use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
 use smallvec::SmallVec;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// Register-based compiled code object
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CodeObject {
     pub instructions: Vec<Instruction>,
     pub constants: Vec<Value>,
@@ -32,7 +27,17 @@ pub struct CodeObject {
     pub flags: u32,
     pub registers: u32,         // Number of registers needed
     pub inline_caches: Vec<InlineCache>, // Inline caches for specialization
+    pub params: Vec<Param>,     // Add this field to store parameter information
 }
+
+impl PartialEq for CodeObject {
+    fn eq(&self, other: &Self) -> bool {
+        // Simplified comparison for now - just compare name and instruction count
+        self.name == other.name && self.instructions.len() == other.instructions.len()
+    }
+}
+
+
 
 impl CodeObject {
     pub fn new(filename: String, name: String, first_line: u32) -> Self {
@@ -53,6 +58,7 @@ impl CodeObject {
             flags: 0,
             registers: 0,
             inline_caches: Vec::new(),
+            params: Vec::new(),  // Initialize the params field
         }
     }
     
@@ -155,6 +161,7 @@ pub enum BlockType {
 }
 
 /// Execution frame for register-based VM with reference counting and method caching
+#[derive(Clone)]
 pub struct Frame {
     pub code: CodeObject,
     pub pc: usize,                          // Program counter
@@ -187,12 +194,17 @@ impl std::fmt::Debug for Frame {
 
 impl Frame {
     pub fn new(code: CodeObject, globals: HashMap<String, Value>, builtins: HashMap<String, Value>) -> Self {
-        // Debug output to see the code object being used
-        // eprintln!("DEBUG: Frame::new creating frame with code object '{}' with {} instructions", code.name, code.instructions.len());
-        
         // Initialize registers
         let mut registers = SmallVec::new();
         registers.resize(code.registers as usize, RcValue::new(Value::None));
+        
+        // If registers count is 0, log a warning
+        if code.registers == 0 && !code.instructions.is_empty() {
+            // For debugging, let's allocate some registers if there are instructions
+            if code.instructions.len() > 0 {
+                registers.resize(64, RcValue::new(Value::None));
+            }
+        }
         
         // Initialize locals vector with None values
         let mut locals = Vec::new();
@@ -225,7 +237,7 @@ impl Frame {
     }
 
     /// Create a frame optimized for function calls with pre-allocated registers
-    pub fn new_function_frame(code: CodeObject, globals: HashMap<String, Value>, builtins: HashMap<String, Value>, args: Vec<Value>) -> Self {
+    pub fn new_function_frame(code: CodeObject, globals: HashMap<String, Value>, builtins: HashMap<String, Value>, args: Vec<Value>, kwargs: HashMap<String, Value>) -> Self {
         // Initialize registers
         let mut registers = SmallVec::new();
         registers.resize(code.registers as usize, RcValue::new(Value::None));
@@ -240,11 +252,72 @@ impl Frame {
             locals_map.insert(name.clone(), i);
         }
         
-        // Copy arguments to locals
-        for (i, (arg, param_name)) in args.into_iter().zip(code.varnames.iter()).enumerate() {
-            if i < locals.len() {
-                let rc_arg = RcValue::new(arg);
-                locals[i] = rc_arg;
+        // Copy arguments to locals, handling *args, **kwargs, and keyword arguments
+        let mut arg_index = 0;
+        
+        // Process each parameter in order
+        for (param_index, param_name) in code.varnames.iter().enumerate() {
+            // Check if this parameter is *args or **kwargs by looking at the params in code object
+            let param_info = code.params.iter().find(|param| &param.name == param_name);
+            
+            if let Some(param) = param_info {
+                match param.kind {
+                    crate::ast::ParamKind::VarArgs => {
+                        // This is a *args parameter
+                        // Collect all remaining positional arguments into a tuple
+                        let remaining_args: Vec<Value> = args.iter().skip(arg_index).cloned().collect();
+                        let tuple_value = Value::Tuple(remaining_args);
+                        let rc_arg = RcValue::new(tuple_value.clone());
+                        if param_index < locals.len() {
+                            locals[param_index] = rc_arg;
+                        }
+                        break; // All remaining args are collected, so we're done
+                    }
+                    crate::ast::ParamKind::VarKwargs => {
+                        // This is a **kwargs parameter
+                        // Create a dict with all remaining keyword arguments
+                        // Convert KwargsMarker back to regular Dict when used as parameter
+                        let dict_value = Value::Dict(kwargs.clone());
+                        let rc_arg = RcValue::new(dict_value);
+                        if param_index < locals.len() {
+                            locals[param_index] = rc_arg;
+                        }
+                        break; // **kwargs should be the last parameter, so we're done
+                    }
+                    _ => {
+                        // Regular parameter
+                        // First check if it's provided as a keyword argument
+                        if let Some(value) = kwargs.get(param_name) {
+                            let rc_arg = RcValue::new(value.clone());
+                            if param_index < locals.len() {
+                                locals[param_index] = rc_arg;
+                            }
+                        } else if arg_index < args.len() {
+                            // Use positional argument
+                            let rc_arg = RcValue::new(args[arg_index].clone());
+                            if param_index < locals.len() {
+                                locals[param_index] = rc_arg;
+                            }
+                            arg_index += 1;
+                        }
+                    }
+                }
+            } else {
+                // Regular parameter
+                // First check if it's provided as a keyword argument
+                if let Some(value) = kwargs.get(param_name) {
+                    let rc_arg = RcValue::new(value.clone());
+                    if param_index < locals.len() {
+                        locals[param_index] = rc_arg;
+                    }
+                } else if arg_index < args.len() {
+                    // Use positional argument
+                    let rc_arg = RcValue::new(args[arg_index].clone());
+                    if param_index < locals.len() {
+                        locals[param_index] = rc_arg;
+                    }
+                    arg_index += 1;
+                }
             }
         }
         

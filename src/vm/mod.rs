@@ -1,21 +1,12 @@
-//! Central entry point for the VM module
-//! Re-exports everything from the submodules
+//! Virtual machine module
 
-// Re-export all submodules
 pub mod core;
 pub mod frame;
-pub mod stack;
 pub mod memory;
-pub mod objects;
-pub mod modules;
-// Removed builtins - using crate::builtins instead
-pub mod errors;
-pub mod debug;
-pub mod executor;
+pub mod stack;
 
 // Re-export commonly used items
 pub use crate::vm::core::VM;
 pub use crate::vm::frame::ExecutionFrame;
-pub use crate::vm::stack::StackFrame;
 pub use crate::vm::memory::Scope;
-pub use crate::vm::executor::*;
+pub use crate::vm::stack::StackFrame;

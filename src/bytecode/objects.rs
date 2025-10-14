@@ -1,9 +1,7 @@
 //! Object handling (dict, list, string, etc.)
 
 use crate::value::Value;
-use crate::modules::hplist::HPList;
 use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
 
 /// Reference counted value for optimized memory management
 #[derive(Debug, Clone)]
@@ -29,11 +27,12 @@ impl PartialEq for RcValue {
 
 impl Eq for RcValue {}
 
-impl Hash for RcValue {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.value.hash(state);
-    }
-}
+// Remove the Hash implementation since Value doesn't implement Hash properly
+// impl Hash for RcValue {
+//     fn hash<H: Hasher>(&self, state: &mut H) {
+//         self.value.hash(state);
+//     }
+// }
 
 impl RcValue {
     pub fn new(value: Value) -> Self {

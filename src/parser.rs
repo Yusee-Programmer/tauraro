@@ -298,24 +298,56 @@ impl Parser {
         if self.match_token(&[Token::LParen]) {
             if !self.check(&Token::RParen) {
                 loop {
-                    let param_name = self.consume_identifier_or_keyword()?;
-                    let type_annotation = if self.match_token(&[Token::Colon]) {
-                        Some(self.type_annotation()?)
+                    // Check for *args or **kwargs
+                    if self.match_token(&[Token::Star]) {
+                        if self.match_token(&[Token::Star]) {
+                            // **kwargs
+                            let param_name = self.consume_identifier_or_keyword()?;
+                            params.push(Param {
+                                name: param_name,
+                                type_annotation: None,
+                                default: None,
+                                kind: ParamKind::VarKwargs,
+                            });
+                        } else {
+                            // *args
+                            let param_name = self.consume_identifier_or_keyword()?;
+                            params.push(Param {
+                                name: param_name,
+                                type_annotation: None,
+                                default: None,
+                                kind: ParamKind::VarArgs,
+                            });
+                        }
+                    } else if self.match_token(&[Token::Power]) {
+                        // **kwargs (alternative syntax)
+                        let param_name = self.consume_identifier_or_keyword()?;
+                        params.push(Param {
+                            name: param_name,
+                            type_annotation: None,
+                            default: None,
+                            kind: ParamKind::VarKwargs,
+                        });
                     } else {
-                        None
-                    };
-                    let default = if self.match_token(&[Token::Assign]) {
-                        Some(self.expression()?)
-                    } else {
-                        None
-                    };
-                    
-                    params.push(Param {
-                        name: param_name,
-                        type_annotation,
-                        default,
-                        kind: ParamKind::Positional,
-                    });
+                        let param_name = self.consume_identifier_or_keyword()?;
+                        let type_annotation = if self.match_token(&[Token::Colon]) {
+                            Some(self.type_annotation()?)
+                        } else {
+                            None
+                        };
+                        let default = if self.match_token(&[Token::Assign]) {
+                            Some(self.expression()?)
+                        } else {
+                            None
+                        };
+                        
+                        params.push(Param {
+                            name: param_name,
+                            type_annotation,
+                            default,
+                            kind: ParamKind::Positional,
+                        });
+                    }
                     
                     if !self.match_token(&[Token::Comma]) {
                         break;
@@ -998,26 +1030,37 @@ impl Parser {
                 Ok(Expr::Yield(value))
             }
         } else if self.match_token(&[Token::KwAwait]) {
-            // Parse await expression: await expr
             let expr = Box::new(self.expression()?);
             Ok(Expr::Await(expr))
         } else if self.match_token(&[Token::KwLambda]) {
-            // Parse lambda function: lambda params: body
+            // Parse lambda expression
             let mut params = Vec::new();
             
-            // Parse parameters (optional)
+            // Lambda parameters (optional)
             if !self.check(&Token::Colon) {
-                let name = self.consume_identifier()?;
-                params.push(Param {
-                    name,
-                    type_annotation: None,
-                    default: None,
-                    kind: ParamKind::Positional,
-                });
-                while self.match_token(&[Token::Comma]) {
-                    let name = self.consume_identifier()?;
+                if self.match_token(&[Token::LParen]) {
+                    // Lambda with parentheses
+                    if !self.check(&Token::RParen) {
+                        loop {
+                            let param_name = self.consume_identifier()?;
+                            params.push(Param {
+                                name: param_name,
+                                type_annotation: None,
+                                default: None,
+                                kind: ParamKind::Positional,
+                            });
+                            
+                            if !self.match_token(&[Token::Comma]) {
+                                break;
+                            }
+                        }
+                    }
+                    self.consume(Token::RParen, "Expected ')' after lambda parameters")?;
+                } else {
+                    // Simple lambda with single parameter
+                    let param_name = self.consume_identifier()?;
                     params.push(Param {
-                        name,
+                        name: param_name,
                         type_annotation: None,
                         default: None,
                         kind: ParamKind::Positional,
@@ -1029,114 +1072,158 @@ impl Parser {
             let body = Box::new(self.expression()?);
             
             Ok(Expr::Lambda { params, body })
-        } else if let Token::Int(n) = self.peek().token.clone() {
-            self.advance();
-            Ok(Expr::Literal(Literal::Int(n)))
-        } else if let Token::Float(n) = self.peek().token.clone() {
-            self.advance();
-            Ok(Expr::Literal(Literal::Float(n)))
-        } else if let Token::StringLit(s) = self.peek().token.clone() {
-            self.advance();
-            Ok(Expr::Literal(Literal::String(s)))
-        } else if let Token::DocString(s) = self.peek().token.clone() {
-            self.advance();
-            Ok(Expr::DocString(s))
-        } else if let Token::FString(s) = self.peek().token.clone() {
-            self.advance();
-            self.parse_fstring(s)
-        } else if let Token::Identifier(name) = self.peek().token.clone() {
-            self.advance();
-            Ok(Expr::Identifier(name))
-        } else if self.is_keyword_as_identifier() {
-            // Handle keywords used as identifiers in expression contexts
-            let name = self.consume_identifier_or_keyword()?;
-            Ok(Expr::Identifier(name))
+        } else if self.is_number_token() {
+            // Consume the number token first
+            match self.advance().token {
+                Token::Int(n) => Ok(Expr::Literal(Literal::Int(n))),
+                Token::Float(n) => Ok(Expr::Literal(Literal::Float(n))),
+                _ => unreachable!(),
+            }
+        } else if matches!(self.peek().token, Token::StringLit(_)) || matches!(self.peek().token, Token::FString(_)) {
+            // Consume the string token first
+            match self.advance().token.clone() {
+                Token::StringLit(s) => Ok(Expr::Literal(Literal::String(s))),
+                Token::FString(s) => {
+                    // Parse f-string
+                    let parts = self.parse_fstring(&s)?;
+                    Ok(Expr::FormatString { parts })
+                }
+                _ => unreachable!(),
+            }
+        } else if matches!(self.peek().token, Token::DocString(_)) {
+            // Consume the docstring token first
+            match self.advance().token.clone() {
+                Token::DocString(s) => Ok(Expr::DocString(s)),
+                _ => unreachable!(),
+            }
+        } else if matches!(self.peek().token, Token::Identifier(_)) {
+            // Consume the identifier token first
+            match self.advance().token.clone() {
+                Token::Identifier(name) => Ok(Expr::Identifier(name)),
+                _ => unreachable!(),
+            }
         } else if self.match_token(&[Token::LParen]) {
-            // Handle empty tuple
-            if self.check(&Token::RParen) {
-                self.consume(Token::RParen, "Expected ')")?;
-                return Ok(Expr::Tuple(Vec::new()));
-            }
-            
-            let first_expr = self.assignment()?; // Use assignment instead of expression to avoid conditional parsing
-            
-            // Check if this is a generator expression
-            if self.check(&Token::KwFor) {
-                // This is a generator expression: (element for target in iter)
-                let mut generators = Vec::new();
-                
-                // Parse all for clauses
-                while self.check(&Token::KwFor) {
-                    self.consume(Token::KwFor, "Expected 'for'")?;
-                    let target = self.consume_identifier()?;
-                    self.consume(Token::KwIn, "Expected 'in'")?;
-                    let iter = self.assignment()?; // Use assignment instead of expression to avoid conditional parsing
-                    
-                    let mut ifs = Vec::new();
-                    while self.check(&Token::KwIf) {
-                        self.consume(Token::KwIf, "Expected 'if'")?;
-                        ifs.push(self.assignment()?); // Use assignment instead of expression
-                    }
-                    
-                    generators.push(crate::ast::Comprehension {
-                        target,
-                        iter,
-                        ifs,
-                        is_async: false,
-                    });
-                }
-                
-                self.consume(Token::RParen, "Expected ')' after generator expression")?;
-                
-                Ok(Expr::GeneratorExp {
-                    element: Box::new(first_expr),
-                    generators,
-                })
-            }
-            // Check if this is a tuple (has comma) or just grouped expression
-            else if self.match_token(&[Token::Comma]) {
-                let mut elements = vec![first_expr];
-                
-                // Handle trailing comma case: (expr,)
-                if self.check(&Token::RParen) {
-                    self.consume(Token::RParen, "Expected ')' after tuple")?;
-                    return Ok(Expr::Tuple(elements));
-                }
-                
-                // Parse remaining elements
-                loop {
-                    elements.push(self.expression()?);
-                    if !self.match_token(&[Token::Comma]) {
-                        break;
-                    }
-                    // Allow trailing comma
-                    if self.check(&Token::RParen) {
-                        break;
-                    }
-                }
-                
-                self.consume(Token::RParen, "Expected ')' after tuple")?;
-                Ok(Expr::Tuple(elements))
-            } else {
-                // Just a grouped expression
-                self.consume(Token::RParen, "Expected ')' after expression")?;
-                Ok(first_expr)
-            }
+            let expr = self.expression()?;
+            self.consume(Token::RParen, "Expected ')' after expression")?;
+            Ok(expr)
         } else if self.match_token(&[Token::LBracket]) {
-            self.list_or_comp()
+            // List or list comprehension
+            if self.check(&Token::RBracket) {
+                // Empty list
+                self.advance();
+                Ok(Expr::List(Vec::new()))
+            } else {
+                let first_expr = self.expression()?;
+                
+                // Check if this is a list comprehension
+                if self.match_token(&[Token::KwFor]) {
+                    // List comprehension
+                    let generators = self.parse_comprehension()?;
+                    self.consume(Token::RBracket, "Expected ']' after list comprehension")?;
+                    Ok(Expr::ListComp {
+                        element: Box::new(first_expr),
+                        generators,
+                    })
+                } else {
+                    // Regular list
+                    let mut items = vec![first_expr];
+                    while self.match_token(&[Token::Comma]) {
+                        if self.check(&Token::RBracket) {
+                            break;
+                        }
+                        items.push(self.expression()?);
+                    }
+                    self.consume(Token::RBracket, "Expected ']' after list items")?;
+                    Ok(Expr::List(items))
+                }
+            }
         } else if self.match_token(&[Token::LBrace]) {
-            self.dict_or_set()
-        } else if self.is_at_end() || self.check(&Token::Eof) {
-            Err(ParseError::UnexpectedEof)
+            // Dict, set, or comprehension
+            if self.check(&Token::RBrace) {
+                // Empty dict
+                self.advance();
+                Ok(Expr::Dict(Vec::new()))
+            } else {
+                let first_expr = self.expression()?;
+                
+                // Check if it's a dict
+                if self.match_token(&[Token::Colon]) {
+                    // Dict or dict comprehension
+                    let first_value = self.expression()?;
+                    let mut pairs = vec![(first_expr.clone(), first_value.clone())];
+                    
+                    // Check if this is a dict comprehension
+                    if self.match_token(&[Token::KwFor]) {
+                        // Dict comprehension
+                        let generators = self.parse_comprehension()?;
+                        self.consume(Token::RBrace, "Expected '}' after dict comprehension")?;
+                        Ok(Expr::DictComp {
+                            key: Box::new(first_expr.clone()),
+                            value: Box::new(first_value.clone()),
+                            generators,
+                        })
+                    } else {
+                        // Regular dict
+                        while self.match_token(&[Token::Comma]) {
+                            if self.check(&Token::RBrace) {
+                                break;
+                            }
+                            let key = self.expression()?;
+                            self.consume(Token::Colon, "Expected ':' in dict")?;
+                            let value = self.expression()?;
+                            pairs.push((key, value));
+                        }
+                        self.consume(Token::RBrace, "Expected '}' after dict items")?;
+                        Ok(Expr::Dict(pairs))
+                    }
+                } else {
+                    // Set or set comprehension
+                    let mut items = vec![first_expr.clone()];
+                    
+                    // Check if this is a set comprehension
+                    if self.match_token(&[Token::KwFor]) {
+                        // Set comprehension
+                        let generators = self.parse_comprehension()?;
+                        self.consume(Token::RBrace, "Expected '}' after set comprehension")?;
+                        Ok(Expr::SetComp {
+                            element: Box::new(first_expr.clone()),
+                            generators,
+                        })
+                    } else {
+                        // Regular set
+                        while self.match_token(&[Token::Comma]) {
+                            if self.check(&Token::RBrace) {
+                                break;
+                            }
+                            items.push(self.expression()?);
+                        }
+                        self.consume(Token::RBrace, "Expected '}' after set items")?;
+                        Ok(Expr::Set(items))
+                    }
+                }
+            }
+        } else if self.match_token(&[Token::Ellipsis]) {
+            Ok(Expr::Literal(Literal::Ellipsis))
         } else {
             Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
-                found: self.peek().to_string(),
+                found: format!("{:?}", self.peek().token),
             })
         }
     }
 
     // Helper methods
+    fn consume(&mut self, token: Token, message: &str) -> Result<&TokenInfo, ParseError> {
+        if self.check(&token) {
+            Ok(self.advance())
+        } else {
+            Err(ParseError::UnexpectedToken {
+                expected: message.to_string(),
+                found: format!("{:?}", self.peek().token),
+            })
+        }
+    }
+
     fn match_token(&mut self, tokens: &[Token]) -> bool {
         for token in tokens {
             if self.check(token) {
@@ -1149,10 +1236,9 @@ impl Parser {
 
     fn check(&self, token: &Token) -> bool {
         if self.is_at_end() {
-            matches!(token, Token::Eof)
-        } else {
-            &self.peek().token == token
+            return false;
         }
+        &self.peek().token == token
     }
 
     fn advance(&mut self) -> &TokenInfo {
@@ -1163,44 +1249,49 @@ impl Parser {
     }
 
     fn is_at_end(&self) -> bool {
-        self.current >= self.tokens.len()
+        self.current >= self.tokens.len() || matches!(self.peek().token, Token::Eof)
     }
 
     fn peek(&self) -> &TokenInfo {
-        if self.is_at_end() {
-            // Return the last token (should be EOF) if we're at the end
-            &self.tokens[self.tokens.len() - 1]
-        } else {
-            &self.tokens[self.current]
-        }
+        &self.tokens[self.current]
     }
 
     fn previous(&self) -> &TokenInfo {
         &self.tokens[self.current - 1]
     }
 
-    fn consume(&mut self, token: Token, message: &str) -> Result<&TokenInfo, ParseError> {
-        if self.check(&token) {
-            Ok(self.advance())
-        } else {
-            Err(ParseError::UnexpectedToken {
-                expected: format!("{}", token),
-                found: format!("{}", self.peek()),
-            })
+    fn consume_identifier(&mut self) -> Result<String, ParseError> {
+        match &self.peek().token {
+            Token::Identifier(name) => {
+                let name = name.clone();
+                self.advance();
+                Ok(name)
+            }
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "identifier".to_string(),
+                found: format!("{:?}", self.peek().token),
+            }),
         }
     }
 
-    fn consume_identifier(&mut self) -> Result<String, ParseError> {
-        if let Token::Identifier(name) = &self.peek().token {
-            let name = name.clone();
-            self.advance();
-            Ok(name)
-        } else {
-            Err(ParseError::UnexpectedToken {
-                expected: "identifier".to_string(),
-                found: self.peek().to_string(),
-            })
-        }
+    /// Check if the current token is a number (Int or Float)
+    fn is_number_token(&self) -> bool {
+        matches!(self.peek().token, Token::Int(_) | Token::Float(_))
+    }
+
+    /// Check if the current token is a string literal
+    fn is_string_token(&self) -> bool {
+        matches!(self.peek().token, Token::StringLit(_) | Token::FString(_))
+    }
+
+    /// Check if the current token is a docstring
+    fn is_docstring_token(&self) -> bool {
+        matches!(self.peek().token, Token::DocString(_))
+    }
+
+    /// Check if the current token is an identifier
+    fn is_identifier_token(&self) -> bool {
+        matches!(self.peek().token, Token::Identifier(_))
     }
 
     fn consume_identifier_or_keyword(&mut self) -> Result<String, ParseError> {
@@ -1210,236 +1301,154 @@ impl Parser {
                 self.advance();
                 Ok(name)
             }
-            // Allow keywords to be used as identifiers in parameter contexts
-            Token::KwFunc => {
+            // Allow keywords to be used as identifiers in certain contexts
+            token if self.is_keyword_as_identifier() => {
+                let name = format!("{:?}", token);
                 self.advance();
-                Ok("func".to_string())
-            }
-            Token::KwClass => {
-                self.advance();
-                Ok("class".to_string())
-            }
-            Token::KwIf => {
-                self.advance();
-                Ok("if".to_string())
-            }
-            Token::KwElse => {
-                self.advance();
-                Ok("else".to_string())
-            }
-            Token::KwFor => {
-                self.advance();
-                Ok("for".to_string())
-            }
-            Token::KwWhile => {
-                self.advance();
-                Ok("while".to_string())
-            }
-            Token::KwReturn => {
-                self.advance();
-                Ok("return".to_string())
-            }
-            Token::KwBreak => {
-                self.advance();
-                Ok("break".to_string())
-            }
-            Token::KwContinue => {
-                self.advance();
-                Ok("continue".to_string())
-            }
-            Token::KwImport => {
-                self.advance();
-                Ok("import".to_string())
-            }
-            Token::KwFrom => {
-                self.advance();
-                Ok("from".to_string())
-            }
-            Token::KwAs => {
-                self.advance();
-                Ok("as".to_string())
-            }
-            Token::KwExtern => {
-                self.advance();
-                Ok("extern".to_string())
-            }
-            Token::KwExport => {
-                self.advance();
-                Ok("export".to_string())
-            }
-            Token::KwAsync => {
-                self.advance();
-                Ok("async".to_string())
-            }
-            Token::KwAwait => {
-                self.advance();
-                Ok("await".to_string())
-            }
-            Token::KwTry => {
-                self.advance();
-                Ok("try".to_string())
-            }
-            Token::KwExcept => {
-                self.advance();
-                Ok("except".to_string())
-            }
-            Token::KwFinally => {
-                self.advance();
-                Ok("finally".to_string())
-            }
-            Token::KwRaise => {
-                self.advance();
-                Ok("raise".to_string())
-            }
-            Token::KwWith => {
-                self.advance();
-                Ok("with".to_string())
-            }
-            Token::KwYield => {
-                self.advance();
-                Ok("yield".to_string())
-            }
-            Token::KwLambda => {
-                self.advance();
-                Ok("lambda".to_string())
-            }
-            Token::KwMatch => {
-                self.advance();
-                Ok("match".to_string())
-            }
-            Token::KwCase => {
-                self.advance();
-                Ok("case".to_string())
-            }
-            Token::KwIn => {
-                self.advance();
-                Ok("in".to_string())
-            }
-            Token::KwIs => {
-                self.advance();
-                Ok("is".to_string())
-            }
-            Token::KwPass => {
-                self.advance();
-                Ok("pass".to_string())
-            }
-            Token::KwGlobal => {
-                self.advance();
-                Ok("global".to_string())
-            }
-            Token::KwNonlocal => {
-                self.advance();
-                Ok("nonlocal".to_string())
-            }
-            Token::KwDel => {
-                self.advance();
-                Ok("del".to_string())
-            }
-            Token::KwAssert => {
-                self.advance();
-                Ok("assert".to_string())
-            }
-            Token::And => {
-                self.advance();
-                Ok("and".to_string())
-            }
-            Token::Or => {
-                self.advance();
-                Ok("or".to_string())
-            }
-            Token::Not => {
-                self.advance();
-                Ok("not".to_string())
+                Ok(name)
             }
             _ => Err(ParseError::UnexpectedToken {
-                expected: "identifier or keyword".to_string(),
-                found: self.peek().to_string(),
-            })
-        }
-    }
-
-    fn consume_dotted_name(&mut self) -> Result<String, ParseError> {
-        let mut name = self.consume_identifier()?;
-        
-        while self.match_token(&[Token::Dot]) {
-            name.push('.');
-            name.push_str(&self.consume_identifier()?);
-        }
-        
-        Ok(name)
-    }
-
-    fn type_annotation(&mut self) -> Result<Type, ParseError> {
-        match &self.peek().token {
-            Token::Identifier(name) => {
-                let name = name.clone();
-                self.advance();
-                
-                // Check for generic types
-                if self.match_token(&[Token::LBracket]) {
-                    let mut args = Vec::new();
-                    if !self.check(&Token::RBracket) {
-                        loop {
-                            args.push(self.type_annotation()?);
-                            if !self.match_token(&[Token::Comma]) {
-                                break;
-                            }
-                        }
-                    }
-                    self.consume(Token::RBracket, "Expected ']' after generic type arguments")?;
-                    Ok(Type::Generic { name, args })
-                } else {
-                    Ok(Type::Simple(name))
-                }
-            }
-            Token::None => {
-                // Handle None as a type annotation
-                self.advance();
-                Ok(Type::Simple("None".to_string()))
-            }
-            Token::LParen => {
-                // Tuple type
-                self.advance();
-                let mut types = Vec::new();
-                if !self.check(&Token::RParen) {
-                    loop {
-                        types.push(self.type_annotation()?);
-                        if !self.match_token(&[Token::Comma]) {
-                            break;
-                        }
-                    }
-                }
-                self.consume(Token::RParen, "Expected ')' after tuple type")?;
-                Ok(Type::Tuple(types))
-            }
-            _ => Err(ParseError::UnexpectedToken {
-                expected: "type annotation".to_string(),
+                expected: "identifier".to_string(),
                 found: format!("{:?}", self.peek().token),
             }),
         }
     }
 
-    fn finish_call(&mut self, callee: Expr) -> Result<Expr, ParseError> {
+    fn check_compound_assignment(&self) -> bool {
+        matches!(self.peek().token,
+            Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq |
+            Token::PercentEq | Token::PowerEq | Token::FloorDivEq
+        )
+    }
+
+    fn compound_assignment(&mut self, target: Expr) -> Result<Statement, ParseError> {
+        let op = match self.previous().token {
+            Token::PlusEq => BinaryOp::Add,
+            Token::MinusEq => BinaryOp::Sub,
+            Token::StarEq => BinaryOp::Mul,
+            Token::SlashEq => BinaryOp::Div,
+            Token::PercentEq => BinaryOp::Mod,
+            Token::PowerEq => BinaryOp::Pow,
+            Token::FloorDivEq => BinaryOp::FloorDiv,
+            _ => unreachable!(),
+        };
+        let value = self.expression()?;
+        self.match_token(&[Token::Semicolon, Token::Newline]);
+        
+        let binop_expr = Expr::BinaryOp {
+            left: Box::new(target.clone()),
+            op,
+            right: Box::new(value),
+        };
+        
+        match target {
+            Expr::Identifier(name) => Ok(Statement::VariableDef {
+                name,
+                type_annotation: None,
+                value: Some(binop_expr),
+            }),
+            Expr::Attribute { object, name } => Ok(Statement::AttributeAssignment {
+                object: *object,
+                name,
+                value: binop_expr,
+            }),
+            Expr::Subscript { object, index } => Ok(Statement::SubscriptAssignment {
+                object: *object,
+                index: *index,
+                value: binop_expr,
+            }),
+            _ => Err(ParseError::InvalidSyntax {
+                message: "Invalid target for compound assignment".to_string(),
+            }),
+        }
+    }
+
+    fn variable_def(&mut self, target: Expr) -> Result<Statement, ParseError> {
+        let value = self.expression()?;
+        self.match_token(&[Token::Semicolon, Token::Newline]);
+        
+        match target {
+            Expr::Identifier(name) => Ok(Statement::VariableDef {
+                name,
+                type_annotation: None,
+                value: Some(value),
+            }),
+            Expr::Attribute { object, name } => Ok(Statement::AttributeAssignment {
+                object: *object,
+                name,
+                value,
+            }),
+            Expr::Subscript { object, index } => Ok(Statement::SubscriptAssignment {
+                object: *object,
+                index: *index,
+                value,
+            }),
+            _ => Err(ParseError::InvalidSyntax {
+                message: "Invalid target for assignment".to_string(),
+            }),
+        }
+    }
+
+    fn block(&mut self) -> Result<Vec<Statement>, ParseError> {
+        // The colon has already been consumed by the calling function
+        // Handle single-line block
+        if !self.check(&Token::Newline) && !self.check(&Token::Eof) {
+            let stmt = self.statement()?;
+            return Ok(vec![stmt]);
+        }
+        
+        // Multi-line block
+        self.consume(Token::Newline, "Expected newline after ':'")?;
+        self.consume(Token::Indent, "Expected indented block")?;
+        
+        let mut statements = Vec::new();
+        while !self.check(&Token::Dedent) && !self.is_at_end() {
+            // Skip newlines within blocks
+            if self.check(&Token::Newline) {
+                self.advance();
+                continue;
+            }
+            statements.push(self.statement()?);
+        }
+        
+        self.consume(Token::Dedent, "Expected dedent after block")?;
+        Ok(statements)
+    }
+
+    fn finish_call(&mut self, func: Expr) -> Result<Expr, ParseError> {
         let mut args = Vec::new();
         let mut kwargs = Vec::new();
         
         if !self.check(&Token::RParen) {
             loop {
-                // Check if this is a keyword argument
-                if matches!(self.peek().token, Token::Identifier(_)) {
+                // Check for starred expressions (*args, **kwargs)
+                if self.match_token(&[Token::Star]) {
+                    if self.match_token(&[Token::Star]) {
+                        // **kwargs in function call
+                        let value = self.expression()?;
+                        // For now, we'll add it as a special starred expression
+                        // In a full implementation, we would need to handle this properly in the compiler/VM
+                        args.push(Expr::Starred(Box::new(value)));
+                    } else {
+                        // *args in function call
+                        let value = self.expression()?;
+                        args.push(Expr::Starred(Box::new(value)));
+                    }
+                } else if let Token::Identifier(_) = &self.peek().token {
                     let checkpoint = self.current;
-                    let name = self.consume_identifier().unwrap();
+                    let name = self.consume_identifier()?;
                     
                     if self.match_token(&[Token::Assign]) {
-                        // It's a keyword argument
+                        // This is a keyword argument
                         let value = self.expression()?;
                         kwargs.push((name, value));
                     } else {
-                        // It's a positional argument, backtrack
+                        // This is a positional argument, backtrack
                         self.current = checkpoint;
                         args.push(self.expression()?);
                     }
                 } else {
+                    // Positional argument
                     args.push(self.expression()?);
                 }
                 
@@ -1452,7 +1461,7 @@ impl Parser {
         self.consume(Token::RParen, "Expected ')' after arguments")?;
         
         Ok(Expr::Call {
-            func: Box::new(callee),
+            func: Box::new(func),
             args,
             kwargs,
         })
@@ -1464,21 +1473,34 @@ impl Parser {
         
         if !self.check(&Token::RParen) {
             loop {
-                // Check if this is a keyword argument
-                if matches!(self.peek().token, Token::Identifier(_)) {
+                // Check for starred expressions (*args, **kwargs)
+                if self.match_token(&[Token::Star]) {
+                    if self.match_token(&[Token::Star]) {
+                        // **kwargs in function call
+                        let value = self.expression()?;
+                        // For now, we'll add it as a special starred expression
+                        // In a full implementation, we would need to handle this properly in the compiler/VM
+                        args.push(Expr::Starred(Box::new(value)));
+                    } else {
+                        // *args in function call
+                        let value = self.expression()?;
+                        args.push(Expr::Starred(Box::new(value)));
+                    }
+                } else if let Token::Identifier(_) = &self.peek().token {
                     let checkpoint = self.current;
-                    let name = self.consume_identifier().unwrap();
+                    let name = self.consume_identifier()?;
                     
                     if self.match_token(&[Token::Assign]) {
-                        // It's a keyword argument
+                        // This is a keyword argument
                         let value = self.expression()?;
                         kwargs.push((name, value));
                     } else {
-                        // It's a positional argument, backtrack
+                        // This is a positional argument, backtrack
                         self.current = checkpoint;
                         args.push(self.expression()?);
                     }
                 } else {
+                    // Positional argument
                     args.push(self.expression()?);
                 }
                 
@@ -1498,232 +1520,215 @@ impl Parser {
         })
     }
 
-    fn variable_def(&mut self, target: Expr) -> Result<Statement, ParseError> {
-        let value = self.expression()?;
+    fn parse_comprehension(&mut self) -> Result<Vec<Comprehension>, ParseError> {
+        let mut generators = Vec::new();
         
-        // Optional type annotation
-        let type_annotation = if self.match_token(&[Token::Colon]) {
-            Some(self.type_annotation()?)
+        loop {
+            let is_async = self.match_token(&[Token::KwAsync]);
+            
+            self.consume(Token::KwFor, "Expected 'for' in comprehension")?;
+            let target = self.consume_identifier()?;
+            self.consume(Token::KwIn, "Expected 'in' in comprehension")?;
+            let iter = self.expression()?;
+            
+            let mut ifs = Vec::new();
+            while self.match_token(&[Token::KwIf]) {
+                ifs.push(self.expression()?);
+            }
+            
+            generators.push(Comprehension {
+                target,
+                iter,
+                ifs,
+                is_async,
+            });
+            
+            // Check if there's another for clause
+            if !self.check(&Token::KwFor) && !self.check(&Token::KwAsync) {
+                break;
+            }
+        }
+        
+        Ok(generators)
+    }
+
+    fn parse_fstring(&mut self, s: &str) -> Result<Vec<FormatPart>, ParseError> {
+        let mut parts = Vec::new();
+        let mut current = String::new();
+        let mut chars = s.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if ch == '{' {
+                // Flush current string part
+                if !current.is_empty() {
+                    parts.push(FormatPart::String(current.clone()));
+                    current.clear();
+                }
+                
+                // Parse expression inside braces
+                let mut expr_str = String::new();
+                let mut brace_count = 1;
+                
+                while let Some(inner_ch) = chars.next() {
+                    if inner_ch == '{' {
+                        brace_count += 1;
+                        expr_str.push(inner_ch);
+                    } else if inner_ch == '}' {
+                        brace_count -= 1;
+                        if brace_count == 0 {
+                            break;
+                        }
+                        expr_str.push(inner_ch);
+                    } else {
+                        expr_str.push(inner_ch);
+                    }
+                }
+                
+                if brace_count != 0 {
+                    return Err(ParseError::InvalidSyntax {
+                        message: "Unmatched braces in f-string".to_string(),
+                    });
+                }
+                
+                // For now, we'll just store the expression string
+                // In a full implementation, we would parse it as an expression
+                parts.push(FormatPart::Expression {
+                    expr: Expr::Identifier(expr_str), // Placeholder
+                    format_spec: None,
+                    conversion: None,
+                });
+            } else {
+                current.push(ch);
+            }
+        }
+        
+        // Flush remaining string part
+        if !current.is_empty() {
+            parts.push(FormatPart::String(current));
+        }
+        
+        Ok(parts)
+    }
+
+    fn type_annotation(&mut self) -> Result<Type, ParseError> {
+        // Simplified type annotation parsing
+        // In a full implementation, this would parse complex type annotations
+        let name = self.consume_identifier()?;
+        Ok(Type::Simple(name))
+    }
+
+    fn extract_docstring(&self, body: &[Statement]) -> Option<String> {
+        if let Some(Statement::Expression(Expr::DocString(doc))) = body.first() {
+            Some(doc.clone())
         } else {
             None
-        };
-        
-        self.match_token(&[Token::Semicolon, Token::Newline]);
-        
-        match target {
-            Expr::Identifier(name) => {
-                Ok(Statement::VariableDef {
-                    name,
-                    type_annotation,
-                    value: Some(value),
-                })
-            },
-            Expr::Attribute { object, name } => {
-                // Handle attribute assignment like self.x = value
-                Ok(Statement::AttributeAssignment {
-                    object: *object,
-                    name,
-                    value,
-                })
-            },
-            Expr::Subscript { object, index } => {
-                // Handle subscript assignment like arr[index] = value
-                Ok(Statement::SubscriptAssignment {
-                    object: *object,
-                    index: *index,
-                    value,
-                })
-            },
-            _ => Err(ParseError::InvalidSyntax {
-                message: "Invalid assignment target".to_string(),
-            }),
         }
-    }
-    
-    fn check_compound_assignment(&self) -> bool {
-        matches!(self.peek().token, 
-            Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq |
-            Token::PercentEq | Token::PowerEq | Token::FloorDivEq
-        )
-    }
-    
-    fn compound_assignment(&mut self, target: Expr) -> Result<Statement, ParseError> {
-        let op_token = self.advance().token.clone();
-        let value = self.expression()?;
-        
-        self.match_token(&[Token::Semicolon, Token::Newline]);
-        
-        match target {
-            Expr::Identifier(name) => {
-                // Convert compound assignment to regular assignment with binary operation
-                // e.g., x += 5 becomes x = x + 5
-                let binary_op = match op_token {
-                    Token::PlusEq => BinaryOp::Add,
-                    Token::MinusEq => BinaryOp::Sub,
-                    Token::StarEq => BinaryOp::Mul,
-                    Token::SlashEq => BinaryOp::Div,
-                    Token::PercentEq => BinaryOp::Mod,
-                    Token::PowerEq => BinaryOp::Pow,
-                    Token::FloorDivEq => BinaryOp::FloorDiv,
-                    _ => return Err(ParseError::InvalidSyntax {
-                        message: "Invalid compound assignment operator".to_string(),
-                    }),
-                };
-                
-                let combined_value = Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(name.clone())),
-                    op: binary_op,
-                    right: Box::new(value),
-                };
-                
-                Ok(Statement::VariableDef {
-                    name,
-                    type_annotation: None,
-                    value: Some(combined_value),
-                })
-            },
-            Expr::Attribute { object, name: attr_name } => {
-                // Handle attribute compound assignment like self.x += value
-                let binary_op = match op_token {
-                    Token::PlusEq => BinaryOp::Add,
-                    Token::MinusEq => BinaryOp::Sub,
-                    Token::StarEq => BinaryOp::Mul,
-                    Token::SlashEq => BinaryOp::Div,
-                    Token::PercentEq => BinaryOp::Mod,
-                    Token::PowerEq => BinaryOp::Pow,
-                    Token::FloorDivEq => BinaryOp::FloorDiv,
-                    _ => return Err(ParseError::InvalidSyntax {
-                        message: "Invalid compound assignment operator".to_string(),
-                    }),
-                };
-                
-                let combined_value = Expr::BinaryOp {
-                    left: Box::new(Expr::Attribute { object: object.clone(), name: attr_name.clone() }),
-                    op: binary_op,
-                    right: Box::new(value),
-                };
-                
-                Ok(Statement::AttributeAssignment {
-                    object: *object,
-                    name: attr_name,
-                    value: combined_value,
-                })
-            },
-            Expr::Subscript { object, index } => {
-                // Handle subscript compound assignment like arr[index] += value
-                let binary_op = match op_token {
-                    Token::PlusEq => BinaryOp::Add,
-                    Token::MinusEq => BinaryOp::Sub,
-                    Token::StarEq => BinaryOp::Mul,
-                    Token::SlashEq => BinaryOp::Div,
-                    Token::PercentEq => BinaryOp::Mod,
-                    Token::PowerEq => BinaryOp::Pow,
-                    Token::FloorDivEq => BinaryOp::FloorDiv,
-                    _ => return Err(ParseError::InvalidSyntax {
-                        message: "Invalid compound assignment operator".to_string(),
-                    }),
-                };
-                
-                let combined_value = Expr::BinaryOp {
-                    left: Box::new(Expr::Subscript { object: object.clone(), index: index.clone() }),
-                    op: binary_op,
-                    right: Box::new(value),
-                };
-                
-                Ok(Statement::SubscriptAssignment {
-                    object: *object,
-                    index: *index,
-                    value: combined_value,
-                })
-            },
-            _ => Err(ParseError::InvalidSyntax {
-                message: "Invalid assignment target for compound assignment".to_string(),
-            }),
-        }
-    }
-
-    // Additional statement parsing methods...
-
-    fn return_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwReturn, "Expected 'return'")?;
-        let value = if !self.check(&Token::Semicolon) && !self.check(&Token::RBrace) {
-            Some(self.expression()?)
-        } else {
-            None
-        };
-        Ok(Statement::Return(value))
-    }
-
-    fn break_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwBreak, "Expected 'break'")?;
-        Ok(Statement::Break)
-    }
-
-    fn continue_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwContinue, "Expected 'continue'")?;
-        Ok(Statement::Continue)
     }
 
     fn import_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwImport, "Expected 'import'")?;
-        let module = self.consume_dotted_name()?;
+        self.consume(Token::KwImport, "Expected 'import' or 'shigoda'")?;
+        let module = self.consume_identifier()?;
         let alias = if self.match_token(&[Token::KwAs]) {
             Some(self.consume_identifier()?)
         } else {
             None
         };
+        self.match_token(&[Token::Semicolon, Token::Newline]);
         Ok(Statement::Import { module, alias })
     }
 
     fn from_import_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwFrom, "Expected 'from'")?;
-        let module = self.consume_dotted_name()?;
-        self.consume(Token::KwImport, "Expected 'import'")?;
+        self.consume(Token::KwFrom, "Expected 'from' or 'daga'")?;
+        let module = self.consume_identifier()?;
+        self.consume(Token::KwImport, "Expected 'import' or 'shigoda'")?;
         
-        let mut items = Vec::new();
-        loop {
-            let name = self.consume_identifier()?;
-            let alias = if self.match_token(&[Token::KwAs]) {
-                Some(self.consume_identifier()?)
-            } else {
-                None
-            };
-            items.push((name, alias));
-            
-            if !self.match_token(&[Token::Comma]) {
-                break;
+        let mut names = Vec::new();
+        if self.match_token(&[Token::Star]) {
+            // from module import *
+            names.push(("*".to_string(), None));
+        } else {
+            loop {
+                let name = self.consume_identifier()?;
+                let alias = if self.match_token(&[Token::KwAs]) {
+                    Some(self.consume_identifier()?)
+                } else {
+                    None
+                };
+                names.push((name, alias));
+                
+                if !self.match_token(&[Token::Comma]) {
+                    break;
+                }
             }
         }
         
-        Ok(Statement::FromImport { module, names: items })
+        self.match_token(&[Token::Semicolon, Token::Newline]);
+        Ok(Statement::FromImport { module, names })
     }
 
     fn extern_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwExtern, "Expected 'extern'")?;
+        self.consume(Token::KwExtern, "Expected 'extern' or 'waje'")?;
         let name = self.consume_identifier()?;
         self.consume(Token::Colon, "Expected ':' after extern name")?;
-        let signature = self.consume_identifier()?; // For now, just consume an identifier as signature
+        // For now, we'll just consume the signature as a string
+        // In a full implementation, this would be parsed as a type signature
+        let signature = if let Token::StringLit(s) = &self.peek().token {
+            let s = s.clone();
+            self.advance();
+            s
+        } else {
+            return Err(ParseError::UnexpectedToken {
+                expected: "string literal".to_string(),
+                found: format!("{:?}", self.peek().token),
+            });
+        };
+        self.match_token(&[Token::Semicolon, Token::Newline]);
         Ok(Statement::Extern { name, signature })
     }
 
     fn export_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwExport, "Expected 'export'")?;
+        self.consume(Token::KwExport, "Expected 'export' or 'fitar'")?;
         let name = self.consume_identifier()?;
+        self.match_token(&[Token::Semicolon, Token::Newline]);
         Ok(Statement::Export { name })
     }
 
-    fn raise_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwRaise, "Expected 'raise'")?;
-        let exception = if self.check(&Token::Newline) || self.is_at_end() {
+    fn return_statement(&mut self) -> Result<Statement, ParseError> {
+        self.consume(Token::KwReturn, "Expected 'return' or 'maido'")?;
+        let value = if self.check(&Token::Newline) || self.check(&Token::Semicolon) || self.is_at_end() {
             None
         } else {
             Some(self.expression()?)
         };
-        Ok(Statement::Raise(exception))
+        self.match_token(&[Token::Semicolon, Token::Newline]);
+        Ok(Statement::Return(value))
+    }
+
+    fn break_statement(&mut self) -> Result<Statement, ParseError> {
+        self.consume(Token::KwBreak, "Expected 'break' or 'tsaya'")?;
+        self.match_token(&[Token::Semicolon, Token::Newline]);
+        Ok(Statement::Break)
+    }
+
+    fn continue_statement(&mut self) -> Result<Statement, ParseError> {
+        self.consume(Token::KwContinue, "Expected 'continue' or 'cigaba'")?;
+        self.match_token(&[Token::Semicolon, Token::Newline]);
+        Ok(Statement::Continue)
+    }
+
+    fn raise_statement(&mut self) -> Result<Statement, ParseError> {
+        self.consume(Token::KwRaise, "Expected 'raise', 'throw', or 'jefa'")?;
+        let value = if self.check(&Token::Newline) || self.check(&Token::Semicolon) || self.is_at_end() {
+            None
+        } else {
+            Some(self.expression()?)
+        };
+        self.match_token(&[Token::Semicolon, Token::Newline]);
+        Ok(Statement::Raise(value))
     }
 
     fn with_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwWith, "Expected 'with'")?;
+        self.consume(Token::KwWith, "Expected 'with' or 'tare'")?;
         let context = self.expression()?;
         let alias = if self.match_token(&[Token::KwAs]) {
             Some(self.consume_identifier()?)
@@ -1736,411 +1741,91 @@ impl Parser {
     }
 
     fn del_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwDel, "Expected 'del'")?;
-        let target = self.expression()?;
-        Ok(Statement::Del { targets: vec![target] })
+        self.consume(Token::KwDel, "Expected 'del' or 'share'")?;
+        let mut targets = Vec::new();
+        loop {
+            targets.push(self.expression()?);
+            if !self.match_token(&[Token::Comma]) {
+                break;
+            }
+        }
+        self.match_token(&[Token::Semicolon, Token::Newline]);
+        Ok(Statement::Del { targets })
     }
 
     fn assert_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwAssert, "Expected 'assert'")?;
+        self.consume(Token::KwAssert, "Expected 'assert' or 'tabbatar'")?;
         let condition = self.expression()?;
         let message = if self.match_token(&[Token::Comma]) {
             Some(self.expression()?)
         } else {
             None
         };
+        self.match_token(&[Token::Semicolon, Token::Newline]);
         Ok(Statement::Assert { condition, message })
     }
 
     fn global_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwGlobal, "Expected 'global'")?;
-        let mut names = vec![self.consume_identifier()?];
-        while self.match_token(&[Token::Comma]) {
+        self.consume(Token::KwGlobal, "Expected 'global' or 'duniya'")?;
+        let mut names = Vec::new();
+        loop {
             names.push(self.consume_identifier()?);
+            if !self.match_token(&[Token::Comma]) {
+                break;
+            }
         }
+        self.match_token(&[Token::Semicolon, Token::Newline]);
         Ok(Statement::Global { names })
     }
 
     fn nonlocal_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwNonlocal, "Expected 'nonlocal'")?;
-        let mut names = vec![self.consume_identifier()?];
-        while self.match_token(&[Token::Comma]) {
+        self.consume(Token::KwNonlocal, "Expected 'nonlocal' or 'ba_gida'")?;
+        let mut names = Vec::new();
+        loop {
             names.push(self.consume_identifier()?);
+            if !self.match_token(&[Token::Comma]) {
+                break;
+            }
         }
+        self.match_token(&[Token::Semicolon, Token::Newline]);
         Ok(Statement::Nonlocal { names })
     }
 
     fn pass_statement(&mut self) -> Result<Statement, ParseError> {
-        self.consume(Token::KwPass, "Expected 'pass'")?;
+        self.consume(Token::KwPass, "Expected 'pass' or 'wuce'")?;
+        self.match_token(&[Token::Semicolon, Token::Newline]);
         Ok(Statement::Pass)
     }
 
     fn decorated_statement(&mut self) -> Result<Statement, ParseError> {
         let mut decorators = Vec::new();
+        
+        // Parse decorators
         while self.match_token(&[Token::At]) {
             let decorator = self.expression()?;
             decorators.push(decorator);
-            if !self.match_token(&[Token::Newline]) {
-                break;
+            self.consume(Token::Newline, "Expected newline after decorator")?;
+        }
+        
+        // Parse the decorated statement
+        let mut stmt = self.statement()?;
+        
+        // Attach decorators to the statement
+        match &mut stmt {
+            Statement::FunctionDef { decorators: ref mut func_decorators, .. } => {
+                *func_decorators = decorators;
             }
-        }
-        
-        // Parse the decorated statement (function or class)
-        let stmt = match self.peek().token {
-            Token::KwFunc => self.function_def()?,
-            Token::KwClass => self.class_def()?,
-            _ => return Err(ParseError::InvalidSyntax {
-                message: "Decorators can only be applied to functions or classes".to_string(),
-            }),
-        };
-
-        // Add decorators to the statement
-        match stmt {
-            Statement::FunctionDef { name, params, return_type, body, is_async: _, decorators: _, docstring: _ } => {
-                Ok(Statement::FunctionDef {
-                    name,
-                    params,
-                    return_type,
-                    body,
-                    decorators,
-                    is_async: false, // Default to false for now
-                    docstring: None, // Decorators don't preserve docstrings for now
-                })
+            Statement::ClassDef { decorators: ref mut class_decorators, .. } => {
+                *class_decorators = decorators;
             }
-            Statement::ClassDef { name, bases, body, decorators: _, metaclass: _, docstring: _ } => {
-                Ok(Statement::ClassDef { 
-                    name, 
-                    bases, 
-                    body,
-                    decorators,
-                    metaclass: None,
-                    docstring: None, // Decorators don't preserve docstrings for now
-                })
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn block(&mut self) -> Result<Vec<Statement>, ParseError> {
-        let mut statements = Vec::new();
-        
-        // Skip any newlines after colon
-        while self.match_token(&[Token::Newline]) {
-            // Continue skipping newlines
-        }
-        
-        // Expect an indent after colon (and possible newlines)
-        if !self.match_token(&[Token::Indent]) {
-            return Err(ParseError::IndentationError {
-                message: "Expected indented block".to_string(),
-            });
-        }
-
-        // Parse statements until dedent
-        while !self.check(&Token::Dedent) && !self.is_at_end() {
-            if self.match_token(&[Token::Newline]) {
-                continue; // Skip empty lines
-            }
-            statements.push(self.statement()?);
-        }
-
-        // Consume the dedent
-        if !self.match_token(&[Token::Dedent]) {
-            return Err(ParseError::IndentationError {
-                message: "Expected dedent to close block".to_string(),
-            });
-        }
-
-        Ok(statements)
-    }
-
-    fn list_or_comp(&mut self) -> Result<Expr, ParseError> {
-        // Skip newlines after opening bracket
-        while self.match_token(&[Token::Newline]) {}
-        
-        if self.check(&Token::RBracket) {
-            self.consume(Token::RBracket, "Expected ']'")?;
-            return Ok(Expr::List(vec![]));
-        }
-        
-        let first_element = self.expression()?;
-        
-        // Check if this is a list comprehension
-        if self.check(&Token::KwFor) {
-            // This is a list comprehension: [element for target in iter]
-            let mut generators = Vec::new();
-            
-            // Parse all for clauses
-            while self.check(&Token::KwFor) {
-                self.consume(Token::KwFor, "Expected 'for'")?;
-                let target = self.consume_identifier()?;
-                self.consume(Token::KwIn, "Expected 'in'")?;
-                let iter = self.assignment()?;
-                
-                let mut ifs = Vec::new();
-                while self.check(&Token::KwIf) {
-                    self.consume(Token::KwIf, "Expected 'if'")?;
-                    ifs.push(self.assignment()?);
-                }
-                
-                generators.push(crate::ast::Comprehension {
-                    target,
-                    iter,
-                    ifs,
-                    is_async: false,
+            _ => {
+                return Err(ParseError::InvalidSyntax {
+                    message: "Only functions and classes can be decorated".to_string(),
                 });
             }
-            
-            self.consume(Token::RBracket, "Expected ']' after list comprehension")?;
-            
-            Ok(Expr::ListComp {
-                element: Box::new(first_element),
-                generators,
-            })
-        } else {
-            // Regular list
-            let mut elements = vec![first_element];
-            
-            while self.match_token(&[Token::Comma]) {
-                // Skip newlines after comma
-                while self.match_token(&[Token::Newline]) {}
-                
-                if self.check(&Token::RBracket) {
-                    break; // Trailing comma
-                }
-                elements.push(self.expression()?);
-            }
-            
-            // Skip newlines before closing bracket
-            while self.match_token(&[Token::Newline]) {}
-            self.consume(Token::RBracket, "Expected ']' after list")?;
-            Ok(Expr::List(elements))
         }
+        
+        Ok(stmt)
     }
 
-    fn dict_or_set(&mut self) -> Result<Expr, ParseError> {
-        // Skip newlines after opening brace
-        while self.match_token(&[Token::Newline]) {}
-        
-        if self.check(&Token::RBrace) {
-            self.consume(Token::RBrace, "Expected '}'")?;
-            return Ok(Expr::Dict(Vec::new()));
-        }
-        
-        let first_expr = self.expression()?;
-        
-        if self.match_token(&[Token::Colon]) {
-            // Check if this is a dictionary comprehension
-            let value_expr = self.expression()?;
-            
-            if self.check(&Token::KwFor) {
-                // This is a dictionary comprehension: {key: value for target in iter}
-                self.consume(Token::KwFor, "Expected 'for'")?;
-                let target = self.consume_identifier()?;
-                self.consume(Token::KwIn, "Expected 'in'")?;
-                let iter = self.assignment()?;
-                
-                let mut ifs = Vec::new();
-                while self.check(&Token::KwIf) {
-                    self.consume(Token::KwIf, "Expected 'if'")?;
-                    ifs.push(self.assignment()?);
-                }
-                
-                self.consume(Token::RBrace, "Expected '}' after dictionary comprehension")?;
-                
-                let generator = crate::ast::Comprehension {
-                    target,
-                    iter,
-                    ifs,
-                    is_async: false,
-                };
-                
-                return Ok(Expr::DictComp {
-                    key: Box::new(first_expr),
-                    value: Box::new(value_expr),
-                    generators: vec![generator],
-                });
-            }
-            
-            // Regular dictionary
-            let mut pairs = vec![(first_expr, value_expr)];
-            
-            while self.match_token(&[Token::Comma]) {
-                // Skip newlines after comma
-                while self.match_token(&[Token::Newline]) {}
-                
-                if self.check(&Token::RBrace) {
-                    break;
-                }
-                let key = self.expression()?;
-                self.consume(Token::Colon, "Expected ':' in dictionary")?;
-                let value = self.expression()?;
-                pairs.push((key, value));
-            }
-            
-            // Skip newlines before closing brace
-            while self.match_token(&[Token::Newline]) {}
-            self.consume(Token::RBrace, "Expected '}' after dictionary")?;
-            Ok(Expr::Dict(pairs))
-        } else {
-            // Check if this is a set comprehension
-            if self.check(&Token::KwFor) {
-                // This is a set comprehension: {element for target in iter}
-                let mut generators = Vec::new();
-                
-                // Parse all for clauses
-                while self.check(&Token::KwFor) {
-                    self.consume(Token::KwFor, "Expected 'for'")?;
-                    let target = self.consume_identifier()?;
-                    self.consume(Token::KwIn, "Expected 'in'")?;
-                    let iter = self.assignment()?;
-                    
-                    let mut ifs = Vec::new();
-                    while self.check(&Token::KwIf) {
-                        self.consume(Token::KwIf, "Expected 'if'")?;
-                        ifs.push(self.assignment()?);
-                    }
-                    
-                    generators.push(crate::ast::Comprehension {
-                        target,
-                        iter,
-                        ifs,
-                        is_async: false,
-                    });
-                }
-                
-                self.consume(Token::RBrace, "Expected '}' after set comprehension")?;
-                
-                return Ok(Expr::SetComp {
-                    element: Box::new(first_expr),
-                    generators,
-                });
-            }
-            
-            // Set
-            let mut elements = vec![first_expr];
-            
-            while self.match_token(&[Token::Comma]) {
-                // Skip newlines after comma
-                while self.match_token(&[Token::Newline]) {}
-                
-                if self.check(&Token::RBrace) {
-                    break;
-                }
-                elements.push(self.expression()?);
-            }
-            
-            // Skip newlines before closing brace
-            while self.match_token(&[Token::Newline]) {}
-            self.consume(Token::RBrace, "Expected '}' after set")?;
-            Ok(Expr::Set(elements))
-        }
-    }
-
-    fn parse_fstring(&mut self, content: String) -> Result<Expr, ParseError> {
-        let mut parts = Vec::new();
-        let mut current_string = String::new();
-        let mut chars = content.chars().peekable();
-        
-        while let Some(ch) = chars.next() {
-            if ch == '{' {
-                // Check for escaped brace {{
-                if chars.peek() == Some(&'{') {
-                    chars.next(); // consume second {
-                    current_string.push('{');
-                    continue;
-                }
-                
-                // If we have accumulated string content, add it as a string part
-                if !current_string.is_empty() {
-                    parts.push(crate::ast::FormatPart::String(current_string.clone()));
-                    current_string.clear();
-                }
-                
-                // Parse the expression inside {}
-                let mut expr_content = String::new();
-                let mut brace_count = 1;
-                
-                while let Some(ch) = chars.next() {
-                    if ch == '{' {
-                        brace_count += 1;
-                    } else if ch == '}' {
-                        brace_count -= 1;
-                        if brace_count == 0 {
-                            break;
-                        }
-                    }
-                    expr_content.push(ch);
-                }
-                
-                if brace_count > 0 {
-                    return Err(ParseError::InvalidSyntax {
-                        message: "Unclosed '{' in f-string".to_string(),
-                    });
-                }
-                
-                // Parse the expression content
-                if !expr_content.is_empty() {
-                    // Create a mini-parser for the expression
-                    let mut expr_lexer = crate::lexer::Lexer::new(&expr_content);
-                    let expr_tokens = expr_lexer.collect::<Result<Vec<_>, _>>()
-                        .map_err(|_| ParseError::InvalidSyntax {
-                            message: "Invalid expression in f-string".to_string(),
-                        })?;
-                    
-                    let token_infos: Vec<crate::lexer::TokenInfo> = expr_tokens.into_iter()
-                        .enumerate()
-                        .map(|(i, token_info)| crate::lexer::TokenInfo {
-                            token: token_info.token,
-                            span: (i, i + 1),
-                            line: 1,
-                            column: i + 1,
-                        })
-                        .collect();
-                    
-                    let mut expr_parser = Parser::new(token_infos);
-                    let expr = expr_parser.expression()?;
-                    
-                    parts.push(crate::ast::FormatPart::Expression {
-                        expr,
-                        format_spec: None,
-                        conversion: None,
-                    });
-                }
-            } else if ch == '}' {
-                // Check for escaped brace }}
-                if chars.peek() == Some(&'}') {
-                    chars.next(); // consume second }
-                    current_string.push('}');
-                    continue;
-                } else {
-                    return Err(ParseError::InvalidSyntax {
-                        message: "Unmatched '}' in f-string".to_string(),
-                    });
-                }
-            } else {
-                current_string.push(ch);
-            }
-        }
-        
-        // Add any remaining string content
-        if !current_string.is_empty() {
-            parts.push(crate::ast::FormatPart::String(current_string));
-        }
-        
-        Ok(Expr::FormatString { parts })
-    }
-
-    /// Extract docstring from the first statement in a body if it's a string literal or DocString
-    fn extract_docstring(&self, body: &[Statement]) -> Option<String> {
-        if let Some(Statement::Expression(expr)) = body.first() {
-            match expr {
-                Expr::Literal(crate::ast::Literal::String(s)) => Some(s.clone()),
-                Expr::DocString(s) => Some(s.clone()),
-                _ => None,
-            }
-        } else {
-            None
-        }
-    }
 }

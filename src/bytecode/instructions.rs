@@ -17,90 +17,78 @@ pub enum OpCode {
     LoadClosure,    // Load from closure
     StoreClosure,   // Store to closure
     LoadFast,       // Load from fast local variable (indexed access)
-    StoreFast,      // Store to fast local variable (indexed access)
+    StoreFast,      // Store to fast local variable (indexed access),
     
-    // Stack manipulation (for compatibility)
-    PopTop,
-    RotTwo,
-    RotThree,
-    DupTop,
-    DupTopTwo,
+    // Loop control
+    SetupLoop,      // Setup loop block in block stack
+    
+    // Control flow
+    Jump,           // Unconditional jump
+    JumpIfTrue,     // Jump if value is true
+    JumpIfFalse,    // Jump if value is false
+    ReturnValue,    // Return a value from function
+    BreakLoop,      // Break out of loop
+    ContinueLoop,   // Continue to next loop iteration
     
     // Function calls
-    CallFunction,
-    CallFunctionKw,
-    CallFunctionEx,
-    ReturnValue,
-    YieldValue,
-    YieldFrom,
+    CallFunction,   // Call a function
+    CallFunctionKw, // Call a function with keyword arguments
+    CallFunctionEx, // Call a function with extended arguments
     
-    // Binary operations (register-based) with reference counting optimizations
+    // Binary operations
     BinaryAddRR,    // Register-Register addition
     BinaryAddRI,    // Register-Immediate addition
     BinaryAddIR,    // Immediate-Register addition
-    BinaryAddRRInPlace, // In-place Register-Register addition (when left is unique)
-    BinaryAddRRFastInt, // Fast path for integer Register-Register addition
-    BinaryAddRIFastInt, // Fast path for integer Register-Immediate addition
-    BinaryAddRRFast,    // Fast path for Register-Register addition
     BinarySubRR,    // Register-Register subtraction
     BinarySubRI,    // Register-Immediate subtraction
     BinarySubIR,    // Immediate-Register subtraction
-    BinarySubRRFastInt, // Fast path for integer Register-Register subtraction
-    BinarySubRIFastInt, // Fast path for integer Register-Immediate subtraction
-    BinarySubRRFast,    // Fast path for Register-Register subtraction
     BinaryMulRR,    // Register-Register multiplication
     BinaryMulRI,    // Register-Immediate multiplication
     BinaryMulIR,    // Immediate-Register multiplication
-    BinaryMulRRFastInt, // Fast path for integer Register-Register multiplication
-    BinaryMulRIFastInt, // Fast path for integer Register-Immediate multiplication
-    BinaryMulRRFast,    // Fast path for Register-Register multiplication
     BinaryDivRR,    // Register-Register division
     BinaryDivRI,    // Register-Immediate division
     BinaryDivIR,    // Immediate-Register division
-    BinaryDivRRFastInt, // Fast path for integer Register-Register division
-    BinaryDivRIFastInt, // Fast path for integer Register-Immediate division
     BinaryModRR,    // Register-Register modulo
     BinaryModRI,    // Register-Immediate modulo
     BinaryModIR,    // Immediate-Register modulo
-    BinaryModRRFastInt, // Fast path for integer Register-Register modulo
-    BinaryModRIFastInt, // Fast path for integer Register-Immediate modulo
     BinaryPowRR,    // Register-Register power
     BinaryPowRI,    // Register-Immediate power
-    BinaryPowIR,    // Immediate-Register power
-    BinaryPowRRFastInt, // Fast path for integer Register-Register power
-    BinaryPowRIFastInt, // Fast path for integer Register-Immediate power
-    BinaryPowRRFast,    // Fast path for Register-Register power
+    BinaryPowIR,    // Immediate-Register power,
     
-    // Unary operations
-    UnaryPositive,
-    UnaryNegative,
-    UnaryNot,
-    UnaryInvert,
-    UnaryNegativeFastInt, // Fast path for integer negation
+    // Fast integer operations
+    BinaryDivRRFastInt, // Fast integer division
+    BinaryModRRFastInt, // Fast integer modulo
     
-    // Comparisons
-    CompareEqualRR,
-    CompareEqualRI,
-    CompareNotEqualRR,
-    CompareNotEqualRI,
-    CompareLessRR,
-    CompareLessRI,
-    CompareGreaterRR,
-    CompareGreaterRI,
-    CompareLessEqualRR,
-    CompareLessEqualRI,
-    CompareGreaterEqualRR,
-    CompareGreaterEqualRI,
-    CompareEqualRRFastInt, // Fast path for integer equality comparison
-    CompareLessRRFastInt,  // Fast path for integer less-than comparison
+    // Comparison operations
+    CompareEqualRR,     // Register-Register equality comparison
+    CompareNotEqualRR,  // Register-Register inequality comparison
+    CompareLessRR,      // Register-Register less than comparison
+    CompareLessEqualRR, // Register-Register less than or equal comparison
+    CompareGreaterRR,   // Register-Register greater than comparison
+    CompareGreaterEqualRR, // Register-Register greater than or equal comparison
     
-    // Control flow
-    Jump,
-    JumpIfTrue,
-    JumpIfFalse,
-    JumpIfNotExhausted,
-    PopJumpIfTrue,
-    PopJumpIfFalse,
+    // Exception handling
+    SetupExcept,    // Setup exception handler block
+    SetupFinally,   // Setup finally block
+    EndFinally,     // End finally block
+    Raise,          // Raise an exception
+    StoreException, // Store exception value in variable (used in except handlers)
+    
+    // Assertions
+    Assert,         // Assert statement
+    Match,          // Pattern matching
+    MatchKeys,      // Match keys in mapping
+    MatchClass,     // Match class pattern
+    MatchSequence,  // Match sequence pattern
+    MatchMapping,   // Match mapping pattern
+    MatchOr,        // Match or pattern
+    
+    // Generator operations
+    YieldValue,     // Yield a value from generator
+    YieldFrom,      // Yield from an iterable
+    
+    // Async operations
+    Await,          // Await a coroutine/future
     
     // Data structures
     BuildList,
@@ -123,6 +111,7 @@ pub enum OpCode {
     // Attribute operations
     LoadAttr,       // Load attribute from object (obj.attr)
     StoreAttr,      // Store attribute to object (obj.attr = value)
+    DeleteAttr,     // Delete attribute from object (del obj.attr)
     
     // Functions
     MakeFunction,
@@ -138,9 +127,6 @@ pub enum OpCode {
     ImportModule,   // Import a module
     ImportFrom,     // Import specific names from a module
     
-    // Exceptions
-    Raise,
-    
     // Super-instructions for common patterns
     LoadAddStore,   // Load + Add + Store in one instruction
     LoadMulStore,   // Load + Mul + Store in one instruction
@@ -151,7 +137,7 @@ pub enum OpCode {
     LoadAndStore,   // Load + Store in one instruction
     IncLocal,       // Increment local variable
     DecLocal,       // Decrement local variable
-    LoopCond,       // Loop condition check
+    LoopCond,       // Loop condition check,
     
     // Reference counting operations
     IncRef,         // Increment reference count
@@ -177,6 +163,7 @@ pub enum OpCode {
     PrintExpr,
     FormatValue,
     ExtendedArg,
+    WrapKwargs,     // Wrap a dictionary in a KwargsMarker
     NOP,
 }
 

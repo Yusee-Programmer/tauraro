@@ -4,7 +4,6 @@ use crate::value::Value;
 use crate::modules::hplist::HPList;
 use super::vm::SuperBytecodeVM;
 use anyhow::{Result, anyhow};
-use std::collections::HashMap;
 
 // Arithmetic operations implementation for SuperBytecodeVM
 impl SuperBytecodeVM {
