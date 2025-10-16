@@ -294,6 +294,7 @@ impl SuperBytecodeVM {
     /// Optimized instruction execution with computed GOTOs for maximum performance
     #[inline(always)]
     fn execute_instruction_fast(&mut self, frame_idx: usize, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        println!("DEBUG: Executing opcode: {:?}", opcode);
         // For now, we'll just return an error
         // In a complete implementation, this would dispatch to the appropriate handler
         match opcode {
@@ -1679,6 +1680,40 @@ impl SuperBytecodeVM {
                 // Call the method on the object directly (this requires a mutable reference)
                 // But first check if it's a BoundMethod
                 let result = match &self.frames[frame_idx].registers[object_reg].value {
+                    Value::Super(current_class, parent_class, instance, parent_methods) => {
+                        // Handle super() object method calls
+                        println!("DEBUG: CallMethod - Super object, method_name={}", method_name);
+                        
+                        if let Some(instance_value) = instance {
+                            // Look for the method in the parent class methods
+                            if let Some(parent_methods_map) = parent_methods {
+                                println!("DEBUG: CallMethod - Super object, parent_methods count: {}", parent_methods_map.len());
+                                if let Some(method) = parent_methods_map.get(&method_name) {
+                                    println!("DEBUG: CallMethod - Found method {} in parent_methods", method_name);
+                                    // Create arguments with self as the first argument
+                                    let mut method_args = vec![*instance_value.clone()];
+                                    method_args.extend(args);
+                                    
+                                    // Call the method through the VM
+                                    self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), None)?;
+                                    Value::None
+                                } else {
+                                    println!("DEBUG: CallMethod - Method {} not found in parent_methods", method_name);
+                                    // Print all available methods for debugging
+                                    for (method_name, _) in parent_methods_map {
+                                        println!("DEBUG: CallMethod - Available method: {}", method_name);
+                                    }
+                                    // If not found in parent_methods, return an error
+                                    return Err(anyhow!("super(): method '{}' not found in parent class", method_name));
+                                }
+                            } else {
+                                // If not found in parent_methods, return an error
+                                return Err(anyhow!("super(): method '{}' not found in parent class", method_name));
+                            }
+                        } else {
+                            return Err(anyhow!("super(): unbound super object cannot be called directly"));
+                        }
+                    },
                     Value::BoundMethod { object, method_name: bound_method_name } => {
                         // For BoundMethod objects, we need to call the method from the class
                         match object.as_ref() {
@@ -2190,6 +2225,7 @@ impl SuperBytecodeVM {
                 Ok(None)
             }
             OpCode::LoadAttr => {
+                println!("DEBUG: LoadAttr opcode called");
                 // Load attribute from object (obj.attr)
                 let object_reg = arg1 as usize;
                 let attr_name_idx = arg2 as usize;
@@ -2208,24 +2244,185 @@ impl SuperBytecodeVM {
                 let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();
                 
                 // Try to get the attribute from the object
+                println!("DEBUG: LoadAttr - object_value type: {}", object_value.type_name());
+                println!("DEBUG: LoadAttr - checking if object_value is Super");
+                println!("DEBUG: LoadAttr - object_value debug: {:?}", object_value);
+                println!("DEBUG: LoadAttr - object_value variant: {:?}", std::mem::discriminant(&object_value));
+                println!("DEBUG: LoadAttr - object_value is Super: {}", matches!(object_value, Value::Super(_, _, _, _)));
+                
+                // Additional debug to check the actual type
+                if let Value::Super(current_class, parent_class, instance, parent_methods) = &object_value {
+                    println!("DEBUG: LoadAttr - Confirmed Super object: current_class={}, parent_class={}", current_class, parent_class);
+                    if let Some(instance_val) = instance {
+                        println!("DEBUG: LoadAttr - Super has instance of type: {}", instance_val.type_name());
+                    } else {
+                        println!("DEBUG: LoadAttr - Super has no instance");
+                    }
+                    if let Some(methods) = parent_methods {
+                        println!("DEBUG: LoadAttr - Super has {} parent methods", methods.len());
+                        for (method_name, _) in methods {
+                            println!("DEBUG: LoadAttr - Parent method: {}", method_name);
+                        }
+                    } else {
+                        println!("DEBUG: LoadAttr - Super has no parent methods");
+                    }
+                } else {
+                    println!("DEBUG: LoadAttr - object_value is NOT a Super object");
+                    // Let's check what variant it actually is
+                    match &object_value {
+                        Value::Int(_) => println!("DEBUG: LoadAttr - object_value is Int"),
+                        Value::Float(_) => println!("DEBUG: LoadAttr - object_value is Float"),
+                        Value::Bool(_) => println!("DEBUG: LoadAttr - object_value is Bool"),
+                        Value::Str(_) => println!("DEBUG: LoadAttr - object_value is Str"),
+                        Value::List(_) => println!("DEBUG: LoadAttr - object_value is List"),
+                        Value::Dict(_) => println!("DEBUG: LoadAttr - object_value is Dict"),
+                        Value::Tuple(_) => println!("DEBUG: LoadAttr - object_value is Tuple"),
+                        Value::Object { .. } => println!("DEBUG: LoadAttr - object_value is Object"),
+                        Value::Class { .. } => println!("DEBUG: LoadAttr - object_value is Class"),
+                        Value::Super(_, _, _, _) => println!("DEBUG: LoadAttr - object_value is Super (this should have matched above!)"),
+                        Value::Closure { .. } => println!("DEBUG: LoadAttr - object_value is Closure"),
+                        Value::BuiltinFunction(_, _) => println!("DEBUG: LoadAttr - object_value is BuiltinFunction"),
+                        Value::NativeFunction(_) => println!("DEBUG: LoadAttr - object_value is NativeFunction"),
+                        Value::Module(_, _) => println!("DEBUG: LoadAttr - object_value is Module"),
+                        Value::BoundMethod { .. } => println!("DEBUG: LoadAttr - object_value is BoundMethod"),
+                        Value::None => println!("DEBUG: LoadAttr - object_value is None"),
+                        _ => println!("DEBUG: LoadAttr - object_value is some other variant"),
+                    }
+                }
+                
                 let result = match &object_value {
-                    Value::Super(current_class, parent_class, instance) => {
+                    Value::Super(current_class, parent_class, instance, parent_methods) => {
                         // Handle super() object - delegate to parent class
+                        println!("DEBUG: LoadAttr - Super object, current_class={}, attr_name={}", current_class, attr_name);
+                        
                         if let Some(instance_value) = instance {
-                            // For super() objects, we need to look up the method in the parent class
-                            // For now, we'll create a BoundMethod that will be resolved at call time
-                            // This allows us to delegate to parent class methods
-                            let bound_method = Value::BoundMethod {
-                                object: instance_value.clone(),
-                                method_name: attr_name.clone(),
-                            };
-                            self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
-                            return Ok(None);
+                            // Debug information
+                            println!("DEBUG: Super object - current_class={}, parent_class={}, attr_name={}", current_class, parent_class, attr_name);
+                            println!("DEBUG: Instance value type: {}", instance_value.type_name());
+                            
+                            // For super() objects, we need to look up the method in the parent class hierarchy
+                            
+                            // First, try to find the current class in globals to get its MRO
+                            // Convert globals from RcValue to Value for MRO lookup
+                            let globals_values: HashMap<String, Value> = self.globals
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.value.clone()))
+                                .collect();
+                            
+                            println!("DEBUG: globals_values keys: {:?}", globals_values.keys().collect::<Vec<_>>());
+                            
+                            // Look for the current class in globals
+                            println!("DEBUG: Looking for class {} in globals", current_class);
+                            if let Some(class_value) = globals_values.get(current_class) {
+                                println!("DEBUG: Found class_value for {}", current_class);
+                                if let Value::Class { name, mro, .. } = class_value {
+                                    println!("DEBUG: Class name={}, MRO={:?}", name, mro.get_linearization());
+                                    
+                                    // Use MRO to find the method in parent classes
+                                    println!("DEBUG: Looking for method {} in MRO", attr_name);
+                                    if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
+                                        println!("DEBUG: Found method {} in MRO", attr_name);
+                                        // Found the method, create a BoundMethod
+                                        let bound_method = Value::BoundMethod {
+                                            object: instance_value.clone(),
+                                            method_name: attr_name.clone(),
+                                        };
+                                        self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                                        return Ok(None);
+                                    } else {
+                                        println!("DEBUG: Method {} not found in MRO", attr_name);
+                                        println!("DEBUG: Will check parent_methods as fallback");
+                                    }
+                                }
+                            } else {
+                                println!("DEBUG: Class {} not found in globals", current_class);
+                                println!("DEBUG: Will check parent_methods as fallback");
+                            }
+                            
+                            // If not found through MRO, check parent_methods as fallback
+                            if let Some(methods) = parent_methods {
+                                println!("DEBUG: Checking parent_methods, methods count: {}", methods.len());
+                                println!("DEBUG: Looking for method: {}", attr_name);
+                                if let Some(method) = methods.get(&attr_name) {
+                                    println!("DEBUG: Found method {} in parent_methods", attr_name);
+                                    // Found the method in parent methods, create a BoundMethod
+                                    let bound_method = Value::BoundMethod {
+                                        object: instance_value.clone(),
+                                        method_name: attr_name.clone(),
+                                    };
+                                    self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                                    return Ok(None);
+                                } else {
+                                    println!("DEBUG: Method {} not found in parent_methods", attr_name);
+                                    // Print all available methods for debugging
+                                    for (method_name, _) in methods {
+                                        println!("DEBUG: Available method: {}", method_name);
+                                    }
+                                    
+                                    // If still not found, check if this is a special case
+                                    // For methods that might not be in the class methods, try to find them in the instance
+                                    if let Value::Object { class_methods, .. } = instance_value.as_ref() {
+                                        println!("DEBUG: Checking instance class_methods, methods count: {}", class_methods.len());
+                                        if let Some(method) = class_methods.get(&attr_name) {
+                                            println!("DEBUG: Found method {} in instance class_methods", attr_name);
+                                            // Found the method in the instance's class methods, create a BoundMethod
+                                            let bound_method = Value::BoundMethod {
+                                                object: instance_value.clone(),
+                                                method_name: attr_name.clone(),
+                                            };
+                                            self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                                            return Ok(None);
+                                        } else {
+                                            println!("DEBUG: Method {} not found in instance class_methods", attr_name);
+                                        }
+                                    }
+                                    
+                                    // If still not found, create a BoundMethod but it will fail at call time
+                                    // This maintains compatibility with the existing approach
+                                    println!("DEBUG: Creating BoundMethod for {} (will fail at call time)", attr_name);
+                                    let bound_method = Value::BoundMethod {
+                                        object: instance_value.clone(),
+                                        method_name: attr_name.clone(),
+                                    };
+                                    self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                                    return Ok(None);
+                                }
+                            } else {
+                                println!("DEBUG: No parent_methods provided");
+                                
+                                // If no parent_methods provided, check if this is a special case
+                                // For methods that might not be in the class methods, try to find them in the instance
+                                if let Value::Object { class_methods, .. } = instance_value.as_ref() {
+                                    println!("DEBUG: Checking instance class_methods, methods count: {}", class_methods.len());
+                                    if let Some(method) = class_methods.get(&attr_name) {
+                                        println!("DEBUG: Found method {} in instance class_methods", attr_name);
+                                        // Found the method in the instance's class methods, create a BoundMethod
+                                        let bound_method = Value::BoundMethod {
+                                            object: instance_value.clone(),
+                                            method_name: attr_name.clone(),
+                                        };
+                                        self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                                        return Ok(None);
+                                    } else {
+                                        println!("DEBUG: Method {} not found in instance class_methods", attr_name);
+                                    }
+                                }
+                                
+                                // If still not found, create a BoundMethod but it will fail at call time
+                                // This maintains compatibility with the existing approach
+                                println!("DEBUG: Creating BoundMethod for {} (will fail at call time)", attr_name);
+                                let bound_method = Value::BoundMethod {
+                                    object: instance_value.clone(),
+                                    method_name: attr_name.clone(),
+                                };
+                                self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                                return Ok(None);
+                            }
                         } else {
                             return Err(anyhow!("super(): unbound super object has no attribute '{}'", attr_name));
                         }
                     },
-                    Value::Object { fields, class_methods, .. } => {
+                    Value::Object { fields, class_methods, mro, .. } => {
                         // First check fields
                         if let Some(value) = fields.get(&attr_name) {
                             // Check if this is a descriptor (has __get__ method)
@@ -2245,16 +2442,38 @@ impl SuperBytecodeVM {
                         // Then check methods
                         else if let Some(method) = class_methods.get(&attr_name) {
                             method.clone()
-                        } else {
-                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
+                        }
+                        // Then check MRO for inherited methods
+                        else {
+                            // Convert globals from RcValue to Value for MRO lookup
+                            let globals_values: HashMap<String, Value> = self.globals
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.value.clone()))
+                                .collect();
+                            if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
+                                method.clone()
+                            } else {
+                                return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
+                            }
                         }
                     },
-                    Value::Class { methods, .. } => {
+                    Value::Class { methods, mro, .. } => {
                         // Check class methods
                         if let Some(method) = methods.get(&attr_name) {
                             method.clone()
-                        } else {
-                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
+                        }
+                        // Then check MRO for inherited methods
+                        else {
+                            // Convert globals from RcValue to Value for MRO lookup
+                            let globals_values: HashMap<String, Value> = self.globals
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.value.clone()))
+                                .collect();
+                            if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
+                                method.clone()
+                            } else {
+                                return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
+                            }
                         }
                     },
                     Value::Module(_, namespace) => {
@@ -2275,6 +2494,7 @@ impl SuperBytecodeVM {
                     },
                     _ => {
                         // For other objects, try to get method
+                        println!("DEBUG: LoadAttr - default case, object_value type: {}", object_value.type_name());
                         if let Some(method) = object_value.get_method(&attr_name) {
                             method
                         } else {
@@ -2630,6 +2850,39 @@ impl SuperBytecodeVM {
                             method_args.extend(args);
                             // We can't call call_method on a non-mutable reference, so we'll return an error
                             Err(anyhow!("Method '{}' not found in class methods", method_name))
+                        }
+                    },
+                    Value::Super(current_class, parent_class, instance, parent_methods) => {
+                        // Handle super() object method calls
+                        println!("DEBUG: CallMethod - Super object, method_name={}", method_name);
+                        
+                        if let Some(instance_value) = instance {
+                            // Look for the method in the parent class methods
+                            if let Some(parent_methods_map) = parent_methods {
+                                println!("DEBUG: CallMethod - Super object, parent_methods count: {}", parent_methods_map.len());
+                                if let Some(method) = parent_methods_map.get(&method_name) {
+                                    println!("DEBUG: CallMethod - Found method {} in parent_methods", method_name);
+                                    // Create arguments with self as the first argument
+                                    let mut method_args = vec![*instance_value.clone()];
+                                    method_args.extend(args);
+                                    
+                                    // Call the method through the VM and capture the return value
+                                    return self.call_function_fast(method.clone(), method_args, HashMap::new(), frame_idx, None)
+                                } else {
+                                    println!("DEBUG: CallMethod - Method {} not found in parent_methods", method_name);
+                                    // Print all available methods for debugging
+                                    for (method_name, _) in parent_methods_map {
+                                        println!("DEBUG: CallMethod - Available method: {}", method_name);
+                                    }
+                                    // If not found in parent_methods, return an error
+                                    return Err(anyhow!("super(): method '{}' not found in parent class", method_name));
+                                }
+                            } else {
+                                // If not found in parent_methods, return an error
+                                return Err(anyhow!("super(): method '{}' not found in parent class", method_name));
+                            }
+                        } else {
+                            return Err(anyhow!("super(): unbound super object cannot be called directly"));
                         }
                     },
                     _ => Err(anyhow!("Bound method called on non-object type '{}'", object.type_name()))

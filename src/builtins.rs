@@ -998,6 +998,8 @@ fn issubclass_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
 }
 
 fn super_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    println!("DEBUG: super_builtin called with {} arguments", args.len());
+    
     if args.len() > 2 {
         return Err(anyhow::anyhow!("super() takes at most 2 arguments ({} given)", args.len()));
     }
@@ -1006,22 +1008,54 @@ fn super_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     // In a full implementation, we would determine the current class and instance automatically
     if args.len() == 0 {
         // No arguments - create an unbound super object
-        Ok(Value::Super("object".to_string(), "object".to_string(), None))
+        // In a full implementation, we would determine the current class and instance from the call stack
+        // For now, we'll create a basic super object that can work with manual arguments
+        println!("DEBUG: Creating unbound super object");
+        Ok(Value::Super("object".to_string(), "object".to_string(), None, None))
     } else if args.len() == 1 {
         // One argument - class only
+        println!("DEBUG: Creating super object with 1 argument");
         match &args[0] {
-            Value::Class { name, .. } => {
-                Ok(Value::Super(name.clone(), "object".to_string(), None))
+            Value::Class { name, methods, mro, .. } => {
+                println!("DEBUG: Class name={}, MRO={:?}", name, mro.get_linearization());
+                
+                // For super() with one argument, we don't need parent methods as they'll be looked up dynamically
+                Ok(Value::Super(name.clone(), "object".to_string(), None, None))
             },
-            _ => Err(anyhow::anyhow!("super(): argument 1 must be a class"))
+            _ => {
+                println!("DEBUG: Invalid argument type for super()");
+                Err(anyhow::anyhow!("super(): argument 1 must be a class"))
+            }
         }
     } else {
         // Two arguments - class and instance
+        println!("DEBUG: Creating super object with 2 arguments");
         match (&args[0], &args[1]) {
-            (Value::Class { name: class_name, .. }, instance) => {
-                Ok(Value::Super(class_name.clone(), "object".to_string(), Some(Box::new(instance.clone()))))
+            (Value::Class { name: class_name, mro, methods, .. }, instance) => {
+                println!("DEBUG: Class name={}, MRO={:?}", class_name, mro.get_linearization());
+                
+                // Determine the parent class from the MRO
+                let parent_class = if let Some(second_class) = mro.get_linearization().get(1) {
+                    second_class.clone()
+                } else {
+                    "object".to_string()
+                };
+                println!("DEBUG: Parent class: {}", parent_class);
+                
+                // For super() with two arguments, we pass the class methods directly
+                // This avoids the need to look up the class in globals
+                println!("DEBUG: Creating super object with parent_methods, methods count: {}", methods.len());
+                for (method_name, _) in methods {
+                    println!("DEBUG: Available method in parent: {}", method_name);
+                }
+                let super_obj = Value::Super(class_name.clone(), parent_class, Some(Box::new(instance.clone())), Some(methods.clone()));
+                println!("DEBUG: Created super object: {:?}", super_obj);
+                Ok(super_obj)
             },
-            _ => Err(anyhow::anyhow!("super(): invalid arguments"))
+            _ => {
+                println!("DEBUG: Invalid argument types for super()");
+                Err(anyhow::anyhow!("super(): invalid arguments"))
+            }
         }
     }
 }

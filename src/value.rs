@@ -47,7 +47,7 @@ pub enum Value {
         mro: MRO,
         base_object: BaseObject,
     },
-    Super(String, String, Option<Box<Value>>), // current class name, parent class name, object instance
+    Super(String, String, Option<Box<Value>>, Option<HashMap<String, Value>>), // current class name, parent class name, object instance, parent class methods
     Closure {
         name: String,
         params: Vec<Param>,
@@ -160,7 +160,7 @@ impl PartialEq for Value {
             (Value::NotImplemented, Value::NotImplemented) => true,
             (Value::Object { class_name: class_name_a, fields: fields_a, class_methods: class_methods_a, base_object: base_object_a, mro: mro_a }, Value::Object { class_name: class_name_b, fields: fields_b, class_methods: class_methods_b, base_object: base_object_b, mro: mro_b }) => class_name_a == class_name_b && fields_a == fields_b && class_methods_a == class_methods_b && base_object_a == base_object_b && mro_a == mro_b,
             (Value::Class { name: name_a, bases: bases_a, methods: methods_a, metaclass: metaclass_a, mro: mro_a, base_object: base_object_a }, Value::Class { name: name_b, bases: bases_b, methods: methods_b, metaclass: metaclass_b, mro: mro_b, base_object: base_object_b }) => name_a == name_b && bases_a == bases_b && methods_a == methods_b && metaclass_a == metaclass_b && mro_a == mro_b && base_object_a == base_object_b,
-            (Value::Super(current_class_a, parent_class_a, obj_a), Value::Super(current_class_b, parent_class_b, obj_b)) => current_class_a == current_class_b && parent_class_a == parent_class_b && obj_a == obj_b,
+            (Value::Super(current_class_a, parent_class_a, obj_a, _), Value::Super(current_class_b, parent_class_b, obj_b, _)) => current_class_a == current_class_b && parent_class_a == parent_class_b && obj_a == obj_b,
             // For Closure, we compare name, params, and compiled_code
             (Value::Closure { name: name_a, params: params_a, compiled_code: code_a, .. }, Value::Closure { name: name_b, params: params_b, compiled_code: code_b, .. }) => name_a == name_b && params_a == params_b && code_a == code_b,
             (Value::Code(a), Value::Code(b)) => a == b,
@@ -224,7 +224,7 @@ impl fmt::Debug for Value {
                     .field("base_object", base_object)
                     .finish()
             },
-            Value::Super(current_class, parent_class, obj) => {
+            Value::Super(current_class, parent_class, obj, _) => {
                 f.debug_tuple("Super")
                     .field(current_class)
                     .field(parent_class)
@@ -595,7 +595,7 @@ impl Value {
                      format!("<class '{}' bases: ({}) with {} methods>", name, bases.join(", "), methods.len())
                  }
              }
-             Value::Super(current_class, parent_class, _) => {
+             Value::Super(current_class, parent_class, _, _) => {
                  format!("<super: {} -> {}>", current_class, parent_class)
              }
              Value::Module(name, namespace) => {
@@ -649,7 +649,7 @@ impl Value {
             Value::MemoryView { .. } => "memoryview",
             Value::Object { class_name, .. } => class_name,
             Value::Class { .. } => "type",
-            Value::Super(_, _, _) => "super",
+            Value::Super(_, _, _, _) => "super",
             Value::Closure { .. } => "function",
             Value::BuiltinFunction(_, _) => "builtin function",
             Value::NativeFunction(_) => "native function",
@@ -735,7 +735,7 @@ impl Value {
             Value::TypedValue { type_info, .. } => type_info.clone(),
             #[cfg(feature = "ffi")]
             Value::ExternFunction { .. } => Type::Simple("function".to_string()),
-            Value::Super(_, _, _) => Type::Simple("super".to_string()),
+            Value::Super(_, _, _, _) => Type::Simple("super".to_string()),
             Value::BoundMethod { .. } => Type::Simple("bound method".to_string()),
             Value::Code(_) => Type::Simple("code".to_string()),
             Value::KwargsMarker(_) => Type::Simple("dict".to_string()),
@@ -972,7 +972,7 @@ impl Value {
             Value::None => false,
             Value::Object { .. } => true,
             Value::Class { .. } => true,
-            Value::Super(_, _, _) => true,
+            Value::Super(_, _, _, _) => true,
             Value::Closure { .. } => true,
             Value::BuiltinFunction(_, _) => true,
             Value::NativeFunction(_) => true,
@@ -1996,7 +1996,7 @@ impl fmt::Display for Value {
                     write!(f, "<class '{}' bases: ({})>", name, bases.join(", "))
                 }
             }
-            Value::Super(current_class, parent_class, _) => {
+            Value::Super(current_class, parent_class, _, _) => {
                 write!(f, "<super: {} -> {}>", current_class, parent_class)
             }
             Value::Module(name, namespace) => {
