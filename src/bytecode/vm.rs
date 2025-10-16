@@ -10,6 +10,8 @@ use crate::bytecode::arithmetic;
 // Import necessary types for Closure handling
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 /// Register-based bytecode virtual machine with computed GOTOs for maximum performance
 pub struct SuperBytecodeVM {
@@ -1675,8 +1677,61 @@ impl SuperBytecodeVM {
                 }
                 
                 // Call the method on the object directly (this requires a mutable reference)
-                let result = self.frames[frame_idx].registers[object_reg].value.call_method(&method_name, args)
-                    .map_err(|e| anyhow!("Error calling method '{}': {}", method_name, e))?;
+                // But first check if it's a BoundMethod
+                let result = match &self.frames[frame_idx].registers[object_reg].value {
+                    Value::BoundMethod { object, method_name: bound_method_name } => {
+                        // For BoundMethod objects, we need to call the method from the class
+                        match object.as_ref() {
+                            Value::Object { class_methods, .. } => {
+                                if let Some(method) = class_methods.get(bound_method_name) {
+                                    // Create arguments with self as the first argument
+                                    let mut method_args = vec![*object.clone()];
+                                    method_args.extend(args);
+                                    
+                                    // Call the method through the VM
+                                    // For BoundMethod calls, we don't store the result in a register, just return None
+                                    self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), None)?;
+                                    Value::None
+                                } else {
+                                    return Err(anyhow!("Method '{}' not found in class methods", bound_method_name));
+                                }
+                            },
+                            _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.as_ref().type_name())),
+                        }
+                    },
+                    _ => {
+                        // For regular objects, call the method directly
+                        match self.frames[frame_idx].registers[object_reg].value.call_method(&method_name, args.clone()) {
+                            Ok(result) => result,
+                            Err(e) => {
+                                // If the error is "Method '{}' exists but needs to be called through VM",
+                                // it means we need to handle it through the VM
+                                if e.to_string().contains("needs to be called through VM") {
+                                    // Extract the object and find the method in class_methods
+                                    match &self.frames[frame_idx].registers[object_reg].value {
+                                        Value::Object { class_methods, .. } => {
+                                            if let Some(method) = class_methods.get(&method_name) {
+                                                // Create arguments with self as the first argument
+                                                let mut method_args = vec![self.frames[frame_idx].registers[object_reg].value.clone()];
+                                                method_args.extend(args.clone());
+                                                
+                                                // Call the method through the VM
+                                                // For method calls, we don't store the result in a register, just return None
+                                                self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), None)?;
+                                                Value::None
+                                            } else {
+                                                return Err(anyhow!("Method '{}' not found in class methods", method_name));
+                                            }
+                                        },
+                                        _ => return Err(e),
+                                    }
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                        }
+                    }
+                };
                 
                 // Store the result back in the object register (this is where the VM expects it)
                 self.frames[frame_idx].registers[object_reg] = RcValue::new(result);
@@ -2154,6 +2209,22 @@ impl SuperBytecodeVM {
                 
                 // Try to get the attribute from the object
                 let result = match &object_value {
+                    Value::Super(current_class, parent_class, instance) => {
+                        // Handle super() object - delegate to parent class
+                        if let Some(instance_value) = instance {
+                            // For super() objects, we need to look up the method in the parent class
+                            // For now, we'll create a BoundMethod that will be resolved at call time
+                            // This allows us to delegate to parent class methods
+                            let bound_method = Value::BoundMethod {
+                                object: instance_value.clone(),
+                                method_name: attr_name.clone(),
+                            };
+                            self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                            return Ok(None);
+                        } else {
+                            return Err(anyhow!("super(): unbound super object has no attribute '{}'", attr_name));
+                        }
+                    },
                     Value::Object { fields, class_methods, .. } => {
                         // First check fields
                         if let Some(value) = fields.get(&attr_name) {
@@ -2511,10 +2582,15 @@ impl SuperBytecodeVM {
                             func(init_args)?;
                         },
                         Value::Closure { name: method_name, params, body: _, captured_scope: _, docstring: _, compiled_code } => {
-                            // For user-defined __init__ methods, we would call them
-                            // For now, we'll just note that we should call it
-                            if let Some(_code_obj) = compiled_code {
-                                // In a full implementation, we would create a frame and call the __init__ method
+                            // For user-defined __init__ methods, we would call them through the VM
+                            if let Some(code_obj) = compiled_code {
+                                // Create arguments with self as the first argument
+                                let mut init_args = vec![instance.clone()];
+                                init_args.extend(args.clone());
+                                
+                                // Call the __init__ method through the VM
+                                self.call_function_fast(init_method.clone(), init_args, HashMap::new(), frame_idx, None)?;
+                                // The field modifications should already be in the instance
                             }
                         },
                         _ => {
@@ -2524,6 +2600,40 @@ impl SuperBytecodeVM {
                 }
                 
                 Ok(instance)
+            },
+            Value::BoundMethod { object, method_name } => {
+                // Handle bound method calls
+                // Get the method from the object
+                match object.as_ref() {
+                    Value::Object { class_name, class_methods, mro, .. } => {
+                        // First try to find the method in class_methods (normal case)
+                        if let Some(method) = class_methods.get(&method_name) {
+                            // For bound methods, we need to call the method with the object as the first argument (self)
+                            // But we need to do this through the VM properly
+                            
+                            // Create arguments with self as the first argument
+                            let mut method_args = vec![*object.clone()];
+                            method_args.extend(args);
+                            
+                            // Call the method through the VM
+                            self.call_function_fast(method.clone(), method_args, kwargs, frame_idx, result_reg)
+                        } else {
+                            // If not found in class_methods, try to find it in the MRO (Method Resolution Order)
+                            // This is important for super() calls
+                            for class_name in mro.get_linearization() {
+                                // In a full implementation, we would look up the class and find its methods
+                                // For now, we'll just continue searching
+                            }
+                            
+                            // If not found in MRO, try to call it as a method on the object
+                            let mut method_args = vec![*object.clone()];
+                            method_args.extend(args);
+                            // We can't call call_method on a non-mutable reference, so we'll return an error
+                            Err(anyhow!("Method '{}' not found in class methods", method_name))
+                        }
+                    },
+                    _ => Err(anyhow!("Bound method called on non-object type '{}'", object.type_name()))
+                }
             }
             _ => {
                 Err(anyhow!("'{}' object is not callable", func_value.type_name()))

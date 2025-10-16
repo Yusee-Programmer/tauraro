@@ -1002,8 +1002,28 @@ fn super_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         return Err(anyhow::anyhow!("super() takes at most 2 arguments ({} given)", args.len()));
     }
     
-    // For now, we'll just return None as super() is complex
-    Ok(Value::None)
+    // For now, we'll create a basic Super object
+    // In a full implementation, we would determine the current class and instance automatically
+    if args.len() == 0 {
+        // No arguments - create an unbound super object
+        Ok(Value::Super("object".to_string(), "object".to_string(), None))
+    } else if args.len() == 1 {
+        // One argument - class only
+        match &args[0] {
+            Value::Class { name, .. } => {
+                Ok(Value::Super(name.clone(), "object".to_string(), None))
+            },
+            _ => Err(anyhow::anyhow!("super(): argument 1 must be a class"))
+        }
+    } else {
+        // Two arguments - class and instance
+        match (&args[0], &args[1]) {
+            (Value::Class { name: class_name, .. }, instance) => {
+                Ok(Value::Super(class_name.clone(), "object".to_string(), Some(Box::new(instance.clone()))))
+            },
+            _ => Err(anyhow::anyhow!("super(): invalid arguments"))
+        }
+    }
 }
 
 fn staticmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
