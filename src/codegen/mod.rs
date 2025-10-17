@@ -7,7 +7,6 @@ pub use crate::codegen::interpreter::{Interpreter, InterpreterCodeGenerator};
 
 use crate::ir::IRModule;
 use anyhow::Result;
-use std::path::Path;
 
 /// Code generation target
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

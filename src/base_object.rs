@@ -170,7 +170,7 @@ impl MRO {
         
         // Merge operation
         while !merge_lists.is_empty() {
-            let mut found = false;
+            let mut _found = false;
             let candidate = {
                 // Find a candidate class that is not in the tail of any list
                 let mut candidate_opt = None;

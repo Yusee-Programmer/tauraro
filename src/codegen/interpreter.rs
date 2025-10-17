@@ -1,6 +1,5 @@
 //! Interpreter for Tauraro
 
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
 
@@ -9,13 +8,11 @@ use rustyline::Editor;
 use rustyline::completion::{Completer, Pair};
 use rustyline::validate::{Validator, ValidationContext, ValidationResult};
 use rustyline::highlight::Highlighter;
-use rustyline::hint::{Hinter, HistoryHinter};
+use rustyline::hint::Hinter;
 use rustyline::Helper;
 
 use crate::vm::VM;
 use crate::value::Value;
-use crate::lexer::Lexer;
-use crate::parser::{Parser, ParseError};
 use crate::codegen::{CodegenOptions, Target};
 use anyhow::Result;
 

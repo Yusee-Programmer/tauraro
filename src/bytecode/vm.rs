@@ -11,7 +11,6 @@ use crate::bytecode::arithmetic;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::cell::RefCell;
 
 /// Register-based bytecode virtual machine with computed GOTOs for maximum performance
 pub struct SuperBytecodeVM {
@@ -191,7 +190,7 @@ impl SuperBytecodeVM {
             
             // Direct access to instruction without cloning when possible
             // Get the instruction details without borrowing self
-            let (opcode, arg1, arg2, arg3, function_name, line_num, filename) = {
+            let (opcode, arg1, arg2, arg3, function_name, _line_num, _filename) = {
                 let frame = &self.frames[frame_idx];
                 let instruction = &frame.code.instructions[pc]; // Use reference instead of moving
                 (instruction.opcode, instruction.arg1, instruction.arg2, instruction.arg3,
@@ -251,6 +250,8 @@ impl SuperBytecodeVM {
                             self.frames[frame_idx].pc += 1;
                         }
                     }
+                    // Continue the loop to execute the next instruction
+                    continue;
                 },
                 Err(e) => {
                     // Snapshot needed info without holding borrows across mutations
@@ -1677,9 +1678,11 @@ impl SuperBytecodeVM {
                     args.push(self.frames[frame_idx].registers[arg_reg].value.clone());
                 }
                 
-                // Call the method on the object directly (this requires a mutable reference)
-                // But first check if it's a BoundMethod
-                let result = match &self.frames[frame_idx].registers[object_reg].value {
+                // Get the object value
+                let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
+                
+                // Handle different types of method calls
+                let result_value = match object_value {
                     Value::Super(current_class, parent_class, instance, parent_methods) => {
                         // Handle super() object method calls
                         println!("DEBUG: CallMethod - Super object, method_name={}", method_name);
@@ -1694,7 +1697,7 @@ impl SuperBytecodeVM {
                                     let mut method_args = vec![*instance_value.clone()];
                                     method_args.extend(args);
                                     
-                                    // Call the method through the VM
+                                    // Call the method through the VM and capture the return value
                                     self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), None)?;
                                     Value::None
                                 } else {
@@ -1718,7 +1721,7 @@ impl SuperBytecodeVM {
                         // For BoundMethod objects, we need to call the method from the class
                         match object.as_ref() {
                             Value::Object { class_methods, .. } => {
-                                if let Some(method) = class_methods.get(bound_method_name) {
+                                if let Some(method) = class_methods.get(&bound_method_name) {
                                     // Create arguments with self as the first argument
                                     let mut method_args = vec![*object.clone()];
                                     method_args.extend(args);
@@ -1734,42 +1737,42 @@ impl SuperBytecodeVM {
                             _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.as_ref().type_name())),
                         }
                     },
+                    Value::Object { class_methods, .. } => {
+                        // For regular objects, we need to handle method calls through the VM
+                        // Extract the object and find the method in class_methods
+                        if let Some(method) = class_methods.get(&method_name) {
+                            // Create arguments with self as the first argument
+                            let mut method_args = vec![self.frames[frame_idx].registers[object_reg].value.clone()];
+                            method_args.extend(args.clone());
+                            
+                            // Call the method through the VM and capture the return value
+                            let method_result = self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), None)?;
+                            method_result
+                        } else {
+                            return Err(anyhow!("Method '{}' not found in class methods", method_name));
+                        }
+                    },
                     _ => {
-                        // For regular objects, call the method directly
-                        match self.frames[frame_idx].registers[object_reg].value.call_method(&method_name, args.clone()) {
-                            Ok(result) => result,
-                            Err(e) => {
-                                // If the error is "Method '{}' exists but needs to be called through VM",
-                                // it means we need to handle it through the VM
-                                if e.to_string().contains("needs to be called through VM") {
-                                    // Extract the object and find the method in class_methods
-                                    match &self.frames[frame_idx].registers[object_reg].value {
-                                        Value::Object { class_methods, .. } => {
-                                            if let Some(method) = class_methods.get(&method_name) {
-                                                // Create arguments with self as the first argument
-                                                let mut method_args = vec![self.frames[frame_idx].registers[object_reg].value.clone()];
-                                                method_args.extend(args.clone());
-                                                
-                                                // Call the method through the VM
-                                                // For method calls, we don't store the result in a register, just return None
-                                                self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), None)?;
-                                                Value::None
-                                            } else {
-                                                return Err(anyhow!("Method '{}' not found in class methods", method_name));
-                                            }
-                                        },
-                                        _ => return Err(e),
-                                    }
-                                } else {
-                                    return Err(e);
-                                }
+                        // For builtin types, try to get method and call it
+                        if let Some(method) = object_value.get_method(&method_name) {
+                            // Create arguments with self as the first argument
+                            let mut method_args = vec![self.frames[frame_idx].registers[object_reg].value.clone()];
+                            method_args.extend(args.clone());
+                            
+                            // Call the method
+                            match method {
+                                Value::BuiltinFunction(_, func) => func(method_args)?,
+                                Value::NativeFunction(func) => func(method_args)?,
+                                _ => return Err(anyhow!("Method '{}' cannot be called directly", method_name)),
                             }
+                        } else {
+                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
                         }
                     }
                 };
                 
                 // Store the result back in the object register (this is where the VM expects it)
-                self.frames[frame_idx].registers[object_reg] = RcValue::new(result);
+                self.frames[frame_idx].registers[object_reg] = RcValue::new(result_value);
                 Ok(None)
             }
             OpCode::BinaryMulRR => {
@@ -2239,9 +2242,17 @@ impl SuperBytecodeVM {
                     return Err(anyhow!("LoadAttr: attribute name index {} out of bounds (len: {})", attr_name_idx, self.frames[frame_idx].code.names.len()));
                 }
                 
+                println!("DEBUG: LoadAttr - object_reg={}, attr_name_idx={}, result_reg={}", object_reg, attr_name_idx, result_reg);
+                println!("DEBUG: LoadAttr - frame registers len: {}", self.frames[frame_idx].registers.len());
+                println!("DEBUG: LoadAttr - frame names len: {}", self.frames[frame_idx].code.names.len());
+                // Print object ID to track if we're working with the same object
+                println!("DEBUG: LoadAttr - object value ID: {:p}", &self.frames[frame_idx].registers[object_reg].value);
+                
                 // Clone values to avoid borrowing issues
                 let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
                 let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();
+                
+                println!("DEBUG: LoadAttr - object_value: {:?}, attr_name: {}", object_value, attr_name);
                 
                 // Try to get the attribute from the object
                 println!("DEBUG: LoadAttr - object_value type: {}", object_value.type_name());
@@ -2423,8 +2434,9 @@ impl SuperBytecodeVM {
                         }
                     },
                     Value::Object { fields, class_methods, mro, .. } => {
+                        println!("DEBUG: LoadAttr - Object has {} fields: {:?}", fields.len(), fields.as_ref().keys().collect::<Vec<_>>());
                         // First check fields
-                        if let Some(value) = fields.get(&attr_name) {
+                        if let Some(value) = fields.as_ref().get(&attr_name) {
                             // Check if this is a descriptor (has __get__ method)
                             if let Some(getter) = value.get_method("__get__") {
                                 // Call the descriptor's __get__ method
@@ -2507,6 +2519,7 @@ impl SuperBytecodeVM {
                 Ok(None)
             }
             OpCode::StoreAttr => {
+                println!("DEBUG: StoreAttr opcode called");
                 // Store attribute to object (obj.attr = value)
                 let object_reg = arg1 as usize;
                 let attr_name_idx = arg2 as usize;
@@ -2524,11 +2537,18 @@ impl SuperBytecodeVM {
                     return Err(anyhow!("StoreAttr: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
                 }
                 
+                println!("DEBUG: StoreAttr - object_reg={}, attr_name_idx={}, value_reg={}", object_reg, attr_name_idx, value_reg);
+                println!("DEBUG: StoreAttr - frame registers len: {}", self.frames[frame_idx].registers.len());
+                println!("DEBUG: StoreAttr - frame names len: {}", self.frames[frame_idx].code.names.len());
+                
                 // Clone the values first to avoid borrowing issues
                 let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();
                 let value_to_store = self.frames[frame_idx].registers[value_reg].value.clone();
                 let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
                 let object_type_name = object_value.type_name();
+                
+                println!("DEBUG: StoreAttr - attr_name: {}, value_to_store: {:?}, object_type: {}", attr_name, value_to_store, object_type_name);
+                println!("DEBUG: StoreAttr - object value ID: {:p}", &self.frames[frame_idx].registers[object_reg].value);
                 
                 // Check if we're dealing with an Object that might have descriptors
                 let is_object_with_fields = matches!(object_value, Value::Object { .. });
@@ -2536,7 +2556,7 @@ impl SuperBytecodeVM {
                 if is_object_with_fields {
                     // Get the current value of the field to check if it's a descriptor
                     let current_field_value = match &object_value {
-                        Value::Object { fields, .. } => fields.get(&attr_name).cloned(),
+                        Value::Object { fields, .. } => fields.as_ref().get(&attr_name).cloned(),
                         _ => None
                     };
                     
@@ -2563,11 +2583,18 @@ impl SuperBytecodeVM {
                     }
                 }
                 
+                println!("DEBUG: StoreAttr - About to store value in object");
                 // Normal assignment for all other cases
                 match &mut self.frames[frame_idx].registers[object_reg].value {
                     Value::Object { fields, .. } => {
-                        // Store in fields
-                        fields.insert(attr_name, value_to_store);
+                        // Store in fields using Rc::make_mut to get a mutable reference
+                        println!("DEBUG: StoreAttr - Storing {} = {:?} in object fields", attr_name, value_to_store);
+                        Rc::make_mut(fields).insert(attr_name, value_to_store);
+                        println!("DEBUG: StoreAttr - Stored successfully");
+                // Let's verify that the value was actually stored
+                if let Value::Object { fields, .. } = &self.frames[frame_idx].registers[object_reg].value {
+                    println!("DEBUG: StoreAttr - After storing, object now has {} fields: {:?}", fields.len(), fields.as_ref().keys().collect::<Vec<_>>());
+                }
                     },
                     Value::Dict(dict) => {
                         // For dictionaries, treat keys as attributes
@@ -2608,7 +2635,7 @@ impl SuperBytecodeVM {
                 if is_object_with_fields {
                     // Get the current value of the field to check if it's a descriptor
                     let current_field_value = match &object_value {
-                        Value::Object { fields, .. } => fields.get(&attr_name).cloned(),
+                        Value::Object { fields, .. } => fields.as_ref().get(&attr_name).cloned(),
                         _ => None
                     };
                     
@@ -2639,10 +2666,10 @@ impl SuperBytecodeVM {
                 match &mut self.frames[frame_idx].registers[object_reg].value {
                     Value::Object { fields, .. } => {
                         // Remove from fields
-                        if !fields.contains_key(&attr_name) {
+                        if !fields.as_ref().contains_key(&attr_name) {
                             return Err(anyhow!("'{}' object has no attribute '{}'", object_type_name, attr_name));
                         }
-                        fields.remove(&attr_name);
+                        Rc::make_mut(fields).remove(&attr_name);
                     },
                     Value::Dict(dict) => {
                         // For dictionaries, treat keys as attributes
@@ -2749,43 +2776,13 @@ impl SuperBytecodeVM {
             }
             Value::Class { name: class_name, methods, mro, base_object, .. } => {
                 // When a class is called, it creates a new instance of that class
-                // Check if the class has a __new__ method
-                let instance = if let Some(new_method) = methods.get("__new__") {
-                    // Call the __new__ method to create the instance
-                    match new_method {
-                        Value::BuiltinFunction(_, func) => func(args.clone())?,
-                        Value::NativeFunction(func) => func(args.clone())?,
-                        Value::Closure { .. } => {
-                            // For user-defined __new__ methods, we would call them
-                            // For now, we'll create a basic object
-                            Value::Object {
-                                class_name: class_name.clone(),
-                                fields: HashMap::new(),
-                                class_methods: methods.clone(),
-                                base_object: base_object.clone(),
-                                mro: mro.clone(),
-                            }
-                        },
-                        _ => {
-                            // Fallback to creating a basic object
-                            Value::Object {
-                                class_name: class_name.clone(),
-                                fields: HashMap::new(),
-                                class_methods: methods.clone(),
-                                base_object: base_object.clone(),
-                                mro: mro.clone(),
-                            }
-                        }
-                    }
-                } else {
-                    // No __new__ method, create a basic object instance
-                    Value::Object {
-                        class_name: class_name.clone(),
-                        fields: HashMap::new(),
-                        class_methods: methods.clone(),
-                        base_object: base_object.clone(),
-                        mro: mro.clone(),
-                    }
+                // Create the object instance
+                let instance = Value::Object {
+                    class_name: class_name.clone(),
+                    fields: Rc::new(HashMap::new()),
+                    class_methods: methods.clone(), // Use the class methods from the Class
+                    base_object: base_object.clone(),
+                    mro: mro.clone(),
                 };
                 
                 // If the instance has an __init__ method, call it
@@ -2802,25 +2799,88 @@ impl SuperBytecodeVM {
                             func(init_args)?;
                         },
                         Value::Closure { name: method_name, params, body: _, captured_scope: _, docstring: _, compiled_code } => {
-                            // For user-defined __init__ methods, we would call them through the VM
+                            // For user-defined __init__ methods, we need to call them in a way that
+                            // ensures modifications to the instance are visible
                             if let Some(code_obj) = compiled_code {
+                                // Create a new frame for the __init__ method call
+                                // Convert globals and builtins from RcValue to Value for Frame::new_function_frame
+                                let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+                                let builtins_values: HashMap<String, Value> = self.builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+                                
                                 // Create arguments with self as the first argument
                                 let mut init_args = vec![instance.clone()];
                                 init_args.extend(args.clone());
                                 
-                                // Call the __init__ method through the VM
-                                self.call_function_fast(init_method.clone(), init_args, HashMap::new(), frame_idx, None)?;
-                                // The field modifications should already be in the instance
+                                // Create a new frame for the __init__ method
+                                let mut init_frame = Frame::new_function_frame((**code_obj).clone(), globals_values, builtins_values, init_args, HashMap::new());
+                                
+                                // Push the frame onto the stack
+                                self.frames.push(init_frame);
+                                
+                                // Execute the __init__ method
+                                self.run_frame()?;
+                                
+                                // Pop the frame (it's been removed by run_frame when it completed)
+                                // Note: run_frame removes the frame when it completes, so we don't need to pop it here
                             }
                         },
-                        _ => {
-                            // Do nothing for other types
-                        }
+                        _ => {},
                     }
                 }
-                
+
+                // Return the object instance
+                // Note: In CPython, the __init__ method modifies the same instance that gets returned
+                // In our implementation, we need to ensure that modifications to the instance in __init__ are preserved
                 Ok(instance)
-            },
+            }
+            Value::Object {
+                class_name,
+                fields,
+                class_methods,
+                base_object,
+                mro,
+                ..
+            } => {
+                // Create the object instance
+                let mut instance = Value::Object {
+                    class_name: class_name.clone(),
+                    fields: Rc::new(HashMap::new()),
+                    class_methods: class_methods.clone(), // Use the class methods from the Object
+                    base_object: base_object.clone(),
+                    mro: mro.clone(),
+                };
+                
+                // If the instance has an __init__ method, call it
+                if let Some(init_method) = class_methods.get("__init__") {
+                    match init_method {
+                        Value::BuiltinFunction(_, func) => {
+                            let mut init_args = vec![instance.clone()];
+                            init_args.extend(args.clone());
+                            func(init_args)?;
+                        },
+                        Value::NativeFunction(func) => {
+                            let mut init_args = vec![instance.clone()];
+                            init_args.extend(args.clone());
+                            func(init_args)?;
+                        },
+                        Value::Closure { name: method_name, params, body: _, captured_scope: _, docstring: _, compiled_code } => {
+                            // For user-defined __init__ methods, we need to call them directly
+                            // to ensure that modifications to the instance are visible
+                            if let Some(code_obj) = compiled_code {
+                                // Create arguments with self as the first argument
+                                let mut init_args = vec![instance.clone()];
+                                init_args.extend(args.clone());
+                                // Execute the __init__ method directly in the current frame context
+                                self.call_function_fast(init_method.clone(), init_args, HashMap::new(), frame_idx, None)?;
+                            }
+                        },
+                        _ => {},
+                    }
+                }
+
+                // Return the object instance (which may have been modified by __init__)
+                Ok(instance)
+            }
             Value::BoundMethod { object, method_name } => {
                 // Handle bound method calls
                 // Get the method from the object
@@ -2836,7 +2896,7 @@ impl SuperBytecodeVM {
                             method_args.extend(args);
                             
                             // Call the method through the VM
-                            self.call_function_fast(method.clone(), method_args, kwargs, frame_idx, result_reg)
+                            return self.call_function_fast(method.clone(), method_args, kwargs, frame_idx, result_reg);
                         } else {
                             // If not found in class_methods, try to find it in the MRO (Method Resolution Order)
                             // This is important for super() calls
@@ -2849,43 +2909,10 @@ impl SuperBytecodeVM {
                             let mut method_args = vec![*object.clone()];
                             method_args.extend(args);
                             // We can't call call_method on a non-mutable reference, so we'll return an error
-                            Err(anyhow!("Method '{}' not found in class methods", method_name))
+                            return Err(anyhow!("Method '{}' not found in class methods", method_name));
                         }
-                    },
-                    Value::Super(current_class, parent_class, instance, parent_methods) => {
-                        // Handle super() object method calls
-                        println!("DEBUG: CallMethod - Super object, method_name={}", method_name);
-                        
-                        if let Some(instance_value) = instance {
-                            // Look for the method in the parent class methods
-                            if let Some(parent_methods_map) = parent_methods {
-                                println!("DEBUG: CallMethod - Super object, parent_methods count: {}", parent_methods_map.len());
-                                if let Some(method) = parent_methods_map.get(&method_name) {
-                                    println!("DEBUG: CallMethod - Found method {} in parent_methods", method_name);
-                                    // Create arguments with self as the first argument
-                                    let mut method_args = vec![*instance_value.clone()];
-                                    method_args.extend(args);
-                                    
-                                    // Call the method through the VM and capture the return value
-                                    return self.call_function_fast(method.clone(), method_args, HashMap::new(), frame_idx, None)
-                                } else {
-                                    println!("DEBUG: CallMethod - Method {} not found in parent_methods", method_name);
-                                    // Print all available methods for debugging
-                                    for (method_name, _) in parent_methods_map {
-                                        println!("DEBUG: CallMethod - Available method: {}", method_name);
-                                    }
-                                    // If not found in parent_methods, return an error
-                                    return Err(anyhow!("super(): method '{}' not found in parent class", method_name));
-                                }
-                            } else {
-                                // If not found in parent_methods, return an error
-                                return Err(anyhow!("super(): method '{}' not found in parent class", method_name));
-                            }
-                        } else {
-                            return Err(anyhow!("super(): unbound super object cannot be called directly"));
-                        }
-                    },
-                    _ => Err(anyhow!("Bound method called on non-object type '{}'", object.type_name()))
+                    }
+                    _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.type_name()))
                 }
             }
             _ => {
@@ -2905,7 +2932,7 @@ impl SuperBytecodeVM {
     }
     
     /// Process starred arguments (*args, **kwargs) in function calls
-    fn process_starred_arguments(&mut self, args: Vec<Value>) -> Result<Vec<Value>> {
+    fn process_starred_arguments(&self, args: Vec<Value>) -> Result<Vec<Value>> {
         let mut processed_args = Vec::new();
         
         for arg in args {
@@ -2939,6 +2966,5 @@ impl SuperBytecodeVM {
         
         Ok(processed_args)
     }
-    
 
 }

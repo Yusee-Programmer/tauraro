@@ -2,9 +2,8 @@
 /// Similar to Python's threading module
 
 use crate::value::Value;
-use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock, Condvar};
+use std::sync::{Arc, Mutex, Condvar};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -163,7 +162,7 @@ impl SemaphoreObject {
 
 // Thread Functions Implementation
 
-pub fn thread_start_new_thread(args: Vec<Value>) -> Result<Value> {
+pub fn thread_start_new_thread(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() < 1 || args.len() > 2 {
         return Err(anyhow::anyhow!("start_new_thread() takes 1 or 2 arguments"));
     }
@@ -184,7 +183,7 @@ pub fn thread_start_new_thread(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Int(thread_id as i64))
 }
 
-pub fn thread_get_ident(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_get_ident(_args: Vec<Value>) -> anyhow::Result<Value> {
     // Return current thread ID (simplified)
     let thread_id = format!("{:?}", thread::current().id());
     // Extract numeric part if possible, otherwise use hash
@@ -203,13 +202,13 @@ pub fn thread_get_ident(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Int(id))
 }
 
-pub fn thread_active_count(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_active_count(_args: Vec<Value>) -> anyhow::Result<Value> {
     // In a real implementation, we would track active threads
     // For now, return a placeholder
     Ok(Value::Int(1))
 }
 
-pub fn thread_current_thread(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_current_thread(_args: Vec<Value>) -> anyhow::Result<Value> {
     let thread_obj = ThreadObject::new(Some("MainThread".to_string()));
     
     let mut thread_dict = HashMap::new();
@@ -220,13 +219,13 @@ pub fn thread_current_thread(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Dict(thread_dict))
 }
 
-pub fn thread_enumerate(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_enumerate(_args: Vec<Value>) -> anyhow::Result<Value> {
     // Return list of active threads (simplified)
     let main_thread = thread_current_thread(vec![])?;
     Ok(Value::List(HPList::from_values(vec![main_thread])))
 }
 
-pub fn thread_main_thread(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_main_thread(_args: Vec<Value>) -> anyhow::Result<Value> {
     let mut main_thread = HashMap::new();
     main_thread.insert("name".to_string(), Value::Str("MainThread".to_string()));
     main_thread.insert("ident".to_string(), Value::Int(1));
@@ -235,7 +234,7 @@ pub fn thread_main_thread(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Dict(main_thread))
 }
 
-pub fn thread_sleep(args: Vec<Value>) -> Result<Value> {
+pub fn thread_sleep(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow::anyhow!("sleep() takes exactly one argument"));
     }
@@ -250,14 +249,14 @@ pub fn thread_sleep(args: Vec<Value>) -> Result<Value> {
     Ok(Value::None)
 }
 
-pub fn thread_yield(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_yield(_args: Vec<Value>) -> anyhow::Result<Value> {
     thread::yield_now();
     Ok(Value::None)
 }
 
 // Synchronization Primitives
 
-pub fn thread_lock_new(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_lock_new(_args: Vec<Value>) -> anyhow::Result<Value> {
     let lock = LockObject::new();
     
     let mut lock_dict = HashMap::new();
@@ -268,7 +267,7 @@ pub fn thread_lock_new(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Dict(lock_dict))
 }
 
-pub fn thread_rlock_new(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_rlock_new(_args: Vec<Value>) -> anyhow::Result<Value> {
     let rlock = RLockObject::new();
     
     let mut rlock_dict = HashMap::new();
@@ -278,7 +277,7 @@ pub fn thread_rlock_new(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Dict(rlock_dict))
 }
 
-pub fn thread_condition_new(args: Vec<Value>) -> Result<Value> {
+pub fn thread_condition_new(args: Vec<Value>) -> anyhow::Result<Value> {
     let _lock = if args.is_empty() { None } else { Some(&args[0]) };
     
     let condition = ConditionObject::new();
@@ -293,7 +292,7 @@ pub fn thread_condition_new(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Dict(condition_dict))
 }
 
-pub fn thread_event_new(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_event_new(_args: Vec<Value>) -> anyhow::Result<Value> {
     let event = EventObject::new();
     
     let mut event_dict = HashMap::new();
@@ -305,7 +304,7 @@ pub fn thread_event_new(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Dict(event_dict))
 }
 
-pub fn thread_semaphore_new(args: Vec<Value>) -> Result<Value> {
+pub fn thread_semaphore_new(args: Vec<Value>) -> anyhow::Result<Value> {
     let value = if args.is_empty() {
         1
     } else {
@@ -328,7 +327,7 @@ pub fn thread_semaphore_new(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Dict(semaphore_dict))
 }
 
-pub fn thread_bounded_semaphore_new(args: Vec<Value>) -> Result<Value> {
+pub fn thread_bounded_semaphore_new(args: Vec<Value>) -> anyhow::Result<Value> {
     let value = if args.is_empty() {
         1
     } else {
@@ -351,7 +350,7 @@ pub fn thread_bounded_semaphore_new(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Dict(semaphore_dict))
 }
 
-pub fn thread_thread_new(args: Vec<Value>) -> Result<Value> {
+pub fn thread_thread_new(args: Vec<Value>) -> anyhow::Result<Value> {
     let mut thread_dict = HashMap::new();
     
     // Extract arguments (target, args, kwargs, name, daemon)
@@ -378,7 +377,7 @@ pub fn thread_thread_new(args: Vec<Value>) -> Result<Value> {
 
 // Lock method implementations (simplified)
 
-pub fn lock_acquire(args: Vec<Value>) -> Result<Value> {
+pub fn lock_acquire(args: Vec<Value>) -> anyhow::Result<Value> {
     let _blocking = if args.is_empty() {
         true
     } else {
@@ -392,37 +391,37 @@ pub fn lock_acquire(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Bool(true))
 }
 
-pub fn lock_release(_args: Vec<Value>) -> Result<Value> {
+pub fn lock_release(_args: Vec<Value>) -> anyhow::Result<Value> {
     // In a real implementation, we would release the actual lock
     Ok(Value::None)
 }
 
-pub fn lock_locked(_args: Vec<Value>) -> Result<Value> {
+pub fn lock_locked(_args: Vec<Value>) -> anyhow::Result<Value> {
     // In a real implementation, we would check if the lock is held
     Ok(Value::Bool(false))
 }
 
 // RLock method implementations (simplified)
 
-pub fn rlock_acquire(args: Vec<Value>) -> Result<Value> {
+pub fn rlock_acquire(args: Vec<Value>) -> anyhow::Result<Value> {
     lock_acquire(args) // Simplified implementation
 }
 
-pub fn rlock_release(_args: Vec<Value>) -> Result<Value> {
+pub fn rlock_release(_args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::None)
 }
 
 // Condition method implementations (simplified)
 
-pub fn condition_acquire(args: Vec<Value>) -> Result<Value> {
+pub fn condition_acquire(args: Vec<Value>) -> anyhow::Result<Value> {
     lock_acquire(args)
 }
 
-pub fn condition_release(_args: Vec<Value>) -> Result<Value> {
+pub fn condition_release(_args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::None)
 }
 
-pub fn condition_wait(args: Vec<Value>) -> Result<Value> {
+pub fn condition_wait(args: Vec<Value>) -> anyhow::Result<Value> {
     let _timeout = if args.is_empty() {
         None
     } else {
@@ -437,31 +436,31 @@ pub fn condition_wait(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Bool(true))
 }
 
-pub fn condition_notify(_args: Vec<Value>) -> Result<Value> {
+pub fn condition_notify(_args: Vec<Value>) -> anyhow::Result<Value> {
     // In a real implementation, we would notify one waiting thread
     Ok(Value::None)
 }
 
-pub fn condition_notify_all(_args: Vec<Value>) -> Result<Value> {
+pub fn condition_notify_all(_args: Vec<Value>) -> anyhow::Result<Value> {
     // In a real implementation, we would notify all waiting threads
     Ok(Value::None)
 }
 
 // Event method implementations (simplified)
 
-pub fn event_is_set(_args: Vec<Value>) -> Result<Value> {
+pub fn event_is_set(_args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Bool(false))
 }
 
-pub fn event_set(_args: Vec<Value>) -> Result<Value> {
+pub fn event_set(_args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::None)
 }
 
-pub fn event_clear(_args: Vec<Value>) -> Result<Value> {
+pub fn event_clear(_args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::None)
 }
 
-pub fn event_wait(args: Vec<Value>) -> Result<Value> {
+pub fn event_wait(args: Vec<Value>) -> anyhow::Result<Value> {
     let _timeout = if args.is_empty() {
         None
     } else {
@@ -477,7 +476,7 @@ pub fn event_wait(args: Vec<Value>) -> Result<Value> {
 
 // Semaphore method implementations (simplified)
 
-pub fn semaphore_acquire(args: Vec<Value>) -> Result<Value> {
+pub fn semaphore_acquire(args: Vec<Value>) -> anyhow::Result<Value> {
     let _blocking = if args.is_empty() {
         true
     } else {
@@ -490,23 +489,23 @@ pub fn semaphore_acquire(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Bool(true))
 }
 
-pub fn semaphore_release(_args: Vec<Value>) -> Result<Value> {
+pub fn semaphore_release(_args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::None)
 }
 
-pub fn bounded_semaphore_release(_args: Vec<Value>) -> Result<Value> {
+pub fn bounded_semaphore_release(_args: Vec<Value>) -> anyhow::Result<Value> {
     // In a real implementation, we would check bounds
     Ok(Value::None)
 }
 
 // Thread method implementations (simplified)
 
-pub fn thread_start(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_start(_args: Vec<Value>) -> anyhow::Result<Value> {
     // In a real implementation, we would start the thread
     Ok(Value::None)
 }
 
-pub fn thread_join(args: Vec<Value>) -> Result<Value> {
+pub fn thread_join(args: Vec<Value>) -> anyhow::Result<Value> {
     let _timeout = if args.is_empty() {
         None
     } else {
@@ -521,6 +520,6 @@ pub fn thread_join(args: Vec<Value>) -> Result<Value> {
     Ok(Value::None)
 }
 
-pub fn thread_is_alive(_args: Vec<Value>) -> Result<Value> {
+pub fn thread_is_alive(_args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Bool(false))
 }

@@ -403,7 +403,7 @@ impl SuperCompiler {
                 // Debug output to see what's stored in constants
                 // eprintln!("DEBUG: Stored Closure '{}' in constants at index {}", name, closure_const_idx);
                 if let Some(stored_value) = self.code.constants.get(closure_const_idx as usize) {
-                    if let Value::Closure { name: ref name, params: _, body: _, captured_scope: _, docstring: _, compiled_code: ref compiled_code } = stored_value {
+                    if let Value::Closure { name: ref _name, params: _, body: _, captured_scope: _, docstring: _, compiled_code: ref compiled_code } = stored_value {
                         // eprintln!("DEBUG: Stored Closure '{}' has compiled_code: {}", name, compiled_code.is_some());
                         if let Some(ref code) = compiled_code {
                             // eprintln!("DEBUG: Stored Closure '{}' has {} instructions", name, code.instructions.len());
@@ -612,14 +612,14 @@ impl SuperCompiler {
                 }
 
                 // Extract metaclass name if provided
-                let metaclass_name = if let Some(mc_expr) = metaclass {
+                let metaclass_value = if let Some(mc_expr) = metaclass {
                     if let Expr::Identifier(mc_name) = mc_expr {
-                        Some(mc_name.clone())
+                        Some(Box::new(Value::Str(mc_name.clone())))
                     } else {
                         None
                     }
                 } else {
-                    Some("type".to_string()) // Default metaclass is 'type'
+                    Some(Box::new(Value::Str("type".to_string()))) // Default metaclass is 'type'
                 };
 
                 // Create the class using the new Class variant
@@ -627,7 +627,7 @@ impl SuperCompiler {
                     name: name.clone(),
                     bases: base_names.clone(),
                     methods: class_methods,
-                    metaclass: metaclass_name,
+                    metaclass: metaclass_value,
                     mro: crate::base_object::MRO::from_linearization(mro_list.clone()),
                     base_object: crate::base_object::BaseObject::new(name.clone(), base_names.clone()),
                 };
@@ -734,7 +734,7 @@ impl SuperCompiler {
                 let mut except_end_jump_positions = Vec::new();
                 for (i, handler) in except_handlers.iter().enumerate() {
                     // If handler has a specific exception type, we need to check it
-                    if let Some(ref exception_type) = handler.exception_type {
+                    if let Some(ref _exception_type) = handler.exception_type {
                         // For now, we'll just compile the handler body without type checking
                         // In a full implementation, we would check the exception type
                     }
@@ -845,6 +845,16 @@ impl SuperCompiler {
                 
                 Ok(())
             }
+            Statement::AttributeAssignment { object, name, value } => {
+                // Compile attribute assignment: object.name = value
+                let object_reg = self.compile_expression(object)?;
+                let value_reg = self.compile_expression(value)?;
+                let name_idx = self.code.add_name(name);
+                
+                // Emit StoreAttr instruction to store attribute to object
+                self.emit(OpCode::StoreAttr, object_reg, name_idx, value_reg, self.current_line);
+                Ok(())
+            }
             _ => {
                 // For unimplemented statements, we'll just return Ok for now
                 // In a complete implementation, we would handle all statement types
@@ -880,7 +890,7 @@ impl SuperCompiler {
                 self.emit(OpCode::MatchSequence, value_reg, patterns.len() as u32, 0, self.current_line);
                 
                 // Compile sub-patterns
-                for (i, pattern) in patterns.into_iter().enumerate() {
+                for (_i, pattern) in patterns.into_iter().enumerate() {
                     // For each sub-pattern, we would need to extract the i-th element
                     // and match it against the sub-pattern
                     // For now, we'll just emit the pattern matching opcodes
@@ -1270,15 +1280,12 @@ impl SuperCompiler {
             }
             Expr::Attribute { object, name } => {
                 // Attribute access: object.name
-                // For now, we compile the object and return a placeholder
-                // TODO: Implement proper LoadAttr opcode and runtime support
-                let _object_reg = self.compile_expression(*object)?;
-
-                // For now, just return None as a placeholder
-                // This allows class methods to compile even if they reference self.x
+                let object_reg = self.compile_expression(*object)?;
+                let name_idx = self.code.add_name(name);
                 let result_reg = self.allocate_register();
-                let none_const = self.code.add_constant(Value::None);
-                self.emit(OpCode::LoadConst, none_const, result_reg, 0, self.current_line);
+                
+                // Emit LoadAttr instruction to load attribute from object
+                self.emit(OpCode::LoadAttr, object_reg, name_idx, result_reg, self.current_line);
                 Ok(result_reg)
             }
             Expr::FormatString { parts } => {

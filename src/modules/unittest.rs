@@ -4,7 +4,7 @@
 use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Create the unittest module object with all its classes and functions
 pub fn create_unittest_module() -> Value {

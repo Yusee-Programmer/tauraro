@@ -95,3 +95,7 @@ pretty_assertions = "1.4"
 [[bin]]
 name = "tauraro"
 path = "src/main.rs"
+
+[[bin]]
+name = "test_oop"
+path = "src/bin/test_oop.rs"

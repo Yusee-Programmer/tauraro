@@ -4,7 +4,7 @@ use crate::value::Value;
 use std::fmt::Debug;
 
 /// Reference counted value for optimized memory management
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RcValue {
     pub value: Value,
     pub ref_count: usize,
@@ -57,6 +57,17 @@ impl RcValue {
         self.value.is_truthy()
     }
 }
+
+impl Clone for RcValue {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            ref_count: self.ref_count + 1,
+        }
+    }
+}
+
+
 
 /// Object handling operations
 pub struct ObjectOps;

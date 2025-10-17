@@ -4,9 +4,10 @@
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use chrono::{DateTime, Local, Utc, TimeZone, NaiveDateTime, Timelike, Datelike};
+use chrono::{Local, Utc, TimeZone, NaiveDateTime, Timelike, Datelike};
 
 /// Create the time module object with all its functions and constants
 pub fn create_time_module() -> Value {
@@ -252,7 +253,7 @@ pub fn time_gmtime(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "struct_time".to_string(),
-        fields: time_struct,
+        fields: Rc::new(time_struct),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("struct_time".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["struct_time".to_string(), "object".to_string()]),

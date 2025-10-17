@@ -2,6 +2,7 @@
 
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
 use crate::modules::hplist::HPList;
 use crate::base_object::{BaseObject, MRO};
 
@@ -898,7 +899,7 @@ fn getattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     match obj {
         Value::Object { fields, class_methods, .. } => {
             // First check fields
-            if let Some(value) = fields.get(attr_name) {
+            if let Some(value) = fields.as_ref().get(attr_name) {
                 Ok(value.clone())
             }
             // Then check methods
@@ -1116,26 +1117,26 @@ fn property_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         None 
     };
     
+    // Create fields for the property object
+    let mut fields = HashMap::new();
+    if let Some(getter_fn) = getter {
+        fields.insert("fget".to_string(), *getter_fn);
+    }
+    if let Some(setter_fn) = setter {
+        fields.insert("fset".to_string(), *setter_fn);
+    }
+    if let Some(deleter_fn) = deleter {
+        fields.insert("fdel".to_string(), *deleter_fn);
+    }
+    if let Some(doc_str) = doc {
+        fields.insert("__doc__".to_string(), Value::Str(doc_str));
+    }
+    
     // For now, we'll just return a special Property value that contains the functions
     // In a full implementation, this would be a proper property object
     Ok(Value::Object {
         class_name: "property".to_string(),
-        fields: {
-            let mut fields = HashMap::new();
-            if let Some(getter) = getter {
-                fields.insert("fget".to_string(), *getter);
-            }
-            if let Some(setter) = setter {
-                fields.insert("fset".to_string(), *setter);
-            }
-            if let Some(deleter) = deleter {
-                fields.insert("fdel".to_string(), *deleter);
-            }
-            if let Some(doc) = doc {
-                fields.insert("__doc__".to_string(), Value::Str(doc));
-            }
-            fields
-        },
+        fields: Rc::new(fields),
         class_methods: HashMap::new(),
         base_object: BaseObject::new("property".to_string(), vec!["object".to_string()]),
         mro: MRO::from_linearization(vec!["property".to_string(), "object".to_string()]),
@@ -1293,7 +1294,7 @@ fn dir_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         match obj {
             Value::Object { fields, class_methods, .. } => {
                 // Add field names
-                for field_name in fields.keys() {
+                for field_name in fields.as_ref().keys() {
                     attrs.push(Value::Str(field_name.clone()));
                 }
                 // Add method names

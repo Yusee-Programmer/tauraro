@@ -3,6 +3,7 @@
 
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 type Result<T> = anyhow::Result<T>;
 
@@ -212,7 +213,7 @@ fn pickle_pickler(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "Pickler".to_string(),
-        fields: pickler_obj,
+        fields: Rc::new(pickler_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Pickler".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Pickler".to_string(), "object".to_string()]),
@@ -266,7 +267,7 @@ fn pickle_error_str(args: Vec<Value>) -> Result<Value> {
     }
     
     if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(message)) = fields.get("message") {
+        if let Some(Value::Str(message)) = fields.as_ref().get("message") {
             return Ok(Value::Str(message.clone()));
         }
     }
@@ -281,7 +282,7 @@ fn pickling_error_str(args: Vec<Value>) -> Result<Value> {
     }
     
     if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(message)) = fields.get("message") {
+        if let Some(Value::Str(message)) = fields.as_ref().get("message") {
             return Ok(Value::Str(message.clone()));
         }
     }
@@ -296,7 +297,7 @@ fn unpickling_error_str(args: Vec<Value>) -> Result<Value> {
     }
     
     if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(message)) = fields.get("message") {
+        if let Some(Value::Str(message)) = fields.as_ref().get("message") {
             return Ok(Value::Str(message.clone()));
         }
     }
@@ -317,7 +318,7 @@ fn pickle_unpickler(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "Unpickler".to_string(),
-        fields: unpickler_obj,
+        fields: Rc::new(unpickler_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Unpickler".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Unpickler".to_string(), "object".to_string()]),
@@ -341,7 +342,7 @@ fn pickle_error(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "PickleError".to_string(),
-        fields: error_obj,
+        fields: Rc::new(error_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("PickleError".to_string(), vec!["Exception".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["PickleError".to_string(), "Exception".to_string(), "object".to_string()]),
@@ -365,7 +366,7 @@ fn pickling_error(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "PicklingError".to_string(),
-        fields: error_obj,
+        fields: Rc::new(error_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("PicklingError".to_string(), vec!["PickleError".to_string(), "Exception".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["PicklingError".to_string(), "PickleError".to_string(), "Exception".to_string(), "object".to_string()]),
@@ -389,7 +390,7 @@ fn unpickling_error(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "UnpicklingError".to_string(),
-        fields: error_obj,
+        fields: Rc::new(error_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("UnpicklingError".to_string(), vec!["PickleError".to_string(), "Exception".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["UnpicklingError".to_string(), "PickleError".to_string(), "Exception".to_string(), "object".to_string()]),

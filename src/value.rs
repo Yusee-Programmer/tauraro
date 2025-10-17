@@ -6,6 +6,7 @@ use crate::bytecode::memory::CodeObject;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 // Import HPList
 use crate::modules::hplist::HPList;
@@ -34,16 +35,16 @@ pub enum Value {
     KwargsMarker(HashMap<String, Value>), // Special marker for **kwargs in function calls
     Object {
         class_name: String,
-        fields: HashMap<String, Value>,
+        fields: Rc<HashMap<String, Value>>,
         class_methods: HashMap<String, Value>,
         base_object: BaseObject,
         mro: MRO,
     },
     Class {
         name: String,
-        bases: Vec<String>, // Base class names
-        methods: HashMap<String, Value>, // Class methods, attributes, and __init__, __new__, etc.
-        metaclass: Option<String>, // Metaclass name (usually 'type')
+        bases: Vec<String>,
+        methods: HashMap<String, Value>,
+        metaclass: Option<Box<Value>>,
         mro: MRO,
         base_object: BaseObject,
     },
@@ -288,7 +289,7 @@ impl Value {
 
         Value::Object {
             class_name: class_name.clone(),
-            fields,
+            fields: Rc::new(fields),
             class_methods: HashMap::new(),
             base_object: BaseObject::new(class_name, parents),
             mro,
@@ -2025,6 +2026,79 @@ impl fmt::Display for Value {
 }
 
 impl Value {
+    // Method callers (these would be implemented to call the static methods)
+    fn call_str_method(args: Vec<Value>) -> anyhow::Result<Value> {
+        if args.is_empty() {
+            return Err(anyhow::anyhow!("str method called with no arguments"));
+        }
+        let method_name = if let Value::Str(name) = &args[0] {
+            name
+        } else {
+            return Err(anyhow::anyhow!("First argument must be method name"));
+        };
+        Value::call_str_method_static(String::new(), method_name, args[1..].to_vec())
+    }
+
+    fn call_list_method(args: Vec<Value>) -> anyhow::Result<Value> {
+        if args.is_empty() {
+            return Err(anyhow::anyhow!("list method called with no arguments"));
+        }
+        let method_name = if let Value::Str(name) = &args[0] {
+            name
+        } else {
+            return Err(anyhow::anyhow!("First argument must be method name"));
+        };
+        // We can't actually call list methods without a mutable reference to the list
+        // This is a limitation of this approach - in a real implementation, 
+        // method calls would be handled by the VM with proper references
+        Err(anyhow::anyhow!("List method '{}' cannot be called directly", method_name))
+    }
+
+    fn call_dict_method(args: Vec<Value>) -> anyhow::Result<Value> {
+        if args.is_empty() {
+            return Err(anyhow::anyhow!("dict method called with no arguments"));
+        }
+        let method_name = if let Value::Str(name) = &args[0] {
+            name
+        } else {
+            return Err(anyhow::anyhow!("First argument must be method name"));
+        };
+        // We can't actually call dict methods without a mutable reference to the dict
+        // This is a limitation of this approach - in a real implementation, 
+        // method calls would be handled by the VM with proper references
+        Err(anyhow::anyhow!("Dict method '{}' cannot be called directly", method_name))
+    }
+
+    fn call_set_method(args: Vec<Value>) -> anyhow::Result<Value> {
+        if args.is_empty() {
+            return Err(anyhow::anyhow!("set method called with no arguments"));
+        }
+        let method_name = if let Value::Str(name) = &args[0] {
+            name
+        } else {
+            return Err(anyhow::anyhow!("First argument must be method name"));
+        };
+        // We can't actually call bytearray methods without a mutable reference to the bytearray
+        // This is a limitation of this approach - in a real implementation, 
+        // method calls would be handled by the VM with proper references
+        Err(anyhow::anyhow!("Bytearray method '{}' cannot be called directly", method_name))
+    }
+
+    fn call_bytearray_method(args: Vec<Value>) -> anyhow::Result<Value> {
+        if args.is_empty() {
+            return Err(anyhow::anyhow!("bytearray method called with no arguments"));
+        }
+        let method_name = if let Value::Str(name) = &args[0] {
+            name
+        } else {
+            return Err(anyhow::anyhow!("First argument must be method name"));
+        };
+        // We can't actually call bytearray methods without a mutable reference to the bytearray
+        // This is a limitation of this approach - in a real implementation, 
+        // method calls would be handled by the VM with proper references
+        Err(anyhow::anyhow!("Bytearray method '{}' cannot be called directly", method_name))
+    }
+
     /// Get method for this value (used for method resolution)
     pub fn get_method(&self, method_name: &str) -> Option<Value> {
         match self {
@@ -2118,64 +2192,6 @@ impl Value {
         }
     }
 
-    // Method callers (these would be implemented to call the static methods)
-    fn call_str_method(args: Vec<Value>) -> anyhow::Result<Value> {
-        if args.is_empty() {
-            return Err(anyhow::anyhow!("str method called with no arguments"));
-        }
-        let method_name = if let Value::Str(name) = &args[0] {
-            name
-        } else {
-            return Err(anyhow::anyhow!("First argument must be method name"));
-        };
-        Self::call_str_method_static(String::new(), method_name, args[1..].to_vec())
-    }
-
-    fn call_list_method(args: Vec<Value>) -> anyhow::Result<Value> {
-        if args.is_empty() {
-            return Err(anyhow::anyhow!("list method called with no arguments"));
-        }
-        let method_name = if let Value::Str(name) = &args[0] {
-            name
-        } else {
-            return Err(anyhow::anyhow!("First argument must be method name"));
-        };
-        // We can't actually call list methods without a mutable reference to the list
-        // This is a limitation of this approach - in a real implementation, 
-        // method calls would be handled by the VM with proper references
-        Err(anyhow::anyhow!("List method '{}' cannot be called directly", method_name))
-    }
-
-    fn call_dict_method(args: Vec<Value>) -> anyhow::Result<Value> {
-        if args.is_empty() {
-            return Err(anyhow::anyhow!("dict method called with no arguments"));
-        }
-        let method_name = if let Value::Str(name) = &args[0] {
-            name
-        } else {
-            return Err(anyhow::anyhow!("First argument must be method name"));
-        };
-        // We can't actually call dict methods without a mutable reference to the dict
-        // This is a limitation of this approach - in a real implementation, 
-        // method calls would be handled by the VM with proper references
-        Err(anyhow::anyhow!("Dict method '{}' cannot be called directly", method_name))
-    }
-
-    fn call_set_method(args: Vec<Value>) -> anyhow::Result<Value> {
-        if args.is_empty() {
-            return Err(anyhow::anyhow!("set method called with no arguments"));
-        }
-        let method_name = if let Value::Str(name) = &args[0] {
-            name
-        } else {
-            return Err(anyhow::anyhow!("First argument must be method name"));
-        };
-        // We can't actually call set methods without a mutable reference to the set
-        // This is a limitation of this approach - in a real implementation, 
-        // method calls would be handled by the VM with proper references
-        Err(anyhow::anyhow!("Set method '{}' cannot be called directly", method_name))
-    }
-
     fn call_tuple_method(args: Vec<Value>) -> anyhow::Result<Value> {
         if args.is_empty() {
             return Err(anyhow::anyhow!("tuple method called with no arguments"));
@@ -2185,7 +2201,7 @@ impl Value {
         } else {
             return Err(anyhow::anyhow!("First argument must be method name"));
         };
-        Self::call_tuple_method_static(vec![], method_name, args[1..].to_vec())
+        Value::call_tuple_method_static(vec![], method_name, args[1..].to_vec())
     }
 
     fn call_int_method(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -2197,7 +2213,7 @@ impl Value {
         } else {
             return Err(anyhow::anyhow!("First argument must be method name"));
         };
-        Self::call_int_method_static(0, method_name, args[1..].to_vec())
+        Value::call_int_method_static(0, method_name, args[1..].to_vec())
     }
 
     fn call_float_method(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -2209,7 +2225,7 @@ impl Value {
         } else {
             return Err(anyhow::anyhow!("First argument must be method name"));
         };
-        Self::call_float_method_static(0.0, method_name, args[1..].to_vec())
+        Value::call_float_method_static(0.0, method_name, args[1..].to_vec())
     }
 
     fn call_bytes_method(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -2221,21 +2237,7 @@ impl Value {
         } else {
             return Err(anyhow::anyhow!("First argument must be method name"));
         };
-        Self::call_bytes_method_static(vec![], method_name, args[1..].to_vec())
-    }
-
-    fn call_bytearray_method(args: Vec<Value>) -> anyhow::Result<Value> {
-        if args.is_empty() {
-            return Err(anyhow::anyhow!("bytearray method called with no arguments"));
-        }
-        let method_name = if let Value::Str(name) = &args[0] {
-            name
-        } else {
-            return Err(anyhow::anyhow!("First argument must be method name"));
-        };
-        // We can't actually call bytearray methods without a mutable reference to the bytearray
-        // This is a limitation of this approach - in a real implementation, 
-        // method calls would be handled by the VM with proper references
-        Err(anyhow::anyhow!("Bytearray method '{}' cannot be called directly", method_name))
+        Value::call_bytes_method_static(vec![], method_name, args[1..].to_vec())
     }
 }
+

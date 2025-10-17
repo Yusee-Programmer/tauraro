@@ -3,6 +3,7 @@
 
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 type Result<T> = anyhow::Result<T>;
 
@@ -121,7 +122,7 @@ fn create_logger(name: String, level: i64) -> Value {
     
     Value::Object {
         class_name: "Logger".to_string(),
-        fields: logger,
+        fields: Rc::new(logger),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Logger".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Logger".to_string(), "object".to_string()]),
@@ -147,7 +148,7 @@ fn create_handler(handler_type: String) -> Value {
     
     Value::Object {
         class_name: handler_type,
-        fields: handler,
+        fields: Rc::new(handler),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Handler".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Handler".to_string(), "object".to_string()]),
@@ -174,7 +175,7 @@ fn create_formatter(fmt: Option<String>, datefmt: Option<String>) -> Value {
     
     Value::Object {
         class_name: "Formatter".to_string(),
-        fields: formatter,
+        fields: Rc::new(formatter),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Formatter".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Formatter".to_string(), "object".to_string()]),
@@ -388,8 +389,9 @@ fn logging_stream_handler_class(args: Vec<Value>) -> Result<Value> {
         args[0].clone()
     };
     
-    if let Value::Object { ref mut fields, .. } = handler {
-        fields.insert("stream".to_string(), stream);
+    // We need to properly handle the Rc<HashMap> fields
+    if let Value::Object { fields, .. } = &mut handler {
+        Rc::make_mut(fields).insert("stream".to_string(), stream);
     }
     
     Ok(handler)
@@ -417,9 +419,10 @@ fn logging_file_handler_class(args: Vec<Value>) -> Result<Value> {
     
     let mut handler = create_handler("FileHandler".to_string());
     
-    if let Value::Object { ref mut fields, .. } = handler {
-        fields.insert("filename".to_string(), Value::Str(filename));
-        fields.insert("mode".to_string(), Value::Str(mode));
+    // We need to properly handle the Rc<HashMap> fields
+    if let Value::Object { fields, .. } = &mut handler {
+        Rc::make_mut(fields).insert("filename".to_string(), Value::Str(filename));
+        Rc::make_mut(fields).insert("mode".to_string(), Value::Str(mode));
     }
     
     Ok(handler)
@@ -475,7 +478,7 @@ fn logging_filter_class(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "Filter".to_string(),
-        fields: filter,
+        fields: Rc::new(filter), // Wrap with Rc::new
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Filter".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Filter".to_string(), "object".to_string()]),
@@ -520,7 +523,7 @@ fn logging_log_record_class(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "LogRecord".to_string(),
-        fields: record,
+        fields: Rc::new(record), // Wrap with Rc::new
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("LogRecord".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["LogRecord".to_string(), "object".to_string()]),
