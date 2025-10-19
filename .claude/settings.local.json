@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo run:*)",
+      "Bash(target/debug/tauraro.exe run:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

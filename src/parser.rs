@@ -1552,59 +1552,109 @@ impl Parser {
         Ok(generators)
     }
 
-    fn parse_fstring(&mut self, s: &str) -> Result<Vec<FormatPart>, ParseError> {
+    /// Parse an f-string into FormatPart components
+    fn parse_fstring(&mut self, fstring_content: &str) -> Result<Vec<crate::ast::FormatPart>, ParseError> {
         let mut parts = Vec::new();
         let mut current = String::new();
-        let mut chars = s.chars().peekable();
+        let mut chars = fstring_content.chars().peekable();
+        let mut i = 0;
         
         while let Some(ch) = chars.next() {
-            if ch == '{' {
-                // Flush current string part
-                if !current.is_empty() {
-                    parts.push(FormatPart::String(current.clone()));
-                    current.clear();
-                }
-                
-                // Parse expression inside braces
-                let mut expr_str = String::new();
-                let mut brace_count = 1;
-                
-                while let Some(inner_ch) = chars.next() {
-                    if inner_ch == '{' {
-                        brace_count += 1;
-                        expr_str.push(inner_ch);
-                    } else if inner_ch == '}' {
-                        brace_count -= 1;
-                        if brace_count == 0 {
-                            break;
+            match ch {
+                '{' => {
+                    // Flush any accumulated string content
+                    if !current.is_empty() {
+                        parts.push(crate::ast::FormatPart::String(current.clone()));
+                        current.clear();
+                    }
+                    
+                    // Check for escaped brace
+                    if chars.peek() == Some(&'{') {
+                        chars.next(); // consume the second {
+                        current.push('{');
+                        continue;
+                    }
+                    
+                    // Parse expression inside braces
+                    let mut expr_content = String::new();
+                    let mut brace_count = 1;
+                    
+                    while let Some(inner_ch) = chars.next() {
+                        match inner_ch {
+                            '{' => {
+                                brace_count += 1;
+                                expr_content.push(inner_ch);
+                            }
+                            '}' => {
+                                brace_count -= 1;
+                                if brace_count == 0 {
+                                    break;
+                                }
+                                expr_content.push(inner_ch);
+                            }
+                            _ => {
+                                expr_content.push(inner_ch);
+                            }
                         }
-                        expr_str.push(inner_ch);
-                    } else {
-                        expr_str.push(inner_ch);
+                    }
+                    
+                    if brace_count != 0 {
+                        return Err(ParseError::InvalidSyntax {
+                            message: "Unmatched braces in f-string".to_string(),
+                        });
+                    }
+                    
+                    // For now, we'll create a simple parser for the expression content
+                    // In a full implementation, we would need to parse the expression properly
+                    // But for now, we'll just treat it as an identifier
+                    let expr_content = expr_content.trim();
+                    if !expr_content.is_empty() {
+                        // Create a temporary parser for the expression
+                        // This is a simplified approach - in a real implementation we'd need a better solution
+                        let expr = if expr_content.contains('.') {
+                            // Handle attribute access like self.name
+                            let parts: Vec<&str> = expr_content.split('.').collect();
+                            if parts.len() == 2 {
+                                Expr::Attribute {
+                                    object: Box::new(Expr::Identifier(parts[0].to_string())),
+                                    name: parts[1].to_string(),
+                                }
+                            } else {
+                                // For more complex cases, fall back to identifier
+                                Expr::Identifier(expr_content.to_string())
+                            }
+                        } else {
+                            Expr::Identifier(expr_content.to_string())
+                        };
+                        
+                        parts.push(crate::ast::FormatPart::Expression {
+                            expr,
+                            format_spec: None,
+                            conversion: None,
+                        });
                     }
                 }
-                
-                if brace_count != 0 {
-                    return Err(ParseError::InvalidSyntax {
-                        message: "Unmatched braces in f-string".to_string(),
-                    });
+                '}' => {
+                    // Check for escaped brace
+                    if chars.peek() == Some(&'}') {
+                        chars.next(); // consume the second }
+                        current.push('}');
+                    } else {
+                        return Err(ParseError::InvalidSyntax {
+                            message: "Single '}' in f-string".to_string(),
+                        });
+                    }
                 }
-                
-                // For now, we'll just store the expression string
-                // In a full implementation, we would parse it as an expression
-                parts.push(FormatPart::Expression {
-                    expr: Expr::Identifier(expr_str), // Placeholder
-                    format_spec: None,
-                    conversion: None,
-                });
-            } else {
-                current.push(ch);
+                _ => {
+                    current.push(ch);
+                }
             }
+            i += 1;
         }
         
-        // Flush remaining string part
+        // Flush any remaining string content
         if !current.is_empty() {
-            parts.push(FormatPart::String(current));
+            parts.push(crate::ast::FormatPart::String(current));
         }
         
         Ok(parts)

@@ -879,8 +879,26 @@ fn hasattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         _ => return Err(anyhow::anyhow!("hasattr() attribute name must be string")),
     };
     
-    // For now, we'll just check if the object has a method with this name
-    let has_attr = obj.get_method(attr_name).is_some();
+    // Try to check if the attribute exists on the object
+    let has_attr = match obj {
+        Value::Object { fields, class_methods, .. } => {
+            // First check fields
+            fields.as_ref().contains_key(attr_name) || class_methods.contains_key(attr_name)
+        },
+        Value::Class { methods, .. } => {
+            methods.contains_key(attr_name)
+        },
+        Value::Module(_, namespace) => {
+            namespace.contains_key(attr_name)
+        },
+        Value::Dict(dict) => {
+            dict.contains_key(attr_name)
+        },
+        _ => {
+            // For other objects, check if they have a method with this name
+            obj.get_method(attr_name).is_some()
+        }
+    };
     Ok(Value::Bool(has_attr))
 }
 

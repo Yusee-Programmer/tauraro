@@ -203,11 +203,32 @@ impl SuperBytecodeVM {
             // Execute instruction using computed GOTOs for maximum performance
             match self.execute_instruction_fast(frame_idx, opcode, arg1, arg2, arg3) {
                 Ok(Some(value)) => {
+                    println!("DEBUG: Function returned value: {:?}", value);
                     // A function has returned a value, pop the current frame
                     if let Some(returned_frame) = self.frames.pop() {
+                        println!("DEBUG: Popped frame: {}", returned_frame.code.name);
+                        // Check if this is an __init__ frame by looking at the function name
+                        let is_init_frame = returned_frame.code.name == "__init__" || returned_frame.code.name == "<fn:__init__>";
+                        println!("DEBUG: is_init_frame: {}", is_init_frame);
+
+                        // If this is an __init__ frame, we want to return the instance instead of None
+                        let return_value = if is_init_frame {
+                            // For __init__ methods, we should return the instance that was passed as self
+                            // The instance should be in the first local variable (self parameter)
+                            if !returned_frame.locals.is_empty() {
+                                returned_frame.locals[0].value.clone()
+                            } else {
+                                value // Fallback to the actual return value
+                            }
+                        } else {
+                            // For regular functions, return the actual return value
+                            println!("DEBUG: Returning actual value from {}: {:?}", returned_frame.code.name, value);
+                            value
+                        };
+                        
                         // If there are no more frames, return the value
                         if self.frames.is_empty() {
-                            return Ok(value);
+                            return Ok(return_value);
                         }
                         
                         // Update frame index to point to the calling frame
@@ -217,11 +238,18 @@ impl SuperBytecodeVM {
                         self.globals = returned_frame.globals;
                         
                         // Store the return value in the calling frame if return_register is set
+                        println!("DEBUG: returned_frame.return_register: {:?}", returned_frame.return_register);
                         if let Some((caller_frame_idx, result_reg)) = returned_frame.return_register {
+                            println!("DEBUG: Storing return value {:?} in caller frame {} register {}", return_value, caller_frame_idx, result_reg);
                             // Make sure the caller frame index is valid
                             if caller_frame_idx < self.frames.len() {
-                                self.frames[caller_frame_idx].set_register(result_reg, RcValue::new(value));
+                                self.frames[caller_frame_idx].set_register(result_reg, RcValue::new(return_value.clone()));
+                                println!("DEBUG: Stored return value successfully");
+                            } else {
+                                println!("DEBUG: ERROR: caller_frame_idx {} >= frames.len() {}", caller_frame_idx, self.frames.len());
                             }
+                        } else {
+                            println!("DEBUG: No return_register set for frame {}", returned_frame.code.name);
                         }
                         
                         // Continue execution with the calling frame
@@ -782,15 +810,16 @@ impl SuperBytecodeVM {
                 let func_reg = arg1 as usize;
                 let arg_count = arg2 as usize;
                 let result_reg = arg3 as usize;
-                
-                // Debug info removed
-                
+
+                println!("DEBUG: CallFunction - func_reg={}, arg_count={}, result_reg={}, frame_idx={}", func_reg, arg_count, result_reg, frame_idx);
+
                 if func_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("CallFunction: function register index {} out of bounds (len: {})", func_reg, self.frames[frame_idx].registers.len()));
                 }
-                
+
                 // Get the function value
                 let func_value = self.frames[frame_idx].registers[func_reg].value.clone();
+                println!("DEBUG: CallFunction - func_value type: {}", func_value.type_name());
                 // Debug info removed
                 
                 // Collect arguments from registers
@@ -877,13 +906,18 @@ impl SuperBytecodeVM {
                 };
                 
                 // Call the function using the fast path
+                println!("DEBUG: CallFunction - calling call_function_fast with frame_idx=Some({}), result_reg=Some({})", frame_idx, result_reg);
                 let result = self.call_function_fast(func_value, processed_args, kwargs, Some(frame_idx), Some(result_reg as u32))?;
-                
+
+                println!("DEBUG: CallFunction - call_function_fast returned: {:?}", result);
                 // If the function returned a value directly, store it in the result register
                 if !matches!(result, Value::None) {
+                    println!("DEBUG: CallFunction - storing non-None result in register {}", result_reg);
                     self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(result));
+                } else {
+                    println!("DEBUG: CallFunction - result was None, expecting frame return_register to handle it");
                 }
-                
+
                 Ok(None)
             }
             OpCode::BinaryDivRRFastInt => {
@@ -1698,8 +1732,8 @@ impl SuperBytecodeVM {
                                     method_args.extend(args);
                                     
                                     // Call the method through the VM and capture the return value
-                                    self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), None)?;
-                                    Value::None
+                                    // Pass object_reg as the result register so the return value is stored correctly
+                                    self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
                                 } else {
                                     println!("DEBUG: CallMethod - Method {} not found in parent_methods", method_name);
                                     // Print all available methods for debugging
@@ -1727,9 +1761,8 @@ impl SuperBytecodeVM {
                                     method_args.extend(args);
                                     
                                     // Call the method through the VM
-                                    // For BoundMethod calls, we don't store the result in a register, just return None
-                                    self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), None)?;
-                                    Value::None
+                                    // Pass object_reg as the result register so the return value is stored correctly
+                                    self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
                                 } else {
                                     return Err(anyhow!("Method '{}' not found in class methods", bound_method_name));
                                 }
@@ -1746,7 +1779,8 @@ impl SuperBytecodeVM {
                             method_args.extend(args.clone());
                             
                             // Call the method through the VM and capture the return value
-                            let method_result = self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), None)?;
+                            // Pass object_reg as the result register so the return value is stored correctly
+                            let method_result = self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
                             method_result
                         } else {
                             return Err(anyhow!("Method '{}' not found in class methods", method_name));
@@ -1770,9 +1804,19 @@ impl SuperBytecodeVM {
                         }
                     }
                 };
-                
+
                 // Store the result back in the object register (this is where the VM expects it)
-                self.frames[frame_idx].registers[object_reg] = RcValue::new(result_value);
+                // IMPORTANT: If result_value is None and the object may have been modified by the method,
+                // preserve the current object_reg value instead of overwriting with None
+                if matches!(result_value, Value::None) {
+                    // Method returned None - the object_reg may have been updated by StoreAttr during method execution
+                    // Don't overwrite it with None; keep the potentially modified object
+                    println!("DEBUG: CallMethod - Method returned None, preserving object_reg");
+                } else {
+                    // Method returned an actual value - store it
+                    println!("DEBUG: CallMethod - Method returned value, storing in object_reg");
+                    self.frames[frame_idx].registers[object_reg] = RcValue::new(result_value);
+                }
                 Ok(None)
             }
             OpCode::BinaryMulRR => {
@@ -2451,9 +2495,13 @@ impl SuperBytecodeVM {
                                 value.clone()
                             }
                         }
-                        // Then check methods
-                        else if let Some(method) = class_methods.get(&attr_name) {
-                            method.clone()
+                        // Then check methods - return as BoundMethod so self is bound
+                        else if let Some(_method) = class_methods.get(&attr_name) {
+                            // Create a BoundMethod to bind self to the method
+                            Value::BoundMethod {
+                                object: Box::new(object_value.clone()),
+                                method_name: attr_name.clone(),
+                            }
                         }
                         // Then check MRO for inherited methods
                         else {
@@ -2549,6 +2597,17 @@ impl SuperBytecodeVM {
                 
                 println!("DEBUG: StoreAttr - attr_name: {}, value_to_store: {:?}, object_type: {}", attr_name, value_to_store, object_type_name);
                 println!("DEBUG: StoreAttr - object value ID: {:p}", &self.frames[frame_idx].registers[object_reg].value);
+                // Check if we're in an __init__ frame
+                if self.frames[frame_idx].code.name == "__init__" || self.frames[frame_idx].code.name == "<fn:__init__>" {
+                    println!("DEBUG: StoreAttr called in __init__ frame");
+                    // Check if this is the self parameter (locals[0])
+                    if object_reg < self.frames[frame_idx].registers.len() {
+                        // Get the self instance from locals[0]
+                        if !self.frames[frame_idx].locals.is_empty() {
+                            println!("DEBUG: self instance from locals[0]: {:?}", self.frames[frame_idx].locals[0].value);
+                        }
+                    }
+                }
                 
                 // Check if we're dealing with an Object that might have descriptors
                 let is_object_with_fields = matches!(object_value, Value::Object { .. });
@@ -2589,8 +2648,32 @@ impl SuperBytecodeVM {
                     Value::Object { fields, .. } => {
                         // Store in fields using Rc::make_mut to get a mutable reference
                         println!("DEBUG: StoreAttr - Storing {} = {:?} in object fields", attr_name, value_to_store);
-                        Rc::make_mut(fields).insert(attr_name, value_to_store);
+                        Rc::make_mut(fields).insert(attr_name.clone(), value_to_store.clone());
                         println!("DEBUG: StoreAttr - Stored successfully");
+
+                        // CRITICAL FIX: Update locals[0] (self) with the modified object
+                        // This ensures that subsequent loads of 'self' see the updated fields
+                        // This applies to ALL methods, not just __init__
+                        if !self.frames[frame_idx].locals.is_empty() {
+                            // Update locals[0] with the modified object from the register
+                            let updated_object = self.frames[frame_idx].registers[object_reg].clone();
+                            self.frames[frame_idx].locals[0] = updated_object;
+                            println!("DEBUG: StoreAttr - Updated locals[0] (self) with modified object in {}", self.frames[frame_idx].code.name);
+                        }
+
+                        // For ALL methods (not just __init__), update the instance in the caller frame's register
+                        // This ensures that when methods modify self, the changes are visible to the caller
+                        if let Some((caller_frame_idx, result_reg)) = self.frames[frame_idx].return_register {
+                            if caller_frame_idx < self.frames.len() {
+                                // Update the instance in the caller frame's register with all modified fields
+                                println!("DEBUG: StoreAttr - Updating caller frame {} register {} with modified instance", caller_frame_idx, result_reg);
+                                // Clone the entire modified object from current frame to caller frame
+                                let modified_object = self.frames[frame_idx].registers[object_reg].clone();
+                                self.frames[caller_frame_idx].registers[result_reg as usize] = modified_object;
+                                println!("DEBUG: StoreAttr - Successfully updated caller frame's object register");
+                            }
+                        }
+
                 // Let's verify that the value was actually stored
                 if let Value::Object { fields, .. } = &self.frames[frame_idx].registers[object_reg].value {
                     println!("DEBUG: StoreAttr - After storing, object now has {} fields: {:?}", fields.len(), fields.as_ref().keys().collect::<Vec<_>>());
@@ -2751,14 +2834,18 @@ impl SuperBytecodeVM {
                         Ok(generator_value)
                     } else {
                         // For regular functions, create a new frame for the function call
+                        println!("DEBUG: Closure - creating frame for function {}, frame_idx={:?}, result_reg={:?}", name, frame_idx, result_reg);
                         let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
                         let builtins_values: HashMap<String, Value> = self.builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
-                        
+
                         let mut frame = Frame::new_function_frame(*code_obj, globals_values, builtins_values, args, kwargs);
-                        
+
                         // Set the return register information if provided
                         if let (Some(caller_frame_idx), Some(result_reg)) = (frame_idx, result_reg) {
+                            println!("DEBUG: Closure - setting return_register to ({}, {})", caller_frame_idx, result_reg);
                             frame.return_register = Some((caller_frame_idx, result_reg));
+                        } else {
+                            println!("DEBUG: Closure - NOT setting return_register, frame_idx={:?}, result_reg={:?}", frame_idx, result_reg);
                         }
                         
                         self.frames.push(frame);
@@ -2792,17 +2879,20 @@ impl SuperBytecodeVM {
                             let mut init_args = vec![instance.clone()];
                             init_args.extend(args.clone());
                             func(init_args)?;
+                            // For builtin functions, we can return the instance directly
+                            return Ok(instance);
                         },
                         Value::NativeFunction(func) => {
                             let mut init_args = vec![instance.clone()];
                             init_args.extend(args.clone());
                             func(init_args)?;
+                            // For native functions, we can return the instance directly
+                            return Ok(instance);
                         },
                         Value::Closure { name: method_name, params, body: _, captured_scope: _, docstring: _, compiled_code } => {
                             // For user-defined __init__ methods, we need to call them in a way that
                             // ensures modifications to the instance are visible
                             if let Some(code_obj) = compiled_code {
-                                // Create a new frame for the __init__ method call
                                 // Convert globals and builtins from RcValue to Value for Frame::new_function_frame
                                 let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
                                 let builtins_values: HashMap<String, Value> = self.builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
@@ -2814,23 +2904,27 @@ impl SuperBytecodeVM {
                                 // Create a new frame for the __init__ method
                                 let mut init_frame = Frame::new_function_frame((**code_obj).clone(), globals_values, builtins_values, init_args, HashMap::new());
                                 
+                                // Store the instance in the result register BEFORE creating the __init__ frame
+                                // This ensures that the instance is available for modification during __init__ execution
+                                if let (Some(caller_frame_idx), Some(result_reg)) = (frame_idx, result_reg) {
+                                    if caller_frame_idx < self.frames.len() {
+                                        self.frames[caller_frame_idx].set_register(result_reg, RcValue::new(instance.clone()));
+                                    }
+                                    init_frame.return_register = Some((caller_frame_idx, result_reg));
+                                }
+                                
                                 // Push the frame onto the stack
                                 self.frames.push(init_frame);
                                 
-                                // Execute the __init__ method
-                                self.run_frame()?;
-                                
-                                // Pop the frame (it's been removed by run_frame when it completed)
-                                // Note: run_frame removes the frame when it completes, so we don't need to pop it here
+                                // Return None to indicate that we've pushed a new frame and the main loop should handle it
+                                return Ok(Value::None);
                             }
                         },
                         _ => {},
                     }
                 }
 
-                // Return the object instance
-                // Note: In CPython, the __init__ method modifies the same instance that gets returned
-                // In our implementation, we need to ensure that modifications to the instance in __init__ are preserved
+                // Return the object instance for cases where there's no __init__ or __init__ is not handled above
                 Ok(instance)
             }
             Value::Object {
@@ -2864,14 +2958,34 @@ impl SuperBytecodeVM {
                             func(init_args)?;
                         },
                         Value::Closure { name: method_name, params, body: _, captured_scope: _, docstring: _, compiled_code } => {
-                            // For user-defined __init__ methods, we need to call them directly
-                            // to ensure that modifications to the instance are visible
+                            // For user-defined __init__ methods, we need to call them in a way that
+                            // ensures modifications to the instance are visible
                             if let Some(code_obj) = compiled_code {
+                                // Convert globals and builtins from RcValue to Value for Frame::new_function_frame
+                                let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+                                let builtins_values: HashMap<String, Value> = self.builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+
                                 // Create arguments with self as the first argument
                                 let mut init_args = vec![instance.clone()];
                                 init_args.extend(args.clone());
-                                // Execute the __init__ method directly in the current frame context
-                                self.call_function_fast(init_method.clone(), init_args, HashMap::new(), frame_idx, None)?;
+
+                                // Create a new frame for the __init__ method
+                                let mut init_frame = Frame::new_function_frame((**code_obj).clone(), globals_values, builtins_values, init_args, HashMap::new());
+
+                                // Store the instance in the result register BEFORE creating the __init__ frame
+                                // This ensures that the instance is available for modification during __init__ execution
+                                if let (Some(caller_frame_idx), Some(result_reg)) = (frame_idx, result_reg) {
+                                    if caller_frame_idx < self.frames.len() {
+                                        self.frames[caller_frame_idx].set_register(result_reg, RcValue::new(instance.clone()));
+                                    }
+                                    init_frame.return_register = Some((caller_frame_idx, result_reg));
+                                }
+
+                                // Push the frame onto the stack
+                                self.frames.push(init_frame);
+
+                                // Return None to indicate that we've pushed a new frame and the main loop should handle it
+                                return Ok(Value::None);
                             }
                         },
                         _ => {},
@@ -2882,19 +2996,23 @@ impl SuperBytecodeVM {
                 Ok(instance)
             }
             Value::BoundMethod { object, method_name } => {
+                println!("DEBUG: BoundMethod handling - method_name={}, frame_idx={:?}, result_reg={:?}", method_name, frame_idx, result_reg);
                 // Handle bound method calls
                 // Get the method from the object
                 match object.as_ref() {
                     Value::Object { class_name, class_methods, mro, .. } => {
+                        println!("DEBUG: BoundMethod - found Object with class_name={}", class_name);
                         // First try to find the method in class_methods (normal case)
                         if let Some(method) = class_methods.get(&method_name) {
+                            println!("DEBUG: BoundMethod - found method {} in class_methods", method_name);
                             // For bound methods, we need to call the method with the object as the first argument (self)
                             // But we need to do this through the VM properly
-                            
+
                             // Create arguments with self as the first argument
                             let mut method_args = vec![*object.clone()];
                             method_args.extend(args);
-                            
+
+                            println!("DEBUG: BoundMethod - calling call_function_fast with frame_idx={:?}, result_reg={:?}", frame_idx, result_reg);
                             // Call the method through the VM
                             return self.call_function_fast(method.clone(), method_args, kwargs, frame_idx, result_reg);
                         } else {
