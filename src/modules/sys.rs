@@ -8,7 +8,6 @@ use std::env;
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::fs;
 // Import HPList
 use crate::modules::hplist::HPList;
 
@@ -239,7 +238,7 @@ fn create_builtin_modules() -> Value {
 
 // SYS Functions Implementation
 
-pub fn sys_exit(args: Vec<Value>) -> Result<Value> {
+pub fn sys_exit(args: Vec<Value>) -> anyhow::Result<Value> {
     let exit_code = if args.is_empty() {
         0
     } else {
@@ -253,7 +252,7 @@ pub fn sys_exit(args: Vec<Value>) -> Result<Value> {
     std::process::exit(exit_code);
 }
 
-pub fn sys_getrefcount(args: Vec<Value>) -> Result<Value> {
+pub fn sys_getrefcount(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow::anyhow!("getrefcount() takes exactly one argument"));
     }
@@ -263,7 +262,7 @@ pub fn sys_getrefcount(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Int(1))
 }
 
-pub fn sys_getsizeof(args: Vec<Value>) -> Result<Value> {
+pub fn sys_getsizeof(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow::anyhow!("getsizeof() takes exactly one argument"));
     }
@@ -283,7 +282,7 @@ pub fn sys_getsizeof(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Int(size))
 }
 
-pub fn sys_intern(args: Vec<Value>) -> Result<Value> {
+pub fn sys_intern(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow::anyhow!("intern() takes exactly one argument"));
     }
@@ -348,7 +347,7 @@ pub fn get_recursion_limit() -> i64 {
 }
 
 /// sys.path_append function - adds a path to sys.path and module system
-fn sys_path_append(args: Vec<Value>) -> Result<Value> {
+fn sys_path_append(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow::anyhow!("path_append() takes exactly one argument"));
     }
@@ -379,7 +378,7 @@ fn sys_path_append(args: Vec<Value>) -> Result<Value> {
 }
 
 /// sys.path.insert(index, path) - Insert a directory at the given index in sys.path
-pub fn sys_path_insert(args: Vec<Value>) -> Result<Value> {
+pub fn sys_path_insert(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
         return Err(anyhow::anyhow!("path_insert() takes exactly two arguments"));
     }
@@ -422,7 +421,7 @@ pub fn sys_path_insert(args: Vec<Value>) -> Result<Value> {
 }
 
 /// sys.path.remove(path) - Remove the first occurrence of path from sys.path
-pub fn sys_path_remove(args: Vec<Value>) -> Result<Value> {
+pub fn sys_path_remove(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow::anyhow!("path_remove() takes exactly one argument"));
     }

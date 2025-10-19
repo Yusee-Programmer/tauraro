@@ -4,6 +4,7 @@
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 // Import HPList
 use crate::modules::hplist::HPList;
@@ -72,7 +73,7 @@ fn itertools_count(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "count".to_string(),
-        fields: count_obj,
+        fields: Rc::new(count_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("count".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["count".to_string(), "object".to_string()]),
@@ -111,7 +112,7 @@ fn itertools_cycle(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "cycle".to_string(),
-        fields: cycle_obj,
+        fields: Rc::new(cycle_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("cycle".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["cycle".to_string(), "object".to_string()]),
@@ -156,7 +157,7 @@ fn itertools_repeat(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "repeat".to_string(),
-        fields: repeat_obj,
+        fields: Rc::new(repeat_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("repeat".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["repeat".to_string(), "object".to_string()]),

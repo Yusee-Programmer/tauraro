@@ -1,6 +1,9 @@
-//! Import/export, module loading instructions
+//! Module operations for the bytecode VM
 
-/// Module operations
 pub struct ModuleOps;
 
-// Module-related opcodes are already defined in instructions.rs
+impl ModuleOps {
+    pub fn new() -> Self {
+        Self
+    }
+}

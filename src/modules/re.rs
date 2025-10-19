@@ -4,6 +4,7 @@
 use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
+use std::rc::Rc;
 use regex::{Regex, RegexBuilder, Match};
 use lazy_static::lazy_static;
 use std::sync::Mutex;
@@ -138,7 +139,7 @@ fn re_compile(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "Pattern".to_string(),
-        fields: pattern_obj,
+        fields: Rc::new(pattern_obj), // Wrap with Rc::new
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Pattern".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Pattern".to_string(), "object".to_string()]),
@@ -503,12 +504,8 @@ fn pattern_split(_args: Vec<Value>) -> Result<Value> {
 }
 
 /// Create a match object from a regex Match
-fn create_match_object_from_match(regex: &Regex, string: &str, mat: Match) -> Result<Value> {
+fn create_match_object_from_match(_regex: &Regex, _string: &str, _mat: Match) -> Result<Value> {
     let mut match_obj = HashMap::new();
-    match_obj.insert("string".to_string(), Value::Str(string.to_string()));
-    match_obj.insert("re".to_string(), Value::Str(regex.as_str().to_string()));
-    match_obj.insert("pos".to_string(), Value::Int(mat.start() as i64));
-    match_obj.insert("endpos".to_string(), Value::Int(mat.end() as i64));
     match_obj.insert("group".to_string(), Value::NativeFunction(match_group));
     match_obj.insert("groups".to_string(), Value::NativeFunction(match_groups));
     match_obj.insert("groupdict".to_string(), Value::NativeFunction(match_groupdict));
@@ -516,10 +513,9 @@ fn create_match_object_from_match(regex: &Regex, string: &str, mat: Match) -> Re
     match_obj.insert("end".to_string(), Value::NativeFunction(match_end));
     match_obj.insert("span".to_string(), Value::NativeFunction(match_span));
     
-    // Create a simple object structure (simplified for this implementation)
     Ok(Value::Object {
         class_name: "Match".to_string(),
-        fields: match_obj,
+        fields: Rc::new(match_obj), // Wrap with Rc::new
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Match".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Match".to_string(), "object".to_string()]),
@@ -542,7 +538,7 @@ fn create_match_object(pattern: &str, string: &str, start: usize) -> Result<Valu
     
     Ok(Value::Object {
         class_name: "Match".to_string(),
-        fields: match_obj,
+        fields: Rc::new(match_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Match".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Match".to_string(), "object".to_string()]),

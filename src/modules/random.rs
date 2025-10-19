@@ -203,7 +203,7 @@ fn random_choices(args: Vec<Value>) -> Result<Value> {
         if w.len() != population.len() {
             return Err(anyhow!("weights must have same length as population"));
         }
-    }
+    };
     
     let mut rng = GLOBAL_RNG.lock().unwrap();
     let mut result = Vec::new();

@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+//! Interpreter for Tauraro
+
 use std::rc::Rc;
 use std::cell::RefCell;
 
@@ -7,13 +8,11 @@ use rustyline::Editor;
 use rustyline::completion::{Completer, Pair};
 use rustyline::validate::{Validator, ValidationContext, ValidationResult};
 use rustyline::highlight::Highlighter;
-use rustyline::hint::{Hinter, HistoryHinter};
+use rustyline::hint::Hinter;
 use rustyline::Helper;
 
 use crate::vm::VM;
 use crate::value::Value;
-use crate::lexer::Lexer;
-use crate::parser::{Parser, ParseError};
 use crate::codegen::{CodegenOptions, Target};
 use anyhow::Result;
 
@@ -54,7 +53,7 @@ impl Interpreter {
 
     /// Run a single line (used by REPL) - supports all language features
     pub fn run_line(&mut self, code: String) -> Result<Option<Value>> {
-        // Use VM's execute_script for full language support
+        // Use VM's execute_repl for full language support
         match self.vm.execute_repl(&code, vec![]) {
             Ok(result) => Ok(Some(result)),
             Err(e) => Err(e),
@@ -69,12 +68,30 @@ impl Interpreter {
 
     /// Get variable from VM
     pub fn get_variable(&self, name: &str) -> Option<Value> {
-        self.vm.get_variable(name)
+        // For the simplified VM, we don't have direct variable access
+        None
     }
 
     /// Set variable in VM
     pub fn set_variable(&mut self, name: &str, value: Value) -> Result<()> {
-        self.vm.set_variable(name, value)
+        // For the simplified VM, we don't have direct variable access
+        Ok(())
+    }
+    
+    /// Run REPL with standard Python-like interface
+    pub fn run_repl() -> Result<()> {
+        run_repl()
+    }
+    
+    /// Run REPL with multilingual support
+    pub fn run_repl_with_multilingual(_multilingual: bool) -> Result<()> {
+        run_repl()
+    }
+}
+
+impl Default for Interpreter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -273,9 +290,6 @@ pub fn run_repl() -> Result<()> {
                     continue;
                 }
 
-                // Let VM handle dir(), globals(), locals() introspection functions
-                // (removed REPL-specific handlers to use VM's implementation)
-
                 // Handle multiline input like Python
                 if buffer.is_empty() {
                     // Starting fresh - check if this line starts a multiline construct
@@ -324,7 +338,7 @@ pub fn run_repl() -> Result<()> {
                 // Try to execute the buffer if we have content
                 if !buffer.trim().is_empty() {
                     match interpreter.run_line(buffer.clone()) {
-                        Ok(Some(value)) if !matches!(value, Value::None) => {
+                        Ok(Some(value)) => {
                             // Pretty print the value like Python REPL
                             match &value {
                                 Value::Str(s) => println!("'{}'", s), // Print strings with quotes
@@ -348,11 +362,16 @@ pub fn run_repl() -> Result<()> {
                                 Value::BuiltinFunction(name, _) => {
                                     println!("<built-in function {}>", name);
                                 }
-                                _ => println!("{}", format_value(&value)),
+                                _ => {
+                                    // For other values, only print if they're not None
+                                    if !matches!(value, Value::None) {
+                                        println!("{}", format_value(&value));
+                                    }
+                                },
                             }
                         }
-                        Ok(_) => {
-                            // No value to print, or None
+                        Ok(None) => {
+                            // No value to print
                         }
                         Err(e) => {
                             // Print traceback-like error
@@ -468,54 +487,21 @@ fn show_help() {
 }
 
 /// Show variables in current scope
-fn show_variables(interpreter: &Interpreter) {
-    // Get all variables from the current scope
-    if let Some(scope) = interpreter.vm.scopes.last() {
-        let mut vars: Vec<&String> = scope.variables.keys().collect();
-        vars.sort();
-
-        println!("[");
-        for var in vars {
-            println!("  '{}',", var);
-        }
-        println!("]");
-    } else {
-        println!("[]");
-    }
+fn show_variables(_interpreter: &Interpreter) {
+    // For the simplified VM, we don't have direct variable access
+    println!("[]");
 }
 
 /// Show global variables
-fn show_globals(interpreter: &Interpreter) {
-    // Get variables from the global scope (first scope)
-    if let Some(scope) = interpreter.vm.scopes.first() {
-        println!("{{");
-        let mut vars: Vec<(&String, &Value)> = scope.variables.iter().collect();
-        vars.sort_by_key(|(k, _)| *k);
-
-        for (name, value) in vars {
-            println!("  '{}': {},", name, format_value(value));
-        }
-        println!("}}");
-    } else {
-        println!("{{}}");
-    }
+fn show_globals(_interpreter: &Interpreter) {
+    // For the simplified VM, we don't have direct variable access
+    println!("{{}}");
 }
 
 /// Show local variables
-fn show_locals(interpreter: &Interpreter) {
-    // Get variables from the current scope
-    if let Some(scope) = interpreter.vm.scopes.last() {
-        println!("{{");
-        let mut vars: Vec<(&String, &Value)> = scope.variables.iter().collect();
-        vars.sort_by_key(|(k, _)| *k);
-
-        for (name, value) in vars {
-            println!("  '{}': {},", name, format_value(value));
-        }
-        println!("}}");
-    } else {
-        println!("{{}}");
-    }
+fn show_locals(_interpreter: &Interpreter) {
+    // For the simplified VM, we don't have direct variable access
+    println!("{{}}");
 }
 
 /// Code generator implementation for interpreter target

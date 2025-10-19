@@ -1,28 +1,26 @@
-//! Module cache system for built-in Rust modules
-//! This module handles caching of compiled built-in modules to improve compilation performance
+//! Module cache for Tauraro
 
-use std::path::{Path, PathBuf};
-use std::fs;
 use std::collections::HashMap;
-use anyhow::{Result, anyhow};
-use std::time::SystemTime;
-use std::fmt;
+use std::path::PathBuf;
+use anyhow::Result;
+use std::fs;
 
-/// Cache manager for built-in modules
-#[derive(Debug, Clone)]
 pub struct ModuleCache {
-    /// Path to the cache directory
+    cache: HashMap<String, CachedModule>,
     cache_dir: PathBuf,
-    /// Map of module names to their cached object file paths
-    cached_modules: HashMap<String, PathBuf>,
-    /// Map of module names to their last compilation timestamps
-    module_timestamps: HashMap<String, SystemTime>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CachedModule {
+    pub name: String,
+    pub path: PathBuf,
+    pub compiled_code: Vec<u8>,
+    pub timestamp: std::time::SystemTime,
 }
 
 impl ModuleCache {
-    /// Create a new module cache manager
     pub fn new() -> Result<Self> {
-        let cache_dir = PathBuf::from("build").join("built-ins");
+        let cache_dir = PathBuf::from(".tauraro_cache");
         
         // Create cache directory if it doesn't exist
         if !cache_dir.exists() {
@@ -30,92 +28,79 @@ impl ModuleCache {
         }
         
         Ok(Self {
+            cache: HashMap::new(),
             cache_dir,
-            cached_modules: HashMap::new(),
-            module_timestamps: HashMap::new(),
         })
     }
     
-    /// Get the cache directory path
-    pub fn cache_dir(&self) -> &Path {
-        &self.cache_dir
+    pub fn get(&self, module_name: &str) -> Option<&CachedModule> {
+        self.cache.get(module_name)
     }
     
-    /// Check if a module is cached
-    pub fn is_module_cached(&self, module_name: &str) -> bool {
-        self.cached_modules.contains_key(module_name)
+    pub fn insert(&mut self, module_name: String, module: CachedModule) {
+        self.cache.insert(module_name, module);
     }
     
-    /// Get the cached object file path for a module
-    pub fn get_cached_module_path(&self, module_name: &str) -> Option<&PathBuf> {
-        self.cached_modules.get(module_name)
+    pub fn remove(&mut self, module_name: &str) -> Option<CachedModule> {
+        self.cache.remove(module_name)
     }
     
-    /// Cache a compiled module object file
-    pub fn cache_module(&mut self, module_name: &str, obj_path: PathBuf) -> Result<()> {
-        self.cached_modules.insert(module_name.to_string(), obj_path);
-        self.module_timestamps.insert(module_name.to_string(), SystemTime::now());
-        Ok(())
+    pub fn contains(&self, module_name: &str) -> bool {
+        self.cache.contains_key(module_name)
     }
     
-    /// Mark a module as processed (even if we don't have a real object file)
-    pub fn mark_module_processed(&mut self, module_name: &str) -> Result<()> {
-        let obj_path = self.get_module_obj_path(module_name);
-        self.cached_modules.insert(module_name.to_string(), obj_path);
-        self.module_timestamps.insert(module_name.to_string(), SystemTime::now());
-        Ok(())
-    }
-    
-    /// Check if a built-in module should be cached
-    pub fn should_cache_module(&self, module_name: &str) -> bool {
-        // List of built-in modules that should be cached
-        const BUILTIN_MODULES: &[&str] = &[
-            "os", "sys", "threading", "time", "datetime", "io", "math", "random", "re", "json",
-            "functools", "itertools", "collections", "copy", "pickle", "base64", "hashlib",
-            "urllib", "csv", "logging", "unittest", "socket", "asyncio", "httptools",
-            "websockets", "httpx", "memory", "gc", "exceptions"
-        ];
-        
-        BUILTIN_MODULES.contains(&module_name)
-    }
-    
-    /// Get the object file path for a cached module
-    pub fn get_module_obj_path(&self, module_name: &str) -> PathBuf {
-        self.cache_dir.join(format!("{}_module.o", module_name))
-    }
-    
-    /// Clear the cache
     pub fn clear_cache(&self) -> Result<()> {
-        if self.cache_dir.exists() {
-            fs::remove_dir_all(&self.cache_dir)?;
-            fs::create_dir_all(&self.cache_dir)?;
+        // Remove all files in cache directory
+        for entry in fs::read_dir(&self.cache_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                fs::remove_file(entry.path())?;
+            }
         }
         Ok(())
     }
     
-    /// Check if cache directory exists
-    pub fn cache_exists(&self) -> bool {
-        self.cache_dir.exists()
-    }
-    
-    /// Get the last compilation timestamp for a module
-    pub fn get_module_timestamp(&self, module_name: &str) -> Option<SystemTime> {
-        self.module_timestamps.get(module_name).copied()
-    }
-    
-    /// Update the compilation timestamp for a module
-    pub fn update_module_timestamp(&mut self, module_name: &str) -> Result<()> {
-        self.module_timestamps.insert(module_name.to_string(), SystemTime::now());
+    pub fn save_module(&self, module_name: &str, compiled_code: &[u8]) -> Result<()> {
+        let cache_file = self.cache_dir.join(format!("{}.tcache", module_name));
+        fs::write(cache_file, compiled_code)?;
         Ok(())
+    }
+    
+    pub fn load_module(&self, module_name: &str) -> Result<Option<Vec<u8>>> {
+        let cache_file = self.cache_dir.join(format!("{}.tcache", module_name));
+        if cache_file.exists() {
+            let compiled_code = fs::read(cache_file)?;
+            Ok(Some(compiled_code))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    pub fn is_module_outdated(&self, module_name: &str, source_path: &PathBuf) -> Result<bool> {
+        let cache_file = self.cache_dir.join(format!("{}.tcache", module_name));
+        
+        if !cache_file.exists() {
+            return Ok(true);
+        }
+        
+        let source_modified = fs::metadata(source_path)?.modified()?;
+        let cache_modified = fs::metadata(cache_file)?.modified()?;
+        
+        Ok(source_modified > cache_modified)
     }
 }
 
-impl Default for ModuleCache {
-    fn default() -> Self {
-        Self::new().unwrap_or_else(|_| Self {
-            cache_dir: PathBuf::from(".cache"),
-            cached_modules: HashMap::new(),
-            module_timestamps: HashMap::new(),
-        })
+impl CachedModule {
+    pub fn new(name: String, path: PathBuf, compiled_code: Vec<u8>) -> Self {
+        Self {
+            name,
+            path,
+            compiled_code,
+            timestamp: std::time::SystemTime::now(),
+        }
+    }
+    
+    pub fn age(&self) -> Result<std::time::Duration> {
+        self.timestamp.elapsed().map_err(|e| anyhow::anyhow!("Failed to calculate module age: {}", e))
     }
 }

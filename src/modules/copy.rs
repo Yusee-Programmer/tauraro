@@ -26,7 +26,7 @@ fn copy_error_str(args: Vec<Value>) -> Result<Value> {
     }
     
     if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(message)) = fields.get("message") {
+        if let Some(Value::Str(message)) = fields.as_ref().get("message") {
             return Ok(Value::Str(message.clone()));
         }
     }
@@ -149,12 +149,12 @@ fn deepcopy_recursive(obj: &Value, memo: &mut HashMap<String, Value>) -> Result<
         },
         Value::Object { class_name, fields, base_object, mro, .. } => {
             let mut new_fields = HashMap::new();
-            for (key, value) in fields {
+            for (key, value) in fields.as_ref() {
                 new_fields.insert(key.clone(), deepcopy_recursive(value, memo)?);
             }
             Ok(Value::Object {
                 class_name: class_name.clone(),
-                fields: new_fields,
+                fields: std::rc::Rc::new(new_fields),
                 class_methods: HashMap::new(),
                 base_object: base_object.clone(),
                 mro: mro.clone(),
@@ -184,7 +184,7 @@ fn copy_error(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "Error".to_string(),
-        fields: error_obj,
+        fields: std::rc::Rc::new(error_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Error".to_string(), vec!["Exception".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Error".to_string(), "Exception".to_string(), "object".to_string()]),

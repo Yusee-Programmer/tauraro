@@ -2,9 +2,10 @@
 /// Similar to Python's collections module
 
 use crate::value::Value;
-use anyhow::{Result, anyhow};
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 use std::fmt;
+use anyhow::Result;
 
 /// High-performance list implementation that maintains Python list semantics
 /// Uses VecDeque internally for better performance with insertions/deletions
@@ -61,7 +62,7 @@ impl HighPerfList {
     /// Set an element at the specified index
     pub fn set(&mut self, index: isize, value: Value) -> Result<()> {
         let idx = self.normalize_index(index)
-            .ok_or_else(|| anyhow!("list assignment index out of range"))?;
+            .ok_or_else(|| anyhow::anyhow!("list assignment index out of range"))?;
         *self.data.get_mut(idx).unwrap() = value;
         Ok(())
     }
@@ -103,14 +104,14 @@ impl HighPerfList {
     /// Remove and return the element at the specified index
     pub fn pop_at(&mut self, index: isize) -> Result<Value> {
         let idx = self.normalize_index(index)
-            .ok_or_else(|| anyhow!("pop index out of range"))?;
+            .ok_or_else(|| anyhow::anyhow!("pop index out of range"))?;
         Ok(self.data.remove(idx).unwrap())
     }
 
     /// Remove the first occurrence of a value
     pub fn remove(&mut self, value: &Value) -> Result<()> {
         let pos = self.data.iter().position(|x| x == value)
-            .ok_or_else(|| anyhow!("list.remove(x): x not in list"))?;
+            .ok_or_else(|| anyhow::anyhow!("list.remove(x): x not in list"))?;
         self.data.remove(pos);
         Ok(())
     }
@@ -118,7 +119,7 @@ impl HighPerfList {
     /// Get the index of the first occurrence of a value
     pub fn index(&self, value: &Value) -> Result<usize> {
         self.data.iter().position(|x| x == value)
-            .ok_or_else(|| anyhow!("list.index(x): x not in list"))
+            .ok_or_else(|| anyhow::anyhow!("list.index(x): x not in list"))
     }
 
     /// Count the occurrences of a value
@@ -208,13 +209,13 @@ pub fn create_collections_module() -> Value {
         if args.is_empty() {
             Ok(Value::Object {
                 class_name: "HighPerfList".to_string(),
-                fields: HashMap::new(),
+                fields: Rc::new(HashMap::new()),
                 class_methods: HashMap::new(),
                 base_object: crate::base_object::BaseObject::new("HighPerfList".to_string(), vec!["object".to_string()]),
                 mro: crate::base_object::MRO::from_linearization(vec!["HighPerfList".to_string(), "object".to_string()]),
             })
         } else {
-            Err(anyhow!("HighPerfList constructor not implemented with arguments"))
+            Err(anyhow::anyhow!("HighPerfList constructor not implemented with arguments"))
         }
     }));
     

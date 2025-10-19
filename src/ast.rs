@@ -108,6 +108,10 @@ pub enum Statement {
         index: Expr,
         value: Expr,
     },
+    TupleUnpack {
+        targets: Vec<String>,
+        value: Expr,
+    },
     TypeAlias {
         name: String,
         type_def: Type,

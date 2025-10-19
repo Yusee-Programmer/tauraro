@@ -1,723 +1,922 @@
-//! Built-in Functions and Module Registry for TauraroLang
-//! 
-//! This module serves as the central hub for all built-in functions and modules in TauraroLang.
+//! Built-in functions and values for Tauraro
 
 use crate::value::Value;
-use crate::modules;
-use crate::ast::*;
-use crate::base_object::BaseObject;
-use anyhow::{Result, anyhow};
 use std::collections::HashMap;
-use std::io::Write;
-
-// Import HPList
+use std::rc::Rc;
 use crate::modules::hplist::HPList;
-
-/// Type alias for built-in function signatures
-pub type BuiltinFunction = fn(Vec<Value>) -> Result<Value>;
-
-/// Registry for all built-in functions and modules
-pub struct BuiltinRegistry {
-    functions: HashMap<String, BuiltinFunction>,
-    modules: HashMap<String, fn() -> Value>,
-}
-
-impl BuiltinRegistry {
-    pub fn new() -> Self {
-        let mut registry = Self {
-            functions: HashMap::new(),
-            modules: HashMap::new(),
-        };
-        
-        registry.register_core_functions();
-        registry.register_type_functions();
-        registry.register_builtin_modules();
-        
-        registry
-    }
-    
-    pub fn get_functions(&self) -> HashMap<String, Value> {
-        self.functions.iter()
-            .map(|(name, func)| {
-                (name.clone(), Value::BuiltinFunction(name.clone(), *func))
-            })
-            .collect()
-    }
-    
-    pub fn get_module(&self, name: &str) -> Option<Value> {
-        self.modules.get(name).map(|create_fn| create_fn())
-    }
-    
-    pub fn is_builtin_module(&self, name: &str) -> bool {
-        self.modules.contains_key(name)
-    }
-    
-    pub fn get_builtin_module_names(&self) -> Vec<String> {
-        self.modules.keys().cloned().collect()
-    }
-    
-    fn register_core_functions(&mut self) {
-        // Core I/O functions
-        self.functions.insert("print".to_string(), builtin_print);
-        self.functions.insert("input".to_string(), builtin_input);
-        
-        // Core introspection functions
-        self.functions.insert("len".to_string(), builtin_len);
-        self.functions.insert("type".to_string(), builtin_type);
-        self.functions.insert("id".to_string(), builtin_id);
-        self.functions.insert("hash".to_string(), builtin_hash);
-        self.functions.insert("repr".to_string(), builtin_repr);
-        self.functions.insert("dir".to_string(), builtin_dir);
-        self.functions.insert("globals".to_string(), builtin_globals);
-        self.functions.insert("locals".to_string(), builtin_locals);
-        self.functions.insert("vars".to_string(), builtin_vars);
-        self.functions.insert("help".to_string(), builtin_help);
-        
-        // Core utility functions
-        self.functions.insert("callable".to_string(), builtin_callable);
-        self.functions.insert("iter".to_string(), builtin_iter);
-        self.functions.insert("next".to_string(), builtin_next);
-        self.functions.insert("range".to_string(), builtin_range);
-
-        // String and numeric functions
-        self.functions.insert("ord".to_string(), builtin_ord);
-        self.functions.insert("chr".to_string(), builtin_chr);
-        self.functions.insert("abs".to_string(), builtin_abs);
-        self.functions.insert("sum".to_string(), builtin_sum);
-        self.functions.insert("min".to_string(), builtin_min);
-        self.functions.insert("max".to_string(), builtin_max);
-        self.functions.insert("round".to_string(), builtin_round);
-        self.functions.insert("pow".to_string(), builtin_pow);
-        self.functions.insert("divmod".to_string(), builtin_divmod);
-
-        // Sequence and iteration functions
-        self.functions.insert("all".to_string(), builtin_all);
-        self.functions.insert("any".to_string(), builtin_any);
-        self.functions.insert("enumerate".to_string(), builtin_enumerate);
-        self.functions.insert("filter".to_string(), builtin_filter);
-        self.functions.insert("map".to_string(), builtin_map);
-        self.functions.insert("zip".to_string(), builtin_zip);
-        self.functions.insert("sorted".to_string(), builtin_sorted);
-        self.functions.insert("reversed".to_string(), builtin_reversed);
-
-        // Other utility functions
-        self.functions.insert("isinstance".to_string(), builtin_isinstance);
-        self.functions.insert("issubclass".to_string(), builtin_issubclass);
-        self.functions.insert("hasattr".to_string(), builtin_hasattr);
-        self.functions.insert("getattr".to_string(), builtin_getattr);
-        self.functions.insert("setattr".to_string(), builtin_setattr);
-        self.functions.insert("delattr".to_string(), builtin_delattr);
-        self.functions.insert("ascii".to_string(), builtin_ascii);
-        self.functions.insert("bin".to_string(), builtin_bin);
-        self.functions.insert("hex".to_string(), builtin_hex);
-        self.functions.insert("oct".to_string(), builtin_oct);
-        self.functions.insert("format".to_string(), builtin_format);
-        self.functions.insert("open".to_string(), builtin_open);
-        
-        // Advanced iteration functions (temporary placeholders)
-        self.functions.insert("aiter".to_string(), |_args| Ok(Value::None));
-        self.functions.insert("anext".to_string(), |_args| Ok(Value::None));
-        
-        // Special object creation (temporary placeholders)
-        self.functions.insert("object".to_string(), |_args| Ok(Value::Object {
-            class_name: "object".to_string(),
-            fields: HashMap::new(),
-            class_methods: HashMap::new(),
-            base_object: crate::base_object::BaseObject::new("object".to_string(), vec![]),
-            mro: crate::base_object::MRO::from_linearization(vec!["object".to_string()]),
-        }));
-        self.functions.insert("super".to_string(), |_args| Ok(Value::Super("object".to_string(), "object".to_string(), None)));
-        self.functions.insert("memoryview".to_string(), |_args| Ok(Value::None));
-        self.functions.insert("slice".to_string(), builtin_slice);
-        
-        // Class and method decorators (temporary placeholders)
-        self.functions.insert("classmethod".to_string(), |args| Ok(if args.is_empty() { Value::None } else { args[0].clone() }));
-        self.functions.insert("staticmethod".to_string(), |args| Ok(if args.is_empty() { Value::None } else { args[0].clone() }));
-        self.functions.insert("property".to_string(), |args| Ok(if args.is_empty() { Value::None } else { args[0].clone() }));
-        
-        // Import system (temporary placeholder)
-        self.functions.insert("__import__".to_string(), |args| {
-            if args.is_empty() {
-                return Err(anyhow::anyhow!("__import__() missing required argument 'name'"));
-            }
-            match &args[0] {
-                Value::Str(module_name) => {
-                    if let Some(module) = get_builtin_module(module_name) {
-                        Ok(module)
-                    } else {
-                        Err(anyhow::anyhow!("No module named '{}'", module_name))
-                    }
-                }
-                _ => Err(anyhow::anyhow!("__import__() argument 1 must be str")),
-            }
-        });
-    }
-    
-    fn register_type_functions(&mut self) {
-        self.functions.insert("str".to_string(), builtin_str);
-        self.functions.insert("int".to_string(), builtin_int);
-        self.functions.insert("float".to_string(), builtin_float);
-        self.functions.insert("bool".to_string(), builtin_bool);
-        self.functions.insert("complex".to_string(), crate::builtins::builtin_complex);
-        self.functions.insert("bytes".to_string(), crate::builtins::builtin_bytes);
-        self.functions.insert("bytearray".to_string(), crate::builtins::builtin_bytearray);
-        self.functions.insert("list".to_string(), builtin_list);
-        self.functions.insert("tuple".to_string(), builtin_tuple);
-        self.functions.insert("dict".to_string(), builtin_dict);
-        self.functions.insert("set".to_string(), builtin_set);
-        self.functions.insert("frozenset".to_string(), builtin_frozenset);
-        self.functions.insert("range".to_string(), builtin_range);
-        self.functions.insert("memoryview".to_string(), builtin_memoryview);
-    }
-    
-    fn register_builtin_modules(&mut self) {
-        // Core system modules
-        self.modules.insert("sys".to_string(), modules::sys::create_sys_module);
-        self.modules.insert("os".to_string(), modules::os::create_os_module);
-        self.modules.insert("io".to_string(), modules::io::create_io_module);
-        
-        // Math and computation modules
-        self.modules.insert("math".to_string(), modules::math::create_math_module);
-        self.modules.insert("random".to_string(), modules::random::create_random_module);
-        
-        // Date and time modules
-        self.modules.insert("time".to_string(), modules::time::create_time_module);
-        self.modules.insert("datetime".to_string(), modules::datetime::create_datetime_module);
-        
-        // Text processing and data formats
-        self.modules.insert("json".to_string(), modules::json::create_json_module);
-        self.modules.insert("re".to_string(), modules::re::create_re_module);
-        self.modules.insert("csv".to_string(), modules::csv::create_csv_module);
-        self.modules.insert("base64".to_string(), modules::base64::create_base64_module);
-        
-        // Collections and functional programming
-        self.modules.insert("collections".to_string(), modules::collections::create_collections_module);
-        self.modules.insert("itertools".to_string(), modules::itertools::create_itertools_module);
-        self.modules.insert("functools".to_string(), modules::functools::create_functools_module);
-        self.modules.insert("copy".to_string(), modules::copy::create_copy_module);
-        
-        // Serialization and encoding
-        self.modules.insert("pickle".to_string(), modules::pickle::create_pickle_module);
-        self.modules.insert("hashlib".to_string(), modules::hashlib::create_hashlib_module);
-        
-        // Network and web modules
-        self.modules.insert("socket".to_string(), modules::socket::create_socket_module);
-        self.modules.insert("urllib".to_string(), modules::urllib::create_urllib_module);
-        self.modules.insert("httpx".to_string(), modules::httpx::create_httpx_module);
-        self.modules.insert("httptools".to_string(), modules::httptools::create_httptools_module);
-        self.modules.insert("websockets".to_string(), modules::websockets::create_websockets_module);
-        
-        // Concurrency modules
-        self.modules.insert("threading".to_string(), modules::threading::create_threading_module);
-        self.modules.insert("asyncio".to_string(), modules::asyncio::create_asyncio_module);
-        
-        // Memory management modules
-        self.modules.insert("memory".to_string(), modules::memory::create_memory_module);
-        self.modules.insert("gc".to_string(), modules::gc::create_gc_module);
-        
-        // Development and testing modules
-        self.modules.insert("logging".to_string(), modules::logging::create_logging_module);
-        self.modules.insert("unittest".to_string(), modules::unittest::create_unittest_module);
-    }
-}
-
-/// Global builtin registry instance
-static mut BUILTIN_REGISTRY: Option<BuiltinRegistry> = None;
-static REGISTRY_INIT: std::sync::Once = std::sync::Once::new();
-
-pub fn get_builtin_registry() -> &'static BuiltinRegistry {
-    unsafe {
-        REGISTRY_INIT.call_once(|| {
-            BUILTIN_REGISTRY = Some(BuiltinRegistry::new());
-        });
-        BUILTIN_REGISTRY.as_ref().unwrap()
-    }
-}
+use crate::base_object::{BaseObject, MRO};
 
 pub fn init_builtins() -> HashMap<String, Value> {
-    get_builtin_registry().get_functions()
+    let mut builtins = HashMap::new();
+    
+    // None value
+    builtins.insert("None".to_string(), Value::None);
+    
+    // Boolean values
+    builtins.insert("True".to_string(), Value::Bool(true));
+    builtins.insert("False".to_string(), Value::Bool(false));
+    
+    // Built-in functions
+    builtins.insert("print".to_string(), Value::BuiltinFunction("print".to_string(), print_builtin));
+    builtins.insert("len".to_string(), Value::BuiltinFunction("len".to_string(), len_builtin));
+    builtins.insert("str".to_string(), Value::BuiltinFunction("str".to_string(), str_builtin));
+    builtins.insert("int".to_string(), Value::BuiltinFunction("int".to_string(), int_builtin));
+    builtins.insert("float".to_string(), Value::BuiltinFunction("float".to_string(), float_builtin));
+    builtins.insert("bool".to_string(), Value::BuiltinFunction("bool".to_string(), bool_builtin));
+    builtins.insert("list".to_string(), Value::BuiltinFunction("list".to_string(), list_builtin));
+    builtins.insert("dict".to_string(), Value::BuiltinFunction("dict".to_string(), dict_builtin));
+    builtins.insert("range".to_string(), Value::BuiltinFunction("range".to_string(), range_builtin));
+    builtins.insert("input".to_string(), Value::BuiltinFunction("input".to_string(), input_builtin));
+    builtins.insert("abs".to_string(), Value::BuiltinFunction("abs".to_string(), abs_builtin));
+    builtins.insert("min".to_string(), Value::BuiltinFunction("min".to_string(), min_builtin));
+    builtins.insert("max".to_string(), Value::BuiltinFunction("max".to_string(), max_builtin));
+    builtins.insert("sum".to_string(), Value::BuiltinFunction("sum".to_string(), sum_builtin));
+    builtins.insert("round".to_string(), Value::BuiltinFunction("round".to_string(), round_builtin));
+    builtins.insert("pow".to_string(), Value::BuiltinFunction("pow".to_string(), pow_builtin));
+    builtins.insert("divmod".to_string(), Value::BuiltinFunction("divmod".to_string(), divmod_builtin));
+    builtins.insert("enumerate".to_string(), Value::BuiltinFunction("enumerate".to_string(), enumerate_builtin));
+    builtins.insert("zip".to_string(), Value::BuiltinFunction("zip".to_string(), zip_builtin));
+    builtins.insert("map".to_string(), Value::BuiltinFunction("map".to_string(), map_builtin));
+    builtins.insert("filter".to_string(), Value::BuiltinFunction("filter".to_string(), filter_builtin));
+    builtins.insert("sorted".to_string(), Value::BuiltinFunction("sorted".to_string(), sorted_builtin));
+    builtins.insert("reversed".to_string(), Value::BuiltinFunction("reversed".to_string(), reversed_builtin));
+    builtins.insert("any".to_string(), Value::BuiltinFunction("any".to_string(), any_builtin));
+    builtins.insert("all".to_string(), Value::BuiltinFunction("all".to_string(), all_builtin));
+    builtins.insert("chr".to_string(), Value::BuiltinFunction("chr".to_string(), chr_builtin));
+    builtins.insert("ord".to_string(), Value::BuiltinFunction("ord".to_string(), ord_builtin));
+    builtins.insert("hex".to_string(), Value::BuiltinFunction("hex".to_string(), hex_builtin));
+    builtins.insert("bin".to_string(), Value::BuiltinFunction("bin".to_string(), bin_builtin));
+    builtins.insert("oct".to_string(), Value::BuiltinFunction("oct".to_string(), oct_builtin));
+    builtins.insert("isinstance".to_string(), Value::BuiltinFunction("isinstance".to_string(), isinstance_builtin));
+    builtins.insert("type".to_string(), Value::BuiltinFunction("type".to_string(), type_builtin));
+    builtins.insert("callable".to_string(), Value::BuiltinFunction("callable".to_string(), callable_builtin));
+    builtins.insert("hasattr".to_string(), Value::BuiltinFunction("hasattr".to_string(), hasattr_builtin));
+    builtins.insert("getattr".to_string(), Value::BuiltinFunction("getattr".to_string(), getattr_builtin));
+    builtins.insert("setattr".to_string(), Value::BuiltinFunction("setattr".to_string(), setattr_builtin));
+    builtins.insert("delattr".to_string(), Value::BuiltinFunction("delattr".to_string(), delattr_builtin));
+    builtins.insert("issubclass".to_string(), Value::BuiltinFunction("issubclass".to_string(), issubclass_builtin));
+    builtins.insert("super".to_string(), Value::BuiltinFunction("super".to_string(), super_builtin));
+    builtins.insert("staticmethod".to_string(), Value::BuiltinFunction("staticmethod".to_string(), staticmethod_builtin));
+    builtins.insert("classmethod".to_string(), Value::BuiltinFunction("classmethod".to_string(), classmethod_builtin));
+    builtins.insert("property".to_string(), Value::BuiltinFunction("property".to_string(), property_builtin));
+    builtins.insert("dataclass".to_string(), Value::BuiltinFunction("dataclass".to_string(), dataclass_builtin));
+    builtins.insert("Enum".to_string(), Value::BuiltinFunction("Enum".to_string(), enum_builtin));
+    builtins.insert("open".to_string(), Value::BuiltinFunction("open".to_string(), open_builtin));
+    builtins.insert("iter".to_string(), Value::BuiltinFunction("iter".to_string(), iter_builtin));
+    builtins.insert("next".to_string(), Value::BuiltinFunction("next".to_string(), next_builtin));
+    builtins.insert("id".to_string(), Value::BuiltinFunction("id".to_string(), id_builtin));
+    builtins.insert("hash".to_string(), Value::BuiltinFunction("hash".to_string(), hash_builtin));
+    builtins.insert("help".to_string(), Value::BuiltinFunction("help".to_string(), help_builtin));
+    builtins.insert("dir".to_string(), Value::BuiltinFunction("dir".to_string(), dir_builtin));
+    builtins.insert("vars".to_string(), Value::BuiltinFunction("vars".to_string(), vars_builtin));
+    builtins.insert("locals".to_string(), Value::BuiltinFunction("locals".to_string(), locals_builtin));
+    builtins.insert("globals".to_string(), Value::BuiltinFunction("globals".to_string(), globals_builtin));
+    builtins.insert("eval".to_string(), Value::BuiltinFunction("eval".to_string(), eval_builtin));
+    builtins.insert("exec".to_string(), Value::BuiltinFunction("exec".to_string(), exec_builtin));
+    builtins.insert("compile".to_string(), Value::BuiltinFunction("compile".to_string(), compile_builtin));
+    builtins.insert("repr".to_string(), Value::BuiltinFunction("repr".to_string(), repr_builtin));
+    builtins.insert("ascii".to_string(), Value::BuiltinFunction("ascii".to_string(), ascii_builtin));
+    builtins.insert("format".to_string(), Value::BuiltinFunction("format".to_string(), format_builtin));
+    
+    // Exception classes
+    builtins.insert("Exception".to_string(), Value::BuiltinFunction("Exception".to_string(), exception_builtin));
+    builtins.insert("ValueError".to_string(), Value::BuiltinFunction("ValueError".to_string(), value_error_builtin));
+    builtins.insert("TypeError".to_string(), Value::BuiltinFunction("TypeError".to_string(), type_error_builtin));
+    builtins.insert("RuntimeError".to_string(), Value::BuiltinFunction("RuntimeError".to_string(), runtime_error_builtin));
+    
+    builtins
 }
 
-pub fn get_builtin_module(name: &str) -> Option<Value> {
-    get_builtin_registry().get_module(name)
-}
-
-pub fn is_builtin_module(name: &str) -> bool {
-    get_builtin_registry().is_builtin_module(name)
-}
-
-pub fn get_builtin_module_names() -> Vec<String> {
-    get_builtin_registry().get_builtin_module_names()
-}
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-pub fn is_truthy(value: &Value) -> bool {
-    match value {
-        Value::None => false,
-        Value::Bool(b) => *b,
-        Value::Int(n) => *n != 0,
-        Value::Float(f) => *f != 0.0,
-        Value::Str(s) => !s.is_empty(),
-        Value::List(items) => !items.is_empty(),
-        Value::Tuple(items) => !items.is_empty(),
-        Value::Dict(dict) => !dict.is_empty(),
-        _ => true,
-    }
-}
-
-pub fn type_name(value: &Value) -> String {
-    match value {
-        Value::None => "NoneType".to_string(),
-        Value::Bool(_) => "bool".to_string(),
-        Value::Int(_) => "int".to_string(),
-        Value::Float(_) => "float".to_string(),
-        Value::Str(_) => "str".to_string(),
-        Value::List(_) => "list".to_string(),
-        Value::Tuple(_) => "tuple".to_string(),
-        Value::Dict(_) => "dict".to_string(),
-        Value::Set(_) => "set".to_string(),
-        Value::Closure { .. } => "function".to_string(),
-        Value::BuiltinFunction(_, _) => "builtin_function_or_method".to_string(),
-        Value::Object { class_name, .. } => class_name.clone(),
-        Value::Module(name, _) => format!("module '{}'", name),
-        _ => "object".to_string(),
-    }
-}
-
-// ============================================================================
-// CORE BUILT-IN FUNCTION IMPLEMENTATIONS
-// ============================================================================
-
-pub fn builtin_print(args: Vec<Value>) -> Result<Value> {
-    for (i, arg) in args.iter().enumerate() {
-        if i > 0 { print!(" "); }
-        print!("{}", arg);
-    }
-    println!();
+fn print_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let output = args.iter().map(|arg| format!("{}", arg)).collect::<Vec<_>>().join(" ");
+    println!("{}", output);
     Ok(Value::None)
 }
 
-pub fn builtin_input(args: Vec<Value>) -> Result<Value> {
-    if !args.is_empty() {
-        print!("{}", args[0]);
-        std::io::stdout().flush().map_err(|e| anyhow::anyhow!("Failed to flush stdout: {}", e))?;
-    }
-    
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line)
-        .map_err(|e| anyhow::anyhow!("Failed to read input: {}", e))?;
-    
-    if line.ends_with('\n') {
-        line.pop();
-        if line.ends_with('\r') {
-            line.pop();
-        }
-    }
-    
-    Ok(Value::Str(line))
-}
-
-pub fn builtin_len(args: Vec<Value>) -> Result<Value> {
+fn len_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
-        return Err(anyhow::anyhow!("len() takes exactly one argument"));
+        return Err(anyhow::anyhow!("len() takes exactly one argument ({} given)", args.len()));
     }
+    
     match &args[0] {
         Value::Str(s) => Ok(Value::Int(s.len() as i64)),
         Value::List(items) => Ok(Value::Int(items.len() as i64)),
         Value::Tuple(items) => Ok(Value::Int(items.len() as i64)),
         Value::Dict(dict) => Ok(Value::Int(dict.len() as i64)),
-        _ => Err(anyhow::anyhow!("object of type '{}' has no len()", type_name(&args[0]))),
+        Value::Set(items) => Ok(Value::Int(items.len() as i64)),
+        Value::FrozenSet(items) => Ok(Value::Int(items.len() as i64)),
+        Value::Bytes(bytes) => Ok(Value::Int(bytes.len() as i64)),
+        Value::ByteArray(bytes) => Ok(Value::Int(bytes.len() as i64)),
+        _ => Err(anyhow::anyhow!("object of type '{}' has no len()", args[0].type_name())),
     }
 }
 
-pub fn builtin_type(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(anyhow::anyhow!("type() takes exactly one argument"));
-    }
-    Ok(Value::Str(format!("<class '{}'>", type_name(&args[0]))))
-}
-
-
-
-pub fn builtin_str(args: Vec<Value>) -> Result<Value> {
+fn str_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
-        return Ok(Value::Str(String::new()));
-    }
-    Ok(Value::Str(format!("{}", args[0])))
-}
-
-pub fn builtin_int(args: Vec<Value>) -> Result<Value> {
-    if args.is_empty() {
-        return Ok(Value::Int(0));
-    }
-    match &args[0] {
-        Value::Int(n) => Ok(Value::Int(*n)),
-        Value::Float(f) => Ok(Value::Int(*f as i64)),
-        Value::Bool(b) => Ok(Value::Int(if *b { 1 } else { 0 })),
-        Value::Str(s) => {
-            s.trim().parse::<i64>()
-                .map(Value::Int)
-                .map_err(|_| anyhow::anyhow!("invalid literal for int(): '{}'", s))
-        }
-        _ => Err(anyhow::anyhow!("int() argument must be a string or a number")),
+        Ok(Value::Str(String::new()))
+    } else if args.len() == 1 {
+        Ok(Value::Str(format!("{}", args[0])))
+    } else {
+        Err(anyhow::anyhow!("str() takes at most 1 argument ({} given)", args.len()))
     }
 }
 
-pub fn builtin_float(args: Vec<Value>) -> Result<Value> {
+fn int_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
-        return Ok(Value::Float(0.0));
-    }
-    match &args[0] {
-        Value::Int(n) => Ok(Value::Float(*n as f64)),
-        Value::Float(n) => Ok(Value::Float(*n)),
-        Value::Str(s) => {
-            s.parse::<f64>()
-                .map(Value::Float)
-                .map_err(|_| anyhow::anyhow!("could not convert string to float: '{}'", s))
-        }
-        Value::Bool(b) => Ok(Value::Float(if *b { 1.0 } else { 0.0 })),
-        _ => Err(anyhow::anyhow!("float() argument must be a string or a number")),
+        Ok(Value::Int(0))
+    } else if args.len() == 1 {
+        args[0].to_int()
+    } else {
+        Err(anyhow::anyhow!("int() takes at most 1 argument ({} given)", args.len()))
     }
 }
 
-pub fn builtin_bool(args: Vec<Value>) -> Result<Value> {
+fn float_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
-        return Ok(Value::Bool(false));
+        Ok(Value::Float(0.0))
+    } else if args.len() == 1 {
+        args[0].to_float()
+    } else {
+        Err(anyhow::anyhow!("float() takes at most 1 argument ({} given)", args.len()))
     }
-    Ok(Value::Bool(is_truthy(&args[0])))
 }
 
-pub fn builtin_list(args: Vec<Value>) -> Result<Value> {
+fn bool_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
-        // Return high-performance list
-        return Ok(Value::List(HPList::new()));
+        Ok(Value::Bool(false))
+    } else if args.len() == 1 {
+        Ok(Value::Bool(args[0].is_truthy()))
+    } else {
+        Err(anyhow::anyhow!("bool() takes at most 1 argument ({} given)", args.len()))
     }
-    
-    match &args[0] {
-        Value::List(items) => Ok(Value::List(items.clone())),
-        Value::Tuple(items) => {
-            let mut hplist = HPList::new();
-            for item in items {
-                hplist.append(item.clone());
-            }
-            Ok(Value::List(hplist))
-        },
-        Value::Set(items) => {
-            let mut hplist = HPList::new();
-            for item in items {
-                hplist.append(item.clone());
-            }
-            Ok(Value::List(hplist))
-        },
-        Value::FrozenSet(items) => {
-            let mut hplist = HPList::new();
-            for item in items {
-                hplist.append(item.clone());
-            }
-            Ok(Value::List(hplist))
-        },
-        Value::Range { start, stop, step } => {
-            let mut result = HPList::new();
-            let mut current = *start;
-            
-            if *step > 0 {
-                while current < *stop {
-                    result.append(Value::Int(current));
-                    current += step;
+}
+
+fn list_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        Ok(Value::List(HPList::new()))
+    } else if args.len() == 1 {
+        args[0].to_list()
+    } else {
+        Err(anyhow::anyhow!("list() takes at most 1 argument ({} given)", args.len()))
+    }
+}
+
+fn dict_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        Ok(Value::Dict(HashMap::new()))
+    } else if args.len() == 1 {
+        match &args[0] {
+            Value::Dict(dict) => Ok(Value::Dict(dict.clone())),
+            Value::List(items) => {
+                let mut dict = HashMap::new();
+                for item in items.iter() {
+                    match item {
+                        Value::Tuple(pair) if pair.len() == 2 => {
+                            if let (Value::Str(key), value) = (&pair[0], &pair[1]) {
+                                dict.insert(key.clone(), value.clone());
+                            } else {
+                                return Err(anyhow::anyhow!("dictionary update sequence element #0 has wrong type"));
+                            }
+                        }
+                        _ => return Err(anyhow::anyhow!("dictionary update sequence element #0 has wrong type")),
+                    }
                 }
-            } else if *step < 0 {
-                while current > *stop {
-                    result.append(Value::Int(current));
-                    current += step;
-                }
+                Ok(Value::Dict(dict))
             }
-            
-            Ok(Value::List(result))
+            _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name())),
         }
-        Value::Str(s) => {
-            let mut hplist = HPList::new();
-            for c in s.chars() {
-                hplist.append(Value::Str(c.to_string()));
-            }
-            Ok(Value::List(hplist))
-        }
-        _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name()))
+    } else {
+        Err(anyhow::anyhow!("dict() takes at most 1 argument ({} given)", args.len()))
     }
 }
 
-pub fn builtin_tuple(args: Vec<Value>) -> Result<Value> {
-    if args.is_empty() {
-        return Ok(Value::Tuple(vec![]));
-    }
-    Ok(Value::Tuple(vec![args[0].clone()]))
-}
-
-pub fn builtin_dict(_args: Vec<Value>) -> Result<Value> {
-    Ok(Value::Dict(HashMap::new()))
-}
-
-pub fn builtin_set(_args: Vec<Value>) -> Result<Value> {
-    Ok(Value::Set(vec![]))
-}
-
-pub fn builtin_frozenset(_args: Vec<Value>) -> Result<Value> {
-    Ok(Value::FrozenSet(vec![]))
-}
-
-pub fn builtin_iter(_args: Vec<Value>) -> Result<Value> {
-    Ok(Value::None)
-}
-
-pub fn builtin_next(_args: Vec<Value>) -> Result<Value> {
-    Ok(Value::None)
-}
-
-pub fn builtin_slice(_args: Vec<Value>) -> Result<Value> {
-    Ok(Value::None)
-}
-
-pub fn builtin_range(args: Vec<Value>) -> Result<Value> {
-    let mut start: i64 = 0;
-    let stop: i64;
-    let mut step: i64 = 1;
-    
+fn range_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     match args.len() {
         1 => {
-            stop = match &args[0] {
-                Value::Int(n) => *n,
-                _ => return Err(anyhow::anyhow!("range() integer argument expected, got {}", type_name(&args[0]))),
-            };
+            if let Value::Int(stop) = args[0] {
+                Ok(Value::Range { start: 0, stop, step: 1 })
+            } else {
+                Err(anyhow::anyhow!("range() argument must be an integer"))
+            }
         }
         2 => {
-            start = match &args[0] {
-                Value::Int(n) => *n,
-                _ => return Err(anyhow::anyhow!("range() integer argument expected, got {}", type_name(&args[0]))),
-            };
-            stop = match &args[1] {
-                Value::Int(n) => *n,
-                _ => return Err(anyhow::anyhow!("range() integer argument expected, got {}", type_name(&args[0]))),
-            };
+            if let (Value::Int(start), Value::Int(stop)) = (&args[0], &args[1]) {
+                Ok(Value::Range { start: *start, stop: *stop, step: 1 })
+            } else {
+                Err(anyhow::anyhow!("range() arguments must be integers"))
+            }
         }
         3 => {
-            start = match &args[0] {
-                Value::Int(n) => *n,
-                _ => return Err(anyhow::anyhow!("range() integer argument expected, got {}", type_name(&args[0]))),
-            };
-            stop = match &args[1] {
-                Value::Int(n) => *n,
-                _ => return Err(anyhow::anyhow!("range() integer argument expected, got {}", type_name(&args[0]))),
-            };
-            step = match &args[2] {
-                Value::Int(n) => *n,
-                _ => return Err(anyhow::anyhow!("range() integer argument expected, got {}", type_name(&args[0]))),
-            };
-            if step == 0 {
-                return Err(anyhow::anyhow!("range() step argument must not be zero"));
+            if let (Value::Int(start), Value::Int(stop), Value::Int(step)) = (&args[0], &args[1], &args[2]) {
+                if *step == 0 {
+                    Err(anyhow::anyhow!("range() step argument must not be zero"))
+                } else {
+                    Ok(Value::Range { start: *start, stop: *stop, step: *step })
+                }
+            } else {
+                Err(anyhow::anyhow!("range() arguments must be integers"))
             }
         }
-        _ => return Err(anyhow::anyhow!("range() expected 1-3 arguments, got {}", args.len())),
+        _ => Err(anyhow::anyhow!("range() takes 1 to 3 arguments ({} given)", args.len())),
+    }
+}
+
+fn input_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("input() takes at most 1 argument ({} given)", args.len()));
     }
     
-    Ok(Value::Range { start, stop, step })
-}
-
-pub fn builtin_memoryview(_args: Vec<Value>) -> Result<Value> {
-    Ok(Value::None)
-}
-
-// Placeholder implementations for other functions
-pub fn builtin_id(_args: Vec<Value>) -> Result<Value> { Ok(Value::Int(0)) }
-pub fn builtin_hash(_args: Vec<Value>) -> Result<Value> { Ok(Value::Int(0)) }
-pub fn builtin_repr(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
-pub fn builtin_dir(args: Vec<Value>) -> Result<Value> {
-    if args.is_empty() {
-        // Return empty list as placeholder - proper implementation needs VM context
-        Ok(Value::List(HPList::new()))
-    } else {
-        let mut names = Vec::new();
-        match &args[0] {
-            Value::Str(_) => {
-                // For strings, show only string methods (no inherited dunder methods)
-                names.extend([
-                    "capitalize", "casefold", "center", "count", "encode", "endswith",
-                    "expandtabs", "find", "format", "format_map", "index", "isalnum",
-                    "isalpha", "isascii", "isdecimal", "isdigit", "isidentifier",
-                    "islower", "isnumeric", "isprintable", "isspace", "istitle",
-                    "isupper", "join", "ljust", "lower", "lstrip", "maketrans",
-                    "partition", "removeprefix", "removesuffix", "replace", "rfind",
-                    "rindex", "rjust", "rpartition", "rsplit", "rstrip", "split",
-                    "splitlines", "startswith", "strip", "swapcase", "title",
-                    "translate", "upper", "zfill"
-                ].iter().map(|s| Value::Str(s.to_string())));
-            },
-            Value::List(_) => {
-                // For lists, show only list methods (no inherited dunder methods)
-                names.extend([
-                    "append", "clear", "copy", "count", "extend", "index", "insert",
-                    "pop", "remove", "reverse", "sort"
-                ].iter().map(|s| Value::Str(s.to_string())));
-            },
-            Value::Dict(_) => {
-                // For dicts, show only dict methods (no inherited dunder methods)
-                names.extend([
-                    "clear", "copy", "fromkeys", "get", "items", "keys", "pop",
-                    "popitem", "setdefault", "update", "values"
-                ].iter().map(|s| Value::Str(s.to_string())));
-            },
-            Value::Set(_) => {
-                // For sets, show only set methods (no inherited dunder methods)
-                names.extend([
-                    "add", "clear", "copy", "difference", "difference_update",
-                    "discard", "intersection", "intersection_update", "isdisjoint",
-                    "issubset", "issuperset", "pop", "remove", "symmetric_difference",
-                    "symmetric_difference_update", "union", "update"
-                ].iter().map(|s| Value::Str(s.to_string())));
-            },
-            Value::Tuple(_) => {
-                // For tuples, show only tuple methods (no inherited dunder methods)
-                names.extend([
-                    "count", "index"
-                ].iter().map(|s| Value::Str(s.to_string())));
-            },
-            Value::Int(_) => {
-                // For ints, show only int methods (no inherited dunder methods)
-                names.extend([
-                    "bit_length", "conjugate", "denominator", "from_bytes",
-                    "numerator", "to_bytes"
-                ].iter().map(|s| Value::Str(s.to_string())));
-            },
-            Value::Float(_) => {
-                // For floats, show only float methods (no inherited dunder methods)
-                names.extend([
-                    "as_integer_ratio", "conjugate", "fromhex", "hex", "is_integer"
-                ].iter().map(|s| Value::Str(s.to_string())));
-            },
-            Value::Object { fields, class_methods, base_object, .. } => {
-                // For custom objects, show user-defined attributes (fields), class methods, and only overridden dunder methods
-
-                // Add instance attributes (fields)
-                for (field_name, _) in fields {
-                    names.push(Value::Str(field_name.clone()));
-                }
-
-                // Add class methods (non-dunder methods defined in the class)
-                for (method_name, _) in class_methods {
-                    if !method_name.starts_with("__") || !method_name.ends_with("__") {
-                        names.push(Value::Str(method_name.clone()));
-                    }
-                }
-
-                // Add only overridden dunder methods from class_methods
-                for (method_name, _) in class_methods {
-                    if method_name.starts_with("__") && method_name.ends_with("__") {
-                        names.push(Value::Str(method_name.clone()));
-                    }
-                }
-
-                // Note: We don't add dunder methods from base_object because in Python,
-                // dir() only shows dunders that are explicitly defined/overridden in the class
-            },
-            Value::Module(_, namespace) => {
-                // For modules, show all attributes
-                for (name, _) in namespace {
-                    names.push(Value::Str(name.clone()));
-                }
-            },
-            _ => {
-                // For other types, return empty list (no inherited dunder methods)
-            }
-        }
-
-        // Sort the names alphabetically like Python does
-        names.sort_by(|a, b| {
-            match (a, b) {
-                (Value::Str(s1), Value::Str(s2)) => s1.cmp(s2),
-                _ => std::cmp::Ordering::Equal,
-            }
-        });
-
-        let mut hplist = HPList::new();
-        for name in names {
-            hplist.append(name);
-        }
-        Ok(Value::List(hplist))
+    if !args.is_empty() {
+        print!("{}", args[0]);
     }
-}
-
-// Introspection functions - placeholders that will be overridden by VM's special handling
-pub fn builtin_globals(_args: Vec<Value>) -> Result<Value> {
-    // Placeholder - actual implementation requires VM context
-    // The VM intercepts this in call_function_fast and provides the real globals dict
-    Ok(Value::Dict(HashMap::new()))
-}
-
-pub fn builtin_locals(_args: Vec<Value>) -> Result<Value> {
-    // Placeholder - actual implementation requires VM context
-    // The VM intercepts this in call_function_fast and provides the real locals dict
-    Ok(Value::Dict(HashMap::new()))
-}
-
-pub fn builtin_vars(args: Vec<Value>) -> Result<Value> {
-    if args.is_empty() {
-        // Placeholder - actual implementation requires VM context
-        // The VM intercepts this in call_function_fast and provides the real locals dict
-        Ok(Value::Dict(HashMap::new()))
-    } else {
-        // vars(object) - return object's __dict__
-        // For now, just return empty dict as placeholder
-        Ok(Value::Dict(HashMap::new()))
+    
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    // Remove trailing newline
+    if input.ends_with('\n') {
+        input.pop();
+        if input.ends_with('\r') {
+            input.pop();
+        }
     }
+    
+    Ok(Value::Str(input))
 }
 
-pub fn builtin_help(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
-pub fn builtin_open(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
-pub fn builtin_format(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
-pub fn builtin_callable(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bool(false)) }
-
-// Math functions
-pub fn builtin_abs(args: Vec<Value>) -> Result<Value> { 
+fn abs_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
-        return Err(anyhow::anyhow!("abs() takes exactly one argument"));
+        return Err(anyhow::anyhow!("abs() takes exactly one argument ({} given)", args.len()));
     }
+    
     match &args[0] {
         Value::Int(n) => Ok(Value::Int(n.abs())),
         Value::Float(f) => Ok(Value::Float(f.abs())),
-        _ => Err(anyhow::anyhow!("abs() unsupported for type"))
+        Value::Complex { real, imag } => {
+            Ok(Value::Float((real * real + imag * imag).sqrt()))
+        }
+        _ => Err(anyhow::anyhow!("bad operand type for abs(): '{}'", args[0].type_name())),
     }
 }
 
-pub fn builtin_min(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
-pub fn builtin_max(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
-pub fn builtin_round(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
-pub fn builtin_pow(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
-pub fn builtin_divmod(_args: Vec<Value>) -> Result<Value> { Ok(Value::None) }
+fn min_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("min() expected at least 1 argument, got 0"));
+    }
+    
+    if args.len() == 1 {
+        // Single iterable argument
+        match &args[0] {
+            Value::List(items) => {
+                if items.is_empty() {
+                    return Err(anyhow::anyhow!("min() arg is an empty sequence"));
+                }
+                let mut min_val = items.get(0).unwrap().clone();
+                for item in items.iter().skip(1) {
+                    if item.partial_cmp(&min_val) == Some(std::cmp::Ordering::Less) {
+                        min_val = item.clone();
+                    }
+                }
+                Ok(min_val)
+            }
+            Value::Tuple(items) => {
+                if items.is_empty() {
+                    return Err(anyhow::anyhow!("min() arg is an empty sequence"));
+                }
+                let mut min_val = items[0].clone();
+                for item in items.iter().skip(1) {
+                    if item.partial_cmp(&min_val) == Some(std::cmp::Ordering::Less) {
+                        min_val = item.clone();
+                    }
+                }
+                Ok(min_val)
+            }
+            _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name())),
+        }
+    } else {
+        // Multiple arguments
+        let mut min_val = args[0].clone();
+        for arg in args.iter().skip(1) {
+            if arg.partial_cmp(&min_val) == Some(std::cmp::Ordering::Less) {
+                min_val = arg.clone();
+            }
+        }
+        Ok(min_val)
+    }
+}
 
-// String functions
-pub fn builtin_hex(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("0x0".to_string())) }
-pub fn builtin_oct(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("0o0".to_string())) }
-pub fn builtin_bin(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("0b0".to_string())) }
-pub fn builtin_ascii(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
+fn max_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("max() expected at least 1 argument, got 0"));
+    }
+    
+    if args.len() == 1 {
+        // Single iterable argument
+        match &args[0] {
+            Value::List(items) => {
+                if items.is_empty() {
+                    return Err(anyhow::anyhow!("max() arg is an empty sequence"));
+                }
+                let mut max_val = items.get(0).unwrap().clone();
+                for item in items.iter().skip(1) {
+                    if item.partial_cmp(&max_val) == Some(std::cmp::Ordering::Greater) {
+                        max_val = item.clone();
+                    }
+                }
+                Ok(max_val)
+            }
+            Value::Tuple(items) => {
+                if items.is_empty() {
+                    return Err(anyhow::anyhow!("max() arg is an empty sequence"));
+                }
+                let mut max_val = items[0].clone();
+                for item in items.iter().skip(1) {
+                    if item.partial_cmp(&max_val) == Some(std::cmp::Ordering::Greater) {
+                        max_val = item.clone();
+                    }
+                }
+                Ok(max_val)
+            }
+            _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name())),
+        }
+    } else {
+        // Multiple arguments
+        let mut max_val = args[0].clone();
+        for arg in args.iter().skip(1) {
+            if arg.partial_cmp(&max_val) == Some(std::cmp::Ordering::Greater) {
+                max_val = arg.clone();
+            }
+        }
+        Ok(max_val)
+    }
+}
 
-// Object functions
-pub fn builtin_hasattr(args: Vec<Value>) -> Result<Value> {
+fn sum_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(anyhow::anyhow!("sum() takes at most 2 arguments ({} given)", args.len()));
+    }
+    
+    let iterable = &args[0];
+    let start = if args.len() == 2 { &args[1] } else { &Value::Int(0) };
+    
+    let mut sum = start.clone();
+    
+    match iterable {
+        Value::List(items) => {
+            for item in items.iter() {
+                sum = match (&sum, item) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                    (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 + b),
+                    (Value::Float(a), Value::Int(b)) => Value::Float(a + *b as f64),
+                    _ => return Err(anyhow::anyhow!("unsupported operand type(s) for +: '{}' and '{}'", sum.type_name(), item.type_name())),
+                };
+            }
+            Ok(sum)
+        }
+        Value::Tuple(items) => {
+            for item in items {
+                sum = match (&sum, item) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                    (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 + b),
+                    (Value::Float(a), Value::Int(b)) => Value::Float(a + *b as f64),
+                    _ => return Err(anyhow::anyhow!("unsupported operand type(s) for +: '{}' and '{}'", sum.type_name(), item.type_name())),
+                };
+            }
+            Ok(sum)
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
+    }
+}
+
+fn round_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(anyhow::anyhow!("round() takes at most 2 arguments ({} given)", args.len()));
+    }
+    
+    let number = &args[0];
+    let ndigits = if args.len() == 2 {
+        match &args[1] {
+            Value::Int(n) => *n,
+            _ => return Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", args[1].type_name())),
+        }
+    } else {
+        0
+    };
+    
+    match number {
+        Value::Int(n) => {
+            if ndigits >= 0 {
+                Ok(Value::Int(*n))
+            } else {
+                let factor = 10_i64.pow((-ndigits) as u32);
+                let rounded = (*n + factor / 2) / factor * factor;
+                Ok(Value::Int(rounded))
+            }
+        }
+        Value::Float(f) => {
+            if ndigits >= 0 {
+                let factor = 10_f64.powi(ndigits as i32);
+                Ok(Value::Float((f * factor).round() / factor))
+            } else {
+                let factor = 10_f64.powi((-ndigits) as i32);
+                Ok(Value::Float((f / factor).round() * factor))
+            }
+        }
+        _ => Err(anyhow::anyhow!("type {} doesn't define __round__ method", number.type_name())),
+    }
+}
+
+fn pow_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err(anyhow::anyhow!("pow() takes 2 or 3 arguments ({} given)", args.len()));
+    }
+    
+    let base = &args[0];
+    let exp = &args[1];
+    
+    if args.len() == 3 {
+        // Modular exponentiation
+        let modulus = &args[2];
+        match (base, exp, modulus) {
+            (Value::Int(b), Value::Int(e), Value::Int(m)) => {
+                if *e < 0 {
+                    return Err(anyhow::anyhow!("pow() 2nd argument cannot be negative when 3rd argument specified"));
+                }
+                if *m == 0 {
+                    return Err(anyhow::anyhow!("pow() 3rd argument cannot be 0"));
+                }
+                // Simple implementation for now
+                Ok(Value::Int(b.pow(*e as u32) % m))
+            }
+            _ => Err(anyhow::anyhow!("pow() with 3 arguments requires integers")),
+        }
+    } else {
+        // Regular exponentiation
+        match (base, exp) {
+            (Value::Int(b), Value::Int(e)) => {
+                if *e >= 0 {
+                    Ok(Value::Int(b.pow(*e as u32)))
+                } else {
+                    Ok(Value::Float((*b as f64).powf(*e as f64)))
+                }
+            }
+            (Value::Float(b), Value::Float(e)) => Ok(Value::Float(b.powf(*e))),
+            (Value::Int(b), Value::Float(e)) => Ok(Value::Float((*b as f64).powf(*e))),
+            (Value::Float(b), Value::Int(e)) => Ok(Value::Float(b.powf(*e as f64))),
+            _ => Err(anyhow::anyhow!("unsupported operand type(s) for pow()")),
+        }
+    }
+}
+
+fn divmod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
-        return Err(anyhow::anyhow!("hasattr expected 2 arguments, got {}", args.len()));
+        return Err(anyhow::anyhow!("divmod() takes exactly 2 arguments ({} given)", args.len()));
+    }
+    
+    let a = &args[0];
+    let b = &args[1];
+    
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => {
+            if *y == 0 {
+                return Err(anyhow::anyhow!("division by zero"));
+            }
+            let div = x / y;
+            let rem = x % y;
+            Ok(Value::Tuple(vec![Value::Int(div), Value::Int(rem)]))
+        }
+        (Value::Float(x), Value::Float(y)) => {
+            if *y == 0.0 {
+                return Err(anyhow::anyhow!("division by zero"));
+            }
+            let div = (x / y).floor();
+            let rem = x - div * y;
+            Ok(Value::Tuple(vec![Value::Float(div), Value::Float(rem)]))
+        }
+        (Value::Int(x), Value::Float(y)) => {
+            if *y == 0.0 {
+                return Err(anyhow::anyhow!("division by zero"));
+            }
+            let xf = *x as f64;
+            let div = (xf / y).floor();
+            let rem = xf - div * y;
+            Ok(Value::Tuple(vec![Value::Float(div), Value::Float(rem)]))
+        }
+        (Value::Float(x), Value::Int(y)) => {
+            if *y == 0 {
+                return Err(anyhow::anyhow!("division by zero"));
+            }
+            let yf = *y as f64;
+            let div = (x / yf).floor();
+            let rem = x - div * yf;
+            Ok(Value::Tuple(vec![Value::Float(div), Value::Float(rem)]))
+        }
+        _ => Err(anyhow::anyhow!("unsupported operand type(s) for divmod()")),
+    }
+}
+
+fn enumerate_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(anyhow::anyhow!("enumerate() takes at most 2 arguments ({} given)", args.len()));
+    }
+    
+    let iterable = &args[0];
+    let start = if args.len() == 2 {
+        match &args[1] {
+            Value::Int(n) => *n,
+            _ => return Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", args[1].type_name())),
+        }
+    } else {
+        0
+    };
+    
+    match iterable {
+        Value::List(items) => {
+            let mut result = Vec::new();
+            for (i, item) in items.iter().enumerate() {
+                result.push(Value::Tuple(vec![Value::Int(start + i as i64), item.clone()]));
+            }
+            Ok(Value::List(HPList::from_values(result)))
+        }
+        Value::Tuple(items) => {
+            let mut result = Vec::new();
+            for (i, item) in items.iter().enumerate() {
+                result.push(Value::Tuple(vec![Value::Int(start + i as i64), item.clone()]));
+            }
+            Ok(Value::List(HPList::from_values(result)))
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
+    }
+}
+
+fn zip_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        return Ok(Value::List(HPList::new()));
+    }
+    
+    // Convert all arguments to vectors
+    let mut iterables = Vec::new();
+    for arg in &args {
+        match arg {
+            Value::List(items) => iterables.push(items.as_vec().clone()),
+            Value::Tuple(items) => iterables.push(items.clone()),
+            _ => return Err(anyhow::anyhow!("'{}' object is not iterable", arg.type_name())),
+        }
+    }
+    
+    // Zip the iterables
+    let min_len = iterables.iter().map(|v| v.len()).min().unwrap_or(0);
+    let mut result = Vec::new();
+    
+    for i in 0..min_len {
+        let mut tuple = Vec::new();
+        for iterable in &iterables {
+            tuple.push(iterable[i].clone());
+        }
+        result.push(Value::Tuple(tuple));
+    }
+    
+    Ok(Value::List(HPList::from_values(result)))
+}
+
+fn map_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("map() must have at least two arguments"));
+    }
+    
+    let func = &args[0];
+    let iterables: Vec<&Value> = args.iter().skip(1).collect();
+    
+    // Convert iterables to vectors
+    let mut iterable_vecs = Vec::new();
+    for iterable in iterables {
+        match iterable {
+            Value::List(items) => iterable_vecs.push(items.as_vec().clone()),
+            Value::Tuple(items) => iterable_vecs.push(items.clone()),
+            _ => return Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
+        }
+    }
+    
+    // Map the function over the iterables
+    let min_len = iterable_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
+    let mut result = Vec::new();
+    
+    for i in 0..min_len {
+        let func_args: Vec<Value> = iterable_vecs.iter().map(|v| v[i].clone()).collect();
+        
+        // Call the function with the arguments
+        let func_result = match func {
+            Value::BuiltinFunction(_, f) => f(func_args)?,
+            Value::NativeFunction(f) => f(func_args)?,
+            _ => return Err(anyhow::anyhow!("'{}' object is not callable", func.type_name())),
+        };
+        
+        result.push(func_result);
+    }
+    
+    Ok(Value::List(HPList::from_values(result)))
+}
+
+fn filter_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("filter() takes exactly 2 arguments ({} given)", args.len()));
+    }
+    
+    let func = &args[0];
+    let iterable = &args[1];
+    
+    // Convert iterable to vector
+    let items = match iterable {
+        Value::List(items) => items.as_vec().clone(),
+        Value::Tuple(items) => items.clone(),
+        _ => return Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
+    };
+    
+    // Filter the items
+    let mut result = Vec::new();
+    
+    for item in items {
+        // Call the function with the item
+        let func_result = match func {
+            Value::BuiltinFunction(_, f) => f(vec![item.clone()])?,
+            Value::NativeFunction(f) => f(vec![item.clone()])?,
+            Value::None => item.clone(), // None means use truthiness
+            _ => return Err(anyhow::anyhow!("'{}' object is not callable", func.type_name())),
+        };
+        
+        // If the result is truthy, include the item
+        if func_result.is_truthy() {
+            result.push(item);
+        }
+    }
+    
+    Ok(Value::List(HPList::from_values(result)))
+}
+
+fn sorted_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 1 {
+        return Err(anyhow::anyhow!("sorted() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    let iterable = &args[0];
+    
+    match iterable {
+        Value::List(items) => {
+            let mut sorted_items = items.as_vec().clone();
+            sorted_items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            Ok(Value::List(HPList::from_values(sorted_items)))
+        }
+        Value::Tuple(items) => {
+            let mut sorted_items = items.clone();
+            sorted_items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            Ok(Value::List(HPList::from_values(sorted_items)))
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
+    }
+}
+
+fn reversed_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("reversed() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    let iterable = &args[0];
+    
+    match iterable {
+        Value::List(items) => {
+            let mut reversed_items = items.as_vec().clone();
+            reversed_items.reverse();
+            Ok(Value::List(HPList::from_values(reversed_items)))
+        }
+        Value::Tuple(items) => {
+            let mut reversed_items = items.clone();
+            reversed_items.reverse();
+            Ok(Value::List(HPList::from_values(reversed_items)))
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not reversible", iterable.type_name())),
+    }
+}
+
+fn any_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("any() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    let iterable = &args[0];
+    
+    match iterable {
+        Value::List(items) => {
+            for item in items.iter() {
+                if item.is_truthy() {
+                    return Ok(Value::Bool(true));
+                }
+            }
+            Ok(Value::Bool(false))
+        }
+        Value::Tuple(items) => {
+            for item in items {
+                if item.is_truthy() {
+                    return Ok(Value::Bool(true));
+                }
+            }
+            Ok(Value::Bool(false))
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
+    }
+}
+
+fn all_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("all() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    let iterable = &args[0];
+    
+    match iterable {
+        Value::List(items) => {
+            for item in items.iter() {
+                if !item.is_truthy() {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            Ok(Value::Bool(true))
+        }
+        Value::Tuple(items) => {
+            for item in items {
+                if !item.is_truthy() {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            Ok(Value::Bool(true))
+        }
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
+    }
+}
+
+fn chr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("chr() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    match &args[0] {
+        Value::Int(n) => {
+            if *n < 0 || *n > 0x10FFFF {
+                return Err(anyhow::anyhow!("chr() arg not in range(0x110000)"));
+            }
+            Ok(Value::Str(String::from_utf8(vec![*n as u8]).unwrap_or_else(|_| String::from("\u{FFFD}"))))
+        }
+        _ => Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", args[0].type_name())),
+    }
+}
+
+fn ord_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("ord() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    match &args[0] {
+        Value::Str(s) => {
+            if s.chars().count() != 1 {
+                return Err(anyhow::anyhow!("ord() expected a character, but string of length {} found", s.chars().count()));
+            }
+            Ok(Value::Int(s.chars().next().unwrap() as i64))
+        }
+        _ => Err(anyhow::anyhow!("ord() expected string of length 1, but {} found", args[0].type_name())),
+    }
+}
+
+fn hex_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("hex() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    match &args[0] {
+        Value::Int(n) => Ok(Value::Str(format!("0x{:x}", n))),
+        _ => Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", args[0].type_name())),
+    }
+}
+
+fn bin_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("bin() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    match &args[0] {
+        Value::Int(n) => Ok(Value::Str(format!("0b{:b}", n))),
+        _ => Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", args[0].type_name())),
+    }
+}
+
+fn oct_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("oct() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    match &args[0] {
+        Value::Int(n) => Ok(Value::Str(format!("0o{:o}", n))),
+        _ => Err(anyhow::anyhow!("'{}' object cannot be interpreted as an integer", args[0].type_name())),
+    }
+}
+
+fn isinstance_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("isinstance() takes exactly 2 arguments ({} given)", args.len()));
+    }
+    
+    let obj = &args[0];
+    let type_info = &args[1];
+    
+    // Handle both string type names and actual class types
+    let is_instance = match type_info {
+        Value::Str(type_name) => {
+            // Original string-based check
+            obj.type_name() == type_name
+        },
+        Value::Class { name, .. } => {
+            // Check if object is instance of this class
+            match obj {
+                Value::Object { class_name, .. } => {
+                    class_name == name
+                },
+                _ => false
+            }
+        },
+        Value::Tuple(items) => {
+            // Check if object is instance of any type in the tuple
+            items.iter().any(|item| {
+                match item {
+                    Value::Str(type_name) => obj.type_name() == type_name,
+                    Value::Class { name, .. } => {
+                        match obj {
+                            Value::Object { class_name, .. } => class_name == name,
+                            _ => false
+                        }
+                    },
+                    _ => false
+                }
+            })
+        },
+        _ => return Err(anyhow::anyhow!("isinstance() arg 2 must be a type, a tuple of types, or a string")),
+    };
+    
+    Ok(Value::Bool(is_instance))
+}
+
+fn type_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("type() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    let obj = &args[0];
+    
+    // Return the type name as a string
+    match obj {
+        Value::Object { class_name, .. } => {
+            Ok(Value::Str(class_name.clone()))
+        },
+        Value::Class { name, .. } => {
+            Ok(Value::Str(name.clone()))
+        },
+        _ => {
+            Ok(Value::Str(obj.type_name().to_string()))
+        }
+    }
+}
+
+fn callable_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("callable() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    let obj = &args[0];
+    let is_callable = match obj {
+        Value::BuiltinFunction(_, _) | Value::NativeFunction(_) | Value::Closure { .. } => true,
+        _ => false,
+    };
+    
+    Ok(Value::Bool(is_callable))
+}
+
+fn hasattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("hasattr() takes exactly 2 arguments ({} given)", args.len()));
     }
     
     let obj = &args[0];
     let attr_name = match &args[1] {
         Value::Str(s) => s,
-        _ => return Err(anyhow::anyhow!("hasattr(): attribute name must be string")),
+        _ => return Err(anyhow::anyhow!("hasattr() attribute name must be string")),
     };
     
-    // Check if object has the attribute
+    // Try to check if the attribute exists on the object
     let has_attr = match obj {
-        Value::Object { fields, base_object, .. } => {
-            // For custom objects, check both user-defined fields and dunder methods
-            fields.contains_key(attr_name) || base_object.dunder_methods.contains_key(attr_name)
+        Value::Object { fields, class_methods, .. } => {
+            // First check fields
+            fields.as_ref().contains_key(attr_name) || class_methods.contains_key(attr_name)
+        },
+        Value::Class { methods, .. } => {
+            methods.contains_key(attr_name)
         },
         Value::Module(_, namespace) => {
             namespace.contains_key(attr_name)
@@ -725,81 +924,83 @@ pub fn builtin_hasattr(args: Vec<Value>) -> Result<Value> {
         Value::Dict(dict) => {
             dict.contains_key(attr_name)
         },
-        // For other types, check if they have methods with this name or inherit dunder methods
         _ => {
-            // Check if it's a built-in method or a dunder method from base object
-            obj.get_method(attr_name).is_some() || 
-            // Check if it's a dunder method that all objects inherit
-            BaseObject::get_base_methods().contains_key(attr_name)
+            // For other objects, check if they have a method with this name
+            obj.get_method(attr_name).is_some()
         }
     };
-    
     Ok(Value::Bool(has_attr))
 }
-pub fn builtin_getattr(args: Vec<Value>) -> Result<Value> {
+
+fn getattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() < 2 || args.len() > 3 {
-        return Err(anyhow::anyhow!("getattr expected 2 or 3 arguments, got {}", args.len()));
+        return Err(anyhow::anyhow!("getattr() takes 2 or 3 arguments ({} given)", args.len()));
     }
     
     let obj = &args[0];
     let attr_name = match &args[1] {
         Value::Str(s) => s,
-        _ => return Err(anyhow::anyhow!("getattr(): attribute name must be string")),
+        _ => return Err(anyhow::anyhow!("getattr() attribute name must be string")),
     };
     
-    // Try to get the attribute
+    // Try to get the attribute from the object
     match obj {
-        Value::Object { fields, base_object, .. } => {
-            if let Some(value) = fields.get(attr_name) {
+        Value::Object { fields, class_methods, .. } => {
+            // First check fields
+            if let Some(value) = fields.as_ref().get(attr_name) {
                 Ok(value.clone())
-            } else if base_object.dunder_methods.contains_key(attr_name) {
-                // Create a bound method object for dunder methods
-                Ok(Value::BoundMethod {
-                    object: Box::new(obj.clone()),
-                    method_name: attr_name.clone(),
-                })
-            } else if args.len() == 3 {
-                // Return default value
+            }
+            // Then check methods
+            else if let Some(method) = class_methods.get(attr_name) {
+                Ok(method.clone())
+            }
+            // If not found and default provided, return default
+            else if args.len() == 3 {
+                Ok(args[2].clone())
+            } else {
+                Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
+            }
+        },
+        Value::Class { methods, .. } => {
+            // Check class methods
+            if let Some(method) = methods.get(attr_name) {
+                Ok(method.clone())
+            }
+            // If not found and default provided, return default
+            else if args.len() == 3 {
                 Ok(args[2].clone())
             } else {
                 Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
             }
         },
         Value::Module(_, namespace) => {
+            // Check module attributes
             if let Some(value) = namespace.get(attr_name) {
                 Ok(value.clone())
-            } else if args.len() == 3 {
-                // Return default value
+            }
+            // If not found and default provided, return default
+            else if args.len() == 3 {
                 Ok(args[2].clone())
             } else {
-                Err(anyhow::anyhow!("module '{}' has no attribute '{}'", obj.type_name(), attr_name))
+                Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
             }
         },
         Value::Dict(dict) => {
+            // For dictionaries, treat keys as attributes
             if let Some(value) = dict.get(attr_name) {
                 Ok(value.clone())
-            } else if args.len() == 3 {
-                // Return default value
+            }
+            // If not found and default provided, return default
+            else if args.len() == 3 {
                 Ok(args[2].clone())
             } else {
-                Err(anyhow::anyhow!("'dict' object has no attribute '{}'", attr_name))
+                Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
             }
         },
-        // For other types, try to get method
         _ => {
-            // First check if there's a method with this name
-            if let Some(_) = obj.get_method(attr_name) {
-                // Create a bound method object
-                Ok(Value::BoundMethod {
-                    object: Box::new(obj.clone()),
-                    method_name: attr_name.clone(),
-                })
-            } else if BaseObject::get_base_methods().contains_key(attr_name) {
-                // Create a bound method object for inherited dunder methods
-                Ok(Value::BoundMethod {
-                    object: Box::new(obj.clone()),
-                    method_name: attr_name.clone(),
-                })
+            // For other objects, try to get method
+            if let Some(method) = obj.get_method(attr_name) {
+                Ok(method)
             } else if args.len() == 3 {
                 // Return default value
                 Ok(args[2].clone())
@@ -809,322 +1010,538 @@ pub fn builtin_getattr(args: Vec<Value>) -> Result<Value> {
         }
     }
 }
-pub fn builtin_setattr(args: Vec<Value>) -> Result<Value> {
+
+fn setattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 3 {
-        return Err(anyhow::anyhow!("setattr expected 3 arguments, got {}", args.len()));
+        return Err(anyhow::anyhow!("setattr() takes exactly 3 arguments ({} given)", args.len()));
     }
     
-    let obj = &args[0];
+    let obj = &mut args[0].clone(); // We'll need to make this mutable in a full implementation
     let attr_name = match &args[1] {
         Value::Str(s) => s,
-        _ => return Err(anyhow::anyhow!("setattr(): attribute name must be string")),
+        _ => return Err(anyhow::anyhow!("setattr() attribute name must be string")),
     };
     let value = &args[2];
     
-    // Set the attribute based on object type
-    match obj {
-        Value::Object { fields, .. } => {
-            // This is a bit tricky since we can't mutate the object directly
-            // In a real implementation, we'd need to handle this differently
-            Err(anyhow::anyhow!("setattr not fully implemented for objects"))
-        },
-        Value::Module(_, namespace) => {
-            // This is also tricky for the same reason
-            Err(anyhow::anyhow!("setattr not fully implemented for modules"))
-        },
-        Value::Dict(dict) => {
-            // For dicts, we can insert the key-value pair
-            // But again, we can't mutate directly
-            Err(anyhow::anyhow!("setattr not fully implemented for dicts"))
-        },
-        _ => {
-            Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
-        }
-    }
+    // For now, we'll just return None as setting attributes requires mutable references
+    // In a full implementation, we would modify the object's fields
+    Ok(Value::None)
 }
-pub fn builtin_delattr(args: Vec<Value>) -> Result<Value> {
+
+fn delattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
-        return Err(anyhow::anyhow!("delattr expected 2 arguments, got {}", args.len()));
+        return Err(anyhow::anyhow!("delattr() takes exactly 2 arguments ({} given)", args.len()));
     }
     
-    let obj = &args[0];
-    let attr_name = match &args[1] {
-        Value::Str(s) => s,
-        _ => return Err(anyhow::anyhow!("delattr(): attribute name must be string")),
-    };
-    
-    // Delete the attribute based on object type
-    match obj {
-        Value::Object { .. } => {
-            // Can't mutate directly
-            Err(anyhow::anyhow!("delattr not fully implemented for objects"))
-        },
-        Value::Module(_, _) => {
-            // Can't mutate directly
-            Err(anyhow::anyhow!("delattr not fully implemented for modules"))
-        },
-        Value::Dict(dict) => {
-            // Can't mutate directly
-            Err(anyhow::anyhow!("delattr not fully implemented for dicts"))
-        },
-        _ => {
-            Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
-        }
-    }
+    // For now, we'll just return None as deleting attributes is complex
+    Ok(Value::None)
 }
-pub fn builtin_isinstance(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bool(false)) }
-pub fn builtin_issubclass(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bool(false)) }
 
-// Collection functions
-pub fn builtin_enumerate(_args: Vec<Value>) -> Result<Value> { Ok(Value::List(HPList::new())) }
-pub fn builtin_zip(_args: Vec<Value>) -> Result<Value> { Ok(Value::List(HPList::new())) }
-pub fn builtin_sorted(_args: Vec<Value>) -> Result<Value> { Ok(Value::List(HPList::new())) }
-pub fn builtin_reversed(_args: Vec<Value>) -> Result<Value> { Ok(Value::List(HPList::new())) }
-pub fn builtin_filter(_args: Vec<Value>) -> Result<Value> { Ok(Value::List(HPList::new())) }
-pub fn builtin_map(_args: Vec<Value>) -> Result<Value> { Ok(Value::List(HPList::new())) }
-
-// Advanced collection functions
-pub fn builtin_all(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bool(true)) }
-pub fn builtin_any(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bool(false)) }
-
-// Built-in type constructors that were missing
-pub fn builtin_bytearray(_args: Vec<Value>) -> Result<Value> { Ok(Value::ByteArray(vec![])) }
-pub fn builtin_bytes(_args: Vec<Value>) -> Result<Value> { Ok(Value::Bytes(vec![])) }
-pub fn builtin_complex(_args: Vec<Value>) -> Result<Value> { Ok(Value::Complex { real: 0.0, imag: 0.0 }) }
-
-// Method implementations for built-in types
-pub fn builtin_str_join(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
-pub fn builtin_str_split(_args: Vec<Value>) -> Result<Value> { 
-    let mut hplist = HPList::new();
-    hplist.append(Value::Str("".to_string()));
-    Ok(Value::List(hplist))
-}
-pub fn builtin_str_strip(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
-pub fn builtin_str_upper(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
-pub fn builtin_str_lower(_args: Vec<Value>) -> Result<Value> { Ok(Value::Str("".to_string())) }
-
-// List methods
-pub fn builtin_list_append(mut args: Vec<Value>) -> Result<Value> {
+fn issubclass_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
-        return Err(anyhow::anyhow!("append() takes exactly one argument"));
+        return Err(anyhow::anyhow!("issubclass() takes exactly 2 arguments ({} given)", args.len()));
     }
     
-    let item = args.pop().unwrap();
-    let list = args.pop().unwrap();
-    
-    match list {
-        Value::List(mut items) => {
-            items.append(item);
-            Ok(Value::None)
-        },
-        _ => Err(anyhow::anyhow!("append() method only available for lists"))
-    }
+    // For now, we'll just return False as subclass checking is complex
+    Ok(Value::Bool(false))
 }
 
-pub fn builtin_list_extend(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 2 {
-        return Err(anyhow::anyhow!("extend() takes exactly one argument"));
+fn super_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    println!("DEBUG: super_builtin called with {} arguments", args.len());
+    
+    if args.len() > 2 {
+        return Err(anyhow::anyhow!("super() takes at most 2 arguments ({} given)", args.len()));
     }
     
-    let iterable = args[1].clone();
-    let list = args[0].clone();
-    
-    match (list, iterable) {
-        (Value::List(mut items), Value::List(other_items)) => {
-            items.extend(other_items);
-            Ok(Value::None)
-        },
-        (Value::List(mut items), Value::Tuple(other_items)) => {
-            items.extend(other_items.iter().cloned());
-            Ok(Value::None)
-        },
-        _ => Err(anyhow::anyhow!("extend() argument must be iterable"))
-    }
-}
-
-pub fn builtin_list_count(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 2 {
-        return Err(anyhow::anyhow!("count() takes exactly one argument"));
-    }
-    
-    let item = &args[1];
-    let list = &args[0];
-    
-    match list {
-        Value::List(items) => {
-            let count = items.count(item);
-            Ok(Value::Int(count as i64))
-        },
-        _ => Err(anyhow::anyhow!("count() method only available for lists"))
-    }
-}
-
-pub fn builtin_list_index(args: Vec<Value>) -> Result<Value> {
-    if args.len() < 2 || args.len() > 4 {
-        return Err(anyhow::anyhow!("index() takes at least 1 argument and at most 3 arguments"));
-    }
-    
-    let item = &args[1];
-    let list = &args[0];
-    
-    match list {
-        Value::List(items) => {
-            let pos = items.index(item, None, None)
-                .map_err(|_| anyhow::anyhow!("list.index(x): x not in list"))?;
-            Ok(Value::Int(pos as i64))
-        },
-        _ => Err(anyhow::anyhow!("index() method only available for lists"))
-    }
-}
-
-// Dict methods
-pub fn builtin_dict_keys(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::List(HPList::new())) 
-}
-
-pub fn builtin_dict_values(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::List(HPList::new())) 
-}
-
-pub fn builtin_dict_items(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::List(HPList::new())) 
-}
-
-pub fn builtin_dict_get(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::None) 
-}
-
-// Int methods
-pub fn builtin_int_bit_length(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::Int(0)) 
-}
-
-// Float methods
-pub fn builtin_float_is_integer(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::Bool(false)) 
-}
-
-// Tuple methods
-pub fn builtin_tuple_count(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::Int(0)) 
-}
-
-pub fn builtin_tuple_index(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::Int(0)) 
-}
-
-// Set methods
-pub fn builtin_set_add(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::None) 
-}
-
-pub fn builtin_set_remove(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::None) 
-}
-
-// Bytes methods
-pub fn builtin_bytes_decode(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::Str("".to_string())) 
-}
-
-// Bytearray methods
-pub fn builtin_bytearray_append(_args: Vec<Value>) -> Result<Value> { 
-    Ok(Value::None) 
-}
-
-pub fn builtin_chr(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(anyhow::anyhow!("chr() takes exactly one argument"));
-    }
-    
-    match &args[0] {
-        Value::Int(n) => {
-            if *n < 0 || *n > 1114111 {
-                return Err(anyhow::anyhow!("chr() arg not in range(0x110000)"));
-            }
-            match char::from_u32(*n as u32) {
-                Some(ch) => Ok(Value::Str(ch.to_string())),
-                None => Err(anyhow::anyhow!("chr() arg not in range(0x110000)")),
+    // For now, we'll create a basic Super object
+    // In a full implementation, we would determine the current class and instance automatically
+    if args.len() == 0 {
+        // No arguments - create an unbound super object
+        // In a full implementation, we would determine the current class and instance from the call stack
+        // For now, we'll create a basic super object that can work with manual arguments
+        println!("DEBUG: Creating unbound super object");
+        Ok(Value::Super("object".to_string(), "object".to_string(), None, None))
+    } else if args.len() == 1 {
+        // One argument - class only
+        println!("DEBUG: Creating super object with 1 argument");
+        match &args[0] {
+            Value::Class { name, methods, mro, .. } => {
+                println!("DEBUG: Class name={}, MRO={:?}", name, mro.get_linearization());
+                
+                // For super() with one argument, we don't need parent methods as they'll be looked up dynamically
+                Ok(Value::Super(name.clone(), "object".to_string(), None, None))
+            },
+            _ => {
+                println!("DEBUG: Invalid argument type for super()");
+                Err(anyhow::anyhow!("super(): argument 1 must be a class"))
             }
         }
-        _ => Err(anyhow::anyhow!("chr() expected int object, not '{}'", type_name(&args[0]))),
-    }
-}
-
-pub fn builtin_ord(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(anyhow::anyhow!("ord() takes exactly one argument"));
-    }
-    
-    match &args[0] {
-        Value::Str(s) => {
-            if s.len() != 1 {
-                return Err(anyhow::anyhow!("ord() expected a character, but string of length {} found", s.len()));
-            }
-            let ch = s.chars().next().unwrap();
-            Ok(Value::Int(ch as u32 as i64))
-        }
-        _ => Err(anyhow::anyhow!("ord() expected str object, not '{}'", type_name(&args[0]))),
-    }
-}
-
-// Math and comparison functions
-pub fn builtin_sum(args: Vec<Value>) -> Result<Value> {
-    if args.is_empty() || args.len() > 2 {
-        return Err(anyhow::anyhow!("sum expected at most 2 arguments, got {}", args.len()));
-    }
-    
-    let start = if args.len() == 2 {
-        args[1].clone()
     } else {
-        Value::Int(0)
-    };
-    
-    match &args[0] {
-        Value::List(items) => {
-            let mut result = start;
-            for item in items {
-                match (&result, item) {
-                    (Value::Int(a), Value::Int(b)) => result = Value::Int(a + b),
-                    (Value::Float(a), Value::Float(b)) => result = Value::Float(a + b),
-                    (Value::Int(a), Value::Float(b)) => result = Value::Float(*a as f64 + b),
-                    (Value::Float(a), Value::Int(b)) => result = Value::Float(a + *b as f64),
-                    _ => return Err(anyhow::anyhow!("unsupported operand type(s) for +: '{}' and '{}'", type_name(&result), type_name(item))),
+        // Two arguments - class and instance
+        println!("DEBUG: Creating super object with 2 arguments");
+        match (&args[0], &args[1]) {
+            (Value::Class { name: class_name, mro, methods, .. }, instance) => {
+                println!("DEBUG: Class name={}, MRO={:?}", class_name, mro.get_linearization());
+                
+                // Determine the parent class from the MRO
+                let parent_class = if let Some(second_class) = mro.get_linearization().get(1) {
+                    second_class.clone()
+                } else {
+                    "object".to_string()
+                };
+                println!("DEBUG: Parent class: {}", parent_class);
+                
+                // For super() with two arguments, we pass the class methods directly
+                // This avoids the need to look up the class in globals
+                println!("DEBUG: Creating super object with parent_methods, methods count: {}", methods.len());
+                for (method_name, _) in methods {
+                    println!("DEBUG: Available method in parent: {}", method_name);
                 }
+                let super_obj = Value::Super(class_name.clone(), parent_class, Some(Box::new(instance.clone())), Some(methods.clone()));
+                println!("DEBUG: Created super object: {:?}", super_obj);
+                Ok(super_obj)
+            },
+            _ => {
+                println!("DEBUG: Invalid argument types for super()");
+                Err(anyhow::anyhow!("super(): invalid arguments"))
             }
-            Ok(result)
-        },
-        _ => Err(anyhow::anyhow!("sum() can't sum {}", type_name(&args[0]))),
+        }
     }
 }
 
-// Advanced iteration functions
-pub fn builtin_aiter(_args: Vec<Value>) -> Result<Value> {
-    // Async iterator - placeholder for future async support
-    Ok(Value::None)
+fn staticmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("staticmethod() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return the function as-is
+    Ok(args[0].clone())
 }
 
-pub fn builtin_anext(_args: Vec<Value>) -> Result<Value> {
-    // Async next - placeholder for future async support  
-    Ok(Value::None)
+fn classmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("classmethod() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return the function as-is
+    Ok(args[0].clone())
 }
 
-// Special object creation
-pub fn builtin_object(_args: Vec<Value>) -> Result<Value> {
+fn dataclass_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("dataclass() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return the class as-is
+    // In a full implementation, we would add __init__, __repr__, __eq__, etc. methods
+    Ok(args[0].clone())
+}
+
+fn enum_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("Enum() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return the class as-is
+    // In a full implementation, we would process the class to create enum members
+    Ok(args[0].clone())
+}
+
+fn property_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 4 {
+        return Err(anyhow::anyhow!("property() takes at most 4 arguments ({} given)", args.len()));
+    }
+    
+    // Create a property object that stores the getter, setter, and deleter functions
+    let getter = if !args.is_empty() { Some(Box::new(args[0].clone())) } else { None };
+    let setter = if args.len() > 1 { Some(Box::new(args[1].clone())) } else { None };
+    let deleter = if args.len() > 2 { Some(Box::new(args[2].clone())) } else { None };
+    let doc = if args.len() > 3 { 
+        match &args[3] {
+            Value::Str(s) => Some(s.clone()),
+            _ => None
+        }
+    } else { 
+        None 
+    };
+    
+    // Create fields for the property object
+    let mut fields = HashMap::new();
+    if let Some(getter_fn) = getter {
+        fields.insert("fget".to_string(), *getter_fn);
+    }
+    if let Some(setter_fn) = setter {
+        fields.insert("fset".to_string(), *setter_fn);
+    }
+    if let Some(deleter_fn) = deleter {
+        fields.insert("fdel".to_string(), *deleter_fn);
+    }
+    if let Some(doc_str) = doc {
+        fields.insert("__doc__".to_string(), Value::Str(doc_str));
+    }
+    
+    // For now, we'll just return a special Property value that contains the functions
+    // In a full implementation, this would be a proper property object
     Ok(Value::Object {
-        class_name: "object".to_string(),
-        fields: HashMap::new(),
+        class_name: "property".to_string(),
+        fields: Rc::new(fields),
         class_methods: HashMap::new(),
-        base_object: crate::base_object::BaseObject::new("object".to_string(), vec![]),
-        mro: crate::base_object::MRO::from_linearization(vec!["object".to_string()]),
+        base_object: BaseObject::new("property".to_string(), vec!["object".to_string()]),
+        mro: MRO::from_linearization(vec!["property".to_string(), "object".to_string()]),
     })
 }
 
-// VM-specific functions with VM context
-pub fn builtin_eval_with_vm(_vm: &mut crate::vm::VM, _args: Vec<Value>) -> Result<Value> {
+fn open_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(anyhow::anyhow!("open() takes at most 3 arguments ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return None as file operations are complex
     Ok(Value::None)
 }
 
-pub fn builtin_exec_with_vm(_vm: &mut crate::vm::VM, _args: Vec<Value>) -> Result<Value> {
+fn iter_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("iter() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    let obj = &args[0];
+    
+    match obj {
+        Value::List(items) => {
+            // Create an Iterator object for the list
+            Ok(Value::Iterator {
+                items: items.as_vec().clone(),
+                current_index: 0,
+            })
+        },
+        Value::Tuple(items) => {
+            // Create an Iterator object for the tuple
+            Ok(Value::Iterator {
+                items: items.clone(),
+                current_index: 0,
+            })
+        },
+        Value::Str(s) => {
+            // Create an Iterator object for the string (character by character)
+            let items: Vec<Value> = s.chars().map(|c| Value::Str(c.to_string())).collect();
+            Ok(Value::Iterator {
+                items,
+                current_index: 0,
+            })
+        },
+        Value::Dict(dict) => {
+            // Create an Iterator object for the dict (keys)
+            let items: Vec<Value> = dict.keys().map(|k| Value::Str(k.clone())).collect();
+            Ok(Value::Iterator {
+                items,
+                current_index: 0,
+            })
+        },
+        Value::Set(items) => {
+            // Create an Iterator object for the set
+            Ok(Value::Iterator {
+                items: items.clone(),
+                current_index: 0,
+            })
+        },
+        _ => Err(anyhow::anyhow!("'{}' object is not iterable", obj.type_name())),
+    }
+}
+
+fn next_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() < 1 || args.len() > 2 {
+        return Err(anyhow::anyhow!("next() takes at least 1 and at most 2 arguments ({} given)", args.len()));
+    }
+    
+    // Get the iterator
+    let iterator = &args[0];
+    
+    // For generators, we would resume execution and get the next value
+    match iterator {
+        Value::Generator { code, frame, finished } => {
+            // For generators, we need to resume execution
+            if *finished {
+                // Generator is finished, raise StopIteration
+                return Err(anyhow::anyhow!("StopIteration"));
+            }
+            
+            // Create a VM instance to execute the generator
+            // For now, we'll just return None as proper generator implementation is complex
+            // In a full implementation, we would resume the generator execution
+            Ok(Value::None)
+        },
+        Value::Iterator { ref items, ref current_index } => {
+            // For Iterator objects, check if we've reached the end
+            if *current_index < items.len() {
+                // Return the current item
+                Ok(items[*current_index].clone())
+            } else {
+                // Iterator exhausted, raise StopIteration
+                Err(anyhow::anyhow!("StopIteration"))
+            }
+        },
+        _ => {
+            // For other iterators, return None for now
+            Ok(Value::None)
+        }
+    }
+}
+
+fn id_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("id() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    // Return a unique ID based on the object's memory address or hash
+    // For now, we'll use a simple hash-based approach
+    let obj = &args[0];
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    
+    let mut hasher = DefaultHasher::new();
+    obj.hash(&mut hasher);
+    let id = hasher.finish() as i64;
+    
+    Ok(Value::Int(id))
+}
+
+fn hash_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("hash() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return a dummy hash
+    Ok(Value::Int(0))
+}
+
+fn help_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("help() takes at most 1 argument ({} given)", args.len()));
+    }
+    
+    println!("Tauraro help system - for more information, visit the documentation");
     Ok(Value::None)
+}
+
+fn dir_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("dir() takes at most 1 argument ({} given)", args.len()));
+    }
+    
+    if args.is_empty() {
+        // dir() without arguments - return names in current local scope
+        // For now, we'll just return an empty list
+        Ok(Value::List(HPList::new()))
+    } else {
+        // dir(obj) - return attributes of the object
+        let obj = &args[0];
+        let mut attrs = Vec::new();
+        
+        // Add built-in attributes based on object type
+        match obj {
+            Value::Object { fields, class_methods, .. } => {
+                // Add field names
+                for field_name in fields.as_ref().keys() {
+                    attrs.push(Value::Str(field_name.clone()));
+                }
+                // Add method names
+                for method_name in class_methods.keys() {
+                    attrs.push(Value::Str(method_name.clone()));
+                }
+            },
+            Value::Class { methods, .. } => {
+                // Add method names
+                for method_name in methods.keys() {
+                    attrs.push(Value::Str(method_name.clone()));
+                }
+            },
+            Value::Module(_, namespace) => {
+                // Add module attributes
+                for attr_name in namespace.keys() {
+                    attrs.push(Value::Str(attr_name.clone()));
+                }
+            },
+            Value::Dict(dict) => {
+                // Add dictionary keys
+                for key in dict.keys() {
+                    attrs.push(Value::Str(key.clone()));
+                }
+            },
+            _ => {
+                // For other types, we could add dunder methods
+                // For now, we'll just return an empty list
+            }
+        }
+        
+        // Sort the attributes
+        attrs.sort_by(|a, b| {
+            if let (Value::Str(a_str), Value::Str(b_str)) = (a, b) {
+                a_str.cmp(b_str)
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
+        
+        Ok(Value::List(HPList::from_values(attrs)))
+    }
+}
+
+fn vars_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("vars() takes at most 1 argument ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return an empty dict
+    Ok(Value::Dict(HashMap::new()))
+}
+
+fn locals_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow::anyhow!("locals() takes no arguments ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return an empty dict
+    Ok(Value::Dict(HashMap::new()))
+}
+
+fn globals_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow::anyhow!("globals() takes no arguments ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return an empty dict
+    Ok(Value::Dict(HashMap::new()))
+}
+
+fn eval_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(anyhow::anyhow!("eval() takes at most 3 arguments ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return None as eval is complex
+    Ok(Value::None)
+}
+
+fn exec_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(anyhow::anyhow!("exec() takes at most 3 arguments ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return None as exec is complex
+    Ok(Value::None)
+}
+
+fn compile_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(anyhow::anyhow!("compile() takes at most 3 arguments ({} given)", args.len()));
+    }
+    
+    // For now, we'll just return None as compile is complex
+    Ok(Value::None)
+}
+
+fn repr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("repr() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    Ok(Value::Str(format!("{:?}", args[0])))
+}
+
+fn ascii_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("ascii() takes exactly 1 argument ({} given)", args.len()));
+    }
+    
+    Ok(Value::Str(format!("{:?}", args[0])))
+}
+
+fn format_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(anyhow::anyhow!("format() takes at most 2 arguments ({} given)", args.len()));
+    }
+    
+    let obj = &args[0];
+    Ok(Value::Str(format!("{}", obj)))
+}
+
+fn exception_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        Ok(Value::Exception {
+            class_name: "Exception".to_string(),
+            message: "".to_string(),
+            traceback: None,
+        })
+    } else {
+        let message = match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        };
+        Ok(Value::Exception {
+            class_name: "Exception".to_string(),
+            message,
+            traceback: None,
+        })
+    }
+}
+
+fn value_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        Ok(Value::Exception {
+            class_name: "ValueError".to_string(),
+            message: "".to_string(),
+            traceback: None,
+        })
+    } else {
+        let message = match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        };
+        Ok(Value::Exception {
+            class_name: "ValueError".to_string(),
+            message,
+            traceback: None,
+        })
+    }
+}
+
+fn type_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        Ok(Value::Exception {
+            class_name: "TypeError".to_string(),
+            message: "".to_string(),
+            traceback: None,
+        })
+    } else {
+        let message = match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        };
+        Ok(Value::Exception {
+            class_name: "TypeError".to_string(),
+            message,
+            traceback: None,
+        })
+    }
+}
+
+fn runtime_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        Ok(Value::Exception {
+            class_name: "RuntimeError".to_string(),
+            message: "".to_string(),
+            traceback: None,
+        })
+    } else {
+        let message = match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        };
+        Ok(Value::Exception {
+            class_name: "RuntimeError".to_string(),
+            message,
+            traceback: None,
+        })
+    }
 }

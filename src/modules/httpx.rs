@@ -1,5 +1,6 @@
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
 use crate::modules::hplist::HPList;
 
 #[cfg(feature = "http")]
@@ -346,7 +347,7 @@ fn httpx_request_helper(method: &str, args: *const Value, argc: usize) -> Value 
         
         Value::Object {
         class_name: "Response".to_string(),
-        fields: response_obj,
+        fields: Rc::new(response_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Response".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Response".to_string(), "object".to_string()])
@@ -366,7 +367,7 @@ fn create_mock_headers() -> Value {
     
     Value::Object {
         class_name: "Headers".to_string(),
-        fields: headers,
+        fields: Rc::new(headers),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Headers".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Headers".to_string(), "object".to_string()])
@@ -391,21 +392,21 @@ fn create_mock_headers() -> Value {
     client_obj.insert("is_closed".to_string(), Value::Bool(false));
     client_obj.insert("cookies".to_string(), Value::Object { 
         class_name: "Cookies".to_string(),
-        fields: HashMap::new(),
+        fields: Rc::new(HashMap::new()),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Cookies".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Cookies".to_string(), "object".to_string()])
     });
     client_obj.insert("headers".to_string(), Value::Object { 
         class_name: "Headers".to_string(),
-        fields: HashMap::new(),
+        fields: Rc::new(HashMap::new()),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Headers".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Headers".to_string(), "object".to_string()])
     });
     client_obj.insert("params".to_string(), Value::Object { 
         class_name: "Params".to_string(),
-        fields: HashMap::new(),
+        fields: Rc::new(HashMap::new()),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Params".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Params".to_string(), "object".to_string()])
@@ -413,7 +414,7 @@ fn create_mock_headers() -> Value {
     
     Value::Object { 
         class_name: "AsyncClient".to_string(),
-        fields: client_obj,
+        fields: Rc::new(client_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("AsyncClient".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["AsyncClient".to_string(), "object".to_string()])
@@ -477,7 +478,7 @@ extern "C" fn client_stream(args: *const Value, argc: usize) -> Value {
     
     Value::Object { 
         class_name: "Response".to_string(),
-        fields: stream_obj,
+        fields: Rc::new(stream_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Response".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Response".to_string(), "object".to_string()])
@@ -518,7 +519,7 @@ extern "C" fn client_build_request(args: *const Value, argc: usize) -> Value {
     request_obj.insert("url".to_string(), Value::Str(url.clone()));
     request_obj.insert("headers".to_string(), Value::Object { 
         class_name: "Headers".to_string(),
-        fields: HashMap::new(),
+        fields: Rc::new(HashMap::new()),  // Wrap with Rc::new
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Headers".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Headers".to_string(), "object".to_string()])
@@ -527,7 +528,7 @@ extern "C" fn client_build_request(args: *const Value, argc: usize) -> Value {
     
     Value::Object { 
         class_name: "Request".to_string(),
-        fields: request_obj,
+        fields: Rc::new(request_obj),  // Wrap with Rc::new
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Request".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Request".to_string(), "object".to_string()])
@@ -579,7 +580,7 @@ extern "C" fn create_request(args: *const Value, argc: usize) -> Value {
     request_obj.insert("url".to_string(), Value::Str(url.clone()));
     request_obj.insert("headers".to_string(), Value::Object { 
         class_name: "Headers".to_string(),
-        fields: HashMap::new(),
+        fields: Rc::new(HashMap::new()),  // Wrap with Rc::new
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Headers".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Headers".to_string(), "object".to_string()])
@@ -589,7 +590,7 @@ extern "C" fn create_request(args: *const Value, argc: usize) -> Value {
     
     Value::Object { 
         class_name: "Request".to_string(),
-        fields: request_obj,
+        fields: Rc::new(request_obj),  // Wrap with Rc::new
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Request".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Request".to_string(), "object".to_string()])
@@ -615,7 +616,7 @@ extern "C" fn create_response(_args: *const Value, _argc: usize) -> Value {
      
      Value::Object {
          class_name: "Response".to_string(),
-         fields: response_obj,
+         fields: Rc::new(response_obj),
          class_methods: HashMap::new(),
          base_object: crate::base_object::BaseObject::new("Response".to_string(), vec!["object".to_string()]),
          mro: crate::base_object::MRO::from_linearization(vec!["Response".to_string(), "object".to_string()])
@@ -634,7 +635,7 @@ extern "C" fn response_json(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "JSONResponse".to_string(),
-        fields: json_obj,
+        fields: Rc::new(json_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("JSONResponse".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["JSONResponse".to_string(), "object".to_string()])
@@ -654,7 +655,7 @@ extern "C" fn create_basic_auth(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "BasicAuth".to_string(),
-        fields: auth_obj,
+        fields: Rc::new(auth_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("BasicAuth".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["BasicAuth".to_string(), "object".to_string()])
@@ -669,7 +670,7 @@ extern "C" fn create_digest_auth(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "DigestAuth".to_string(),
-        fields: auth_obj,
+        fields: Rc::new(auth_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("DigestAuth".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["DigestAuth".to_string(), "object".to_string()])
@@ -684,7 +685,7 @@ extern "C" fn create_limits(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "Limits".to_string(),
-        fields: limits_obj,
+        fields: Rc::new(limits_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Limits".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Limits".to_string(), "object".to_string()])
@@ -700,7 +701,7 @@ extern "C" fn create_timeout(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "Timeout".to_string(),
-        fields: timeout_obj,
+        fields: Rc::new(timeout_obj),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Timeout".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Timeout".to_string(), "object".to_string()])
@@ -720,7 +721,7 @@ extern "C" fn create_status_codes(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "StatusCodes".to_string(),
-        fields: codes,
+        fields: Rc::new(codes),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("StatusCodes".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["StatusCodes".to_string(), "object".to_string()])

@@ -1,45 +1,42 @@
-/// Built-in modules for Tauraro
-/// This module contains implementations of built-in modules similar to Python's standard library
+//! Central module system entry point
 
 use crate::value::Value;
 use std::collections::HashMap;
 
+// Re-export all submodules
+pub mod asyncio;
+pub mod base64;
+pub mod collections;
+pub mod copy;
+pub mod csv;
+pub mod datetime;
+pub mod exceptions;
+pub mod functools;
+pub mod gc;
+pub mod hashlib;
+pub mod hplist;
+pub mod httptools;
+pub mod httpx;
+pub mod io;
+pub mod itertools;
+pub mod json;
+pub mod logging;
+pub mod math;
+pub mod memory;
 pub mod os;
+pub mod pickle;
+pub mod random;
+pub mod re;
+pub mod socket;
 pub mod sys;
 pub mod threading;
 pub mod time;
-pub mod datetime;
-pub mod io;
-pub mod math;
-pub mod random;
-pub mod re;
-pub mod json;
-pub mod functools;
-pub mod itertools;
-pub mod collections;
-pub mod copy;
-pub mod pickle;
-pub mod base64;
-pub mod hashlib;
-pub mod urllib;
-pub mod csv;
-pub mod logging;
 pub mod unittest;
-pub mod socket;
-pub mod asyncio;
-pub mod httptools;
+pub mod urllib;
 pub mod websockets;
-pub mod httpx;
-pub mod hplist;
 
-// Add memory management modules
-pub mod memory;
-pub mod gc;
-
-// Add exceptions module
-pub mod exceptions;
-
-// Note: HPList is now the default list implementation and not exported as a separate module
+// Re-export commonly used items
+pub use crate::modules::hplist::HPList;
 
 /// Initialize all built-in modules and return them as a HashMap
 pub fn init_builtin_modules() -> HashMap<String, Value> {
