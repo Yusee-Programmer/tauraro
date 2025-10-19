@@ -14,4 +14,14 @@ class Person:
 person1 = Person("Alice")
 print(person1.introduce())
 
+# Simple test to understand the issue
+
+class A:
+    def __init__(self, x):
+        self.x = x
+        print("A.__init__ called with x =", x)
+
+a = A(10)
+print("a.x =", a.x)
+
 print("=== Test Completed ===")

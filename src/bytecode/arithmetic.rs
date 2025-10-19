@@ -51,6 +51,48 @@ impl SuperBytecodeVM {
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 * b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * b as f64)),
+            // String repetition: "abc" * 3 or 3 * "abc"
+            (Value::Str(s), Value::Int(n)) => {
+                if n < 0 {
+                    Ok(Value::Str(String::new()))
+                } else {
+                    Ok(Value::Str(s.repeat(n as usize)))
+                }
+            },
+            (Value::Int(n), Value::Str(s)) => {
+                if n < 0 {
+                    Ok(Value::Str(String::new()))
+                } else {
+                    Ok(Value::Str(s.repeat(n as usize)))
+                }
+            },
+            // List repetition: [1, 2] * 3 or 3 * [1, 2]
+            (Value::List(list), Value::Int(n)) => {
+                if n < 0 {
+                    Ok(Value::List(HPList::new()))
+                } else {
+                    let mut result = HPList::new();
+                    for _ in 0..n {
+                        for item in list.iter() {
+                            result.append(item.clone());
+                        }
+                    }
+                    Ok(Value::List(result))
+                }
+            },
+            (Value::Int(n), Value::List(list)) => {
+                if n < 0 {
+                    Ok(Value::List(HPList::new()))
+                } else {
+                    let mut result = HPList::new();
+                    for _ in 0..n {
+                        for item in list.iter() {
+                            result.append(item.clone());
+                        }
+                    }
+                    Ok(Value::List(result))
+                }
+            },
             _ => Err(anyhow!("Unsupported types for multiplication")),
         }
     }

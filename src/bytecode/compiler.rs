@@ -12,6 +12,8 @@ pub struct SuperCompiler {
     pub code: CodeObject,
     next_register: u32,
     current_line: u32,
+    current_class: Option<String>,  // Track the current class being compiled
+    current_method_first_param: Option<String>,  // Track the first parameter of the current method (typically 'self')
 }
 
 // Helper function to check if a statement contains yield expressions
@@ -49,6 +51,9 @@ fn contains_yield(stmt: &Statement) -> bool {
         },
         Statement::AttributeAssignment { object, value, .. } => {
             contains_yield_in_expr(object) || contains_yield_in_expr(value)
+        },
+        Statement::TupleUnpack { value, .. } => {
+            contains_yield_in_expr(value)
         },
         _ => false,
     }
@@ -147,16 +152,29 @@ impl SuperCompiler {
             code: CodeObject::new(filename, "<module>".to_string(), 1),
             next_register: 0,
             current_line: 0,  // Start at 0, will increment to 1 for first statement
+            current_class: None,
+            current_method_first_param: None,
         }
     }
     
     /// Compile a function with the given name, parameters, and body
     pub fn compile_function(name: String, params: &[Param], body: &[Statement]) -> Result<CodeObject> {
+        Self::compile_function_with_class(name, params, body, None)
+    }
+
+    /// Compile a function with optional class context for super() support
+    pub fn compile_function_with_class(name: String, params: &[Param], body: &[Statement], class_name: Option<String>) -> Result<CodeObject> {
         // Create a new compiler for the function
         let mut func_compiler = SuperCompiler::new(format!("<fn:{}>", name));
 
         // Set the code name to the function name so is_in_function_scope() works
         func_compiler.code.name = format!("<fn:{}>", name);
+
+        // Set the class context if provided
+        func_compiler.current_class = class_name;
+        if let Some(first_param) = params.first() {
+            func_compiler.current_method_first_param = Some(first_param.name.clone());
+        }
 
         // Add parameters to the function's varnames
         for param in params.iter() {
@@ -570,8 +588,8 @@ impl SuperCompiler {
                 // Process class body to extract methods and attributes
                 for stmt in body {
                     if let Statement::FunctionDef { name: method_name, params, return_type: _, body: method_body, is_async: _, decorators: _, docstring } = stmt {
-                        // Compile the method using the compile_function helper
-                        let method_code = SuperCompiler::compile_function(method_name.clone(), &params, &method_body)?;
+                        // Compile the method using the compile_function_with_class helper to support super()
+                        let method_code = SuperCompiler::compile_function_with_class(method_name.clone(), &params, &method_body, Some(name.clone()))?;
 
                         let method_value = Value::Closure {
                             name: method_name.clone(),
@@ -600,16 +618,29 @@ impl SuperCompiler {
                 }
 
                 // Build MRO (Method Resolution Order) using C3 linearization
-                // For now, simple linearization: [self, bases..., object]
-                let mut mro_list = vec![name.clone()];
-                for base in &base_names {
-                    if base != "object" && !mro_list.contains(base) {
-                        mro_list.push(base.clone());
+                // Create a map of existing class MROs for linearization
+                let mut class_mros = HashMap::new();
+                // In a full implementation, we would populate this from existing classes
+                // For now, we'll just use the simple approach but with better MRO computation
+
+                // Compute proper MRO using C3 linearization
+                let mro_list = crate::base_object::MRO::compute_c3_linearization(
+                    &name,
+                    &base_names,
+                    &class_mros
+                ).unwrap_or_else(|_| {
+                    // Fallback to simple linearization
+                    let mut linearization = vec![name.clone()];
+                    for base in &base_names {
+                        if base != "object" && !linearization.contains(base) {
+                            linearization.push(base.clone());
+                        }
                     }
-                }
-                if !mro_list.contains(&"object".to_string()) {
-                    mro_list.push("object".to_string());
-                }
+                    if !linearization.contains(&"object".to_string()) {
+                        linearization.push("object".to_string());
+                    }
+                    linearization
+                });
 
                 // Extract metaclass name if provided
                 let metaclass_value = if let Some(mc_expr) = metaclass {
@@ -850,9 +881,37 @@ impl SuperCompiler {
                 let object_reg = self.compile_expression(object)?;
                 let value_reg = self.compile_expression(value)?;
                 let name_idx = self.code.add_name(name);
-                
+
                 // Emit StoreAttr instruction to store attribute to object
                 self.emit(OpCode::StoreAttr, object_reg, name_idx, value_reg, self.current_line);
+                Ok(())
+            }
+            Statement::TupleUnpack { targets, value } => {
+                // Compile tuple unpacking: a, b = (1, 2)
+                let value_reg = self.compile_expression(value)?;
+
+                // For each target, we need to extract the value from the tuple and store it
+                for (i, target) in targets.iter().enumerate() {
+                    // Create a register for the index
+                    let index_const = self.code.add_constant(Value::Int(i as i64));
+                    let index_reg = self.allocate_register();
+                    self.emit(OpCode::LoadConst, index_const, index_reg, 0, self.current_line);
+
+                    // Extract the value at index i from the tuple
+                    let item_reg = self.allocate_register();
+                    self.emit(OpCode::SubscrLoad, value_reg, index_reg, item_reg, self.current_line);
+
+                    // Store the value in the target variable
+                    if self.is_in_function_scope() {
+                        // Function scope - use fast local access
+                        let local_idx = self.get_local_index(target);
+                        self.emit(OpCode::StoreFast, local_idx, item_reg, 0, self.current_line);
+                    } else {
+                        // Global scope - use StoreGlobal
+                        let name_idx = self.code.add_name(target.clone());
+                        self.emit(OpCode::StoreGlobal, name_idx, item_reg, 0, self.current_line);
+                    }
+                }
                 Ok(())
             }
             _ => {
@@ -1066,7 +1125,6 @@ impl SuperCompiler {
                         }
                     }
                 }
-
                 // If we have keyword arguments, we need to pass them as a special argument
                 // But only for user-defined functions that have **kwargs parameters
                 if !kwargs.is_empty() {
@@ -1107,7 +1165,6 @@ impl SuperCompiler {
                         compiled_arg_regs.push(kwargs_marker_reg);
                     }
                 }
-
                 // CRITICAL: Move arguments to consecutive registers starting from func_reg + 1
                 // The CallFunction handler expects arguments in consecutive registers
                 for (i, &arg_reg) in compiled_arg_regs.iter().enumerate() {
@@ -1118,7 +1175,6 @@ impl SuperCompiler {
                         self.emit(OpCode::LoadLocal, arg_reg, target_reg, 0, self.current_line);
                     }
                 }
-
                 let result_reg = self.allocate_register();
                 self.emit(OpCode::CallFunction, func_reg, compiled_arg_regs.len() as u32, result_reg, self.current_line);
 
@@ -1162,6 +1218,23 @@ impl SuperCompiler {
                 // arg1 = number of items, arg2 = first item register, arg3 = result register
                 let first_reg = if item_regs.is_empty() { 0 } else { item_regs[0] };
                 self.emit(OpCode::BuildList, item_regs.len() as u32, first_reg, result_reg, self.current_line);
+
+                Ok(result_reg)
+            }
+            Expr::Tuple(items) => {
+                // Compile each item and store in consecutive registers
+                let mut item_regs = Vec::new();
+                for item in items {
+                    let item_reg = self.compile_expression(item)?;
+                    item_regs.push(item_reg);
+                }
+
+                let result_reg = self.allocate_register();
+
+                // Use the BuildTuple opcode to create a tuple with the items
+                // arg1 = number of items, arg2 = first item register, arg3 = result register
+                let first_reg = if item_regs.is_empty() { 0 } else { item_regs[0] };
+                self.emit(OpCode::BuildTuple, item_regs.len() as u32, first_reg, result_reg, self.current_line);
 
                 Ok(result_reg)
             }
@@ -1304,11 +1377,23 @@ impl SuperCompiler {
                         crate::ast::FormatPart::Expression { expr, format_spec: _, conversion: _ } => {
                             // Compile expression part and convert to string
                             let expr_reg = self.compile_expression(expr)?;
-                            
+
                             // Call str() builtin on the expression result
-                            // For now, we'll use a simplified approach
-                            // In a full implementation, we would call the str() builtin function
-                            part_regs.push(expr_reg);
+                            // Load the str function
+                            let str_func_idx = self.code.add_name("str".to_string());
+                            let str_func_reg = self.allocate_register();
+                            let cache_idx = self.code.add_inline_cache();
+                            self.emit(OpCode::LoadGlobal, str_func_idx, cache_idx, str_func_reg, self.current_line);
+
+                            // Move the expression result to the next register (argument position)
+                            let arg_reg = str_func_reg + 1;
+                            self.emit(OpCode::LoadLocal, expr_reg, arg_reg, 0, self.current_line);
+
+                            // Call str() with the expression result as argument
+                            let result_reg = self.allocate_register();
+                            self.emit(OpCode::CallFunction, str_func_reg, 1, result_reg, self.current_line);
+
+                            part_regs.push(result_reg);
                         }
                     }
                 }

@@ -273,15 +273,44 @@ impl Parser {
                 }
                 
                 // Try expression statement or variable definition
-                let expr = self.expression()?;
+                // Check for tuple unpacking pattern: a, b = value
+                let checkpoint = self.current;
+                let first_expr = self.expression()?;
+
+                // Check if this is a tuple (comma after first expression) before =
+                if self.match_token(&[Token::Comma]) {
+                    // This is potentially a tuple unpacking
+                    let mut tuple_items = vec![first_expr];
+
+                    // Parse remaining tuple elements
+                    while !self.check(&Token::Assign) && !self.is_at_end() {
+                        tuple_items.push(self.expression()?);
+                        if !self.match_token(&[Token::Comma]) {
+                            break;
+                        }
+                    }
+
+                    // Now expect an assignment
+                    if self.match_token(&[Token::Assign]) {
+                        return self.variable_def(Expr::Tuple(tuple_items));
+                    } else {
+                        // Not an assignment, treat as expression statement
+                        // This is an error case - tuples without parentheses in expression context
+                        return Err(ParseError::InvalidSyntax {
+                            message: "Tuple expression needs parentheses or assignment".to_string(),
+                        });
+                    }
+                }
+
+                // Not a tuple, check for regular assignment
                 if self.match_token(&[Token::Assign]) {
-                    self.variable_def(expr)
+                    self.variable_def(first_expr)
                 } else if self.check_compound_assignment() {
-                    self.compound_assignment(expr)
+                    self.compound_assignment(first_expr)
                 } else {
                     // Optional semicolon or newline for expression statements
                     self.match_token(&[Token::Semicolon, Token::Newline]);
-                    Ok(Statement::Expression(expr))
+                    Ok(Statement::Expression(first_expr))
                 }
             }
         }
@@ -1103,9 +1132,42 @@ impl Parser {
                 _ => unreachable!(),
             }
         } else if self.match_token(&[Token::LParen]) {
-            let expr = self.expression()?;
-            self.consume(Token::RParen, "Expected ')' after expression")?;
-            Ok(expr)
+            // Check for empty tuple
+            if self.match_token(&[Token::RParen]) {
+                return Ok(Expr::Tuple(Vec::new()));
+            }
+            
+            let first_expr = self.expression()?;
+            
+            // Check if this is a tuple (has comma) or just grouped expression
+            if self.match_token(&[Token::Comma]) {
+                // Tuple
+                let mut items = vec![first_expr];
+                while !self.check(&Token::RParen) {
+                    if self.match_token(&[Token::Comma]) {
+                        // Allow trailing comma
+                        if self.check(&Token::RParen) {
+                            break;
+                        }
+                        items.push(self.expression()?);
+                    } else {
+                        items.push(self.expression()?);
+                        // After expression, we should have either comma or closing paren
+                        if !self.check(&Token::RParen) && !self.check(&Token::Comma) {
+                            return Err(ParseError::UnexpectedToken {
+                                expected: "',' or ')'".to_string(),
+                                found: format!("{:?}", self.peek().token),
+                            });
+                        }
+                    }
+                }
+                self.consume(Token::RParen, "Expected ')' after tuple items")?;
+                Ok(Expr::Tuple(items))
+            } else {
+                // Just grouped expression
+                self.consume(Token::RParen, "Expected ')' after expression")?;
+                Ok(first_expr)
+            }
         } else if self.match_token(&[Token::LBracket]) {
             // List or list comprehension
             if self.check(&Token::RBracket) {
@@ -1366,7 +1428,7 @@ impl Parser {
     fn variable_def(&mut self, target: Expr) -> Result<Statement, ParseError> {
         let value = self.expression()?;
         self.match_token(&[Token::Semicolon, Token::Newline]);
-        
+
         match target {
             Expr::Identifier(name) => Ok(Statement::VariableDef {
                 name,
@@ -1383,6 +1445,19 @@ impl Parser {
                 index: *index,
                 value,
             }),
+            Expr::Tuple(items) => {
+                // Tuple unpacking: a, b = (1, 2)
+                let mut targets = Vec::new();
+                for item in items {
+                    match item {
+                        Expr::Identifier(name) => targets.push(name),
+                        _ => return Err(ParseError::InvalidSyntax {
+                            message: "Tuple unpacking targets must be identifiers".to_string(),
+                        }),
+                    }
+                }
+                Ok(Statement::TupleUnpack { targets, value })
+            },
             _ => Err(ParseError::InvalidSyntax {
                 message: "Invalid target for assignment".to_string(),
             }),
@@ -1604,34 +1679,44 @@ impl Parser {
                         });
                     }
                     
-                    // For now, we'll create a simple parser for the expression content
-                    // In a full implementation, we would need to parse the expression properly
-                    // But for now, we'll just treat it as an identifier
+                    // Parse the expression content using a temporary lexer and parser
                     let expr_content = expr_content.trim();
                     if !expr_content.is_empty() {
-                        // Create a temporary parser for the expression
-                        // This is a simplified approach - in a real implementation we'd need a better solution
-                        let expr = if expr_content.contains('.') {
-                            // Handle attribute access like self.name
-                            let parts: Vec<&str> = expr_content.split('.').collect();
-                            if parts.len() == 2 {
-                                Expr::Attribute {
-                                    object: Box::new(Expr::Identifier(parts[0].to_string())),
-                                    name: parts[1].to_string(),
+                        // Use the lexer to tokenize the expression
+                        use crate::lexer::Lexer;
+
+                        let lexer = Lexer::new(expr_content);
+                        match lexer.collect::<Result<Vec<_>, String>>() {
+                            Ok(tokens) => {
+                                // Create a temporary parser for the expression
+                                let mut expr_parser = Parser::new(tokens);
+                                match expr_parser.expression() {
+                                    Ok(expr) => {
+                                        parts.push(crate::ast::FormatPart::Expression {
+                                            expr,
+                                            format_spec: None,
+                                            conversion: None,
+                                        });
+                                    }
+                                    Err(_) => {
+                                        // If parsing fails, treat as identifier (backwards compatibility)
+                                        parts.push(crate::ast::FormatPart::Expression {
+                                            expr: Expr::Identifier(expr_content.to_string()),
+                                            format_spec: None,
+                                            conversion: None,
+                                        });
+                                    }
                                 }
-                            } else {
-                                // For more complex cases, fall back to identifier
-                                Expr::Identifier(expr_content.to_string())
                             }
-                        } else {
-                            Expr::Identifier(expr_content.to_string())
-                        };
-                        
-                        parts.push(crate::ast::FormatPart::Expression {
-                            expr,
-                            format_spec: None,
-                            conversion: None,
-                        });
+                            Err(_) => {
+                                // If lexing fails, treat as identifier (backwards compatibility)
+                                parts.push(crate::ast::FormatPart::Expression {
+                                    expr: Expr::Identifier(expr_content.to_string()),
+                                    format_spec: None,
+                                    conversion: None,
+                                });
+                            }
+                        }
                     }
                 }
                 '}' => {

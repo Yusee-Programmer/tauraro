@@ -827,10 +827,40 @@ fn isinstance_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     let obj = &args[0];
     let type_info = &args[1];
     
-    match type_info {
-        Value::Str(type_name) => Ok(Value::Bool(obj.type_name() == type_name)),
-        _ => Err(anyhow::anyhow!("isinstance() arg 2 must be a type or tuple of types")),
-    }
+    // Handle both string type names and actual class types
+    let is_instance = match type_info {
+        Value::Str(type_name) => {
+            // Original string-based check
+            obj.type_name() == type_name
+        },
+        Value::Class { name, .. } => {
+            // Check if object is instance of this class
+            match obj {
+                Value::Object { class_name, .. } => {
+                    class_name == name
+                },
+                _ => false
+            }
+        },
+        Value::Tuple(items) => {
+            // Check if object is instance of any type in the tuple
+            items.iter().any(|item| {
+                match item {
+                    Value::Str(type_name) => obj.type_name() == type_name,
+                    Value::Class { name, .. } => {
+                        match obj {
+                            Value::Object { class_name, .. } => class_name == name,
+                            _ => false
+                        }
+                    },
+                    _ => false
+                }
+            })
+        },
+        _ => return Err(anyhow::anyhow!("isinstance() arg 2 must be a type, a tuple of types, or a string")),
+    };
+    
+    Ok(Value::Bool(is_instance))
 }
 
 fn type_builtin(args: Vec<Value>) -> anyhow::Result<Value> {

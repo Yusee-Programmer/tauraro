@@ -3,7 +3,8 @@
     "allow": [
       "Bash(cargo build:*)",
       "Bash(cargo run:*)",
-      "Bash(target/debug/tauraro.exe run:*)"
+      "Bash(target/debug/tauraro.exe run:*)",
+      "Bash(target/debug/tauraro.exe:*)"
     ],
     "deny": [],
     "ask": []

@@ -2,7 +2,7 @@
 
 use crate::value::Value;
 use std::collections::HashMap;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseObject {
@@ -125,13 +125,7 @@ impl MRO {
         &self.linearization
     }
     
-    pub fn find_method(&self, method_name: &str, class_methods: &HashMap<String, Value>) -> Option<DunderMethod> {
-        // First check if the method exists in the current class methods
-        if class_methods.contains_key(method_name) {
-            // This is a simplified check - in a full implementation we would return the actual method
-            return Some(DunderMethod::Call); // Placeholder
-        }
-        
+    pub fn find_method(&self, method_name: &str, _class_methods: &HashMap<String, Value>) -> Option<DunderMethod> {
         // For now, we'll just check if the method exists in base methods
         let base_methods = BaseObject::get_base_methods();
         base_methods.get(method_name).copied()
@@ -144,73 +138,81 @@ impl MRO {
         class_mros: &HashMap<String, MRO>,
     ) -> Result<Vec<String>> {
         // Implement proper C3 linearization algorithm
-        // C3 linearization algorithm:
-        // L(Class) = Class + merge(L(parent1), L(parent2), ..., parent1, parent2, ...)
         
-        // Create lists for merge operation
-        let mut merge_lists: Vec<Vec<String>> = Vec::new();
+        // Create lists for each base class MRO + the base class itself
+        let mut sequences = Vec::new();
         
-        // Add MRO of each base class
-        for base in bases {
-            if let Some(base_mro) = class_mros.get(base) {
-                merge_lists.push(base_mro.get_linearization().clone());
+        // Add each base class MRO as a sequence
+        for base_name in bases {
+            if let Some(base_mro) = class_mros.get(base_name) {
+                // Add the MRO sequence
+                sequences.push(base_mro.get_linearization().clone());
             } else {
-                // If base class MRO is not available, create a simple one
-                merge_lists.push(vec![base.clone(), "object".to_string()]);
+                // If we don't have the base MRO, just add the base class
+                sequences.push(vec![base_name.clone()]);
             }
         }
         
-        // Add the base classes themselves as a list
-        let mut bases_list = bases.to_vec();
-        bases_list.push("object".to_string()); // All classes ultimately inherit from object
-        merge_lists.push(bases_list);
+        // Add the bases themselves as the final sequence
+        sequences.push(bases.to_vec());
         
         // Start with the class itself
         let mut result = vec![class_name.to_string()];
         
-        // Merge operation
-        while !merge_lists.is_empty() {
-            let mut _found = false;
-            let candidate = {
-                // Find a candidate class that is not in the tail of any list
-                let mut candidate_opt = None;
-                for list in &merge_lists {
-                    if !list.is_empty() {
-                        let candidate = &list[0];
-                        let mut is_valid = true;
-                        
-                        // Check if candidate is in the tail of any other list
-                        for other_list in &merge_lists {
-                            if other_list.len() > 1 && other_list[1..].contains(candidate) {
-                                is_valid = false;
-                                break;
-                            }
-                        }
-                        
-                        if is_valid {
-                            candidate_opt = Some(candidate.clone());
+        // Apply C3 merge algorithm
+        while !sequences.is_empty() {
+            // Find a good head (a class that appears at the head of at least one sequence
+            // and doesn't appear in the tail of any sequence)
+            let mut found = false;
+            let mut i = 0;
+            while i < sequences.len() {
+                if !sequences[i].is_empty() {
+                    let head = sequences[i][0].clone();
+                    // Check if this head appears in any tail
+                    let mut in_tail = false;
+                    for seq in &sequences {
+                        if seq.len() > 1 && seq[1..].contains(&head) {
+                            in_tail = true;
                             break;
                         }
                     }
+                    
+                    if !in_tail {
+                        // This is a good head, add it to result
+                        result.push(head.clone());
+                        
+                        // Remove this head from all sequences
+                        let mut j = 0;
+                        while j < sequences.len() {
+                            if !sequences[j].is_empty() && sequences[j][0] == head {
+                                sequences[j].remove(0);
+                                // If sequence is now empty, remove it
+                                if sequences[j].is_empty() {
+                                    sequences.remove(j);
+                                } else {
+                                    j += 1;
+                                }
+                            } else {
+                                j += 1;
+                            }
+                        }
+                        
+                        found = true;
+                        break;
+                    }
                 }
-                if let Some(c) = candidate_opt {
-                    c
-                } else {
-                    // Inconsistent hierarchy - this should not happen in valid Python code
-                    return Err(anyhow::anyhow!("Cannot create a consistent method resolution order (MRO) for class {}", class_name));
-                }
-            };
-            
-            // Add candidate to result
-            result.push(candidate.clone());
-            
-            // Remove candidate from all lists
-            for list in merge_lists.iter_mut() {
-                list.retain(|item| item != &candidate);
+                i += 1;
             }
             
-            // Remove empty lists
-            merge_lists.retain(|list| !list.is_empty());
+            if !found {
+                // Cannot create consistent MRO
+                return Err(anyhow::anyhow!("Cannot create a consistent method resolution order (MRO) for class {}", class_name));
+            }
+        }
+        
+        // Add object as the ultimate base class if not already present
+        if !result.contains(&"object".to_string()) {
+            result.push("object".to_string());
         }
         
         Ok(result)
@@ -226,6 +228,13 @@ impl MRO {
                 if let Value::Class { methods, .. } = class_value {
                     // Check if the method exists in this class
                     if let Some(method) = methods.get(method_name) {
+                        return Some(method.clone());
+                    }
+                }
+                // Also check Object values (instances) for class methods
+                else if let Value::Object { class_methods, .. } = class_value {
+                    // Check if the method exists in this object's class methods
+                    if let Some(method) = class_methods.get(method_name) {
                         return Some(method.clone());
                     }
                 }

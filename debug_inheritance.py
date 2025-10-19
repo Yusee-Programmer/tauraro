@@ -1,22 +1,28 @@
-# Debug test for inheritance
-print("Creating classes...")
+# Debug inheritance to understand the issue
+
+print("=== Debug Inheritance ===")
 
 class A:
     def __init__(self, x):
-        self.x = x
         print("A.__init__ called with x =", x)
+        self.x = x
+        print("A.__init__ finished, self.x =", self.x)
 
 class B(A):
     def __init__(self, x, y):
         print("B.__init__ called with x =", x, "y =", y)
-        # This is the critical call that was failing
-        A.__init__(self, x)
+        print("Before calling A.__init__, self.x =", getattr(self, 'x', 'NOT_SET'))
+        A.__init__(self, x)  # Call parent constructor
+        print("After calling A.__init__, self.x =", getattr(self, 'x', 'NOT_SET'))
         self.y = y
-        print("B.__init__ completed")
+        print("B.__init__ finished, self.x =", getattr(self, 'x', 'NOT_SET'), "self.y =", self.y)
 
-print("Classes created")
-print("Creating B instance...")
-b = B(1, 2)
-print("Instance created:", b)
-print("b.x =", b.x)
-print("b.y =", b.y)
+# Create instance
+print("Creating B instance")
+b = B(10, 20)
+
+# Try to access the field set in parent constructor
+print("Final check: b.x =", getattr(b, 'x', 'NOT_SET'))
+print("Final check: b.y =", getattr(b, 'y', 'NOT_SET'))
+
+print("=== Debug Completed ===")
