@@ -1786,6 +1786,33 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("Method '{}' not found in class methods", method_name));
                         }
                     },
+                    Value::Class { name, methods, .. } => {
+                        // For Class objects, we need to handle method calls by looking up the method in the class
+                        println!("DEBUG: CallMethod - Class object, method_name={}", method_name);
+                        println!("DEBUG: CallMethod - Class name: {}", name);
+                        
+                        if let Some(method) = methods.get(&method_name) {
+                            // For class methods, the first argument should be the instance
+                            // This is the correct Python semantics for calling class methods on instances
+                            if args.is_empty() {
+                                return Err(anyhow!("Method '{}' requires at least one argument (self)", method_name));
+                            }
+                            
+                            // The first argument is the instance (self)
+                            let instance = args[0].clone();
+                            let remaining_args = args[1..].to_vec();
+                            
+                            // Create arguments with instance as self
+                            let mut method_args = vec![instance];
+                            method_args.extend(remaining_args);
+                            
+                            // Call the method through the VM
+                            // Pass object_reg as the result register so the return value is stored correctly
+                            self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                        } else {
+                            return Err(anyhow!("Method '{}' not found in class methods", method_name));
+                        }
+                    },
                     _ => {
                         // For builtin types, try to get method and call it
                         if let Some(method) = object_value.get_method(&method_name) {
