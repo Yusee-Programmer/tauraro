@@ -1106,6 +1106,30 @@ impl SuperCompiler {
                 Ok(result_reg)
             }
             Expr::Call { func, args, kwargs } => {
+                // Special handling for super() calls with no arguments
+                if let Expr::Identifier(ref name) = *func {
+                    if name == "super" && args.is_empty() && kwargs.is_empty() && self.current_class.is_some() {
+                        // This is a super() call with no arguments in a method context
+                        // We need to create a super object with the current class context
+                        let result_reg = self.allocate_register();
+                        
+                        // Get the current class name
+                        if let Some(ref class_name) = self.current_class {
+                            // Get the first parameter name (typically 'self')
+                            if let Some(ref self_param) = self.current_method_first_param {
+                                // Load the self parameter (first argument)
+                                let self_reg = 0; // First parameter is at register 0
+                                
+                                // Emit a special opcode for zero-argument super() calls
+                                let class_name_const = self.code.add_constant(Value::Str(class_name.clone()));
+                                let self_param_const = self.code.add_constant(Value::Str(self_param.clone()));
+                                self.emit(OpCode::LoadZeroArgSuper, class_name_const, self_reg, result_reg, self.current_line);
+                                return Ok(result_reg);
+                            }
+                        }
+                    }
+                }
+                
                 let func_reg = self.compile_expression(*func)?;
 
                 // Compile all positional arguments first

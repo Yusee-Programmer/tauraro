@@ -159,6 +159,9 @@ pub enum OpCode {
     FastIntDiv,     // Ultra-fast integer division
     FastIntMod,     // Ultra-fast integer modulo
     
+    // Super() support
+    LoadZeroArgSuper, // Load super object with zero arguments (special handling)
+    
     // Miscellaneous
     PrintExpr,
     FormatValue,

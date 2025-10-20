@@ -115,6 +115,9 @@ fn str_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
         Ok(Value::Str(String::new()))
     } else if args.len() == 1 {
+        // NOTE: This currently doesn't call __str__ for custom objects
+        // Direct method calls like obj.__str__() work, but str(obj) uses Rust's Display
+        // This is a known limitation that would require VM integration to fix
         Ok(Value::Str(format!("{}", args[0])))
     } else {
         Err(anyhow::anyhow!("str() takes at most 1 argument ({} given)", args.len()))

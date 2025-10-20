@@ -248,13 +248,21 @@ impl SuperBytecodeVM {
                                 
                                 // CRITICAL FIX: For object field persistence during inheritance
                                 // When an __init__ frame returns, we need to ensure that any modifications
-                                // to the object are properly propagated back to the caller's object registers
+                                // to the object are properly propagated back to the caller's object registers AND locals[0]
                                 // Check if this is an __init__ frame and update object registers if needed
                                 if is_init_frame {
-                                    // For __init__ frames, we also need to update any object registers in the caller frame
-                                    // that might be referencing the same object instance
-                                    // Update the specific result register that was used for the method call
-                                    println!("DEBUG: Updated specific caller frame register {} with modified object", result_reg);
+                                    // For __init__ frames, we also need to update locals[0] in the caller frame
+                                    // This is critical for super() calls where the parent __init__ modifies the instance
+                                    // and the child __init__ needs to see those modifications in its locals[0]
+                                    println!("DEBUG: __init__ frame returned, updating caller frame's locals[0]");
+
+                                    // Update locals[0] with the modified instance from result_reg
+                                    if !self.frames[caller_frame_idx].locals.is_empty() {
+                                        // The modified instance is now in result_reg of the caller frame
+                                        let modified_instance = self.frames[caller_frame_idx].registers[result_reg as usize].value.clone();
+                                        self.frames[caller_frame_idx].locals[0] = RcValue::new(modified_instance);
+                                        println!("DEBUG: Successfully updated caller frame's locals[0] with modified instance");
+                                    }
                                 }
                             } else {
                                 println!("DEBUG: ERROR: caller_frame_idx {} >= frames.len() {}", caller_frame_idx, self.frames.len());
@@ -527,16 +535,34 @@ impl SuperBytecodeVM {
                 let left_reg = arg1;
                 let right_reg = arg2;
                 let result_reg = arg3;
-                
-                if left_reg as usize >= self.frames[frame_idx].registers.len() || 
+
+                if left_reg as usize >= self.frames[frame_idx].registers.len() ||
                    right_reg as usize >= self.frames[frame_idx].registers.len() ||
                    result_reg as usize >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("BinaryAddRR: register index out of bounds"));
                 }
-                
+
                 let left = &self.frames[frame_idx].registers[left_reg as usize];
                 let right = &self.frames[frame_idx].registers[right_reg as usize];
-                
+
+                // Check for __add__ method (operator overloading)
+                if let Some(add_method) = left.value.get_method("__add__") {
+                    println!("DEBUG: Found __add__ method, calling it");
+                    // Call __add__(self, other)
+                    let add_args = vec![left.value.clone(), right.value.clone()];
+                    let return_value = self.call_function_fast(
+                        add_method,
+                        add_args,
+                        HashMap::new(),
+                        Some(frame_idx),
+                        Some(result_reg)
+                    )?;
+
+                    // Store the result
+                    self.frames[frame_idx].registers[result_reg as usize] = RcValue::new(return_value);
+                    return Ok(None);
+                }
+
                 // Fast path for common operations
                 let result = match (&left.value, &right.value) {
                     (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
@@ -688,7 +714,26 @@ impl SuperBytecodeVM {
                 let left_reg = arg1 as usize;
                 let right_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
-                
+
+                // Check for __add__ method first (operator overloading)
+                let left_val = &self.frames[frame_idx].registers[left_reg].value;
+                if let Some(add_method) = left_val.get_method("__add__") {
+                    println!("DEBUG: FastIntAdd found __add__ method");
+                    let left_clone = left_val.clone();
+                    let right_clone = self.frames[frame_idx].registers[right_reg].value.clone();
+                    let add_args = vec![left_clone, right_clone];
+                    let return_value = self.call_function_fast(
+                        add_method,
+                        add_args,
+                        HashMap::new(),
+                        Some(frame_idx),
+                        Some(result_reg as u32)
+                    )?;
+
+                    self.frames[frame_idx].registers[result_reg] = RcValue::new(return_value);
+                    return Ok(None);
+                }
+
                 // Direct access to integer values without cloning for maximum performance
                 if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
                     if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
@@ -1753,20 +1798,44 @@ impl SuperBytecodeVM {
                     Value::Super(current_class, parent_class, instance, parent_methods) => {
                         // Handle super() object method calls
                         println!("DEBUG: CallMethod - Super object, method_name={}", method_name);
-                        
+
                         if let Some(instance_value) = instance {
                             // Look for the method in the parent class methods
                             if let Some(parent_methods_map) = parent_methods {
                                 println!("DEBUG: CallMethod - Super object, parent_methods count: {}", parent_methods_map.len());
                                 if let Some(method) = parent_methods_map.get(&method_name) {
                                     println!("DEBUG: CallMethod - Found method {} in parent_methods", method_name);
-                                    // Create arguments with self as the first argument
-                                    let mut method_args = vec![*instance_value.clone()];
+
+                                    // CRITICAL FIX for super() attribute propagation:
+                                    // The issue is that we need to pass locals[0] (the actual instance)
+                                    // to the parent method, not the instance from the Super object.
+                                    // This ensures that all modifications happen to the same instance object.
+
+                                    // Get the actual instance from locals[0] (this is 'self')
+                                    let current_instance = if !self.frames[frame_idx].locals.is_empty() {
+                                        self.frames[frame_idx].locals[0].value.clone()
+                                    } else {
+                                        *instance_value.clone()
+                                    };
+
+                                    println!("DEBUG: CallMethod - Super: calling parent method with instance from locals[0]");
+                                    println!("DEBUG: CallMethod - Super: object_reg={}, frame_idx={}", object_reg, frame_idx);
+
+                                    // Create arguments with the current instance as self
+                                    let mut method_args = vec![current_instance];
                                     method_args.extend(args);
-                                    
-                                    // Call the method through the VM and capture the return value
-                                    // Pass object_reg as the result register so the return value is stored correctly
-                                    self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+
+                                    // Call the parent method
+                                    // The key is NOT to extract anything after - just let StoreAttr do its job
+                                    // StoreAttr will update locals[0] in the child frame,
+                                    // and also update the result_reg in THIS frame (object_reg)
+                                    self.call_function_fast(
+                                        method.clone(),
+                                        method_args,
+                                        HashMap::new(),
+                                        Some(frame_idx),
+                                        Some(object_reg as u32)
+                                    )?
                                 } else {
                                     println!("DEBUG: CallMethod - Method {} not found in parent_methods", method_name);
                                     // Print all available methods for debugging
@@ -1803,20 +1872,35 @@ impl SuperBytecodeVM {
                             _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.as_ref().type_name())),
                         }
                     },
-                    Value::Object { class_methods, .. } => {
+                    Value::Object { class_methods, mro, .. } => {
                         // For regular objects, we need to handle method calls through the VM
-                        // Extract the object and find the method in class_methods
-                        if let Some(method) = class_methods.get(&method_name) {
+                        // First, try to find the method in class_methods
+                        let method = if let Some(method) = class_methods.get(&method_name) {
+                            Some(method.clone())
+                        } else {
+                            // Method not found in immediate class, search through MRO
+                            println!("DEBUG: CallMethod - Method '{}' not in immediate class, checking MRO", method_name);
+
+                            // Use MRO to find the method in parent classes
+                            // Convert globals from HashMap<String, RcValue> to HashMap<String, Value>
+                            let globals_values: HashMap<String, Value> = self.frames[frame_idx].globals
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.value.clone()))
+                                .collect();
+                            mro.find_method_in_mro(&method_name, &globals_values)
+                        };
+
+                        if let Some(method) = method {
                             // Create arguments with self as the first argument
                             let mut method_args = vec![self.frames[frame_idx].registers[object_reg].value.clone()];
                             method_args.extend(args.clone());
-                            
+
                             // Call the method through the VM and capture the return value
                             // Pass object_reg as the result register so the return value is stored correctly
                             let method_result = self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
                             method_result
                         } else {
-                            return Err(anyhow!("Method '{}' not found in class methods", method_name));
+                            return Err(anyhow!("Method '{}' not found in class or parent classes", method_name));
                         }
                     },
                     Value::Class { name, methods, .. } => {
@@ -1890,6 +1974,21 @@ impl SuperBytecodeVM {
                     // Method returned None - the object_reg may have been updated by StoreAttr during method execution
                     // Don't overwrite it with None; keep the potentially modified object
                     println!("DEBUG: CallMethod - Method returned None, preserving object_reg");
+                    println!("DEBUG: CallMethod - object_reg contains: {}", self.frames[frame_idx].registers[object_reg].value.type_name());
+
+                    // CRITICAL FIX: After a super() method call, sync locals[0] with object_reg
+                    // This ensures that subsequent code in this method sees the modifications
+                    // made by the parent method
+                    if !self.frames[frame_idx].locals.is_empty() {
+                        // Check if object_reg contains an Object (instance)
+                        if matches!(self.frames[frame_idx].registers[object_reg].value, Value::Object { .. }) {
+                            println!("DEBUG: CallMethod - Syncing locals[0] with modified object_reg");
+                            self.frames[frame_idx].locals[0] = self.frames[frame_idx].registers[object_reg].clone();
+                        } else {
+                            println!("DEBUG: CallMethod - object_reg is NOT an Object, it's a {}",
+                                   self.frames[frame_idx].registers[object_reg].value.type_name());
+                        }
+                    }
                 } else {
                     // Method returned an actual value - store it
                     println!("DEBUG: CallMethod - Method returned value, storing in object_reg");
@@ -2869,6 +2968,74 @@ impl SuperBytecodeVM {
                 
                 Ok(None)
             }
+            OpCode::LoadZeroArgSuper => {
+                // Handle zero-argument super() calls
+                let class_name_const_idx = arg1 as usize;
+                let self_reg = arg2 as usize;
+                let result_reg = arg3;
+                
+                if class_name_const_idx >= self.frames[frame_idx].code.constants.len() {
+                    return Err(anyhow!("LoadZeroArgSuper: class name constant index {} out of bounds (len: {})", class_name_const_idx, self.frames[frame_idx].code.constants.len()));
+                }
+                
+                if self_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("LoadZeroArgSuper: self register index {} out of bounds (len: {})", self_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                // Get the class name from constants
+                let class_name = match &self.frames[frame_idx].code.constants[class_name_const_idx] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(anyhow!("LoadZeroArgSuper: class name constant must be a string")),
+                };
+                
+                // Get the self instance from registers (first local variable which should be 'self')
+                let self_instance = if !self.frames[frame_idx].locals.is_empty() {
+                    self.frames[frame_idx].locals[0].value.clone()
+                } else {
+                    self.frames[frame_idx].registers[self_reg].value.clone()
+                };
+                
+                // Get the class methods from globals
+                let super_obj = if let Some(class_value) = self.frames[frame_idx].globals.get(&class_name) {
+                    match &class_value.value {
+                        Value::Class { name, methods, mro, .. } => {
+                            // Determine the parent class from the MRO
+                            let parent_class = if let Some(second_class) = mro.get_linearization().get(1) {
+                                second_class.clone()
+                            } else {
+                                "object".to_string()
+                            };
+                            println!("DEBUG: LoadZeroArgSuper - Parent class: {}", parent_class);
+                            
+                            // Get parent class methods
+                            let parent_methods = if let Some(parent_class_value) = self.frames[frame_idx].globals.get(&parent_class) {
+                                match &parent_class_value.value {
+                                    Value::Class { methods, .. } => {
+                                        Some(methods.clone())
+                                    },
+                                    _ => None
+                                }
+                            } else {
+                                None
+                            };
+                            
+                            // Create the super object with the current class, parent class, instance, and parent methods
+                            Value::Super(name.clone(), parent_class, Some(Box::new(self_instance)), parent_methods)
+                        },
+                        _ => {
+                            return Err(anyhow!("LoadZeroArgSuper: {} is not a class", class_name));
+                        }
+                    }
+                } else {
+                    return Err(anyhow!("LoadZeroArgSuper: class {} not found in globals", class_name));
+                };
+                
+                println!("DEBUG: LoadZeroArgSuper - Created super object: {:?}", super_obj);
+                
+                // Store the super object in the result register
+                self.frames[frame_idx].set_register(result_reg, RcValue::new(super_obj));
+                Ok(None)
+            }
             _ => {
                 // For unimplemented opcodes, we'll just return an error
                 // In a complete implementation, we would handle all opcodes
@@ -2880,7 +3047,36 @@ impl SuperBytecodeVM {
     /// Call a function with optimized fast path
     fn call_function_fast(&mut self, func_value: Value, args: Vec<Value>, kwargs: HashMap<String, Value>, frame_idx: Option<usize>, result_reg: Option<u32>) -> Result<Value> {
         match func_value {
-            Value::BuiltinFunction(_, func) => {
+            Value::BuiltinFunction(name, func) => {
+                // Special handling for str() and repr() to support __str__ and __repr__ dunder methods
+                if name == "str" && args.len() == 1 {
+                    if let Some(str_method) = args[0].get_method("__str__") {
+                        println!("DEBUG: str() calling __str__ method");
+                        // Call __str__(self)
+                        return self.call_function_fast(
+                            str_method,
+                            vec![args[0].clone()],
+                            HashMap::new(),
+                            frame_idx,
+                            result_reg
+                        );
+                    }
+                }
+
+                if name == "repr" && args.len() == 1 {
+                    if let Some(repr_method) = args[0].get_method("__repr__") {
+                        println!("DEBUG: repr() calling __repr__ method");
+                        // Call __repr__(self)
+                        return self.call_function_fast(
+                            repr_method,
+                            vec![args[0].clone()],
+                            HashMap::new(),
+                            frame_idx,
+                            result_reg
+                        );
+                    }
+                }
+
                 // For builtin functions, we should not pass kwargs as they don't expect them
                 // Concatenate args and kwargs values if needed, or handle them appropriately
                 // For now, let's just pass the args to builtin functions
