@@ -368,7 +368,7 @@ impl SuperCompiler {
                 func_code.params = params.clone(); // Set the params field
                 
                 // Debug output to see the compiled code
-                // eprintln!("DEBUG: Compiled function '{}' with {} instructions", name, func_code.instructions.len());
+        // eprintln!("DEBUG: Compiled function '{}' with {} instructions", name, func_code.instructions.len());
                 
                 // Create a closure value for the function with the compiled code
                 let closure_value = Value::Closure {
@@ -405,6 +405,11 @@ impl SuperCompiler {
                         // Update the function register to the decorated result
                         func_reg = result_reg;
                     }
+                    
+                    // Update the closure value with the decorated result
+                    // Load the decorated result from register to get the actual value
+                    // For now, we'll assume the decorator returns the modified closure
+                    // In a full implementation, we would need to handle this properly
                 }
                 
                 // Store the closure in constants
@@ -419,15 +424,7 @@ impl SuperCompiler {
                 self.emit(OpCode::StoreGlobal, name_idx, reg, 0, self.current_line);
                 
                 // Debug output to see what's stored in constants
-                // eprintln!("DEBUG: Stored Closure '{}' in constants at index {}", name, closure_const_idx);
-                if let Some(stored_value) = self.code.constants.get(closure_const_idx as usize) {
-                    if let Value::Closure { name: ref _name, params: _, body: _, captured_scope: _, docstring: _, compiled_code: ref compiled_code } = stored_value {
-                        // eprintln!("DEBUG: Stored Closure '{}' has compiled_code: {}", name, compiled_code.is_some());
-                        if let Some(ref code) = compiled_code {
-                            // eprintln!("DEBUG: Stored Closure '{}' has {} instructions", name, code.instructions.len());
-                        }
-                    }
-                }
+
                 Ok(())
             }
             Statement::For { variable, iterable, body, .. } => {
@@ -587,19 +584,115 @@ impl SuperCompiler {
 
                 // Process class body to extract methods and attributes
                 for stmt in body {
-                    if let Statement::FunctionDef { name: method_name, params, return_type: _, body: method_body, is_async: _, decorators: _, docstring } = stmt {
-                        // Compile the method using the compile_function_with_class helper to support super()
-                        let method_code = SuperCompiler::compile_function_with_class(method_name.clone(), &params, &method_body, Some(name.clone()))?;
+                    match stmt {
+                        Statement::FunctionDef { name: method_name, params, return_type: _, body: method_body, is_async: _, decorators, docstring } => {
+                            // Compile the method using the compile_function_with_class helper to support super()
+                            let method_code = SuperCompiler::compile_function_with_class(method_name.clone(), &params, &method_body, Some(name.clone()))?;
 
-                        let method_value = Value::Closure {
-                            name: method_name.clone(),
-                            params: params.clone(),
-                            body: vec![], // Body is encoded in the bytecode, not stored as AST
-                            captured_scope: HashMap::new(),
-                            docstring: docstring.clone(),
-                            compiled_code: Some(Box::new(method_code)), // Store the compiled code directly in the Closure
-                        };
-                        class_methods.insert(method_name.clone(), method_value);
+                            let method_value = Value::Closure {
+                                name: method_name.clone(),
+                                params: params.clone(),
+                                body: vec![], // Body is encoded in the bytecode, not stored as AST
+                                captured_scope: HashMap::new(),
+                                docstring: docstring.clone(),
+                                compiled_code: Some(Box::new(method_code)), // Store the compiled code directly in the Closure
+                            };
+
+                            // Apply decorators if any
+                            let mut final_method_value = method_value;
+                            if !decorators.is_empty() {
+                                // For each decorator, we need to call it with the method as argument
+                                for decorator_expr in decorators.iter().rev() {
+                                    // For built-in decorators like @property, we handle them specially
+                                    if let Expr::Identifier(decorator_name) = decorator_expr {
+                                        if decorator_name == "property" {
+                                            // Call the property builtin function with the method as argument
+                                            let args = vec![final_method_value];
+                                            final_method_value = crate::builtins::property_builtin(args)?;
+                                        }
+                                    }
+                                    // Handle @property_name.setter decorators
+                                    else if let Expr::Attribute { object, name } = decorator_expr {
+                                        if let Expr::Identifier(property_name) = object.as_ref() {
+                                            if name == "setter" || name == "deleter" || name == "getter" {
+                                                // Look up the existing property object
+                                                if let Some(existing_property) = class_methods.get(property_name) {
+                                                    // The existing property should be a property object
+                                                    if let Value::Object { class_name, fields, .. } = existing_property {
+                                                        if class_name == "property" {
+                                                            // Create a new property object with the updated setter/deleter/getter
+                                                            let mut new_fields = fields.as_ref().clone();
+
+                                                            match name.as_str() {
+                                                                "setter" => {
+                                                                    new_fields.insert("fset".to_string(), final_method_value.clone());
+                                                                }
+                                                                "deleter" => {
+                                                                    new_fields.insert("fdel".to_string(), final_method_value.clone());
+                                                                }
+                                                                "getter" => {
+                                                                    new_fields.insert("fget".to_string(), final_method_value.clone());
+                                                                }
+                                                                _ => {}
+                                                            }
+
+                                                            // Create updated property object
+                                                            final_method_value = Value::Object {
+                                                                class_name: "property".to_string(),
+                                                                fields: std::rc::Rc::new(new_fields),
+                                                                class_methods: std::collections::HashMap::new(),
+                                                                mro: crate::base_object::MRO::new(),
+                                                                base_object: crate::base_object::BaseObject::new("property".to_string(), vec![]),
+                                                            };
+
+                                                            // Update the existing property in class_methods
+                                                            class_methods.insert(property_name.clone(), final_method_value.clone());
+
+                                                            // Don't insert the setter method itself, skip this iteration
+                                                            continue;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // For other decorators, we would need to evaluate them at runtime
+                                    // This is a simplified approach for now
+                                }
+                            }
+
+                            class_methods.insert(method_name.clone(), final_method_value);
+                        }
+                        Statement::VariableDef { name: attr_name, type_annotation: _, value: Some(value_expr) } => {
+                            // Handle class-level assignments like: celsius = property(get_celsius, set_celsius)
+                            // Check if this is a property() call
+                            if let Expr::Call { func, args, kwargs: _ } = value_expr {
+                                if let Expr::Identifier(func_name) = func.as_ref() {
+                                    if func_name == "property" {
+                                        // Evaluate the property() call at compile time
+                                        // Convert argument expressions to values by looking them up in class_methods
+                                        let mut property_args = Vec::new();
+                                        for arg_expr in args {
+                                            if let Expr::Identifier(method_name) = arg_expr {
+                                                // Look up the method in class_methods
+                                                if let Some(method_value) = class_methods.get(&method_name) {
+                                                    property_args.push(method_value.clone());
+                                                }
+                                            }
+                                        }
+
+                                        // Call property builtin with the collected arguments
+                                        if !property_args.is_empty() {
+                                            let property_obj = crate::builtins::property_builtin(property_args)?;
+                                            class_methods.insert(attr_name.clone(), property_obj);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            // Ignore other statements in class body for now
+                        }
                     }
                 }
 
@@ -620,8 +713,12 @@ impl SuperCompiler {
                 // Build MRO (Method Resolution Order) using C3 linearization
                 // Create a map of existing class MROs for linearization
                 let mut class_mros = HashMap::new();
-                // In a full implementation, we would populate this from existing classes
-                // For now, we'll just use the simple approach but with better MRO computation
+                // Populate class_mros from globals to get parent class MROs
+                for base_name in &base_names {
+                    // Look up the base class in the code's constants
+                    // We need to search through globals to find the class
+                    // For now, we'll rely on the fallback MRO computation
+                }
 
                 // Compute proper MRO using C3 linearization
                 let mro_list = crate::base_object::MRO::compute_c3_linearization(
@@ -1106,6 +1203,30 @@ impl SuperCompiler {
                 Ok(result_reg)
             }
             Expr::Call { func, args, kwargs } => {
+                // Special handling for super() calls with no arguments
+                if let Expr::Identifier(ref name) = *func {
+                    if name == "super" && args.is_empty() && kwargs.is_empty() && self.current_class.is_some() {
+                        // This is a super() call with no arguments in a method context
+                        // We need to create a super object with the current class context
+                        let result_reg = self.allocate_register();
+                        
+                        // Get the current class name
+                        if let Some(ref class_name) = self.current_class {
+                            // Get the first parameter name (typically 'self')
+                            if let Some(ref self_param) = self.current_method_first_param {
+                                // Load the self parameter (first argument)
+                                let self_reg = 0; // First parameter is at register 0
+                                
+                                // Emit a special opcode for zero-argument super() calls
+                                let class_name_const = self.code.add_constant(Value::Str(class_name.clone()));
+                                let self_param_const = self.code.add_constant(Value::Str(self_param.clone()));
+                                self.emit(OpCode::LoadZeroArgSuper, class_name_const, self_reg, result_reg, self.current_line);
+                                return Ok(result_reg);
+                            }
+                        }
+                    }
+                }
+                
                 let func_reg = self.compile_expression(*func)?;
 
                 // Compile all positional arguments first

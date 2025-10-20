@@ -1,10 +1,29 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo build:*)",
-      "Bash(cargo run:*)",
-      "Bash(target/debug/tauraro.exe run:*)",
-      "Bash(target/debug/tauraro.exe:*)"
+      "Bash(cargo build)",
+      "Read(//c/**)",
+      "Bash(git stash)",
+      "Bash(cargo run --release examples/basic_oop_test.py)",
+      "Bash(cargo run --release --bin tauraro examples/basic_oop_test.py)",
+      "Bash(cargo run --bin tauraro examples/basic_oop_test.py)",
+      "Bash(./target/debug/tauraro.exe examples/basic_oop_test.py)",
+      "Bash(./target/debug/tauraro.exe run examples/basic_oop_test.py)",
+      "Bash(./target/debug/tauraro.exe run examples/comprehensive_oop_test.py)",
+      "Bash(./target/debug/tauraro.exe run examples/simple_oop_demo.py)",
+      "Bash(./target/debug/tauraro.exe run examples/advanced_oop_demo.py)",
+      "Bash(./target/debug/tauraro.exe run examples/oop_core_features_test.py)",
+      "Bash(./target/debug/tauraro.exe run examples/test_mro_simple.py)",
+      "Bash(./target/debug/tauraro.exe run examples/test_mro_override.py)",
+      "Bash(timeout 5 ./target/debug/tauraro.exe run examples/test_property_simple.py)",
+      "Bash(./target/debug/tauraro.exe run examples/test_mro_debug.py)",
+      "Bash(./target/debug/tauraro.exe run oop_test.tr)",
+      "Bash(./target/debug/tauraro.exe run examples/test_property_setter_debug.py)",
+      "Bash(./target/debug/tauraro.exe run examples/test_property_simple2.py)",
+      "Bash(./target/debug/tauraro.exe run examples/test_bytecode_store.py)",
+      "Bash(timeout 10 ./target/debug/tauraro.exe run examples/comprehensive_oop_test.py)",
+      "Bash(./target/debug/tauraro.exe run examples/test_super_chain.py)",
+      "Bash(./target/debug/tauraro.exe run examples/test_class_init.py)"
     ],
     "deny": [],
     "ask": []

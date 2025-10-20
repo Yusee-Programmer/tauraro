@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use crate::modules::hplist::HPList;
 use crate::base_object::{BaseObject, MRO};
+use anyhow::{anyhow, Result};
 
 pub fn init_builtins() -> HashMap<String, Value> {
     let mut builtins = HashMap::new();
@@ -88,7 +89,15 @@ pub fn init_builtins() -> HashMap<String, Value> {
 }
 
 fn print_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
-    let output = args.iter().map(|arg| format!("{}", arg)).collect::<Vec<_>>().join(" ");
+    let output = args.iter().map(|arg| {
+        // Call str() on each argument to support __str__ method
+        let str_value = str_builtin(vec![arg.clone()]).unwrap_or_else(|_| Value::Str(format!("{}", arg)));
+        // Extract the string from Value::Str
+        match str_value {
+            Value::Str(s) => s,
+            _ => format!("{}", str_value)
+        }
+    }).collect::<Vec<_>>().join(" ");
     println!("{}", output);
     Ok(Value::None)
 }
@@ -115,7 +124,38 @@ fn str_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
         Ok(Value::Str(String::new()))
     } else if args.len() == 1 {
-        Ok(Value::Str(format!("{}", args[0])))
+        // Check if the object has a __str__ method
+        let value = &args[0];
+
+        match value {
+            Value::Object { class_methods, .. } => {
+                // Try to get __str__ method
+                if let Some(str_method) = class_methods.get("__str__") {
+                    // Call the __str__ method with self as argument
+                    match str_method {
+                        Value::Closure { .. } => {
+                            // For closures, we can't call them directly from builtins
+                            // Fall back to default representation
+                            // This would need VM support to call properly
+                            Ok(Value::Str(format!("{}", value)))
+                        }
+                        Value::BuiltinFunction(_, func) => {
+                            let result = func(vec![value.clone()])?;
+                            // The result should be a string
+                            if let Value::Str(s) = result {
+                                Ok(Value::Str(s))
+                            } else {
+                                Ok(Value::Str(format!("{}", result)))
+                            }
+                        }
+                        _ => Ok(Value::Str(format!("{}", value)))
+                    }
+                } else {
+                    Ok(Value::Str(format!("{}", value)))
+                }
+            }
+            _ => Ok(Value::Str(format!("{}", value)))
+        }
     } else {
         Err(anyhow::anyhow!("str() takes at most 1 argument ({} given)", args.len()))
     }
@@ -1046,66 +1086,53 @@ fn issubclass_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Bool(false))
 }
 
-fn super_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
-    println!("DEBUG: super_builtin called with {} arguments", args.len());
-    
-    if args.len() > 2 {
-        return Err(anyhow::anyhow!("super() takes at most 2 arguments ({} given)", args.len()));
-    }
-    
-    // For now, we'll create a basic Super object
-    // In a full implementation, we would determine the current class and instance automatically
-    if args.len() == 0 {
-        // No arguments - create an unbound super object
-        // In a full implementation, we would determine the current class and instance from the call stack
-        // For now, we'll create a basic super object that can work with manual arguments
-        println!("DEBUG: Creating unbound super object");
-        Ok(Value::Super("object".to_string(), "object".to_string(), None, None))
-    } else if args.len() == 1 {
-        // One argument - class only
-        println!("DEBUG: Creating super object with 1 argument");
-        match &args[0] {
-            Value::Class { name, methods, mro, .. } => {
-                println!("DEBUG: Class name={}, MRO={:?}", name, mro.get_linearization());
-                
-                // For super() with one argument, we don't need parent methods as they'll be looked up dynamically
-                Ok(Value::Super(name.clone(), "object".to_string(), None, None))
-            },
-            _ => {
-                println!("DEBUG: Invalid argument type for super()");
-                Err(anyhow::anyhow!("super(): argument 1 must be a class"))
+pub fn super_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    // super() can be called with 0, 1, or 2 arguments
+    match args.len() {
+        0 => {
+            // Zero-argument super() - needs to be handled by the compiler/VM to get context
+            // We'll return a special marker value that the VM will handle
+            Ok(Value::Super("".to_string(), "".to_string(), None, None))
+        }
+        1 => {
+            // One-argument super(cls)
+            if let Value::Class { name, mro, .. } = &args[0] {
+                // Create an unbound super object
+                Ok(Value::Super(name.clone(), mro.get_linearization().get(1).cloned().unwrap_or_else(|| "object".to_string()), None, None))
+            } else {
+                Err(anyhow!("super() argument 1 must be type, not {}", args[0].type_name()))
             }
         }
-    } else {
-        // Two arguments - class and instance
-        println!("DEBUG: Creating super object with 2 arguments");
-        match (&args[0], &args[1]) {
-            (Value::Class { name: class_name, mro, methods, .. }, instance) => {
-                println!("DEBUG: Class name={}, MRO={:?}", class_name, mro.get_linearization());
-                
+        2 => {
+            // Two-argument super(cls, obj)
+            if let (Value::Class { name: class_name, mro, .. }, Value::Object { .. }) = (&args[0], &args[1]) {
                 // Determine the parent class from the MRO
                 let parent_class = if let Some(second_class) = mro.get_linearization().get(1) {
                     second_class.clone()
                 } else {
                     "object".to_string()
                 };
-                println!("DEBUG: Parent class: {}", parent_class);
                 
-                // For super() with two arguments, we pass the class methods directly
-                // This avoids the need to look up the class in globals
-                println!("DEBUG: Creating super object with parent_methods, methods count: {}", methods.len());
-                for (method_name, _) in methods {
-                    println!("DEBUG: Available method in parent: {}", method_name);
-                }
-                let super_obj = Value::Super(class_name.clone(), parent_class, Some(Box::new(instance.clone())), Some(methods.clone()));
-                println!("DEBUG: Created super object: {:?}", super_obj);
+                // Get parent class methods
+                let parent_methods = if let Some(parent_class_value) = args[0].get_method(&parent_class) {
+                    if let Value::Class { methods, .. } = parent_class_value {
+                        Some(methods.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                
+                // Create the super object with the current class, parent class, instance, and parent methods
+                let super_obj = Value::Super(class_name.clone(), parent_class, Some(Box::new(args[1].clone())), parent_methods);
+                
                 Ok(super_obj)
-            },
-            _ => {
-                println!("DEBUG: Invalid argument types for super()");
-                Err(anyhow::anyhow!("super(): invalid arguments"))
+            } else {
+                Err(anyhow!("super() arguments must be type, object"))
             }
         }
+        _ => Err(anyhow!("super() takes 0, 1, or 2 arguments, not {}", args.len())),
     }
 }
 
@@ -1147,7 +1174,7 @@ fn enum_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(args[0].clone())
 }
 
-fn property_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+pub fn property_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() || args.len() > 4 {
         return Err(anyhow::anyhow!("property() takes at most 4 arguments ({} given)", args.len()));
     }

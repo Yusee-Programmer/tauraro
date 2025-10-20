@@ -220,22 +220,45 @@ impl MRO {
     
     /// Find a method in the MRO chain
     pub fn find_method_in_mro(&self, method_name: &str, class_registry: &HashMap<String, Value>) -> Option<Value> {
+        self.find_method_in_mro_with_visited(method_name, class_registry, &mut std::collections::HashSet::new())
+    }
+
+    fn find_method_in_mro_with_visited(
+        &self,
+        method_name: &str,
+        class_registry: &HashMap<String, Value>,
+        visited: &mut std::collections::HashSet<String>
+    ) -> Option<Value> {
         // Search through the linearization for the method
         for class_name in &self.linearization {
+            // Skip if we've already visited this class (prevents infinite recursion)
+            if visited.contains(class_name) {
+                continue;
+            }
+            visited.insert(class_name.clone());
+
             // Look up the class in the registry
             if let Some(class_value) = class_registry.get(class_name) {
                 // Check if it's a Class value
-                if let Value::Class { methods, .. } = class_value {
-                    // Check if the method exists in this class
+                if let Value::Class { methods, mro, .. } = class_value {
+                    // First check if the method exists in this class's immediate methods
                     if let Some(method) = methods.get(method_name) {
                         return Some(method.clone());
                     }
+                    // If not found, recursively search through this class's MRO
+                    if let Some(method) = mro.find_method_in_mro_with_visited(method_name, class_registry, visited) {
+                        return Some(method);
+                    }
                 }
                 // Also check Object values (instances) for class methods
-                else if let Value::Object { class_methods, .. } = class_value {
+                else if let Value::Object { class_methods, mro, .. } = class_value {
                     // Check if the method exists in this object's class methods
                     if let Some(method) = class_methods.get(method_name) {
                         return Some(method.clone());
+                    }
+                    // If not found, recursively search through this object's MRO
+                    if let Some(method) = mro.find_method_in_mro_with_visited(method_name, class_registry, visited) {
+                        return Some(method);
                     }
                 }
             }

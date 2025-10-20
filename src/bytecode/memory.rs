@@ -175,6 +175,8 @@ pub struct Frame {
     pub cache_version: u32,                 // Current cache version
     pub method_cache: HashMap<(String, String), MethodCache>, // Method cache for object-oriented code
     pub return_register: Option<(usize, u32)>, // (caller_frame_idx, result_reg) where return value should be stored
+    pub is_property_setter: bool,           // True if this frame is executing a property setter
+    pub vars_to_update: Vec<String>,        // Variables to update after property setter completes
 }
 
 // Manual implementation of Debug trait for Frame struct
@@ -233,6 +235,8 @@ impl Frame {
             cache_version: 0,
             method_cache: HashMap::new(),
             return_register: None,
+            is_property_setter: false,
+            vars_to_update: Vec::new(),
         }
     }
 
@@ -338,6 +342,8 @@ impl Frame {
             cache_version: 0,
             method_cache: HashMap::new(),
             return_register: None,
+            is_property_setter: false,
+            vars_to_update: Vec::new(),
         }
     }
     

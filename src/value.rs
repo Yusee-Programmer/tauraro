@@ -2188,6 +2188,10 @@ impl Value {
                     _ => None,
                 }
             }
+            Value::Object { class_methods, .. } => {
+                // For custom objects, check class_methods for the method
+                class_methods.get(method_name).cloned()
+            }
             _ => None,
         }
     }
