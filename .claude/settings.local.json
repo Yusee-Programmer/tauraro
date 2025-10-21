@@ -50,7 +50,9 @@
       "Bash(./target/release/tauraro.exe run:*)",
       "Bash(./target/debug/tauraro.exe run:*)",
       "Bash(timeout 5 ./target/debug/tauraro.exe run:*)",
-      "Bash(timeout 10 ./target/debug/tauraro.exe run:*)"
+      "Bash(timeout 10 ./target/debug/tauraro.exe run:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
