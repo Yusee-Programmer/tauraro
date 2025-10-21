@@ -2,6 +2,7 @@
 /// Similar to Python's collections module
 
 use crate::value::Value;
+use crate::modules::hplist::HPList;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::fmt;
@@ -330,7 +331,7 @@ fn deque_builtin(args: Vec<Value>) -> Result<Value> {
     }
 
     let mut fields = HashMap::new();
-    fields.insert("items".to_string(), Value::List(items));
+    fields.insert("items".to_string(), Value::List(HPList::from_values(items)));
     if let Some(max) = maxlen {
         fields.insert("maxlen".to_string(), Value::Int(max));
     } else {
