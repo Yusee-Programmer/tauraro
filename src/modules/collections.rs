@@ -203,7 +203,7 @@ impl fmt::Display for HighPerfList {
 /// Create the collections module with high-performance list support
 pub fn create_collections_module() -> Value {
     let mut namespace = HashMap::new();
-    
+
     // Add high-performance list constructor
     namespace.insert("HighPerfList".to_string(), Value::NativeFunction(|args| {
         if args.is_empty() {
@@ -218,8 +218,132 @@ pub fn create_collections_module() -> Value {
             Err(anyhow::anyhow!("HighPerfList constructor not implemented with arguments"))
         }
     }));
-    
+
+    // Add Counter class
+    namespace.insert("Counter".to_string(), Value::BuiltinFunction("Counter".to_string(), counter_builtin));
+
+    // Add defaultdict class
+    namespace.insert("defaultdict".to_string(), Value::BuiltinFunction("defaultdict".to_string(), defaultdict_builtin));
+
+    // Add deque class
+    namespace.insert("deque".to_string(), Value::BuiltinFunction("deque".to_string(), deque_builtin));
+
     Value::Module("collections".to_string(), namespace)
+}
+
+/// Counter implementation
+fn counter_builtin(args: Vec<Value>) -> Result<Value> {
+    // Counter() or Counter(iterable) or Counter(mapping)
+    let mut counts: HashMap<String, Value> = HashMap::new();
+
+    if !args.is_empty() {
+        // Initialize from iterable or mapping
+        match &args[0] {
+            Value::List(items) => {
+                // Count items in list
+                for item in items {
+                    let key = format!("{}", item);
+                    let count = counts.entry(key.clone()).or_insert(Value::Int(0));
+                    if let Value::Int(n) = count {
+                        *count = Value::Int(*n + 1);
+                    }
+                }
+            }
+            Value::Dict(map) => {
+                // Initialize from dict
+                for (k, v) in map.iter() {
+                    counts.insert(k.clone(), v.clone());
+                }
+            }
+            Value::Str(s) => {
+                // Count characters in string
+                for ch in s.chars() {
+                    let key = ch.to_string();
+                    let count = counts.entry(key.clone()).or_insert(Value::Int(0));
+                    if let Value::Int(n) = count {
+                        *count = Value::Int(*n + 1);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Value::Object {
+        class_name: "Counter".to_string(),
+        fields: Rc::new(counts),
+        class_methods: HashMap::new(),
+        base_object: crate::base_object::BaseObject::new("Counter".to_string(), vec!["dict".to_string(), "object".to_string()]),
+        mro: crate::base_object::MRO::from_linearization(vec!["Counter".to_string(), "dict".to_string(), "object".to_string()]),
+    })
+}
+
+/// defaultdict implementation
+fn defaultdict_builtin(args: Vec<Value>) -> Result<Value> {
+    // defaultdict(default_factory) or defaultdict(default_factory, mapping)
+    let default_factory = if !args.is_empty() {
+        Some(args[0].clone())
+    } else {
+        None
+    };
+
+    let mut fields = HashMap::new();
+    fields.insert("default_factory".to_string(), default_factory.unwrap_or(Value::None));
+
+    // If there's a second argument, initialize from it
+    if args.len() > 1 {
+        if let Value::Dict(map) = &args[1] {
+            for (k, v) in map.iter() {
+                fields.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    Ok(Value::Object {
+        class_name: "defaultdict".to_string(),
+        fields: Rc::new(fields),
+        class_methods: HashMap::new(),
+        base_object: crate::base_object::BaseObject::new("defaultdict".to_string(), vec!["dict".to_string(), "object".to_string()]),
+        mro: crate::base_object::MRO::from_linearization(vec!["defaultdict".to_string(), "dict".to_string(), "object".to_string()]),
+    })
+}
+
+/// deque implementation
+fn deque_builtin(args: Vec<Value>) -> Result<Value> {
+    // deque() or deque(iterable) or deque(iterable, maxlen)
+    let mut items = Vec::new();
+    let mut maxlen = None;
+
+    if !args.is_empty() {
+        match &args[0] {
+            Value::List(list) => {
+                items.extend(list.iter().cloned());
+            }
+            _ => {}
+        }
+    }
+
+    if args.len() > 1 {
+        if let Value::Int(n) = &args[1] {
+            maxlen = Some(*n);
+        }
+    }
+
+    let mut fields = HashMap::new();
+    fields.insert("items".to_string(), Value::List(items));
+    if let Some(max) = maxlen {
+        fields.insert("maxlen".to_string(), Value::Int(max));
+    } else {
+        fields.insert("maxlen".to_string(), Value::None);
+    }
+
+    Ok(Value::Object {
+        class_name: "deque".to_string(),
+        fields: Rc::new(fields),
+        class_methods: HashMap::new(),
+        base_object: crate::base_object::BaseObject::new("deque".to_string(), vec!["object".to_string()]),
+        mro: crate::base_object::MRO::from_linearization(vec!["deque".to_string(), "object".to_string()]),
+    })
 }
 
 #[cfg(test)]

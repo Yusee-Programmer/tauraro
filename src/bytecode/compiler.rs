@@ -427,55 +427,85 @@ impl SuperCompiler {
 
                 Ok(())
             }
-            Statement::For { variable, iterable, body, .. } => {
-                // Compile for loop: for variable in iterable:
-                
+            Statement::For { variable, variables, iterable, body, .. } => {
+                // Compile for loop: for variable(s) in iterable:
+
                 // 1. Compile the iterable expression
                 let iterable_reg = self.compile_expression(iterable)?;
-                
+
                 // 2. Get an iterator from the iterable
                 let iter_reg = self.allocate_register();
                 self.emit(OpCode::GetIter, iterable_reg, iter_reg, 0, self.current_line);
-                
-                // 3. Set up the loop structure
-                let loop_var_idx = if self.is_in_function_scope() {
-                    // In function scope, use fast local access
-                    self.get_local_index(&variable)
-                } else {
-                    // In global scope, we don't add to varnames, just get the name index
-                    self.code.add_name(variable.clone())
-                };
-                
-                // 4. Create jump targets
+
+                // 3. Create jump targets
                 let loop_start = self.code.instructions.len(); // Start of loop body
-                
-                // 5. Emit SetupLoop instruction to set up the loop block
+
+                // 4. Emit SetupLoop instruction to set up the loop block
                 // arg1 = end of loop PC (will be updated later)
                 // arg2 = continue target PC (start of loop body)
                 self.emit(OpCode::SetupLoop, 0, loop_start as u32, 0, self.current_line);
-                
-                // 6. Emit ForIter instruction with placeholder for end target
+
+                // 5. Emit ForIter instruction with placeholder for end target
                 let value_reg = self.allocate_register();
                 let for_iter_pos = self.emit(OpCode::ForIter, iter_reg, value_reg, 0, self.current_line); // arg3 will be updated later
-                
-                // 7. Store the iterated value in the loop variable
-                if self.is_in_function_scope() {
-                    // In function scope, use fast local access
-                    self.emit(OpCode::StoreFast, loop_var_idx, value_reg, 0, self.current_line);
+
+                // 6. Handle tuple unpacking if we have multiple variables
+                if variables.len() > 1 {
+                    // Tuple unpacking: for a, b, c in iterable
+                    // Allocate temporary registers for index and element (reuse for all variables)
+                    let index_reg = self.allocate_register();
+                    let elem_reg = self.allocate_register();
+
+                    for (idx, var_name) in variables.iter().enumerate() {
+                        // Load the index constant
+                        let idx_const = self.code.add_constant(Value::Int(idx as i64));
+                        self.emit(OpCode::LoadConst, idx_const, index_reg, 0, self.current_line);
+
+                        // Extract element by index
+                        self.emit(OpCode::SubscrLoad, value_reg, index_reg, elem_reg, self.current_line);
+
+                        // Store the element in the variable
+                        let var_idx = if self.is_in_function_scope() {
+                            self.get_local_index(var_name)
+                        } else {
+                            self.code.add_name(var_name.clone())
+                        };
+
+                        if self.is_in_function_scope() {
+                            self.emit(OpCode::StoreFast, var_idx, elem_reg, 0, self.current_line);
+                        } else {
+                            self.emit(OpCode::StoreGlobal, var_idx, elem_reg, 0, self.current_line);
+                        }
+                    }
                 } else {
-                    // In global scope, use StoreGlobal
-                    self.emit(OpCode::StoreGlobal, loop_var_idx, value_reg, 0, self.current_line);
+                    // Single variable: for x in iterable
+                    let loop_var_idx = if self.is_in_function_scope() {
+                        // In function scope, use fast local access
+                        self.get_local_index(&variable)
+                    } else {
+                        // In global scope, we don't add to varnames, just get the name index
+                        self.code.add_name(variable.clone())
+                    };
+
+                    // Store the iterated value in the loop variable
+                    if self.is_in_function_scope() {
+                        // In function scope, use fast local access
+                        self.emit(OpCode::StoreFast, loop_var_idx, value_reg, 0, self.current_line);
+                    } else {
+                        // In global scope, use StoreGlobal
+                        self.emit(OpCode::StoreGlobal, loop_var_idx, value_reg, 0, self.current_line);
+                    }
                 }
-                
-                // 8. Compile the loop body
+
+                // 7. Compile the loop body
                 for stmt in body {
                     self.compile_statement(stmt)?;
                 }
-                
-                // 9. Jump back to the start of the loop
+
+                // 8. Jump back to the start of the loop
                 self.emit(OpCode::Jump, loop_start as u32, 0, 0, self.current_line);
-                
-                // 10. Fix the loop end placeholder
+
+                // 9. Fix the loop end placeholder
                 let loop_end_pos = self.code.instructions.len();
                 // Update the ForIter instruction with the correct target
                 self.code.instructions[for_iter_pos].arg3 = loop_end_pos as u32;
@@ -854,7 +884,13 @@ impl SuperCompiler {
                 for stmt in body {
                     self.compile_statement(stmt)?;
                 }
-                
+
+                // Pop the exception handler blocks since try block completed successfully
+                // We need to pop one block for each SetupExcept instruction we emitted
+                for _ in 0..except_handlers.len() {
+                    self.emit(OpCode::PopBlock, 0, 0, 0, self.current_line);
+                }
+
                 // Jump to end of try/except/finally block (skip except handlers)
                 let end_jump_pos = self.emit(OpCode::Jump, 0, 0, 0, self.current_line); // Will be fixed later
                 
@@ -1009,6 +1045,41 @@ impl SuperCompiler {
                         self.emit(OpCode::StoreGlobal, name_idx, item_reg, 0, self.current_line);
                     }
                 }
+                Ok(())
+            }
+            Statement::Import { module, alias } => {
+                // Compile import statement: import module [as alias]
+                let module_name_idx = self.code.add_name(module.clone());
+                let result_reg = self.allocate_register();
+
+                // Emit ImportModule instruction
+                self.emit(OpCode::ImportModule, module_name_idx, result_reg, 0, self.current_line);
+
+                // Store the module in the global namespace
+                // Use the alias if provided, otherwise use the module name
+                let store_name = alias.as_ref().unwrap_or(&module);
+                let store_name_idx = self.code.add_name(store_name.clone());
+                self.emit(OpCode::StoreGlobal, store_name_idx, result_reg, 0, self.current_line);
+
+                Ok(())
+            }
+            Statement::FromImport { module, names } => {
+                // Compile from import statement: from module import name1 [as alias1], name2 [as alias2], ...
+                for (name, alias) in names {
+                    let module_name_idx = self.code.add_name(module.clone());
+                    let import_name_idx = self.code.add_name(name.clone());
+                    let result_reg = self.allocate_register();
+
+                    // Emit ImportFrom instruction
+                    self.emit(OpCode::ImportFrom, module_name_idx, import_name_idx, result_reg, self.current_line);
+
+                    // Store the imported value in the global namespace
+                    // Use the alias if provided, otherwise use the imported name
+                    let store_name = alias.as_ref().unwrap_or(&name);
+                    let store_name_idx = self.code.add_name(store_name.clone());
+                    self.emit(OpCode::StoreGlobal, store_name_idx, result_reg, 0, self.current_line);
+                }
+
                 Ok(())
             }
             _ => {
@@ -1326,35 +1397,65 @@ impl SuperCompiler {
                 Ok(result_reg)
             }
             Expr::List(items) => {
-                // Compile each item and store in consecutive registers
+                // Compile each item
                 let mut item_regs = Vec::new();
                 for item in items {
                     let item_reg = self.compile_expression(item)?;
                     item_regs.push(item_reg);
+                }
+
+                // Ensure items are in consecutive registers for BuildList
+                // BuildList expects items in consecutive registers starting from first_reg
+                let first_consecutive_reg = self.allocate_register();
+                for (i, &item_reg) in item_regs.iter().enumerate() {
+                    let target_reg = first_consecutive_reg + i as u32;
+                    if item_reg != target_reg {
+                        // Allocate the target register if needed
+                        while self.next_register <= target_reg {
+                            self.allocate_register();
+                        }
+                        // Copy item to consecutive position
+                        self.emit(OpCode::LoadLocal, item_reg, target_reg, 0, self.current_line);
+                    }
                 }
 
                 let result_reg = self.allocate_register();
 
                 // Use the BuildList opcode to create a list with the items
                 // arg1 = number of items, arg2 = first item register, arg3 = result register
-                let first_reg = if item_regs.is_empty() { 0 } else { item_regs[0] };
+                let first_reg = if item_regs.is_empty() { result_reg } else { first_consecutive_reg };
                 self.emit(OpCode::BuildList, item_regs.len() as u32, first_reg, result_reg, self.current_line);
 
                 Ok(result_reg)
             }
             Expr::Tuple(items) => {
-                // Compile each item and store in consecutive registers
+                // Compile each item
                 let mut item_regs = Vec::new();
                 for item in items {
                     let item_reg = self.compile_expression(item)?;
                     item_regs.push(item_reg);
                 }
 
+                // Ensure items are in consecutive registers for BuildTuple
+                // BuildTuple expects items in consecutive registers starting from first_reg
+                let first_consecutive_reg = self.allocate_register();
+                for (i, &item_reg) in item_regs.iter().enumerate() {
+                    let target_reg = first_consecutive_reg + i as u32;
+                    if item_reg != target_reg {
+                        // Allocate the target register if needed
+                        while self.next_register <= target_reg {
+                            self.allocate_register();
+                        }
+                        // Copy item to consecutive position
+                        self.emit(OpCode::LoadLocal, item_reg, target_reg, 0, self.current_line);
+                    }
+                }
+
                 let result_reg = self.allocate_register();
 
                 // Use the BuildTuple opcode to create a tuple with the items
                 // arg1 = number of items, arg2 = first item register, arg3 = result register
-                let first_reg = if item_regs.is_empty() { 0 } else { item_regs[0] };
+                let first_reg = if item_regs.is_empty() { result_reg } else { first_consecutive_reg };
                 self.emit(OpCode::BuildTuple, item_regs.len() as u32, first_reg, result_reg, self.current_line);
 
                 Ok(result_reg)
@@ -1384,21 +1485,22 @@ impl SuperCompiler {
                 let result_reg = self.allocate_register();
                 
                 match op {
-                    UnaryOp::USub => {
-                        // For unary minus, we multiply by -1
-                        let neg_one_const = self.code.add_constant(Value::Int(-1));
-                        let neg_one_reg = self.allocate_register();
-                        self.emit(OpCode::LoadConst, neg_one_const, neg_one_reg, 0, self.current_line);
-                        self.emit(OpCode::BinaryMulRR, operand_reg, neg_one_reg, result_reg, self.current_line);
+                    UnaryOp::USub | UnaryOp::Minus => {
+                        // Unary negation operation
+                        self.emit(OpCode::UnaryNegate, operand_reg, result_reg, 0, self.current_line);
                     }
                     UnaryOp::UAdd => {
                         // For unary plus, we just return the operand
                         self.emit(OpCode::LoadLocal, operand_reg, result_reg, 0, self.current_line);
                     }
                     UnaryOp::Not => {
-                        // For logical not, we need to implement this
-                        // For now, we'll just load the operand as a placeholder
-                        self.emit(OpCode::LoadLocal, operand_reg, result_reg, 0, self.current_line);
+                        // Logical NOT operation
+                        self.emit(OpCode::UnaryNot, operand_reg, result_reg, 0, self.current_line);
+                    }
+                    UnaryOp::Invert | UnaryOp::BitNot => {
+                        // Bitwise NOT - for now, just negate the number (simplified)
+                        // TODO: Implement proper bitwise NOT
+                        self.emit(OpCode::UnaryNegate, operand_reg, result_reg, 0, self.current_line);
                     }
                     _ => {
                         return Err(anyhow!("Unsupported unary operation: {:?}", op));

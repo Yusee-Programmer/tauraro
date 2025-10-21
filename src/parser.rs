@@ -306,6 +306,7 @@ impl Parser {
                 if self.match_token(&[Token::Assign]) {
                     self.variable_def(first_expr)
                 } else if self.check_compound_assignment() {
+                    self.advance(); // Advance past the compound assignment operator
                     self.compound_assignment(first_expr)
                 } else {
                     // Optional semicolon or newline for expression statements
@@ -473,14 +474,27 @@ impl Parser {
 
     fn for_statement(&mut self) -> Result<Statement, ParseError> {
         self.consume(Token::KwFor, "Expected 'for' or 'duk'")?;
-        let variable = self.consume_identifier()?;
+
+        // Parse variable(s) - can be a single variable or tuple unpacking
+        let mut variables = Vec::new();
+        variables.push(self.consume_identifier()?);
+
+        // Check for tuple unpacking (comma-separated variables)
+        while self.match_token(&[Token::Comma]) {
+            variables.push(self.consume_identifier()?);
+        }
+
         self.consume(Token::KwIn, "Expected 'in' or 'cikin' after for variable")?;
         let iterable = self.expression()?;
         self.consume(Token::Colon, "Expected ':' after for clause")?;
         let body = self.block()?;
-        
+
+        // For backwards compatibility, store first variable as 'variable'
+        let variable = variables.get(0).unwrap_or(&String::new()).clone();
+
         Ok(Statement::For {
             variable,
+            variables,
             iterable,
             body,
             else_branch: None,
@@ -1384,7 +1398,8 @@ impl Parser {
     }
 
     fn compound_assignment(&mut self, target: Expr) -> Result<Statement, ParseError> {
-        let op = match self.previous().token {
+        let prev_token = &self.previous().token;
+        let op = match prev_token {
             Token::PlusEq => BinaryOp::Add,
             Token::MinusEq => BinaryOp::Sub,
             Token::StarEq => BinaryOp::Mul,
@@ -1392,7 +1407,12 @@ impl Parser {
             Token::PercentEq => BinaryOp::Mod,
             Token::PowerEq => BinaryOp::Pow,
             Token::FloorDivEq => BinaryOp::FloorDiv,
-            _ => unreachable!(),
+            _ => {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "compound assignment operator".to_string(),
+                    found: format!("{:?}", prev_token),
+                });
+            }
         };
         let value = self.expression()?;
         self.match_token(&[Token::Semicolon, Token::Newline]);

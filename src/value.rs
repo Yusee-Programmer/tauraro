@@ -865,6 +865,23 @@ impl Value {
                 }
                 Ok(Value::List(hplist))
             },
+            Value::Range { start, stop, step } => {
+                let mut hplist = HPList::new();
+                if *step > 0 {
+                    let mut current = *start;
+                    while current < *stop {
+                        hplist.append(Value::Int(current));
+                        current += step;
+                    }
+                } else if *step < 0 {
+                    let mut current = *start;
+                    while current > *stop {
+                        hplist.append(Value::Int(current));
+                        current += step;
+                    }
+                }
+                Ok(Value::List(hplist))
+            },
             _ => Err(anyhow::anyhow!("'{}' object is not iterable", self.type_name())),
         }
     }
@@ -888,6 +905,23 @@ impl Value {
             },
             Value::ByteArray(bytes) => {
                 let items: Vec<Value> = bytes.iter().map(|&b| Value::Int(b as i64)).collect();
+                Ok(Value::Tuple(items))
+            },
+            Value::Range { start, stop, step } => {
+                let mut items = Vec::new();
+                if *step > 0 {
+                    let mut current = *start;
+                    while current < *stop {
+                        items.push(Value::Int(current));
+                        current += step;
+                    }
+                } else if *step < 0 {
+                    let mut current = *start;
+                    while current > *stop {
+                        items.push(Value::Int(current));
+                        current += step;
+                    }
+                }
                 Ok(Value::Tuple(items))
             },
             _ => Err(anyhow::anyhow!("'{}' object is not iterable", self.type_name())),

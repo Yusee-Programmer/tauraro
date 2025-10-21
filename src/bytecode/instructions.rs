@@ -71,6 +71,7 @@ pub enum OpCode {
     SetupExcept,    // Setup exception handler block
     SetupFinally,   // Setup finally block
     EndFinally,     // End finally block
+    PopBlock,       // Pop a block from the block stack
     Raise,          // Raise an exception
     StoreException, // Store exception value in variable (used in except handlers)
     
@@ -162,6 +163,10 @@ pub enum OpCode {
     // Super() support
     LoadZeroArgSuper, // Load super object with zero arguments (special handling)
     
+    // Unary operations
+    UnaryNot,       // Logical NOT operation
+    UnaryNegate,    // Unary negation (-)
+
     // Miscellaneous
     PrintExpr,
     FormatValue,
