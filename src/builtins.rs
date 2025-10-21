@@ -25,6 +25,7 @@ pub fn init_builtins() -> HashMap<String, Value> {
     builtins.insert("float".to_string(), Value::BuiltinFunction("float".to_string(), float_builtin));
     builtins.insert("bool".to_string(), Value::BuiltinFunction("bool".to_string(), bool_builtin));
     builtins.insert("list".to_string(), Value::BuiltinFunction("list".to_string(), list_builtin));
+    builtins.insert("tuple".to_string(), Value::BuiltinFunction("tuple".to_string(), tuple_builtin));
     builtins.insert("dict".to_string(), Value::BuiltinFunction("dict".to_string(), dict_builtin));
     builtins.insert("range".to_string(), Value::BuiltinFunction("range".to_string(), range_builtin));
     builtins.insert("input".to_string(), Value::BuiltinFunction("input".to_string(), input_builtin));
@@ -198,6 +199,16 @@ fn list_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         args[0].to_list()
     } else {
         Err(anyhow::anyhow!("list() takes at most 1 argument ({} given)", args.len()))
+    }
+}
+
+fn tuple_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        Ok(Value::Tuple(Vec::new()))
+    } else if args.len() == 1 {
+        args[0].to_tuple()
+    } else {
+        Err(anyhow::anyhow!("tuple() takes at most 1 argument ({} given)", args.len()))
     }
 }
 

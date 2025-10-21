@@ -11,6 +11,8 @@ use crate::bytecode::arithmetic;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
+// Import module system for dynamic module loading
+use crate::modules;
 
 /// Register-based bytecode virtual machine with computed GOTOs for maximum performance
 pub struct SuperBytecodeVM {
@@ -1633,6 +1635,42 @@ impl SuperBytecodeVM {
                 }
                 Ok(None)
             }
+            OpCode::UnaryNot => {
+                // Logical NOT operation - negate boolean value
+                let operand_reg = arg1 as usize;
+                let result_reg = arg2 as usize;
+
+                if operand_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("UnaryNot: operand register index {} out of bounds (len: {})", operand_reg, self.frames[frame_idx].registers.len()));
+                }
+
+                // Get the truthiness of the operand and negate it
+                let operand_value = &self.frames[frame_idx].registers[operand_reg];
+                let is_truthy = operand_value.is_truthy();
+                let result = Value::Bool(!is_truthy);
+
+                self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(result));
+                Ok(None)
+            }
+            OpCode::UnaryNegate => {
+                // Unary negation operation (-)
+                let operand_reg = arg1 as usize;
+                let result_reg = arg2 as usize;
+
+                if operand_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("UnaryNegate: operand register index {} out of bounds (len: {})", operand_reg, self.frames[frame_idx].registers.len()));
+                }
+
+                let operand_value = &self.frames[frame_idx].registers[operand_reg].value;
+                let result = match operand_value {
+                    Value::Int(n) => Value::Int(-n),
+                    Value::Float(f) => Value::Float(-f),
+                    _ => return Err(anyhow!("UnaryNegate: unsupported operand type")),
+                };
+
+                self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(result));
+                Ok(None)
+            }
             OpCode::ReturnValue => {
                 // Return a value from the current function
                 let value_reg = arg1 as usize;
@@ -1962,13 +2000,33 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("Method '{}' not found in class methods", method_name));
                         }
                     },
+                    Value::Module(_, namespace) => {
+                        // For Module objects, get the function/value from the namespace
+                        if let Some(value) = namespace.get(&method_name) {
+                            // Call the function with the provided arguments (no self argument for module functions)
+                            match value {
+                                Value::BuiltinFunction(_, func) => func(args.clone())?,
+                                Value::NativeFunction(func) => func(args.clone())?,
+                                Value::Closure { .. } => {
+                                    // For closures, call through the VM
+                                    self.call_function_fast(value.clone(), args.clone(), HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                                },
+                                _ => {
+                                    // If it's not a callable, return an error
+                                    return Err(anyhow!("'{}' in module is not callable", method_name));
+                                }
+                            }
+                        } else {
+                            return Err(anyhow!("module has no function '{}'", method_name));
+                        }
+                    },
                     _ => {
                         // For builtin types, try to get method and call it
                         if let Some(method) = object_value.get_method(&method_name) {
                             // Create arguments with self as the first argument
                             let mut method_args = vec![self.frames[frame_idx].registers[object_reg].value.clone()];
                             method_args.extend(args.clone());
-                            
+
                             // Call the method
                             match method {
                                 Value::BuiltinFunction(_, func) => func(method_args)?,
@@ -2124,6 +2182,15 @@ impl SuperBytecodeVM {
             }
             OpCode::EndFinally => {
                 // End of finally block - just continue execution
+                Ok(None)
+            }
+            OpCode::PopBlock => {
+                // Pop a block from the block stack
+                // This is used to remove exception handler blocks when try block completes successfully
+                if self.frames[frame_idx].block_stack.is_empty() {
+                    return Err(anyhow!("PopBlock: block stack is empty"));
+                }
+                self.frames[frame_idx].block_stack.pop();
                 Ok(None)
             }
             OpCode::StoreException => {
@@ -3138,6 +3205,83 @@ impl SuperBytecodeVM {
                 
                 // Store the super object in the result register
                 self.frames[frame_idx].set_register(result_reg, RcValue::new(super_obj));
+                Ok(None)
+            }
+            OpCode::ImportModule => {
+                // Import a module and store it in the global namespace
+                // arg1: name index (module name in names array)
+                // arg2: result register (where to store the module)
+                let name_idx = arg1 as usize;
+                let result_reg = arg2;
+
+                if name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("ImportModule: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
+                }
+
+                let module_name = self.frames[frame_idx].code.names[name_idx].clone();
+
+                // Try to load the builtin module
+                let module_value = if let Some(module) = modules::get_builtin_module(&module_name) {
+                    module
+                } else {
+                    return Err(anyhow!("ImportModule: module '{}' not found", module_name));
+                };
+
+                // Store the module in both globals and the result register
+                let rc_module = RcValue::new(module_value);
+                self.globals.insert(module_name.clone(), rc_module.clone());
+                self.frames[frame_idx].globals.insert(module_name.clone(), rc_module.clone());
+                self.frames[frame_idx].set_register(result_reg, rc_module);
+
+                Ok(None)
+            }
+            OpCode::ImportFrom => {
+                // Import specific names from a module
+                // arg1: module name index
+                // arg2: name to import index
+                // arg3: result register
+                let module_name_idx = arg1 as usize;
+                let import_name_idx = arg2 as usize;
+                let result_reg = arg3;
+
+                if module_name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("ImportFrom: module name index {} out of bounds (len: {})", module_name_idx, self.frames[frame_idx].code.names.len()));
+                }
+
+                if import_name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("ImportFrom: import name index {} out of bounds (len: {})", import_name_idx, self.frames[frame_idx].code.names.len()));
+                }
+
+                let module_name = self.frames[frame_idx].code.names[module_name_idx].clone();
+                let import_name = self.frames[frame_idx].code.names[import_name_idx].clone();
+
+                // Try to load the builtin module
+                let module_value = if let Some(module) = modules::get_builtin_module(&module_name) {
+                    module
+                } else {
+                    return Err(anyhow!("ImportFrom: module '{}' not found", module_name));
+                };
+
+                // Extract the specific name from the module
+                let imported_value = match &module_value {
+                    Value::Module(_, namespace) => {
+                        if let Some(value) = namespace.get(&import_name) {
+                            value.clone()
+                        } else {
+                            return Err(anyhow!("ImportFrom: cannot import name '{}' from module '{}'", import_name, module_name));
+                        }
+                    }
+                    _ => {
+                        return Err(anyhow!("ImportFrom: '{}' is not a module", module_name));
+                    }
+                };
+
+                // Store the imported value in globals and the result register
+                let rc_value = RcValue::new(imported_value);
+                self.globals.insert(import_name.clone(), rc_value.clone());
+                self.frames[frame_idx].globals.insert(import_name.clone(), rc_value.clone());
+                self.frames[frame_idx].set_register(result_reg, rc_value);
+
                 Ok(None)
             }
             _ => {

@@ -4,6 +4,7 @@ use crate::value::Value;
 use std::collections::HashMap;
 
 // Re-export all submodules
+pub mod abc;
 pub mod asyncio;
 pub mod base64;
 pub mod collections;
@@ -41,8 +42,9 @@ pub use crate::modules::hplist::HPList;
 /// Initialize all built-in modules and return them as a HashMap
 pub fn init_builtin_modules() -> HashMap<String, Value> {
     let mut modules = HashMap::new();
-    
+
     // Add built-in modules
+    modules.insert("abc".to_string(), abc::create_abc_module());
     modules.insert("os".to_string(), os::create_os_module());
     modules.insert("sys".to_string(), sys::create_sys_module());
     modules.insert("threading".to_string(), threading::create_threading_module());
@@ -83,6 +85,7 @@ pub fn init_builtin_modules() -> HashMap<String, Value> {
 /// Get a specific built-in module by name
 pub fn get_builtin_module(name: &str) -> Option<Value> {
     match name {
+        "abc" => Some(abc::create_abc_module()),
         "os" => Some(os::create_os_module()),
         "sys" => Some(sys::create_sys_module()),
         "threading" => Some(threading::create_threading_module()),
@@ -118,12 +121,13 @@ pub fn get_builtin_module(name: &str) -> Option<Value> {
 
 /// Check if a module name is a built-in module
 pub fn is_builtin_module(name: &str) -> bool {
-    matches!(name, "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx" | "memory" | "gc" | "exceptions")
+    matches!(name, "abc" | "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx" | "memory" | "gc" | "exceptions")
 }
 
 /// Get list of all built-in module names
 pub fn get_builtin_module_names() -> Vec<String> {
     vec![
+        "abc".to_string(),
         "os".to_string(),
         "sys".to_string(),
         "threading".to_string(),

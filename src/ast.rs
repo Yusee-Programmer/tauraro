@@ -43,7 +43,8 @@ pub enum Statement {
         else_branch: Option<Vec<Statement>>,
     },
     For {
-        variable: String,
+        variable: String,  // Primary variable (for backwards compatibility)
+        variables: Vec<String>,  // Multiple variables for tuple unpacking
         iterable: Expr,
         body: Vec<Statement>,
         else_branch: Option<Vec<Statement>>,
