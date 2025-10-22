@@ -6,13 +6,14 @@ use crate::bytecode::objects::RcValue;
 use crate::ast::{Param, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::rc::Rc;
 use smallvec::SmallVec;
 
 /// Register-based compiled code object
 #[derive(Debug, Clone)]
 pub struct CodeObject {
     pub instructions: Vec<Instruction>,
-    pub constants: Vec<Value>,
+    pub constants: Vec<Value>,  // Keep as Value for simplicity
     pub names: Vec<String>,
     pub varnames: Vec<String>,
     pub freevars: Vec<String>,
@@ -172,8 +173,8 @@ pub struct Frame {
     pub registers: SmallVec<[RcValue; 64]>, // Register file with reference counting
     pub locals: Vec<RcValue>,               // Local variables with direct indexing (faster than HashMap)
     pub locals_map: HashMap<String, usize>, // Maps variable names to indices for debugging
-    pub globals: HashMap<String, RcValue>,  // Global variables with reference counting
-    pub builtins: HashMap<String, RcValue>, // Builtin functions with reference counting
+    pub globals: Rc<HashMap<String, RcValue>>,  // OPTIMIZATION: Shared globals (cheap clone)
+    pub builtins: Rc<HashMap<String, RcValue>>, // OPTIMIZATION: Shared builtins (cheap clone)
     pub free_vars: Vec<RcValue>,            // Free variables for closures with reference counting
     pub block_stack: Vec<Block>,            // Block stack for control flow
     pub cache_version: u32,                 // Current cache version
@@ -203,7 +204,7 @@ impl Frame {
         // Initialize registers
         let mut registers = SmallVec::new();
         registers.resize(code.registers as usize, RcValue::new(Value::None));
-        
+
         // If registers count is 0, log a warning
         if code.registers == 0 && !code.instructions.is_empty() {
             // For debugging, let's allocate some registers if there are instructions
@@ -211,21 +212,21 @@ impl Frame {
                 registers.resize(64, RcValue::new(Value::None));
             }
         }
-        
+
         // Initialize locals vector with None values
         let mut locals = Vec::new();
         locals.resize(code.varnames.len(), RcValue::new(Value::None));
-        
+
         // Create mapping from variable names to indices
         let mut locals_map = HashMap::new();
         for (i, name) in code.varnames.iter().enumerate() {
             locals_map.insert(name.clone(), i);
         }
-        
-        // Convert globals and builtins to RcValue
-        let rc_globals = globals.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect();
-        let rc_builtins = builtins.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect();
-        
+
+        // OPTIMIZATION: Wrap in Rc so future function calls just clone the pointer
+        let rc_globals = Rc::new(globals.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect());
+        let rc_builtins = Rc::new(builtins.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect());
+
         Self {
             code,
             pc: 0,
@@ -249,25 +250,25 @@ impl Frame {
         // Initialize registers
         let mut registers = SmallVec::new();
         registers.resize(code.registers as usize, RcValue::new(Value::None));
-        
+
         // Initialize locals vector
         let mut locals = Vec::new();
         locals.resize(code.varnames.len(), RcValue::new(Value::None));
-        
+
         // Create mapping from variable names to indices
         let mut locals_map = HashMap::new();
         for (i, name) in code.varnames.iter().enumerate() {
             locals_map.insert(name.clone(), i);
         }
-        
+
         // Copy arguments to locals, handling *args, **kwargs, and keyword arguments
         let mut arg_index = 0;
-        
+
         // Process each parameter in order
         for (param_index, param_name) in code.varnames.iter().enumerate() {
             // Check if this parameter is *args or **kwargs by looking at the params in code object
             let param_info = code.params.iter().find(|param| &param.name == param_name);
-            
+
             if let Some(param) = param_info {
                 match param.kind {
                     crate::ast::ParamKind::VarArgs => {
@@ -328,11 +329,11 @@ impl Frame {
                 }
             }
         }
-        
-        // Convert globals and builtins to RcValue
-        let rc_globals = globals.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect();
-        let rc_builtins = builtins.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect();
-        
+
+        // OPTIMIZATION: Wrap in Rc so cloning is cheap
+        let rc_globals = Rc::new(globals.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect());
+        let rc_builtins = Rc::new(builtins.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect());
+
         Self {
             code,
             pc: 0,
@@ -350,7 +351,48 @@ impl Frame {
             vars_to_update: Vec::new(),
         }
     }
-    
+
+    /// Create a frame with Rc-wrapped globals/builtins (OPTIMIZATION: no HashMap conversion)
+    pub fn new_with_rc(code: CodeObject, globals: Rc<HashMap<String, RcValue>>, builtins: Rc<HashMap<String, RcValue>>) -> Self {
+        // Initialize registers
+        let mut registers = SmallVec::new();
+        registers.resize(code.registers as usize, RcValue::new(Value::None));
+
+        // If registers count is 0, allocate some registers if there are instructions
+        if code.registers == 0 && !code.instructions.is_empty() {
+            if code.instructions.len() > 0 {
+                registers.resize(64, RcValue::new(Value::None));
+            }
+        }
+
+        // Initialize locals vector with None values
+        let mut locals = Vec::new();
+        locals.resize(code.varnames.len(), RcValue::new(Value::None));
+
+        // Create mapping from variable names to indices
+        let mut locals_map = HashMap::new();
+        for (i, name) in code.varnames.iter().enumerate() {
+            locals_map.insert(name.clone(), i);
+        }
+
+        Self {
+            code,
+            pc: 0,
+            registers,
+            locals,
+            locals_map,
+            globals,   // Already Rc-wrapped, no conversion needed!
+            builtins,  // Already Rc-wrapped, no conversion needed!
+            free_vars: Vec::new(),
+            block_stack: Vec::new(),
+            cache_version: 0,
+            method_cache: HashMap::new(),
+            return_register: None,
+            is_property_setter: false,
+            vars_to_update: Vec::new(),
+        }
+    }
+
     /// Get value from register
     pub fn get_register(&self, reg: u32) -> &RcValue {
         &self.registers[reg as usize]

@@ -48,6 +48,9 @@ pub enum OpCode {
     BinaryDivRR,    // Register-Register division
     BinaryDivRI,    // Register-Immediate division
     BinaryDivIR,    // Immediate-Register division
+    BinaryFloorDivRR, // Register-Register floor division
+    BinaryFloorDivRI, // Register-Immediate floor division
+    BinaryFloorDivIR, // Immediate-Register floor division
     BinaryModRR,    // Register-Register modulo
     BinaryModRI,    // Register-Immediate modulo
     BinaryModIR,    // Immediate-Register modulo

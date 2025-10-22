@@ -161,7 +161,7 @@ impl SuperBytecodeVM {
         
         // Update globals from the executed frame and pop it
         if let Some(frame) = self.frames.pop() {
-            self.globals = frame.globals;
+            self.globals = (*frame.globals).clone();
         }
 
         Ok(result)
@@ -185,7 +185,7 @@ impl SuperBytecodeVM {
             if self.frames[frame_idx].code.instructions.is_empty() {
                 // Update globals before popping any frame (REPL needs this)
                 if let Some(frame) = self.frames.last() {
-                    self.globals = frame.globals.clone();
+                    self.globals = (*frame.globals).clone();
                 }
                 self.frames.pop();
                 return Ok(Value::None);
@@ -246,7 +246,7 @@ impl SuperBytecodeVM {
                         frame_idx = self.frames.len() - 1;
                         
                         // Update globals from the returned frame
-                        self.globals = returned_frame.globals;
+                        self.globals = (*returned_frame.globals).clone();
                         
                         // Store the return value in the calling frame if return_register is set
                         if let Some((caller_frame_idx, result_reg)) = returned_frame.return_register {
@@ -285,7 +285,7 @@ impl SuperBytecodeVM {
                                             }
                                             "frame_global" => {
                                                 if caller_frame_idx < self.frames.len() {
-                                                    if let Some(frame_global_value) = self.frames[caller_frame_idx].globals.get_mut(parts[1]) {
+                                                    if let Some(frame_global_value) = Rc::make_mut(&mut self.frames[caller_frame_idx].globals).get_mut(parts[1]) {
                                                         *frame_global_value = modified_object.clone();
                                                     }
                                                 }
@@ -740,7 +740,7 @@ impl SuperBytecodeVM {
                 let value = self.frames[frame_idx].registers[value_reg as usize].clone();
                 
                 // Store in both frame globals and VM globals
-                self.frames[frame_idx].globals.insert(name.clone(), value.clone());
+                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name.clone(), value.clone());
                 self.globals.insert(name, value);
                 
                 Ok(None)
@@ -1100,6 +1100,35 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
+            OpCode::BinaryModRRFastInt => {
+                // Fast path for integer Register-Register modulo
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                // Direct access to integer values without cloning for maximum performance
+                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
+                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
+                        // Check for division by zero
+                        if right_val == 0 {
+                            return Err(anyhow!("Modulo by zero"));
+                        }
+                        // Create result directly without intermediate allocations
+                        self.frames[frame_idx].registers[result_reg] = RcValue {
+                            value: Value::Int(left_val % right_val),
+                            ref_count: 1,
+                        };
+                        return Ok(None);
+                    }
+                }
+                // Fallback to regular modulo
+                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
+                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
+                let result = self.mod_values(left_val, right_val)
+                    .map_err(|e| anyhow!("Error in BinaryModRRFastInt: {}", e))?;
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
             OpCode::CompareLessRR => {
                 // Register-Register less than comparison
                 let left_reg = arg1 as usize;
@@ -1276,6 +1305,125 @@ impl SuperBytecodeVM {
                     }
                 };
                 
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryFloorDivRR => {
+                // Register-Register floor division
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryFloorDivRR: register index out of bounds"));
+                }
+
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+
+                // Fast path for integer floor division
+                let result = match (&left.value, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => {
+                        if *b == 0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        // Python-style floor division for integers
+                        Value::Int(a / b)
+                    },
+                    (Value::Float(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        // Floor division for floats returns float
+                        Value::Float((a / b).floor())
+                    },
+                    (Value::Int(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Float((*a as f64 / b).floor())
+                    },
+                    (Value::Float(a), Value::Int(b)) => {
+                        if *b == 0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Float((a / *b as f64).floor())
+                    },
+                    _ => {
+                        return Err(anyhow!("Unsupported operand types for floor division"));
+                    }
+                };
+
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryFloorDivRI => {
+                // Register-Immediate floor division
+                let left_reg = arg1 as usize;
+                let imm_idx = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if left_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryFloorDivRI: register index out of bounds"));
+                }
+
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = self.frames[frame_idx].code.constants.get(imm_idx)
+                    .ok_or_else(|| anyhow!("BinaryFloorDivRI: constant index out of bounds"))?;
+
+                let result = match (&left.value, right) {
+                    (Value::Int(a), Value::Int(b)) => {
+                        if *b == 0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Int(a / b)
+                    },
+                    (Value::Float(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Float((a / b).floor())
+                    },
+                    _ => {
+                        return Err(anyhow!("Unsupported operand types for floor division"));
+                    }
+                };
+
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryFloorDivIR => {
+                // Immediate-Register floor division
+                let imm_idx = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryFloorDivIR: register index out of bounds"));
+                }
+
+                let left = self.frames[frame_idx].code.constants.get(imm_idx)
+                    .ok_or_else(|| anyhow!("BinaryFloorDivIR: constant index out of bounds"))?;
+                let right = &self.frames[frame_idx].registers[right_reg];
+
+                let result = match (left, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => {
+                        if *b == 0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Int(a / b)
+                    },
+                    (Value::Float(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Float((a / b).floor())
+                    },
+                    _ => {
+                        return Err(anyhow!("Unsupported operand types for floor division"));
+                    }
+                };
+
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
@@ -2495,7 +2643,7 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("StoreException: varname index {} out of bounds", var_idx));
                         }
                         let var_name = self.frames[frame_idx].code.varnames[var_idx].clone();
-                        self.frames[frame_idx].globals.insert(var_name, exception_value);
+                        Rc::make_mut(&mut self.frames[frame_idx].globals).insert(var_name, exception_value);
                     }
                     _ => return Err(anyhow!("StoreException: invalid storage type {}", storage_type)),
                 }
@@ -3297,7 +3445,7 @@ impl SuperBytecodeVM {
                             }
                         }
                         "frame_global" => {
-                            if let Some(frame_global_value) = self.frames[frame_idx].globals.get_mut(parts[1]) {
+                            if let Some(frame_global_value) = Rc::make_mut(&mut self.frames[frame_idx].globals).get_mut(parts[1]) {
                                 *frame_global_value = modified_object.clone();
                             }
                         }
@@ -3503,7 +3651,7 @@ impl SuperBytecodeVM {
                 // Store the module in both globals and the result register
                 let rc_module = RcValue::new(module_value);
                 self.globals.insert(module_name.clone(), rc_module.clone());
-                self.frames[frame_idx].globals.insert(module_name.clone(), rc_module.clone());
+                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(module_name.clone(), rc_module.clone());
                 self.frames[frame_idx].set_register(result_reg, rc_module);
 
                 Ok(None)
@@ -3552,7 +3700,7 @@ impl SuperBytecodeVM {
                 // Store the imported value in globals and the result register
                 let rc_value = RcValue::new(imported_value);
                 self.globals.insert(import_name.clone(), rc_value.clone());
-                self.frames[frame_idx].globals.insert(import_name.clone(), rc_value.clone());
+                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(import_name.clone(), rc_value.clone());
                 self.frames[frame_idx].set_register(result_reg, rc_value);
 
                 Ok(None)

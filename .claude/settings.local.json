@@ -57,7 +57,14 @@
       "Bash(cargo build:*)",
       "Bash(pgrep:*)",
       "Bash(/dev/null)",
-      "Bash(./target/release/tauraro.exe:*)"
+      "Bash(./target/release/tauraro.exe:*)",
+      "Bash(while pgrep cargo)",
+      "Bash(do sleep 1)",
+      "Bash(done)",
+      "Bash(time python:*)",
+      "Bash(time:*)",
+      "Bash(grep:*)",
+      "Bash(test:*)"
     ],
     "deny": [],
     "ask": []

@@ -1307,6 +1307,7 @@ impl SuperCompiler {
                         BinaryOp::Sub => OpCode::BinarySubRR,
                         BinaryOp::Mul => OpCode::BinaryMulRR,
                         BinaryOp::Div => OpCode::BinaryDivRR,
+                        BinaryOp::FloorDiv => OpCode::BinaryFloorDivRR,
                         BinaryOp::Mod => OpCode::BinaryModRR,
                         BinaryOp::Pow => OpCode::BinaryPowRR,
                         BinaryOp::Eq => OpCode::CompareEqualRR,
