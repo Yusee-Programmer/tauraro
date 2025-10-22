@@ -19,12 +19,14 @@ pub mod object_system;
 pub mod package_manager;
 pub mod base_object;
 pub mod bytecode;
+pub mod type_checker;
 
 // Re-export commonly used items
 pub use value::Value;
 pub use bytecode::{SuperBytecodeVM, SuperCompiler, CodeObject, Frame, RcValue};
 pub use bytecode::instructions::{Instruction, OpCode};
 pub use vm::memory::Scope;
+pub use type_checker::{TypeChecker, TypeEnvironment, TypeInfo};
 
 #[cfg(feature = "ffi")]
 pub mod ffi;

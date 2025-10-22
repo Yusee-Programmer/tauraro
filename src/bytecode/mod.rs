@@ -12,6 +12,7 @@ pub mod module;
 pub mod vm;
 pub mod builtins;
 pub mod compiler;
+pub mod type_checking;
 
 // Re-export commonly used items
 pub use crate::bytecode::instructions::{OpCode, Instruction};

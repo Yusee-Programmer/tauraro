@@ -172,6 +172,14 @@ pub enum OpCode {
     UnaryNot,       // Logical NOT operation
     UnaryNegate,    // Unary negation (-)
 
+    // Type checking operations
+    RegisterType,       // Register a variable's declared type
+    CheckType,          // Check if a value matches the declared type
+    CheckFunctionParam, // Check function parameter type
+    CheckFunctionReturn,// Check function return type
+    CheckAttrType,      // Check attribute assignment type
+    InferType,          // Infer type from value and store it
+
     // Miscellaneous
     PrintExpr,
     FormatValue,
