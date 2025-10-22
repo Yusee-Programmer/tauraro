@@ -1100,6 +1100,35 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
+            OpCode::BinaryModRRFastInt => {
+                // Fast path for integer Register-Register modulo
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                // Direct access to integer values without cloning for maximum performance
+                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
+                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
+                        // Check for division by zero
+                        if right_val == 0 {
+                            return Err(anyhow!("Modulo by zero"));
+                        }
+                        // Create result directly without intermediate allocations
+                        self.frames[frame_idx].registers[result_reg] = RcValue {
+                            value: Value::Int(left_val % right_val),
+                            ref_count: 1,
+                        };
+                        return Ok(None);
+                    }
+                }
+                // Fallback to regular modulo
+                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
+                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
+                let result = self.mod_values(left_val, right_val)
+                    .map_err(|e| anyhow!("Error in BinaryModRRFastInt: {}", e))?;
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
             OpCode::CompareLessRR => {
                 // Register-Register less than comparison
                 let left_reg = arg1 as usize;
@@ -1276,6 +1305,125 @@ impl SuperBytecodeVM {
                     }
                 };
                 
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryFloorDivRR => {
+                // Register-Register floor division
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryFloorDivRR: register index out of bounds"));
+                }
+
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+
+                // Fast path for integer floor division
+                let result = match (&left.value, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => {
+                        if *b == 0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        // Python-style floor division for integers
+                        Value::Int(a / b)
+                    },
+                    (Value::Float(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        // Floor division for floats returns float
+                        Value::Float((a / b).floor())
+                    },
+                    (Value::Int(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Float((*a as f64 / b).floor())
+                    },
+                    (Value::Float(a), Value::Int(b)) => {
+                        if *b == 0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Float((a / *b as f64).floor())
+                    },
+                    _ => {
+                        return Err(anyhow!("Unsupported operand types for floor division"));
+                    }
+                };
+
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryFloorDivRI => {
+                // Register-Immediate floor division
+                let left_reg = arg1 as usize;
+                let imm_idx = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if left_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryFloorDivRI: register index out of bounds"));
+                }
+
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = self.frames[frame_idx].code.constants.get(imm_idx)
+                    .ok_or_else(|| anyhow!("BinaryFloorDivRI: constant index out of bounds"))?;
+
+                let result = match (&left.value, right) {
+                    (Value::Int(a), Value::Int(b)) => {
+                        if *b == 0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Int(a / b)
+                    },
+                    (Value::Float(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Float((a / b).floor())
+                    },
+                    _ => {
+                        return Err(anyhow!("Unsupported operand types for floor division"));
+                    }
+                };
+
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryFloorDivIR => {
+                // Immediate-Register floor division
+                let imm_idx = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryFloorDivIR: register index out of bounds"));
+                }
+
+                let left = self.frames[frame_idx].code.constants.get(imm_idx)
+                    .ok_or_else(|| anyhow!("BinaryFloorDivIR: constant index out of bounds"))?;
+                let right = &self.frames[frame_idx].registers[right_reg];
+
+                let result = match (left, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => {
+                        if *b == 0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Int(a / b)
+                    },
+                    (Value::Float(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Float((a / b).floor())
+                    },
+                    _ => {
+                        return Err(anyhow!("Unsupported operand types for floor division"));
+                    }
+                };
+
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
