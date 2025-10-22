@@ -263,9 +263,42 @@ impl SuperCompiler {
                 }
                 Ok(())
             }
-            Statement::VariableDef { name, value, .. } => {
+            Statement::VariableDef { name, type_annotation, value } => {
+                // If there's a type annotation, store it and emit type checking instruction
+                if let Some(ref type_ann) = type_annotation {
+                    self.code.var_types.insert(name.clone(), type_ann.clone());
+
+                    // Emit RegisterType instruction
+                    // arg1 = variable name index, arg2 = type constant index
+                    let name_idx = self.code.add_name(name.clone());
+                    let type_const_idx = self.code.add_constant(Value::Str(format!("{}", type_ann)));
+                    self.emit(OpCode::RegisterType, name_idx, type_const_idx, 0, self.current_line);
+                }
+
                 if let Some(expr) = value {
                     let value_reg = self.compile_expression(expr)?;
+
+                    // Check if variable has a declared type (either from current annotation or previous declaration)
+                    let type_to_check = if let Some(ref type_ann) = type_annotation {
+                        Some(type_ann.clone())
+                    } else {
+                        // Check if this variable was previously declared with a type
+                        self.code.var_types.get(&name).cloned()
+                    };
+
+                    // If there's a type to check (either new or existing), emit CheckType instruction
+                    if let Some(type_ann) = type_to_check {
+                        let name_idx = self.code.add_name(name.clone());
+                        // arg1 = name index, arg2 = value register, arg3 = type constant index
+                        let type_const_idx = self.code.add_constant(Value::Str(format!("{}", type_ann)));
+                        self.emit(OpCode::CheckType, name_idx, value_reg, type_const_idx, self.current_line);
+                    } else {
+                        // No explicit type annotation, but emit InferType for type inference
+                        let name_idx = self.code.add_name(name.clone());
+                        // arg1 = name index, arg2 = value register
+                        self.emit(OpCode::InferType, name_idx, value_reg, 0, self.current_line);
+                    }
+
                     // Store in local variable if in function scope, otherwise global
                     if self.is_in_function_scope() {
                         // We're in a function scope, use fast local access
@@ -304,21 +337,43 @@ impl SuperCompiler {
             Statement::Return(expr) => {
                 if let Some(expr) = expr {
                     let value_reg = self.compile_expression(expr)?;
+
+                    // If function has a return type annotation, emit CheckFunctionReturn instruction
+                    if let Some(return_type) = &self.code.return_type {
+                        let type_const_idx = self.code.add_constant(Value::Str(format!("{}", return_type)));
+                        let func_name_idx = self.code.add_name(self.code.name.clone());
+                        // arg1 = function name index, arg2 = return value register, arg3 = type constant index
+                        self.emit(OpCode::CheckFunctionReturn, func_name_idx, value_reg, type_const_idx, self.current_line);
+                    }
+
                     self.emit(OpCode::ReturnValue, value_reg, 0, 0, self.current_line);
                 } else {
                     let none_const = self.code.add_constant(Value::None);
                     let reg = self.allocate_register();
                     self.emit(OpCode::LoadConst, none_const, reg, 0, self.current_line);
+
+                    // If function has a return type annotation, check None against it
+                    if let Some(return_type) = &self.code.return_type {
+                        let type_const_idx = self.code.add_constant(Value::Str(format!("{}", return_type)));
+                        let func_name_idx = self.code.add_name(self.code.name.clone());
+                        self.emit(OpCode::CheckFunctionReturn, func_name_idx, reg, type_const_idx, self.current_line);
+                    }
+
                     self.emit(OpCode::ReturnValue, reg, 0, 0, self.current_line);
                 }
                 Ok(())
             }
-            Statement::FunctionDef { name, params, body, decorators, .. } => {
+            Statement::FunctionDef { name, params, return_type, body, decorators, .. } => {
                 // Create a new compiler for the function
                 let mut func_compiler = SuperCompiler::new(format!("<fn:{}>", name));
 
                 // CRITICAL: Set code.name so is_in_function_scope() works correctly
                 func_compiler.code.name = format!("<fn:{}>", name);
+
+                // Store return type annotation if present
+                if let Some(ret_type) = return_type {
+                    func_compiler.code.return_type = Some(ret_type.clone());
+                }
 
                 // Add parameters to the function's varnames
                 for param in &params {
@@ -1013,7 +1068,11 @@ impl SuperCompiler {
                 // Compile attribute assignment: object.name = value
                 let object_reg = self.compile_expression(object)?;
                 let value_reg = self.compile_expression(value)?;
-                let name_idx = self.code.add_name(name);
+                let name_idx = self.code.add_name(name.clone());
+
+                // Emit CheckAttrType instruction if type checking is enabled
+                // arg1 = object register, arg2 = attribute name index, arg3 = value register
+                self.emit(OpCode::CheckAttrType, object_reg, name_idx, value_reg, self.current_line);
 
                 // Emit StoreAttr instruction to store attribute to object
                 self.emit(OpCode::StoreAttr, object_reg, name_idx, value_reg, self.current_line);

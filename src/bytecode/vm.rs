@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 // Import module system for dynamic module loading
 use crate::modules;
+// Import type checker for runtime type enforcement
+use crate::type_checker::TypeChecker;
 
 /// Register-based bytecode virtual machine with computed GOTOs for maximum performance
 pub struct SuperBytecodeVM {
@@ -20,19 +22,23 @@ pub struct SuperBytecodeVM {
     pub builtins: HashMap<String, RcValue>,
     pub globals: HashMap<String, RcValue>,
     pub globals_version: u32,
-    
+
     // Cache compiled code objects for closures to avoid recompiling on each call
     function_code_cache: HashMap<Value, CodeObject>,
-    
+
     // Profiling and JIT compilation tracking
     instruction_execution_count: HashMap<(String, usize), u64>, // (function_name, instruction_index) -> count
     function_call_count: HashMap<String, u64>, // function_name -> call count
     hot_function_threshold: u64, // Threshold for considering a function "hot"
     jit_compiled_functions: HashMap<String, bool>, // Track which functions have been JIT compiled
-    
+
     // JIT compiler for hot function compilation
     #[cfg(feature = "jit")]
     jit_builder: Option<cranelift_module::Module<cranelift_module::Backend>>,
+
+    // Type checker for runtime type enforcement
+    pub type_checker: TypeChecker,
+    pub enable_type_checking: bool, // Flag to enable/disable type checking
 }
 
 // Type alias for builtin functions
@@ -88,16 +94,20 @@ impl SuperBytecodeVM {
             globals,
             globals_version: 0,
             function_code_cache: HashMap::new(),
-            
+
             // Initialize profiling counters
             instruction_execution_count: HashMap::new(),
             function_call_count: HashMap::new(),
             hot_function_threshold: 1000, // Consider functions hot after 1000 calls
             jit_compiled_functions: HashMap::new(),
-            
+
             // Initialize JIT compiler
             #[cfg(feature = "jit")]
             jit_builder,
+
+            // Initialize type checker
+            type_checker: TypeChecker::new(),
+            enable_type_checking: true, // Enable type checking by default
         }
     }
     
@@ -1793,6 +1803,145 @@ impl SuperBytecodeVM {
                 };
 
                 self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(result));
+                Ok(None)
+            }
+            OpCode::RegisterType => {
+                // Register a variable's declared type in the type checker
+                // arg1 = variable name index, arg2 = type constant index
+                if !self.enable_type_checking {
+                    return Ok(None);
+                }
+
+                let name_idx = arg1 as usize;
+                let type_const_idx = arg2 as usize;
+
+                let var_name = self.frames[frame_idx].code.names.get(name_idx)
+                    .ok_or_else(|| anyhow!("RegisterType: name index {} out of bounds", name_idx))?;
+
+                let type_str = match self.frames[frame_idx].code.constants.get(type_const_idx) {
+                    Some(Value::Str(s)) => s,
+                    _ => return Err(anyhow!("RegisterType: type constant is not a string")),
+                };
+
+                // Parse the type string and register it
+                let parsed_type = crate::bytecode::type_checking::parse_type_string(type_str)
+                    .map_err(|e| anyhow!("RegisterType: failed to parse type '{}': {}", type_str, e))?;
+
+                self.type_checker.type_env.register_variable(var_name.clone(), parsed_type);
+                Ok(None)
+            }
+            OpCode::CheckType => {
+                // Check if a value matches a declared type
+                // arg1 = variable name index, arg2 = value register, arg3 = type constant index
+                if !self.enable_type_checking {
+                    return Ok(None);
+                }
+
+                let name_idx = arg1 as usize;
+                let value_reg = arg2 as usize;
+                let type_const_idx = arg3 as usize;
+
+                let var_name = self.frames[frame_idx].code.names.get(name_idx)
+                    .ok_or_else(|| anyhow!("CheckType: name index {} out of bounds", name_idx))?;
+
+                let value = &self.frames[frame_idx].registers[value_reg].value;
+
+                let type_str = match self.frames[frame_idx].code.constants.get(type_const_idx) {
+                    Some(Value::Str(s)) => s,
+                    _ => return Err(anyhow!("CheckType: type constant is not a string")),
+                };
+
+                // Check the value against the type
+                crate::bytecode::type_checking::check_value_against_type_string(value, type_str, &self.type_checker)
+                    .map_err(|e| anyhow!("Type error in variable '{}': {}", var_name, e))?;
+
+                Ok(None)
+            }
+            OpCode::CheckFunctionParam => {
+                // Check function parameter type
+                // arg1 = function name index, arg2 = param name index, arg3 = value register
+                if !self.enable_type_checking {
+                    return Ok(None);
+                }
+
+                // TODO: Implement parameter type checking
+                // For now, this is a placeholder
+                Ok(None)
+            }
+            OpCode::CheckFunctionReturn => {
+                // Check function return type
+                // arg1 = function name index, arg2 = return value register, arg3 = type constant index
+                if !self.enable_type_checking {
+                    return Ok(None);
+                }
+
+                let func_name_idx = arg1 as usize;
+                let value_reg = arg2 as usize;
+                let type_const_idx = arg3 as usize;
+
+                let func_name = self.frames[frame_idx].code.names.get(func_name_idx)
+                    .ok_or_else(|| anyhow!("CheckFunctionReturn: function name index {} out of bounds", func_name_idx))?;
+
+                let value = &self.frames[frame_idx].registers[value_reg].value;
+
+                let type_str = match self.frames[frame_idx].code.constants.get(type_const_idx) {
+                    Some(Value::Str(s)) => s,
+                    _ => return Err(anyhow!("CheckFunctionReturn: type constant is not a string")),
+                };
+
+                // Check the return value against the expected return type
+                crate::bytecode::type_checking::check_value_against_type_string(value, type_str, &self.type_checker)
+                    .map_err(|e| anyhow!("Type error in function '{}' return value: {}", func_name, e))?;
+
+                Ok(None)
+            }
+            OpCode::CheckAttrType => {
+                // Check attribute assignment type
+                // arg1 = object register, arg2 = attribute name index, arg3 = value register
+                if !self.enable_type_checking {
+                    return Ok(None);
+                }
+
+                let object_reg = arg1 as usize;
+                let attr_name_idx = arg2 as usize;
+                let value_reg = arg3 as usize;
+
+                let attr_name = self.frames[frame_idx].code.names.get(attr_name_idx)
+                    .ok_or_else(|| anyhow!("CheckAttrType: attribute name index {} out of bounds", attr_name_idx))?;
+
+                let object = &self.frames[frame_idx].registers[object_reg].value;
+                let value = &self.frames[frame_idx].registers[value_reg].value;
+
+                // Get the class name from the object
+                if let Value::Object { class_name, .. } = object {
+                    if let Some(class_type) = self.type_checker.type_env.get_class_type(class_name) {
+                        if let Some(expected_type) = class_type.attribute_types.get(attr_name) {
+                            self.type_checker.check_type(value, expected_type)
+                                .map_err(|e| anyhow!("Type error in attribute '{}' of class '{}': {}", attr_name, class_name, e))?;
+                        }
+                    }
+                }
+
+                Ok(None)
+            }
+            OpCode::InferType => {
+                // Infer type from a value and register it
+                // arg1 = variable name index, arg2 = value register
+                if !self.enable_type_checking || !self.type_checker.type_env.enable_type_inference {
+                    return Ok(None);
+                }
+
+                let name_idx = arg1 as usize;
+                let value_reg = arg2 as usize;
+
+                let var_name = self.frames[frame_idx].code.names.get(name_idx)
+                    .ok_or_else(|| anyhow!("InferType: name index {} out of bounds", name_idx))?;
+
+                let value = &self.frames[frame_idx].registers[value_reg].value;
+
+                // Infer and store the type
+                self.type_checker.type_env.infer_type(var_name.clone(), value);
+
                 Ok(None)
             }
             OpCode::ReturnValue => {

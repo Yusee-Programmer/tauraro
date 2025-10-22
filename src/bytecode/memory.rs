@@ -3,7 +3,7 @@
 use crate::value::Value;
 use crate::bytecode::instructions::{OpCode, Instruction};
 use crate::bytecode::objects::RcValue;
-use crate::ast::Param;
+use crate::ast::{Param, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use smallvec::SmallVec;
@@ -27,7 +27,9 @@ pub struct CodeObject {
     pub flags: u32,
     pub registers: u32,         // Number of registers needed
     pub inline_caches: Vec<InlineCache>, // Inline caches for specialization
-    pub params: Vec<Param>,     // Add this field to store parameter information
+    pub params: Vec<Param>,     // Parameter information with type annotations
+    pub var_types: HashMap<String, Type>,  // Variable type annotations
+    pub return_type: Option<Type>,         // Function return type annotation
 }
 
 impl PartialEq for CodeObject {
@@ -59,6 +61,8 @@ impl CodeObject {
             registers: 0,
             inline_caches: Vec::new(),
             params: Vec::new(),  // Initialize the params field
+            var_types: HashMap::new(),  // Initialize variable type annotations
+            return_type: None,           // Initialize return type annotation
         }
     }
     

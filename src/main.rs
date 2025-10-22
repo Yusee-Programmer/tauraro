@@ -23,6 +23,8 @@ mod object_system;
 mod package_manager;
 mod base_object;
 mod bytecode;
+mod type_checker;
+mod runtime_error;
 
 #[derive(Parser)]
 #[command(name = "tauraro")]
