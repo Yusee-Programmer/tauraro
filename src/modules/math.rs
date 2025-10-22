@@ -45,6 +45,10 @@ pub fn create_math_module() -> Value {
     namespace.insert("acosh".to_string(), Value::NativeFunction(math_acosh));
     namespace.insert("atanh".to_string(), Value::NativeFunction(math_atanh));
     
+    // Additional functions
+    namespace.insert("isqrt".to_string(), Value::NativeFunction(math_isqrt));
+    namespace.insert("nextafter".to_string(), Value::NativeFunction(math_nextafter));
+    
     // Angular conversion
     namespace.insert("degrees".to_string(), Value::NativeFunction(math_degrees));
     namespace.insert("radians".to_string(), Value::NativeFunction(math_radians));
@@ -367,6 +371,75 @@ fn math_atanh(args: Vec<Value>) -> Result<Value> {
     Ok(Value::Float(x.atanh()))
 }
 
+/// Return the integer square root of a non-negative integer: isqrt(x)
+fn math_isqrt(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("isqrt() takes exactly 1 argument"));
+    }
+    
+    let x = value_to_int(&args[0])?;
+    if x < 0 {
+        return Err(anyhow!("math domain error"));
+    }
+    
+    Ok(Value::Int((x as f64).sqrt() as i64))
+}
+
+/// Return the next floating-point value after x towards y: nextafter(x, y)
+fn math_nextafter(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("nextafter() takes exactly 2 arguments"));
+    }
+    
+    let x = value_to_float(&args[0])?;
+    let y = value_to_float(&args[1])?;
+    
+    // Simple implementation - in reality would use platform-specific nextafter function
+    if x == y {
+        Ok(Value::Float(x))
+    } else if x < y {
+        // Return the next representable value towards y
+        Ok(Value::Float(x + f64::EPSILON))
+    } else {
+        // Return the next representable value towards y
+        Ok(Value::Float(x - f64::EPSILON))
+    }
+}
+
+/// Return the floating-point remainder of x/y: fmod(x, y)
+fn math_fmod(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("fmod() takes exactly 2 arguments"));
+    }
+    
+    let x = value_to_float(&args[0])?;
+    let y = value_to_float(&args[1])?;
+    
+    if y == 0.0 {
+        return Err(anyhow!("math domain error"));
+    }
+    
+    Ok(Value::Float(x % y))
+}
+
+/// Return the IEEE remainder of x/y: remainder(x, y)
+fn math_remainder(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("remainder() takes exactly 2 arguments"));
+    }
+    
+    let x = value_to_float(&args[0])?;
+    let y = value_to_float(&args[1])?;
+    
+    if y == 0.0 {
+        return Err(anyhow!("math domain error"));
+    }
+    
+    // IEEE remainder: x - n*y where n is the integer nearest to x/y
+    let n = (x / y).round();
+    Ok(Value::Float(x - n * y))
+}
+
 /// Convert radians to degrees: degrees(x)
 fn math_degrees(args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
@@ -489,40 +562,6 @@ fn math_lcm(args: Vec<Value>) -> Result<Value> {
         .ok_or_else(|| anyhow!("lcm() result too large"))?;
     
     Ok(Value::Int(lcm))
-}
-
-/// Floating point modulo function: fmod(x, y)
-fn math_fmod(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 2 {
-        return Err(anyhow!("fmod() takes exactly 2 arguments"));
-    }
-    
-    let x = value_to_float(&args[0])?;
-    let y = value_to_float(&args[1])?;
-    
-    if y == 0.0 {
-        return Err(anyhow!("math domain error"));
-    }
-    
-    Ok(Value::Float(x % y))
-}
-
-/// IEEE remainder function: remainder(x, y)
-fn math_remainder(args: Vec<Value>) -> Result<Value> {
-    if args.len() != 2 {
-        return Err(anyhow!("remainder() takes exactly 2 arguments"));
-    }
-    
-    let x = value_to_float(&args[0])?;
-    let y = value_to_float(&args[1])?;
-    
-    if y == 0.0 {
-        return Err(anyhow!("math domain error"));
-    }
-    
-    // IEEE remainder: x - n*y where n is the integer nearest to x/y
-    let n = (x / y).round();
-    Ok(Value::Float(x - n * y))
 }
 
 /// Return fractional and integer parts: modf(x)

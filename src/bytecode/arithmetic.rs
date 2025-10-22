@@ -272,4 +272,26 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for not equal comparison")),
         }
     }
+    
+    /// Bitwise AND operation
+    pub fn bitand_values(&self, left: Value, right: Value) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a & b)),
+            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a & b)),
+            (Value::Int(a), Value::Bool(b)) => Ok(Value::Int(a & (b as i64))),
+            (Value::Bool(a), Value::Int(b)) => Ok(Value::Int((a as i64) & b)),
+            _ => Err(anyhow!("Unsupported types for bitwise AND operation")),
+        }
+    }
+    
+    /// Bitwise OR operation
+    pub fn bitor_values(&self, left: Value, right: Value) -> Result<Value> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a | b)),
+            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a | b)),
+            (Value::Int(a), Value::Bool(b)) => Ok(Value::Int(a | (b as i64))),
+            (Value::Bool(a), Value::Int(b)) => Ok(Value::Int((a as i64) | b)),
+            _ => Err(anyhow!("Unsupported types for bitwise OR operation")),
+        }
+    }
 }

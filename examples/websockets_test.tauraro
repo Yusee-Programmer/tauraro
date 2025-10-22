@@ -1,0 +1,29 @@
+# Websockets module test
+import websockets
+
+print("=== Websockets Module Test ===")
+
+# Test websocket client creation
+print("Websockets module loaded successfully")
+
+# Test websocket URI parsing
+try:
+    # This would typically be used for websocket connections
+    uri = "ws://localhost:8765"
+    print("WebSocket URI:", uri)
+    
+    # Test websocket connection (this is just a placeholder)
+    print("WebSocket connection functionality would be tested here")
+    
+except Exception as e:
+    print("WebSocket error:", e)
+
+# Test websocket server functionality
+try:
+    # Test server creation (this is just a placeholder)
+    print("WebSocket server functionality would be tested here")
+    
+except Exception as e:
+    print("WebSocket server error:", e)
+
+print("Websockets module test completed successfully!")

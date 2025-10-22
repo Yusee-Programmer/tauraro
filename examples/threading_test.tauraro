@@ -1,0 +1,45 @@
+# Threading module test
+import threading
+import time
+
+print("=== Threading Module Test ===")
+
+# Test thread creation
+def worker(name, delay):
+    for i in range(3):
+        print(f"Thread {name}: {i}")
+        time.sleep(delay)
+
+# Create and start threads
+thread1 = threading.Thread(target=worker, args=("A", 1))
+thread2 = threading.Thread(target=worker, args=("B", 1.5))
+
+print("Starting threads...")
+thread1.start()
+thread2.start()
+
+# Wait for threads to complete
+thread1.join()
+thread2.join()
+print("All threads completed")
+
+# Test thread with return value (using a shared variable)
+result = []
+
+def worker_with_result(result_list):
+    result_list.append("Thread result")
+
+thread3 = threading.Thread(target=worker_with_result, args=(result,))
+thread3.start()
+thread3.join()
+print("Thread result:", result)
+
+# Test thread name and identification
+current_thread = threading.current_thread()
+print("Current thread:", current_thread.name)
+print("Thread ID:", current_thread.ident)
+
+# Test active thread count
+print("Active threads:", threading.active_count())
+
+print("Threading module test completed successfully!")

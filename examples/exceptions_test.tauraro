@@ -1,0 +1,36 @@
+# Exceptions module test
+import exceptions
+
+print("=== Exceptions Module Test ===")
+
+# Test basic exception handling
+try:
+    raise ValueError("This is a test error")
+except ValueError as e:
+    print("Caught ValueError:", e)
+
+# Test custom exception
+class CustomError(Exception):
+    pass
+
+try:
+    raise CustomError("This is a custom error")
+except CustomError as e:
+    print("Caught CustomError:", e)
+
+# Test exception hierarchy
+try:
+    raise RuntimeError("Runtime error occurred")
+except Exception as e:
+    print("Caught generic Exception:", e)
+
+# Test finally block
+try:
+    print("In try block")
+    raise TypeError("Type error")
+except TypeError:
+    print("Caught TypeError")
+finally:
+    print("Finally block executed")
+
+print("Exceptions module test completed successfully!")

@@ -1,0 +1,27 @@
+# Simple random module test
+import random
+
+print("=== Simple Random Module Test ===")
+
+# Test random float between 0.0 and 1.0
+print("Random float [0.0, 1.0):", random.random())
+
+# Test random integer in range
+print("Random integer [1, 10]:", random.randint(1, 10))
+
+# Test random choice from sequence
+choices = ['apple', 'banana', 'cherry', 'date']
+print("Random choice:", random.choice(choices))
+
+# Test random sample with a list instead of range
+numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+sample = random.sample(numbers, 5)
+print("Random sample of 5 numbers:", sample)
+
+# Test random shuffle
+deck = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+print("Original deck:", deck)
+random.shuffle(deck)
+print("Shuffled deck:", deck)
+
+print("Simple random module test completed successfully!")

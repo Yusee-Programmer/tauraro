@@ -1,0 +1,18 @@
+# HTTP Tools module test
+import httptools
+
+print("=== HTTP Tools Module Test ===")
+
+# Test URL parsing
+url = "https://example.com:8080/path?query=value#fragment"
+print("URL:", url)
+
+# Note: The exact API may vary depending on the httptools implementation
+# This is a placeholder for actual httptools functionality
+print("HTTP Tools module loaded successfully")
+
+# Test basic HTTP parser functionality (if available)
+# parser = httptools.HttpRequestParser()
+# print("HTTP Parser created successfully")
+
+print("HTTP Tools module test completed successfully!")

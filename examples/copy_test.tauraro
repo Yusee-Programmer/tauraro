@@ -1,0 +1,32 @@
+# Copy module test
+import copy
+
+print("=== Copy Module Test ===")
+
+# Test shallow copy
+original_list = [[1, 2, 3], [4, 5, 6]]
+shallow_copied = copy.copy(original_list)
+
+print("Original list:", original_list)
+print("Shallow copied:", shallow_copied)
+
+# Modify nested element in original
+original_list[0][0] = 999
+print("After modifying original[0][0]:")
+print("Original list:", original_list)
+print("Shallow copied:", shallow_copied)  # Should also change
+
+# Test deep copy
+original_list2 = [[1, 2, 3], [4, 5, 6]]
+deep_copied = copy.deepcopy(original_list2)
+
+print("\nOriginal list2:", original_list2)
+print("Deep copied:", deep_copied)
+
+# Modify nested element in original
+original_list2[0][0] = 888
+print("After modifying original2[0][0]:")
+print("Original list2:", original_list2)
+print("Deep copied:", deep_copied)  # Should NOT change
+
+print("Copy module test completed successfully!")

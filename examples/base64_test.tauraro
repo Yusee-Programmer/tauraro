@@ -1,0 +1,22 @@
+# Base64 module test
+import base64
+
+print("=== Base64 Module Test ===")
+
+# Test string encoding/decoding
+text = "Hello, Tauraro!"
+encoded = base64.b64encode(text.encode('utf-8'))
+print("Encoded:", encoded)
+
+decoded = base64.b64decode(encoded).decode('utf-8')
+print("Decoded:", decoded)
+
+# Test URL-safe encoding
+url_text = "Hello+World/123"
+url_encoded = base64.urlsafe_b64encode(url_text.encode('utf-8'))
+print("URL-safe encoded:", url_encoded)
+
+url_decoded = base64.urlsafe_b64decode(url_encoded).decode('utf-8')
+print("URL-safe decoded:", url_decoded)
+
+print("Base64 module test completed successfully!")

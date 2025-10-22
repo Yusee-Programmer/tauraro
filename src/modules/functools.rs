@@ -257,6 +257,8 @@ fn functools_update_wrapper(args: Vec<Value>) -> Result<Value> {
     Ok(wrapper.clone())
 }
 
+
+
 /// LRU Cache decorator - least-recently-used cache decorator
 fn functools_lru_cache(args: Vec<Value>) -> Result<Value> {
     let maxsize = if !args.is_empty() {
@@ -317,32 +319,99 @@ fn cached_function_call(args: Vec<Value>) -> Result<Value> {
         return Err(anyhow::anyhow!("cached function call missing self argument"));
     }
     
-    // For now, just call the original function without caching
     let cached_obj = match &args[0] {
         Value::Object { fields, .. } => fields,
         _ => return Err(anyhow::anyhow!("Invalid cached function object")),
     };
     
     let func = cached_obj.get("func").ok_or_else(|| anyhow::anyhow!("Cached function missing func"))?;
+    let cache = match cached_obj.get("cache") {
+        Some(Value::Dict(cache)) => cache,
+        _ => return Err(anyhow::anyhow!("Cached function missing cache")),
+    };
     
-    call_function(func, args[1..].to_vec())
+    // Create a key from the arguments (simplified - in reality would need to handle unhashable types)
+    let key = format!("{:?}", &args[1..]);
+    
+    // Check if result is in cache
+    if let Some(cached_result) = cache.get(&key) {
+        // Increment hits counter
+        // In a full implementation, we would update the hits counter
+        return Ok(cached_result.clone());
+    }
+    
+    // Call the original function
+    let result = call_function(func, args[1..].to_vec())?;
+    
+    // Store result in cache
+    // In a full implementation, we would update the cache and misses counter
+    
+    Ok(result)
 }
 
 /// Cache info method
-fn cache_info(_args: Vec<Value>) -> Result<Value> {
-    // Return cache statistics
-    let mut info = HashMap::new();
-    info.insert("hits".to_string(), Value::Int(0));
-    info.insert("misses".to_string(), Value::Int(0));
-    info.insert("maxsize".to_string(), Value::Int(128));
-    info.insert("currsize".to_string(), Value::Int(0));
+fn cache_info(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("cache_info() takes exactly 1 argument"));
+    }
     
-    Ok(Value::Dict(info))
+    let cached_obj = match &args[0] {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid cached function object")),
+    };
+    
+    let cache: &HashMap<String, Value> = match cached_obj.get("cache") {
+        Some(Value::Dict(cache)) => cache,
+        _ => &HashMap::new(), // Return empty cache if not found
+    };
+    
+    // Get hits and misses counters
+    let hits = match cached_obj.get("hits") {
+        Some(Value::Int(n)) => *n,
+        _ => 0,
+    };
+    
+    let misses = match cached_obj.get("misses") {
+        Some(Value::Int(n)) => *n,
+        _ => 0,
+    };
+    
+    let maxsize = match cached_obj.get("maxsize") {
+        Some(Value::Int(n)) => Some(*n),
+        Some(Value::None) => None,
+        _ => Some(128), // Default maxsize
+    };
+    
+    let mut info = HashMap::new();
+    info.insert("hits".to_string(), Value::Int(hits));
+    info.insert("misses".to_string(), Value::Int(misses));
+    info.insert("maxsize".to_string(), maxsize.map_or(Value::None, |n| Value::Int(n)));
+    info.insert("currsize".to_string(), Value::Int(cache.len() as i64));
+    
+    // Create a simple object to represent the cache info
+    Ok(Value::Object {
+        class_name: "cache_info".to_string(),
+        fields: Rc::new(info),
+        class_methods: HashMap::new(),
+        base_object: crate::base_object::BaseObject::new("cache_info".to_string(), vec!["object".to_string()]),
+        mro: crate::base_object::MRO::from_linearization(vec!["cache_info".to_string(), "object".to_string()]),
+    })
 }
 
 /// Cache clear method
-fn cache_clear(_args: Vec<Value>) -> Result<Value> {
-    // Clear the cache
+fn cache_clear(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("cache_clear() takes exactly 1 argument"));
+    }
+    
+    let cached_obj = match &args[0] {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid cached function object")),
+    };
+    
+    // In a full implementation, this would clear the cache and reset counters
+    // For now, we'll just return None
+    
     Ok(Value::None)
 }
 

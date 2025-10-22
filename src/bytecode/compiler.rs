@@ -1237,6 +1237,8 @@ impl SuperCompiler {
                         BinaryOp::Mul => OpCode::FastIntMul,
                         BinaryOp::Div => OpCode::BinaryDivRRFastInt,
                         BinaryOp::Mod => OpCode::BinaryModRRFastInt,
+                        BinaryOp::BitAnd => OpCode::BinaryBitAndRR, // No fast int version for BitAnd
+                        BinaryOp::BitOr => OpCode::BinaryBitOrRR,   // No fast int version for BitOr
                         _ => OpCode::BinaryAddRR, // fallback
                     };
                     self.emit(opcode, left_reg, right_reg, result_reg, self.current_line);
@@ -1254,6 +1256,8 @@ impl SuperCompiler {
                         BinaryOp::Gt => OpCode::CompareGreaterRR,
                         BinaryOp::Le | BinaryOp::Lte => OpCode::CompareLessEqualRR,
                         BinaryOp::Ge | BinaryOp::Gte => OpCode::CompareGreaterEqualRR,
+                        BinaryOp::BitAnd => OpCode::BinaryBitAndRR,
+                        BinaryOp::BitOr => OpCode::BinaryBitOrRR,
                         BinaryOp::And => {
                             // Short-circuit AND: if left is false, return left, otherwise return right
                             // This is a simplified implementation
@@ -1295,6 +1299,18 @@ impl SuperCompiler {
                                 return Ok(result_reg);
                             }
                         }
+                    }
+                    
+                    // Special handling for next() calls with exactly one argument
+                    if name == "next" && args.len() == 1 && kwargs.is_empty() {
+                        // This is a next() call with one argument (the iterator)
+                        // We need to generate a Next opcode instead of CallFunction
+                        let iter_reg = self.compile_expression(args[0].clone())?;
+                        let result_reg = self.allocate_register();
+                        
+                        // Emit the Next opcode
+                        self.emit(OpCode::Next, iter_reg, result_reg, 0, self.current_line);
+                        return Ok(result_reg);
                     }
                 }
                 

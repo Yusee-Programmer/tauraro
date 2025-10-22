@@ -554,6 +554,76 @@ impl SuperBytecodeVM {
                     }
                 }
             }
+            OpCode::Next => {
+                // Call next() on an iterator and update the iterator variable
+                let iter_reg = arg1 as usize;
+                let result_reg = arg2 as usize;
+                
+                if iter_reg >= self.frames[frame_idx].registers.len() || result_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("Next: register index out of bounds"));
+                }
+                
+                // Clone the iterator value to avoid borrowing issues
+                let iter_value = self.frames[frame_idx].registers[iter_reg].value.clone();
+                match iter_value {
+                    Value::Iterator { ref items, ref current_index } => {
+                        // For Iterator objects, check if we've reached the end
+                        if *current_index < items.len() {
+                            // Store the current value in the result register
+                            let value = RcValue::new(items[*current_index].clone());
+                            self.frames[frame_idx].set_register(result_reg as u32, value);
+                            
+                            // Update the iterator's current position
+                            let updated_iterator = Value::Iterator {
+                                items: items.clone(),
+                                current_index: current_index + 1,
+                            };
+                            self.frames[frame_idx].registers[iter_reg] = RcValue::new(updated_iterator);
+                            
+                            Ok(None)
+                        } else {
+                            // Iterator exhausted, raise StopIteration
+                            Err(anyhow!("StopIteration"))
+                        }
+                    },
+                    Value::RangeIterator { start, stop, step, current } => {
+                        // Check if we've reached the end of the range
+                        let should_continue = if step > 0 {
+                            current < stop
+                        } else if step < 0 {
+                            current > stop
+                        } else {
+                            // step == 0 is invalid, but we'll treat it as end of iteration
+                            false
+                        };
+                        
+                        if should_continue {
+                            // Store the current value in the result register
+                            let value = RcValue::new(Value::Int(current));
+                            self.frames[frame_idx].set_register(result_reg as u32, value);
+                            
+                            // Update the iterator's current position
+                            let new_current = current + step;
+                            let updated_iterator = Value::RangeIterator {
+                                start,
+                                stop,
+                                step,
+                                current: new_current,
+                            };
+                            self.frames[frame_idx].registers[iter_reg] = RcValue::new(updated_iterator);
+                            
+                            Ok(None)
+                        } else {
+                            // Iterator exhausted, raise StopIteration
+                            Err(anyhow!("StopIteration"))
+                        }
+                    },
+                    _ => {
+                        // For other types, try to call the __next__ method
+                        Err(anyhow!("'{}' object is not an iterator", iter_value.type_name()))
+                    }
+                }
+            }
             OpCode::BinaryAddRR => {
                 // Register-Register addition
                 let left_reg = arg1;
@@ -1477,6 +1547,60 @@ impl SuperBytecodeVM {
                         // For less common cases, use the general implementation
                         self.pow_values(left.clone(), right.value.clone())
                             .map_err(|e| anyhow!("Error in BinaryPowIR: {}", e))?
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryBitAndRR => {
+                // Register-Register bitwise AND
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryBitAndRR: register index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+                
+                // Fast path for common operations
+                let result = match (&left.value, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a & b),
+                    (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a & *b),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.bitand_values(left.value.clone(), right.value.clone())
+                            .map_err(|e| anyhow!("Error in BinaryBitAndRR: {}", e))?
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryBitOrRR => {
+                // Register-Register bitwise OR
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryBitOrRR: register index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+                
+                // Fast path for common operations
+                let result = match (&left.value, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a | b),
+                    (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a | *b),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.bitor_values(left.value.clone(), right.value.clone())
+                            .map_err(|e| anyhow!("Error in BinaryBitOrRR: {}", e))?
                     }
                 };
                 

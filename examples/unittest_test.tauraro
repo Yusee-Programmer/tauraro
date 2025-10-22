@@ -1,0 +1,52 @@
+# Unittest module test
+import unittest
+
+print("=== Unittest Module Test ===")
+
+# Test basic test case
+class TestExample(unittest.TestCase):
+    def test_addition(self):
+        self.assertEqual(2 + 2, 4)
+    
+    def test_subtraction(self):
+        self.assertEqual(5 - 3, 2)
+    
+    def test_multiplication(self):
+        self.assertEqual(3 * 4, 12)
+    
+    def test_string_operations(self):
+        self.assertIn("hello", "hello world")
+        self.assertTrue("HELLO".isupper())
+    
+    def test_list_operations(self):
+        test_list = [1, 2, 3]
+        self.assertEqual(len(test_list), 3)
+        self.assertIn(2, test_list)
+    
+    def test_assert_raises(self):
+        with self.assertRaises(ZeroDivisionError):
+            result = 1 / 0
+    
+    def test_assert_true_false(self):
+        self.assertTrue(True)
+        self.assertFalse(False)
+    
+    def test_assert_greater_less(self):
+        self.assertGreater(5, 3)
+        self.assertLess(3, 5)
+
+# Test suite creation
+suite = unittest.TestLoader().loadTestsFromTestCase(TestExample)
+print("Test suite created with", suite.countTestCases(), "tests")
+
+# Test result collection
+result = unittest.TestResult()
+suite.run(result)
+print("Tests run:", result.testsRun)
+print("Failures:", len(result.failures))
+print("Errors:", len(result.errors))
+
+# Show that unittest module is available
+print("Unittest module loaded successfully")
+
+print("Unittest module test completed successfully!")

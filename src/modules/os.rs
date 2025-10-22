@@ -11,6 +11,10 @@ use std::process::Command;
 // Import HPList
 use crate::modules::hplist::HPList;
 
+// Platform-specific imports
+#[cfg(unix)]
+extern crate libc;
+
 /// Create the os module object with all its functions and attributes
 pub fn create_os_module() -> Value {
     let mut namespace = HashMap::new();
@@ -34,6 +38,7 @@ pub fn create_os_module() -> Value {
     
     // Process operations
     namespace.insert("getpid".to_string(), Value::NativeFunction(os_getpid));
+    namespace.insert("getppid".to_string(), Value::NativeFunction(os_getppid));
     namespace.insert("system".to_string(), Value::NativeFunction(os_system));
     
     // Environment functions
@@ -252,6 +257,32 @@ pub fn os_stat(args: Vec<Value>) -> Result<Value> {
 
 pub fn os_getpid(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::Int(std::process::id() as i64))
+}
+
+pub fn os_getppid(_args: Vec<Value>) -> Result<Value> {
+    // On Windows, we can use winapi to get parent process ID
+    // On Unix-like systems, we can read from /proc/self/stat
+    // For now, we'll return a placeholder or try to get it platform-specifically
+    
+    #[cfg(unix)]
+    {
+        // On Unix, we can use libc::getppid()
+        let ppid = unsafe { libc::getppid() } as i64;
+        Ok(Value::Int(ppid))
+    }
+    
+    #[cfg(windows)]
+    {
+        // On Windows, we need to use Windows API
+        // For now, we'll return a placeholder
+        Ok(Value::Int(1)) // Placeholder
+    }
+    
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Fallback for other platforms
+        Ok(Value::Int(1)) // Placeholder
+    }
 }
 
 pub fn os_system(args: Vec<Value>) -> Result<Value> {

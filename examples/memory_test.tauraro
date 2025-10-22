@@ -1,0 +1,14 @@
+# Memory module test
+import memory
+
+print("=== Memory Module Test ===")
+
+# Test memory information (if available)
+# Note: The exact API may vary depending on the memory module implementation
+print("Memory module loaded successfully")
+
+# Test memory usage tracking (if available)
+# This is a placeholder for actual memory functionality
+print("Memory tracking features would be tested here")
+
+print("Memory module test completed successfully!")

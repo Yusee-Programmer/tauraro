@@ -1,0 +1,44 @@
+# Pickle module test
+import pickle
+
+print("=== Pickle Module Test ===")
+
+# Test data to serialize
+data = {
+    "name": "Tauraro",
+    "version": 1.0,
+    "features": ["fast", "efficient", "pythonic"],
+    "numbers": [1, 2, 3, 4, 5],
+    "nested": {
+        "key": "value"
+    }
+}
+
+# Test pickling (serializing)
+pickled_data = pickle.dumps(data)
+print("Data pickled successfully")
+print("Pickled data size:", len(pickled_data))
+
+# Test unpickling (deserializing)
+unpickled_data = pickle.loads(pickled_data)
+print("Data unpickled successfully")
+print("Unpickled data:", unpickled_data)
+print("Data matches:", data == unpickled_data)
+
+# Test with list
+numbers = [1, 2, 3, 4, 5]
+pickled_numbers = pickle.dumps(numbers)
+unpickled_numbers = pickle.loads(pickled_numbers)
+print("List pickle test:", numbers == unpickled_numbers)
+
+# Test with custom object (simplified)
+class SimpleClass:
+    def __init__(self, value):
+        self.value = value
+
+obj = SimpleClass("test")
+pickled_obj = pickle.dumps(obj)
+unpickled_obj = pickle.loads(pickled_obj)
+print("Object pickle test:", obj.value == unpickled_obj.value)
+
+print("Pickle module test completed successfully!")
