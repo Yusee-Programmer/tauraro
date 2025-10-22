@@ -1,0 +1,22 @@
+# Iterator state management test
+print("=== Iterator State Management Test ===")
+
+# Create a list
+my_list = [1, 2, 3, 4, 5]
+print("Original list:", my_list)
+
+# Create two iterators from the same list
+iter1 = iter(my_list)
+iter2 = iter(my_list)
+
+# Advance first iterator by 2 elements
+print("First two elements from iter1:")
+print("  next(iter1) =", next(iter1))
+print("  next(iter1) =", next(iter1))
+
+# Now get elements from iter2 - should start from the beginning
+print("First two elements from iter2 (should be same as original):")
+print("  next(iter2) =", next(iter2))
+print("  next(iter2) =", next(iter2))
+
+print("Iterator state management test completed successfully!")

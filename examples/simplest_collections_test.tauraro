@@ -1,0 +1,19 @@
+# Simplest collections test
+import collections
+
+print("=== Simplest Collections Test ===")
+
+# Test Counter creation
+counter = collections.Counter(['a', 'b', 'c', 'a', 'b', 'b'])
+print("Counter:", counter)
+
+# Test most_common method
+print("Most common:", counter.most_common(2))
+
+# Test deque
+deque = collections.deque([1, 2, 3])
+deque.append(4)
+deque.appendleft(0)
+print("Deque:", list(deque))
+
+print("Simplest collections test completed!")

@@ -1,0 +1,53 @@
+# Time module test
+import time
+
+print("=== Time Module Test ===")
+
+# Test current time
+current_time = time.time()
+print("Current time (seconds since epoch):", current_time)
+
+# Test time formatting
+local_time = time.localtime()
+formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
+print("Formatted local time:", formatted_time)
+
+# Test sleep functionality
+print("Sleeping for 1 second...")
+start = time.time()
+time.sleep(1)
+end = time.time()
+print("Slept for approximately", end - start, "seconds")
+
+# Test different time formats
+print("UTC time:", time.gmtime())
+print("Local time:", time.localtime())
+
+# Test time conversion
+timestamp = 1640995200  # 2022-01-01 00:00:00 UTC
+utc_time = time.gmtime(timestamp)
+local_time_from_utc = time.localtime(timestamp)
+print("Timestamp converted to UTC:", time.strftime("%Y-%m-%d %H:%M:%S", utc_time))
+print("Timestamp converted to local:", time.strftime("%Y-%m-%d %H:%M:%S", local_time_from_utc))
+
+# Test monotonic time
+monotonic_start = time.monotonic()
+time.sleep(0.1)
+monotonic_end = time.monotonic()
+print("Monotonic time elapsed:", monotonic_end - monotonic_start)
+
+# Test performance counter
+perf_start = time.perf_counter()
+time.sleep(0.1)
+perf_end = time.perf_counter()
+print("Performance counter elapsed:", perf_end - perf_start)
+
+# Test process time
+process_start = time.process_time()
+# Do some work
+for i in range(1000000):
+    pass
+process_end = time.process_time()
+print("Process time elapsed:", process_end - process_start)
+
+print("Time module test completed successfully!")

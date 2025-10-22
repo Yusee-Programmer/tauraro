@@ -1318,7 +1318,7 @@ fn next_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
                 // Iterator exhausted, raise StopIteration
                 Err(anyhow::anyhow!("StopIteration"))
             }
-        },
+        }, 
         _ => {
             // For other iterators, return None for now
             Ok(Value::None)

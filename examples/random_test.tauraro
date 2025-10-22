@@ -1,0 +1,39 @@
+# Random module test
+import random
+
+print("=== Random Module Test ===")
+
+# Test random float between 0.0 and 1.0
+print("Random float [0.0, 1.0):", random.random())
+
+# Test random integer in range
+print("Random integer [1, 10]:", random.randint(1, 10))
+
+# Test random choice from sequence
+choices = ['apple', 'banana', 'cherry', 'date']
+print("Random choice:", random.choice(choices))
+
+# Test random sample
+sample = random.sample(range(1, 100), 5)
+print("Random sample of 5 numbers:", sample)
+
+# Test random shuffle
+deck = list(range(1, 11))
+print("Original deck:", deck)
+random.shuffle(deck)
+print("Shuffled deck:", deck)
+
+# Test random uniform
+print("Random uniform [1.0, 10.0]:", random.uniform(1.0, 10.0))
+
+# Test random with seed
+random.seed(42)
+print("Random with seed 42:", random.random())
+random.seed(42)
+print("Random with same seed:", random.random())
+
+# Test random.randrange
+print("Random range [0, 10):", random.randrange(10))
+print("Random range [5, 15):", random.randrange(5, 15))
+
+print("Random module test completed successfully!")

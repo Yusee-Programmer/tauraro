@@ -92,8 +92,26 @@ fn count_next(args: Vec<Value>) -> Result<Value> {
         return Err(anyhow::anyhow!("count.__next__() takes no arguments"));
     }
     
-    // This is a simplified implementation - in reality would need mutable state
-    Ok(Value::Int(0))
+    let count_obj = match &args[0] {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid count object")),
+    };
+    
+    let current = match count_obj.get("current") {
+        Some(Value::Int(n)) => *n,
+        _ => return Err(anyhow::anyhow!("Invalid count current value")),
+    };
+    
+    let step = match count_obj.get("step") {
+        Some(Value::Int(n)) => *n,
+        _ => return Err(anyhow::anyhow!("Invalid count step value")),
+    };
+    
+    // Update the current value for next call
+    // Note: This is a simplified implementation that doesn't actually update the object state
+    // In a real implementation, we would need mutable access to update the fields
+    
+    Ok(Value::Int(current))
 }
 
 /// Cycle - make an iterator returning elements from the iterable and saving a copy of each
@@ -126,9 +144,37 @@ fn cycle_iter(args: Vec<Value>) -> Result<Value> {
     Ok(args[0].clone())
 }
 
-fn cycle_next(_args: Vec<Value>) -> Result<Value> {
-    // Simplified implementation
-    Ok(Value::None)
+fn cycle_next(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("cycle.__next__() takes no arguments"));
+    }
+    
+    let cycle_obj = match &args[0] {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid cycle object")),
+    };
+    
+    let iterable = match cycle_obj.get("iterable") {
+        Some(Value::List(items)) => items,
+        _ => return Err(anyhow::anyhow!("Invalid cycle iterable")),
+    };
+    
+    if iterable.is_empty() {
+        return Err(anyhow::anyhow!("StopIteration"));
+    }
+    
+    let index = match cycle_obj.get("index") {
+        Some(Value::Int(i)) => *i as usize,
+        _ => return Err(anyhow::anyhow!("Invalid cycle index")),
+    };
+    
+    let item = iterable.get(index as isize).unwrap().clone();
+    
+    // Update index for next call (cycling back to 0 if needed)
+    // Note: This is a simplified implementation that doesn't actually update the object state
+    // In a real implementation, we would need mutable access to update the fields
+    
+    Ok(item)
 }
 
 /// Repeat - make an iterator that returns object over and over again
@@ -171,9 +217,44 @@ fn repeat_iter(args: Vec<Value>) -> Result<Value> {
     Ok(args[0].clone())
 }
 
-fn repeat_next(_args: Vec<Value>) -> Result<Value> {
-    // Simplified implementation
-    Ok(Value::None)
+fn repeat_next(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("repeat.__next__() takes no arguments"));
+    }
+    
+    let repeat_obj = match &args[0] {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid repeat object")),
+    };
+    
+    let object = match repeat_obj.get("object") {
+        Some(obj) => obj.clone(),
+        None => return Err(anyhow::anyhow!("Invalid repeat object")),
+    };
+    
+    let times = match repeat_obj.get("times") {
+        Some(Value::Int(n)) => Some(*n),
+        Some(Value::None) => None,
+        _ => return Err(anyhow::anyhow!("Invalid repeat times")),
+    };
+    
+    let count = match repeat_obj.get("count") {
+        Some(Value::Int(n)) => *n,
+        _ => return Err(anyhow::anyhow!("Invalid repeat count")),
+    };
+    
+    // Check if we've reached the limit
+    if let Some(times) = times {
+        if count >= times {
+            return Err(anyhow::anyhow!("StopIteration"));
+        }
+    }
+    
+    // Update count for next call
+    // Note: This is a simplified implementation that doesn't actually update the object state
+    // In a real implementation, we would need mutable access to update the fields
+    
+    Ok(object)
 }
 
 /// Accumulate - make an iterator that returns accumulated values
@@ -183,9 +264,38 @@ fn itertools_accumulate(args: Vec<Value>) -> Result<Value> {
     }
     
     let iterable = to_list(&args[0])?;
+    let func = if args.len() > 1 {
+        args[1].clone()
+    } else {
+        // Default to addition
+        Value::NativeFunction(|args| {
+            if args.len() != 2 {
+                return Err(anyhow::anyhow!("addition function takes exactly 2 arguments"));
+            }
+            match (&args[0], &args[1]) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+                _ => Err(anyhow::anyhow!("unsupported operand types for +")),
+            }
+        })
+    };
     
-    // For now, just return the original list (simplified implementation)
-    Ok(Value::List(HPList::from_values(iterable)))
+    let mut result = Vec::new();
+    let mut accumulator = None;
+    
+    for item in iterable {
+        if let Some(acc) = accumulator {
+            // Apply function to accumulator and current item
+            let new_acc = call_function(&func, vec![acc, item.clone()])?;
+            result.push(new_acc.clone());
+            accumulator = Some(new_acc);
+        } else {
+            result.push(item.clone());
+            accumulator = Some(item);
+        }
+    }
+    
+    Ok(Value::List(HPList::from_values(result)))
 }
 
 /// Chain - make an iterator that returns elements from the first iterable until it is exhausted
@@ -523,7 +633,7 @@ fn itertools_permutations(args: Vec<Value>) -> Result<Value> {
     }
     
     let iterable = to_list(&args[0])?;
-    let _r = if args.len() > 1 {
+    let r = if args.len() > 1 {
         match &args[1] {
             Value::Int(n) => *n as usize,
             _ => return Err(anyhow::anyhow!("permutations() r must be an integer")),
@@ -532,8 +642,43 @@ fn itertools_permutations(args: Vec<Value>) -> Result<Value> {
         iterable.len()
     };
     
-    // Simplified implementation - just return empty for now
-    Ok(Value::List(HPList::new()))
+    if r > iterable.len() {
+        return Ok(Value::List(HPList::new()));
+    }
+    
+    // Generate all permutations of length r
+    let mut result = Vec::new();
+    let indices: Vec<usize> = (0..iterable.len()).collect();
+    let mut permutations = Vec::new();
+    
+    generate_permutations(&indices, r, &mut vec![], &mut permutations);
+    
+    // Convert index permutations to value permutations
+    for perm in permutations {
+        let mut tuple_items = Vec::new();
+        for index in perm {
+            tuple_items.push(iterable[index].clone());
+        }
+        result.push(Value::Tuple(tuple_items));
+    }
+    
+    Ok(Value::List(HPList::from_values(result)))
+}
+
+/// Helper function to generate permutations of indices
+fn generate_permutations(indices: &[usize], r: usize, current: &mut Vec<usize>, result: &mut Vec<Vec<usize>>) {
+    if current.len() == r {
+        result.push(current.clone());
+        return;
+    }
+    
+    for &index in indices {
+        if !current.contains(&index) {
+            current.push(index);
+            generate_permutations(indices, r, current, result);
+            current.pop();
+        }
+    }
 }
 
 /// Combinations - return r length subsequences of elements from the input iterable
@@ -552,19 +697,37 @@ fn itertools_combinations(args: Vec<Value>) -> Result<Value> {
         return Ok(Value::List(HPList::new()));
     }
     
-    // Simple implementation for r=2
-    if r == 2 {
-        let mut result = Vec::new();
-        for i in 0..iterable.len() {
-            for j in (i + 1)..iterable.len() {
-                result.push(Value::Tuple(vec![iterable[i].clone(), iterable[j].clone()]));
-            }
+    // Generate all combinations of length r
+    let mut result = Vec::new();
+    let indices: Vec<usize> = (0..iterable.len()).collect();
+    let mut combinations = Vec::new();
+    
+    generate_combinations(&indices, r, 0, &mut vec![], &mut combinations);
+    
+    // Convert index combinations to value combinations
+    for comb in combinations {
+        let mut tuple_items = Vec::new();
+        for index in comb {
+            tuple_items.push(iterable[index].clone());
         }
-        return Ok(Value::List(HPList::from_values(result)));
+        result.push(Value::Tuple(tuple_items));
     }
     
-    // For other cases, return empty for now
-    Ok(Value::List(HPList::new()))
+    Ok(Value::List(HPList::from_values(result)))
+}
+
+/// Helper function to generate combinations of indices
+fn generate_combinations(indices: &[usize], r: usize, start: usize, current: &mut Vec<usize>, result: &mut Vec<Vec<usize>>) {
+    if current.len() == r {
+        result.push(current.clone());
+        return;
+    }
+    
+    for i in start..indices.len() {
+        current.push(indices[i]);
+        generate_combinations(indices, r, i + 1, current, result);
+        current.pop();
+    }
 }
 
 /// Combinations with replacement - return r length subsequences of elements from the input iterable allowing individual elements to be repeated more than once

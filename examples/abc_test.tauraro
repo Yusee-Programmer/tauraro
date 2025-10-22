@@ -1,0 +1,31 @@
+# ABC (Abstract Base Classes) module test
+import abc
+
+print("=== ABC Module Test ===")
+
+# Define an abstract base class
+class Animal(metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def make_sound(self):
+        pass
+
+# Concrete implementation
+class Dog(Animal):
+    def make_sound(self):
+        return "Woof!"
+
+# Test instantiation
+dog = Dog()
+print("Dog sound:", dog.make_sound())
+
+# Test ABC registration
+class Cat:
+    def make_sound(self):
+        return "Meow!"
+
+# Register Cat as implementing Animal
+Animal.register(Cat)
+cat = Cat()
+print("Cat sound:", cat.make_sound())
+
+print("ABC module test completed successfully!")

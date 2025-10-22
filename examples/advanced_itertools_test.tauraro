@@ -1,0 +1,102 @@
+# Advanced Itertools Module Test
+import itertools
+import operator
+
+print("=== Advanced Itertools Module Test ===")
+
+# Test infinite iterators
+print("\n--- Infinite Iterators ---")
+# Test count with different parameters
+counter = itertools.count(10, 3)
+print("Count(10, 3) first 5:", [next(counter) for _ in range(5)])
+
+# Test cycle with different data
+colors = ['red', 'green', 'blue']
+cycler = itertools.cycle(colors)
+print("Cycle first 7:", [next(cycler) for _ in range(7)])
+
+# Test repeat with and without times
+repeater1 = itertools.repeat('Tauraro')
+repeater2 = itertools.repeat('Tauraro', 3)
+print("Repeat forever (first 3):", [next(repeater1) for _ in range(3)])
+print("Repeat 3 times:", list(repeater2))
+
+# Test iterators terminating on shortest input
+print("\n--- Iterators on Shortest Input ---")
+
+# Test accumulate with different functions
+numbers = [1, 2, 3, 4, 5]
+print("Numbers:", numbers)
+print("Accumulate (sum):", list(itertools.accumulate(numbers)))
+print("Accumulate (mult):", list(itertools.accumulate(numbers, operator.mul)))
+print("Accumulate (max):", list(itertools.accumulate(numbers, max)))
+
+# Test chain and chain.from_iterable
+list1 = [1, 2, 3]
+list2 = ['a', 'b', 'c']
+list3 = [10, 20]
+print("Chain:", list(itertools.chain(list1, list2, list3)))
+nested = [[1, 2], [3, 4], [5, 6]]
+print("Chain from iterable:", list(itertools.chain.from_iterable(nested)))
+
+# Test compress
+data = ['A', 'B', 'C', 'D', 'E']
+selectors = [True, False, True, True, False]
+print("Compress:", list(itertools.compress(data, selectors)))
+
+# Test dropwhile and takewhile
+numbers = [1, 2, 3, 4, 5, 1, 2]
+print("Numbers:", numbers)
+print("Dropwhile (< 4):", list(itertools.dropwhile(lambda x: x < 4, numbers)))
+print("Takewhile (< 4):", list(itertools.takewhile(lambda x: x < 4, numbers)))
+
+# Test filterfalse
+print("Filterfalse (even):", list(itertools.filterfalse(lambda x: x % 2 == 0, range(1, 11))))
+
+# Test groupby
+data = [('a', 1), ('a', 2), ('b', 3), ('b', 4), ('c', 5)]
+grouped = [(k, list(g)) for k, g in itertools.groupby(data, key=lambda x: x[0])]
+print("Groupby:", grouped)
+
+# Test islice with different parameters
+print("Islice (2, 8, 2):", list(itertools.islice(range(10), 2, 8, 2)))
+
+# Test starmap
+pairs = [(2, 5), (3, 2), (10, 3)]
+print("Starmap (pow):", list(itertools.starmap(pow, pairs)))
+
+# Test tee
+iterable = [1, 2, 3, 4, 5]
+iter1, iter2, iter3 = itertools.tee(iterable, 3)
+print("Tee iter1:", list(iter1))
+print("Tee iter2:", list(iter2))
+print("Tee iter3:", list(iter3))
+
+# Test zip_longest
+print("Zip longest:", list(itertools.zip_longest([1, 2], ['a', 'b', 'c', 'd'], fillvalue='X')))
+
+# Test combinatorial iterators
+print("\n--- Combinatorial Iterators ---")
+
+# Test product
+print("Product:", list(itertools.product([1, 2], ['a', 'b'])))
+
+# Test permutations
+items = ['A', 'B', 'C']
+print("Permutations (all):", list(itertools.permutations(items)))
+print("Permutations (2):", list(itertools.permutations(items, 2)))
+
+# Test combinations
+print("Combinations (2):", list(itertools.combinations(items, 2)))
+
+# Test combinations with replacement
+print("Combinations with replacement (2):", list(itertools.combinations_with_replacement(items, 2)))
+
+# Test advanced combinations
+print("\n--- Advanced Combinations ---")
+# Test with larger datasets
+large_items = list(range(5))
+print("Large items combinations (3):", list(itertools.combinations(large_items, 3)))
+print("Large items permutations (3):", list(itertools.permutations(large_items, 3)))
+
+print("Advanced Itertools module test completed successfully!")

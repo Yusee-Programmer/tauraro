@@ -1,0 +1,39 @@
+# JSON module test
+import json
+
+print("=== JSON Module Test ===")
+
+# Test dictionary to JSON
+data = {
+    "name": "Tauraro",
+    "version": 1.0,
+    "features": ["fast", "efficient", "pythonic"],
+    "metadata": {
+        "author": "Developer",
+        "license": "MIT"
+    }
+}
+
+json_string = json.dumps(data)
+print("JSON string:", json_string)
+
+# Test JSON to dictionary
+parsed_data = json.loads(json_string)
+print("Parsed data:", parsed_data)
+print("Name:", parsed_data["name"])
+print("Features:", parsed_data["features"])
+
+# Test array handling
+numbers = [1, 2, 3, 4, 5]
+json_array = json.dumps(numbers)
+print("JSON array:", json_array)
+
+parsed_array = json.loads(json_array)
+print("Parsed array:", parsed_array)
+
+# Test pretty printing
+pretty_json = json.dumps(data, indent=2)
+print("Pretty JSON:")
+print(pretty_json)
+
+print("JSON module test completed successfully!")

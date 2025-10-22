@@ -1,0 +1,28 @@
+# Bitwise operations test
+print("=== Bitwise Operations Test ===")
+
+# Test bitwise AND
+a = 12  # 1100 in binary
+b = 10  # 1010 in binary
+result_and = a & b
+print("12 & 10 =", result_and)  # Should be 8 (1000 in binary)
+
+# Test bitwise OR
+result_or = a | b
+print("12 | 10 =", result_or)   # Should be 14 (1110 in binary)
+
+# Test with booleans
+x = True
+y = False
+bool_and = x & y
+bool_or = x | y
+print("True & False =", bool_and)  # Should be False
+print("True | False =", bool_or)   # Should be True
+
+# Test with mixed types
+mixed_and = 5 & True
+mixed_or = 5 | False
+print("5 & True =", mixed_and)     # Should be 1
+print("5 | False =", mixed_or)     # Should be 5
+
+print("Bitwise operations test completed successfully!")

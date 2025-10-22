@@ -1,0 +1,30 @@
+# IO module test
+import io
+
+print("=== IO Module Test ===")
+
+# Test StringIO
+string_io = io.StringIO()
+string_io.write("Hello, ")
+string_io.write("Tauraro!")
+string_io.seek(0)
+content = string_io.read()
+print("StringIO content:", content)
+
+# Test BytesIO
+bytes_io = io.BytesIO()
+bytes_io.write(b"Hello, ")
+bytes_io.write(b"Tauraro!")
+bytes_io.seek(0)
+bytes_content = bytes_io.read()
+print("BytesIO content:", bytes_content)
+
+# Test buffering
+buffered_io = io.BufferedWriter(io.BytesIO())
+print("BufferedWriter created successfully")
+
+# Test text wrapper
+text_io = io.TextIOWrapper(io.BytesIO())
+print("TextIOWrapper created successfully")
+
+print("IO module test completed successfully!")

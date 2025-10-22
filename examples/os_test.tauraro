@@ -1,0 +1,31 @@
+# OS module test
+import os
+
+print("=== OS Module Test ===")
+
+# Test environment variables
+print("Current working directory:", os.getcwd())
+print("OS name:", os.name)
+print("Path separator:", os.sep)
+
+# Test file system operations
+print("List directory contents:", os.listdir("."))
+
+# Test path operations
+path = "/some/test/path"
+print("Join path:", os.path.join("folder", "file.txt"))
+print("Basename:", os.path.basename("/path/to/file.txt"))
+print("Dirname:", os.path.dirname("/path/to/file.txt"))
+
+# Test file operations
+print("Is file:", os.path.isfile("examples/os_test.tauraro"))
+print("Is directory:", os.path.isdir("examples"))
+
+# Test process information
+print("Process ID:", os.getpid())
+print("Parent process ID:", os.getppid())
+
+# Test user information
+print("Current user:", os.getlogin())
+
+print("OS module test completed successfully!")

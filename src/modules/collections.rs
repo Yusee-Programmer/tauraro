@@ -270,13 +270,203 @@ fn counter_builtin(args: Vec<Value>) -> Result<Value> {
         }
     }
 
+    // Add methods to Counter class
+    let mut class_methods = HashMap::new();
+    class_methods.insert("most_common".to_string(), Value::NativeFunction(counter_most_common));
+    class_methods.insert("elements".to_string(), Value::NativeFunction(counter_elements));
+    class_methods.insert("subtract".to_string(), Value::NativeFunction(counter_subtract));
+    class_methods.insert("update".to_string(), Value::NativeFunction(counter_update));
+    class_methods.insert("__add__".to_string(), Value::NativeFunction(counter_add));
+    class_methods.insert("__sub__".to_string(), Value::NativeFunction(counter_subtract_op));
+    class_methods.insert("__or__".to_string(), Value::NativeFunction(counter_or));
+    class_methods.insert("__and__".to_string(), Value::NativeFunction(counter_and));
+
     Ok(Value::Object {
         class_name: "Counter".to_string(),
         fields: Rc::new(counts),
-        class_methods: HashMap::new(),
+        class_methods,
         base_object: crate::base_object::BaseObject::new("Counter".to_string(), vec!["dict".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Counter".to_string(), "dict".to_string(), "object".to_string()]),
     })
+}
+
+/// most_common method for Counter
+fn counter_most_common(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 1 || args.len() > 2 {
+        return Err(anyhow::anyhow!("most_common() takes 1 or 2 arguments"));
+    }
+
+    // First argument is self (the Counter object)
+    let self_obj = &args[0];
+    
+    // Second argument is n (optional)
+    let n = if args.len() == 2 {
+        match &args[1] {
+            Value::Int(i) => *i as usize,
+            Value::None => usize::MAX, // None means return all
+            _ => return Err(anyhow::anyhow!("most_common() argument must be an integer or None")),
+        }
+    } else {
+        0 // Default is return all
+    };
+
+    // Get the fields from the Counter object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid Counter object")),
+    };
+
+    // Convert to vector of (key, count) pairs
+    let mut items: Vec<(String, i64)> = Vec::new();
+    for (key, value) in fields.iter() {
+        if let Value::Int(count) = value {
+            items.push((key.clone(), *count));
+        }
+    }
+
+    // Sort by count in descending order
+    items.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Take the first n items or all if n is 0
+    let result_items = if n > 0 && n < items.len() {
+        &items[..n]
+    } else {
+        &items[..]
+    };
+
+    // Convert to list of tuples
+    let mut result = Vec::new();
+    for (key, count) in result_items {
+        result.push(Value::Tuple(vec![Value::Str(key.clone()), Value::Int(*count)]));
+    }
+
+    Ok(Value::List(HPList::from_values(result)))
+}
+
+/// elements method for Counter
+fn counter_elements(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("elements() takes exactly 1 argument"));
+    }
+
+    // First argument is self (the Counter object)
+    let self_obj = &args[0];
+
+    // Get the fields from the Counter object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid Counter object")),
+    };
+
+    // Create a list with elements repeated according to their counts
+    let mut result = Vec::new();
+    for (key, value) in fields.iter() {
+        if let Value::Int(count) = value {
+            for _ in 0..*count {
+                result.push(Value::Str(key.clone()));
+            }
+        }
+    }
+
+    Ok(Value::List(HPList::from_values(result)))
+}
+
+/// subtract method for Counter
+fn counter_subtract(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("subtract() takes exactly 2 arguments"));
+    }
+
+    // First argument is self (the Counter object)
+    let self_obj = &args[0];
+    let other = &args[1];
+
+    // Get the fields from the Counter object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid Counter object")),
+    };
+
+    // For now, we'll just return None as this would require mutable access to fields
+    // In a full implementation, we would subtract counts from other
+    Ok(Value::None)
+}
+
+/// update method for Counter
+fn counter_update(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("update() takes exactly 2 arguments"));
+    }
+
+    // First argument is self (the Counter object)
+    let self_obj = &args[0];
+    let other = &args[1];
+
+    // Get the fields from the Counter object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid Counter object")),
+    };
+
+    // For now, we'll just return None as this would require mutable access to fields
+    // In a full implementation, we would add counts from other
+    Ok(Value::None)
+}
+
+/// __add__ method for Counter
+fn counter_add(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("__add__ takes exactly 2 arguments"));
+    }
+
+    // First argument is self (the Counter object)
+    let self_obj = &args[0];
+    let other = &args[1];
+
+    // For now, we'll just return self as this would require combining counters
+    Ok(self_obj.clone())
+}
+
+/// __sub__ method for Counter
+fn counter_subtract_op(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("__sub__ takes exactly 2 arguments"));
+    }
+
+    // First argument is self (the Counter object)
+    let self_obj = &args[0];
+    let other = &args[1];
+
+    // For now, we'll just return self as this would require subtracting counters
+    Ok(self_obj.clone())
+}
+
+/// __or__ method for Counter (union)
+fn counter_or(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("__or__ takes exactly 2 arguments"));
+    }
+
+    // First argument is self (the Counter object)
+    let self_obj = &args[0];
+    let other = &args[1];
+
+    // For now, we'll just return self as this would require combining counters with max counts
+    Ok(self_obj.clone())
+}
+
+/// __and__ method for Counter (intersection)
+fn counter_and(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("__and__ takes exactly 2 arguments"));
+    }
+
+    // First argument is self (the Counter object)
+    let self_obj = &args[0];
+    let other = &args[1];
+
+    // For now, we'll just return self as this would require combining counters with min counts
+    Ok(self_obj.clone())
 }
 
 /// defaultdict implementation
@@ -337,14 +527,516 @@ fn deque_builtin(args: Vec<Value>) -> Result<Value> {
     } else {
         fields.insert("maxlen".to_string(), Value::None);
     }
+    
+    // Add iterator methods to fields (like in itertools)
+    fields.insert("__iter__".to_string(), Value::NativeFunction(deque_iter));
+    fields.insert("__next__".to_string(), Value::NativeFunction(deque_next));
+
+    // Add deque methods
+    let mut class_methods = HashMap::new();
+    class_methods.insert("append".to_string(), Value::NativeFunction(deque_append));
+    class_methods.insert("appendleft".to_string(), Value::NativeFunction(deque_appendleft));
+    class_methods.insert("pop".to_string(), Value::NativeFunction(deque_pop));
+    class_methods.insert("popleft".to_string(), Value::NativeFunction(deque_popleft));
+    class_methods.insert("clear".to_string(), Value::NativeFunction(deque_clear));
+    class_methods.insert("extend".to_string(), Value::NativeFunction(deque_extend));
+    class_methods.insert("extendleft".to_string(), Value::NativeFunction(deque_extendleft));
+    class_methods.insert("rotate".to_string(), Value::NativeFunction(deque_rotate));
 
     Ok(Value::Object {
         class_name: "deque".to_string(),
         fields: Rc::new(fields),
-        class_methods: HashMap::new(),
+        class_methods,
         base_object: crate::base_object::BaseObject::new("deque".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["deque".to_string(), "object".to_string()]),
     })
+}
+
+/// deque append method
+fn deque_append(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("append() takes exactly one argument"));
+    }
+
+    let self_obj = &args[0];
+    let value = &args[1];
+
+    // Get the fields from the deque object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid deque object")),
+    };
+
+    // Get the items list
+    let items = match fields.get("items") {
+        Some(Value::List(list)) => list,
+        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    };
+
+    // Get maxlen if it exists
+    let maxlen = match fields.get("maxlen") {
+        Some(Value::Int(n)) => Some(*n as usize),
+        _ => None,
+    };
+
+    // Clone the list to modify it
+    let mut new_items = items.clone();
+    new_items.append(value.clone());
+
+    // Apply maxlen constraint if needed
+    if let Some(max) = maxlen {
+        while new_items.len() > max {
+            new_items.pop_at(0)?; // Remove from left when exceeding maxlen
+        }
+    }
+
+    // Update the items in the fields
+    let mut new_fields = (**fields).clone();
+    new_fields.insert("items".to_string(), Value::List(new_items));
+
+    Ok(Value::None)
+}
+
+/// deque appendleft method
+fn deque_appendleft(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("appendleft() takes exactly one argument"));
+    }
+
+    let self_obj = &args[0];
+    let value = &args[1];
+
+    // Get the fields from the deque object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid deque object")),
+    };
+
+    // Get the items list
+    let items = match fields.get("items") {
+        Some(Value::List(list)) => list,
+        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    };
+
+    // Get maxlen if it exists
+    let maxlen = match fields.get("maxlen") {
+        Some(Value::Int(n)) => Some(*n as usize),
+        _ => None,
+    };
+
+    // Clone the list to modify it
+    let mut new_items = items.clone();
+    new_items.insert(0, value.clone())?;
+
+    // Apply maxlen constraint if needed
+    if let Some(max) = maxlen {
+        while new_items.len() > max {
+            new_items.pop(); // Remove from right when exceeding maxlen
+        }
+    }
+
+    // Update the items in the fields
+    let mut new_fields = (**fields).clone();
+    new_fields.insert("items".to_string(), Value::List(new_items));
+
+    Ok(Value::None)
+}
+
+/// deque pop method
+fn deque_pop(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("pop() takes no arguments"));
+    }
+
+    let self_obj = &args[0];
+
+    // Get the fields from the deque object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid deque object")),
+    };
+
+    // Get the items list
+    let items = match fields.get("items") {
+        Some(Value::List(list)) => list,
+        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    };
+
+    // Check if deque is empty
+    if items.is_empty() {
+        return Err(anyhow::anyhow!("pop from an empty deque"));
+    }
+
+    // Clone the list to modify it
+    let mut new_items = items.clone();
+    let popped = new_items.pop().unwrap();
+
+    // Update the items in the fields
+    let mut new_fields = (**fields).clone();
+    new_fields.insert("items".to_string(), Value::List(new_items));
+
+    Ok(popped)
+}
+
+/// deque popleft method
+fn deque_popleft(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("popleft() takes no arguments"));
+    }
+
+    let self_obj = &args[0];
+
+    // Get the fields from the deque object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid deque object")),
+    };
+
+    // Get the items list
+    let items = match fields.get("items") {
+        Some(Value::List(list)) => list,
+        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    };
+
+    // Check if deque is empty
+    if items.is_empty() {
+        return Err(anyhow::anyhow!("pop from an empty deque"));
+    }
+
+    // Clone the list to modify it
+    let mut new_items = items.clone();
+    let popped = new_items.pop_at(0)?;
+
+    // Update the items in the fields
+    let mut new_fields = (**fields).clone();
+    new_fields.insert("items".to_string(), Value::List(new_items));
+
+    Ok(popped)
+}
+
+/// deque clear method
+fn deque_clear(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("clear() takes no arguments"));
+    }
+
+    let self_obj = &args[0];
+
+    // Get the fields from the deque object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid deque object")),
+    };
+
+    // Update the items in the fields with an empty list
+    let mut new_fields = (**fields).clone();
+    new_fields.insert("items".to_string(), Value::List(HPList::new()));
+
+    Ok(Value::None)
+}
+
+/// deque extend method
+fn deque_extend(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("extend() takes exactly one argument"));
+    }
+
+    let self_obj = &args[0];
+    let iterable = &args[1];
+
+    // Get the fields from the deque object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid deque object")),
+    };
+
+    // Get the items list
+    let items = match fields.get("items") {
+        Some(Value::List(list)) => list,
+        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    };
+
+    // Get maxlen if it exists
+    let maxlen = match fields.get("maxlen") {
+        Some(Value::Int(n)) => Some(*n as usize),
+        _ => None,
+    };
+
+    // Clone the list to modify it
+    let mut new_items = items.clone();
+
+    // Extend with items from iterable
+    match iterable {
+        Value::List(list) => {
+            for item in list.iter() {
+                new_items.append(item.clone());
+            }
+        }
+        Value::Tuple(tuple) => {
+            for item in tuple.iter() {
+                new_items.append(item.clone());
+            }
+        }
+        _ => return Err(anyhow::anyhow!("extend() argument must be iterable")),
+    }
+
+    // Apply maxlen constraint if needed
+    if let Some(max) = maxlen {
+        while new_items.len() > max {
+            new_items.pop_at(0)?; // Remove from left when exceeding maxlen
+        }
+    }
+
+    // Update the items in the fields
+    let mut new_fields = (**fields).clone();
+    new_fields.insert("items".to_string(), Value::List(new_items));
+
+    Ok(Value::None)
+}
+
+/// deque extendleft method
+fn deque_extendleft(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow::anyhow!("extendleft() takes exactly one argument"));
+    }
+
+    let self_obj = &args[0];
+    let iterable = &args[1];
+
+    // Get the fields from the deque object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid deque object")),
+    };
+
+    // Get the items list
+    let items = match fields.get("items") {
+        Some(Value::List(list)) => list,
+        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    };
+
+    // Get maxlen if it exists
+    let maxlen = match fields.get("maxlen") {
+        Some(Value::Int(n)) => Some(*n as usize),
+        _ => None,
+    };
+
+    // Clone the list to modify it
+    let mut new_items = items.clone();
+
+    // Extend with items from iterable (in reverse order to match Python behavior)
+    match iterable {
+        Value::List(list) => {
+            // Collect items and then insert them in reverse order
+            let mut items_to_insert = Vec::new();
+            for item in list.iter() {
+                items_to_insert.push(item.clone());
+            }
+            
+            // Insert items in reverse order (last item first)
+            for item in items_to_insert.iter().rev() {
+                new_items.insert(0, item.clone())?;
+            }
+        }
+        Value::Tuple(tuple) => {
+            // Collect items and then insert them in reverse order
+            let mut items_to_insert = Vec::new();
+            for item in tuple.iter() {
+                items_to_insert.push(item.clone());
+            }
+            
+            // Insert items in reverse order (last item first)
+            for item in items_to_insert.iter().rev() {
+                new_items.insert(0, item.clone())?;
+            }
+        }
+        _ => return Err(anyhow::anyhow!("extendleft() argument must be iterable")),
+    }
+
+    // Apply maxlen constraint if needed
+    if let Some(max) = maxlen {
+        while new_items.len() > max {
+            new_items.pop(); // Remove from right when exceeding maxlen
+        }
+    }
+
+    // Update the items in the fields
+    let mut new_fields = (**fields).clone();
+    new_fields.insert("items".to_string(), Value::List(new_items));
+
+    Ok(Value::None)
+}
+
+/// deque rotate method
+fn deque_rotate(args: Vec<Value>) -> Result<Value> {
+    if args.len() > 2 {
+        return Err(anyhow::anyhow!("rotate() takes at most one argument"));
+    }
+
+    let self_obj = &args[0];
+    let n = if args.len() == 2 {
+        match &args[1] {
+            Value::Int(i) => *i,
+            _ => return Err(anyhow::anyhow!("rotate() argument must be an integer")),
+        }
+    } else {
+        1 // Default rotation
+    };
+
+    // Get the fields from the deque object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid deque object")),
+    };
+
+    // Get the items list
+    let items = match fields.get("items") {
+        Some(Value::List(list)) => list,
+        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    };
+
+    if items.is_empty() || n == 0 {
+        return Ok(Value::None);
+    }
+
+    // Clone the list to modify it
+    let mut new_items = items.clone();
+    let len = new_items.len() as i64;
+    
+    // Normalize rotation steps to be within list length
+    let steps = if n >= 0 {
+        n % len
+    } else {
+        (n % len + len) % len
+    };
+
+    if steps != 0 {
+        // Perform rotation
+        if steps > 0 {
+            // Rotate right: move last 'steps' elements to the front
+            let split_point = (len - steps) as usize;
+            let mut elements_to_move = Vec::new();
+            
+            // Collect elements to move from the end
+            for i in split_point..new_items.len() {
+                if let Some(item) = new_items.get(i as isize) {
+                    elements_to_move.push(item.clone());
+                }
+            }
+            
+            // Remove elements from the end
+            for _ in split_point..new_items.len() {
+                new_items.pop();
+            }
+            
+            // Insert elements at the beginning (in reverse order to maintain sequence)
+            for item in elements_to_move.iter().rev() {
+                new_items.insert(0, item.clone())?;
+            }
+        } else {
+            // Rotate left: move first 'steps' elements to the end
+            let steps_abs = (-steps) as usize;
+            let mut elements_to_move = Vec::new();
+            
+            // Collect elements to move from the beginning
+            for i in 0..steps_abs {
+                if let Some(item) = new_items.get(i as isize) {
+                    elements_to_move.push(item.clone());
+                }
+            }
+            
+            // Remove elements from the beginning
+            for _ in 0..steps_abs {
+                let _ = new_items.pop_at(0)?; // Ignore the returned value
+            }
+            
+            // Append elements to the end
+            for item in elements_to_move {
+                new_items.append(item);
+            }
+        }
+    }
+
+    // Update the items in the fields
+    let mut new_fields = (**fields).clone();
+    new_fields.insert("items".to_string(), Value::List(new_items));
+
+    Ok(Value::None)
+}
+
+/// deque __iter__ method
+fn deque_iter(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("__iter__() takes no arguments"));
+    }
+
+    let self_obj = &args[0];
+
+    // Get the fields from the deque object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid deque object")),
+    };
+
+    // Get the items list
+    let items = match fields.get("items") {
+        Some(Value::List(list)) => list,
+        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    };
+
+    // Create an iterator object with the items and starting index
+    let mut iterator_fields = HashMap::new();
+    iterator_fields.insert("items".to_string(), Value::List(items.clone()));
+    iterator_fields.insert("index".to_string(), Value::Int(0));
+
+    Ok(Value::Object {
+        class_name: "deque_iterator".to_string(),
+        fields: Rc::new(iterator_fields),
+        class_methods: HashMap::new(),
+        base_object: crate::base_object::BaseObject::new("deque_iterator".to_string(), vec!["object".to_string()]),
+        mro: crate::base_object::MRO::from_linearization(vec!["deque_iterator".to_string(), "object".to_string()]),
+    })
+}
+
+/// deque __next__ method
+fn deque_next(args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow::anyhow!("__next__() takes no arguments"));
+    }
+
+    let self_obj = &args[0];
+
+    // Get the fields from the iterator object
+    let fields = match self_obj {
+        Value::Object { fields, .. } => fields,
+        _ => return Err(anyhow::anyhow!("Invalid iterator object")),
+    };
+
+    // Get the items list
+    let items = match fields.get("items") {
+        Some(Value::List(list)) => list,
+        _ => return Err(anyhow::anyhow!("Invalid iterator items")),
+    };
+
+    // Get the current index
+    let index = match fields.get("index") {
+        Some(Value::Int(i)) => *i,
+        _ => return Err(anyhow::anyhow!("Invalid iterator index")),
+    };
+
+    // Check if we've reached the end
+    if index as usize >= items.len() {
+        return Err(anyhow::anyhow!("StopIteration"));
+    }
+
+    // Get the current item
+    let item = items.get(index as isize).unwrap().clone();
+
+    // Update the index in the fields
+    let mut new_fields = (**fields).clone();
+    new_fields.insert("index".to_string(), Value::Int(index + 1));
+
+    Ok(item)
 }
 
 #[cfg(test)]

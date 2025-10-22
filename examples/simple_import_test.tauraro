@@ -1,0 +1,25 @@
+# Simple import test
+print("Testing module imports")
+
+# Test importing a few key modules
+import json
+import os
+import sys
+import math
+import random
+
+print("JSON module imported successfully")
+print("OS module imported successfully")
+print("Sys module imported successfully")
+print("Math module imported successfully")
+print("Random module imported successfully")
+
+# Test basic functionality
+data = {"name": "Tauraro", "version": 1.0}
+json_str = json.dumps(data)
+print("JSON functionality works:", json_str)
+
+print("Math pi:", math.pi)
+print("Random number:", random.random())
+
+print("All tests passed!")

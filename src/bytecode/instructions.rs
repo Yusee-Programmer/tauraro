@@ -53,7 +53,9 @@ pub enum OpCode {
     BinaryModIR,    // Immediate-Register modulo
     BinaryPowRR,    // Register-Register power
     BinaryPowRI,    // Register-Immediate power
-    BinaryPowIR,    // Immediate-Register power,
+    BinaryPowIR,    // Immediate-Register power
+    BinaryBitAndRR, // Register-Register bitwise AND
+    BinaryBitOrRR,  // Register-Register bitwise OR
     
     // Fast integer operations
     BinaryDivRRFastInt, // Fast integer division
@@ -162,6 +164,9 @@ pub enum OpCode {
     
     // Super() support
     LoadZeroArgSuper, // Load super object with zero arguments (special handling)
+    
+    // Iterator operations
+    Next,           // Call next() on iterator and update iterator variable
     
     // Unary operations
     UnaryNot,       // Logical NOT operation

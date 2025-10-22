@@ -55,6 +55,9 @@ regex = "1.10"
 # URL parsing
 url = "2.4"
 
+# System library for Unix systems
+libc = "0.2"
+
 # Hostname for socket module
 hostname = "0.3"
 
