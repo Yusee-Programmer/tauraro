@@ -40,6 +40,8 @@ impl VM {
         
         // Execute with VM
         let mut vm = SuperBytecodeVM::new();
+        // Disable type checking for better performance unless explicitly requested
+        vm.enable_type_checking = strict_types;
         vm.execute(code_object)?;
         
         Ok(())
@@ -86,6 +88,8 @@ impl VM {
         let code_object = compiler.compile(program)?;
         
         // Execute the program
+        // Disable type checking for better performance
+        self.bytecode_vm.enable_type_checking = false;
         let result = self.bytecode_vm.execute(code_object)?;
         
         Ok(result)

@@ -161,7 +161,7 @@ impl SuperBytecodeVM {
         
         // Update globals from the executed frame and pop it
         if let Some(frame) = self.frames.pop() {
-            self.globals = frame.globals;
+            self.globals = (*frame.globals).clone();
         }
 
         Ok(result)
@@ -185,7 +185,7 @@ impl SuperBytecodeVM {
             if self.frames[frame_idx].code.instructions.is_empty() {
                 // Update globals before popping any frame (REPL needs this)
                 if let Some(frame) = self.frames.last() {
-                    self.globals = frame.globals.clone();
+                    self.globals = (*frame.globals).clone();
                 }
                 self.frames.pop();
                 return Ok(Value::None);
@@ -246,7 +246,7 @@ impl SuperBytecodeVM {
                         frame_idx = self.frames.len() - 1;
                         
                         // Update globals from the returned frame
-                        self.globals = returned_frame.globals;
+                        self.globals = (*returned_frame.globals).clone();
                         
                         // Store the return value in the calling frame if return_register is set
                         if let Some((caller_frame_idx, result_reg)) = returned_frame.return_register {
@@ -285,7 +285,7 @@ impl SuperBytecodeVM {
                                             }
                                             "frame_global" => {
                                                 if caller_frame_idx < self.frames.len() {
-                                                    if let Some(frame_global_value) = self.frames[caller_frame_idx].globals.get_mut(parts[1]) {
+                                                    if let Some(frame_global_value) = Rc::make_mut(&mut self.frames[caller_frame_idx].globals).get_mut(parts[1]) {
                                                         *frame_global_value = modified_object.clone();
                                                     }
                                                 }
@@ -740,7 +740,7 @@ impl SuperBytecodeVM {
                 let value = self.frames[frame_idx].registers[value_reg as usize].clone();
                 
                 // Store in both frame globals and VM globals
-                self.frames[frame_idx].globals.insert(name.clone(), value.clone());
+                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name.clone(), value.clone());
                 self.globals.insert(name, value);
                 
                 Ok(None)
@@ -2643,7 +2643,7 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("StoreException: varname index {} out of bounds", var_idx));
                         }
                         let var_name = self.frames[frame_idx].code.varnames[var_idx].clone();
-                        self.frames[frame_idx].globals.insert(var_name, exception_value);
+                        Rc::make_mut(&mut self.frames[frame_idx].globals).insert(var_name, exception_value);
                     }
                     _ => return Err(anyhow!("StoreException: invalid storage type {}", storage_type)),
                 }
@@ -3445,7 +3445,7 @@ impl SuperBytecodeVM {
                             }
                         }
                         "frame_global" => {
-                            if let Some(frame_global_value) = self.frames[frame_idx].globals.get_mut(parts[1]) {
+                            if let Some(frame_global_value) = Rc::make_mut(&mut self.frames[frame_idx].globals).get_mut(parts[1]) {
                                 *frame_global_value = modified_object.clone();
                             }
                         }
@@ -3651,7 +3651,7 @@ impl SuperBytecodeVM {
                 // Store the module in both globals and the result register
                 let rc_module = RcValue::new(module_value);
                 self.globals.insert(module_name.clone(), rc_module.clone());
-                self.frames[frame_idx].globals.insert(module_name.clone(), rc_module.clone());
+                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(module_name.clone(), rc_module.clone());
                 self.frames[frame_idx].set_register(result_reg, rc_module);
 
                 Ok(None)
@@ -3700,7 +3700,7 @@ impl SuperBytecodeVM {
                 // Store the imported value in globals and the result register
                 let rc_value = RcValue::new(imported_value);
                 self.globals.insert(import_name.clone(), rc_value.clone());
-                self.frames[frame_idx].globals.insert(import_name.clone(), rc_value.clone());
+                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(import_name.clone(), rc_value.clone());
                 self.frames[frame_idx].set_register(result_reg, rc_value);
 
                 Ok(None)
