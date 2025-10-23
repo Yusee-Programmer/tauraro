@@ -68,6 +68,42 @@ fn websocket_exception_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(result)
 }
 
+// Missing wrapper functions for WebSocket methods
+fn ws_send_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
+    let result = ws_send(args.as_ptr(), args.len());
+    Ok(result)
+}
+
+fn ws_recv_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
+    let result = ws_recv(args.as_ptr(), args.len());
+    Ok(result)
+}
+
+fn ws_close_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
+    let result = ws_close(args.as_ptr(), args.len());
+    Ok(result)
+}
+
+fn ws_ping_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
+    let result = ws_ping(args.as_ptr(), args.len());
+    Ok(result)
+}
+
+fn ws_pong_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
+    let result = ws_pong(args.as_ptr(), args.len());
+    Ok(result)
+}
+
+fn server_start_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
+    let result = server_start(args.as_ptr(), args.len());
+    Ok(result)
+}
+
+fn server_stop_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
+    let result = server_stop(args.as_ptr(), args.len());
+    Ok(result)
+}
+
 pub fn create_websockets_module() -> Value {
     let mut namespace = HashMap::new();
 
@@ -198,317 +234,232 @@ extern "C" fn ws_send(args: *const Value, argc: usize) -> Value {
 
     let message = unsafe { &*args };
     
-    match message {
-        Value::Str(_) => {
-            // Mock sending text message
-            Value::None
-        }
-        Value::Bytes(_) => {
-            // Mock sending binary message
-            Value::None
-        }
-        _ => Value::None,
+    #[cfg(feature = "http")]
+    {
+        // Mock sending a message
+        Value::None
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
     }
 }
 
-extern "C" fn ws_recv(_args: *const Value, _argc: usize) -> Value {
-    // Mock receiving message
-    Value::Str("Hello from WebSocket!".to_string())
+extern "C" fn ws_recv(args: *const Value, argc: usize) -> Value {
+    if argc > 0 {
+        return Value::None;
+    }
+
+    #[cfg(feature = "http")]
+    {
+        // Mock receiving a message
+        Value::Str("mock message".to_string())
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
 }
 
 extern "C" fn ws_close(args: *const Value, argc: usize) -> Value {
-    let code = if argc > 0 {
-        unsafe {
-            match &*args {
-                Value::Int(c) => *c,
-                _ => 1000,
-            }
-        }
-    } else {
-        1000
-    };
+    if argc > 0 {
+        return Value::None;
+    }
 
-    let reason = if argc > 1 {
-        unsafe {
-            match &*args.add(1) {
-                Value::Str(r) => r.clone(),
-                _ => "".to_string(),
-            }
-        }
-    } else {
-        "".to_string()
-    };
-
-    // Mock closing WebSocket
-    Value::None
+    #[cfg(feature = "http")]
+    {
+        // Mock closing connection
+        Value::None
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
 }
 
 extern "C" fn ws_ping(args: *const Value, argc: usize) -> Value {
-    let _data = if argc > 0 {
-        unsafe {
-            match &*args {
-                Value::Bytes(b) => b.clone(),
-                Value::Str(s) => s.as_bytes().to_vec(),
-                _ => vec![],
-            }
-        }
-    } else {
-        vec![]
-    };
+    if argc > 0 {
+        return Value::None;
+    }
 
-    // Mock ping
-    Value::None
+    #[cfg(feature = "http")]
+    {
+        // Mock ping
+        Value::None
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
 }
 
 extern "C" fn ws_pong(args: *const Value, argc: usize) -> Value {
-    let _data = if argc > 0 {
-        unsafe {
-            match &*args {
-                Value::Bytes(b) => b.clone(),
-                Value::Str(s) => s.as_bytes().to_vec(),
-                _ => vec![],
-            }
-        }
-    } else {
-        vec![]
-    };
+    if argc > 0 {
+        return Value::None;
+    }
 
-    // Mock pong
-    Value::None
+    #[cfg(feature = "http")]
+    {
+        // Mock pong
+        Value::None
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
 }
 
 // Server methods
-extern "C" fn server_start(_args: *const Value, _argc: usize) -> Value {
-    // Mock server start
-    Value::None
+extern "C" fn server_start(args: *const Value, argc: usize) -> Value {
+    if argc > 0 {
+        return Value::None;
+    }
+
+    #[cfg(feature = "http")]
+    {
+        // Mock server start
+        Value::None
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
 }
 
-extern "C" fn server_stop(_args: *const Value, _argc: usize) -> Value {
-    // Mock server stop
-    Value::None
+extern "C" fn server_stop(args: *const Value, argc: usize) -> Value {
+    if argc > 0 {
+        return Value::None;
+    }
+
+    #[cfg(feature = "http")]
+    {
+        // Mock server stop
+        Value::None
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
 }
 
-// Protocol classes
+// Error constructors
+extern "C" fn connection_closed_error(_args: *const Value, _argc: usize) -> Value {
+    #[cfg(feature = "http")]
+    {
+        // Mock error
+        Value::Str("ConnectionClosed".to_string())
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
+}
+
+extern "C" fn invalid_handshake_error(_args: *const Value, _argc: usize) -> Value {
+    #[cfg(feature = "http")]
+    {
+        // Mock error
+        Value::Str("InvalidHandshake".to_string())
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
+}
+
+extern "C" fn invalid_message_error(_args: *const Value, _argc: usize) -> Value {
+    #[cfg(feature = "http")]
+    {
+        // Mock error
+        Value::Str("InvalidMessage".to_string())
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
+}
+
+extern "C" fn invalid_status_code_error(_args: *const Value, _argc: usize) -> Value {
+    #[cfg(feature = "http")]
+    {
+        // Mock error
+        Value::Str("InvalidStatusCode".to_string())
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
+}
+
+extern "C" fn invalid_uri_error(_args: *const Value, _argc: usize) -> Value {
+    #[cfg(feature = "http")]
+    {
+        // Mock error
+        Value::Str("InvalidURI".to_string())
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
+}
+
+extern "C" fn payload_too_big_error(_args: *const Value, _argc: usize) -> Value {
+    #[cfg(feature = "http")]
+    {
+        // Mock error
+        Value::Str("PayloadTooBig".to_string())
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
+}
+
+extern "C" fn protocol_error(_args: *const Value, _argc: usize) -> Value {
+    #[cfg(feature = "http")]
+    {
+        // Mock error
+        Value::Str("ProtocolError".to_string())
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
+}
+
+extern "C" fn websocket_exception(_args: *const Value, _argc: usize) -> Value {
+    #[cfg(feature = "http")]
+    {
+        // Mock exception
+        Value::Str("WebSocketException".to_string())
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
+    }
+}
+
+// Protocol constructors
 extern "C" fn create_server_protocol(_args: *const Value, _argc: usize) -> Value {
-    let mut protocol_obj = HashMap::new();
-    protocol_obj.insert("connection_made".to_string(), Value::NativeFunction(connection_made_wrapper));
-    protocol_obj.insert("connection_lost".to_string(), Value::NativeFunction(connection_lost_wrapper));
-    protocol_obj.insert("data_received".to_string(), Value::NativeFunction(data_received_wrapper));
-    protocol_obj.insert("eof_received".to_string(), Value::NativeFunction(eof_received_wrapper));
-    protocol_obj.insert("connection_open".to_string(), Value::NativeFunction(connection_open_wrapper));
-    protocol_obj.insert("connection_close".to_string(), Value::NativeFunction(connection_close_wrapper));
-    protocol_obj.insert("recv".to_string(), Value::NativeFunction(protocol_recv_wrapper));
-    protocol_obj.insert("send".to_string(), Value::NativeFunction(protocol_send_wrapper));
-    protocol_obj.insert("ping".to_string(), Value::NativeFunction(protocol_ping_wrapper));
-    protocol_obj.insert("pong".to_string(), Value::NativeFunction(protocol_pong_wrapper));
-    protocol_obj.insert("close".to_string(), Value::NativeFunction(protocol_close_wrapper));
-    
-    Value::Object {
-        class_name: "WebSocketServerProtocol".to_string(),
-        fields: Rc::new(protocol_obj),
-        class_methods: HashMap::new(),
-        base_object: crate::base_object::BaseObject::new("WebSocketServerProtocol".to_string(), vec!["object".to_string()]),
-        mro: crate::base_object::MRO::from_linearization(vec!["WebSocketServerProtocol".to_string(), "object".to_string()]),
+    #[cfg(feature = "http")]
+    {
+        // Mock protocol
+        Value::Str("WebSocketServerProtocol".to_string())
+    }
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
     }
 }
 
 extern "C" fn create_client_protocol(_args: *const Value, _argc: usize) -> Value {
-    let mut protocol_obj = HashMap::new();
-    protocol_obj.insert("connection_made".to_string(), Value::NativeFunction(connection_made_wrapper));
-    protocol_obj.insert("connection_lost".to_string(), Value::NativeFunction(connection_lost_wrapper));
-    protocol_obj.insert("data_received".to_string(), Value::NativeFunction(data_received_wrapper));
-    protocol_obj.insert("eof_received".to_string(), Value::NativeFunction(eof_received_wrapper));
-    protocol_obj.insert("connection_open".to_string(), Value::NativeFunction(connection_open_wrapper));
-    protocol_obj.insert("connection_close".to_string(), Value::NativeFunction(connection_close_wrapper));
-    protocol_obj.insert("recv".to_string(), Value::NativeFunction(protocol_recv_wrapper));
-    protocol_obj.insert("send".to_string(), Value::NativeFunction(protocol_send_wrapper));
-    protocol_obj.insert("ping".to_string(), Value::NativeFunction(protocol_ping_wrapper));
-    protocol_obj.insert("pong".to_string(), Value::NativeFunction(protocol_pong_wrapper));
-    protocol_obj.insert("close".to_string(), Value::NativeFunction(protocol_close_wrapper));
-    
-    Value::Object {
-        class_name: "WebSocketClientProtocol".to_string(),
-        fields: Rc::new(protocol_obj),
-        class_methods: HashMap::new(),
-        base_object: crate::base_object::BaseObject::new("WebSocketClientProtocol".to_string(), vec!["object".to_string()]),
-        mro: crate::base_object::MRO::from_linearization(vec!["WebSocketClientProtocol".to_string(), "object".to_string()]),
+    #[cfg(feature = "http")]
+    {
+        // Mock protocol
+        Value::Str("WebSocketClientProtocol".to_string())
     }
-}
-
-// Protocol methods
-extern "C" fn connection_made(_args: *const Value, _argc: usize) -> Value {
-    Value::None
-}
-
-extern "C" fn connection_lost(_args: *const Value, _argc: usize) -> Value {
-    Value::None
-}
-
-extern "C" fn data_received(_args: *const Value, _argc: usize) -> Value {
-    Value::None
-}
-
-extern "C" fn eof_received(_args: *const Value, _argc: usize) -> Value {
-    Value::None
-}
-
-extern "C" fn connection_open(_args: *const Value, _argc: usize) -> Value {
-    Value::None
-}
-
-extern "C" fn connection_close(_args: *const Value, _argc: usize) -> Value {
-    Value::None
-}
-
-extern "C" fn protocol_recv(_args: *const Value, _argc: usize) -> Value {
-    // Mock receiving message in protocol
-    Value::Str("Protocol message".to_string())
-}
-
-extern "C" fn protocol_send(_args: *const Value, argc: usize) -> Value {
-    if argc == 0 {
-        return Value::None;
+    #[cfg(not(feature = "http"))]
+    {
+        Value::Str("WebSocket support not enabled".to_string())
     }
-
-    // Mock sending message in protocol
-    Value::None
-}
-
-extern "C" fn protocol_ping(_args: *const Value, _argc: usize) -> Value {
-    // Mock ping in protocol
-    Value::None
-}
-
-extern "C" fn protocol_pong(_args: *const Value, _argc: usize) -> Value {
-    // Mock pong in protocol
-    Value::None
-}
-
-extern "C" fn protocol_close(_args: *const Value, _argc: usize) -> Value {
-    // Mock close in protocol
-    Value::None
-}
-
-// Exception classes
-extern "C" fn connection_closed_error(_args: *const Value, _argc: usize) -> Value {
-    Value::Str("ConnectionClosed".to_string())
-}
-
-extern "C" fn invalid_handshake_error(_args: *const Value, _argc: usize) -> Value {
-    Value::Str("InvalidHandshake".to_string())
-}
-
-extern "C" fn invalid_message_error(_args: *const Value, _argc: usize) -> Value {
-    Value::Str("InvalidMessage".to_string())
-}
-
-extern "C" fn invalid_status_code_error(_args: *const Value, _argc: usize) -> Value {
-    Value::Str("InvalidStatusCode".to_string())
-}
-
-extern "C" fn invalid_uri_error(_args: *const Value, _argc: usize) -> Value {
-    Value::Str("InvalidURI".to_string())
-}
-
-extern "C" fn payload_too_big_error(_args: *const Value, _argc: usize) -> Value {
-    Value::Str("PayloadTooBig".to_string())
-}
-
-extern "C" fn protocol_error(_args: *const Value, _argc: usize) -> Value {
-    Value::Str("ProtocolError".to_string())
-}
-
-extern "C" fn websocket_exception(_args: *const Value, _argc: usize) -> Value {
-    Value::Str("WebSocketException".to_string())
-}
-
-// Additional wrapper functions for WebSocket operations
-fn ws_send_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = ws_send(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn ws_recv_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = ws_recv(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn ws_close_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = ws_close(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn ws_ping_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = ws_ping(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn ws_pong_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = ws_pong(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn server_start_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = server_start(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn server_stop_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = server_stop(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn connection_made_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = connection_made(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn connection_lost_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = connection_lost(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn data_received_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = data_received(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn eof_received_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = eof_received(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn connection_open_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = connection_open(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn connection_close_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = connection_close(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn protocol_recv_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = protocol_recv(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn protocol_send_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = protocol_send(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn protocol_ping_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = protocol_ping(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn protocol_pong_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = protocol_pong(args.as_ptr(), args.len());
-    Ok(result)
-}
-
-fn protocol_close_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
-    let result = protocol_close(args.as_ptr(), args.len());
-    Ok(result)
 }

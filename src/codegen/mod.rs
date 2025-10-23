@@ -1,9 +1,11 @@
 //! Code generation module
 
 pub mod interpreter;
+pub mod c_transpiler;
 
 // Re-export commonly used items
 pub use crate::codegen::interpreter::{Interpreter, InterpreterCodeGenerator};
+pub use crate::codegen::c_transpiler::CTranspiler;
 
 use crate::ir::IRModule;
 use anyhow::Result;

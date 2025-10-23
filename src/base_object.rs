@@ -2,7 +2,7 @@
 
 use crate::value::Value;
 use std::collections::HashMap;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseObject {

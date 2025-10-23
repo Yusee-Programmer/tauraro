@@ -4,6 +4,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use anyhow::Result;
 
+use crate::codegen::{CodeGenerator, CTranspiler};  // Fix the import
+
 mod lexer;
 mod parser;
 mod ast;
@@ -247,7 +249,23 @@ fn compile_file(
             }
         }
         "c" => {
-            // Determine output path based on whether there are imports and if destination is specified
+            // Use our new C transpiler
+            let c_transpiler = codegen::CTranspiler::new();
+            let options = codegen::CodegenOptions {
+                target: codegen::Target::C,
+                opt_level: optimization,
+                target_triple: Some(target.to_string()),
+                export_symbols: export,
+                generate_debug_info: false,
+                enable_async: true,
+                enable_ffi: true,
+                strict_types,
+                output_path: output.map(|p| p.to_string_lossy().to_string()),
+            };
+            
+            let c_code_bytes = c_transpiler.generate(ir_module, &options)?;
+            
+            // Determine output path
             let output_path = if let Some(output_file) = output {
                 // Use specified output path
                 output_file.clone()
@@ -261,9 +279,53 @@ fn compile_file(
                 PathBuf::from(format!("{}.c", file.file_stem().and_then(|s| s.to_str()).unwrap_or("output")))
             };
             
-            // Use VM for now since C backend is not available
-            println!("C backend not available, using VM instead");
-            crate::vm::core::VM::run_file_with_options(&source, "vm", optimization, strict_types)?;
+            // Write C code to file
+            std::fs::write(&output_path, c_code_bytes)?;
+            println!("C code generated successfully: {}", output_path.display());
+            
+            // If --native flag is set, compile to executable
+            if native {
+                // Determine executable path
+                let exe_path = if output_path.extension().and_then(|s| s.to_str()) == Some("c") {
+                    // Change extension to exe (or no extension on Unix)
+                    let mut exe_path = output_path.clone();
+                    exe_path.set_extension(std::env::consts::EXE_EXTENSION);
+                    exe_path
+                } else {
+                    // Append .exe to the output path
+                    let mut exe_path = output_path.clone();
+                    exe_path.set_file_name(format!("{}.{}", 
+                        output_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output"),
+                        std::env::consts::EXE_EXTENSION));
+                    exe_path
+                };
+                
+                let status = std::process::Command::new("gcc")
+                    .args(&[output_path.to_str().unwrap(), "-o", exe_path.to_str().unwrap()])
+                    .status();
+                
+                match status {
+                    Ok(status) if status.success() => {
+                        println!("Executable compiled successfully: {}", exe_path.display());
+                    }
+                    _ => {
+                        // Try clang as fallback
+                        let status = std::process::Command::new("clang")
+                            .args(&[output_path.to_str().unwrap(), "-o", exe_path.to_str().unwrap()])
+                            .status();
+                        
+                        match status {
+                            Ok(status) if status.success() => {
+                                println!("Executable compiled successfully: {}", exe_path.display());
+                            }
+                            _ => {
+                                println!("Warning: Could not compile to executable. Please compile manually with:");
+                                println!("  gcc {} -o {}", output_path.display(), exe_path.display());
+                            }
+                        }
+                    }
+                }
+            }
         }
         "wasm" => {
             #[cfg(feature = "wasm")]
