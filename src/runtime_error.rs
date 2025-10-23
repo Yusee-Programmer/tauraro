@@ -33,6 +33,6 @@ impl std::error::Error for RuntimeError {}
 pub fn format_traceback(error: &Error, filename: &str, line: usize, column: usize) -> String {
     format!(
         "Traceback (most recent call last):\n  File \"{}\", line {}, in <module>\n{}",
-        filename, line, error
+        filename, line, error.to_string()
     )
 }

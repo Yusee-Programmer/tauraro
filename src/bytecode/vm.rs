@@ -6,7 +6,7 @@ use crate::bytecode::instructions::OpCode;
 use crate::bytecode::objects::RcValue;
 use crate::bytecode::memory::{CodeObject, Frame, Block, BlockType};
 // Import the arithmetic module
-use crate::bytecode::arithmetic;
+// use crate::bytecode::arithmetic;
 // Import necessary types for Closure handling
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;

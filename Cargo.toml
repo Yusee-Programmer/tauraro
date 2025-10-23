@@ -102,3 +102,7 @@ path = "src/main.rs"
 [[bin]]
 name = "test_oop"
 path = "src/bin/test_oop.rs"
+
+[[bin]]
+name = "test_c_transpiler_minimal"
+path = "test_c_transpiler_minimal.rs"
