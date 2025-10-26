@@ -1,0 +1,578 @@
+//! C Transpiler for Tauraro
+//!
+//! This module transpiles Tauraro IR to C code and optionally compiles to executable.
+//! It provides comprehensive support for all Python-compatible features including:
+//! - Built-in types (int, float, str, bool, list, dict, tuple, set, etc.)
+//! - Object-oriented programming (classes, inheritance, methods)
+//! - Built-in functions (print, len, str, int, etc.)
+//! - Operators and expressions
+//! - Control flow statements
+
+pub mod types;
+pub mod builtins;
+pub mod oop;
+pub mod runtime;
+pub mod functions;
+pub mod expressions;
+pub mod statements;
+pub mod compiler;
+
+use crate::codegen::{CodeGenerator, CodegenOptions, Target};
+use crate::ir::{IRModule, IRFunction, IRInstruction, IRTypeInfo};
+use crate::ast::Type;
+use anyhow::Result;
+use std::collections::HashSet;
+use std::path::Path;
+
+/// C Transpiler that converts Tauraro IR to C code
+pub struct CTranspiler {
+    target: Target,
+}
+
+impl CTranspiler {
+    pub fn new() -> Self {
+        Self {
+            target: Target::C,
+        }
+    }
+
+    /// Generate complete C code from IR module
+    fn generate_c_code(&self, module: IRModule) -> Result<String> {
+        let mut c_code = String::new();
+
+        // Add standard headers
+        c_code.push_str(&self.generate_headers());
+
+        // Add type definitions
+        c_code.push_str(&types::generate_type_definitions());
+
+        // Add OOP structures (always included since builtins may reference them)
+        c_code.push_str(&oop::generate_oop_structures());
+
+        // Add type function declarations
+        c_code.push_str(&types::generate_type_function_declarations());
+
+        // Add OOP function declarations (always included for compatibility)
+        c_code.push_str(&oop::generate_oop_declarations());
+
+        // Analyze which builtins are used
+        let used_builtins = self.analyze_used_builtins(&module);
+
+        // Add builtin function declarations
+        c_code.push_str(&builtins::generate_builtin_declarations(&used_builtins));
+
+        // Add runtime function declarations
+        c_code.push_str("// Runtime operators\n");
+        c_code.push_str("tauraro_value_t* tauraro_add(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_sub(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_mul(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_div(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_mod(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_eq(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_ne(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_lt(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_le(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_gt(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_ge(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("\n");
+
+        // Add optimized function declarations for typed operations
+        c_code.push_str("// Optimized typed operations\n");
+        c_code.push_str("int64_t tauraro_add_int(int64_t left, int64_t right);\n");
+        c_code.push_str("double tauraro_add_float(double left, double right);\n");
+        c_code.push_str("char* tauraro_add_string(char* left, char* right);\n");
+        c_code.push_str("\n");
+
+        // Add type utility implementations
+        c_code.push_str(&types::generate_type_utility_functions());
+
+        // Add OOP implementations (always included for compatibility)
+        c_code.push_str(&oop::generate_oop_implementations());
+
+        // Add builtin implementations
+        if !used_builtins.is_empty() {
+            c_code.push_str("// Builtin function implementations\n");
+            for builtin in &used_builtins {
+                c_code.push_str(&builtins::generate_builtin_implementation(builtin));
+                c_code.push_str("\n");
+            }
+        }
+
+        // Add runtime support implementations
+        c_code.push_str(&runtime::generate_runtime_support());
+
+        // Add optimized function implementations for typed operations
+        c_code.push_str("// Optimized typed operation implementations\n");
+        c_code.push_str("int64_t tauraro_add_int(int64_t left, int64_t right) {\n");
+        c_code.push_str("    return left + right;\n");
+        c_code.push_str("}\n\n");
+        c_code.push_str("double tauraro_add_float(double left, double right) {\n");
+        c_code.push_str("    return left + right;\n");
+        c_code.push_str("}\n\n");
+        c_code.push_str("char* tauraro_add_string(char* left, char* right) {\n");
+        c_code.push_str("    size_t left_len = strlen(left);\n");
+        c_code.push_str("    size_t right_len = strlen(right);\n");
+        c_code.push_str("    char* result = malloc(left_len + right_len + 1);\n");
+        c_code.push_str("    strcpy(result, left);\n");
+        c_code.push_str("    strcat(result, right);\n");
+        c_code.push_str("    return result;\n");
+        c_code.push_str("}\n\n");
+
+        // Add global variables
+        c_code.push_str("// Global variables\n");
+        for instruction in &module.globals {
+            match instruction {
+                IRInstruction::StoreGlobal { name, value: _ } => {
+                    c_code.push_str(&format!("tauraro_value_t* {};\n", name));
+                }
+                IRInstruction::StoreTypedGlobal { name, value: _, type_info: _ } => {
+                    c_code.push_str(&format!("tauraro_value_t* {};\n", name));
+                }
+                _ => {}
+            }
+        }
+        c_code.push_str("\n");
+
+        // Generate functions
+        for (_name, function) in &module.functions {
+            c_code.push_str(&functions::generate_function(function)?);
+            c_code.push_str("\n");
+        }
+
+        // Generate main function
+        c_code.push_str(&self.generate_main_function(&module)?);
+
+        Ok(c_code)
+    }
+
+    /// Generate C header includes
+    fn generate_headers(&self) -> String {
+        let mut headers = String::new();
+        headers.push_str("#include <stdio.h>\n");
+        headers.push_str("#include <stdlib.h>\n");
+        headers.push_str("#include <string.h>\n");
+        headers.push_str("#include <stdbool.h>\n");
+        headers.push_str("#include <stdint.h>\n");
+        headers.push_str("#include <math.h>\n");
+        headers.push_str("#include <ctype.h>\n");
+        headers.push_str("\n");
+        headers
+    }
+
+    /// Generate main function
+    fn generate_main_function(&self, module: &IRModule) -> Result<String> {
+        let mut main_code = String::new();
+
+        // Don't generate main if it already exists
+        if module.functions.contains_key("main") {
+            return Ok(main_code);
+        }
+
+        main_code.push_str("int main() {\n");
+
+        // Track declared variables
+        let mut declared_vars = HashSet::new();
+
+        // Collect all variable names
+        for instruction in &module.globals {
+            match instruction {
+                IRInstruction::LoadConst { result, .. } => {
+                    declared_vars.insert(result.clone());
+                }
+                IRInstruction::LoadGlobal { result, .. } => {
+                    declared_vars.insert(result.clone());
+                }
+                IRInstruction::LoadTypedGlobal { result, .. } => {
+                    declared_vars.insert(result.clone());
+                }
+                IRInstruction::Call { result: Some(result), .. } => {
+                    declared_vars.insert(result.clone());
+                }
+                IRInstruction::Call { func, args, result: None } => {
+                    // For method calls with no result, we still need to track them
+                    if func.contains("__") && !args.is_empty() {
+                        declared_vars.insert(args[0].clone()); // First arg is self
+                    }
+                }
+                IRInstruction::BinaryOp { result, .. } => {
+                    declared_vars.insert(result.clone());
+                }
+                IRInstruction::TypedBinaryOp { result, .. } => {
+                    declared_vars.insert(result.clone());
+                }
+                IRInstruction::ObjectCreate { result, .. } => {
+                    declared_vars.insert(result.clone());
+                }
+                IRInstruction::ObjectGetAttr { result, .. } => {
+                    declared_vars.insert(result.clone());
+                }
+                _ => {}
+            }
+        }
+
+        // Declare all variables
+        for var_name in &declared_vars {
+            main_code.push_str(&format!("    tauraro_value_t* {} = NULL;\n", var_name));
+        }
+
+        // Execute global instructions
+        for instruction in &module.globals {
+            main_code.push_str(&format!("    {}\n", self.generate_global_instruction(instruction, &module.type_info)?));
+        }
+
+        // Call main_function if it exists
+        if module.functions.contains_key("main_function") {
+            main_code.push_str("    main_function();\n");
+        }
+
+        main_code.push_str("    return 0;\n");
+        main_code.push_str("}\n");
+
+        Ok(main_code)
+    }
+
+    /// Generate code for a global instruction
+    fn generate_global_instruction(&self, instruction: &IRInstruction, type_info: &IRTypeInfo) -> Result<String> {
+        use crate::value::Value;
+
+        match instruction {
+            IRInstruction::LoadConst { value, result } => {
+                match value {
+                    Value::Int(i) => {
+                        Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_INT; {}->data.int_val = {};",
+                            result, result, result, i))
+                    }
+                    Value::Float(f) => {
+                        Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_FLOAT; {}->data.float_val = {};",
+                            result, result, result, f))
+                    }
+                    Value::Str(s) => {
+                        // Escape special characters in strings
+                        let escaped = s
+                            .replace("\\", "\\\\")
+                            .replace("\"", "\\\"")
+                            .replace("\n", "\\n")
+                            .replace("\r", "\\r")
+                            .replace("\t", "\\t");
+                        Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_STRING; {}->data.str_val = strdup(\"{}\");",
+                            result, result, result, escaped))
+                    }
+                    Value::Bool(b) => {
+                        Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_BOOL; {}->data.bool_val = {};",
+                            result, result, result, if *b { "true" } else { "false" }))
+                    }
+                    Value::None => {
+                        Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_NONE;", result, result))
+                    }
+                    _ => {
+                        Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_NONE; // Unsupported constant type",
+                            result, result))
+                    }
+                }
+            }
+            IRInstruction::StoreGlobal { name, value } => {
+                Ok(format!("{} = {};", name, value))
+            }
+            IRInstruction::StoreTypedGlobal { name, value, type_info: var_type } => {
+                // For typed globals, we can potentially optimize based on the type
+                match var_type {
+                    Type::Simple(type_name) if type_name == "int" => {
+                        Ok(format!("{} = {}; // Typed as int", name, value))
+                    }
+                    Type::Simple(type_name) if type_name == "float" => {
+                        Ok(format!("{} = {}; // Typed as float", name, value))
+                    }
+                    Type::Simple(type_name) if type_name == "str" => {
+                        Ok(format!("{} = {}; // Typed as str", name, value))
+                    }
+                    _ => {
+                        Ok(format!("{} = {}; // Typed variable", name, value))
+                    }
+                }
+            }
+            IRInstruction::Call { func, args, result } => {
+                let args_str = if args.is_empty() {
+                    "0, NULL".to_string()
+                } else {
+                    let arg_list = args.join(", ");
+                    format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
+                };
+
+                // Check if this is a method call (contains __)
+                if func.contains("__") {
+                    // Method call
+                    match result {
+                        Some(res) => {
+                            if !args.is_empty() {
+                                Ok(format!("{} = {}({});", res, func, args_str))
+                            } else {
+                                Ok(format!("{} = {}(0, NULL);", res, func))
+                            }
+                        },
+                        None => {
+                            if !args.is_empty() {
+                                Ok(format!("{}({});", func, args_str))
+                            } else {
+                                Ok(format!("{}(0, NULL);", func))
+                            }
+                        }
+                    }
+                } else if func == "tauraro_super_call" {
+                    // Handle super() call
+                    match result {
+                        Some(res) => {
+                            Ok(format!("{} = tauraro_super_call({});", res, args_str))
+                        },
+                        None => {
+                            Ok(format!("tauraro_super_call({});", args_str))
+                        }
+                    }
+                } else {
+                    // Regular function call
+                    match result {
+                        Some(res) => Ok(format!("{} = tauraro_{}({});", res, func, args_str)),
+                        None => Ok(format!("tauraro_{}({});", func, args_str))
+                    }
+                }
+            }
+            IRInstruction::ObjectCreate { class_name, result } => {
+                Ok(format!("{} = tauraro_object_create(\"{}\");", result, class_name))
+            }
+            IRInstruction::ObjectSetAttr { object, attr, value } => {
+                Ok(format!("tauraro_object_set_attr({}, \"{}\", {});", object, attr, value))
+            }
+            IRInstruction::ObjectGetAttr { object, attr, result } => {
+                Ok(format!("{} = tauraro_object_get_attr({}, \"{}\");", result, object, attr))
+            }
+            IRInstruction::SuperCall { args, result } => {
+                let args_str = if args.is_empty() {
+                    "0, NULL".to_string()
+                } else {
+                    let arg_list = args.join(", ");
+                    format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
+                };
+                Ok(format!("{} = tauraro_super_call({});", result, args_str))
+            }
+            IRInstruction::BinaryOp { op, left, right, result } => {
+                let op_func = match op {
+                    crate::ast::BinaryOp::Add => "tauraro_add",
+                    crate::ast::BinaryOp::Sub => "tauraro_sub",
+                    crate::ast::BinaryOp::Mul => "tauraro_mul",
+                    crate::ast::BinaryOp::Div => "tauraro_div",
+                    crate::ast::BinaryOp::Mod => "tauraro_mod",
+                    crate::ast::BinaryOp::Eq => "tauraro_eq",
+                    crate::ast::BinaryOp::Ne => "tauraro_ne",
+                    crate::ast::BinaryOp::Lt => "tauraro_lt",
+                    crate::ast::BinaryOp::Le => "tauraro_le",
+                    crate::ast::BinaryOp::Gt => "tauraro_gt",
+                    crate::ast::BinaryOp::Ge => "tauraro_ge",
+                    _ => "tauraro_add"  // Fallback
+                };
+                Ok(format!("{} = {}({}, {});", result, op_func, left, right))
+            }
+            IRInstruction::TypedBinaryOp { op, left, right, result, type_info: expr_type } => {
+                // Generate optimized code based on type information
+                match expr_type {
+                    Type::Simple(type_name) if type_name == "int" => {
+                        match op {
+                            crate::ast::BinaryOp::Add => {
+                                Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_INT; {}->data.int_val = tauraro_add_int({}->data.int_val, {}->data.int_val);", 
+                                    result, result, result, left, right))
+                            }
+                            _ => {
+                                // Fall back to generic operation for other operators
+                                Ok(format!("{} = tauraro_add({}, {}); // Typed operation", result, left, right))
+                            }
+                        }
+                    }
+                    Type::Simple(type_name) if type_name == "float" => {
+                        match op {
+                            crate::ast::BinaryOp::Add => {
+                                Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_FLOAT; {}->data.float_val = tauraro_add_float({}->data.float_val, {}->data.float_val);", 
+                                    result, result, result, left, right))
+                            }
+                            _ => {
+                                // Fall back to generic operation for other operators
+                                Ok(format!("{} = tauraro_add({}, {}); // Typed operation", result, left, right))
+                            }
+                        }
+                    }
+                    Type::Simple(type_name) if type_name == "str" => {
+                        match op {
+                            crate::ast::BinaryOp::Add => {
+                                Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_STRING; {}->data.str_val = tauraro_add_string({}->data.str_val, {}->data.str_val);", 
+                                    result, result, result, left, right))
+                            }
+                            _ => {
+                                // Fall back to generic operation for other operators
+                                Ok(format!("{} = tauraro_add({}, {}); // Typed operation", result, left, right))
+                            }
+                        }
+                    }
+                    _ => {
+                        // Fall back to generic operation for other types
+                        let op_func = match op {
+                            crate::ast::BinaryOp::Add => "tauraro_add",
+                            crate::ast::BinaryOp::Sub => "tauraro_sub",
+                            crate::ast::BinaryOp::Mul => "tauraro_mul",
+                            crate::ast::BinaryOp::Div => "tauraro_div",
+                            crate::ast::BinaryOp::Mod => "tauraro_mod",
+                            crate::ast::BinaryOp::Eq => "tauraro_eq",
+                            crate::ast::BinaryOp::Ne => "tauraro_ne",
+                            crate::ast::BinaryOp::Lt => "tauraro_lt",
+                            crate::ast::BinaryOp::Le => "tauraro_le",
+                            crate::ast::BinaryOp::Gt => "tauraro_gt",
+                            crate::ast::BinaryOp::Ge => "tauraro_ge",
+                            _ => "tauraro_add"  // Fallback
+                        };
+                        Ok(format!("{} = {}({}, {}); // Typed operation", result, op_func, left, right))
+                    }
+                }
+            }
+            IRInstruction::LoadGlobal { name, result } => {
+                // Special handling for class names
+                // If there are functions with this name as a prefix, it's likely a class
+                // In that case, we should create a string value with the class name
+                Ok(format!("{} = {};", result, name))
+            }
+            IRInstruction::LoadTypedGlobal { name, result, type_info: _ } => {
+                // For typed globals, we can potentially optimize based on the type
+                Ok(format!("{} = {}; // Typed load", result, name))
+            }
+            IRInstruction::Import { module } => {
+                Ok(format!("// Import module: {}", module))
+            }
+            IRInstruction::ImportFrom { module, names: _ } => {
+                Ok(format!("// Import from module: {}", module))
+            }
+            _ => {
+                Ok(format!("// Global instruction: {:?}", instruction))
+            }
+        }
+    }
+
+    /// Analyze which builtin functions are used in the module
+    fn analyze_used_builtins(&self, module: &IRModule) -> HashSet<String> {
+        let mut used = HashSet::new();
+
+        // Always include essential builtins
+        used.insert("print".to_string());
+        used.insert("isinstance".to_string());
+
+        // Check global instructions
+        for instruction in &module.globals {
+            if let IRInstruction::Call { func, .. } = instruction {
+                if builtins::is_builtin_function(func) {
+                    used.insert(func.clone());
+                }
+            }
+        }
+
+        // Check function instructions
+        for (_name, function) in &module.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let IRInstruction::Call { func, .. } = instruction {
+                        if builtins::is_builtin_function(func) {
+                            used.insert(func.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        used
+    }
+
+    /// Check if the module uses OOP features
+    fn uses_oop(&self, module: &IRModule) -> bool {
+        // Check for class methods (functions with __ in their name)
+        for (name, _function) in &module.functions {
+            if name.contains("__") {
+                return true;
+            }
+        }
+
+        // Check global instructions
+        for instruction in &module.globals {
+            if matches!(instruction,
+                IRInstruction::ObjectCreate { .. } |
+                IRInstruction::ObjectSetAttr { .. } |
+                IRInstruction::ObjectGetAttr { .. })
+            {
+                return true;
+            }
+        }
+
+        // Check function instructions
+        for (_name, function) in &module.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if matches!(instruction,
+                        IRInstruction::ObjectCreate { .. } |
+                        IRInstruction::ObjectSetAttr { .. } |
+                        IRInstruction::ObjectGetAttr { .. })
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+}
+
+impl CodeGenerator for CTranspiler {
+    fn generate(&self, module: IRModule, options: &CodegenOptions) -> Result<Vec<u8>> {
+        let c_code = self.generate_c_code(module)?;
+
+        // If output path is specified and we want to compile to executable
+        if let Some(output_path) = &options.output_path {
+            // Check if we should compile to executable
+            let should_compile = output_path.ends_with(std::env::consts::EXE_EXTENSION)
+                || !output_path.contains(".")
+                || Path::new(output_path).extension().is_none();
+
+            if should_compile {
+                // Compile to executable
+                compiler::compile_to_executable(&c_code, output_path, options.opt_level)?;
+                // Return empty bytes since executable is created separately
+                return Ok(vec![]);
+            }
+        }
+
+        // Return C code as bytes
+        Ok(c_code.into_bytes())
+    }
+
+    fn get_target(&self) -> Target {
+        Target::C
+    }
+
+    fn supports_optimization(&self) -> bool {
+        true
+    }
+
+    fn get_supported_features(&self) -> Vec<&'static str> {
+        vec![
+            "basic_types",
+            "functions",
+            "control_flow",
+            "data_structures",
+            "builtin_functions",
+            "collections",
+            "objects",
+            "inheritance",
+            "operators",
+            "memory_management",
+            "static_typing", // Added to indicate support for static typing
+        ]
+    }
+}
+
+impl Default for CTranspiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
