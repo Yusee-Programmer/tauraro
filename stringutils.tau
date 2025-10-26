@@ -1,0 +1,22 @@
+# Tauraro module with .tau extension
+print("Loading stringutils.tau")
+
+def reverse(s):
+    result = ""
+    i = len(s) - 1
+    while i >= 0:
+        result = result + s[i]
+        i = i - 1
+    return result
+
+def repeat(s, n):
+    result = ""
+    for i in range(n):
+        result = result + s
+    return result
+
+def count_chars(s):
+    return len(s)
+
+VOWELS = "aeiouAEIOU"
+CONSONANTS = "bcdfghjklmnpqrstvwxyz"
