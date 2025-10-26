@@ -113,6 +113,12 @@ enum Commands {
         file: PathBuf,
     },
     
+    /// Debug IR generation
+    DebugIr {
+        /// Input file
+        file: PathBuf,
+    },
+    
     /// Clear the module cache
     ClearCache,
 }
@@ -166,6 +172,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::DebugBytecode { file } => {
             debug_bytecode(&file)?;
+        }
+        Commands::DebugIr { file } => {
+            debug_ir(&file)?;
         }
         Commands::ClearCache => {
             clear_cache()?;
@@ -300,30 +309,39 @@ fn compile_file(
                     exe_path
                 };
                 
-                let status = std::process::Command::new("gcc")
-                    .args(&[output_path.to_str().unwrap(), "-o", exe_path.to_str().unwrap()])
-                    .status();
-                
-                match status {
-                    Ok(status) if status.success() => {
-                        println!("Executable compiled successfully: {}", exe_path.display());
-                    }
-                    _ => {
-                        // Try clang as fallback
-                        let status = std::process::Command::new("clang")
-                            .args(&[output_path.to_str().unwrap(), "-o", exe_path.to_str().unwrap()])
-                            .status();
-                        
-                        match status {
-                            Ok(status) if status.success() => {
-                                println!("Executable compiled successfully: {}", exe_path.display());
-                            }
-                            _ => {
-                                println!("Warning: Could not compile to executable. Please compile manually with:");
-                                println!("  gcc {} -o {}", output_path.display(), exe_path.display());
+                // Use our compiler detection module for better error handling
+                if let Err(e) = codegen::c_transpiler::compiler::compile_to_executable(
+                    &std::fs::read_to_string(&output_path)?, 
+                    exe_path.to_str().unwrap(), 
+                    optimization
+                ) {
+                    eprintln!("Warning: Could not compile to executable: {}", e);
+                    println!("Please compile manually with one of the following:");
+                    
+                    // Provide specific instructions based on detected compilers
+                    let compilers = codegen::c_transpiler::compiler::detect_compilers();
+                    if compilers.is_empty() {
+                        println!("  No C compilers detected. Please install GCC, Clang, or MSVC.");
+                    } else {
+                        for compiler in &compilers {
+                            match compiler.as_str() {
+                                "gcc" | "clang" => {
+                                    println!("  {} {} -o {} -lm", compiler, output_path.display(), exe_path.display());
+                                }
+                                "cl" => {
+                                    println!("  cl {} /Fe:{}", output_path.display(), exe_path.display());
+                                }
+                                "clang-cl" => {
+                                    println!("  clang-cl {} -o {}", output_path.display(), exe_path.display());
+                                }
+                                _ => {
+                                    println!("  {} {} -o {}", compiler, output_path.display(), exe_path.display());
+                                }
                             }
                         }
                     }
+                } else {
+                    println!("Executable compiled successfully: {}", exe_path.display());
                 }
             }
         }
@@ -389,6 +407,42 @@ fn clear_cache() -> Result<(), Box<dyn std::error::Error>> {
     let cache = ModuleCache::new()?;
     cache.clear_cache()?;
     println!("Module cache cleared successfully");
+    Ok(())
+}
+
+/// Debug IR generation
+fn debug_ir(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let source = std::fs::read_to_string(file)?;
+    
+    // Lexical analysis
+    let tokens = lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            eprintln!("Error in lexer:");
+            eprintln!("  File \"{}\", line 1", file.display());
+            e
+        })?;
+    
+    // Parsing
+    let mut parser = parser::Parser::new(tokens);
+    let ast = parser.parse().map_err(|e| {
+        // Create a more detailed error message with location information
+        eprintln!("Error in parser:");
+        // For now, we'll just show a generic location since we don't have detailed line info in the error
+        eprintln!("  File \"{}\", line 1", file.display());
+        e
+    })?;
+    
+    // Semantic analysis
+    let semantic_ast = semantic::Analyzer::new(false).analyze(ast)
+        .map_err(|errors| format!("Semantic errors: {:?}", errors))?;
+    
+    // Generate IR
+    let ir_module = ir::Generator::new().generate(semantic_ast)?;
+    
+    // Print the generated IR
+    println!("Generated IR:");
+    println!("{:#?}", ir_module);
+    
     Ok(())
 }
 
