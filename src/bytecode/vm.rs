@@ -39,6 +39,9 @@ pub struct SuperBytecodeVM {
     // Type checker for runtime type enforcement
     pub type_checker: TypeChecker,
     pub enable_type_checking: bool, // Flag to enable/disable type checking
+
+    // Module cache for preventing duplicate module loads (like Python's sys.modules)
+    loaded_modules: HashMap<String, Value>,
 }
 
 // Type alias for builtin functions
@@ -108,9 +111,138 @@ impl SuperBytecodeVM {
             // Initialize type checker
             type_checker: TypeChecker::new(),
             enable_type_checking: true, // Enable type checking by default
+
+            // Initialize module cache
+            loaded_modules: HashMap::new(),
         }
     }
-    
+
+    /// Load a module from a file in the filesystem
+    /// Searches sys.path directories for module files with supported extensions
+    /// Supported extensions: .py, .tr, .tau, .tauraro
+    fn load_module_from_file(&mut self, module_name: &str) -> Result<Value> {
+        // Check if module is already loaded (module caching like Python's sys.modules)
+        if let Some(cached_module) = self.loaded_modules.get(module_name) {
+            return Ok(cached_module.clone());
+        }
+
+        // Get sys.path from the sys module
+        let search_paths = vec![
+            ".".to_string(),
+            "tauraro_packages".to_string(),
+            "lib".to_string(),
+        ];
+
+        // Supported file extensions for Tauraro modules (in priority order)
+        let extensions = vec!["py", "tr", "tau", "tauraro"];
+
+        // Try to find the module file in search paths with any supported extension
+        for search_path in &search_paths {
+            for ext in &extensions {
+                let module_path = std::path::Path::new(search_path).join(format!("{}.{}", module_name, ext));
+
+                if module_path.exists() {
+                // Read the module file
+                let source = std::fs::read_to_string(&module_path)
+                    .map_err(|e| anyhow!("Failed to read module file: {}", e))?;
+
+                // Compile the module
+                let tokens = crate::lexer::Lexer::new(&source)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| anyhow!("Lexer error in module '{}': {}", module_name, e))?;
+
+                let mut parser = crate::parser::Parser::new(tokens);
+                let ast = parser.parse()
+                    .map_err(|e| anyhow!("Parser error in module '{}': {}", module_name, e))?;
+
+                let mut compiler = crate::bytecode::compiler::SuperCompiler::new(module_name.to_string());
+                let code_object = compiler.compile(ast)
+                    .map_err(|e| anyhow!("Compiler error in module '{}': {}", module_name, e))?;
+
+                // Save current globals to determine what the module adds
+                let globals_before: std::collections::HashSet<String> = self.globals.keys().cloned().collect();
+
+                // Execute the module directly
+                let result = self.execute(code_object);
+
+                // Check for errors during execution
+                if let Err(e) = result {
+                    return Err(anyhow!("Error executing module '{}': {}", module_name, e));
+                }
+
+                // Get the module's globals (namespace) - only new names added by the module
+                let mut module_namespace = HashMap::new();
+                for (name, value) in &self.globals {
+                    // Include names that were added by the module (not in globals before)
+                    // Or names that don't start with __ (skip internals like __name__, __builtins__)
+                    if !globals_before.contains(name) && !name.starts_with("__") && name != "builtins" {
+                        module_namespace.insert(name.clone(), value.value.clone());
+                    }
+                }
+
+                    // Create the module and cache it before returning
+                    let module = Value::Module(module_name.to_string(), module_namespace);
+                    self.loaded_modules.insert(module_name.to_string(), module.clone());
+                    return Ok(module);
+                }
+            }
+        }
+
+        // Also try to load from package directories (with __init__ files)
+        for search_path in &search_paths {
+            for ext in &extensions {
+                let package_path = std::path::Path::new(search_path)
+                    .join(module_name)
+                    .join(format!("__init__.{}", ext));
+
+                if package_path.exists() {
+                // Read the __init__.py file
+                let source = std::fs::read_to_string(&package_path)
+                    .map_err(|e| anyhow!("Failed to read package __init__.py: {}", e))?;
+
+                // Compile and execute similar to above
+                let tokens = crate::lexer::Lexer::new(&source)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| anyhow!("Lexer error in package '{}': {}", module_name, e))?;
+
+                let mut parser = crate::parser::Parser::new(tokens);
+                let ast = parser.parse()
+                    .map_err(|e| anyhow!("Parser error in package '{}': {}", module_name, e))?;
+
+                let mut compiler = crate::bytecode::compiler::SuperCompiler::new(module_name.to_string());
+                let code_object = compiler.compile(ast)
+                    .map_err(|e| anyhow!("Compiler error in package '{}': {}", module_name, e))?;
+
+                // Save current globals to determine what the package adds
+                let globals_before: std::collections::HashSet<String> = self.globals.keys().cloned().collect();
+
+                // Execute the package __init__.py
+                let result = self.execute(code_object);
+
+                if let Err(e) = result {
+                    return Err(anyhow!("Error executing package '{}': {}", module_name, e));
+                }
+
+                // Get the package's globals (namespace) - only new names added by the package
+                let mut module_namespace = HashMap::new();
+                for (name, value) in &self.globals {
+                    // Include names that were added by the package (not in globals before)
+                    if !globals_before.contains(name) && !name.starts_with("__") && name != "builtins" {
+                        module_namespace.insert(name.clone(), value.value.clone());
+                    }
+                }
+
+                    // Create the module and cache it before returning
+                    let module = Value::Module(module_name.to_string(), module_namespace);
+                    self.loaded_modules.insert(module_name.to_string(), module.clone());
+                    return Ok(module);
+                }
+            }
+        }
+
+        Err(anyhow!("Module file not found (searched for .py, .tr, .tau, .tauraro)"))
+    }
+
     /// Track instruction execution for profiling and JIT compilation
     /// Get a global variable by name (for REPL)
     pub fn get_global(&self, name: &str) -> Option<&RcValue> {
@@ -3641,11 +3773,15 @@ impl SuperBytecodeVM {
 
                 let module_name = self.frames[frame_idx].code.names[name_idx].clone();
 
-                // Try to load the builtin module
+                // Try to load the builtin module first
                 let module_value = if let Some(module) = modules::get_builtin_module(&module_name) {
                     module
                 } else {
-                    return Err(anyhow!("ImportModule: module '{}' not found", module_name));
+                    // Try to load from file system
+                    match self.load_module_from_file(&module_name) {
+                        Ok(module) => module,
+                        Err(e) => return Err(anyhow!("ImportModule: module '{}' not found: {}", module_name, e)),
+                    }
                 };
 
                 // Store the module in both globals and the result register
@@ -3676,32 +3812,61 @@ impl SuperBytecodeVM {
                 let module_name = self.frames[frame_idx].code.names[module_name_idx].clone();
                 let import_name = self.frames[frame_idx].code.names[import_name_idx].clone();
 
-                // Try to load the builtin module
+                // Try to load the builtin module first
                 let module_value = if let Some(module) = modules::get_builtin_module(&module_name) {
                     module
                 } else {
-                    return Err(anyhow!("ImportFrom: module '{}' not found", module_name));
+                    // Try to load from file system
+                    match self.load_module_from_file(&module_name) {
+                        Ok(module) => module,
+                        Err(e) => return Err(anyhow!("ImportFrom: module '{}' not found: {}", module_name, e)),
+                    }
                 };
 
-                // Extract the specific name from the module
-                let imported_value = match &module_value {
-                    Value::Module(_, namespace) => {
-                        if let Some(value) = namespace.get(&import_name) {
-                            value.clone()
-                        } else {
-                            return Err(anyhow!("ImportFrom: cannot import name '{}' from module '{}'", import_name, module_name));
+                // Check if this is a star import (from module import *)
+                if import_name == "*" {
+                    // Import all names from the module (star import)
+                    match &module_value {
+                        Value::Module(_, namespace) => {
+                            // Import all names from the module namespace
+                            for (name, value) in namespace {
+                                // Skip private names (starting with _) unless they're special like __all__
+                                if !name.starts_with("_") || name == "__all__" {
+                                    let rc_value = RcValue::new(value.clone());
+                                    self.globals.insert(name.clone(), rc_value.clone());
+                                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name.clone(), rc_value.clone());
+                                }
+                            }
+
+                            // For star imports, we don't store anything in the result register
+                            // Just put None there
+                            self.frames[frame_idx].set_register(result_reg, RcValue::new(Value::None));
+                        }
+                        _ => {
+                            return Err(anyhow!("ImportFrom: '{}' is not a module", module_name));
                         }
                     }
-                    _ => {
-                        return Err(anyhow!("ImportFrom: '{}' is not a module", module_name));
-                    }
-                };
+                } else {
+                    // Regular from-import (specific name)
+                    let imported_value = match &module_value {
+                        Value::Module(_, namespace) => {
+                            if let Some(value) = namespace.get(&import_name) {
+                                value.clone()
+                            } else {
+                                return Err(anyhow!("ImportFrom: cannot import name '{}' from module '{}'", import_name, module_name));
+                            }
+                        }
+                        _ => {
+                            return Err(anyhow!("ImportFrom: '{}' is not a module", module_name));
+                        }
+                    };
 
-                // Store the imported value in globals and the result register
-                let rc_value = RcValue::new(imported_value);
-                self.globals.insert(import_name.clone(), rc_value.clone());
-                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(import_name.clone(), rc_value.clone());
-                self.frames[frame_idx].set_register(result_reg, rc_value);
+                    // Store the imported value in globals and the result register
+                    let rc_value = RcValue::new(imported_value);
+                    self.globals.insert(import_name.clone(), rc_value.clone());
+                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(import_name.clone(), rc_value.clone());
+                    self.frames[frame_idx].set_register(result_reg, rc_value);
+                }
 
                 Ok(None)
             }

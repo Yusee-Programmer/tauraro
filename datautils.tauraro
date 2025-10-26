@@ -1,0 +1,25 @@
+# Tauraro module with .tauraro extension
+print("Loading datautils.tauraro")
+
+def sum_list(lst):
+    total = 0
+    for item in lst:
+        total = total + item
+    return total
+
+def average(lst):
+    if len(lst) == 0:
+        return 0
+    return sum_list(lst) / len(lst)
+
+def max_value(lst):
+    if len(lst) == 0:
+        return None
+    maximum = lst[0]
+    for item in lst:
+        if item > maximum:
+            maximum = item
+    return maximum
+
+MIN_VALUE = -999999
+MAX_VALUE = 999999
