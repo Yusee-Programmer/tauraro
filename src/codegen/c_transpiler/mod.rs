@@ -51,6 +51,54 @@ impl CTranspiler {
         headers
     }
 
+    /// Generate extern declarations for builtin modules
+    fn generate_builtin_extern_declarations(&self, module_name: &str) -> String {
+        let mut decls = String::new();
+
+        match module_name {
+            "math" => {
+                decls.push_str("// Math module - extern declarations\n");
+                decls.push_str("extern double tauraro_math_pi;\n");
+                decls.push_str("extern double tauraro_math_e;\n");
+                decls.push_str("extern tauraro_value_t* tauraro_math_sqrt(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_math_pow(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_math_sin(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_math_cos(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_math_tan(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_math_log(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_math_exp(int argc, tauraro_value_t** argv);\n");
+            }
+            "sys" => {
+                decls.push_str("// Sys module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_sys_platform;\n");
+                decls.push_str("extern tauraro_value_t* tauraro_sys_version;\n");
+                decls.push_str("extern tauraro_value_t* tauraro_sys_exit(int argc, tauraro_value_t** argv);\n");
+            }
+            "os" => {
+                decls.push_str("// OS module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_os_getcwd(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_os_listdir(int argc, tauraro_value_t** argv);\n");
+            }
+            "time" => {
+                decls.push_str("// Time module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_time_time(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_time_sleep(int argc, tauraro_value_t** argv);\n");
+            }
+            "random" => {
+                decls.push_str("// Random module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_random_random(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_random_randint(int argc, tauraro_value_t** argv);\n");
+            }
+            _ => {
+                decls.push_str(&format!("// {} module - extern declarations\n", module_name));
+                decls.push_str(&format!("// Note: Builtin module '{}' extern declarations not yet implemented\n", module_name));
+            }
+        }
+
+        decls.push_str("\n");
+        decls
+    }
+
     /// Generate complete C code from IR module
     fn generate_c_code(&self, module: IRModule, output_dir: Option<&str>) -> Result<String> {
         use crate::codegen::c_transpiler::imports::{ImportAnalyzer, ModuleCompiler};
@@ -60,25 +108,41 @@ impl CTranspiler {
         let mut analyzer = ImportAnalyzer::new();
         analyzer.analyze_ir(&module)?;
 
-        // Use output directory if provided, otherwise use temp directory
-        let build_dir = if let Some(dir) = output_dir {
-            PathBuf::from(dir)
+        // Check if there are any imports
+        let has_imports = !analyzer.modules.is_empty();
+
+        // Determine build directory based on imports
+        let build_dir = if has_imports {
+            // If there are imports, use build directory
+            let dir = if let Some(d) = output_dir {
+                PathBuf::from(d)
+            } else {
+                PathBuf::from("build")
+            };
+            std::fs::create_dir_all(&dir)?;
+
+            // Create builtin subdirectory for builtin modules
+            let builtin_dir = dir.join("builtin");
+            std::fs::create_dir_all(&builtin_dir)?;
+
+            Some(dir)
         } else {
-            std::env::temp_dir().join("tauraro_c_build")
+            // No imports, output to current directory
+            None
         };
-        std::fs::create_dir_all(&build_dir)?;
 
         // Compile user-defined modules
-        let mut module_compiler = ModuleCompiler::new(build_dir.clone());
         let mut user_module_headers = Vec::new();
-
-        for user_module in analyzer.get_user_modules() {
-            let (_c_path, h_path) = module_compiler.compile_module(user_module)?;
-            user_module_headers.push(h_path);
+        if let Some(ref dir) = build_dir {
+            let mut module_compiler = ModuleCompiler::new(dir.clone());
+            for user_module in analyzer.get_user_modules() {
+                let (_c_path, h_path) = module_compiler.compile_module(user_module)?;
+                user_module_headers.push(h_path);
+            }
         }
 
-        // Get builtin modules (will be linked later)
-        let _builtin_modules = analyzer.get_builtin_modules();
+        // Get builtin modules and generate extern declarations
+        let builtin_modules = analyzer.get_builtin_modules();
 
         let mut c_code = String::new();
 
@@ -92,6 +156,15 @@ impl CTranspiler {
             }
         }
         c_code.push_str("\n");
+
+        // Add extern declarations for builtin modules
+        if !builtin_modules.is_empty() {
+            c_code.push_str("// Extern declarations for builtin modules (implemented in Rust)\n");
+            for builtin in builtin_modules {
+                c_code.push_str(&self.generate_builtin_extern_declarations(&builtin.name));
+            }
+            c_code.push_str("\n");
+        }
 
         // Add type definitions (only if not already defined in headers)
         if user_module_headers.is_empty() {

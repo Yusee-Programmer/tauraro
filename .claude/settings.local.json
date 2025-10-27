@@ -88,7 +88,8 @@
       "Bash(./target/debug/tauraro.exe compile:*)",
       "Bash(cat:*)",
       "Bash(./main_test.exe:*)",
-      "Bash(./advanced_test.exe:*)"
+      "Bash(./advanced_test.exe:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

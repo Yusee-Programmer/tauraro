@@ -48,6 +48,7 @@ lib.long-type-*.txt
 # IDE and editor files
 .vscode/
 .idea/
+.qoder/
 *.sublime-project
 *.sublime-workspace
 .DS_Store
