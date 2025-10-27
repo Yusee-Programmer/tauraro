@@ -1,7 +1,18 @@
 //! FFI wrapper for math module - exports C-compatible functions
 //! This module is compiled to an object file and linked with generated C code
+//!
+//! Uses #![no_std] for minimal dependencies and easy C linking
 
-use std::os::raw::c_int;
+#![no_std]
+
+use core::ffi::{c_int, c_void};
+use core::panic::PanicInfo;
+
+// Panic handler required for #![no_std]
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    loop {}
+}
 
 // Re-export the tauraro_value_t type definition
 // This must match the C definition in generated code
@@ -30,7 +41,7 @@ pub union TauraroData {
     pub float_val: f64,
     pub bool_val: bool,
     pub str_val: *mut u8,
-    pub ptr_val: *mut std::ffi::c_void,
+    pub ptr_val: *mut c_void,
 }
 
 #[repr(C)]
@@ -47,10 +58,21 @@ extern "C" {
 
 // Math constants
 #[no_mangle]
-pub static tauraro_math_pi: f64 = std::f64::consts::PI;
+pub static tauraro_math_pi: f64 = 3.141592653589793;
 
 #[no_mangle]
-pub static tauraro_math_e: f64 = std::f64::consts::E;
+pub static tauraro_math_e: f64 = 2.718281828459045;
+
+// Math functions from libm (no_std compatible)
+extern "C" {
+    fn sqrt(x: f64) -> f64;
+    fn pow(x: f64, y: f64) -> f64;
+    fn sin(x: f64) -> f64;
+    fn cos(x: f64) -> f64;
+    fn tan(x: f64) -> f64;
+    fn log(x: f64) -> f64;
+    fn exp(x: f64) -> f64;
+}
 
 // Helper to get numeric value from TauraroValue
 unsafe fn get_number(val: *mut TauraroValue) -> f64 {
@@ -69,9 +91,9 @@ unsafe fn get_number(val: *mut TauraroValue) -> f64 {
 #[no_mangle]
 pub extern "C" fn tauraro_math_sqrt(argc: c_int, argv: *mut *mut TauraroValue) -> *mut TauraroValue {
     unsafe {
+        // Return NULL on invalid arguments (no panic, no std)
         if argc < 1 || argv.is_null() {
-            eprintln!("Error: sqrt() requires 1 argument");
-            std::process::exit(1);
+            return core::ptr::null_mut();
         }
 
         let x = get_number(*argv.offset(0));
@@ -79,7 +101,7 @@ pub extern "C" fn tauraro_math_sqrt(argc: c_int, argv: *mut *mut TauraroValue) -
 
         if !result.is_null() {
             (*result).value_type = TauraroType::Float;
-            (*result).data.float_val = x.sqrt();
+            (*result).data.float_val = sqrt(x);
         }
 
         result
@@ -91,8 +113,7 @@ pub extern "C" fn tauraro_math_sqrt(argc: c_int, argv: *mut *mut TauraroValue) -
 pub extern "C" fn tauraro_math_pow(argc: c_int, argv: *mut *mut TauraroValue) -> *mut TauraroValue {
     unsafe {
         if argc < 2 || argv.is_null() {
-            eprintln!("Error: pow() requires 2 arguments");
-            std::process::exit(1);
+            return core::ptr::null_mut();
         }
 
         let x = get_number(*argv.offset(0));
@@ -101,7 +122,7 @@ pub extern "C" fn tauraro_math_pow(argc: c_int, argv: *mut *mut TauraroValue) ->
 
         if !result.is_null() {
             (*result).value_type = TauraroType::Float;
-            (*result).data.float_val = x.powf(y);
+            (*result).data.float_val = pow(x, y);
         }
 
         result
@@ -113,8 +134,7 @@ pub extern "C" fn tauraro_math_pow(argc: c_int, argv: *mut *mut TauraroValue) ->
 pub extern "C" fn tauraro_math_sin(argc: c_int, argv: *mut *mut TauraroValue) -> *mut TauraroValue {
     unsafe {
         if argc < 1 || argv.is_null() {
-            eprintln!("Error: sin() requires 1 argument");
-            std::process::exit(1);
+            return core::ptr::null_mut();
         }
 
         let x = get_number(*argv.offset(0));
@@ -122,7 +142,7 @@ pub extern "C" fn tauraro_math_sin(argc: c_int, argv: *mut *mut TauraroValue) ->
 
         if !result.is_null() {
             (*result).value_type = TauraroType::Float;
-            (*result).data.float_val = x.sin();
+            (*result).data.float_val = sin(x);
         }
 
         result
@@ -134,8 +154,7 @@ pub extern "C" fn tauraro_math_sin(argc: c_int, argv: *mut *mut TauraroValue) ->
 pub extern "C" fn tauraro_math_cos(argc: c_int, argv: *mut *mut TauraroValue) -> *mut TauraroValue {
     unsafe {
         if argc < 1 || argv.is_null() {
-            eprintln!("Error: cos() requires 1 argument");
-            std::process::exit(1);
+            return core::ptr::null_mut();
         }
 
         let x = get_number(*argv.offset(0));
@@ -143,7 +162,7 @@ pub extern "C" fn tauraro_math_cos(argc: c_int, argv: *mut *mut TauraroValue) ->
 
         if !result.is_null() {
             (*result).value_type = TauraroType::Float;
-            (*result).data.float_val = x.cos();
+            (*result).data.float_val = cos(x);
         }
 
         result
@@ -155,8 +174,7 @@ pub extern "C" fn tauraro_math_cos(argc: c_int, argv: *mut *mut TauraroValue) ->
 pub extern "C" fn tauraro_math_tan(argc: c_int, argv: *mut *mut TauraroValue) -> *mut TauraroValue {
     unsafe {
         if argc < 1 || argv.is_null() {
-            eprintln!("Error: tan() requires 1 argument");
-            std::process::exit(1);
+            return core::ptr::null_mut();
         }
 
         let x = get_number(*argv.offset(0));
@@ -164,7 +182,7 @@ pub extern "C" fn tauraro_math_tan(argc: c_int, argv: *mut *mut TauraroValue) ->
 
         if !result.is_null() {
             (*result).value_type = TauraroType::Float;
-            (*result).data.float_val = x.tan();
+            (*result).data.float_val = tan(x);
         }
 
         result
@@ -176,8 +194,7 @@ pub extern "C" fn tauraro_math_tan(argc: c_int, argv: *mut *mut TauraroValue) ->
 pub extern "C" fn tauraro_math_log(argc: c_int, argv: *mut *mut TauraroValue) -> *mut TauraroValue {
     unsafe {
         if argc < 1 || argv.is_null() {
-            eprintln!("Error: log() requires 1 argument");
-            std::process::exit(1);
+            return core::ptr::null_mut();
         }
 
         let x = get_number(*argv.offset(0));
@@ -185,7 +202,7 @@ pub extern "C" fn tauraro_math_log(argc: c_int, argv: *mut *mut TauraroValue) ->
 
         if !result.is_null() {
             (*result).value_type = TauraroType::Float;
-            (*result).data.float_val = x.ln();
+            (*result).data.float_val = log(x);
         }
 
         result
@@ -197,8 +214,7 @@ pub extern "C" fn tauraro_math_log(argc: c_int, argv: *mut *mut TauraroValue) ->
 pub extern "C" fn tauraro_math_exp(argc: c_int, argv: *mut *mut TauraroValue) -> *mut TauraroValue {
     unsafe {
         if argc < 1 || argv.is_null() {
-            eprintln!("Error: exp() requires 1 argument");
-            std::process::exit(1);
+            return core::ptr::null_mut();
         }
 
         let x = get_number(*argv.offset(0));
@@ -206,7 +222,7 @@ pub extern "C" fn tauraro_math_exp(argc: c_int, argv: *mut *mut TauraroValue) ->
 
         if !result.is_null() {
             (*result).value_type = TauraroType::Float;
-            (*result).data.float_val = x.exp();
+            (*result).data.float_val = exp(x);
         }
 
         result

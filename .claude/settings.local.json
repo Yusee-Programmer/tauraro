@@ -91,7 +91,9 @@
       "Bash(./advanced_test.exe:*)",
       "Bash(dir:*)",
       "Bash(./simple_no_import.exe:*)",
-      "Bash(./build/test_import_system.exe:*)"
+      "Bash(./build/test_import_system.exe:*)",
+      "Bash(rustc:*)",
+      "Bash(./build/test_import_rust.exe:*)"
     ],
     "deny": [],
     "ask": []

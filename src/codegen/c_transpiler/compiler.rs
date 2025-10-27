@@ -46,10 +46,12 @@ fn compile_rust_ffi_to_object(module_name: &str, output_dir: &str) -> Result<Str
     std::fs::create_dir_all(output_dir)?;
 
     // Compile Rust to object file using rustc
+    // Use panic=abort for #![no_std] compatibility
     let output = Command::new("rustc")
         .args(&[
             "--crate-type", "staticlib",
             "--emit", "obj",
+            "-C", "panic=abort",
             "-O",
             &rust_source,
             "-o", &object_file,

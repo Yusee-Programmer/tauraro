@@ -168,6 +168,19 @@ tauraro_value_t* mymath_cube(int argc, tauraro_value_t** argv) {
 }
 
 
+tauraro_value_t* mymath_add(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* a = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* b = (argc > 1) ? argv[1] : NULL;
+
+    // Local variables
+    tauraro_value_t* binop_left = a;
+    tauraro_value_t* binop_right = b;
+    tauraro_value_t* temp_result = tauraro_add(binop_left, binop_right);
+    return temp_result;
+}
+
+
 tauraro_value_t* mymath_square(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* x = (argc > 0) ? argv[0] : NULL;
@@ -189,19 +202,6 @@ tauraro_value_t* mymath_multiply(int argc, tauraro_value_t** argv) {
     tauraro_value_t* binop_left = a;
     tauraro_value_t* binop_right = b;
     tauraro_value_t* temp_result = tauraro_mul(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* mymath_add(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* a = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* b = (argc > 1) ? argv[1] : NULL;
-
-    // Local variables
-    tauraro_value_t* binop_left = a;
-    tauraro_value_t* binop_right = b;
-    tauraro_value_t* temp_result = tauraro_add(binop_left, binop_right);
     return temp_result;
 }
 
