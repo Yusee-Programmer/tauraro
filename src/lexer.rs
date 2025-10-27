@@ -264,10 +264,14 @@ pub enum Token {
     #[regex(r#"'{3}[^']*'{3}"#, |lex| lex.slice()[3..lex.slice().len()-3].to_string())]
     DocString(String),
 
-    // Whitespace and comments
+    // Comments (Python-style)
+    #[regex(r"#[^\n]*", |lex| lex.slice()[1..].trim().to_string())]
+    Comment(String),
+
+    // Whitespace
     #[regex(r"[ \t\r]+", logos::skip)]
-    #[regex(r"#.*", logos::skip)]  // Line comments (Python-style)
     #[regex(r"\\\n", logos::skip)]  // Line continuation (backslash followed by newline)
+
     #[regex(r"\n", |_| Token::Newline)]
     Newline,
 

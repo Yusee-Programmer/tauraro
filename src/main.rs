@@ -222,12 +222,15 @@ fn compile_file(
     // Generate IR
     let ir_module = ir::Generator::new().generate(semantic_ast)?;
     
-    // Check if IR module has imports
-    let has_imports = ir_module.functions.iter().any(|(_, function)| {
+    // Check if IR module has imports (both in global instructions and function blocks)
+    let has_imports = ir_module.globals.iter().any(|instruction| {
+        matches!(instruction, crate::ir::IRInstruction::Import { .. } | 
+                                  crate::ir::IRInstruction::ImportFrom { .. })
+    }) || ir_module.functions.iter().any(|(_, function)| {
         function.blocks.iter().any(|block| {
             block.instructions.iter().any(|instruction| {
                 matches!(instruction, crate::ir::IRInstruction::Import { .. } | 
-                                          crate::ir::IRInstruction::ImportFrom { .. })
+                crate::ir::IRInstruction::ImportFrom { .. })
             })
         })
     });

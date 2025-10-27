@@ -207,6 +207,13 @@ impl Parser {
 
     fn statement(&mut self) -> Result<Statement, ParseError> {
         match &self.peek().token {
+            Token::Comment(text) => {
+                // Capture comment and create Comment statement
+                let comment_text = text.clone();
+                self.advance();
+                self.match_token(&[Token::Newline]); // Optional newline after comment
+                Ok(Statement::Comment(comment_text))
+            },
             Token::KwFunc | Token::KwAsync => {
                 // For function definitions, always call function_def() directly
                 // Don't check for keyword assignment for function definitions

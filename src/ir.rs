@@ -2,7 +2,7 @@
 
 use crate::ast::*;
 use crate::value::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
@@ -28,9 +28,12 @@ pub struct IRBlock {
 
 #[derive(Debug, Clone)]
 pub enum IRInstruction {
+    // Comments
+    Comment(String),
+
     // Constants
     LoadConst { value: Value, result: String },
-    
+
     // Variables
     LoadLocal { name: String, result: String },
     StoreLocal { name: String, value: String },
@@ -92,6 +95,7 @@ pub struct Generator {
     object_types: HashMap<String, String>, // Maps variable names to class names
     type_info: IRTypeInfo, // Added to store type information during IR generation
     class_inheritance: HashMap<String, Vec<String>>, // Maps class names to their base classes
+    imported_modules: HashSet<String>, // Track imported module names
 }
 
 impl Generator {
@@ -103,6 +107,7 @@ impl Generator {
                 function_types: HashMap::new(),
             },
             class_inheritance: HashMap::new(),
+            imported_modules: HashSet::new(),
         }
     }
 
@@ -129,6 +134,10 @@ impl Generator {
     
     fn process_statement(&mut self, module: &mut IRModule, statement: Statement) -> Result<()> {
         match statement {
+            Statement::Comment(text) => {
+                // Add comment to globals
+                module.globals.push(IRInstruction::Comment(text));
+            },
             Statement::ClassDef { name, bases, body, .. } => {
                 // Store inheritance information
                 let mut base_classes = Vec::new();
@@ -382,6 +391,26 @@ impl Generator {
                 let ir_function = self.process_function(func_name, params, body)?;
                 module.functions.insert(name, ir_function);
             },
+            Statement::Import { module: module_name, alias } => {
+                // Track imported module
+                let effective_name = alias.as_ref().unwrap_or(&module_name);
+                self.imported_modules.insert(effective_name.clone());
+
+                // Add import instruction to globals
+                module.globals.push(IRInstruction::Import {
+                    module: module_name.clone(),
+                });
+            },
+            Statement::FromImport { module: module_name, names } => {
+                // Extract just the names for the instruction
+                let imported_names: Vec<String> = names.iter().map(|(name, _)| name.clone()).collect();
+                
+                // Add import from instruction to globals
+                module.globals.push(IRInstruction::ImportFrom {
+                    module: module_name.clone(),
+                    names: imported_names,
+                });
+            },
             _ => {
                 // For other statements, we'll add placeholder handling
             }
@@ -408,11 +437,15 @@ impl Generator {
         // Process function body
         for statement in body {
             match statement {
+                Statement::Comment(text) => {
+                    // Add comment to function body
+                    instructions.push(IRInstruction::Comment(text));
+                },
                 Statement::Return(Some(expr)) => {
                     // Process return expression
                     self.process_expression_for_instructions(&mut instructions, &expr)?;
-                    instructions.push(IRInstruction::Return { 
-                        value: Some("temp_result".to_string()) 
+                    instructions.push(IRInstruction::Return {
+                        value: Some("temp_result".to_string())
                     });
                 },
                 Statement::Return(None) => {
@@ -431,11 +464,19 @@ impl Generator {
                     // Process general expressions
                     self.process_expression_for_instructions(&mut instructions, &expr)?;
                 },
+                Statement::VariableDef { name, value: Some(value), .. } => {
+                    // Handle local variable assignments
+                    self.process_expression_for_instructions(&mut instructions, &value)?;
+                    instructions.push(IRInstruction::StoreLocal {
+                        name: name.clone(),
+                        value: "temp_result".to_string()
+                    });
+                },
                 _ => {
                     // For other statements, add placeholder
-                    instructions.push(IRInstruction::LoadConst { 
-                        value: Value::None, 
-                        result: "_".to_string() 
+                    instructions.push(IRInstruction::LoadConst {
+                        value: Value::None,
+                        result: "_".to_string()
                     });
                 }
             }
@@ -513,20 +554,81 @@ impl Generator {
         match expr {
             Expr::Literal(value) => {
                 let converted_value = self.literal_to_value(value);
-                instructions.push(IRInstruction::LoadConst { 
-                    value: converted_value, 
-                    result: "temp_result".to_string() 
+                instructions.push(IRInstruction::LoadConst {
+                    value: converted_value,
+                    result: "temp_result".to_string()
                 });
             },
             Expr::Identifier(name) => {
-                instructions.push(IRInstruction::LoadGlobal { 
-                    name: name.clone(), 
-                    result: "temp_result".to_string() 
+                instructions.push(IRInstruction::LoadGlobal {
+                    name: name.clone(),
+                    result: "temp_result".to_string()
                 });
                 // Copy object type if this is an object
                 if let Some(class_name) = self.object_types.get(name) {
                     self.object_types.insert("temp_result".to_string(), class_name.clone());
                 }
+            },
+            Expr::BinaryOp { op, left, right } => {
+                // Handle binary operations
+                let left_temp = "binop_left".to_string();
+                let right_temp = "binop_right".to_string();
+
+                // Evaluate left operand
+                match left.as_ref() {
+                    Expr::Literal(lit) => {
+                        instructions.push(IRInstruction::LoadConst {
+                            value: self.literal_to_value(lit),
+                            result: left_temp.clone()
+                        });
+                    },
+                    Expr::Identifier(name) => {
+                        instructions.push(IRInstruction::LoadLocal {
+                            name: name.clone(),
+                            result: left_temp.clone()
+                        });
+                    },
+                    _ => {
+                        // Recursively process complex left expressions
+                        self.process_expression_for_instructions(instructions, left)?;
+                        instructions.push(IRInstruction::LoadLocal {
+                            name: "temp_result".to_string(),
+                            result: left_temp.clone()
+                        });
+                    }
+                }
+
+                // Evaluate right operand
+                match right.as_ref() {
+                    Expr::Literal(lit) => {
+                        instructions.push(IRInstruction::LoadConst {
+                            value: self.literal_to_value(lit),
+                            result: right_temp.clone()
+                        });
+                    },
+                    Expr::Identifier(name) => {
+                        instructions.push(IRInstruction::LoadLocal {
+                            name: name.clone(),
+                            result: right_temp.clone()
+                        });
+                    },
+                    _ => {
+                        // Recursively process complex right expressions
+                        self.process_expression_for_instructions(instructions, right)?;
+                        instructions.push(IRInstruction::LoadLocal {
+                            name: "temp_result".to_string(),
+                            result: right_temp.clone()
+                        });
+                    }
+                }
+
+                // Create the binary operation instruction
+                instructions.push(IRInstruction::BinaryOp {
+                    op: op.clone(),
+                    left: left_temp,
+                    right: right_temp,
+                    result: "temp_result".to_string()
+                });
             },
             Expr::Attribute { object, name } => {
                 // Process attribute access
@@ -540,35 +642,58 @@ impl Generator {
             Expr::MethodCall { object, method, args, .. } => {
                 // Process method call
                 let object_name = self.expression_to_string(&object);
-                
-                // Get the class name for this object
-                let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
-                
-                // Process each argument and collect their result names
-                let mut arg_names: Vec<String> = Vec::new();
-                for (i, arg) in args.iter().enumerate() {
-                    let arg_result = format!("method_arg_{}", i);
-                    self.process_expression_for_instructions(instructions, arg)?;
-                    // Move result to arg variable
-                    instructions.push(IRInstruction::LoadGlobal { 
-                        name: "temp_result".to_string(), 
-                        result: arg_result.clone() 
+
+                // Check if this is a module function call vs a method call
+                if self.imported_modules.contains(&object_name) {
+                    // Module function call: module.function() -> module_function()
+                    let mut arg_names: Vec<String> = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_result = format!("method_arg_{}", i);
+                        self.process_expression_for_instructions(instructions, arg)?;
+                        instructions.push(IRInstruction::LoadGlobal {
+                            name: "temp_result".to_string(),
+                            result: arg_result.clone()
+                        });
+                        arg_names.push(arg_result);
+                    }
+
+                    // Call module function directly (no self argument)
+                    let func_name = format!("{}_{}", object_name, method);
+                    instructions.push(IRInstruction::Call {
+                        func: func_name,
+                        args: arg_names,
+                        result: Some("temp_result".to_string())
                     });
-                    arg_names.push(arg_result);
+                } else {
+                    // Object method call: obj.method() -> ClassName__method(obj, ...)
+                    let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
+
+                    // Process each argument and collect their result names
+                    let mut arg_names: Vec<String> = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_result = format!("method_arg_{}", i);
+                        self.process_expression_for_instructions(instructions, arg)?;
+                        // Move result to arg variable
+                        instructions.push(IRInstruction::LoadGlobal {
+                            name: "temp_result".to_string(),
+                            result: arg_result.clone()
+                        });
+                        arg_names.push(arg_result);
+                    }
+
+                    // Create the method name (class__method)
+                    let method_name = format!("{}__{}", class_name, method);
+
+                    // Call the method with object as first argument
+                    let mut method_args = vec![object_name.clone()];
+                    method_args.extend(arg_names);
+
+                    instructions.push(IRInstruction::Call {
+                        func: method_name,
+                        args: method_args,
+                        result: Some("temp_result".to_string())
+                    });
                 }
-                
-                // Create the method name (class__method)
-                let method_name = format!("{}__{}", class_name, method);
-                
-                // Call the method with object as first argument
-                let mut method_args = vec![object_name.clone()];
-                method_args.extend(arg_names);
-                
-                instructions.push(IRInstruction::Call { 
-                    func: method_name,
-                    args: method_args,
-                    result: Some("temp_result".to_string())
-                });
             },
             Expr::FormatString { parts } => {
                 // Handle f-string by concatenating all parts
@@ -812,30 +937,49 @@ impl Generator {
             Expr::MethodCall { object, method, args, .. } => {
                 // Process method call
                 let object_name = self.expression_to_string(&object);
-                
-                // Get the class name for this object
-                let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
-                
-                // Process each argument and collect their result names
-                let mut arg_names: Vec<String> = Vec::new();
-                for (i, arg) in args.iter().enumerate() {
-                    let arg_result = format!("method_arg_{}", i);
-                    self.process_expression_to_result(module, arg, &arg_result)?;
-                    arg_names.push(arg_result);
+
+                // Check if this is a module function call vs a method call
+                if self.imported_modules.contains(&object_name) {
+                    // Module function call: module.function() -> module_function()
+                    let mut arg_names: Vec<String> = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_result = format!("method_arg_{}", i);
+                        self.process_expression_to_result(module, arg, &arg_result)?;
+                        arg_names.push(arg_result);
+                    }
+
+                    // Call module function directly (no self argument)
+                    let func_name = format!("{}_{}", object_name, method);
+                    module.globals.push(IRInstruction::Call {
+                        func: func_name,
+                        args: arg_names,
+                        result: Some("temp".to_string())
+                    });
+                } else {
+                    // Object method call: obj.method() -> ClassName__method(obj, ...)
+                    let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
+
+                    // Process each argument and collect their result names
+                    let mut arg_names: Vec<String> = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_result = format!("method_arg_{}", i);
+                        self.process_expression_to_result(module, arg, &arg_result)?;
+                        arg_names.push(arg_result);
+                    }
+
+                    // Create the method name (class__method)
+                    let method_name = format!("{}__{}", class_name, method);
+
+                    // Call the method with object as first argument
+                    let mut method_args = vec![object_name.clone()];
+                    method_args.extend(arg_names);
+
+                    module.globals.push(IRInstruction::Call {
+                        func: method_name,
+                        args: method_args,
+                        result: Some("temp".to_string())
+                    });
                 }
-                
-                // Create the method name (class__method)
-                let method_name = format!("{}__{}", class_name, method);
-                
-                // Call the method with object as first argument
-                let mut method_args = vec![object_name.clone()];
-                method_args.extend(arg_names);
-                
-                module.globals.push(IRInstruction::Call { 
-                    func: method_name,
-                    args: method_args,
-                    result: Some("temp".to_string())
-                });
             },
             Expr::FormatString { parts } => {
                 // Handle f-string by concatenating all parts

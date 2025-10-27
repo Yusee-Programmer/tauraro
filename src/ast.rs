@@ -8,6 +8,7 @@ pub struct Program {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Statement {
+    Comment(String),
     Expression(Expr),
     VariableDef {
         name: String,
