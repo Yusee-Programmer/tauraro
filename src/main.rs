@@ -230,7 +230,7 @@ fn compile_file(
         function.blocks.iter().any(|block| {
             block.instructions.iter().any(|instruction| {
                 matches!(instruction, crate::ir::IRInstruction::Import { .. } | 
-                                          crate::ir::IRInstruction::ImportFrom { .. })
+                crate::ir::IRInstruction::ImportFrom { .. })
             })
         })
     });
