@@ -43,6 +43,16 @@ pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> 
     let temp_file = format!("{}.c", output_path);
     std::fs::write(&temp_file, c_code)?;
 
+    // Check for builtin module dependencies
+    let mut builtin_files = Vec::new();
+    if c_code.contains("tauraro_math_") {
+        // Check if math builtin module exists
+        let math_builtin = "build/builtin/tauraro_math.c";
+        if std::path::Path::new(math_builtin).exists() {
+            builtin_files.push(math_builtin.to_string());
+        }
+    }
+
     // Detect available compilers
     let compilers = detect_compilers();
     if compilers.is_empty() {
@@ -63,8 +73,12 @@ pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> 
     for compiler in &compilers {
         let output = match compiler.as_str() {
             "gcc" | "clang" => {
+                let mut args = vec![temp_file.as_str()];
+                args.extend(builtin_files.iter().map(|s| s.as_str()));
+                args.extend(&["-o", output_path, opt_flag, "-lm"]);
+
                 Command::new(compiler)
-                    .args(&[&temp_file, "-o", output_path, opt_flag, "-lm"])
+                    .args(&args)
                     .output()
             }
             "clang-cl" => {

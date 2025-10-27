@@ -4,7 +4,9 @@ def square(x):
     return x * x
 
 def cube(x):
-    return x * x * x
+    result = x * x
+    result = result * x
+    return result
 
 def add(a, b):
     return a + b

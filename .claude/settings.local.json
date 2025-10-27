@@ -89,7 +89,9 @@
       "Bash(cat:*)",
       "Bash(./main_test.exe:*)",
       "Bash(./advanced_test.exe:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(./simple_no_import.exe:*)",
+      "Bash(./build/test_import_system.exe:*)"
     ],
     "deny": [],
     "ask": []

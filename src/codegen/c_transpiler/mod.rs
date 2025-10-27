@@ -419,27 +419,63 @@ impl CTranspiler {
             IRInstruction::Call { func, args, result } => {
                 // Check what kind of function this is
                 if func.contains("__") {
-                    // Method call (class__method) - uses argc/argv convention
-                    let args_str = if args.is_empty() {
-                        "0, NULL".to_string()
-                    } else {
-                        let arg_list = args.join(", ");
-                        format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
-                    };
+                    // Could be a method call (class__method) or module function (module__function)
+                    // Module functions from imports should use single underscore and skip first arg
+                    // Check if this looks like a module function call
+                    if !args.is_empty() && args[0].chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                        // Likely a module function call: module__function(module, args...)
+                        // Check if it's a builtin module
+                        let parts: Vec<&str> = func.split("__").collect();
+                        let is_builtin = parts.len() == 2 && matches!(parts[0],
+                            "math" | "sys" | "os" | "time" | "random" | "json" | "re" |
+                            "datetime" | "collections" | "itertools" | "functools");
 
-                    match result {
-                        Some(res) => {
-                            if !args.is_empty() {
-                                Ok(format!("{} = {}({});", res, func, args_str))
-                            } else {
-                                Ok(format!("{} = {}(0, NULL);", res, func))
+                        let fixed_func = if is_builtin {
+                            // Builtin module: convert math__sqrt to tauraro_math_sqrt
+                            format!("tauraro_{}_{}", parts[0], parts[1])
+                        } else {
+                            // User module: convert mymath__square to mymath_square
+                            func.replace("__", "_")
+                        };
+
+                        let actual_args = &args[1..]; // Skip the module argument
+
+                        if actual_args.is_empty() {
+                            match result {
+                                Some(res) => Ok(format!("{} = {}(0, NULL);", res, fixed_func)),
+                                None => Ok(format!("{}(0, NULL);", fixed_func))
                             }
-                        },
-                        None => {
-                            if !args.is_empty() {
-                                Ok(format!("{}({});", func, args_str))
-                            } else {
-                                Ok(format!("{}(0, NULL);", func))
+                        } else {
+                            let arg_list = actual_args.join(", ");
+                            let args_str = format!("{}, (tauraro_value_t*[]){{{}}}", actual_args.len(), arg_list);
+                            match result {
+                                Some(res) => Ok(format!("{} = {}({});", res, fixed_func, args_str)),
+                                None => Ok(format!("{}({});", fixed_func, args_str))
+                            }
+                        }
+                    } else {
+                        // Regular method call (class__method) - uses argc/argv convention
+                        let args_str = if args.is_empty() {
+                            "0, NULL".to_string()
+                        } else {
+                            let arg_list = args.join(", ");
+                            format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
+                        };
+
+                        match result {
+                            Some(res) => {
+                                if !args.is_empty() {
+                                    Ok(format!("{} = {}({});", res, func, args_str))
+                                } else {
+                                    Ok(format!("{} = {}(0, NULL);", res, func))
+                                }
+                            },
+                            None => {
+                                if !args.is_empty() {
+                                    Ok(format!("{}({});", func, args_str))
+                                } else {
+                                    Ok(format!("{}(0, NULL);", func))
+                                }
                             }
                         }
                     }
@@ -461,8 +497,13 @@ impl CTranspiler {
                         }
                     }
                 } else if func.contains("_") {
-                    // Module function (module_function) - call with direct arguments
-                    let args_str = args.join(", ");
+                    // Module function (module_function) - uses argc/argv convention
+                    let args_str = if args.is_empty() {
+                        "0, NULL".to_string()
+                    } else {
+                        let arg_list = args.join(", ");
+                        format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
+                    };
 
                     match result {
                         Some(res) => Ok(format!("{} = {}({});", res, func, args_str)),

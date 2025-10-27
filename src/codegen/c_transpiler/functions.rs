@@ -16,39 +16,39 @@ pub fn generate_function(function: &IRFunction) -> Result<String> {
     // Check if function should return a value
     let returns_value = function_returns_value(function);
 
-    // Function signature
+    // Function signature - use argc/argv convention for compatibility
     if returns_value {
-        func_code.push_str(&format!("tauraro_value_t* {}(", function.name));
+        func_code.push_str(&format!("tauraro_value_t* {}(int argc, tauraro_value_t** argv) {{\n", function.name));
     } else {
-        func_code.push_str(&format!("void {}(", function.name));
+        func_code.push_str(&format!("void {}(int argc, tauraro_value_t** argv) {{\n", function.name));
     }
 
-    // Parameters
-    for (i, param) in function.params.iter().enumerate() {
-        if i > 0 {
-            func_code.push_str(", ");
-        }
-        // Check if parameter has a specific type
-        if let Some(param_type) = function.param_types.get(param) {
-            match param_type {
-                Type::Simple(type_name) if type_name == "int" => {
-                    func_code.push_str(&format!("int64_t {}", param));
+    // Extract parameters from argv array
+    if !function.params.is_empty() {
+        func_code.push_str("    // Extract parameters\n");
+        for (i, param) in function.params.iter().enumerate() {
+            // Check if parameter has a specific type
+            if let Some(param_type) = function.param_types.get(param) {
+                match param_type {
+                    Type::Simple(type_name) if type_name == "int" => {
+                        func_code.push_str(&format!("    int64_t {} = (argc > {}) ? argv[{}]->data.int_val : 0;\n", param, i, i));
+                    }
+                    Type::Simple(type_name) if type_name == "float" => {
+                        func_code.push_str(&format!("    double {} = (argc > {}) ? argv[{}]->data.float_val : 0.0;\n", param, i, i));
+                    }
+                    Type::Simple(type_name) if type_name == "bool" => {
+                        func_code.push_str(&format!("    bool {} = (argc > {}) ? argv[{}]->data.bool_val : false;\n", param, i, i));
+                    }
+                    _ => {
+                        func_code.push_str(&format!("    tauraro_value_t* {} = (argc > {}) ? argv[{}] : NULL;\n", param, i, i));
+                    }
                 }
-                Type::Simple(type_name) if type_name == "float" => {
-                    func_code.push_str(&format!("double {}", param));
-                }
-                Type::Simple(type_name) if type_name == "bool" => {
-                    func_code.push_str(&format!("bool {}", param));
-                }
-                _ => {
-                    func_code.push_str(&format!("tauraro_value_t* {}", param));
-                }
+            } else {
+                func_code.push_str(&format!("    tauraro_value_t* {} = (argc > {}) ? argv[{}] : NULL;\n", param, i, i));
             }
-        } else {
-            func_code.push_str(&format!("tauraro_value_t* {}", param));
         }
+        func_code.push_str("\n");
     }
-    func_code.push_str(") {\n");
 
     // Local variables
     let mut local_vars = HashMap::new();
