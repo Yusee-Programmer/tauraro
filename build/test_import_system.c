@@ -161,8 +161,8 @@ bool tauraro_isinstance_check(tauraro_value_t* object, const char* class_name);
 bool tauraro_issubclass_check(const char* derived, const char* base);
 
 // Builtin function declarations
-tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args);
 tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args);
+tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args);
 
 // Runtime operators
 tauraro_value_t* tauraro_add(tauraro_value_t* left, tauraro_value_t* right);
@@ -588,35 +588,6 @@ bool tauraro_issubclass_check(const char* derived, const char* base) {
 }
 
 // Builtin function implementations
-tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args) {
-    if (argc != 2) return NULL;
-    tauraro_value_t* result = tauraro_value_new();
-    result->type = TAURARO_BOOL;
-    
-    // Check if first argument is an object
-    if (args[0]->type == TAURARO_OBJECT) {
-        tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
-        // Second argument should be a class name string or class reference
-        if (args[1]->type == TAURARO_STRING) {
-            // Compare class name
-            result->data.bool_val = (strcmp(obj->class_name, args[1]->data.str_val) == 0);
-        } else if (args[1]->type == TAURARO_OBJECT) {
-            // Compare with class object
-            tauraro_object_t* class_obj = (tauraro_object_t*)args[1]->data.obj_val;
-            result->data.bool_val = (strcmp(obj->class_name, class_obj->class_name) == 0);
-        } else {
-            // If second argument is not a string or object, treat as class name
-            // This handles cases where class names are passed as variables
-            result->data.bool_val = false;
-        }
-    } else {
-        // For non-objects, compare types directly
-        result->data.bool_val = (args[0]->type == args[1]->type);
-    }
-    
-    return result;
-}
-
 tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args) {
     for (int i = 0; i < argc; i++) {
         if (i > 0) printf(" ");
@@ -662,6 +633,35 @@ tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args) {
     fflush(stdout);
     tauraro_value_t* result = tauraro_value_new();
     result->type = TAURARO_NONE;
+    return result;
+}
+
+tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args) {
+    if (argc != 2) return NULL;
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_BOOL;
+    
+    // Check if first argument is an object
+    if (args[0]->type == TAURARO_OBJECT) {
+        tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
+        // Second argument should be a class name string or class reference
+        if (args[1]->type == TAURARO_STRING) {
+            // Compare class name
+            result->data.bool_val = (strcmp(obj->class_name, args[1]->data.str_val) == 0);
+        } else if (args[1]->type == TAURARO_OBJECT) {
+            // Compare with class object
+            tauraro_object_t* class_obj = (tauraro_object_t*)args[1]->data.obj_val;
+            result->data.bool_val = (strcmp(obj->class_name, class_obj->class_name) == 0);
+        } else {
+            // If second argument is not a string or object, treat as class name
+            // This handles cases where class names are passed as variables
+            result->data.bool_val = false;
+        }
+    } else {
+        // For non-objects, compare types directly
+        result->data.bool_val = (args[0]->type == args[1]->type);
+    }
+    
     return result;
 }
 
@@ -912,14 +912,14 @@ char* tauraro_add_string(char* left, char* right) {
 tauraro_value_t* result;
 
 int main() {
+    tauraro_value_t* arg_0 = NULL;
+    tauraro_value_t* arg_1_method_arg_0 = NULL;
+    tauraro_value_t* arg_1_method_arg_1 = NULL;
+    tauraro_value_t* var_result_temp = NULL;
     tauraro_value_t* method_arg_0 = NULL;
     tauraro_value_t* method_arg_0_method_arg_0 = NULL;
-    tauraro_value_t* arg_0 = NULL;
-    tauraro_value_t* arg_1 = NULL;
-    tauraro_value_t* arg_1_method_arg_1 = NULL;
     tauraro_value_t* temp = NULL;
-    tauraro_value_t* var_result_temp = NULL;
-    tauraro_value_t* arg_1_method_arg_0 = NULL;
+    tauraro_value_t* arg_1 = NULL;
     // Test program with both user-defined and builtin imports
     // Import module: mymath
     // Import module: math

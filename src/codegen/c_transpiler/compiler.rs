@@ -37,19 +37,59 @@ pub fn detect_compilers() -> Vec<String> {
     compilers
 }
 
+/// Compile Rust FFI module to object file
+fn compile_rust_ffi_to_object(module_name: &str, output_dir: &str) -> Result<String> {
+    let rust_source = format!("src/builtins_ffi/{}_ffi.rs", module_name);
+    let object_file = format!("{}/{}_ffi.o", output_dir, module_name);
+
+    // Create output directory if it doesn't exist
+    std::fs::create_dir_all(output_dir)?;
+
+    // Compile Rust to object file using rustc
+    let output = Command::new("rustc")
+        .args(&[
+            "--crate-type", "staticlib",
+            "--emit", "obj",
+            "-O",
+            &rust_source,
+            "-o", &object_file,
+        ])
+        .output();
+
+    match output {
+        Ok(result) => {
+            if result.status.success() {
+                println!("Compiled Rust FFI module '{}' to object file: {}", module_name, object_file);
+                Ok(object_file)
+            } else {
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                Err(anyhow::anyhow!("Failed to compile Rust FFI module: {}", stderr))
+            }
+        }
+        Err(e) => Err(anyhow::anyhow!("Failed to run rustc: {}", e)),
+    }
+}
+
 /// Compile C code to executable using available compilers
 pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> Result<()> {
     // Write C code to temporary file
     let temp_file = format!("{}.c", output_path);
     std::fs::write(&temp_file, c_code)?;
 
-    // Check for builtin module dependencies
+    // Check for builtin module dependencies and compile Rust FFI modules to object files
     let mut builtin_files = Vec::new();
     if c_code.contains("tauraro_math_") {
-        // Check if math builtin module exists
-        let math_builtin = "build/builtin/tauraro_math.c";
-        if std::path::Path::new(math_builtin).exists() {
-            builtin_files.push(math_builtin.to_string());
+        // Compile Rust FFI module to object file
+        match compile_rust_ffi_to_object("math", "build/builtin") {
+            Ok(obj_file) => builtin_files.push(obj_file),
+            Err(e) => {
+                eprintln!("Warning: Failed to compile math FFI module: {}", e);
+                // Fall back to C implementation if it exists
+                let math_c = "build/builtin/tauraro_math.c";
+                if std::path::Path::new(math_c).exists() {
+                    builtin_files.push(math_c.to_string());
+                }
+            }
         }
     }
 
