@@ -16,6 +16,7 @@ pub mod functions;
 pub mod expressions;
 pub mod statements;
 pub mod compiler;
+pub mod imports;
 
 use crate::codegen::{CodeGenerator, CodegenOptions, Target};
 use crate::ir::{IRModule, IRFunction, IRInstruction, IRTypeInfo};
@@ -36,18 +37,80 @@ impl CTranspiler {
         }
     }
 
+    /// Generate C header includes
+    fn generate_headers(&self) -> String {
+        let mut headers = String::new();
+        headers.push_str("#include <stdio.h>\n");
+        headers.push_str("#include <stdlib.h>\n");
+        headers.push_str("#include <string.h>\n");
+        headers.push_str("#include <stdbool.h>\n");
+        headers.push_str("#include <stdint.h>\n");
+        headers.push_str("#include <math.h>\n");
+        headers.push_str("#include <ctype.h>\n");
+        headers.push_str("\n");
+        headers
+    }
+
     /// Generate complete C code from IR module
-    fn generate_c_code(&self, module: IRModule) -> Result<String> {
+    fn generate_c_code(&self, module: IRModule, output_dir: Option<&str>) -> Result<String> {
+        use crate::codegen::c_transpiler::imports::{ImportAnalyzer, ModuleCompiler};
+        use std::path::PathBuf;
+
+        // Analyze imports in the IR module
+        let mut analyzer = ImportAnalyzer::new();
+        analyzer.analyze_ir(&module)?;
+
+        // Use output directory if provided, otherwise use temp directory
+        let build_dir = if let Some(dir) = output_dir {
+            PathBuf::from(dir)
+        } else {
+            std::env::temp_dir().join("tauraro_c_build")
+        };
+        std::fs::create_dir_all(&build_dir)?;
+
+        // Compile user-defined modules
+        let mut module_compiler = ModuleCompiler::new(build_dir.clone());
+        let mut user_module_headers = Vec::new();
+
+        for user_module in analyzer.get_user_modules() {
+            let (_c_path, h_path) = module_compiler.compile_module(user_module)?;
+            user_module_headers.push(h_path);
+        }
+
+        // Get builtin modules (will be linked later)
+        let _builtin_modules = analyzer.get_builtin_modules();
+
         let mut c_code = String::new();
 
         // Add standard headers
         c_code.push_str(&self.generate_headers());
 
-        // Add type definitions
-        c_code.push_str(&types::generate_type_definitions());
+        // Add user module headers
+        for header_path in &user_module_headers {
+            if let Some(header_name) = header_path.file_name() {
+                c_code.push_str(&format!("#include \"{}\"\n", header_name.to_string_lossy()));
+            }
+        }
+        c_code.push_str("\n");
+
+        // Add type definitions (only if not already defined in headers)
+        if user_module_headers.is_empty() {
+            c_code.push_str(&types::generate_type_definitions());
+        } else {
+            // If headers are included, types are already defined there
+            c_code.push_str("#ifndef TAURARO_TYPES_DEFINED\n");
+            c_code.push_str(&types::generate_type_definitions());
+            c_code.push_str("#endif // TAURARO_TYPES_DEFINED\n\n");
+        }
 
         // Add OOP structures (always included since builtins may reference them)
-        c_code.push_str(&oop::generate_oop_structures());
+        if user_module_headers.is_empty() {
+            c_code.push_str(&oop::generate_oop_structures());
+        } else {
+            c_code.push_str("#ifndef TAURARO_OOP_DEFINED\n");
+            c_code.push_str(&oop::generate_oop_structures());
+            c_code.push_str("#endif // TAURARO_OOP_DEFINED\n\n");
+        }
 
         // Add type function declarations
         c_code.push_str(&types::generate_type_function_declarations());
@@ -136,27 +199,13 @@ impl CTranspiler {
         // Generate functions
         for (_name, function) in &module.functions {
             c_code.push_str(&functions::generate_function(function)?);
-            c_code.push_str("\n");
+            c_code.push_str("\n\n");
         }
 
         // Generate main function
         c_code.push_str(&self.generate_main_function(&module)?);
 
         Ok(c_code)
-    }
-
-    /// Generate C header includes
-    fn generate_headers(&self) -> String {
-        let mut headers = String::new();
-        headers.push_str("#include <stdio.h>\n");
-        headers.push_str("#include <stdlib.h>\n");
-        headers.push_str("#include <string.h>\n");
-        headers.push_str("#include <stdbool.h>\n");
-        headers.push_str("#include <stdint.h>\n");
-        headers.push_str("#include <math.h>\n");
-        headers.push_str("#include <ctype.h>\n");
-        headers.push_str("\n");
-        headers
     }
 
     /// Generate main function
@@ -236,6 +285,10 @@ impl CTranspiler {
         use crate::value::Value;
 
         match instruction {
+            IRInstruction::Comment(text) => {
+                // Generate C comment
+                Ok(format!("// {}", text))
+            },
             IRInstruction::LoadConst { value, result } => {
                 match value {
                     Value::Int(i) => {
@@ -291,16 +344,16 @@ impl CTranspiler {
                 }
             }
             IRInstruction::Call { func, args, result } => {
-                let args_str = if args.is_empty() {
-                    "0, NULL".to_string()
-                } else {
-                    let arg_list = args.join(", ");
-                    format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
-                };
-
-                // Check if this is a method call (contains __)
+                // Check what kind of function this is
                 if func.contains("__") {
-                    // Method call
+                    // Method call (class__method) - uses argc/argv convention
+                    let args_str = if args.is_empty() {
+                        "0, NULL".to_string()
+                    } else {
+                        let arg_list = args.join(", ");
+                        format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
+                    };
+
                     match result {
                         Some(res) => {
                             if !args.is_empty() {
@@ -318,7 +371,14 @@ impl CTranspiler {
                         }
                     }
                 } else if func == "tauraro_super_call" {
-                    // Handle super() call
+                    // Handle super() call - uses argc/argv convention
+                    let args_str = if args.is_empty() {
+                        "0, NULL".to_string()
+                    } else {
+                        let arg_list = args.join(", ");
+                        format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
+                    };
+
                     match result {
                         Some(res) => {
                             Ok(format!("{} = tauraro_super_call({});", res, args_str))
@@ -327,8 +387,23 @@ impl CTranspiler {
                             Ok(format!("tauraro_super_call({});", args_str))
                         }
                     }
+                } else if func.contains("_") {
+                    // Module function (module_function) - call with direct arguments
+                    let args_str = args.join(", ");
+
+                    match result {
+                        Some(res) => Ok(format!("{} = {}({});", res, func, args_str)),
+                        None => Ok(format!("{}({});", func, args_str))
+                    }
                 } else {
-                    // Regular function call
+                    // Regular builtin function - uses argc/argv convention, add tauraro_ prefix
+                    let args_str = if args.is_empty() {
+                        "0, NULL".to_string()
+                    } else {
+                        let arg_list = args.join(", ");
+                        format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
+                    };
+
                     match result {
                         Some(res) => Ok(format!("{} = tauraro_{}({});", res, func, args_str)),
                         None => Ok(format!("tauraro_{}({});", func, args_str))
@@ -521,11 +596,153 @@ impl CTranspiler {
 
         false
     }
+
+    /// Generate C code with import system support
+    pub fn generate_with_imports(&self, program: &crate::ast::Program, module: IRModule, output_dir: &str) -> Result<String> {
+        use imports::{ImportAnalyzer, ModuleCompiler};
+        use std::path::PathBuf;
+
+        // Analyze imports in the program
+        let mut analyzer = ImportAnalyzer::new();
+        analyzer.analyze(program)?;
+
+        let output_path = PathBuf::from(output_dir);
+        std::fs::create_dir_all(&output_path)?;
+
+        // Compile user-defined modules
+        let mut module_compiler = ModuleCompiler::new(output_path.clone());
+        let mut user_module_headers = Vec::new();
+
+        for user_module in analyzer.get_user_modules() {
+            let (_c_path, h_path) = module_compiler.compile_module(user_module)?;
+            user_module_headers.push(h_path);
+        }
+
+        // Get builtin modules (will be linked later)
+        let _builtin_modules = analyzer.get_builtin_modules();
+
+        // Generate main C code with includes
+        let mut c_code = String::new();
+
+        // Add standard headers
+        c_code.push_str(&self.generate_headers());
+
+        // Add user module headers
+        for header_path in &user_module_headers {
+            if let Some(header_name) = header_path.file_name() {
+                c_code.push_str(&format!("#include \"{}\"\n", header_name.to_string_lossy()));
+            }
+        }
+        c_code.push_str("\n");
+
+        // Add type definitions
+        c_code.push_str(&types::generate_type_definitions());
+
+        // Add OOP structures
+        c_code.push_str(&oop::generate_oop_structures());
+
+        // Add type function declarations
+        c_code.push_str(&types::generate_type_function_declarations());
+
+        // Add OOP function declarations
+        c_code.push_str(&oop::generate_oop_declarations());
+
+        // Analyze which builtins are used
+        let used_builtins = self.analyze_used_builtins(&module);
+
+        // Add builtin function declarations
+        c_code.push_str(&builtins::generate_builtin_declarations(&used_builtins));
+
+        // Add runtime function declarations
+        c_code.push_str("// Runtime operators\n");
+        c_code.push_str("tauraro_value_t* tauraro_add(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_sub(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_mul(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_div(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_mod(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_eq(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_ne(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_lt(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_le(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_gt(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("tauraro_value_t* tauraro_ge(tauraro_value_t* left, tauraro_value_t* right);\n");
+        c_code.push_str("\n");
+
+        // Add type utility implementations
+        c_code.push_str(&types::generate_type_utility_functions());
+
+        // Add OOP implementations
+        c_code.push_str(&oop::generate_oop_implementations());
+
+        // Add builtin implementations
+        if !used_builtins.is_empty() {
+            c_code.push_str("// Builtin function implementations\n");
+            for builtin in &used_builtins {
+                c_code.push_str(&builtins::generate_builtin_implementation(builtin));
+                c_code.push_str("\n");
+            }
+        }
+
+        // Add runtime operator implementations
+        c_code.push_str(&runtime::generate_runtime_support());
+
+        // Generate functions
+        for (name, function) in &module.functions {
+            c_code.push_str(&functions::generate_function(function)?);
+            c_code.push_str("\n\n");
+        }
+
+        // Generate main function
+        c_code.push_str(&self.generate_main_function(&module)?);
+
+        Ok(c_code)
+    }
+
+    /// Transpile a module (for recursive compilation)
+    pub fn transpile_module(&self, module: &IRModule, module_name: &str) -> Result<String> {
+        let mut c_code = String::new();
+
+        // Add includes
+        c_code.push_str("#include <stdio.h>\n");
+        c_code.push_str("#include <stdlib.h>\n");
+        c_code.push_str("#include <string.h>\n");
+        c_code.push_str("#include <stdbool.h>\n");
+        c_code.push_str("#include <stdint.h>\n");
+        c_code.push_str("#include <math.h>\n\n");
+
+        // Add header include
+        c_code.push_str(&format!("#include \"{}.h\"\n\n", module_name));
+
+        // Add type definitions
+        c_code.push_str(&types::generate_type_definitions());
+
+        // Add OOP if needed
+        if self.uses_oop(module) {
+            c_code.push_str(&oop::generate_oop_structures());
+            c_code.push_str(&oop::generate_oop_implementations());
+        }
+
+        // Generate module functions
+        for (_name, function) in &module.functions {
+            c_code.push_str(&functions::generate_function(function)?);
+            c_code.push_str("\n\n");
+        }
+
+        // Module globals would be generated here
+        c_code.push_str("// Module global variables\n");
+
+        Ok(c_code)
+    }
 }
 
 impl CodeGenerator for CTranspiler {
     fn generate(&self, module: IRModule, options: &CodegenOptions) -> Result<Vec<u8>> {
-        let c_code = self.generate_c_code(module)?;
+        // Extract output directory from output path for header file generation
+        let output_dir = options.output_path.as_ref().and_then(|path| {
+            std::path::Path::new(path).parent().map(|p| p.to_str().unwrap_or("."))
+        });
+
+        let c_code = self.generate_c_code(module, output_dir)?;
 
         // If output path is specified and we want to compile to executable
         if let Some(output_path) = &options.output_path {
