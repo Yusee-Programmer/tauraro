@@ -98,6 +98,10 @@ pub fn generate_instruction(
     param_types: &HashMap<String, Type>,
 ) -> Result<String> {
     match instruction {
+        IRInstruction::Comment(text) => {
+            // Generate C comment
+            Ok(format!("// {}", text))
+        },
         IRInstruction::LoadConst { value, result } => {
             generate_load_const(value, result, local_vars)
         }
@@ -105,7 +109,15 @@ pub fn generate_instruction(
             generate_load_local(name, result, local_vars)
         }
         IRInstruction::StoreLocal { name, value } => {
-            Ok(format!("{} = {};", name, value))
+            // Sanitize variable name to avoid C keywords
+            let sanitized_name = sanitize_c_identifier(name);
+
+            if !local_vars.contains_key(&sanitized_name) {
+                local_vars.insert(sanitized_name.clone(), "tauraro_value_t*".to_string());
+                Ok(format!("tauraro_value_t* {} = {};", sanitized_name, value))
+            } else {
+                Ok(format!("{} = {};", sanitized_name, value))
+            }
         }
         IRInstruction::LoadTypedLocal { name, result, type_info: _ } => {
             generate_load_local(name, result, local_vars)
@@ -232,9 +244,10 @@ fn generate_load_const(value: &Value, result: &str, local_vars: &mut HashMap<Str
 }
 
 fn generate_load_local(name: &str, result: &str, local_vars: &mut HashMap<String, String>) -> Result<String> {
+    let sanitized_name = sanitize_c_identifier(name);
     let unique_result = get_unique_var_name(result, local_vars);
     local_vars.insert(unique_result.clone(), "tauraro_value_t*".to_string());
-    Ok(format!("tauraro_value_t* {} = {};", unique_result, name))
+    Ok(format!("tauraro_value_t* {} = {};", unique_result, sanitized_name))
 }
 
 fn generate_load_global(name: &str, result: &str, local_vars: &mut HashMap<String, String>) -> Result<String> {
@@ -250,7 +263,8 @@ fn generate_binary_op(
     result: &str,
     local_vars: &mut HashMap<String, String>
 ) -> Result<String> {
-    local_vars.insert(result.to_string(), "tauraro_value_t*".to_string());
+    let unique_result = get_unique_var_name(result, local_vars);
+    local_vars.insert(unique_result.clone(), "tauraro_value_t*".to_string());
 
     let op_func = match op {
         crate::ast::BinaryOp::Add => "tauraro_add",
@@ -267,7 +281,7 @@ fn generate_binary_op(
         _ => "tauraro_add"  // Fallback
     };
 
-    Ok(format!("tauraro_value_t* {} = {}({}, {});", result, op_func, left, right))
+    Ok(format!("tauraro_value_t* {} = {}({}, {});", unique_result, op_func, left, right))
 }
 
 fn generate_typed_binary_op(
@@ -372,30 +386,40 @@ fn generate_call(
     match result {
         Some(res) => {
             local_vars.insert(res.clone(), "tauraro_value_t*".to_string());
-            // Check if this is a method call (contains __)
+            // Check what kind of function this is
             if func.contains("__") {
-                // Method call - first argument is self
+                // Method call (class__method) - first argument is self
                 if !args.is_empty() {
                     Ok(format!("tauraro_value_t* {} = {}({});", res, func, args_str))
                 } else {
                     Ok(format!("tauraro_value_t* {} = {}(0, NULL);", res, func))
                 }
+            } else if func.contains("_") {
+                // Module function (module_function) - call directly
+                Ok(format!("tauraro_value_t* {} = {}({});", res, func, args_str))
             } else {
-                // Regular function call
+                // Regular builtin function - add tauraro_ prefix
                 Ok(format!("tauraro_value_t* {} = tauraro_{}({});", res, func, args_str))
             }
         }
         None => {
-            // Check if this is a method call (contains __)
+            // Check what kind of function this is
             if func.contains("__") {
-                // Method call - first argument is self
+                // Method call (class__method)
+                if !args.is_empty() {
+                    Ok(format!("{}({});", func, args_str))
+                } else {
+                    Ok(format!("{}(0, NULL);", func))
+                }
+            } else if func.contains("_") {
+                // Module function (module_function) - call directly
                 if !args.is_empty() {
                     Ok(format!("{}({});", func, args_str))
                 } else {
                     Ok(format!("{}(0, NULL);", func))
                 }
             } else {
-                // Regular function call
+                // Regular builtin function - add tauraro_ prefix
                 Ok(format!("tauraro_{}({});", func, args_str))
             }
         }
@@ -435,14 +459,40 @@ fn generate_object_get_attr(object: &str, attr: &str, result: &str, local_vars: 
 
 /// Get a unique variable name to avoid conflicts
 fn get_unique_var_name(name: &str, local_vars: &HashMap<String, String>) -> String {
-    if local_vars.contains_key(name) {
+    // Sanitize the base name first
+    let sanitized_name = sanitize_c_identifier(name);
+
+    if local_vars.contains_key(&sanitized_name) {
         let mut counter = 1;
-        let mut new_name = format!("{}_{}", name, counter);
+        let mut new_name = format!("{}_{}", sanitized_name, counter);
         while local_vars.contains_key(&new_name) {
             counter += 1;
-            new_name = format!("{}_{}", name, counter);
+            new_name = format!("{}_{}", sanitized_name, counter);
         }
         new_name
+    } else {
+        sanitized_name
+    }
+}
+
+/// Sanitize identifiers to avoid C keywords and invalid characters
+fn sanitize_c_identifier(name: &str) -> String {
+    // List of C keywords that must be avoided
+    const C_KEYWORDS: &[&str] = &[
+        "auto", "break", "case", "char", "const", "continue", "default", "do",
+        "double", "else", "enum", "extern", "float", "for", "goto", "if",
+        "int", "long", "register", "return", "short", "signed", "sizeof", "static",
+        "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while",
+        // C99 keywords
+        "inline", "restrict", "_Bool", "_Complex", "_Imaginary",
+        // C11 keywords
+        "_Alignas", "_Alignof", "_Atomic", "_Generic", "_Noreturn",
+        "_Static_assert", "_Thread_local"
+    ];
+
+    // Check if the name is a C keyword
+    if C_KEYWORDS.contains(&name) {
+        format!("var_{}", name)
     } else {
         name.to_string()
     }
