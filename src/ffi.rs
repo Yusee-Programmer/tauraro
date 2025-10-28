@@ -526,6 +526,29 @@ impl FFIManager {
                 }
             }
 
+            // ShowWindow: (pointer, int) -> int
+            (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32]) => {
+                let hwnd = self.value_to_pointer(&args[0])?;
+                let cmd = self.value_to_int(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_int) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(hwnd, cmd);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // UpdateWindow, DestroyWindow: (pointer) -> int
+            (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer]) => {
+                let hwnd = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(hwnd);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
             // String argument, void return
             (FFIType::Void, &[FFIType::String]) => {
                 let s = self.value_to_string(&args[0])?;
@@ -654,6 +677,47 @@ impl FFIManager {
                     let func: unsafe extern "C" fn(*const c_void, *const c_char, *const c_char, c_int) -> c_int = std::mem::transmute(function.symbol_ptr);
                     let result = func(hwnd, text_cstring.as_ptr(), title_cstring.as_ptr(), style);
                     Ok(Value::Int(result as i64))
+                }
+            }
+
+            // CreateWindowExA: (int, pointer, pointer, int, int, int, int, int, pointer, pointer, pointer, pointer) -> pointer
+            (FFIType::Pointer | FFIType::ConstPointer, params) if params.len() == 12 => {
+                // Extract all 12 parameters
+                let ex_style = self.value_to_int(&args[0])?;
+
+                let class_name = self.value_to_string(&args[1])?;
+                let class_name_cstr = CString::new(class_name)?;
+
+                let window_name = self.value_to_string(&args[2])?;
+                let window_name_cstr = CString::new(window_name)?;
+
+                let style = self.value_to_int(&args[3])?;
+                let x = self.value_to_int(&args[4])?;
+                let y = self.value_to_int(&args[5])?;
+                let width = self.value_to_int(&args[6])?;
+                let height = self.value_to_int(&args[7])?;
+                let parent = self.value_to_pointer(&args[8])?;
+                let menu = self.value_to_pointer(&args[9])?;
+                let instance = self.value_to_pointer(&args[10])?;
+                let param = self.value_to_pointer(&args[11])?;
+
+                unsafe {
+                    let func: unsafe extern "C" fn(
+                        c_int, *const c_char, *const c_char, c_int,
+                        c_int, c_int, c_int, c_int,
+                        *const c_void, *const c_void, *const c_void, *const c_void
+                    ) -> *const c_void = std::mem::transmute(function.symbol_ptr);
+
+                    let result = func(
+                        ex_style,
+                        class_name_cstr.as_ptr(),
+                        window_name_cstr.as_ptr(),
+                        style,
+                        x, y, width, height,
+                        parent, menu, instance, param
+                    );
+
+                    Ok(Value::Int(result as usize as i64))
                 }
             }
 
