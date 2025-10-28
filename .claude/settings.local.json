@@ -89,7 +89,19 @@
       "Bash(cat:*)",
       "Bash(./main_test.exe:*)",
       "Bash(./advanced_test.exe:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(./simple_no_import.exe:*)",
+      "Bash(./build/test_import_system.exe:*)",
+      "Bash(rustc:*)",
+      "Bash(./build/test_import_rust.exe:*)",
+      "Bash(for module in abc asyncio base64 collections copy csv datetime exceptions functools gc hashlib httptools httpx io itertools json logging memory os pickle random re socket sys threading time unittest urllib websockets)",
+      "Bash(do echo \"Compiling $module_ffi.rs...\")",
+      "Bash(echo:*)",
+      "Bash(python:*)",
+      "Bash(for module in base64 datetime io json re)",
+      "Bash(do sed -i 's/^pub enum TauraroType {$/#[derive(PartialEq, Eq)]\\npub enum TauraroType {/g' \"src/builtins_ffi/$module_ffi.rs\")",
+      "Bash(for module in sys os)",
+      "Bash(do sed -i '/^pub enum TauraroType {$/i #[derive(PartialEq, Eq)]' \"src/builtins_ffi/$module_ffi.rs\")"
     ],
     "deny": [],
     "ask": []

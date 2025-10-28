@@ -37,11 +37,100 @@ pub fn detect_compilers() -> Vec<String> {
     compilers
 }
 
+/// Compile Rust FFI module to object file
+fn compile_rust_ffi_to_object(module_name: &str, output_dir: &str) -> Result<String> {
+    let rust_source = format!("src/builtins_ffi/{}_ffi.rs", module_name);
+    let object_file = format!("{}/{}_ffi.o", output_dir, module_name);
+
+    // Create output directory if it doesn't exist
+    std::fs::create_dir_all(output_dir)?;
+
+    // Compile Rust to object file using rustc
+    // Use panic=abort for #![no_std] compatibility
+    let output = Command::new("rustc")
+        .args(&[
+            "--crate-type", "staticlib",
+            "--emit", "obj",
+            "-C", "panic=abort",
+            "-O",
+            &rust_source,
+            "-o", &object_file,
+        ])
+        .output();
+
+    match output {
+        Ok(result) => {
+            if result.status.success() {
+                println!("Compiled Rust FFI module '{}' to object file: {}", module_name, object_file);
+                Ok(object_file)
+            } else {
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                Err(anyhow::anyhow!("Failed to compile Rust FFI module: {}", stderr))
+            }
+        }
+        Err(e) => Err(anyhow::anyhow!("Failed to run rustc: {}", e)),
+    }
+}
+
 /// Compile C code to executable using available compilers
 pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> Result<()> {
     // Write C code to temporary file
     let temp_file = format!("{}.c", output_path);
     std::fs::write(&temp_file, c_code)?;
+
+    // Check for builtin module dependencies and compile Rust FFI modules to object files
+    let mut builtin_files = Vec::new();
+
+    // List of builtin modules to check
+    let builtin_modules = [
+        ("math", "tauraro_math_"),
+        ("sys", "tauraro_sys_"),
+        ("time", "tauraro_time_"),
+        ("random", "tauraro_random_"),
+        ("os", "tauraro_os_"),
+        ("json", "tauraro_json_"),
+        ("re", "tauraro_re_"),
+        ("io", "tauraro_io_"),
+        ("datetime", "tauraro_datetime_"),
+        ("collections", "tauraro_collections_"),
+        ("itertools", "tauraro_itertools_"),
+        ("functools", "tauraro_functools_"),
+        ("threading", "tauraro_threading_"),
+        ("copy", "tauraro_copy_"),
+        ("base64", "tauraro_base64_"),
+        ("hashlib", "tauraro_hashlib_"),
+        ("urllib", "tauraro_urllib_"),
+        ("csv", "tauraro_csv_"),
+        ("logging", "tauraro_logging_"),
+        ("unittest", "tauraro_unittest_"),
+        ("socket", "tauraro_socket_"),
+        ("asyncio", "tauraro_asyncio_"),
+        ("httptools", "tauraro_httptools_"),
+        ("websockets", "tauraro_websockets_"),
+        ("httpx", "tauraro_httpx_"),
+        ("memory", "tauraro_memory_"),
+        ("gc", "tauraro_gc_"),
+        ("exceptions", "tauraro_exceptions_"),
+        ("abc", "tauraro_abc_"),
+        ("pickle", "tauraro_pickle_"),
+    ];
+
+    for (module_name, prefix) in &builtin_modules {
+        if c_code.contains(prefix) {
+            // Compile Rust FFI module to object file
+            match compile_rust_ffi_to_object(module_name, "build/builtin") {
+                Ok(obj_file) => builtin_files.push(obj_file),
+                Err(e) => {
+                    eprintln!("Warning: Failed to compile {} FFI module: {}", module_name, e);
+                    // Fall back to C implementation if it exists
+                    let fallback_c = format!("build/builtin/tauraro_{}.c", module_name);
+                    if std::path::Path::new(&fallback_c).exists() {
+                        builtin_files.push(fallback_c);
+                    }
+                }
+            }
+        }
+    }
 
     // Detect available compilers
     let compilers = detect_compilers();
@@ -63,8 +152,12 @@ pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> 
     for compiler in &compilers {
         let output = match compiler.as_str() {
             "gcc" | "clang" => {
+                let mut args = vec![temp_file.as_str()];
+                args.extend(builtin_files.iter().map(|s| s.as_str()));
+                args.extend(&["-o", output_path, opt_flag, "-lm"]);
+
                 Command::new(compiler)
-                    .args(&[&temp_file, "-o", output_path, opt_flag, "-lm"])
+                    .args(&args)
                     .output()
             }
             "clang-cl" => {

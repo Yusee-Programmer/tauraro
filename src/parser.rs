@@ -248,7 +248,22 @@ impl Parser {
             Token::KwTry => self.try_statement(),
             Token::KwRaise => self.raise_statement(),
             Token::KwWith => self.with_statement(),
-            Token::KwMatch => self.match_statement(),
+            Token::KwMatch => {
+                // Check if this is a keyword being used as an identifier in assignment
+                if self.is_keyword_assignment() {
+                    // Treat as expression/assignment
+                    let expr = self.expression()?;
+                    if self.match_token(&[Token::Assign]) {
+                        self.variable_def(expr)
+                    } else {
+                        // Optional semicolon or newline for expression statements
+                        self.match_token(&[Token::Semicolon, Token::Newline]);
+                        Ok(Statement::Expression(expr))
+                    }
+                } else {
+                    self.match_statement()
+                }
+            },
             Token::KwDel => self.del_statement(),
             Token::KwAssert => self.assert_statement(),
             Token::KwGlobal => self.global_statement(),
@@ -1129,6 +1144,16 @@ impl Parser {
                 Token::Float(n) => Ok(Expr::Literal(Literal::Float(n))),
                 _ => unreachable!(),
             }
+        } else if matches!(self.peek().token, Token::BytesLit(_)) {
+            // Consume the bytes token first
+            match self.advance().token.clone() {
+                Token::BytesLit(s) => {
+                    // Convert string to bytes - for now, just wrap in Bytes literal
+                    // In a more complete implementation, we'd convert to actual byte values
+                    Ok(Expr::Literal(Literal::Bytes(s.into_bytes())))
+                }
+                _ => unreachable!(),
+            }
         } else if matches!(self.peek().token, Token::StringLit(_)) || matches!(self.peek().token, Token::FString(_)) {
             // Consume the string token first
             match self.advance().token.clone() {
@@ -1152,6 +1177,36 @@ impl Parser {
                 Token::Identifier(name) => Ok(Expr::Identifier(name)),
                 _ => unreachable!(),
             }
+        } else if self.is_keyword_as_identifier() {
+            // Allow keywords to be used as identifiers (e.g., match = value)
+            let name = match &self.peek().token {
+                Token::KwMatch => "match".to_string(),
+                Token::KwClass => "class".to_string(),
+                Token::KwIf => "if".to_string(),
+                Token::KwElse => "else".to_string(),
+                Token::KwFor => "for".to_string(),
+                Token::KwWhile => "while".to_string(),
+                Token::KwReturn => "return".to_string(),
+                Token::KwBreak => "break".to_string(),
+                Token::KwContinue => "continue".to_string(),
+                Token::KwImport => "import".to_string(),
+                Token::KwFrom => "from".to_string(),
+                Token::KwAs => "as".to_string(),
+                Token::KwTry => "try".to_string(),
+                Token::KwExcept => "except".to_string(),
+                Token::KwFinally => "finally".to_string(),
+                Token::KwRaise => "raise".to_string(),
+                Token::KwWith => "with".to_string(),
+                Token::KwPass => "pass".to_string(),
+                Token::KwIn => "in".to_string(),
+                Token::KwIs => "is".to_string(),
+                Token::And => "and".to_string(),
+                Token::Or => "or".to_string(),
+                Token::Not => "not".to_string(),
+                _ => format!("{:?}", self.peek().token),
+            };
+            self.advance();
+            Ok(Expr::Identifier(name))
         } else if self.match_token(&[Token::LParen]) {
             // Check for empty tuple
             if self.match_token(&[Token::RParen]) {
@@ -1355,6 +1410,20 @@ impl Parser {
                 found: format!("{:?}", self.peek().token),
             }),
         }
+    }
+
+    /// Consume a module path that can include dots (e.g., urllib.parse)
+    fn consume_module_path(&mut self) -> Result<String, ParseError> {
+        let mut path = self.consume_identifier()?;
+
+        // Handle dotted module names like urllib.parse
+        while self.match_token(&[Token::Dot]) {
+            let next = self.consume_identifier()?;
+            path.push('.');
+            path.push_str(&next);
+        }
+
+        Ok(path)
     }
 
     /// Check if the current token is a number (Int or Float)
@@ -1789,7 +1858,7 @@ impl Parser {
 
     fn import_statement(&mut self) -> Result<Statement, ParseError> {
         self.consume(Token::KwImport, "Expected 'import' or 'shigoda'")?;
-        let module = self.consume_identifier()?;
+        let module = self.consume_module_path()?;
         let alias = if self.match_token(&[Token::KwAs]) {
             Some(self.consume_identifier()?)
         } else {
@@ -1801,7 +1870,7 @@ impl Parser {
 
     fn from_import_statement(&mut self) -> Result<Statement, ParseError> {
         self.consume(Token::KwFrom, "Expected 'from' or 'daga'")?;
-        let module = self.consume_identifier()?;
+        let module = self.consume_module_path()?;
         self.consume(Token::KwImport, "Expected 'import' or 'shigoda'")?;
         
         let mut names = Vec::new();

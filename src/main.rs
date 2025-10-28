@@ -15,6 +15,7 @@ mod codegen;
 mod value;
 mod builtins;
 mod builtins_super;
+// Note: builtins_ffi is compiled separately for C FFI, not included in main binary
 mod vm;
 mod runtime;
 mod ffi;

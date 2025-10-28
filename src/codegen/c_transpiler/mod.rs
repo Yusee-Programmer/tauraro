@@ -70,9 +70,9 @@ impl CTranspiler {
             }
             "sys" => {
                 decls.push_str("// Sys module - extern declarations\n");
-                decls.push_str("extern tauraro_value_t* tauraro_sys_platform;\n");
-                decls.push_str("extern tauraro_value_t* tauraro_sys_version;\n");
-                decls.push_str("extern tauraro_value_t* tauraro_sys_exit(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern const char* tauraro_sys_platform;\n");
+                decls.push_str("extern const char* tauraro_sys_version;\n");
+                decls.push_str("extern void tauraro_sys_exit(int argc, tauraro_value_t** argv) __attribute__((noreturn));\n");
             }
             "os" => {
                 decls.push_str("// OS module - extern declarations\n");
@@ -88,6 +88,262 @@ impl CTranspiler {
                 decls.push_str("// Random module - extern declarations\n");
                 decls.push_str("extern tauraro_value_t* tauraro_random_random(int argc, tauraro_value_t** argv);\n");
                 decls.push_str("extern tauraro_value_t* tauraro_random_randint(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_random_seed(int argc, tauraro_value_t** argv);\n");
+            }
+            "json" => {
+                decls.push_str("// JSON module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_json_loads(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_json_dumps(int argc, tauraro_value_t** argv);\n");
+            }
+            "re" => {
+                decls.push_str("// Regex module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_re_search(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_re_match(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_re_findall(int argc, tauraro_value_t** argv);\n");
+            }
+            "io" => {
+                decls.push_str("// IO module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_io_open(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_io_read(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_io_write(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_io_close(int argc, tauraro_value_t** argv);\n");
+            }
+            "datetime" => {
+                decls.push_str("// Datetime module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_datetime_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_datetime_now(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_datetime_utcnow(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_date_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_date_today(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_time_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_timedelta_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern long long tauraro_datetime_MINYEAR;\n");
+                decls.push_str("extern long long tauraro_datetime_MAXYEAR;\n");
+            }
+            "collections" => {
+                decls.push_str("// Collections module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_collections_deque(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_collections_counter(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_collections_defaultdict(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_collections_highperflist(int argc, tauraro_value_t** argv);\n");
+            }
+            "itertools" => {
+                decls.push_str("// Itertools module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_chain(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_combinations(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_permutations(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_product(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_repeat(int argc, tauraro_value_t** argv);\n");
+            }
+            "functools" => {
+                decls.push_str("// Functools module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_functools_partial(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_functools_reduce(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_functools_lru_cache(int argc, tauraro_value_t** argv);\n");
+            }
+            "threading" => {
+                decls.push_str("// Threading module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_threading_thread_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_threading_lock_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_threading_rlock_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_threading_semaphore_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_threading_event_new(int argc, tauraro_value_t** argv);\n");
+            }
+            "copy" => {
+                decls.push_str("// Copy module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_copy_copy(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_copy_deepcopy(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_copy_error_new(int argc, tauraro_value_t** argv);\n");
+            }
+            "base64" => {
+                decls.push_str("// Base64 module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_b64encode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_b64decode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_standard_b64encode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_standard_b64decode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_urlsafe_b64encode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_urlsafe_b64decode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_b32encode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_b32decode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_b16encode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_b16decode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_b85encode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_b85decode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_encode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_decode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_encodebytes(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_base64_decodebytes(int argc, tauraro_value_t** argv);\n");
+            }
+            "hashlib" => {
+                decls.push_str("// Hashlib module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_hashlib_md5(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_hashlib_sha1(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_hashlib_sha256(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_hashlib_sha512(int argc, tauraro_value_t** argv);\n");
+            }
+            "urllib" => {
+                decls.push_str("// Urllib module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_urllib_parse_quote(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_urllib_parse_unquote(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_urllib_parse_urlencode(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_urllib_request_urlopen(int argc, tauraro_value_t** argv);\n");
+            }
+            "csv" => {
+                decls.push_str("// CSV module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_reader(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_writer(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_dictreader(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_dictwriter(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_sniffer_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_register_dialect(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_unregister_dialect(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_get_dialect(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_list_dialects(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_field_size_limit(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_csv_error_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern long long tauraro_csv_QUOTE_ALL;\n");
+                decls.push_str("extern long long tauraro_csv_QUOTE_MINIMAL;\n");
+                decls.push_str("extern long long tauraro_csv_QUOTE_NONNUMERIC;\n");
+                decls.push_str("extern long long tauraro_csv_QUOTE_NONE;\n");
+            }
+            "logging" => {
+                decls.push_str("// Logging module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_logging_getlogger(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_logging_basicconfig(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_logging_debug(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_logging_info(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_logging_warning(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_logging_error(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_logging_critical(int argc, tauraro_value_t** argv);\n");
+            }
+            "unittest" => {
+                decls.push_str("// Unittest module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_unittest_testcase_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_unittest_testsuite_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_unittest_testloader_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_unittest_texttestrunner_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_unittest_main(int argc, tauraro_value_t** argv);\n");
+            }
+            "socket" => {
+                decls.push_str("// Socket module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_socket_socket_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_socket_gethostname(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_socket_gethostbyname(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_socket_inet_aton(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_socket_inet_ntoa(int argc, tauraro_value_t** argv);\n");
+            }
+            "asyncio" => {
+                decls.push_str("// Asyncio module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_get_event_loop(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_new_event_loop(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_set_event_loop(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_run(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_run_until_complete(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_create_task(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_gather(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_wait_for(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_shield(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_wait(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_sleep(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_iscoroutine(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_iscoroutinefunction(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_isfuture(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_lock_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_event_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_semaphore_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_queue_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_cancelled_error_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_timeout_error_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_asyncio_invalid_state_error_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern const char* tauraro_asyncio_FIRST_COMPLETED;\n");
+                decls.push_str("extern const char* tauraro_asyncio_FIRST_EXCEPTION;\n");
+                decls.push_str("extern const char* tauraro_asyncio_ALL_COMPLETED;\n");
+            }
+            "httptools" => {
+                decls.push_str("// Httptools module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_httptools_request_parser_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_httptools_response_parser_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_httptools_parse_url(int argc, tauraro_value_t** argv);\n");
+            }
+            "websockets" => {
+                decls.push_str("// Websockets module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_websockets_connect(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_websockets_serve(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_websockets_send(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_websockets_recv(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_websockets_close(int argc, tauraro_value_t** argv);\n");
+            }
+            "httpx" => {
+                decls.push_str("// Httpx module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_httpx_get(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_httpx_post(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_httpx_put(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_httpx_delete(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_httpx_client_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_httpx_asyncclient_new(int argc, tauraro_value_t** argv);\n");
+            }
+            "memory" => {
+                decls.push_str("// Memory module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_memory_get_usage(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_memory_get_peak(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_memory_gc_collect(int argc, tauraro_value_t** argv);\n");
+            }
+            "gc" => {
+                decls.push_str("// GC module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_gc_collect(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_gc_enable(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_gc_disable(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_gc_isenabled(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_gc_get_stats(int argc, tauraro_value_t** argv);\n");
+            }
+            "exceptions" => {
+                decls.push_str("// Exceptions module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_exception_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_valueerror_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_typeerror_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_runtimeerror_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_importerror_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_keyerror_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_indexerror_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_attributeerror_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_nameerror_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_ioerror_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_oserror_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_exceptions_zerodivisionerror_new(int argc, tauraro_value_t** argv);\n");
+            }
+            "abc" => {
+                decls.push_str("// ABC module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_abc_abcmeta_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_abc_abc_new(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_abc_abstractmethod(int argc, tauraro_value_t** argv);\n");
+            }
+            "pickle" => {
+                decls.push_str("// Pickle module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_pickle_dumps(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_pickle_loads(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_pickle_dump(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_pickle_load(int argc, tauraro_value_t** argv);\n");
+            }
+            "itertools" => {
+                decls.push_str("// Itertools module - extern declarations\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_count(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_cycle(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_repeat(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_accumulate(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_chain(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_compress(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_dropwhile(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_filterfalse(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_groupby(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_islice(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_starmap(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_takewhile(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_tee(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_zip_longest(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_product(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_permutations(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_combinations(int argc, tauraro_value_t** argv);\n");
+                decls.push_str("extern tauraro_value_t* tauraro_itertools_combinations_with_replacement(int argc, tauraro_value_t** argv);\n");
             }
             _ => {
                 decls.push_str(&format!("// {} module - extern declarations\n", module_name));
@@ -149,23 +405,6 @@ impl CTranspiler {
         // Add standard headers
         c_code.push_str(&self.generate_headers());
 
-        // Add user module headers
-        for header_path in &user_module_headers {
-            if let Some(header_name) = header_path.file_name() {
-                c_code.push_str(&format!("#include \"{}\"\n", header_name.to_string_lossy()));
-            }
-        }
-        c_code.push_str("\n");
-
-        // Add extern declarations for builtin modules
-        if !builtin_modules.is_empty() {
-            c_code.push_str("// Extern declarations for builtin modules (implemented in Rust)\n");
-            for builtin in builtin_modules {
-                c_code.push_str(&self.generate_builtin_extern_declarations(&builtin.name));
-            }
-            c_code.push_str("\n");
-        }
-
         // Add type definitions (only if not already defined in headers)
         if user_module_headers.is_empty() {
             c_code.push_str(&types::generate_type_definitions());
@@ -183,6 +422,23 @@ impl CTranspiler {
             c_code.push_str("#ifndef TAURARO_OOP_DEFINED\n");
             c_code.push_str(&oop::generate_oop_structures());
             c_code.push_str("#endif // TAURARO_OOP_DEFINED\n\n");
+        }
+
+        // Add user module headers (after types so they can use tauraro_value_t)
+        for header_path in &user_module_headers {
+            if let Some(header_name) = header_path.file_name() {
+                c_code.push_str(&format!("#include \"{}\"\n", header_name.to_string_lossy()));
+            }
+        }
+        c_code.push_str("\n");
+
+        // Add extern declarations for builtin modules (after types are defined)
+        if !builtin_modules.is_empty() {
+            c_code.push_str("// Extern declarations for builtin modules (implemented in Rust)\n");
+            for builtin in builtin_modules {
+                c_code.push_str(&self.generate_builtin_extern_declarations(&builtin.name));
+            }
+            c_code.push_str("\n");
         }
 
         // Add type function declarations
@@ -419,27 +675,63 @@ impl CTranspiler {
             IRInstruction::Call { func, args, result } => {
                 // Check what kind of function this is
                 if func.contains("__") {
-                    // Method call (class__method) - uses argc/argv convention
-                    let args_str = if args.is_empty() {
-                        "0, NULL".to_string()
-                    } else {
-                        let arg_list = args.join(", ");
-                        format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
-                    };
+                    // Could be a method call (class__method) or module function (module__function)
+                    // Module functions from imports should use single underscore and skip first arg
+                    // Check if this looks like a module function call
+                    if !args.is_empty() && args[0].chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                        // Likely a module function call: module__function(module, args...)
+                        // Check if it's a builtin module
+                        let parts: Vec<&str> = func.split("__").collect();
+                        let is_builtin = parts.len() == 2 && matches!(parts[0],
+                            "math" | "sys" | "os" | "time" | "random" | "json" | "re" |
+                            "datetime" | "collections" | "itertools" | "functools");
 
-                    match result {
-                        Some(res) => {
-                            if !args.is_empty() {
-                                Ok(format!("{} = {}({});", res, func, args_str))
-                            } else {
-                                Ok(format!("{} = {}(0, NULL);", res, func))
+                        let fixed_func = if is_builtin {
+                            // Builtin module: convert math__sqrt to tauraro_math_sqrt
+                            format!("tauraro_{}_{}", parts[0], parts[1])
+                        } else {
+                            // User module: convert mymath__square to mymath_square
+                            func.replace("__", "_")
+                        };
+
+                        let actual_args = &args[1..]; // Skip the module argument
+
+                        if actual_args.is_empty() {
+                            match result {
+                                Some(res) => Ok(format!("{} = {}(0, NULL);", res, fixed_func)),
+                                None => Ok(format!("{}(0, NULL);", fixed_func))
                             }
-                        },
-                        None => {
-                            if !args.is_empty() {
-                                Ok(format!("{}({});", func, args_str))
-                            } else {
-                                Ok(format!("{}(0, NULL);", func))
+                        } else {
+                            let arg_list = actual_args.join(", ");
+                            let args_str = format!("{}, (tauraro_value_t*[]){{{}}}", actual_args.len(), arg_list);
+                            match result {
+                                Some(res) => Ok(format!("{} = {}({});", res, fixed_func, args_str)),
+                                None => Ok(format!("{}({});", fixed_func, args_str))
+                            }
+                        }
+                    } else {
+                        // Regular method call (class__method) - uses argc/argv convention
+                        let args_str = if args.is_empty() {
+                            "0, NULL".to_string()
+                        } else {
+                            let arg_list = args.join(", ");
+                            format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
+                        };
+
+                        match result {
+                            Some(res) => {
+                                if !args.is_empty() {
+                                    Ok(format!("{} = {}({});", res, func, args_str))
+                                } else {
+                                    Ok(format!("{} = {}(0, NULL);", res, func))
+                                }
+                            },
+                            None => {
+                                if !args.is_empty() {
+                                    Ok(format!("{}({});", func, args_str))
+                                } else {
+                                    Ok(format!("{}(0, NULL);", func))
+                                }
                             }
                         }
                     }
@@ -461,8 +753,13 @@ impl CTranspiler {
                         }
                     }
                 } else if func.contains("_") {
-                    // Module function (module_function) - call with direct arguments
-                    let args_str = args.join(", ");
+                    // Module function (module_function) - uses argc/argv convention
+                    let args_str = if args.is_empty() {
+                        "0, NULL".to_string()
+                    } else {
+                        let arg_list = args.join(", ");
+                        format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
+                    };
 
                     match result {
                         Some(res) => Ok(format!("{} = {}({});", res, func, args_str)),
