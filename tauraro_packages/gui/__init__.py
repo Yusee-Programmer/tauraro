@@ -34,39 +34,44 @@ UpdateWindow = define_function("user32.dll", "UpdateWindow", "int", ["pointer"])
 DestroyWindow = define_function("user32.dll", "DestroyWindow", "int", ["pointer"])
 GetModuleHandleA = define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
 
-# Helper class for creating Windows
-class Window:
-    def __init__(self, title, width, height):
-        self.title = title
-        self.width = width
-        self.height = height
-        self.x = CW_USEDEFAULT
-        self.y = CW_USEDEFAULT
-        self.hwnd = None
-        self.class_name = "TauraroWindowClass"
+# Helper functions for window management
+def create_window(title, width, height):
+    # Create a native Windows window and return its handle
+    h_instance = GetModuleHandleA(None)
+    style = WS_OVERLAPPEDWINDOW | WS_VISIBLE
+    x = CW_USEDEFAULT
+    y = CW_USEDEFAULT
 
-    def create(self):
-        h_instance = GetModuleHandleA(None)
-        style = WS_OVERLAPPEDWINDOW | WS_VISIBLE
-        args = [0, "STATIC", self.title, style, self.x, self.y, self.width, self.height, None, None, h_instance, None]
-        self.hwnd = CreateWindowExA(*args)
-        if self.hwnd == None:
-            print("Failed to create window")
-        return self.hwnd
+    hwnd = CreateWindowExA(0, "STATIC", title, style, x, y, width, height, None, None, h_instance, None)
 
-    def show(self):
-        if self.hwnd:
-            ShowWindow(self.hwnd, SW_SHOW)
-            UpdateWindow(self.hwnd)
+    if hwnd == None:
+        print("Failed to create window")
+        return None
 
-    def hide(self):
-        if self.hwnd:
-            ShowWindow(self.hwnd, SW_HIDE)
+    return hwnd
 
-    def destroy(self):
-        if self.hwnd:
-            DestroyWindow(self.hwnd)
-            self.hwnd = None
+def show_window(hwnd):
+    # Show a window
+    if hwnd:
+        ShowWindow(hwnd, SW_SHOW)
+        UpdateWindow(hwnd)
+        return True
+    return False
+
+def hide_window(hwnd):
+    # Hide a window
+    if hwnd:
+        ShowWindow(hwnd, SW_HIDE)
+        return True
+    return False
+
+def destroy_window(hwnd):
+    # Destroy a window
+    if hwnd:
+        DestroyWindow(hwnd)
+        return True
+    return False
 
 def message_box(text, title, style):
+    # Display a Windows message box
     return MessageBoxA(None, text, title, style)
