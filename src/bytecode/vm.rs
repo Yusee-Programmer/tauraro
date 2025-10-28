@@ -91,6 +91,9 @@ impl SuperBytecodeVM {
             globals.insert(name.clone(), RcValue::new(value.clone()));
         }
 
+        // Note: FFI builtins are automatically added through builtins::init_builtins()
+        // when the 'ffi' feature is enabled
+
         Self {
             frames: Vec::new(),
             builtins,
@@ -4050,6 +4053,31 @@ impl SuperBytecodeVM {
                 // Return the object instance for cases where there's no __init__ or __init__ is not handled above
                 Ok(instance)
             }
+            #[cfg(feature = "ffi")]
+            #[cfg(feature = "ffi")]
+            Value::Object { class_name, fields, .. } if class_name == "FFIFunction" => {
+                // Handle FFI function calls
+                // Check if this is an FFI callable
+                if let Some(Value::Bool(true)) = fields.get("__ffi_callable__") {
+                    // Extract library and function names
+                    let library_name = match fields.get("__ffi_library__") {
+                        Some(Value::Str(s)) => s.clone(),
+                        _ => return Err(anyhow!("FFI function missing library name")),
+                    };
+
+                    let function_name = match fields.get("__ffi_function__") {
+                        Some(Value::Str(s)) => s.clone(),
+                        _ => return Err(anyhow!("FFI function missing function name")),
+                    };
+
+                    // Call the FFI function through the global manager
+                    let manager = crate::builtins::GLOBAL_FFI_MANAGER.lock().unwrap();
+                    let result = manager.call_external_function(&library_name, &function_name, args.clone())?;
+                    Ok(result)
+                } else {
+                    Err(anyhow!("Object is not callable"))
+                }
+            }
             Value::Object {
                 class_name,
                 fields,
@@ -4141,7 +4169,7 @@ impl SuperBytecodeVM {
                                 // In a full implementation, we would look up the class and find its methods
                                 // For now, we'll just continue searching
                             }
-                            
+
                             // If not found in MRO, try to call it as a method on the object
                             let mut method_args = vec![*object.clone()];
                             method_args.extend(args);
@@ -4151,6 +4179,37 @@ impl SuperBytecodeVM {
                     }
                     _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.type_name()))
                 }
+            }
+            #[cfg(feature = "ffi")]
+            Value::Object { class_name, fields, .. } if class_name == "FFIFunction" => {
+                // Handle FFI function calls
+                // Check if this is an FFI callable
+                if let Some(Value::Bool(true)) = fields.get("__ffi_callable__") {
+                    // Extract library and function names
+                    let library_name = match fields.get("__ffi_library__") {
+                        Some(Value::Str(s)) => s.clone(),
+                        _ => return Err(anyhow!("FFI function missing library name")),
+                    };
+
+                    let function_name = match fields.get("__ffi_function__") {
+                        Some(Value::Str(s)) => s.clone(),
+                        _ => return Err(anyhow!("FFI function missing function name")),
+                    };
+
+                    // Call the FFI function through the global manager
+                    let manager = crate::builtins::GLOBAL_FFI_MANAGER.lock().unwrap();
+                    let result = manager.call_external_function(&library_name, &function_name, args)?;
+                    Ok(result)
+                } else {
+                    Err(anyhow!("Object is not callable"))
+                }
+            }
+            #[cfg(feature = "ffi")]
+            Value::ExternFunction { library_name, name, .. } => {
+                // Call the FFI function through the global manager
+                let manager = crate::builtins::GLOBAL_FFI_MANAGER.lock().unwrap();
+                let result = manager.call_external_function(&library_name, &name, args.clone())?;
+                Ok(result)
             }
             _ => {
                 Err(anyhow!("'{}' object is not callable", func_value.type_name()))
