@@ -166,6 +166,11 @@ pub enum Token {
     #[regex(r"[0-9]+[eE][+-]?[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
     Float(f64),
 
+    // Bytes literals (must come before string literals to take precedence)
+    #[regex(r#"b"([^"\\]|\\.)*""#, |lex| unescape_string(&lex.slice()[1..]))]
+    #[regex(r#"b'([^'\\]|\\.)*'"#, |lex| unescape_string(&lex.slice()[1..]))]
+    BytesLit(String),
+
     // String literals with various formats
     #[regex(r#""([^"\\]|\\.)*""#, |lex| unescape_string(lex.slice()))]
     #[regex(r#"'([^'\\]|\\.)*'"#, |lex| unescape_string(lex.slice()))]
@@ -560,6 +565,7 @@ impl fmt::Display for Token {
             Token::None => write!(f, "none"),
             Token::Int(n) => write!(f, "{}", n),
             Token::Float(n) => write!(f, "{}", n),
+            Token::BytesLit(s) => write!(f, "b\"{}\"", s),
             Token::StringLit(s) => write!(f, "\"{}\"", s),
             Token::FString(s) => write!(f, "f\"{}\"", s),
             Token::Identifier(s) => write!(f, "{}", s),
