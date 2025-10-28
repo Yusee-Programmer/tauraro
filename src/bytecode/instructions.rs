@@ -71,6 +71,8 @@ pub enum OpCode {
     CompareLessEqualRR, // Register-Register less than or equal comparison
     CompareGreaterRR,   // Register-Register greater than comparison
     CompareGreaterEqualRR, // Register-Register greater than or equal comparison
+    CompareInRR,        // Register-Register membership test (in)
+    CompareNotInRR,     // Register-Register non-membership test (not in)
     
     // Exception handling
     SetupExcept,    // Setup exception handler block
