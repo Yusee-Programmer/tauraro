@@ -629,6 +629,23 @@ impl FFIManager {
                 Ok(Value::None)
             }
 
+            // MessageBoxA: (pointer, pointer, pointer, int) -> int
+            (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer | FFIType::String, FFIType::Pointer | FFIType::ConstPointer | FFIType::String, FFIType::Int | FFIType::Int32]) => {
+                let hwnd = self.value_to_pointer(&args[0])?;
+                let text = self.value_to_string(&args[1])?;
+                let title = self.value_to_string(&args[2])?;
+                let style = self.value_to_int(&args[3])?;
+
+                let text_cstring = CString::new(text)?;
+                let title_cstring = CString::new(title)?;
+
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_char, *const c_char, c_int) -> c_int = std::mem::transmute(function.symbol_ptr);
+                    let result = func(hwnd, text_cstring.as_ptr(), title_cstring.as_ptr(), style);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
             _ => {
                 Err(anyhow!(
                     "Unsupported function signature: {:?} with {} parameters",
@@ -789,6 +806,15 @@ impl FFIManager {
             Value::Float(f) => Ok(f.to_string()),
             Value::Bool(b) => Ok(b.to_string()),
             _ => Err(anyhow!("Cannot convert {:?} to string", value)),
+        }
+    }
+
+    /// Convert Tauraro Value to pointer (for NULL or integer pointers)
+    fn value_to_pointer(&self, value: &Value) -> Result<*const c_void> {
+        match value {
+            Value::None => Ok(std::ptr::null()),
+            Value::Int(i) => Ok(*i as usize as *const c_void),
+            _ => Err(anyhow!("Cannot convert {:?} to pointer", value)),
         }
     }
 
