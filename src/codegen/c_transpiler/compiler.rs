@@ -80,16 +80,53 @@ pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> 
 
     // Check for builtin module dependencies and compile Rust FFI modules to object files
     let mut builtin_files = Vec::new();
-    if c_code.contains("tauraro_math_") {
-        // Compile Rust FFI module to object file
-        match compile_rust_ffi_to_object("math", "build/builtin") {
-            Ok(obj_file) => builtin_files.push(obj_file),
-            Err(e) => {
-                eprintln!("Warning: Failed to compile math FFI module: {}", e);
-                // Fall back to C implementation if it exists
-                let math_c = "build/builtin/tauraro_math.c";
-                if std::path::Path::new(math_c).exists() {
-                    builtin_files.push(math_c.to_string());
+
+    // List of builtin modules to check
+    let builtin_modules = [
+        ("math", "tauraro_math_"),
+        ("sys", "tauraro_sys_"),
+        ("time", "tauraro_time_"),
+        ("random", "tauraro_random_"),
+        ("os", "tauraro_os_"),
+        ("json", "tauraro_json_"),
+        ("re", "tauraro_re_"),
+        ("io", "tauraro_io_"),
+        ("datetime", "tauraro_datetime_"),
+        ("collections", "tauraro_collections_"),
+        ("itertools", "tauraro_itertools_"),
+        ("functools", "tauraro_functools_"),
+        ("threading", "tauraro_threading_"),
+        ("copy", "tauraro_copy_"),
+        ("base64", "tauraro_base64_"),
+        ("hashlib", "tauraro_hashlib_"),
+        ("urllib", "tauraro_urllib_"),
+        ("csv", "tauraro_csv_"),
+        ("logging", "tauraro_logging_"),
+        ("unittest", "tauraro_unittest_"),
+        ("socket", "tauraro_socket_"),
+        ("asyncio", "tauraro_asyncio_"),
+        ("httptools", "tauraro_httptools_"),
+        ("websockets", "tauraro_websockets_"),
+        ("httpx", "tauraro_httpx_"),
+        ("memory", "tauraro_memory_"),
+        ("gc", "tauraro_gc_"),
+        ("exceptions", "tauraro_exceptions_"),
+        ("abc", "tauraro_abc_"),
+        ("pickle", "tauraro_pickle_"),
+    ];
+
+    for (module_name, prefix) in &builtin_modules {
+        if c_code.contains(prefix) {
+            // Compile Rust FFI module to object file
+            match compile_rust_ffi_to_object(module_name, "build/builtin") {
+                Ok(obj_file) => builtin_files.push(obj_file),
+                Err(e) => {
+                    eprintln!("Warning: Failed to compile {} FFI module: {}", module_name, e);
+                    // Fall back to C implementation if it exists
+                    let fallback_c = format!("build/builtin/tauraro_{}.c", module_name);
+                    if std::path::Path::new(&fallback_c).exists() {
+                        builtin_files.push(fallback_c);
+                    }
                 }
             }
         }
