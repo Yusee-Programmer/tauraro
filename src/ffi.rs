@@ -515,6 +515,17 @@ impl FFIManager {
                 Ok(Value::None)
             }
 
+            // Pointer argument, pointer return (e.g., GetModuleHandleA)
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg_ptr = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> *const c_void =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg_ptr);
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
             // String argument, void return
             (FFIType::Void, &[FFIType::String]) => {
                 let s = self.value_to_string(&args[0])?;
