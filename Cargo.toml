@@ -77,7 +77,7 @@ sha3 = "0.10"
 md5 = { package = "md-5", version = "0.10" }
 
 [features]
-default = ["interpreter", "async", "clang", "http"]
+default = ["interpreter", "async", "clang", "http", "ffi"]
 interpreter = []  # VM-based execution
 llvm = ["dep:llvm-sys", "dep:inkwell"]  # LLVM backend
 wasm = ["dep:wasmer", "dep:object"]  # WebAssembly backend

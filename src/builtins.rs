@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use crate::modules::hplist::HPList;
 use crate::base_object::{BaseObject, MRO};
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 
 pub fn init_builtins() -> HashMap<String, Value> {
     let mut builtins = HashMap::new();
@@ -85,7 +85,19 @@ pub fn init_builtins() -> HashMap<String, Value> {
     builtins.insert("ValueError".to_string(), Value::BuiltinFunction("ValueError".to_string(), value_error_builtin));
     builtins.insert("TypeError".to_string(), Value::BuiltinFunction("TypeError".to_string(), type_error_builtin));
     builtins.insert("RuntimeError".to_string(), Value::BuiltinFunction("RuntimeError".to_string(), runtime_error_builtin));
-    
+
+    // FFI builtins (when feature is enabled)
+    #[cfg(feature = "ffi")]
+    {
+        builtins.insert("load_library".to_string(), Value::BuiltinFunction("load_library".to_string(), ffi_load_library));
+        builtins.insert("define_function".to_string(), Value::BuiltinFunction("define_function".to_string(), ffi_define_function));
+        builtins.insert("call_function".to_string(), Value::BuiltinFunction("call_function".to_string(), ffi_call_function));
+        builtins.insert("unload_library".to_string(), Value::BuiltinFunction("unload_library".to_string(), ffi_unload_library));
+        builtins.insert("list_libraries".to_string(), Value::BuiltinFunction("list_libraries".to_string(), ffi_list_libraries));
+        builtins.insert("library_info".to_string(), Value::BuiltinFunction("library_info".to_string(), ffi_library_info));
+        builtins.insert("add_library_path".to_string(), Value::BuiltinFunction("add_library_path".to_string(), ffi_add_library_path));
+    }
+
     builtins
 }
 
@@ -419,7 +431,7 @@ fn sum_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
                     (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
                     (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 + b),
                     (Value::Float(a), Value::Int(b)) => Value::Float(a + *b as f64),
-                    _ => return Err(anyhow::anyhow!("unsupported operand type(s) for +: '{}' and '{}'", sum.type_name(), item.type_name())),
+                    _ => return Err(anyhow::anyhow!("unsupportedsupported operand type(s) for +: '{}' and '{}'", sum.type_name(), item.type_name())),
                 };
             }
             Ok(sum)
@@ -1582,4 +1594,242 @@ fn runtime_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
             traceback: None,
         })
     }
+}
+// ============================================================================
+// FFI Builtin Functions
+// ============================================================================
+
+#[cfg(feature = "ffi")]
+use std::sync::{Arc, Mutex};
+
+#[cfg(feature = "ffi")]
+lazy_static::lazy_static! {
+    pub static ref GLOBAL_FFI_MANAGER: Arc<Mutex<crate::ffi::FFIManager>> =
+        Arc::new(Mutex::new(crate::ffi::FFIManager::new()));
+}
+
+#[cfg(feature = "ffi")]
+fn ffi_load_library(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow!("load_library() requires at least 1 argument (library_name)"));
+    }
+
+    let library_name = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("Library name must be a string")),
+    };
+
+    let mut manager = GLOBAL_FFI_MANAGER.lock().unwrap();
+    manager.load_library(&library_name)?;
+
+    Ok(Value::None)
+}
+
+#[cfg(not(feature = "ffi"))]
+fn ffi_load_library(_args: Vec<Value>) -> anyhow::Result<Value> {
+    Err(anyhow!("FFI feature is not enabled"))
+}
+
+#[cfg(feature = "ffi")]
+fn ffi_define_function(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() < 3 {
+        return Err(anyhow!(
+            "define_function() requires at least 3 arguments (library, function_name, return_type)"
+        ));
+    }
+
+    let library_name = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("Library name must be a string")),
+    };
+
+    let function_name = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("Function name must be a string")),
+    };
+
+    let return_type_str = match &args[2] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("Return type must be a string")),
+    };
+
+    let return_type = crate::ffi::parse_ffi_type(&return_type_str)?;
+
+    let param_types = if args.len() > 3 {
+        match &args[3] {
+            Value::List(list) => {
+                let mut types = Vec::new();
+                for item in list.as_vec() {
+                    match item {
+                        Value::Str(s) => {
+                            types.push(crate::ffi::parse_ffi_type(s)?);
+                        }
+                        _ => return Err(anyhow!("Parameter types must be strings")),
+                    }
+                }
+                types
+            }
+            _ => return Err(anyhow!("Parameter types must be a list")),
+        }
+    } else {
+        Vec::new()
+    };
+
+    let mut manager = GLOBAL_FFI_MANAGER.lock().unwrap();
+    manager.define_function(
+        &library_name,
+        &function_name,
+        return_type,
+        param_types,
+        None,
+    )?;
+
+    // Create a callable FFI function object
+    // Store library and function name in the object fields
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("__ffi_library__".to_string(), Value::Str(library_name.clone()));
+    fields.insert("__ffi_function__".to_string(), Value::Str(function_name.clone()));
+    fields.insert("__ffi_callable__".to_string(), Value::Bool(true));
+
+    Ok(Value::Object {
+        class_name: "FFIFunction".to_string(),
+        fields: std::rc::Rc::new(fields),
+        class_methods: std::collections::HashMap::new(),
+        base_object: crate::base_object::BaseObject::new("FFIFunction".to_string(), vec![]),
+        mro: crate::base_object::MRO::new(),
+    })
+}
+
+#[cfg(not(feature = "ffi"))]
+fn ffi_define_function(_args: Vec<Value>) -> anyhow::Result<Value> {
+    Err(anyhow!("FFI feature is not enabled"))
+}
+
+#[cfg(feature = "ffi")]
+fn ffi_call_function(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow!(
+            "call_function() requires at least 2 arguments (library, function_name)"
+        ));
+    }
+
+    let library_name = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("Library name must be a string")),
+    };
+
+    let function_name = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("Function name must be a string")),
+    };
+
+    let func_args = if args.len() > 2 {
+        match &args[2] {
+            Value::List(list) => list.as_vec().clone(),
+            _ => return Err(anyhow!("Function arguments must be a list")),
+        }
+    } else {
+        Vec::new()
+    };
+
+    let manager = GLOBAL_FFI_MANAGER.lock().unwrap();
+    let result = manager.call_external_function(&library_name, &function_name, func_args)?;
+
+    Ok(result)
+}
+
+#[cfg(not(feature = "ffi"))]
+fn ffi_call_function(_args: Vec<Value>) -> anyhow::Result<Value> {
+    Err(anyhow!("FFI feature is not enabled"))
+}
+
+#[cfg(feature = "ffi")]
+fn ffi_unload_library(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow!("unload_library() requires 1 argument (library_name)"));
+    }
+
+    let library_name = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("Library name must be a string")),
+    };
+
+    let mut manager = GLOBAL_FFI_MANAGER.lock().unwrap();
+    manager.unload_library(&library_name)?;
+
+    Ok(Value::None)
+}
+
+#[cfg(not(feature = "ffi"))]
+fn ffi_unload_library(_args: Vec<Value>) -> anyhow::Result<Value> {
+    Err(anyhow!("FFI feature is not enabled"))
+}
+
+#[cfg(feature = "ffi")]
+fn ffi_list_libraries(_args: Vec<Value>) -> anyhow::Result<Value> {
+    let manager = GLOBAL_FFI_MANAGER.lock().unwrap();
+    let libraries = manager.list_libraries();
+    let list = libraries
+        .into_iter()
+        .map(Value::Str)
+        .collect::<Vec<_>>();
+
+    Ok(Value::List(HPList::from_values(list)))
+}
+
+#[cfg(not(feature = "ffi"))]
+fn ffi_list_libraries(_args: Vec<Value>) -> anyhow::Result<Value> {
+    Err(anyhow!("FFI feature is not enabled"))
+}
+
+#[cfg(feature = "ffi")]
+fn ffi_library_info(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow!("library_info() requires 1 argument (library_name)"));
+    }
+
+    let library_name = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("Library name must be a string")),
+    };
+
+    let manager = GLOBAL_FFI_MANAGER.lock().unwrap();
+
+    if let Some((name, path, func_count)) = manager.get_library_info(&library_name) {
+        let mut info = HashMap::new();
+        info.insert("name".to_string(), Value::Str(name));
+        info.insert("path".to_string(), Value::Str(path.to_string_lossy().to_string()));
+        info.insert("functions".to_string(), Value::Int(func_count as i64));
+
+        Ok(Value::Dict(info))
+    } else {
+        Err(anyhow!("Library not loaded: {}", library_name))
+    }
+}
+
+#[cfg(not(feature = "ffi"))]
+fn ffi_library_info(_args: Vec<Value>) -> anyhow::Result<Value> {
+    Err(anyhow!("FFI feature is not enabled"))
+}
+
+#[cfg(feature = "ffi")]
+fn ffi_add_library_path(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow!("add_library_path() requires 1 argument (path)"));
+    }
+
+    let path_str = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("Path must be a string")),
+    };
+
+    let mut manager = GLOBAL_FFI_MANAGER.lock().unwrap();
+    manager.add_search_path(&path_str);
+
+    Ok(Value::None)
+}
+
+#[cfg(not(feature = "ffi"))]
+fn ffi_add_library_path(_args: Vec<Value>) -> anyhow::Result<Value> {
+    Err(anyhow!("FFI feature is not enabled"))
 }
