@@ -2710,7 +2710,7 @@ impl SuperBytecodeVM {
                 
                 // Fast path for common operations
                 let result = match (&left.value, &right.value) {
-                    (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
+                    (Value::Int(a), Value::Int(b)) => Value::Int((*a).wrapping_mul(*b)),
                     (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
                     _ => {
                         // For less common cases, use the general implementation

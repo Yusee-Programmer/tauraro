@@ -763,7 +763,7 @@ impl FFIManager {
                 }
             }
 
-            // GetMessageA, PeekMessageA: (pointer, pointer, int, int) -> int
+            // GetMessageA: (pointer, pointer, int, int) -> int
             (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
                 let msg_ptr = self.value_to_pointer(&args[0])?;
                 let hwnd = self.value_to_pointer(&args[1])?;
@@ -774,6 +774,22 @@ impl FFIManager {
                     let func: unsafe extern "C" fn(*const c_void, *const c_void, c_int, c_int) -> c_int =
                         std::mem::transmute(function.symbol_ptr);
                     let result = func(msg_ptr, hwnd, msg_filter_min, msg_filter_max);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // PeekMessageA: (pointer, pointer, int, int, int) -> int (has 5 params!)
+            (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let msg_ptr = self.value_to_pointer(&args[0])?;
+                let hwnd = self.value_to_pointer(&args[1])?;
+                let msg_filter_min = self.value_to_int(&args[2])?;
+                let msg_filter_max = self.value_to_int(&args[3])?;
+                let remove_msg = self.value_to_int(&args[4])?;
+
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, c_int, c_int, c_int) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(msg_ptr, hwnd, msg_filter_min, msg_filter_max, remove_msg);
                     Ok(Value::Int(result as i64))
                 }
             }

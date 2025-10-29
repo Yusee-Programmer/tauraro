@@ -318,6 +318,61 @@ pub fn add_library_path_builtin(args: Vec<Value>) -> Result<Value> {
     }
 }
 
+/// Allocate a buffer for FFI use (e.g., for MSG structure)
+///
+/// Usage:
+/// ```python
+/// # Allocate 48 bytes for MSG structure
+/// msg_buffer = allocate_buffer(48)
+/// ```
+pub fn allocate_buffer_builtin(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow!("allocate_buffer() requires 1 argument (size in bytes)"));
+    }
+
+    let size = match &args[0] {
+        Value::Int(i) if *i > 0 => *i as usize,
+        _ => return Err(anyhow!("Buffer size must be a positive integer")),
+    };
+
+    // Allocate zeroed memory
+    let buffer = vec![0u8; size];
+    let boxed = Box::new(buffer);
+    let ptr = Box::into_raw(boxed);
+
+    // Return pointer as integer
+    Ok(Value::Int(ptr as usize as i64))
+}
+
+/// Free a buffer allocated by allocate_buffer
+///
+/// Usage:
+/// ```python
+/// free_buffer(msg_buffer)
+/// ```
+pub fn free_buffer_builtin(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow!("free_buffer() requires 1 argument (buffer pointer)"));
+    }
+
+    let ptr = match &args[0] {
+        Value::Int(i) => *i as usize as *mut Vec<u8>,
+        _ => return Err(anyhow!("Buffer pointer must be an integer")),
+    };
+
+    if ptr.is_null() {
+        return Err(anyhow!("Cannot free null pointer"));
+    }
+
+    // Reconstruct the Box and let it drop
+    unsafe {
+        let _boxed = Box::from_raw(ptr);
+        // Box will be dropped here, freeing the memory
+    }
+
+    Ok(Value::None)
+}
+
 /// Initialize FFI builtins and return a HashMap of function names to Value::BuiltinFunction
 pub fn init_ffi_builtins() -> HashMap<String, Value> {
     let mut builtins = HashMap::new();
@@ -355,6 +410,16 @@ pub fn init_ffi_builtins() -> HashMap<String, Value> {
     builtins.insert(
         "add_library_path".to_string(),
         Value::BuiltinFunction("add_library_path".to_string(), add_library_path_builtin),
+    );
+
+    builtins.insert(
+        "allocate_buffer".to_string(),
+        Value::BuiltinFunction("allocate_buffer".to_string(), allocate_buffer_builtin),
+    );
+
+    builtins.insert(
+        "free_buffer".to_string(),
+        Value::BuiltinFunction("free_buffer".to_string(), free_buffer_builtin),
     );
 
     builtins
