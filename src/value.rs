@@ -452,6 +452,23 @@ impl Value {
             }
         }
     }
+    
+    /// Create a new exception with traceback information
+    pub fn new_exception(class_name: String, message: String, traceback: Option<String>) -> Self {
+        Value::Exception {
+            class_name,
+            message,
+            traceback,
+        }
+    }
+    
+    /// Get the traceback information from an exception
+    pub fn get_traceback(&self) -> Option<&String> {
+        match self {
+            Value::Exception { traceback, .. } => traceback.as_ref(),
+            _ => None,
+        }
+    }
 
     /// Get a string representation for debugging
     pub fn debug_string(&self) -> String {

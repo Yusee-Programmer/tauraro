@@ -1519,81 +1519,81 @@ fn format_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
 
 fn exception_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
-        Ok(Value::Exception {
-            class_name: "Exception".to_string(),
-            message: "".to_string(),
-            traceback: None,
-        })
+        Ok(Value::new_exception(
+            "Exception".to_string(),
+            "".to_string(),
+            None,
+        ))
     } else {
         let message = match &args[0] {
             Value::Str(s) => s.clone(),
             _ => format!("{}", args[0]),
         };
-        Ok(Value::Exception {
-            class_name: "Exception".to_string(),
+        Ok(Value::new_exception(
+            "Exception".to_string(),
             message,
-            traceback: None,
-        })
+            None,
+        ))
     }
 }
 
 fn value_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
-        Ok(Value::Exception {
-            class_name: "ValueError".to_string(),
-            message: "".to_string(),
-            traceback: None,
-        })
+        Ok(Value::new_exception(
+            "ValueError".to_string(),
+            "".to_string(),
+            None,
+        ))
     } else {
         let message = match &args[0] {
             Value::Str(s) => s.clone(),
             _ => format!("{}", args[0]),
         };
-        Ok(Value::Exception {
-            class_name: "ValueError".to_string(),
+        Ok(Value::new_exception(
+            "ValueError".to_string(),
             message,
-            traceback: None,
-        })
+            None,
+        ))
     }
 }
 
 fn type_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
-        Ok(Value::Exception {
-            class_name: "TypeError".to_string(),
-            message: "".to_string(),
-            traceback: None,
-        })
+        Ok(Value::new_exception(
+            "TypeError".to_string(),
+            "".to_string(),
+            None,
+        ))
     } else {
         let message = match &args[0] {
             Value::Str(s) => s.clone(),
             _ => format!("{}", args[0]),
         };
-        Ok(Value::Exception {
-            class_name: "TypeError".to_string(),
+        Ok(Value::new_exception(
+            "TypeError".to_string(),
             message,
-            traceback: None,
-        })
+            None,
+        ))
     }
 }
 
 fn runtime_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
-        Ok(Value::Exception {
-            class_name: "RuntimeError".to_string(),
-            message: "".to_string(),
-            traceback: None,
-        })
+        Ok(Value::new_exception(
+            "RuntimeError".to_string(),
+            "".to_string(),
+            None,
+        ))
     } else {
         let message = match &args[0] {
             Value::Str(s) => s.clone(),
             _ => format!("{}", args[0]),
         };
-        Ok(Value::Exception {
-            class_name: "RuntimeError".to_string(),
+        Ok(Value::new_exception(
+            "RuntimeError".to_string(),
             message,
-            traceback: None,
-        })
+            None,
+        ))
     }
 }
 // ============================================================================

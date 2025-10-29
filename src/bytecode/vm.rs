@@ -2890,6 +2890,24 @@ impl SuperBytecodeVM {
                 // Clone the exception value to avoid borrowing issues
                 let exception_value = self.frames[frame_idx].registers[exception_reg].value.clone();
                 
+                // Add traceback information to the exception
+                let mut enhanced_exception = exception_value.clone();
+                if let Value::Exception { class_name, message, traceback: _ } = &exception_value {
+                    // Create traceback information
+                    let mut traceback_info = format!("Traceback (most recent call last):\n");
+                    traceback_info.push_str(&format!("  File \"{}\", line {}, in {}\n", 
+                        self.frames[frame_idx].code.filename, 
+                        self.frames[frame_idx].line_number,
+                        self.frames[frame_idx].code.name));
+                    traceback_info.push_str(&format!("{}: {}\n", class_name, message));
+                    
+                    enhanced_exception = Value::new_exception(
+                        class_name.clone(),
+                        message.clone(),
+                        Some(traceback_info)
+                    );
+                }
+                
                 // Search for exception handlers in the block stack
                 // Find the innermost exception handler
                 let except_block_idx_opt = self.frames[frame_idx].block_stack.iter().rposition(|b| matches!(b.block_type, BlockType::Except));
@@ -2902,12 +2920,16 @@ impl SuperBytecodeVM {
                     // Jump to the exception handler
                     self.frames[frame_idx].pc = handler_pc;
                     // Push the exception value onto the stack for the handler to access
-                    self.frames[frame_idx].registers.push(RcValue::new(exception_value));
+                    self.frames[frame_idx].registers.push(RcValue::new(enhanced_exception));
                     Ok(None) // Continue execution, don't return an error
                 } else {
-                    // No exception handler found, print the exception and stop execution
-                    eprintln!("{}", exception_value);
-                    Err(anyhow!("Unhandled exception: {}", exception_value))
+                    // No exception handler found, print the exception with traceback and stop execution
+                    if let Some(traceback) = enhanced_exception.get_traceback() {
+                        eprintln!("{}", traceback);
+                    } else {
+                        eprintln!("{}", enhanced_exception);
+                    }
+                    Err(anyhow!("Unhandled exception: {}", enhanced_exception))
                 }
             }
             OpCode::Assert => {

@@ -171,6 +171,7 @@ pub enum BlockType {
 pub struct Frame {
     pub code: CodeObject,
     pub pc: usize,                          // Program counter
+    pub line_number: usize,                 // Current line number for debugging
     pub registers: SmallVec<[RcValue; 64]>, // Register file with reference counting
     pub locals: Vec<RcValue>,               // Local variables with direct indexing (faster than HashMap)
     pub locals_map: HashMap<String, usize>, // Maps variable names to indices for debugging
@@ -231,6 +232,7 @@ impl Frame {
         Self {
             code,
             pc: 0,
+            line_number: 0,
             registers,
             locals,
             locals_map,
@@ -338,6 +340,7 @@ impl Frame {
         Self {
             code,
             pc: 0,
+            line_number: 0,
             registers,
             locals,
             locals_map,
@@ -379,6 +382,7 @@ impl Frame {
         Self {
             code,
             pc: 0,
+            line_number: 0,
             registers,
             locals,
             locals_map,
