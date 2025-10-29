@@ -5,6 +5,8 @@ use crate::value::Value;
 use crate::runtime::{MemoryMode, get_global_memory_api};
 use anyhow::Result;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 /// Create the memory management module
 pub fn create_memory_module() -> Value {
@@ -127,7 +129,7 @@ fn builtin_memory_stats(_args: Vec<Value>) -> Result<Value> {
     dict.insert("manual_allocations".to_string(), Value::Int(stats.manual_allocations as i64));
     dict.insert("auto_allocations".to_string(), Value::Int(stats.auto_allocations as i64));
     
-    Ok(Value::Dict(dict))
+    Ok(Value::Dict(Rc::new(RefCell::new(dict))))
 }
 
 /// Built-in function to get memory usage
@@ -162,7 +164,7 @@ fn builtin_memory_sizeof(args: Vec<Value>) -> Result<Value> {
         },
         Value::Dict(dict) => {
             std::mem::size_of::<HashMap<String, Value>>() + 
-            dict.iter().map(|(k, v)| {
+            dict.borrow().iter().map(|(k, v)| {
                 k.len() + match v {
                     Value::Int(_) => std::mem::size_of::<i64>(),
                     Value::Float(_) => std::mem::size_of::<f64>(),

@@ -7,6 +7,7 @@ use crate::ast::{Param, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::rc::Rc;
+use std::cell::RefCell;
 use smallvec::SmallVec;
 
 /// Register-based compiled code object
@@ -286,7 +287,7 @@ impl Frame {
                         // This is a **kwargs parameter
                         // Create a dict with all remaining keyword arguments
                         // Convert KwargsMarker back to regular Dict when used as parameter
-                        let dict_value = Value::Dict(kwargs.clone());
+                        let dict_value = Value::Dict(Rc::new(RefCell::new(kwargs.clone())));
                         let rc_arg = RcValue::new(dict_value);
                         if param_index < locals.len() {
                             locals[param_index] = rc_arg;

@@ -5,6 +5,7 @@ use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use regex::{Regex, RegexBuilder, Match};
 use lazy_static::lazy_static;
 use std::sync::Mutex;
@@ -558,7 +559,7 @@ fn match_groups(_args: Vec<Value>) -> Result<Value> {
 
 fn match_groupdict(_args: Vec<Value>) -> Result<Value> {
     // Placeholder implementation
-    Ok(Value::Dict(HashMap::new()))
+    Ok(Value::Dict(Rc::new(RefCell::new(HashMap::new()))))
 }
 
 fn match_start(_args: Vec<Value>) -> Result<Value> {

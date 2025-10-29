@@ -8,6 +8,8 @@ use crate::value::Value;
 use crate::modules::hplist::HPList;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 use anyhow::{Result, anyhow};
 
 #[cfg(feature = "ffi")]
@@ -280,7 +282,7 @@ pub fn library_info_builtin(args: Vec<Value>) -> Result<Value> {
             info.insert("path".to_string(), Value::Str(path.to_string_lossy().to_string()));
             info.insert("functions".to_string(), Value::Int(func_count as i64));
 
-            Ok(Value::Dict(info))
+            Ok(Value::Dict(Rc::new(RefCell::new(info))))
         } else {
             Err(anyhow!("Library not loaded: {}", library_name))
         }

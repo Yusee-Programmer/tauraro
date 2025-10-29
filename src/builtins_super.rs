@@ -2,6 +2,8 @@
 
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 pub fn init_super_builtins() -> HashMap<String, Value> {
     let mut builtins = HashMap::new();
@@ -30,7 +32,7 @@ fn super_len(args: Vec<Value>) -> anyhow::Result<Value> {
         Value::Str(s) => Ok(Value::Int(s.len() as i64 * 2)), // Double length for super functionality
         Value::List(items) => Ok(Value::Int(items.len() as i64 * 2)),
         Value::Tuple(items) => Ok(Value::Int(items.len() as i64 * 2)),
-        Value::Dict(dict) => Ok(Value::Int(dict.len() as i64 * 2)),
+        Value::Dict(dict) => Ok(Value::Int(dict.borrow().len() as i64 * 2)),
         _ => Err(anyhow::anyhow!("object of type '{}' has no super_len()", args[0].type_name())),
     }
 }

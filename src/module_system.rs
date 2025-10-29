@@ -2,6 +2,8 @@
 
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::path::PathBuf;
 use anyhow::Result;
 
@@ -83,7 +85,7 @@ impl ModuleSystem {
                 Value::Str(s) => Ok(Value::Int(s.len() as i64)),
                 Value::List(items) => Ok(Value::Int(items.len() as i64)),
                 Value::Tuple(items) => Ok(Value::Int(items.len() as i64)),
-                Value::Dict(dict) => Ok(Value::Int(dict.len() as i64)),
+                Value::Dict(dict) => Ok(Value::Int(dict.borrow().len() as i64)),
                 _ => Err(anyhow::anyhow!("object of type '{}' has no len()", args[0].type_name())),
             }
         }));
@@ -167,18 +169,9 @@ impl ModuleSystem {
         let mut namespace = HashMap::new();
         
         // Add json module functions
-        namespace.insert("loads".to_string(), Value::BuiltinFunction("loads".to_string(), |args| {
-            if args.len() != 1 {
-                return Err(anyhow::anyhow!("json.loads() takes exactly one argument ({} given)", args.len()));
-            }
-            
-            match &args[0] {
-                Value::Str(_s) => {
-                    // In a full implementation, this would parse JSON
-                    Ok(Value::Dict(HashMap::new()))
-                }
-                _ => Err(anyhow::anyhow!("json.loads() argument must be a string")),
-            }
+        namespace.insert("loads".to_string(), Value::BuiltinFunction("loads".to_string(), |_args| {
+            // In a full implementation, this would parse JSON
+            Ok(Value::Dict(Rc::new(RefCell::new(HashMap::new()))))
         }));
         
         Value::Module("json".to_string(), namespace)

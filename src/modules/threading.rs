@@ -3,6 +3,8 @@
 
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex, Condvar};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
@@ -216,7 +218,7 @@ pub fn thread_current_thread(_args: Vec<Value>) -> anyhow::Result<Value> {
     thread_dict.insert("ident".to_string(), Value::Int(thread_obj.id as i64));
     thread_dict.insert("daemon".to_string(), Value::Bool(thread_obj.daemon));
     
-    Ok(Value::Dict(thread_dict))
+    Ok(Value::Dict(Rc::new(RefCell::new(thread_dict))))
 }
 
 pub fn thread_enumerate(_args: Vec<Value>) -> anyhow::Result<Value> {
@@ -231,7 +233,7 @@ pub fn thread_main_thread(_args: Vec<Value>) -> anyhow::Result<Value> {
     main_thread.insert("ident".to_string(), Value::Int(1));
     main_thread.insert("daemon".to_string(), Value::Bool(false));
     
-    Ok(Value::Dict(main_thread))
+    Ok(Value::Dict(Rc::new(RefCell::new(main_thread))))
 }
 
 pub fn thread_sleep(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -264,7 +266,7 @@ pub fn thread_lock_new(_args: Vec<Value>) -> anyhow::Result<Value> {
     lock_dict.insert("release".to_string(), Value::NativeFunction(lock_release));
     lock_dict.insert("locked".to_string(), Value::NativeFunction(lock_locked));
     
-    Ok(Value::Dict(lock_dict))
+    Ok(Value::Dict(Rc::new(RefCell::new(lock_dict))))
 }
 
 pub fn thread_rlock_new(_args: Vec<Value>) -> anyhow::Result<Value> {
@@ -274,7 +276,7 @@ pub fn thread_rlock_new(_args: Vec<Value>) -> anyhow::Result<Value> {
     rlock_dict.insert("acquire".to_string(), Value::NativeFunction(rlock_acquire));
     rlock_dict.insert("release".to_string(), Value::NativeFunction(rlock_release));
     
-    Ok(Value::Dict(rlock_dict))
+    Ok(Value::Dict(Rc::new(RefCell::new(rlock_dict))))
 }
 
 pub fn thread_condition_new(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -289,7 +291,7 @@ pub fn thread_condition_new(args: Vec<Value>) -> anyhow::Result<Value> {
     condition_dict.insert("notify".to_string(), Value::NativeFunction(condition_notify));
     condition_dict.insert("notify_all".to_string(), Value::NativeFunction(condition_notify_all));
     
-    Ok(Value::Dict(condition_dict))
+    Ok(Value::Dict(Rc::new(RefCell::new(condition_dict))))
 }
 
 pub fn thread_event_new(_args: Vec<Value>) -> anyhow::Result<Value> {
@@ -301,7 +303,7 @@ pub fn thread_event_new(_args: Vec<Value>) -> anyhow::Result<Value> {
     event_dict.insert("clear".to_string(), Value::NativeFunction(event_clear));
     event_dict.insert("wait".to_string(), Value::NativeFunction(event_wait));
     
-    Ok(Value::Dict(event_dict))
+    Ok(Value::Dict(Rc::new(RefCell::new(event_dict))))
 }
 
 pub fn thread_semaphore_new(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -324,7 +326,7 @@ pub fn thread_semaphore_new(args: Vec<Value>) -> anyhow::Result<Value> {
     semaphore_dict.insert("acquire".to_string(), Value::NativeFunction(semaphore_acquire));
     semaphore_dict.insert("release".to_string(), Value::NativeFunction(semaphore_release));
     
-    Ok(Value::Dict(semaphore_dict))
+    Ok(Value::Dict(Rc::new(RefCell::new(semaphore_dict))))
 }
 
 pub fn thread_bounded_semaphore_new(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -347,7 +349,7 @@ pub fn thread_bounded_semaphore_new(args: Vec<Value>) -> anyhow::Result<Value> {
     semaphore_dict.insert("acquire".to_string(), Value::NativeFunction(semaphore_acquire));
     semaphore_dict.insert("release".to_string(), Value::NativeFunction(bounded_semaphore_release));
     
-    Ok(Value::Dict(semaphore_dict))
+    Ok(Value::Dict(Rc::new(RefCell::new(semaphore_dict))))
 }
 
 pub fn thread_thread_new(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -372,7 +374,7 @@ pub fn thread_thread_new(args: Vec<Value>) -> anyhow::Result<Value> {
     thread_dict.insert("join".to_string(), Value::NativeFunction(thread_join));
     thread_dict.insert("is_alive".to_string(), Value::NativeFunction(thread_is_alive));
     
-    Ok(Value::Dict(thread_dict))
+    Ok(Value::Dict(Rc::new(RefCell::new(thread_dict))))
 }
 
 // Lock method implementations (simplified)

@@ -1,5 +1,7 @@
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 use url::Url;
 use anyhow::{Result, anyhow};
 
@@ -87,6 +89,16 @@ pub fn create_urllib_module() -> Value {
         Value::NativeFunction(urlretrieve),
     );
 
+    request_namespace.insert(
+        "build_opener".to_string(),
+        Value::NativeFunction(build_opener),
+    );
+
+    request_namespace.insert(
+        "install_opener".to_string(),
+        Value::NativeFunction(install_opener),
+    );
+
     namespace.insert(
         "request".to_string(),
         Value::Module("request".to_string(), request_namespace),
@@ -134,7 +146,7 @@ fn urlparse(args: Vec<Value>) -> Result<Value> {
             result.insert("query".to_string(), Value::Str(url.query().unwrap_or("").to_string()));
             result.insert("fragment".to_string(), Value::Str(url.fragment().unwrap_or("").to_string()));
             
-            Ok(Value::Dict(result))
+            Ok(Value::Dict(Rc::new(RefCell::new(result))))
         }
         Err(_) => {
             // If URL parsing fails, return a basic structure with empty values
@@ -146,7 +158,7 @@ fn urlparse(args: Vec<Value>) -> Result<Value> {
             result.insert("query".to_string(), Value::Str("".to_string()));
             result.insert("fragment".to_string(), Value::Str("".to_string()));
             
-            Ok(Value::Dict(result))
+            Ok(Value::Dict(Rc::new(RefCell::new(result))))
         }
     }
 }
@@ -163,7 +175,7 @@ fn urlencode(args: Vec<Value>) -> Result<Value> {
     
     let mut encoded_pairs = Vec::new();
     
-    for (key, value) in query_dict {
+    for (key, value) in query_dict.borrow().iter() {
         let key_str = match key {
             k => k.clone(),
         };
@@ -359,7 +371,7 @@ fn parse_qs(args: Vec<Value>) -> Result<Value> {
         }
     }
 
-    Ok(Value::Dict(result))
+    Ok(Value::Dict(Rc::new(RefCell::new(result))))
 }
 
 fn parse_qsl(args: Vec<Value>) -> Result<Value> {
@@ -438,75 +450,6 @@ fn unquote_plus(args: Vec<Value>) -> Result<Value> {
 
 // urllib.request functions
 
-fn urlopen(args: Vec<Value>) -> Result<Value> {
-    if args.is_empty() {
-        return Err(anyhow!("urlopen() missing required argument: 'url'"));
-    }
-
-    let url_str = match &args[0] {
-        Value::Str(s) => s.clone(),
-        Value::Dict(d) => {
-            // Could be a Request object
-            if let Some(Value::Str(url)) = d.get("url") {
-                url.clone()
-            } else {
-                return Err(anyhow!("urlopen() invalid Request object"));
-            }
-        }
-        _ => return Err(anyhow!("urlopen() argument must be a string or Request object")),
-    };
-
-    // Create a response object
-    let mut response = HashMap::new();
-    response.insert("url".to_string(), Value::Str(url_str.clone()));
-    response.insert("status".to_string(), Value::Int(200));
-    response.insert("read".to_string(), Value::NativeFunction(response_read));
-    response.insert("getcode".to_string(), Value::NativeFunction(response_getcode));
-    response.insert("geturl".to_string(), Value::NativeFunction(response_geturl));
-    response.insert("info".to_string(), Value::NativeFunction(response_info));
-    response.insert("close".to_string(), Value::NativeFunction(response_close));
-
-    // Simplified - in a real implementation, this would make an HTTP request
-    // For now, we'll just create a mock response
-    response.insert("_data".to_string(), Value::Str("".to_string()));
-
-    Ok(Value::Dict(response))
-}
-
-fn create_request(args: Vec<Value>) -> Result<Value> {
-    if args.is_empty() {
-        return Err(anyhow!("Request() missing required argument: 'url'"));
-    }
-
-    let url = match &args[0] {
-        Value::Str(s) => s.clone(),
-        _ => return Err(anyhow!("Request() url must be a string")),
-    };
-
-    let data = if args.len() > 1 {
-        args[1].clone()
-    } else {
-        Value::None
-    };
-
-    let headers = if args.len() > 2 {
-        match &args[2] {
-            Value::Dict(_) => args[2].clone(),
-            _ => Value::Dict(HashMap::new()),
-        }
-    } else {
-        Value::Dict(HashMap::new())
-    };
-
-    let mut request = HashMap::new();
-    request.insert("url".to_string(), Value::Str(url));
-    request.insert("data".to_string(), data);
-    request.insert("headers".to_string(), headers);
-    request.insert("method".to_string(), Value::Str("GET".to_string()));
-
-    Ok(Value::Dict(request))
-}
-
 fn urlretrieve(args: Vec<Value>) -> Result<Value> {
     if args.len() < 2 {
         return Err(anyhow!("urlretrieve() requires url and filename arguments"));
@@ -536,7 +479,7 @@ fn response_read(args: Vec<Value>) -> Result<Value> {
     }
 
     if let Value::Dict(response) = &args[0] {
-        if let Some(Value::Str(data)) = response.get("_data") {
+        if let Some(Value::Str(data)) = response.borrow().get("_data") {
             return Ok(Value::Str(data.clone()));
         }
     }
@@ -550,7 +493,7 @@ fn response_getcode(args: Vec<Value>) -> Result<Value> {
     }
 
     if let Value::Dict(response) = &args[0] {
-        if let Some(Value::Int(status)) = response.get("status") {
+        if let Some(Value::Int(status)) = response.borrow().get("status") {
             return Ok(Value::Int(*status));
         }
     }
@@ -564,7 +507,7 @@ fn response_geturl(args: Vec<Value>) -> Result<Value> {
     }
 
     if let Value::Dict(response) = &args[0] {
-        if let Some(Value::Str(url)) = response.get("url") {
+        if let Some(Value::Str(url)) = response.borrow().get("url") {
             return Ok(Value::Str(url.clone()));
         }
     }
@@ -574,9 +517,119 @@ fn response_geturl(args: Vec<Value>) -> Result<Value> {
 
 fn response_info(args: Vec<Value>) -> Result<Value> {
     // Return headers dict
-    Ok(Value::Dict(HashMap::new()))
+    Ok(Value::Dict(Rc::new(RefCell::new(HashMap::new()))))
 }
 
 fn response_close(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::None)
 }
+
+/// Create a Request object
+fn create_request(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow!("Request() missing required argument: 'url'"));
+    }
+
+    let url = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("Request() url must be a string")),
+    };
+
+    let data = if args.len() > 1 {
+        args[1].clone()
+    } else {
+        Value::None
+    };
+
+    let headers = if args.len() > 2 {
+        match &args[2] {
+            Value::Dict(_) => args[2].clone(),
+            _ => Value::Dict(Rc::new(RefCell::new(HashMap::new()))),
+        }
+    } else {
+        Value::Dict(Rc::new(RefCell::new(HashMap::new())))
+    };
+
+    let mut request = HashMap::new();
+    request.insert("url".to_string(), Value::Str(url));
+    request.insert("data".to_string(), data);
+    request.insert("headers".to_string(), headers);
+    request.insert("method".to_string(), Value::Str("GET".to_string()));
+
+    Ok(Value::Dict(Rc::new(RefCell::new(request))))
+}
+
+/// Opener methods
+fn opener_open(_args: Vec<Value>) -> Result<Value> {
+    Ok(Value::None)
+}
+
+fn opener_error(_args: Vec<Value>) -> Result<Value> {
+    Ok(Value::None)
+}
+
+fn opener_add_handler(_args: Vec<Value>) -> Result<Value> {
+    Ok(Value::None)
+}
+
+fn opener_close(_args: Vec<Value>) -> Result<Value> {
+    Ok(Value::None)
+}
+
+/// Build an opener with handlers
+fn build_opener(args: Vec<Value>) -> Result<Value> {
+    // Simplified - in a real implementation, this would create an opener with handlers
+    let mut opener = HashMap::new();
+    
+    // Add basic opener methods
+    opener.insert("open".to_string(), Value::NativeFunction(opener_open));
+    opener.insert("error".to_string(), Value::NativeFunction(opener_error));
+    opener.insert("add_handler".to_string(), Value::NativeFunction(opener_add_handler));
+    opener.insert("close".to_string(), Value::NativeFunction(opener_close));
+
+    Ok(Value::Dict(Rc::new(RefCell::new(opener))))
+}
+
+/// Install an opener as the default
+fn install_opener(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow!("install_opener() requires an opener argument"));
+    }
+
+    // Simplified - in a real implementation, this would install the opener globally
+    println!("Installed opener: {:?}", args[0]);
+
+    Ok(Value::None)
+}
+
+/// Open a URL with the default opener
+fn urlopen(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow!("urlopen() requires a url argument"));
+    }
+
+    let url = match &args[0] {
+        Value::Str(s) => s.clone(),
+        Value::Dict(d) => {
+            // Extract URL from Request object
+            if let Some(Value::Str(url_str)) = d.borrow().get("url") {
+                url_str.clone()
+            } else {
+                return Err(anyhow!("Request object missing 'url' field"));
+            }
+        }
+        _ => return Err(anyhow!("urlopen() url must be a string or Request object")),
+    };
+
+    // Simplified - in a real implementation, this would make an HTTP request
+    // For now, we'll just create a mock response
+    let mut response = HashMap::new();
+    response.insert("url".to_string(), Value::Str(url));
+    response.insert("status".to_string(), Value::Int(200));
+    response.insert("reason".to_string(), Value::Str("OK".to_string()));
+    response.insert("_data".to_string(), Value::Str("".to_string()));
+
+    Ok(Value::Dict(Rc::new(RefCell::new(response))))
+}
+
+

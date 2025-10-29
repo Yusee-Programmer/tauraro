@@ -4,7 +4,9 @@
 use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::rc::Rc;
+use std::cell::RefCell;
+use crate::modules::hplist::HPList;
 
 /// Create the unittest module object with all its classes and functions
 pub fn create_unittest_module() -> Value {
@@ -43,7 +45,7 @@ fn unittest_main(args: Vec<Value>) -> Result<Value> {
     let verbosity = if args.len() > 0 {
         match &args[0] {
             Value::Dict(d) => {
-                if let Some(Value::Int(v)) = d.get("verbosity") {
+                if let Some(Value::Int(v)) = d.borrow().get("verbosity") {
                     *v as i32
                 } else {
                     1
@@ -72,7 +74,7 @@ fn create_test_loader(_args: Vec<Value>) -> Result<Value> {
     loader.insert("loadTestsFromName".to_string(), Value::NativeFunction(load_tests_from_name));
     loader.insert("discover".to_string(), Value::NativeFunction(discover_tests));
 
-    Ok(Value::Dict(loader))
+    Ok(Value::Dict(Rc::new(RefCell::new(loader))))
 }
 
 /// Load tests from a module
@@ -139,7 +141,7 @@ fn create_test_suite(args: Vec<Value>) -> Result<Value> {
     suite.insert("run".to_string(), Value::NativeFunction(test_suite_run));
     suite.insert("countTestCases".to_string(), Value::NativeFunction(test_suite_count_test_cases));
 
-    Ok(Value::Dict(suite))
+    Ok(Value::Dict(Rc::new(RefCell::new(suite))))
 }
 
 /// Add a single test to the suite
@@ -148,11 +150,13 @@ fn test_suite_add_test(args: Vec<Value>) -> Result<Value> {
         return Err(anyhow!("addTest() requires self and test arguments"));
     }
 
-    // Args[0] is self (the suite), args[1] is the test
-    if let Value::Dict(mut suite) = args[0].clone() {
-        if let Some(Value::List(mut tests)) = suite.get_mut("tests").cloned() {
-            tests.append(args[1].clone());
-            suite.insert("tests".to_string(), Value::List(tests));
+    if let Value::Dict(suite) = &args[0] {
+        let mut suite_ref = suite.borrow_mut();
+        if let Some(Value::List(mut tests)) = suite_ref.get("tests").cloned() {
+            tests.push(args[1].clone());
+            suite_ref.insert("tests".to_string(), Value::List(tests));
+        } else {
+            suite_ref.insert("tests".to_string(), Value::List(HPList::from_values(vec![args[1].clone()])));
         }
     }
 
@@ -166,15 +170,19 @@ fn test_suite_add_tests(args: Vec<Value>) -> Result<Value> {
     }
 
     // Args[0] is self (the suite), args[1] is the tests list
-    if let Value::Dict(mut suite) = args[0].clone() {
-        if let Some(Value::List(mut suite_tests)) = suite.get_mut("tests").cloned() {
+    if let Value::Dict(suite) = &args[0] {
+        let mut suite_ref = suite.borrow_mut();
+        if let Some(Value::List(mut suite_tests)) = suite_ref.get("tests").cloned() {
             if let Value::List(new_tests) = &args[1] {
-                for i in 0..new_tests.len() {
-                    if let Some(test) = new_tests.get(i as isize) {
-                        suite_tests.append(test.clone());
-                    }
+                for test in new_tests {
+                    suite_tests.push(test.clone());
                 }
-                suite.insert("tests".to_string(), Value::List(suite_tests));
+                suite_ref.insert("tests".to_string(), Value::List(suite_tests));
+            }
+        } else {
+            // No existing tests, create new list
+            if let Value::List(new_tests) = &args[1] {
+                suite_ref.insert("tests".to_string(), Value::List(new_tests.clone()));
             }
         }
     }
@@ -201,7 +209,7 @@ fn test_suite_count_test_cases(args: Vec<Value>) -> Result<Value> {
     }
 
     if let Value::Dict(suite) = &args[0] {
-        if let Some(Value::List(tests)) = suite.get("tests") {
+        if let Some(Value::List(tests)) = suite.borrow().get("tests") {
             return Ok(Value::Int(tests.len() as i64));
         }
     }
@@ -249,7 +257,55 @@ fn create_test_case(args: Vec<Value>) -> Result<Value> {
     test_case.insert("run".to_string(), Value::NativeFunction(test_case_run));
     test_case.insert("debug".to_string(), Value::NativeFunction(test_case_debug));
 
-    Ok(Value::Dict(test_case))
+    Ok(Value::Dict(Rc::new(RefCell::new(test_case))))
+}
+
+/// Create a TestResult instance
+fn create_test_result(_args: Vec<Value>) -> Result<Value> {
+    let mut result = HashMap::new();
+
+    result.insert("errors".to_string(), Value::List(HPList::new()));
+    result.insert("failures".to_string(), Value::List(HPList::new()));
+    result.insert("testsRun".to_string(), Value::Int(0));
+    result.insert("shouldStop".to_string(), Value::Bool(false));
+    result.insert("buffer".to_string(), Value::Bool(false));
+
+    result.insert("startTest".to_string(), Value::NativeFunction(result_start_test));
+    result.insert("stopTest".to_string(), Value::NativeFunction(result_stop_test));
+    result.insert("addError".to_string(), Value::NativeFunction(result_add_error));
+    result.insert("addFailure".to_string(), Value::NativeFunction(result_add_failure));
+    result.insert("addSuccess".to_string(), Value::NativeFunction(result_add_success));
+    result.insert("addError".to_string(), Value::NativeFunction(result_add_error));
+    result.insert("wasSuccessful".to_string(), Value::NativeFunction(result_was_successful));
+
+    Ok(Value::Dict(Rc::new(RefCell::new(result))))
+}
+
+/// Create a TextTestRunner instance
+fn create_text_test_runner(args: Vec<Value>) -> Result<Value> {
+    let mut runner = HashMap::new();
+
+    // Extract verbosity from args
+    let verbosity = if args.len() > 0 {
+        match &args[0] {
+            Value::Int(i) => *i,
+            _ => 1,
+        }
+    } else {
+        1
+    };
+
+    runner.insert("verbosity".to_string(), Value::Int(verbosity));
+    runner.insert("stream".to_string(), Value::None);
+    runner.insert("descriptions".to_string(), Value::Bool(true));
+    runner.insert("failfast".to_string(), Value::Bool(false));
+    runner.insert("buffer".to_string(), Value::Bool(false));
+    runner.insert("warnings".to_string(), Value::None);
+    runner.insert("tb_locals".to_string(), Value::Bool(false));
+
+    runner.insert("run".to_string(), Value::NativeFunction(runner_run));
+
+    Ok(Value::Dict(Rc::new(RefCell::new(runner))))
 }
 
 /// Assert that two values are equal
@@ -514,32 +570,41 @@ fn test_case_debug(_args: Vec<Value>) -> Result<Value> {
     Ok(Value::None)
 }
 
-/// Create a TestResult instance
-fn create_test_result(_args: Vec<Value>) -> Result<Value> {
-    let mut result = HashMap::new();
-
-    result.insert("failures".to_string(), Value::List(crate::modules::hplist::HPList::new()));
-    result.insert("errors".to_string(), Value::List(crate::modules::hplist::HPList::new()));
-    result.insert("testsRun".to_string(), Value::Int(0));
-    result.insert("skipped".to_string(), Value::List(crate::modules::hplist::HPList::new()));
-    result.insert("expectedFailures".to_string(), Value::List(crate::modules::hplist::HPList::new()));
-    result.insert("unexpectedSuccesses".to_string(), Value::List(crate::modules::hplist::HPList::new()));
-
-    result.insert("wasSuccessful".to_string(), Value::NativeFunction(test_result_was_successful));
-    result.insert("stop".to_string(), Value::NativeFunction(test_result_stop));
-
-    Ok(Value::Dict(result))
+/// Test result startTest method
+fn result_start_test(_args: Vec<Value>) -> Result<Value> {
+    Ok(Value::None)
 }
 
-/// Check if test result was successful
-fn test_result_was_successful(args: Vec<Value>) -> Result<Value> {
+/// Test result stopTest method
+fn result_stop_test(_args: Vec<Value>) -> Result<Value> {
+    Ok(Value::None)
+}
+
+/// Test result addError method
+fn result_add_error(_args: Vec<Value>) -> Result<Value> {
+    Ok(Value::None)
+}
+
+/// Test result addFailure method
+fn result_add_failure(_args: Vec<Value>) -> Result<Value> {
+    Ok(Value::None)
+}
+
+/// Test result addSuccess method
+fn result_add_success(_args: Vec<Value>) -> Result<Value> {
+    Ok(Value::None)
+}
+
+/// Test result wasSuccessful method
+fn result_was_successful(args: Vec<Value>) -> Result<Value> {
     if args.is_empty() {
         return Err(anyhow!("wasSuccessful() requires self argument"));
     }
 
     if let Value::Dict(result) = &args[0] {
-        let failures = result.get("failures");
-        let errors = result.get("errors");
+        let result_ref = result.borrow();
+        let failures = result_ref.get("failures");
+        let errors = result_ref.get("errors");
 
         let has_failures = if let Some(Value::List(f)) = failures {
             f.len() > 0
@@ -559,41 +624,10 @@ fn test_result_was_successful(args: Vec<Value>) -> Result<Value> {
     }
 }
 
-/// Stop the test result
-fn test_result_stop(_args: Vec<Value>) -> Result<Value> {
-    Ok(Value::None)
-}
-
-/// Create a TextTestRunner instance
-fn create_text_test_runner(args: Vec<Value>) -> Result<Value> {
-    let mut runner = HashMap::new();
-
-    let verbosity = if args.len() > 0 {
-        match &args[0] {
-            Value::Dict(d) => {
-                if let Some(Value::Int(v)) = d.get("verbosity") {
-                    *v
-                } else {
-                    1
-                }
-            }
-            Value::Int(v) => *v,
-            _ => 1,
-        }
-    } else {
-        1
-    };
-
-    runner.insert("verbosity".to_string(), Value::Int(verbosity));
-    runner.insert("run".to_string(), Value::NativeFunction(text_test_runner_run));
-
-    Ok(Value::Dict(runner))
-}
-
-/// Run tests with the text test runner
-fn text_test_runner_run(args: Vec<Value>) -> Result<Value> {
-    if args.len() < 2 {
-        return Err(anyhow!("run() requires self and test arguments"));
+/// Text test runner run method
+fn runner_run(args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow!("run() requires self argument"));
     }
 
     println!("Running tests...");

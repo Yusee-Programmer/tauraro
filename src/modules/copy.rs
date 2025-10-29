@@ -3,6 +3,8 @@
 
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 use crate::modules::hplist::HPList;
 
 type Result<T> = anyhow::Result<T>;
@@ -104,7 +106,7 @@ fn copy_deepcopy(args: Vec<Value>) -> Result<Value> {
     // If memo dict is provided, use it
     if args.len() > 1 {
         if let Value::Dict(memo_dict) = &args[1] {
-            memo = memo_dict.clone();
+            memo = memo_dict.borrow().clone();
         }
     }
     
@@ -128,10 +130,10 @@ fn deepcopy_recursive(obj: &Value, memo: &mut HashMap<String, Value>) -> Result<
         },
         Value::Dict(map) => {
             let mut new_map = HashMap::new();
-            for (key, value) in map {
+            for (key, value) in map.borrow().iter() {
                 new_map.insert(key.clone(), deepcopy_recursive(value, memo)?);
             }
-            Ok(Value::Dict(new_map))
+            Ok(Value::Dict(Rc::new(RefCell::new(new_map))))
         },
         Value::Tuple(items) => {
             let mut new_items = Vec::new();

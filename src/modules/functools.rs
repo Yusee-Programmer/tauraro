@@ -5,6 +5,7 @@ use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 
 
 /// Create the functools module object with all its functions and classes
@@ -88,7 +89,7 @@ fn functools_partial(args: Vec<Value>) -> Result<Value> {
     let mut partial_obj = HashMap::new();
     partial_obj.insert("func".to_string(), func);
     partial_obj.insert("args".to_string(), Value::Tuple(partial_args));
-    partial_obj.insert("keywords".to_string(), Value::Dict(HashMap::new()));
+    partial_obj.insert("keywords".to_string(), Value::Dict(Rc::new(RefCell::new(HashMap::new()))));
     partial_obj.insert("__call__".to_string(), Value::NativeFunction(partial_call));
     
     Ok(Value::Object {
@@ -274,7 +275,7 @@ fn functools_lru_cache(args: Vec<Value>) -> Result<Value> {
     let mut cache_decorator = HashMap::new();
     cache_decorator.insert("maxsize".to_string(), 
         if let Some(size) = maxsize { Value::Int(size as i64) } else { Value::None });
-    cache_decorator.insert("cache".to_string(), Value::Dict(HashMap::new()));
+    cache_decorator.insert("cache".to_string(), Value::Dict(Rc::new(RefCell::new(HashMap::new()))));
     cache_decorator.insert("hits".to_string(), Value::Int(0));
     cache_decorator.insert("misses".to_string(), Value::Int(0));
     cache_decorator.insert("__call__".to_string(), Value::NativeFunction(lru_cache_decorator));
@@ -299,7 +300,7 @@ fn lru_cache_decorator(args: Vec<Value>) -> Result<Value> {
     // Create cached function wrapper
     let mut cached_func = HashMap::new();
     cached_func.insert("func".to_string(), func);
-    cached_func.insert("cache".to_string(), Value::Dict(HashMap::new()));
+    cached_func.insert("cache".to_string(), Value::Dict(Rc::new(RefCell::new(HashMap::new()))));
     cached_func.insert("__call__".to_string(), Value::NativeFunction(cached_function_call));
     cached_func.insert("cache_info".to_string(), Value::NativeFunction(cache_info));
     cached_func.insert("cache_clear".to_string(), Value::NativeFunction(cache_clear));
@@ -334,7 +335,7 @@ fn cached_function_call(args: Vec<Value>) -> Result<Value> {
     let key = format!("{:?}", &args[1..]);
     
     // Check if result is in cache
-    if let Some(cached_result) = cache.get(&key) {
+    if let Some(cached_result) = cache.borrow().get(&key) {
         // Increment hits counter
         // In a full implementation, we would update the hits counter
         return Ok(cached_result.clone());
@@ -361,7 +362,7 @@ fn cache_info(args: Vec<Value>) -> Result<Value> {
     };
     
     let cache: &HashMap<String, Value> = match cached_obj.get("cache") {
-        Some(Value::Dict(cache)) => cache,
+        Some(Value::Dict(cache)) => &cache.borrow(),
         _ => &HashMap::new(), // Return empty cache if not found
     };
     
@@ -544,7 +545,7 @@ fn functools_singledispatch(args: Vec<Value>) -> Result<Value> {
     
     let mut registry = HashMap::new();
     registry.insert("dispatch".to_string(), func);
-    registry.insert("registry".to_string(), Value::Dict(HashMap::new()));
+    registry.insert("registry".to_string(), Value::Dict(Rc::new(RefCell::new(HashMap::new()))));
     registry.insert("__call__".to_string(), Value::NativeFunction(singledispatch_call));
     registry.insert("register".to_string(), Value::NativeFunction(singledispatch_register));
     
@@ -590,7 +591,7 @@ fn functools_singledispatchmethod(args: Vec<Value>) -> Result<Value> {
     
     let mut registry = HashMap::new();
     registry.insert("dispatch".to_string(), func);
-    registry.insert("registry".to_string(), Value::Dict(HashMap::new()));
+    registry.insert("registry".to_string(), Value::Dict(Rc::new(RefCell::new(HashMap::new()))));
     registry.insert("__call__".to_string(), Value::NativeFunction(singledispatchmethod_call));
     registry.insert("register".to_string(), Value::NativeFunction(singledispatchmethod_register));
     

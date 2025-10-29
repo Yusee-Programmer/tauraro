@@ -102,7 +102,13 @@
       "Bash(do sed -i 's/^pub enum TauraroType {$/#[derive(PartialEq, Eq)]\\npub enum TauraroType {/g' \"src/builtins_ffi/$module_ffi.rs\")",
       "Bash(for module in sys os)",
       "Bash(do sed -i '/^pub enum TauraroType {$/i #[derive(PartialEq, Eq)]' \"src/builtins_ffi/$module_ffi.rs\")",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(cd:*)",
+      "Bash(awk:*)",
+      "Bash(find:*)",
+      "Bash(timeout 180 cargo build:*)",
+      "Bash(1)",
+      "Bash(tee:*)"
     ],
     "deny": [],
     "ask": []

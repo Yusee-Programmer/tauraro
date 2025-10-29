@@ -3,6 +3,7 @@
 use crate::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use crate::modules::hplist::HPList;
 use crate::base_object::{BaseObject, MRO};
 use anyhow::anyhow;
@@ -124,7 +125,7 @@ fn len_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         Value::Str(s) => Ok(Value::Int(s.len() as i64)),
         Value::List(items) => Ok(Value::Int(items.len() as i64)),
         Value::Tuple(items) => Ok(Value::Int(items.len() as i64)),
-        Value::Dict(dict) => Ok(Value::Int(dict.len() as i64)),
+        Value::Dict(dict) => Ok(Value::Int(dict.borrow().len() as i64)),
         Value::Set(items) => Ok(Value::Int(items.len() as i64)),
         Value::FrozenSet(items) => Ok(Value::Int(items.len() as i64)),
         Value::Bytes(bytes) => Ok(Value::Int(bytes.len() as i64)),
@@ -226,7 +227,7 @@ fn tuple_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
 
 fn dict_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
-        Ok(Value::Dict(HashMap::new()))
+        Ok(Value::Dict(Rc::new(RefCell::new(HashMap::new()))))
     } else if args.len() == 1 {
         match &args[0] {
             Value::Dict(dict) => Ok(Value::Dict(dict.clone())),
@@ -244,7 +245,7 @@ fn dict_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
                         _ => return Err(anyhow::anyhow!("dictionary update sequence element #0 has wrong type")),
                     }
                 }
-                Ok(Value::Dict(dict))
+                Ok(Value::Dict(Rc::new(RefCell::new(dict))))
             }
             _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name())),
         }
@@ -985,7 +986,7 @@ fn hasattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
             namespace.contains_key(attr_name)
         },
         Value::Dict(dict) => {
-            dict.contains_key(attr_name)
+            dict.borrow().contains_key(attr_name)
         },
         _ => {
             // For other objects, check if they have a method with this name
@@ -1050,7 +1051,7 @@ fn getattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         },
         Value::Dict(dict) => {
             // For dictionaries, treat keys as attributes
-            if let Some(value) = dict.get(attr_name) {
+            if let Some(value) = dict.borrow().get(attr_name) {
                 Ok(value.clone())
             }
             // If not found and default provided, return default
@@ -1282,7 +1283,7 @@ fn iter_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         },
         Value::Dict(dict) => {
             // Create an Iterator object for the dict (keys)
-            let items: Vec<Value> = dict.keys().map(|k| Value::Str(k.clone())).collect();
+            let items: Vec<Value> = dict.borrow().keys().map(|k| Value::Str(k.clone())).collect();
             Ok(Value::Iterator {
                 items,
                 current_index: 0,
@@ -1414,7 +1415,7 @@ fn dir_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
             },
             Value::Dict(dict) => {
                 // Add dictionary keys
-                for key in dict.keys() {
+                for key in dict.borrow().keys() {
                     attrs.push(Value::Str(key.clone()));
                 }
             },
@@ -1443,25 +1444,25 @@ fn vars_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     }
     
     // For now, we'll just return an empty dict
-    Ok(Value::Dict(HashMap::new()))
+    Ok(Value::Dict(Rc::new(RefCell::new(HashMap::new()))))
 }
 
 fn locals_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if !args.is_empty() {
         return Err(anyhow::anyhow!("locals() takes no arguments ({} given)", args.len()));
     }
-    
+
     // For now, we'll just return an empty dict
-    Ok(Value::Dict(HashMap::new()))
+    Ok(Value::Dict(Rc::new(RefCell::new(HashMap::new()))))
 }
 
 fn globals_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if !args.is_empty() {
         return Err(anyhow::anyhow!("globals() takes no arguments ({} given)", args.len()));
     }
-    
+
     // For now, we'll just return an empty dict
-    Ok(Value::Dict(HashMap::new()))
+    Ok(Value::Dict(Rc::new(RefCell::new(HashMap::new()))))
 }
 
 fn eval_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -1801,7 +1802,7 @@ fn ffi_library_info(args: Vec<Value>) -> anyhow::Result<Value> {
         info.insert("path".to_string(), Value::Str(path.to_string_lossy().to_string()));
         info.insert("functions".to_string(), Value::Int(func_count as i64));
 
-        Ok(Value::Dict(info))
+        Ok(Value::Dict(Rc::new(RefCell::new(info))))
     } else {
         Err(anyhow!("Library not loaded: {}", library_name))
     }

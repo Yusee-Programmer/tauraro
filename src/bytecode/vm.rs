@@ -11,6 +11,7 @@ use crate::bytecode::memory::{CodeObject, Frame, Block, BlockType};
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 // Import module system for dynamic module loading
 use crate::modules;
 // Import type checker for runtime type enforcement
@@ -1325,6 +1326,8 @@ impl SuperBytecodeVM {
                 let first_key_reg = arg2 as usize;
                 let result_reg = arg3 as u32;
 
+                eprintln!("DEBUG BuildDict: pair_count={}, first_key_reg={}, result_reg={}", pair_count, first_key_reg, result_reg);
+
                 // Create a new dict
                 let mut dict = HashMap::new();
 
@@ -1349,7 +1352,8 @@ impl SuperBytecodeVM {
                     dict.insert(key_str, self.frames[frame_idx].registers[value_reg].value.clone());
                 }
 
-                let dict_value = Value::Dict(dict);
+                eprintln!("DEBUG BuildDict: created dict with {} entries", dict.len());
+                let dict_value = Value::Dict(Rc::new(RefCell::new(dict)));
                 self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(dict_value));
                 Ok(None)
             }
@@ -2021,10 +2025,10 @@ impl SuperBytecodeVM {
                     (item, Value::Dict(container)) => {
                         // For dict membership, we check if the item is a key in the dict
                         match item {
-                            Value::Str(key) => Value::Bool(container.contains_key(key)),
+                            Value::Str(key) => Value::Bool(container.borrow().contains_key(key)),
                             _ => {
                                 let key_str = format!("{}", item);
-                                Value::Bool(container.contains_key(&key_str))
+                                Value::Bool(container.borrow().contains_key(&key_str))
                             }
                         }
                     },
@@ -2075,10 +2079,10 @@ impl SuperBytecodeVM {
                     (item, Value::Dict(container)) => {
                         // For dict non-membership, we check if the item is NOT a key in the dict
                         match item {
-                            Value::Str(key) => Value::Bool(!container.contains_key(key)),
+                            Value::Str(key) => Value::Bool(!container.borrow().contains_key(key)),
                             _ => {
                                 let key_str = format!("{}", item);
-                                Value::Bool(!container.contains_key(&key_str))
+                                Value::Bool(!container.borrow().contains_key(&key_str))
                             }
                         }
                     },
@@ -2320,14 +2324,17 @@ impl SuperBytecodeVM {
                 let object_reg = arg1 as usize;
                 let index_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
-                
+
                 if object_reg >= self.frames[frame_idx].registers.len() || index_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("SubscrLoad: register index out of bounds"));
                 }
-                
+
                 let object_value = &self.frames[frame_idx].registers[object_reg];
                 let index_value = &self.frames[frame_idx].registers[index_reg];
-                
+
+                eprintln!("DEBUG SubscrLoad: object_reg={}, index={:?}, object_type={}",
+                         object_reg, index_value.value, object_value.value.type_name());
+
                 // Handle different sequence types
                 let result = match (&object_value.value, &index_value.value) {
                     (Value::List(items), Value::Int(index)) => {
@@ -2336,7 +2343,7 @@ impl SuperBytecodeVM {
                         } else {
                             *index
                         };
-                        
+
                         if normalized_index >= 0 && normalized_index < items.len() as i64 {
                             items.get(normalized_index as isize).unwrap().clone()
                         } else {
@@ -2349,7 +2356,7 @@ impl SuperBytecodeVM {
                         } else {
                             *index
                         };
-                        
+
                         if normalized_index >= 0 && normalized_index < items.len() as i64 {
                             items[normalized_index as usize].clone()
                         } else {
@@ -2362,21 +2369,25 @@ impl SuperBytecodeVM {
                         } else {
                             *index
                         };
-                        
+
                         if normalized_index >= 0 && normalized_index < s.len() as i64 {
                             Value::Str(s.chars().nth(normalized_index as usize).unwrap().to_string())
                         } else {
                             return Err(anyhow!("Index {} out of range for string of length {}", index, s.len()));
                         }
                     },
-                    (Value::Dict(dict), key) => {
+                    (Value::Dict(dict_ref), key) => {
                         // For dictionaries, convert key to string for lookup
                         let key_str = match key {
                             Value::Str(s) => s.clone(),
                             Value::Int(n) => n.to_string(),
                             _ => format!("{}", key),
                         };
-                        
+
+                        let dict = dict_ref.borrow();
+                        eprintln!("DEBUG SubscrLoad: looking for key='{}', dict has {} entries, keys: {:?}",
+                                 key_str, dict.len(), dict_ref.borrow().keys().collect::<Vec<_>>());
+
                         if let Some(value) = dict.get(&key_str) {
                             value.clone()
                         } else {
@@ -2384,11 +2395,11 @@ impl SuperBytecodeVM {
                         }
                     },
                     _ => {
-                        return Err(anyhow!("Subscript not supported for types {} and {}", 
+                        return Err(anyhow!("Subscript not supported for types {} and {}",
                                           object_value.value.type_name(), index_value.value.type_name()));
                     }
                 };
-                
+
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
@@ -2397,17 +2408,20 @@ impl SuperBytecodeVM {
                 let object_reg = arg1 as usize;
                 let index_reg = arg2 as usize;
                 let value_reg = arg3 as usize;
-                
-                if object_reg >= self.frames[frame_idx].registers.len() || 
+
+                if object_reg >= self.frames[frame_idx].registers.len() ||
                    index_reg >= self.frames[frame_idx].registers.len() ||
                    value_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("SubscrStore: register index out of bounds"));
                 }
-                
+
                 // Clone the values we need to avoid borrowing issues
                 let index_value = self.frames[frame_idx].registers[index_reg].value.clone();
                 let value_to_store = self.frames[frame_idx].registers[value_reg].value.clone();
-                
+
+                eprintln!("DEBUG SubscrStore: object_reg={}, index={:?}, value={:?}",
+                         object_reg, index_value, value_to_store);
+
                 // Handle different sequence types
                 match &mut self.frames[frame_idx].registers[object_reg].value {
                     Value::List(items) => {
@@ -2417,7 +2431,7 @@ impl SuperBytecodeVM {
                             } else {
                                 index
                             };
-                            
+
                             if normalized_index >= 0 && normalized_index < items.len() as i64 {
                                 items.set(normalized_index as isize, value_to_store)
                                     .map_err(|e| anyhow!("Error setting list item: {}", e))?;
@@ -2428,22 +2442,25 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("List indices must be integers, not {}", index_value.type_name()));
                         }
                     },
-                    Value::Dict(dict) => {
+                    Value::Dict(dict_ref) => {
                         // For dictionaries, convert key to string for lookup
                         let key_str = match index_value {
                             Value::Str(s) => s,
                             Value::Int(n) => n.to_string(),
                             _ => format!("{}", index_value),
                         };
-                        
-                        dict.insert(key_str, value_to_store);
+
+                        let mut dict = dict_ref.borrow_mut();
+                        eprintln!("DEBUG SubscrStore: inserting key='{}', dict had {} entries before", key_str, dict.len());
+                        dict.insert(key_str.clone(), value_to_store);
+                        eprintln!("DEBUG SubscrStore: dict now has {} entries, contains key: {}", dict.len(), dict.contains_key(&key_str));
                     },
                     _ => {
-                        return Err(anyhow!("Subscript assignment not supported for type {}", 
+                        return Err(anyhow!("Subscript assignment not supported for type {}",
                                           self.frames[frame_idx].registers[object_reg].value.type_name()));
                     }
                 };
-                
+
                 Ok(None)
             }
             OpCode::CallMethod => {
@@ -2734,7 +2751,7 @@ impl SuperBytecodeVM {
                 let dict_value = &self.frames[frame_idx].registers[dict_reg];
                 match &dict_value.value {
                     Value::Dict(dict) => {
-                        let kwargs_marker = Value::KwargsMarker(dict.clone());
+                        let kwargs_marker = Value::KwargsMarker(dict.borrow().clone());
                         self.frames[frame_idx].set_register(result_reg, RcValue::new(kwargs_marker));
                         Ok(None)
                     }
@@ -2965,7 +2982,7 @@ impl SuperBytecodeVM {
                     Value::Dict(dict) => {
                         // For now, we'll just check that we have the right number of keys
                         // In a full implementation, we would check specific keys
-                        if dict.len() >= key_count {
+                        if dict.borrow().len() >= key_count {
                             Ok(None) // Match successful
                         } else {
                             // Jump to next case
@@ -3060,7 +3077,7 @@ impl SuperBytecodeVM {
                 match &mapping_value.value {
                     Value::Dict(dict) => {
                         // Check if we have at least the required number of key-value pairs
-                        if dict.len() >= pair_count {
+                        if dict.borrow().len() >= pair_count {
                             Ok(None) // Match successful
                         } else {
                             // Jump to next case
@@ -3413,7 +3430,7 @@ impl SuperBytecodeVM {
                     },
                     Value::Dict(dict) => {
                         // For dictionaries, treat keys as attributes
-                        if let Some(value) = dict.get(&attr_name) {
+                        if let Some(value) = dict.borrow().get(&attr_name) {
                             value.clone()
                         } else {
                             return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
@@ -3633,7 +3650,7 @@ impl SuperBytecodeVM {
                     },
                     Value::Dict(dict) => {
                         // For dictionaries, treat keys as attributes
-                        dict.insert(attr_name, value_to_store);
+                        dict.borrow_mut().insert(attr_name, value_to_store);
                     },
                     Value::Module(_, namespace) => {
                         // For modules, store in namespace
@@ -3736,10 +3753,10 @@ impl SuperBytecodeVM {
                     },
                     Value::Dict(dict) => {
                         // For dictionaries, treat keys as attributes
-                        if !dict.contains_key(&attr_name) {
+                        if !dict.borrow().contains_key(&attr_name) {
                             return Err(anyhow!("'{}' object has no attribute '{}'", object_type_name, attr_name));
                         }
-                        dict.remove(&attr_name);
+                        dict.borrow_mut().remove(&attr_name);
                     },
                     Value::Module(_, namespace) => {
                         // For modules, remove from namespace
