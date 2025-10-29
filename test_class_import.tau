@@ -1,0 +1,33 @@
+# Test class imports
+
+import shapes
+
+print("Testing class imports...")
+
+# Test if we can access the Shape class
+if hasattr(shapes, 'Shape'):
+    print("Shape class found")
+    shape_obj = shapes.Shape("blue")
+    print("Shape description:", shape_obj.describe())
+else:
+    print("Shape class not found")
+
+# Test if we can access the Rectangle class
+if hasattr(shapes, 'Rectangle'):
+    print("Rectangle class found")
+    rect_obj = shapes.Rectangle(10, 5, "red")
+    print("Rectangle description:", rect_obj.describe())
+    print("Rectangle area:", rect_obj.area())
+else:
+    print("Rectangle class not found")
+
+# Test if we can access the Circle class
+if hasattr(shapes, 'Circle'):
+    print("Circle class found")
+    circle_obj = shapes.Circle(3, "green")
+    print("Circle description:", circle_obj.describe())
+    print("Circle area:", circle_obj.area())
+else:
+    print("Circle class not found")
+
+print("Class import test completed")

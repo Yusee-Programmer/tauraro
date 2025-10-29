@@ -1,0 +1,43 @@
+# Test script to debug shapes module loading
+import shapes
+
+print("Shapes module imported")
+print("Available names in module:", dir(shapes))
+
+# Check what Rectangle is
+if hasattr(shapes, 'Rectangle'):
+    rect_class = getattr(shapes, 'Rectangle')
+    print("Rectangle type:", type(rect_class))
+    print("Rectangle value:", rect_class)
+    
+    # Try to create an instance
+    try:
+        obj = shapes.Rectangle(5, 3, "red")
+        print("Object created successfully")
+        print("Object type:", type(obj))
+        print("Object description:", obj.describe())
+        print("Object area:", obj.area())
+    except Exception as e:
+        print("Error creating object:", e)
+        import traceback
+        traceback.print_exc()
+else:
+    print("Rectangle not found in module")
+
+# Test exception handling with traceback
+try:
+    # This should raise an exception
+    raise ValueError("This is a test exception")
+except Exception as e:
+    print("Caught exception:", e)
+    import traceback
+    traceback.print_exc()
+
+# Test another exception
+try:
+    # This should raise a different exception
+    raise RuntimeError("Another test exception")
+except Exception as e:
+    print("Caught exception:", e)
+    import traceback
+    traceback.print_exc()

@@ -1,0 +1,41 @@
+# Test script to verify our fixes for class imports and exception handling
+
+print("Testing class imports and exception handling...")
+
+# Test 1: Class imports
+try:
+    import shapes
+    print("Shapes module imported successfully")
+    
+    # Test if we can access classes
+    if hasattr(shapes, 'Rectangle'):
+        rect = shapes.Rectangle(5, 3, "red")
+        print("Rectangle created:", rect.describe())
+        print("Rectangle area:", rect.area())
+    else:
+        print("Rectangle class not found")
+        
+    if hasattr(shapes, 'Circle'):
+        circle = shapes.Circle(4, "blue")
+        print("Circle created:", circle.describe())
+        print("Circle area:", circle.area())
+    else:
+        print("Circle class not found")
+        
+except Exception as e:
+    print("Error importing shapes:", e)
+
+# Test 2: Exception handling with traceback
+try:
+    print("Testing exception handling...")
+    raise ValueError("This is a test exception")
+except ValueError as e:
+    print("Caught ValueError:", e)
+
+# Test 3: Another exception type
+try:
+    raise RuntimeError("This is another test exception")
+except RuntimeError as e:
+    print("Caught RuntimeError:", e)
+
+print("All tests completed")

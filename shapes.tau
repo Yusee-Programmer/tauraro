@@ -1,0 +1,120 @@
+# Tauraro OOP Features Module
+# This module demonstrates comprehensive OOP features in Tauraro
+
+# Base class for all shapes
+class Shape:
+    def __init__(self, color):
+        self.color = color
+    
+    def describe(self):
+        return f"A {self.color} shape"
+
+# Rectangle class inheriting from Shape
+class Rectangle(Shape):
+    def __init__(self, width, height, color):
+        super().__init__(color)
+        self.width = width
+        self.height = height
+    
+    def area(self):
+        return self.width * self.height
+    
+    def describe(self):
+        return f"A {self.color} rectangle with width {self.width} and height {self.height}"
+
+# Circle class inheriting from Shape
+class Circle(Shape):
+    def __init__(self, radius, color):
+        super().__init__(color)
+        self.radius = radius
+    
+    def area(self):
+        return 3.14159 * self.radius * self.radius
+    
+    def describe(self):
+        return f"A {self.color} circle with radius {self.radius}"
+
+# Triangle class inheriting from Shape
+class Triangle(Shape):
+    def __init__(self, side1, side2, side3, color="white"):
+        super().__init__(color)
+        self.side1 = side1
+        self.side2 = side2
+        self.side3 = side3
+    
+    def area(self):
+        # Using Heron's formula with pow function to avoid parser issues
+        s = (self.side1 + self.side2 + self.side3) / 2
+        return pow(s * (s - self.side1) * (s - self.side2) * (s - self.side3), 0.5)
+    
+    def perimeter(self):
+        return self.side1 + self.side2 + self.side3
+    
+    def describe(self):
+        return f"A {self.color} triangle with sides {self.side1}, {self.side2}, and {self.side3}"
+
+# Person class demonstrating class methods and static methods
+class Person:
+    def __init__(self, name, age):
+        self.name = name
+        self.age = age
+    
+    # Instance method
+    def introduce(self):
+        return f"Hi, I'm {self.name} and I'm {self.age} years old."
+    
+    # Static method
+    @staticmethod
+    def is_adult(age):
+        return age >= 18
+
+# Student class inheriting from Person
+class Student(Person):
+    def __init__(self, name, age, student_id, major):
+        super().__init__(name, age)
+        self.student_id = student_id
+        self.major = major
+        self.grades = []
+    
+    # Override introduce method
+    def introduce(self):
+        return f"Hi, I'm {self.name}, {self.age} years old, and my student ID is {self.student_id}."
+    
+    # Add grade method
+    def add_grade(self, grade):
+        self.grades.append(grade)
+    
+    # Calculate average grade
+    def average_grade(self):
+        if not self.grades:
+            return 0
+        return sum(self.grades) / len(self.grades)
+    
+    # Override string representation
+    def __str__(self):
+        return f"Student(name='{self.name}', age={self.age}, student_id='{self.student_id}', major='{self.major}')"
+
+# Factory function to create shapes (simplified to avoid *args/**kwargs issues)
+def create_shape(shape_type, arg1, arg2, arg3=None, color="white"):
+    if shape_type == "rectangle":
+        return Rectangle(arg1, arg2, color)
+    elif shape_type == "circle":
+        return Circle(arg1, color)
+    elif shape_type == "triangle":
+        return Triangle(arg1, arg2, arg3, color)
+    else:
+        raise ValueError(f"Unknown shape type: {shape_type}")
+
+# Module level variable
+PI = 3.14159
+
+# Module level function
+def calculate_area(length, width):
+    return length * width
+
+# Another utility function
+def is_right_triangle(a, b, c):
+    # Sort the sides to identify the longest one
+    sides = sorted([a, b, c])
+    # Use pow function instead of ** operator
+    return pow(sides[0], 2) + pow(sides[1], 2) == pow(sides[2], 2)

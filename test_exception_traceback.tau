@@ -1,0 +1,23 @@
+# Test exception handling with traceback
+
+print("Testing exception handling with traceback")
+
+# Test 1: Basic exception with traceback
+try:
+    raise ValueError("This is a test ValueError")
+except ValueError as e:
+    print("Caught ValueError:", e)
+
+# Test 2: Another exception type
+try:
+    raise RuntimeError("This is a test RuntimeError")
+except RuntimeError as e:
+    print("Caught RuntimeError:", e)
+
+# Test 3: Exception without try/except (should show traceback)
+# This will cause the program to exit with an unhandled exception
+# Uncomment the following lines to test:
+# print("About to raise unhandled exception...")
+# raise Exception("This is an unhandled exception")
+
+print("Tests completed")
