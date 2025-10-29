@@ -69,6 +69,7 @@ pub enum Value {
     },
     #[cfg(feature = "ffi")]
     ExternFunction {
+        library_name: String,
         name: String,
         signature: String,
         return_type: FFIType,
@@ -171,7 +172,7 @@ impl PartialEq for Value {
             (Value::Module(name_a, namespace_a), Value::Module(name_b, namespace_b)) => name_a == name_b && namespace_a == namespace_b,
             (Value::BoundMethod { object: object_a, method_name: method_name_a }, Value::BoundMethod { object: object_b, method_name: method_name_b }) => object_a == object_b && method_name_a == method_name_b,
             #[cfg(feature = "ffi")]
-            (Value::ExternFunction { name: name_a, signature: signature_a, return_type: return_type_a, param_types: param_types_a }, Value::ExternFunction { name: name_b, signature: signature_b, return_type: return_type_b, param_types: param_types_b }) => name_a == name_b && signature_a == signature_b && return_type_a == return_type_b && param_types_a == param_types_b,
+            (Value::ExternFunction { library_name: library_name_a, name: name_a, signature: signature_a, return_type: return_type_a, param_types: param_types_a }, Value::ExternFunction { library_name: library_name_b, name: name_b, signature: signature_b, return_type: return_type_b, param_types: param_types_b }) => library_name_a == library_name_b && name_a == name_b && signature_a == signature_b && return_type_a == return_type_b && param_types_a == param_types_b,
             (Value::None, Value::None) => true,
             (Value::TypedValue { value: value_a, type_info: type_info_a }, Value::TypedValue { value: value_b, type_info: type_info_b }) => value_a == value_b && type_info_a == type_info_b,
             (Value::KwargsMarker(a), Value::KwargsMarker(b)) => a == b,
@@ -254,8 +255,9 @@ impl fmt::Debug for Value {
                     .finish()
             },
             #[cfg(feature = "ffi")]
-            Value::ExternFunction { name, signature, return_type, param_types } => {
+            Value::ExternFunction { library_name, name, signature, return_type, param_types } => {
                 f.debug_struct("ExternFunction")
+                    .field("library_name", library_name)
                     .field("name", name)
                     .field("signature", signature)
                     .field("return_type", return_type)

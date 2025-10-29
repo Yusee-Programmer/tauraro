@@ -1466,6 +1466,8 @@ impl SuperCompiler {
                     CompareOp::LtE => OpCode::CompareLessEqualRR,
                     CompareOp::Gt => OpCode::CompareGreaterRR,
                     CompareOp::GtE => OpCode::CompareGreaterEqualRR,
+                    CompareOp::In => OpCode::CompareInRR,
+                    CompareOp::NotIn => OpCode::CompareNotInRR,
                     _ => return Err(anyhow!("Unsupported comparison operation: {:?}", ops[0])),
                 };
                 
@@ -1553,6 +1555,38 @@ impl SuperCompiler {
                 // arg1 = number of pairs, arg2 = first key register, arg3 = result register
                 let first_reg = if pair_regs.is_empty() { 0 } else { pair_regs[0] };
                 self.emit(OpCode::BuildDict, (pair_regs.len() / 2) as u32, first_reg, result_reg, self.current_line);
+
+                Ok(result_reg)
+            }
+            Expr::Set(items) => {
+                // Compile each item
+                let mut item_regs = Vec::new();
+                for item in items {
+                    let item_reg = self.compile_expression(item)?;
+                    item_regs.push(item_reg);
+                }
+
+                // Ensure items are in consecutive registers for BuildSet
+                // BuildSet expects items in consecutive registers starting from first_reg
+                let first_consecutive_reg = self.allocate_register();
+                for (i, &item_reg) in item_regs.iter().enumerate() {
+                    let target_reg = first_consecutive_reg + i as u32;
+                    if item_reg != target_reg {
+                        // Allocate the target register if needed
+                        while self.next_register <= target_reg {
+                            self.allocate_register();
+                        }
+                        // Copy item to consecutive position
+                        self.emit(OpCode::LoadLocal, item_reg, target_reg, 0, self.current_line);
+                    }
+                }
+
+                let result_reg = self.allocate_register();
+
+                // Use the BuildSet opcode to create a set with the items
+                // arg1 = number of items, arg2 = first item register, arg3 = result register
+                let first_reg = if item_regs.is_empty() { result_reg } else { first_consecutive_reg };
+                self.emit(OpCode::BuildSet, item_regs.len() as u32, first_reg, result_reg, self.current_line);
 
                 Ok(result_reg)
             }

@@ -7,6 +7,14 @@ pub mod semantic;
 pub mod ir;
 pub mod codegen;
 pub mod value;
+
+// FFI modules (before builtins so it can be imported)
+#[cfg(feature = "ffi")]
+pub mod ffi;
+
+#[cfg(feature = "ffi")]
+pub mod ffi_builtins;
+
 pub mod builtins;
 pub mod builtins_super;
 pub mod vm;
@@ -28,13 +36,14 @@ pub use bytecode::instructions::{Instruction, OpCode};
 pub use vm::memory::Scope;
 pub use type_checker::{TypeChecker, TypeEnvironment, TypeInfo};
 
-#[cfg(feature = "ffi")]
-pub mod ffi;
-
 #[cfg(feature = "python-interop")]
 pub mod python_interop;
 
-
+// Helper function to get FFI builtins (accessible from builtins.rs)
+#[cfg(feature = "ffi")]
+pub fn get_ffi_builtins() -> std::collections::HashMap<String, Value> {
+    ffi_builtins::init_ffi_builtins()
+}
 
 pub use lexer::Lexer;
 pub use parser::Parser;

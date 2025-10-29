@@ -91,6 +91,9 @@ impl SuperBytecodeVM {
             globals.insert(name.clone(), RcValue::new(value.clone()));
         }
 
+        // Note: FFI builtins are automatically added through builtins::init_builtins()
+        // when the 'ffi' feature is enabled
+
         Self {
             frames: Vec::new(),
             builtins,
@@ -117,6 +120,42 @@ impl SuperBytecodeVM {
         }
     }
 
+    /// Helper method to compile and execute a module source file
+    fn compile_and_execute_module(&mut self, source: &str, module_name: &str) -> Result<Value> {
+        // Compile the module
+        let tokens = crate::lexer::Lexer::new(source)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow!("Lexer error in module '{}': {}", module_name, e))?;
+
+        let mut parser = crate::parser::Parser::new(tokens);
+        let ast = parser.parse()
+            .map_err(|e| anyhow!("Parser error in module '{}': {}", module_name, e))?;
+
+        let mut compiler = crate::bytecode::compiler::SuperCompiler::new(module_name.to_string());
+        let code_object = compiler.compile(ast)
+            .map_err(|e| anyhow!("Compiler error in module '{}': {}", module_name, e))?;
+
+        // Save current globals to determine what the module adds
+        let globals_before: std::collections::HashSet<String> = self.globals.keys().cloned().collect();
+
+        // Execute the module
+        self.execute(code_object)
+            .map_err(|e| anyhow!("Error executing module '{}': {}", module_name, e))?;
+
+        // Get the module's globals (namespace) - only new names added by the module
+        let mut module_namespace = HashMap::new();
+        for (name, value) in &self.globals {
+            if !globals_before.contains(name) && !name.starts_with("__") && name != "builtins" {
+                module_namespace.insert(name.clone(), value.value.clone());
+            }
+        }
+
+        // Create the module and cache it
+        let module = Value::Module(module_name.to_string(), module_namespace);
+        self.loaded_modules.insert(module_name.to_string(), module.clone());
+        Ok(module)
+    }
+
     /// Load a module from a file in the filesystem
     /// Searches sys.path directories for module files with supported extensions
     /// Supported extensions: .py, .tr, .tau, .tauraro
@@ -126,116 +165,36 @@ impl SuperBytecodeVM {
             return Ok(cached_module.clone());
         }
 
-        // Get sys.path from the sys module
         let search_paths = vec![
             ".".to_string(),
             "tauraro_packages".to_string(),
             "lib".to_string(),
         ];
 
-        // Supported file extensions for Tauraro modules (in priority order)
         let extensions = vec!["py", "tr", "tau", "tauraro"];
 
         // Try to find the module file in search paths with any supported extension
         for search_path in &search_paths {
             for ext in &extensions {
                 let module_path = std::path::Path::new(search_path).join(format!("{}.{}", module_name, ext));
-
                 if module_path.exists() {
-                // Read the module file
-                let source = std::fs::read_to_string(&module_path)
-                    .map_err(|e| anyhow!("Failed to read module file: {}", e))?;
-
-                // Compile the module
-                let tokens = crate::lexer::Lexer::new(&source)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| anyhow!("Lexer error in module '{}': {}", module_name, e))?;
-
-                let mut parser = crate::parser::Parser::new(tokens);
-                let ast = parser.parse()
-                    .map_err(|e| anyhow!("Parser error in module '{}': {}", module_name, e))?;
-
-                let mut compiler = crate::bytecode::compiler::SuperCompiler::new(module_name.to_string());
-                let code_object = compiler.compile(ast)
-                    .map_err(|e| anyhow!("Compiler error in module '{}': {}", module_name, e))?;
-
-                // Save current globals to determine what the module adds
-                let globals_before: std::collections::HashSet<String> = self.globals.keys().cloned().collect();
-
-                // Execute the module directly
-                let result = self.execute(code_object);
-
-                // Check for errors during execution
-                if let Err(e) = result {
-                    return Err(anyhow!("Error executing module '{}': {}", module_name, e));
-                }
-
-                // Get the module's globals (namespace) - only new names added by the module
-                let mut module_namespace = HashMap::new();
-                for (name, value) in &self.globals {
-                    // Include names that were added by the module (not in globals before)
-                    // Or names that don't start with __ (skip internals like __name__, __builtins__)
-                    if !globals_before.contains(name) && !name.starts_with("__") && name != "builtins" {
-                        module_namespace.insert(name.clone(), value.value.clone());
-                    }
-                }
-
-                    // Create the module and cache it before returning
-                    let module = Value::Module(module_name.to_string(), module_namespace);
-                    self.loaded_modules.insert(module_name.to_string(), module.clone());
-                    return Ok(module);
+                    let source = std::fs::read_to_string(&module_path)
+                        .map_err(|e| anyhow!("Failed to read module file: {}", e))?;
+                    return self.compile_and_execute_module(&source, module_name);
                 }
             }
         }
 
-        // Also try to load from package directories (with __init__ files)
+        // Try to load from package directories (with __init__ files)
         for search_path in &search_paths {
             for ext in &extensions {
                 let package_path = std::path::Path::new(search_path)
                     .join(module_name)
                     .join(format!("__init__.{}", ext));
-
                 if package_path.exists() {
-                // Read the __init__.py file
-                let source = std::fs::read_to_string(&package_path)
-                    .map_err(|e| anyhow!("Failed to read package __init__.py: {}", e))?;
-
-                // Compile and execute similar to above
-                let tokens = crate::lexer::Lexer::new(&source)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| anyhow!("Lexer error in package '{}': {}", module_name, e))?;
-
-                let mut parser = crate::parser::Parser::new(tokens);
-                let ast = parser.parse()
-                    .map_err(|e| anyhow!("Parser error in package '{}': {}", module_name, e))?;
-
-                let mut compiler = crate::bytecode::compiler::SuperCompiler::new(module_name.to_string());
-                let code_object = compiler.compile(ast)
-                    .map_err(|e| anyhow!("Compiler error in package '{}': {}", module_name, e))?;
-
-                // Save current globals to determine what the package adds
-                let globals_before: std::collections::HashSet<String> = self.globals.keys().cloned().collect();
-
-                // Execute the package __init__.py
-                let result = self.execute(code_object);
-
-                if let Err(e) = result {
-                    return Err(anyhow!("Error executing package '{}': {}", module_name, e));
-                }
-
-                // Get the package's globals (namespace) - only new names added by the package
-                let mut module_namespace = HashMap::new();
-                for (name, value) in &self.globals {
-                    // Include names that were added by the package (not in globals before)
-                    if !globals_before.contains(name) && !name.starts_with("__") && name != "builtins" {
-                        module_namespace.insert(name.clone(), value.value.clone());
-                    }
-                }
-
-                    // Create the module and cache it before returning
-                    let module = Value::Module(module_name.to_string(), module_namespace);
-                    self.loaded_modules.insert(module_name.to_string(), module.clone());
-                    return Ok(module);
+                    let source = std::fs::read_to_string(&package_path)
+                        .map_err(|e| anyhow!("Failed to read package __init__ file: {}", e))?;
+                    return self.compile_and_execute_module(&source, module_name);
                 }
             }
         }
@@ -500,12 +459,6 @@ impl SuperBytecodeVM {
         }
     }
 
-    /// Execute a single instruction (placeholder implementation)
-    fn execute_instruction(&mut self, _opcode: OpCode, _arg1: u32, _arg2: u32, _arg3: u32, _frame_idx: usize, _frame_len: usize) -> Result<Option<Value>> {
-        // This is a placeholder implementation - in a real VM, this would dispatch to the appropriate handler
-        Err(anyhow!("execute_instruction not implemented"))
-    }
-    
     /// Optimized instruction execution with computed GOTOs for maximum performance
     #[inline(always)]
     fn execute_instruction_fast(&mut self, frame_idx: usize, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
@@ -1371,36 +1324,55 @@ impl SuperBytecodeVM {
                 let pair_count = arg1 as usize;
                 let first_key_reg = arg2 as usize;
                 let result_reg = arg3 as u32;
-                
+
                 // Create a new dict
-                let mut dict = std::collections::HashMap::new();
-                
-                // Get key-value pairs from consecutive registers starting from first_key_reg
-                // Keys and values are interleaved
+                let mut dict = HashMap::new();
+
+                // Get items from consecutive registers starting from first_key_reg
                 for i in 0..pair_count {
-                    let key_reg = first_key_reg + (i * 2);
-                    let value_reg = first_key_reg + (i * 2) + 1;
-                    
-                    if key_reg >= self.frames[frame_idx].registers.len() || value_reg >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildDict: register index out of bounds (len: {})", self.frames[frame_idx].registers.len()));
+                    let key_reg = first_key_reg + 2 * i;
+                    let value_reg = first_key_reg + 2 * i + 1;
+                    if key_reg >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("BuildDict: key register index {} out of bounds (len: {})", key_reg, self.frames[frame_idx].registers.len()));
                     }
-                    
-                    // Keys must be strings in our implementation
-                    let key_value = &self.frames[frame_idx].registers[key_reg].value;
-                    let value_value = &self.frames[frame_idx].registers[value_reg].value;
-                    
-                    match key_value {
-                        Value::Str(key_str) => {
-                            dict.insert(key_str.clone(), value_value.clone());
-                        },
-                        _ => {
-                            return Err(anyhow!("BuildDict: dictionary keys must be strings, got {}", key_value.type_name()));
-                        }
+                    if value_reg >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("BuildDict: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
                     }
+
+                    // Keys must be strings - convert them or error
+                    let key = &self.frames[frame_idx].registers[key_reg].value;
+                    let key_str = match key {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(anyhow!("BuildDict: dictionary keys must be strings, got {}", key.type_name())),
+                    };
+
+                    dict.insert(key_str, self.frames[frame_idx].registers[value_reg].value.clone());
                 }
-                
+
                 let dict_value = Value::Dict(dict);
                 self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(dict_value));
+                Ok(None)
+            }
+            OpCode::BuildSet => {
+                // Build a set from items on the stack/register
+                let item_count = arg1 as usize;
+                let first_item_reg = arg2 as usize;
+                let result_reg = arg3 as u32;
+                
+                // Create a new set
+                let mut items = Vec::new();
+                
+                // Get items from consecutive registers starting from first_item_reg
+                for i in 0..item_count {
+                    let item_reg = first_item_reg + i;
+                    if item_reg >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("BuildSet: item register index {} out of bounds (len: {})", item_reg, self.frames[frame_idx].registers.len()));
+                    }
+                    items.push(self.frames[frame_idx].registers[item_reg].value.clone());
+                }
+                
+                let set_value = Value::Set(items);
+                self.frames[frame_idx].set_register(result_reg, RcValue::new(set_value));
                 Ok(None)
             }
             OpCode::BinaryDivRR => {
@@ -2007,6 +1979,114 @@ impl SuperBytecodeVM {
                             Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal) => Value::Bool(true),
                             _ => Value::Bool(false),
                         }
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::CompareInRR => {
+                // Register-Register membership test (in)
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("CompareInRR: register index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+                
+                // Check membership
+                let result = match (&left.value, &right.value) {
+                    // String membership
+                    (Value::Str(item), Value::Str(container)) => Value::Bool(container.contains(item)),
+                    // List membership
+                    (item, Value::List(container)) => {
+                        let found = container.iter().any(|list_item| list_item == item);
+                        Value::Bool(found)
+                    },
+                    // Tuple membership
+                    (item, Value::Tuple(container)) => {
+                        let found = container.iter().any(|tuple_item| tuple_item == item);
+                        Value::Bool(found)
+                    },
+                    // Set membership
+                    (item, Value::Set(container)) => {
+                        let found = container.iter().any(|set_item| set_item == item);
+                        Value::Bool(found)
+                    },
+                    // Dict membership (check keys)
+                    (item, Value::Dict(container)) => {
+                        // For dict membership, we check if the item is a key in the dict
+                        match item {
+                            Value::Str(key) => Value::Bool(container.contains_key(key)),
+                            _ => {
+                                let key_str = format!("{}", item);
+                                Value::Bool(container.contains_key(&key_str))
+                            }
+                        }
+                    },
+                    _ => {
+                        // For other types, try to convert to string and check string membership
+                        let left_str = format!("{}", left.value);
+                        let right_str = format!("{}", right.value);
+                        Value::Bool(right_str.contains(&left_str))
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::CompareNotInRR => {
+                // Register-Register non-membership test (not in)
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("CompareNotInRR: register index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+                
+                // Check non-membership (opposite of membership)
+                let result = match (&left.value, &right.value) {
+                    // String non-membership
+                    (Value::Str(item), Value::Str(container)) => Value::Bool(!container.contains(item)),
+                    // List non-membership
+                    (item, Value::List(container)) => {
+                        let found = container.iter().any(|list_item| list_item == item);
+                        Value::Bool(!found)
+                    },
+                    // Tuple non-membership
+                    (item, Value::Tuple(container)) => {
+                        let found = container.iter().any(|tuple_item| tuple_item == item);
+                        Value::Bool(!found)
+                    },
+                    // Set non-membership
+                    (item, Value::Set(container)) => {
+                        let found = container.iter().any(|set_item| set_item == item);
+                        Value::Bool(!found)
+                    },
+                    // Dict non-membership (check keys)
+                    (item, Value::Dict(container)) => {
+                        // For dict non-membership, we check if the item is NOT a key in the dict
+                        match item {
+                            Value::Str(key) => Value::Bool(!container.contains_key(key)),
+                            _ => {
+                                let key_str = format!("{}", item);
+                                Value::Bool(!container.contains_key(&key_str))
+                            }
+                        }
+                    },
+                    _ => {
+                        // For other types, try to convert to string and check string non-membership
+                        let left_str = format!("{}", left.value);
+                        let right_str = format!("{}", right.value);
+                        Value::Bool(!right_str.contains(&left_str))
                     }
                 };
                 
@@ -2630,7 +2710,7 @@ impl SuperBytecodeVM {
                 
                 // Fast path for common operations
                 let result = match (&left.value, &right.value) {
-                    (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
+                    (Value::Int(a), Value::Int(b)) => Value::Int((*a).wrapping_mul(*b)),
                     (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
                     _ => {
                         // For less common cases, use the general implementation
@@ -4050,6 +4130,31 @@ impl SuperBytecodeVM {
                 // Return the object instance for cases where there's no __init__ or __init__ is not handled above
                 Ok(instance)
             }
+            #[cfg(feature = "ffi")]
+            #[cfg(feature = "ffi")]
+            Value::Object { class_name, fields, .. } if class_name == "FFIFunction" => {
+                // Handle FFI function calls
+                // Check if this is an FFI callable
+                if let Some(Value::Bool(true)) = fields.get("__ffi_callable__") {
+                    // Extract library and function names
+                    let library_name = match fields.get("__ffi_library__") {
+                        Some(Value::Str(s)) => s.clone(),
+                        _ => return Err(anyhow!("FFI function missing library name")),
+                    };
+
+                    let function_name = match fields.get("__ffi_function__") {
+                        Some(Value::Str(s)) => s.clone(),
+                        _ => return Err(anyhow!("FFI function missing function name")),
+                    };
+
+                    // Call the FFI function through the global manager
+                    let manager = crate::builtins::GLOBAL_FFI_MANAGER.lock().unwrap();
+                    let result = manager.call_external_function(&library_name, &function_name, args.clone())?;
+                    Ok(result)
+                } else {
+                    Err(anyhow!("Object is not callable"))
+                }
+            }
             Value::Object {
                 class_name,
                 fields,
@@ -4141,7 +4246,7 @@ impl SuperBytecodeVM {
                                 // In a full implementation, we would look up the class and find its methods
                                 // For now, we'll just continue searching
                             }
-                            
+
                             // If not found in MRO, try to call it as a method on the object
                             let mut method_args = vec![*object.clone()];
                             method_args.extend(args);
@@ -4151,6 +4256,37 @@ impl SuperBytecodeVM {
                     }
                     _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.type_name()))
                 }
+            }
+            #[cfg(feature = "ffi")]
+            Value::Object { class_name, fields, .. } if class_name == "FFIFunction" => {
+                // Handle FFI function calls
+                // Check if this is an FFI callable
+                if let Some(Value::Bool(true)) = fields.get("__ffi_callable__") {
+                    // Extract library and function names
+                    let library_name = match fields.get("__ffi_library__") {
+                        Some(Value::Str(s)) => s.clone(),
+                        _ => return Err(anyhow!("FFI function missing library name")),
+                    };
+
+                    let function_name = match fields.get("__ffi_function__") {
+                        Some(Value::Str(s)) => s.clone(),
+                        _ => return Err(anyhow!("FFI function missing function name")),
+                    };
+
+                    // Call the FFI function through the global manager
+                    let manager = crate::builtins::GLOBAL_FFI_MANAGER.lock().unwrap();
+                    let result = manager.call_external_function(&library_name, &function_name, args)?;
+                    Ok(result)
+                } else {
+                    Err(anyhow!("Object is not callable"))
+                }
+            }
+            #[cfg(feature = "ffi")]
+            Value::ExternFunction { library_name, name, .. } => {
+                // Call the FFI function through the global manager
+                let manager = crate::builtins::GLOBAL_FFI_MANAGER.lock().unwrap();
+                let result = manager.call_external_function(&library_name, &name, args.clone())?;
+                Ok(result)
             }
             _ => {
                 Err(anyhow!("'{}' object is not callable", func_value.type_name()))
