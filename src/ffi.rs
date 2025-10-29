@@ -721,6 +721,99 @@ impl FFIManager {
                 }
             }
 
+            // GetSystemMetrics, MessageBeep: (int) -> int
+            (FFIType::Int | FFIType::Int32, &[FFIType::Int | FFIType::Int32]) => {
+                let arg = self.value_to_int(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // SetWindowTextA: (pointer, pointer) -> int
+            (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer | FFIType::String]) => {
+                let hwnd = self.value_to_pointer(&args[0])?;
+                let text = self.value_to_string(&args[1])?;
+                let text_cstring = CString::new(text)?;
+
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_char) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(hwnd, text_cstring.as_ptr());
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // MoveWindow: (pointer, int, int, int, int, int) -> int
+            (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let hwnd = self.value_to_pointer(&args[0])?;
+                let x = self.value_to_int(&args[1])?;
+                let y = self.value_to_int(&args[2])?;
+                let width = self.value_to_int(&args[3])?;
+                let height = self.value_to_int(&args[4])?;
+                let repaint = self.value_to_int(&args[5])?;
+
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_int, c_int, c_int, c_int, c_int) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(hwnd, x, y, width, height, repaint);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // GetMessageA, PeekMessageA: (pointer, pointer, int, int) -> int
+            (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let msg_ptr = self.value_to_pointer(&args[0])?;
+                let hwnd = self.value_to_pointer(&args[1])?;
+                let msg_filter_min = self.value_to_int(&args[2])?;
+                let msg_filter_max = self.value_to_int(&args[3])?;
+
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, c_int, c_int) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(msg_ptr, hwnd, msg_filter_min, msg_filter_max);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // TranslateMessage, DispatchMessageA: (pointer) -> int
+            (FFIType::Int | FFIType::Int32 | FFIType::Long, &[FFIType::Pointer | FFIType::ConstPointer]) if sig.return_type != FFIType::Pointer && sig.return_type != FFIType::ConstPointer => {
+                let msg_ptr = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> c_long =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(msg_ptr);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // PostQuitMessage: (int) -> void
+            (FFIType::Void, &[FFIType::Int | FFIType::Int32]) => {
+                let exit_code = self.value_to_int(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int) = std::mem::transmute(function.symbol_ptr);
+                    func(exit_code);
+                }
+                Ok(Value::None)
+            }
+
+            // DefWindowProcA: (pointer, int, int, int) -> long
+            (FFIType::Long | FFIType::Int | FFIType::Int32 | FFIType::Int64, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32 | FFIType::UInt | FFIType::UInt32, FFIType::Int | FFIType::Int32 | FFIType::Int64 | FFIType::UInt64, FFIType::Int | FFIType::Int32 | FFIType::Int64]) => {
+                let hwnd = self.value_to_pointer(&args[0])?;
+                let msg = self.value_to_int(&args[1])?;
+                let wparam = self.value_to_int(&args[2])?;
+                let lparam = self.value_to_int(&args[3])?;
+
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_int, isize, isize) -> isize =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(hwnd, msg, wparam as isize, lparam as isize);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
             _ => {
                 Err(anyhow!(
                     "Unsupported function signature: {:?} with {} parameters",
