@@ -6,10 +6,14 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use anyhow::Result;
+use std::fs;
 
+/// Module system for managing loaded modules and searching for modules in the filesystem
 pub struct ModuleSystem {
-    modules: HashMap<String, Value>,
-    search_paths: Vec<PathBuf>,
+    /// Cache of loaded modules to avoid reloading
+    pub modules: HashMap<String, Value>,
+    /// Search paths for finding module files
+    pub search_paths: Vec<PathBuf>,
 }
 
 impl ModuleSystem {
@@ -60,10 +64,43 @@ impl ModuleSystem {
     }
     
     fn load_module_from_file(&self, module_name: &str) -> Result<Value> {
-        // For now, we'll just return an empty module
-        // In a full implementation, this would load and execute the module file
-        let mut namespace = HashMap::new();
-        Ok(Value::Module(module_name.to_string(), namespace))
+        // Try to find the module file in search paths
+        let mut file_path = None;
+        for search_path in &self.search_paths {
+            let path = search_path.join(format!("{}.tau", module_name));
+            if path.exists() {
+                file_path = Some(path);
+                break;
+            }
+            // Also try .tauraro extension
+            let path = search_path.join(format!("{}.tauraro", module_name));
+            if path.exists() {
+                file_path = Some(path);
+                break;
+            }
+            // Also try .tr extension
+            let path = search_path.join(format!("{}.tr", module_name));
+            if path.exists() {
+                file_path = Some(path);
+                break;
+            }
+        }
+        
+        if let Some(path) = file_path {
+            // Read the module file
+            let source = fs::read_to_string(&path)?;
+            
+            // For now, we'll just return an empty module with the module name
+            // In a full implementation, this would parse and execute the module file
+            let mut namespace = HashMap::new();
+            // Add the module name to the namespace for identification
+            namespace.insert("__name__".to_string(), Value::Str(module_name.to_string()));
+            Ok(Value::Module(module_name.to_string(), namespace))
+        } else {
+            // Module file not found, return empty module
+            let mut namespace = HashMap::new();
+            Ok(Value::Module(module_name.to_string(), namespace))
+        }
     }
     
     fn create_builtins_module(&self) -> Value {
