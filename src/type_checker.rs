@@ -191,7 +191,7 @@ impl TypeChecker {
             }
 
             // Function types
-            Type::Function { params, return_type } => {
+            Type::Function { params: _, return_type: _ } => {
                 matches!(value, Value::Closure { .. } | Value::NativeFunction(_) | Value::BuiltinFunction(_, _))
             }
 
