@@ -459,7 +459,38 @@ pub struct MethodCache {
 }
 
 /// Memory management operations
-pub struct MemoryOps;
+pub struct MemoryOps {
+    pub max_recursion_depth: usize,
+    pub current_recursion_depth: usize,
+}
+
+impl MemoryOps {
+    pub fn new() -> Self {
+        Self {
+            max_recursion_depth: 1000, // Default max recursion depth
+            current_recursion_depth: 0,
+        }
+    }
+    
+    pub fn increment_recursion_depth(&mut self) -> Result<(), String> {
+        self.current_recursion_depth += 1;
+        if self.current_recursion_depth > self.max_recursion_depth {
+            Err("Maximum recursion depth exceeded".to_string())
+        } else {
+            Ok(())
+        }
+    }
+    
+    pub fn decrement_recursion_depth(&mut self) {
+        if self.current_recursion_depth > 0 {
+            self.current_recursion_depth -= 1;
+        }
+    }
+    
+    pub fn set_max_recursion_depth(&mut self, depth: usize) {
+        self.max_recursion_depth = depth;
+    }
+}
 
 // Memory-related opcodes are already defined in instructions.rs
 // The implementation for these opcodes is in arithmetic.rs in the execute_instruction_fast method

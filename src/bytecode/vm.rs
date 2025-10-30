@@ -4,7 +4,7 @@ use crate::value::Value;
 use crate::modules::hplist::HPList;
 use crate::bytecode::instructions::OpCode;
 use crate::bytecode::objects::RcValue;
-use crate::bytecode::memory::{CodeObject, Frame, Block, BlockType};
+use crate::bytecode::memory::{CodeObject, Frame, Block, BlockType, MemoryOps};
 // Import the arithmetic module
 // use crate::bytecode::arithmetic;
 // Import necessary types for Closure handling
@@ -23,6 +23,9 @@ pub struct SuperBytecodeVM {
     pub builtins: HashMap<String, RcValue>,
     pub globals: HashMap<String, RcValue>,
     pub globals_version: u32,
+    
+    // Memory management and stack overflow protection
+    pub memory_ops: MemoryOps,
 
     // Cache compiled code objects for closures to avoid recompiling on each call
     function_code_cache: HashMap<Value, CodeObject>,
@@ -92,6 +95,9 @@ impl SuperBytecodeVM {
             globals.insert(name.clone(), RcValue::new(value.clone()));
         }
 
+        // Initialize memory operations with stack overflow protection
+        let memory_ops = MemoryOps::new();
+
         // Note: FFI builtins are automatically added through builtins::init_builtins()
         // when the 'ffi' feature is enabled
 
@@ -100,6 +106,7 @@ impl SuperBytecodeVM {
             builtins,
             globals,
             globals_version: 0,
+            memory_ops,
             function_code_cache: HashMap::new(),
 
             // Initialize profiling counters
@@ -173,6 +180,21 @@ impl SuperBytecodeVM {
         ];
 
         let extensions = vec!["py", "tr", "tau", "tauraro"];
+
+        // Handle hierarchical packages (e.g., "win32.constants" -> "win32/constants.tr")
+        if module_name.contains('.') {
+            let module_path_str = module_name.replace('.', std::path::MAIN_SEPARATOR_STR);
+            for search_path in &search_paths {
+                for ext in &extensions {
+                    let full_path = std::path::Path::new(search_path).join(format!("{}.{}", module_path_str, ext));
+                    if full_path.exists() {
+                        let source = std::fs::read_to_string(&full_path)
+                            .map_err(|e| anyhow!("Failed to read module file: {}", e))?;
+                        return self.compile_and_execute_module(&source, module_name);
+                    }
+                }
+            }
+        }
 
         // Try to find the module file in search paths with any supported extension
         for search_path in &search_paths {
@@ -262,6 +284,11 @@ impl SuperBytecodeVM {
     /// Optimized frame execution using computed GOTOs for maximum performance
     #[inline(always)]
     fn run_frame(&mut self) -> Result<Value> {
+        // Check for stack overflow using a simple counter
+        if self.frames.len() > 1000 {
+            return Err(anyhow!("Stack overflow: maximum recursion depth exceeded"));
+        }
+        
         let mut frame_idx;
         
         loop {
@@ -428,27 +455,24 @@ impl SuperBytecodeVM {
                     continue;
                 },
                 Err(e) => {
-                    // Snapshot needed info without holding borrows across mutations
-                    let (top_exc, handler_pos_opt) = {
+                    // Handle the exception by checking for handlers without holding borrows across mutations
+                    let handler_pos_opt = {
                         let frame = &self.frames[frame_idx];
-                        let top = if !frame.registers.is_empty() {
-                            Some(frame.registers.last().unwrap().clone())
-                        } else {
-                            None
-                        };
-                        let handler_pos = frame
+                        frame
                             .block_stack
                             .iter()
                             .rfind(|b| matches!(b.block_type, BlockType::Except))
-                            .map(|b| b.handler);
-                        (top, handler_pos)
+                            .map(|b| b.handler)
                     };
+                                
                     // Handle the exception
                     if let Some(handler_pos) = handler_pos_opt {
                         // Unwind the stack to the handler position
                         self.frames[frame_idx].pc = handler_pos;
                         // Push the exception value onto the stack
-                        if let Some(top_exc) = top_exc {
+                        // We need to get the top value before handling the exception
+                        if !self.frames[frame_idx].registers.is_empty() {
+                            let top_exc = self.frames[frame_idx].registers.last().unwrap().clone();
                             self.frames[frame_idx].registers.push(top_exc);
                         }
                     } else {
@@ -1061,34 +1085,7 @@ impl SuperBytecodeVM {
 
                 // Get the function value
                 let func_value = self.frames[frame_idx].registers[func_reg].value.clone();
-                
-                // Special handling for module class imports
-                if let Value::Module(module_name, namespace) = &func_value {
-                    // Check if this is a module attribute access for a class
-                    if frame_idx > 0 && self.frames[frame_idx].pc > 0 {
-                        let prev_pc = self.frames[frame_idx].pc - 1;
-                        if let Some(prev_instr) = self.frames[frame_idx].code.instructions.get(prev_pc) {
-                            if prev_instr.opcode == OpCode::LoadAttr {
-                                let attr_name_idx = prev_instr.arg2 as usize;
-                                if let Some(attr_name) = self.frames[frame_idx].code.names.get(attr_name_idx) {
-                                    if let Some(attr_value) = namespace.get(attr_name) {
-                                        // Direct handling for class and object values
-                                        match attr_value {
-                                            Value::Class { .. } | Value::Object { .. } => {
-                                                // Store the result directly and return
-                                                self.frames[frame_idx].registers[result_reg].value = attr_value.clone();
-                                                return Ok(None);
-                                            },
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // Debug info removed
-                
+
                 // Collect arguments from registers
                 let mut args = Vec::with_capacity(arg_count); // Pre-allocate capacity for better memory efficiency
                 for i in 0..arg_count {
@@ -3939,10 +3936,65 @@ impl SuperBytecodeVM {
                 };
 
                 // Store the module in both globals and the result register
-                let rc_module = RcValue::new(module_value);
+                let rc_module = RcValue::new(module_value.clone());
                 self.globals.insert(module_name.clone(), rc_module.clone());
                 Rc::make_mut(&mut self.frames[frame_idx].globals).insert(module_name.clone(), rc_module.clone());
-                self.frames[frame_idx].set_register(result_reg, rc_module);
+
+                // Handle hierarchical packages (e.g., "win32.constants")
+                if module_name.contains('.') {
+                    let parts: Vec<&str> = module_name.split('.').collect();
+
+                    // Create or get parent package modules
+                    for i in 0..parts.len() - 1 {
+                        let parent_name = parts[0..=i].join(".");
+                        let child_name = parts[i + 1].to_string();
+                        let child_full_name = parts[0..=i+1].join(".");
+
+                        // Get the child module
+                        let child_module = if i + 1 == parts.len() - 1 {
+                            // This is the final submodule we're importing
+                            rc_module.clone()
+                        } else {
+                            // This is an intermediate package - get or create it
+                            self.globals.get(&child_full_name)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    let new_mod = RcValue::new(Value::Module(child_full_name.clone(), std::collections::HashMap::new()));
+                                    self.globals.insert(child_full_name.clone(), new_mod.clone());
+                                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(child_full_name.clone(), new_mod.clone());
+                                    new_mod
+                                })
+                        };
+
+                        // Get or create parent module with updated namespace
+                        let _parent_module = if let Some(existing) = self.globals.get(&parent_name) {
+                            // Parent exists - need to create new version with updated namespace
+                            if let Value::Module(name, mut namespace) = existing.value.clone() {
+                                namespace.insert(child_name, child_module.value.clone());
+                                let updated_parent = RcValue::new(Value::Module(name, namespace));
+                                self.globals.insert(parent_name.clone(), updated_parent.clone());
+                                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(parent_name.clone(), updated_parent.clone());
+                                updated_parent
+                            } else {
+                                existing.clone()
+                            }
+                        } else {
+                            // Create new parent module
+                            let mut namespace = std::collections::HashMap::new();
+                            namespace.insert(child_name, child_module.value.clone());
+                            let new_parent = RcValue::new(Value::Module(parent_name.clone(), namespace));
+                            self.globals.insert(parent_name.clone(), new_parent.clone());
+                            Rc::make_mut(&mut self.frames[frame_idx].globals).insert(parent_name.clone(), new_parent.clone());
+                            new_parent
+                        };
+                    }
+
+                    // Store the actual imported module in the result register
+                    // (not the top-level package)
+                    self.frames[frame_idx].set_register(result_reg, rc_module);
+                } else {
+                    self.frames[frame_idx].set_register(result_reg, rc_module);
+                }
 
                 Ok(None)
             }
@@ -4203,31 +4255,6 @@ impl SuperBytecodeVM {
 
                 // Return the object instance for cases where there's no __init__ or __init__ is not handled above
                 Ok(instance)
-            }
-            #[cfg(feature = "ffi")]
-            #[cfg(feature = "ffi")]
-            Value::Object { class_name, fields, .. } if class_name == "FFIFunction" => {
-                // Handle FFI function calls
-                // Check if this is an FFI callable
-                if let Some(Value::Bool(true)) = fields.get("__ffi_callable__") {
-                    // Extract library and function names
-                    let library_name = match fields.get("__ffi_library__") {
-                        Some(Value::Str(s)) => s.clone(),
-                        _ => return Err(anyhow!("FFI function missing library name")),
-                    };
-
-                    let function_name = match fields.get("__ffi_function__") {
-                        Some(Value::Str(s)) => s.clone(),
-                        _ => return Err(anyhow!("FFI function missing function name")),
-                    };
-
-                    // Call the FFI function through the global manager
-                    let manager = crate::builtins::GLOBAL_FFI_MANAGER.lock().unwrap();
-                    let result = manager.call_external_function(&library_name, &function_name, args.clone())?;
-                    Ok(result)
-                } else {
-                    Err(anyhow!("Object is not callable"))
-                }
             }
             Value::Object {
                 class_name,
