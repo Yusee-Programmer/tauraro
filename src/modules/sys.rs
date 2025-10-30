@@ -4,6 +4,7 @@
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::env;
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
@@ -176,7 +177,7 @@ fn create_modules_dict() -> Value {
     modules.insert("thread".to_string(), crate::modules::threading::create_thread_module());
     modules.insert("builtins".to_string(), Value::Str("<module 'builtins' (built-in)>".to_string()));
     
-    Value::Dict(modules)
+    Value::Dict(Rc::new(RefCell::new(modules)))
 }
 
 /// Create builtin module names tuple
@@ -274,7 +275,7 @@ pub fn sys_getsizeof(args: Vec<Value>) -> anyhow::Result<Value> {
         Value::Float(_) => 8,
         Value::Str(s) => s.len() as i64 + 24, // String overhead
         Value::List(l) => (l.len() as i64 * 8) + 24, // List overhead
-        Value::Dict(d) => (d.len() as i64 * 16) + 32, // Dict overhead
+        Value::Dict(d) => (d.borrow().len() as i64 * 16) + 32, // Dict overhead
         Value::Tuple(t) => (t.len() as i64 * 8) + 16, // Tuple overhead
         _ => 64, // Default size for complex objects
     };
@@ -331,7 +332,7 @@ pub fn get_environ() -> Value {
     for (key, value) in env::vars() {
         environ.insert(key, Value::Str(value));
     }
-    Value::Dict(environ)
+    Value::Dict(Rc::new(RefCell::new(environ)))
 }
 
 /// Check if running in interactive mode

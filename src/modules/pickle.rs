@@ -4,6 +4,7 @@
 use crate::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 
 type Result<T> = anyhow::Result<T>;
 
@@ -147,7 +148,7 @@ fn serialize_object(obj: &Value, protocol: i64) -> Result<String> {
         },
         Value::Dict(map) => {
             let mut result = String::from("(d");
-            for (key, value) in map {
+            for (key, value) in map.borrow().iter() {
                 result.push_str(&format!("S'{}'\n", key));
                 result.push_str(&serialize_object(value, protocol)?);
             }

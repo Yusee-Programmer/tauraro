@@ -7,6 +7,7 @@ use crate::ast::{Param, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::rc::Rc;
+use std::cell::RefCell;
 use smallvec::SmallVec;
 
 /// Register-based compiled code object
@@ -170,6 +171,7 @@ pub enum BlockType {
 pub struct Frame {
     pub code: CodeObject,
     pub pc: usize,                          // Program counter
+    pub line_number: usize,                 // Current line number for debugging
     pub registers: SmallVec<[RcValue; 64]>, // Register file with reference counting
     pub locals: Vec<RcValue>,               // Local variables with direct indexing (faster than HashMap)
     pub locals_map: HashMap<String, usize>, // Maps variable names to indices for debugging
@@ -182,6 +184,7 @@ pub struct Frame {
     pub return_register: Option<(usize, u32)>, // (caller_frame_idx, result_reg) where return value should be stored
     pub is_property_setter: bool,           // True if this frame is executing a property setter
     pub vars_to_update: Vec<String>,        // Variables to update after property setter completes
+    pub last_loaded_attr: Option<String>,   // Track the last loaded attribute name for module class imports
 }
 
 // Manual implementation of Debug trait for Frame struct
@@ -230,6 +233,7 @@ impl Frame {
         Self {
             code,
             pc: 0,
+            line_number: 0,
             registers,
             locals,
             locals_map,
@@ -242,6 +246,7 @@ impl Frame {
             return_register: None,
             is_property_setter: false,
             vars_to_update: Vec::new(),
+            last_loaded_attr: None,
         }
     }
 
@@ -286,7 +291,7 @@ impl Frame {
                         // This is a **kwargs parameter
                         // Create a dict with all remaining keyword arguments
                         // Convert KwargsMarker back to regular Dict when used as parameter
-                        let dict_value = Value::Dict(kwargs.clone());
+                        let dict_value = Value::Dict(Rc::new(RefCell::new(kwargs.clone())));
                         let rc_arg = RcValue::new(dict_value);
                         if param_index < locals.len() {
                             locals[param_index] = rc_arg;
@@ -337,6 +342,7 @@ impl Frame {
         Self {
             code,
             pc: 0,
+            line_number: 0,
             registers,
             locals,
             locals_map,
@@ -349,6 +355,7 @@ impl Frame {
             return_register: None,
             is_property_setter: false,
             vars_to_update: Vec::new(),
+            last_loaded_attr: None,
         }
     }
 
@@ -378,6 +385,7 @@ impl Frame {
         Self {
             code,
             pc: 0,
+            line_number: 0,
             registers,
             locals,
             locals_map,
@@ -390,6 +398,7 @@ impl Frame {
             return_register: None,
             is_property_setter: false,
             vars_to_update: Vec::new(),
+            last_loaded_attr: None,
         }
     }
 
@@ -450,7 +459,38 @@ pub struct MethodCache {
 }
 
 /// Memory management operations
-pub struct MemoryOps;
+pub struct MemoryOps {
+    pub max_recursion_depth: usize,
+    pub current_recursion_depth: usize,
+}
+
+impl MemoryOps {
+    pub fn new() -> Self {
+        Self {
+            max_recursion_depth: 1000, // Default max recursion depth
+            current_recursion_depth: 0,
+        }
+    }
+    
+    pub fn increment_recursion_depth(&mut self) -> Result<(), String> {
+        self.current_recursion_depth += 1;
+        if self.current_recursion_depth > self.max_recursion_depth {
+            Err("Maximum recursion depth exceeded".to_string())
+        } else {
+            Ok(())
+        }
+    }
+    
+    pub fn decrement_recursion_depth(&mut self) {
+        if self.current_recursion_depth > 0 {
+            self.current_recursion_depth -= 1;
+        }
+    }
+    
+    pub fn set_max_recursion_depth(&mut self, depth: usize) {
+        self.max_recursion_depth = depth;
+    }
+}
 
 // Memory-related opcodes are already defined in instructions.rs
 // The implementation for these opcodes is in arithmetic.rs in the execute_instruction_fast method

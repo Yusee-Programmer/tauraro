@@ -4,6 +4,8 @@
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -70,7 +72,7 @@ fn create_environ() -> Value {
     for (key, value) in env::vars() {
         environ.insert(key, Value::Str(value));
     }
-    Value::Dict(environ)
+    Value::Dict(Rc::new(RefCell::new(environ)))
 }
 
 /// Create os.path submodule
@@ -249,7 +251,7 @@ pub fn os_stat(args: Vec<Value>) -> Result<Value> {
                 }
             }
             
-            Ok(Value::Dict(stat_result))
+            Ok(Value::Dict(Rc::new(RefCell::new(stat_result))))
         }
         Err(e) => Err(anyhow::anyhow!("Failed to stat '{}': {}", path, e)),
     }

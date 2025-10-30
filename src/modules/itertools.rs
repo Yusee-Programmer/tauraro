@@ -5,6 +5,7 @@ use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 
 // Import HPList
 use crate::modules::hplist::HPList;
@@ -794,7 +795,7 @@ fn is_truthy(value: &Value) -> bool {
         Value::Str(s) => !s.is_empty(),
         Value::List(items) => !items.is_empty(),
         Value::Tuple(items) => !items.is_empty(),
-        Value::Dict(map) => !map.is_empty(),
+        Value::Dict(map) => !map.borrow().is_empty(),
         _ => true,
     }
 }

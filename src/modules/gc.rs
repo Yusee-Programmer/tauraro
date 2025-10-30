@@ -5,6 +5,8 @@ use crate::value::Value;
 use crate::runtime::get_global_memory_api;
 use anyhow::Result;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 /// Create the garbage collection module
 pub fn create_gc_module() -> Value {
@@ -57,7 +59,7 @@ fn builtin_gc_configure(args: Vec<Value>) -> Result<Value> {
         }
         Value::Dict(config) => {
             // Handle configuration dictionary
-            if let Some(Value::Int(threshold)) = config.get("threshold") {
+            if let Some(Value::Int(threshold)) = config.borrow().get("threshold") {
                 global_memory_api.configure_gc(*threshold as usize);
             }
             Ok(Value::None)
@@ -103,7 +105,7 @@ fn builtin_gc_get_stats(_args: Vec<Value>) -> Result<Value> {
     dict.insert("current_allocations".to_string(), Value::Int(stats.current_allocations as i64));
     dict.insert("total_allocations".to_string(), Value::Int(stats.total_allocations as i64));
     
-    Ok(Value::Dict(dict))
+    Ok(Value::Dict(Rc::new(RefCell::new(dict))))
 }
 
 /// Built-in function to get garbage collection threshold

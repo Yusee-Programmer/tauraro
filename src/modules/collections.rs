@@ -5,6 +5,7 @@ use crate::value::Value;
 use crate::modules::hplist::HPList;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::fmt;
 use anyhow::Result;
 
@@ -252,7 +253,7 @@ fn counter_builtin(args: Vec<Value>) -> Result<Value> {
             }
             Value::Dict(map) => {
                 // Initialize from dict
-                for (k, v) in map.iter() {
+                for (k, v) in map.borrow().iter() {
                     counts.insert(k.clone(), v.clone());
                 }
             }
@@ -484,7 +485,7 @@ fn defaultdict_builtin(args: Vec<Value>) -> Result<Value> {
     // If there's a second argument, initialize from it
     if args.len() > 1 {
         if let Value::Dict(map) = &args[1] {
-            for (k, v) in map.iter() {
+            for (k, v) in map.borrow().iter() {
                 fields.insert(k.clone(), v.clone());
             }
         }

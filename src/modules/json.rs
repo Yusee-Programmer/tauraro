@@ -5,6 +5,7 @@ use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 // Import HPList
 use crate::modules::hplist::HPList;
 
@@ -265,7 +266,7 @@ fn parse_json_array(s: &str) -> Result<Value> {
 fn parse_json_object(s: &str) -> Result<Value> {
     let s = s.trim();
     if s.is_empty() {
-        return Ok(Value::Dict(HashMap::new()));
+        return Ok(Value::Dict(Rc::new(RefCell::new(HashMap::new()))));
     }
     
     let mut obj = HashMap::new();
@@ -314,7 +315,7 @@ fn parse_json_object(s: &str) -> Result<Value> {
         parse_key_value_pair(current.trim(), &mut obj)?;
     }
     
-    Ok(Value::Dict(obj))
+    Ok(Value::Dict(Rc::new(RefCell::new(obj))))
 }
 
 /// Parse a key-value pair for JSON object
@@ -422,7 +423,7 @@ fn serialize_to_json(value: &Value, indent: Option<usize>, current_depth: usize)
             }
         }
         Value::Dict(map) => {
-            if map.is_empty() {
+            if map.borrow().is_empty() {
                 "{}".to_string()
             } else {
                 let mut result = String::from("{");
@@ -430,8 +431,9 @@ fn serialize_to_json(value: &Value, indent: Option<usize>, current_depth: usize)
                     result.push('\n');
                 }
                 
-                let items: Vec<_> = map.iter().collect();
-                for (i, (key, value)) in items.iter().enumerate() {
+                let items: Vec<_> = map.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                let items_len = items.len();
+                for (i, (key, value)) in items.into_iter().enumerate() {
                     if let Some(indent_size) = indent {
                         result.push_str(&" ".repeat((current_depth + 1) * indent_size));
                     }
@@ -442,12 +444,12 @@ fn serialize_to_json(value: &Value, indent: Option<usize>, current_depth: usize)
                         result.push(' ');
                     }
                     
-                    let value_json = serialize_to_json(value, indent, current_depth + 1)?;
+                    let value_json = serialize_to_json(&value, indent, current_depth + 1)?;
                     if let Value::Str(s) = value_json {
                         result.push_str(&s);
                     }
                     
-                    if i < items.len() - 1 {
+                    if i < items_len - 1 {
                         result.push(',');
                     }
                     

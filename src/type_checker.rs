@@ -12,6 +12,8 @@ use crate::ast::Type;
 use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::fmt;
 
 /// Type information storage for variables, functions, and objects
@@ -189,7 +191,7 @@ impl TypeChecker {
             }
 
             // Function types
-            Type::Function { params, return_type } => {
+            Type::Function { params: _, return_type: _ } => {
                 matches!(value, Value::Closure { .. } | Value::NativeFunction(_) | Value::BuiltinFunction(_, _))
             }
 
@@ -262,7 +264,7 @@ impl TypeChecker {
                 let value_type = &args[1];
 
                 // Check all keys and values match their types
-                dict.iter().all(|(k, v)| {
+                dict.borrow().iter().all(|(k, v)| {
                     let key_value = Value::Str(k.clone());
                     self.value_matches_type(&key_value, key_type) &&
                     self.value_matches_type(v, value_type)
@@ -484,7 +486,7 @@ pub fn infer_type_from_value(value: &Value) -> Type {
         }
 
         Value::Dict(dict) => {
-            if dict.is_empty() {
+            if dict.borrow().is_empty() {
                 Type::Generic {
                     name: "Dict".to_string(),
                     args: vec![Type::Any, Type::Any],
@@ -493,7 +495,7 @@ pub fn infer_type_from_value(value: &Value) -> Type {
                 // All dict keys are strings in our implementation
                 let key_type = Type::Simple("str".to_string());
                 // Infer value type from first entry
-                let value_type = dict.values().next()
+                let value_type = dict.borrow().values().next()
                     .map(infer_type_from_value)
                     .unwrap_or(Type::Any);
                 Type::Generic {

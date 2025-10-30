@@ -1,13 +1,17 @@
-//! Module system for Tauraro
-
 use crate::value::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::path::PathBuf;
 use anyhow::Result;
+use std::fs;
 
+/// Module system for managing loaded modules and searching for modules in the filesystem
 pub struct ModuleSystem {
-    modules: HashMap<String, Value>,
-    search_paths: Vec<PathBuf>,
+    /// Cache of loaded modules to avoid reloading
+    pub modules: HashMap<String, Value>,
+    /// Search paths for finding module files
+    pub search_paths: Vec<PathBuf>,
 }
 
 impl ModuleSystem {
@@ -57,11 +61,41 @@ impl ModuleSystem {
         }
     }
     
-    fn load_module_from_file(&self, module_name: &str) -> Result<Value> {
-        // For now, we'll just return an empty module
-        // In a full implementation, this would load and execute the module file
-        let mut namespace = HashMap::new();
-        Ok(Value::Module(module_name.to_string(), namespace))
+    fn load_module_from_file(&mut self, module_name: &str) -> Result<Value> {
+        // Try to find the module file in search paths
+        let mut file_path = None;
+        for search_path in &self.search_paths {
+            let path = search_path.join(format!("{}.tau", module_name));
+            if path.exists() {
+                file_path = Some(path);
+                break;
+            }
+            // Also try .tauraro extension
+            let path = search_path.join(format!("{}.tauraro", module_name));
+            if path.exists() {
+                file_path = Some(path);
+                break;
+            }
+            // Also try .tr extension
+            let path = search_path.join(format!("{}.tr", module_name));
+            if path.exists() {
+                file_path = Some(path);
+                break;
+            }
+        }
+        
+        if let Some(path) = file_path {
+            // Read the module file
+            let source = fs::read_to_string(&path)?;
+            
+            // Use the existing VM method to compile and execute the module
+            let mut vm = crate::bytecode::vm::SuperBytecodeVM::new();
+            vm.compile_and_execute_module(&source, module_name)
+        } else {
+            // Module file not found, return empty module
+            let mut namespace = HashMap::new();
+            Ok(Value::Module(module_name.to_string(), namespace))
+        }
     }
     
     fn create_builtins_module(&self) -> Value {
@@ -83,7 +117,7 @@ impl ModuleSystem {
                 Value::Str(s) => Ok(Value::Int(s.len() as i64)),
                 Value::List(items) => Ok(Value::Int(items.len() as i64)),
                 Value::Tuple(items) => Ok(Value::Int(items.len() as i64)),
-                Value::Dict(dict) => Ok(Value::Int(dict.len() as i64)),
+                Value::Dict(dict) => Ok(Value::Int(dict.borrow().len() as i64)),
                 _ => Err(anyhow::anyhow!("object of type '{}' has no len()", args[0].type_name())),
             }
         }));
@@ -167,18 +201,9 @@ impl ModuleSystem {
         let mut namespace = HashMap::new();
         
         // Add json module functions
-        namespace.insert("loads".to_string(), Value::BuiltinFunction("loads".to_string(), |args| {
-            if args.len() != 1 {
-                return Err(anyhow::anyhow!("json.loads() takes exactly one argument ({} given)", args.len()));
-            }
-            
-            match &args[0] {
-                Value::Str(_s) => {
-                    // In a full implementation, this would parse JSON
-                    Ok(Value::Dict(HashMap::new()))
-                }
-                _ => Err(anyhow::anyhow!("json.loads() argument must be a string")),
-            }
+        namespace.insert("loads".to_string(), Value::BuiltinFunction("loads".to_string(), |_args| {
+            // In a full implementation, this would parse JSON
+            Ok(Value::Dict(Rc::new(RefCell::new(HashMap::new()))))
         }));
         
         Value::Module("json".to_string(), namespace)

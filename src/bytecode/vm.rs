@@ -4,13 +4,14 @@ use crate::value::Value;
 use crate::modules::hplist::HPList;
 use crate::bytecode::instructions::OpCode;
 use crate::bytecode::objects::RcValue;
-use crate::bytecode::memory::{CodeObject, Frame, Block, BlockType};
+use crate::bytecode::memory::{CodeObject, Frame, Block, BlockType, MemoryOps};
 // Import the arithmetic module
 // use crate::bytecode::arithmetic;
 // Import necessary types for Closure handling
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 // Import module system for dynamic module loading
 use crate::modules;
 // Import type checker for runtime type enforcement
@@ -22,6 +23,9 @@ pub struct SuperBytecodeVM {
     pub builtins: HashMap<String, RcValue>,
     pub globals: HashMap<String, RcValue>,
     pub globals_version: u32,
+    
+    // Memory management and stack overflow protection
+    pub memory_ops: MemoryOps,
 
     // Cache compiled code objects for closures to avoid recompiling on each call
     function_code_cache: HashMap<Value, CodeObject>,
@@ -91,6 +95,9 @@ impl SuperBytecodeVM {
             globals.insert(name.clone(), RcValue::new(value.clone()));
         }
 
+        // Initialize memory operations with stack overflow protection
+        let memory_ops = MemoryOps::new();
+
         // Note: FFI builtins are automatically added through builtins::init_builtins()
         // when the 'ffi' feature is enabled
 
@@ -99,6 +106,7 @@ impl SuperBytecodeVM {
             builtins,
             globals,
             globals_version: 0,
+            memory_ops,
             function_code_cache: HashMap::new(),
 
             // Initialize profiling counters
@@ -121,7 +129,7 @@ impl SuperBytecodeVM {
     }
 
     /// Helper method to compile and execute a module source file
-    fn compile_and_execute_module(&mut self, source: &str, module_name: &str) -> Result<Value> {
+    pub fn compile_and_execute_module(&mut self, source: &str, module_name: &str) -> Result<Value> {
         // Compile the module
         let tokens = crate::lexer::Lexer::new(source)
             .collect::<Result<Vec<_>, _>>()
@@ -172,6 +180,21 @@ impl SuperBytecodeVM {
         ];
 
         let extensions = vec!["py", "tr", "tau", "tauraro"];
+
+        // Handle hierarchical packages (e.g., "win32.constants" -> "win32/constants.tr")
+        if module_name.contains('.') {
+            let module_path_str = module_name.replace('.', std::path::MAIN_SEPARATOR_STR);
+            for search_path in &search_paths {
+                for ext in &extensions {
+                    let full_path = std::path::Path::new(search_path).join(format!("{}.{}", module_path_str, ext));
+                    if full_path.exists() {
+                        let source = std::fs::read_to_string(&full_path)
+                            .map_err(|e| anyhow!("Failed to read module file: {}", e))?;
+                        return self.compile_and_execute_module(&source, module_name);
+                    }
+                }
+            }
+        }
 
         // Try to find the module file in search paths with any supported extension
         for search_path in &search_paths {
@@ -261,6 +284,11 @@ impl SuperBytecodeVM {
     /// Optimized frame execution using computed GOTOs for maximum performance
     #[inline(always)]
     fn run_frame(&mut self) -> Result<Value> {
+        // Check for stack overflow using a simple counter
+        if self.frames.len() > 1000 {
+            return Err(anyhow!("Stack overflow: maximum recursion depth exceeded"));
+        }
+        
         let mut frame_idx;
         
         loop {
@@ -427,27 +455,24 @@ impl SuperBytecodeVM {
                     continue;
                 },
                 Err(e) => {
-                    // Snapshot needed info without holding borrows across mutations
-                    let (top_exc, handler_pos_opt) = {
+                    // Handle the exception by checking for handlers without holding borrows across mutations
+                    let handler_pos_opt = {
                         let frame = &self.frames[frame_idx];
-                        let top = if !frame.registers.is_empty() {
-                            Some(frame.registers.last().unwrap().clone())
-                        } else {
-                            None
-                        };
-                        let handler_pos = frame
+                        frame
                             .block_stack
                             .iter()
                             .rfind(|b| matches!(b.block_type, BlockType::Except))
-                            .map(|b| b.handler);
-                        (top, handler_pos)
+                            .map(|b| b.handler)
                     };
+                                
                     // Handle the exception
                     if let Some(handler_pos) = handler_pos_opt {
                         // Unwind the stack to the handler position
                         self.frames[frame_idx].pc = handler_pos;
                         // Push the exception value onto the stack
-                        if let Some(top_exc) = top_exc {
+                        // We need to get the top value before handling the exception
+                        if !self.frames[frame_idx].registers.is_empty() {
+                            let top_exc = self.frames[frame_idx].registers.last().unwrap().clone();
                             self.frames[frame_idx].registers.push(top_exc);
                         }
                     } else {
@@ -1060,18 +1085,16 @@ impl SuperBytecodeVM {
 
                 // Get the function value
                 let func_value = self.frames[frame_idx].registers[func_reg].value.clone();
-                // Debug info removed
-                
+
                 // Collect arguments from registers
-                let mut args = Vec::new();
+                let mut args = Vec::with_capacity(arg_count); // Pre-allocate capacity for better memory efficiency
                 for i in 0..arg_count {
                     // Arguments are stored in consecutive registers after the function register
                     let arg_reg = func_reg + 1 + i;
                     if arg_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("CallFunction: argument register index {} out of bounds (len: {})", arg_reg, self.frames[frame_idx].registers.len()));
+                        return Err(anyhow!("CallFunction: argument register index {} out of bounds (len: {})", arg_reg, self.frames[frame_idx].registers.len()));
                     }
                     let arg_value = self.frames[frame_idx].registers[arg_reg].value.clone();
-                    // Debug info removed
                     args.push(arg_value);
                 }
                 
@@ -1325,6 +1348,8 @@ impl SuperBytecodeVM {
                 let first_key_reg = arg2 as usize;
                 let result_reg = arg3 as u32;
 
+                eprintln!("DEBUG BuildDict: pair_count={}, first_key_reg={}, result_reg={}", pair_count, first_key_reg, result_reg);
+
                 // Create a new dict
                 let mut dict = HashMap::new();
 
@@ -1349,7 +1374,8 @@ impl SuperBytecodeVM {
                     dict.insert(key_str, self.frames[frame_idx].registers[value_reg].value.clone());
                 }
 
-                let dict_value = Value::Dict(dict);
+                eprintln!("DEBUG BuildDict: created dict with {} entries", dict.len());
+                let dict_value = Value::Dict(Rc::new(RefCell::new(dict)));
                 self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(dict_value));
                 Ok(None)
             }
@@ -2021,10 +2047,10 @@ impl SuperBytecodeVM {
                     (item, Value::Dict(container)) => {
                         // For dict membership, we check if the item is a key in the dict
                         match item {
-                            Value::Str(key) => Value::Bool(container.contains_key(key)),
+                            Value::Str(key) => Value::Bool(container.borrow().contains_key(key)),
                             _ => {
                                 let key_str = format!("{}", item);
-                                Value::Bool(container.contains_key(&key_str))
+                                Value::Bool(container.borrow().contains_key(&key_str))
                             }
                         }
                     },
@@ -2075,10 +2101,10 @@ impl SuperBytecodeVM {
                     (item, Value::Dict(container)) => {
                         // For dict non-membership, we check if the item is NOT a key in the dict
                         match item {
-                            Value::Str(key) => Value::Bool(!container.contains_key(key)),
+                            Value::Str(key) => Value::Bool(!container.borrow().contains_key(key)),
                             _ => {
                                 let key_str = format!("{}", item);
-                                Value::Bool(!container.contains_key(&key_str))
+                                Value::Bool(!container.borrow().contains_key(&key_str))
                             }
                         }
                     },
@@ -2320,14 +2346,17 @@ impl SuperBytecodeVM {
                 let object_reg = arg1 as usize;
                 let index_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
-                
+
                 if object_reg >= self.frames[frame_idx].registers.len() || index_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("SubscrLoad: register index out of bounds"));
                 }
-                
+
                 let object_value = &self.frames[frame_idx].registers[object_reg];
                 let index_value = &self.frames[frame_idx].registers[index_reg];
-                
+
+                eprintln!("DEBUG SubscrLoad: object_reg={}, index={:?}, object_type={}",
+                         object_reg, index_value.value, object_value.value.type_name());
+
                 // Handle different sequence types
                 let result = match (&object_value.value, &index_value.value) {
                     (Value::List(items), Value::Int(index)) => {
@@ -2336,7 +2365,7 @@ impl SuperBytecodeVM {
                         } else {
                             *index
                         };
-                        
+
                         if normalized_index >= 0 && normalized_index < items.len() as i64 {
                             items.get(normalized_index as isize).unwrap().clone()
                         } else {
@@ -2349,7 +2378,7 @@ impl SuperBytecodeVM {
                         } else {
                             *index
                         };
-                        
+
                         if normalized_index >= 0 && normalized_index < items.len() as i64 {
                             items[normalized_index as usize].clone()
                         } else {
@@ -2362,21 +2391,25 @@ impl SuperBytecodeVM {
                         } else {
                             *index
                         };
-                        
+
                         if normalized_index >= 0 && normalized_index < s.len() as i64 {
                             Value::Str(s.chars().nth(normalized_index as usize).unwrap().to_string())
                         } else {
                             return Err(anyhow!("Index {} out of range for string of length {}", index, s.len()));
                         }
                     },
-                    (Value::Dict(dict), key) => {
+                    (Value::Dict(dict_ref), key) => {
                         // For dictionaries, convert key to string for lookup
                         let key_str = match key {
                             Value::Str(s) => s.clone(),
                             Value::Int(n) => n.to_string(),
                             _ => format!("{}", key),
                         };
-                        
+
+                        let dict = dict_ref.borrow();
+                        eprintln!("DEBUG SubscrLoad: looking for key='{}', dict has {} entries, keys: {:?}",
+                                 key_str, dict.len(), dict_ref.borrow().keys().collect::<Vec<_>>());
+
                         if let Some(value) = dict.get(&key_str) {
                             value.clone()
                         } else {
@@ -2384,11 +2417,11 @@ impl SuperBytecodeVM {
                         }
                     },
                     _ => {
-                        return Err(anyhow!("Subscript not supported for types {} and {}", 
+                        return Err(anyhow!("Subscript not supported for types {} and {}",
                                           object_value.value.type_name(), index_value.value.type_name()));
                     }
                 };
-                
+
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
@@ -2397,17 +2430,20 @@ impl SuperBytecodeVM {
                 let object_reg = arg1 as usize;
                 let index_reg = arg2 as usize;
                 let value_reg = arg3 as usize;
-                
-                if object_reg >= self.frames[frame_idx].registers.len() || 
+
+                if object_reg >= self.frames[frame_idx].registers.len() ||
                    index_reg >= self.frames[frame_idx].registers.len() ||
                    value_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("SubscrStore: register index out of bounds"));
                 }
-                
+
                 // Clone the values we need to avoid borrowing issues
                 let index_value = self.frames[frame_idx].registers[index_reg].value.clone();
                 let value_to_store = self.frames[frame_idx].registers[value_reg].value.clone();
-                
+
+                eprintln!("DEBUG SubscrStore: object_reg={}, index={:?}, value={:?}",
+                         object_reg, index_value, value_to_store);
+
                 // Handle different sequence types
                 match &mut self.frames[frame_idx].registers[object_reg].value {
                     Value::List(items) => {
@@ -2417,7 +2453,7 @@ impl SuperBytecodeVM {
                             } else {
                                 index
                             };
-                            
+
                             if normalized_index >= 0 && normalized_index < items.len() as i64 {
                                 items.set(normalized_index as isize, value_to_store)
                                     .map_err(|e| anyhow!("Error setting list item: {}", e))?;
@@ -2428,22 +2464,25 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("List indices must be integers, not {}", index_value.type_name()));
                         }
                     },
-                    Value::Dict(dict) => {
+                    Value::Dict(dict_ref) => {
                         // For dictionaries, convert key to string for lookup
                         let key_str = match index_value {
                             Value::Str(s) => s,
                             Value::Int(n) => n.to_string(),
                             _ => format!("{}", index_value),
                         };
-                        
-                        dict.insert(key_str, value_to_store);
+
+                        let mut dict = dict_ref.borrow_mut();
+                        eprintln!("DEBUG SubscrStore: inserting key='{}', dict had {} entries before", key_str, dict.len());
+                        dict.insert(key_str.clone(), value_to_store);
+                        eprintln!("DEBUG SubscrStore: dict now has {} entries, contains key: {}", dict.len(), dict.contains_key(&key_str));
                     },
                     _ => {
-                        return Err(anyhow!("Subscript assignment not supported for type {}", 
+                        return Err(anyhow!("Subscript assignment not supported for type {}",
                                           self.frames[frame_idx].registers[object_reg].value.type_name()));
                     }
                 };
-                
+
                 Ok(None)
             }
             OpCode::CallMethod => {
@@ -2640,10 +2679,20 @@ impl SuperBytecodeVM {
                             match value {
                                 Value::BuiltinFunction(_, func) => func(args.clone())?,
                                 Value::NativeFunction(func) => func(args.clone())?,
+                                Value::Class { .. } | Value::Object { .. } => {
+                                    // For classes and objects in modules, call through the VM
+                                    // This is the critical fix for module class imports
+                                    self.call_function_fast(value.clone(), args.clone(), HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+                                    // For classes and objects, we don't return a value directly, the VM handles it
+                                    return Ok(None);
+                                },
                                 Value::Closure { .. } => {
                                     // For closures, call through the VM
-                                    self.call_function_fast(value.clone(), args.clone(), HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                                    self.call_function_fast(value.clone(), args.clone(), HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+                                    // For closures, we don't return a value directly, the VM handles it
+                                    return Ok(None);
                                 },
+
                                 _ => {
                                     // If it's not a callable, return an error
                                     return Err(anyhow!("'{}' in module is not callable", method_name));
@@ -2734,7 +2783,7 @@ impl SuperBytecodeVM {
                 let dict_value = &self.frames[frame_idx].registers[dict_reg];
                 match &dict_value.value {
                     Value::Dict(dict) => {
-                        let kwargs_marker = Value::KwargsMarker(dict.clone());
+                        let kwargs_marker = Value::KwargsMarker(dict.borrow().clone());
                         self.frames[frame_idx].set_register(result_reg, RcValue::new(kwargs_marker));
                         Ok(None)
                     }
@@ -2873,6 +2922,24 @@ impl SuperBytecodeVM {
                 // Clone the exception value to avoid borrowing issues
                 let exception_value = self.frames[frame_idx].registers[exception_reg].value.clone();
                 
+                // Add traceback information to the exception
+                let mut enhanced_exception = exception_value.clone();
+                if let Value::Exception { class_name, message, traceback: _ } = &exception_value {
+                    // Create traceback information
+                    let mut traceback_info = format!("Traceback (most recent call last):\n");
+                    traceback_info.push_str(&format!("  File \"{}\", line {}, in {}\n", 
+                        self.frames[frame_idx].code.filename, 
+                        self.frames[frame_idx].line_number,
+                        self.frames[frame_idx].code.name));
+                    traceback_info.push_str(&format!("{}: {}\n", class_name, message));
+                    
+                    enhanced_exception = Value::new_exception(
+                        class_name.clone(),
+                        message.clone(),
+                        Some(traceback_info)
+                    );
+                }
+                
                 // Search for exception handlers in the block stack
                 // Find the innermost exception handler
                 let except_block_idx_opt = self.frames[frame_idx].block_stack.iter().rposition(|b| matches!(b.block_type, BlockType::Except));
@@ -2885,12 +2952,16 @@ impl SuperBytecodeVM {
                     // Jump to the exception handler
                     self.frames[frame_idx].pc = handler_pc;
                     // Push the exception value onto the stack for the handler to access
-                    self.frames[frame_idx].registers.push(RcValue::new(exception_value));
+                    self.frames[frame_idx].registers.push(RcValue::new(enhanced_exception));
                     Ok(None) // Continue execution, don't return an error
                 } else {
-                    // No exception handler found, print the exception and stop execution
-                    eprintln!("{}", exception_value);
-                    Err(anyhow!("Unhandled exception: {}", exception_value))
+                    // No exception handler found, print the exception with traceback and stop execution
+                    if let Some(traceback) = enhanced_exception.get_traceback() {
+                        eprintln!("{}", traceback);
+                    } else {
+                        eprintln!("{}", enhanced_exception);
+                    }
+                    Err(anyhow!("Unhandled exception: {}", enhanced_exception))
                 }
             }
             OpCode::Assert => {
@@ -2965,7 +3036,7 @@ impl SuperBytecodeVM {
                     Value::Dict(dict) => {
                         // For now, we'll just check that we have the right number of keys
                         // In a full implementation, we would check specific keys
-                        if dict.len() >= key_count {
+                        if dict.borrow().len() >= key_count {
                             Ok(None) // Match successful
                         } else {
                             // Jump to next case
@@ -3060,7 +3131,7 @@ impl SuperBytecodeVM {
                 match &mapping_value.value {
                     Value::Dict(dict) => {
                         // Check if we have at least the required number of key-value pairs
-                        if dict.len() >= pair_count {
+                        if dict.borrow().len() >= pair_count {
                             Ok(None) // Match successful
                         } else {
                             // Jump to next case
@@ -3413,7 +3484,7 @@ impl SuperBytecodeVM {
                     },
                     Value::Dict(dict) => {
                         // For dictionaries, treat keys as attributes
-                        if let Some(value) = dict.get(&attr_name) {
+                        if let Some(value) = dict.borrow().get(&attr_name) {
                             value.clone()
                         } else {
                             return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
@@ -3633,7 +3704,7 @@ impl SuperBytecodeVM {
                     },
                     Value::Dict(dict) => {
                         // For dictionaries, treat keys as attributes
-                        dict.insert(attr_name, value_to_store);
+                        dict.borrow_mut().insert(attr_name, value_to_store);
                     },
                     Value::Module(_, namespace) => {
                         // For modules, store in namespace
@@ -3736,10 +3807,10 @@ impl SuperBytecodeVM {
                     },
                     Value::Dict(dict) => {
                         // For dictionaries, treat keys as attributes
-                        if !dict.contains_key(&attr_name) {
+                        if !dict.borrow().contains_key(&attr_name) {
                             return Err(anyhow!("'{}' object has no attribute '{}'", object_type_name, attr_name));
                         }
-                        dict.remove(&attr_name);
+                        dict.borrow_mut().remove(&attr_name);
                     },
                     Value::Module(_, namespace) => {
                         // For modules, remove from namespace
@@ -3865,10 +3936,65 @@ impl SuperBytecodeVM {
                 };
 
                 // Store the module in both globals and the result register
-                let rc_module = RcValue::new(module_value);
+                let rc_module = RcValue::new(module_value.clone());
                 self.globals.insert(module_name.clone(), rc_module.clone());
                 Rc::make_mut(&mut self.frames[frame_idx].globals).insert(module_name.clone(), rc_module.clone());
-                self.frames[frame_idx].set_register(result_reg, rc_module);
+
+                // Handle hierarchical packages (e.g., "win32.constants")
+                if module_name.contains('.') {
+                    let parts: Vec<&str> = module_name.split('.').collect();
+
+                    // Create or get parent package modules
+                    for i in 0..parts.len() - 1 {
+                        let parent_name = parts[0..=i].join(".");
+                        let child_name = parts[i + 1].to_string();
+                        let child_full_name = parts[0..=i+1].join(".");
+
+                        // Get the child module
+                        let child_module = if i + 1 == parts.len() - 1 {
+                            // This is the final submodule we're importing
+                            rc_module.clone()
+                        } else {
+                            // This is an intermediate package - get or create it
+                            self.globals.get(&child_full_name)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    let new_mod = RcValue::new(Value::Module(child_full_name.clone(), std::collections::HashMap::new()));
+                                    self.globals.insert(child_full_name.clone(), new_mod.clone());
+                                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(child_full_name.clone(), new_mod.clone());
+                                    new_mod
+                                })
+                        };
+
+                        // Get or create parent module with updated namespace
+                        let _parent_module = if let Some(existing) = self.globals.get(&parent_name) {
+                            // Parent exists - need to create new version with updated namespace
+                            if let Value::Module(name, mut namespace) = existing.value.clone() {
+                                namespace.insert(child_name, child_module.value.clone());
+                                let updated_parent = RcValue::new(Value::Module(name, namespace));
+                                self.globals.insert(parent_name.clone(), updated_parent.clone());
+                                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(parent_name.clone(), updated_parent.clone());
+                                updated_parent
+                            } else {
+                                existing.clone()
+                            }
+                        } else {
+                            // Create new parent module
+                            let mut namespace = std::collections::HashMap::new();
+                            namespace.insert(child_name, child_module.value.clone());
+                            let new_parent = RcValue::new(Value::Module(parent_name.clone(), namespace));
+                            self.globals.insert(parent_name.clone(), new_parent.clone());
+                            Rc::make_mut(&mut self.frames[frame_idx].globals).insert(parent_name.clone(), new_parent.clone());
+                            new_parent
+                        };
+                    }
+
+                    // Store the actual imported module in the result register
+                    // (not the top-level package)
+                    self.frames[frame_idx].set_register(result_reg, rc_module);
+                } else {
+                    self.frames[frame_idx].set_register(result_reg, rc_module);
+                }
 
                 Ok(None)
             }
@@ -4129,31 +4255,6 @@ impl SuperBytecodeVM {
 
                 // Return the object instance for cases where there's no __init__ or __init__ is not handled above
                 Ok(instance)
-            }
-            #[cfg(feature = "ffi")]
-            #[cfg(feature = "ffi")]
-            Value::Object { class_name, fields, .. } if class_name == "FFIFunction" => {
-                // Handle FFI function calls
-                // Check if this is an FFI callable
-                if let Some(Value::Bool(true)) = fields.get("__ffi_callable__") {
-                    // Extract library and function names
-                    let library_name = match fields.get("__ffi_library__") {
-                        Some(Value::Str(s)) => s.clone(),
-                        _ => return Err(anyhow!("FFI function missing library name")),
-                    };
-
-                    let function_name = match fields.get("__ffi_function__") {
-                        Some(Value::Str(s)) => s.clone(),
-                        _ => return Err(anyhow!("FFI function missing function name")),
-                    };
-
-                    // Call the FFI function through the global manager
-                    let manager = crate::builtins::GLOBAL_FFI_MANAGER.lock().unwrap();
-                    let result = manager.call_external_function(&library_name, &function_name, args.clone())?;
-                    Ok(result)
-                } else {
-                    Err(anyhow!("Object is not callable"))
-                }
             }
             Value::Object {
                 class_name,

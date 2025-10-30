@@ -5,6 +5,7 @@ use crate::value::Value;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use chrono::{Local, Utc, TimeZone, NaiveDateTime, Timelike, Datelike};
@@ -107,12 +108,12 @@ pub fn time_strftime(args: Vec<Value>) -> Result<Value> {
         Some(Value::Dict(dict)) => {
             // Handle struct_time object (dict representation)
             // Extract timestamp from the struct_time fields
-            if let Some(Value::Int(year)) = dict.get("tm_year") {
-                if let Some(Value::Int(mon)) = dict.get("tm_mon") {
-                    if let Some(Value::Int(mday)) = dict.get("tm_mday") {
-                        if let Some(Value::Int(hour)) = dict.get("tm_hour") {
-                            if let Some(Value::Int(min)) = dict.get("tm_min") {
-                                if let Some(Value::Int(sec)) = dict.get("tm_sec") {
+            if let Some(Value::Int(year)) = dict.borrow().get("tm_year") {
+                if let Some(Value::Int(mon)) = dict.borrow().get("tm_mon") {
+                    if let Some(Value::Int(mday)) = dict.borrow().get("tm_mday") {
+                        if let Some(Value::Int(hour)) = dict.borrow().get("tm_hour") {
+                            if let Some(Value::Int(min)) = dict.borrow().get("tm_min") {
+                                if let Some(Value::Int(sec)) = dict.borrow().get("tm_sec") {
                                     // Create a NaiveDateTime from the struct_time fields
                                     if let Some(naive_dt) = chrono::NaiveDate::from_ymd_opt(*year as i32, *mon as u32, *mday as u32)
                                         .and_then(|d| d.and_hms_opt(*hour as u32, *min as u32, *sec as u32)) {
@@ -175,12 +176,12 @@ pub fn time_asctime(args: Vec<Value>) -> Result<Value> {
         Some(Value::Dict(dict)) => {
             // Handle struct_time object (dict representation)
             // Extract timestamp from the struct_time fields
-            if let Some(Value::Int(year)) = dict.get("tm_year") {
-                if let Some(Value::Int(mon)) = dict.get("tm_mon") {
-                    if let Some(Value::Int(mday)) = dict.get("tm_mday") {
-                        if let Some(Value::Int(hour)) = dict.get("tm_hour") {
-                            if let Some(Value::Int(min)) = dict.get("tm_min") {
-                                if let Some(Value::Int(sec)) = dict.get("tm_sec") {
+            if let Some(Value::Int(year)) = dict.borrow().get("tm_year") {
+                if let Some(Value::Int(mon)) = dict.borrow().get("tm_mon") {
+                    if let Some(Value::Int(mday)) = dict.borrow().get("tm_mday") {
+                        if let Some(Value::Int(hour)) = dict.borrow().get("tm_hour") {
+                            if let Some(Value::Int(min)) = dict.borrow().get("tm_min") {
+                                if let Some(Value::Int(sec)) = dict.borrow().get("tm_sec") {
                                     // Create a NaiveDateTime from the struct_time fields
                                     if let Some(naive_dt) = chrono::NaiveDate::from_ymd_opt(*year as i32, *mon as u32, *mday as u32)
                                         .and_then(|d| d.and_hms_opt(*hour as u32, *min as u32, *sec as u32)) {
@@ -292,7 +293,7 @@ pub fn time_localtime(args: Vec<Value>) -> Result<Value> {
     time_struct.insert("tm_yday".to_string(), Value::Int(date.ordinal() as i64));
     time_struct.insert("tm_isdst".to_string(), Value::Int(-1)); // Unknown DST status
     
-    Ok(Value::Dict(time_struct))
+    Ok(Value::Dict(Rc::new(RefCell::new(time_struct))))
 }
 
 /// Convert time struct to timestamp
@@ -306,32 +307,32 @@ pub fn time_mktime(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("mktime() argument must be a time struct")),
     };
     
-    let year = match time_struct.get("tm_year") {
+    let year = match time_struct.borrow().get("tm_year") {
         Some(Value::Int(y)) => *y as i32,
         _ => return Err(anyhow::anyhow!("Invalid time struct: missing tm_year")),
     };
     
-    let month = match time_struct.get("tm_mon") {
+    let month = match time_struct.borrow().get("tm_mon") {
         Some(Value::Int(m)) => *m as u32,
         _ => return Err(anyhow::anyhow!("Invalid time struct: missing tm_mon")),
     };
     
-    let day = match time_struct.get("tm_mday") {
+    let day = match time_struct.borrow().get("tm_mday") {
         Some(Value::Int(d)) => *d as u32,
         _ => return Err(anyhow::anyhow!("Invalid time struct: missing tm_mday")),
     };
     
-    let hour = match time_struct.get("tm_hour") {
+    let hour = match time_struct.borrow().get("tm_hour") {
         Some(Value::Int(h)) => *h as u32,
         _ => return Err(anyhow::anyhow!("Invalid time struct: missing tm_hour")),
     };
     
-    let minute = match time_struct.get("tm_min") {
+    let minute = match time_struct.borrow().get("tm_min") {
         Some(Value::Int(m)) => *m as u32,
         _ => return Err(anyhow::anyhow!("Invalid time struct: missing tm_min")),
     };
     
-    let second = match time_struct.get("tm_sec") {
+    let second = match time_struct.borrow().get("tm_sec") {
         Some(Value::Int(s)) => *s as u32,
         _ => return Err(anyhow::anyhow!("Invalid time struct: missing tm_sec")),
     };

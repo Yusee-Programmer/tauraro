@@ -21,7 +21,7 @@ pub enum Value {
     Bool(bool),
     Str(String),
     List(HPList),  // Changed from Vec<Value> to HPList
-    Dict(HashMap<String, Value>),
+    Dict(Rc<RefCell<HashMap<String, Value>>>),  // Rc<RefCell> for reference semantics like Python
     Tuple(Vec<Value>),
     Set(Vec<Value>), // Using Vec for simplicity, should be HashSet in production
     FrozenSet(Vec<Value>), // Immutable set
@@ -452,6 +452,23 @@ impl Value {
             }
         }
     }
+    
+    /// Create a new exception with traceback information
+    pub fn new_exception(class_name: String, message: String, traceback: Option<String>) -> Self {
+        Value::Exception {
+            class_name,
+            message,
+            traceback,
+        }
+    }
+    
+    /// Get the traceback information from an exception
+    pub fn get_traceback(&self) -> Option<&String> {
+        match self {
+            Value::Exception { traceback, .. } => traceback.as_ref(),
+            _ => None,
+        }
+    }
 
     /// Get a string representation for debugging
     pub fn debug_string(&self) -> String {
@@ -544,7 +561,7 @@ impl Value {
                 format!("bytearray(b\"{}\")", String::from_utf8_lossy(bytes))
             }
             Value::Dict(dict) => {
-                let pairs: Vec<String> = dict.iter()
+                let pairs: Vec<String> = dict.borrow().iter()
                     .take(3) // Limit to prevent deep recursion
                     .map(|(k, v)| {
                         let v_str = match v {
@@ -981,7 +998,7 @@ impl Value {
             Value::NotImplemented => true,
             Value::Starred(_) => true,
             Value::List(items) => !items.is_empty(),
-            Value::Dict(dict) => !dict.is_empty(),
+            Value::Dict(dict) => !dict.borrow().is_empty(),
             Value::KwargsMarker(dict) => !dict.is_empty(),
             Value::Tuple(items) => !items.is_empty(),
             Value::Set(items) => !items.is_empty(),
@@ -1032,8 +1049,8 @@ impl Value {
         match self {
             Value::Str(s) => Self::call_str_method_static(s.clone(), method_name, args),
             Value::List(ref mut list) => Self::call_list_method_static(list, method_name, args),
-            Value::Dict(ref mut dict) => Self::call_dict_method_static(dict, method_name, args),
-            Value::KwargsMarker(ref mut dict) => Self::call_dict_method_static(dict, method_name, args),
+            Value::Dict(dict) => Self::call_dict_method_static(dict.clone(), method_name, args),
+            Value::KwargsMarker(ref mut dict) => Self::call_dict_method_static_old(dict, method_name, args),
             Value::Set(ref mut set) => Self::call_set_method_static(set, method_name, args),
             Value::Tuple(tuple) => Self::call_tuple_method_static(tuple.clone(), method_name, args),
             Value::Int(n) => Self::call_int_method_static(*n, method_name, args),
@@ -1478,7 +1495,132 @@ impl Value {
     }
 
     /// Dict method implementations
-    fn call_dict_method_static(dict: &mut HashMap<String, Value>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+    fn call_dict_method_static(dict: Rc<RefCell<HashMap<String, Value>>>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+        match method_name {
+            "clear" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("clear() takes no arguments ({} given)", args.len()));
+                }
+                dict.borrow_mut().clear();
+                Ok(Value::None)
+            }
+            "copy" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("copy() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Dict(Rc::new(RefCell::new(dict.borrow().clone()))))
+            }
+            "get" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(anyhow::anyhow!("get() takes 1 to 2 arguments ({} given)", args.len()));
+                }
+                match &args[0] {
+                    Value::Str(key) => {
+                        let default_value = if args.len() == 2 {
+                            args[1].clone()
+                        } else {
+                            Value::None
+                        };
+                        Ok(dict.borrow().get(key).cloned().unwrap_or(default_value))
+                    }
+                    _ => Err(anyhow::anyhow!("get() key must be a string")),
+                }
+            }
+            "items" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("items() takes no arguments ({} given)", args.len()));
+                }
+                let mut items = Vec::new();
+                for (key, value) in dict.borrow().iter() {
+                    items.push(Value::Tuple(vec![Value::Str(key.clone()), value.clone()]));
+                }
+                Ok(Value::List(HPList::from_values(items)))
+            }
+            "keys" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("keys() takes no arguments ({} given)", args.len()));
+                }
+                let keys: Vec<Value> = dict.borrow().keys().map(|k| Value::Str(k.clone())).collect();
+                Ok(Value::List(HPList::from_values(keys)))
+            }
+            "values" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("values() takes no arguments ({} given)", args.len()));
+                }
+                let values: Vec<Value> = dict.borrow().values().cloned().collect();
+                Ok(Value::List(HPList::from_values(values)))
+            }
+            "pop" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(anyhow::anyhow!("pop() takes 1 to 2 arguments ({} given)", args.len()));
+                }
+                match &args[0] {
+                    Value::Str(key) => {
+                        if args.len() == 1 {
+                            dict.borrow_mut().remove(key).ok_or_else(|| anyhow::anyhow!("pop(): key '{}' not found", key))
+                        } else {
+                            Ok(dict.borrow_mut().remove(key).unwrap_or_else(|| args[1].clone()))
+                        }
+                    }
+                    _ => Err(anyhow::anyhow!("pop() key must be a string")),
+                }
+            }
+            "popitem" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("popitem() takes no arguments ({} given)", args.len()));
+                }
+                dict.borrow_mut().drain().next().map(|(k, v)| Value::Tuple(vec![Value::Str(k), v]))
+                    .ok_or_else(|| anyhow::anyhow!("popitem(): dictionary is empty"))
+            }
+            "setdefault" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(anyhow::anyhow!("setdefault() takes 1 to 2 arguments ({} given)", args.len()));
+                }
+                match &args[0] {
+                    Value::Str(key) => {
+                        let default_value = if args.len() == 2 {
+                            args[1].clone()
+                        } else {
+                            Value::None
+                        };
+                        Ok(dict.borrow_mut().entry(key.clone()).or_insert(default_value).clone())
+                    }
+                    _ => Err(anyhow::anyhow!("setdefault() key must be a string")),
+                }
+            }
+            "update" => {
+                if args.len() != 1 {
+                    return Err(anyhow::anyhow!("update() takes exactly one argument ({} given)", args.len()));
+                }
+                match &args[0] {
+                    Value::Dict(other) => {
+                        dict.borrow_mut().extend(other.borrow().clone());
+                        Ok(Value::None)
+                    }
+                    Value::List(items) => {
+                        for item in items.iter() {
+                            match item {
+                                Value::Tuple(pair) if pair.len() == 2 => {
+                                    if let (Value::Str(key), value) = (&pair[0], &pair[1]) {
+                                        dict.borrow_mut().insert(key.clone(), value.clone());
+                                    } else {
+                                        return Err(anyhow::anyhow!("update() argument must be a dictionary or iterable of key-value pairs"));
+                                    }
+                                }
+                                _ => return Err(anyhow::anyhow!("update() argument must be a dictionary or iterable of key-value pairs")),
+                            }
+                        }
+                        Ok(Value::None)
+                    }
+                    _ => Err(anyhow::anyhow!("update() argument must be a dictionary or iterable of key-value pairs")),
+                }
+            }
+            _ => Err(anyhow::anyhow!("'dict' object has no attribute '{}'", method_name)),
+        }
+    }
+
+    /// Dict method implementations for KwargsMarker (old style HashMap)
+    fn call_dict_method_static_old(dict: &mut HashMap<String, Value>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
         match method_name {
             "clear" => {
                 if !args.is_empty() {
@@ -1491,7 +1633,7 @@ impl Value {
                 if !args.is_empty() {
                     return Err(anyhow::anyhow!("copy() takes no arguments ({} given)", args.len()));
                 }
-                Ok(Value::Dict(dict.clone()))
+                Ok(Value::KwargsMarker(dict.clone()))
             }
             "get" => {
                 if args.is_empty() || args.len() > 2 {
@@ -1577,6 +1719,10 @@ impl Value {
                 }
                 match &args[0] {
                     Value::Dict(other) => {
+                        dict.extend(other.borrow().clone());
+                        Ok(Value::None)
+                    }
+                    Value::KwargsMarker(other) => {
                         dict.extend(other.clone());
                         Ok(Value::None)
                     }
@@ -1970,7 +2116,7 @@ impl fmt::Display for Value {
                 write!(f, "[{}]", items_str.join(", "))
             }
             Value::Dict(dict) => {
-                let pairs: Vec<String> = dict.iter()
+                let pairs: Vec<String> = dict.borrow().iter()
                     .map(|(k, v)| format!("{}: {}", k, v))
                     .collect();
                 write!(f, "{{{}}}", pairs.join(", "))

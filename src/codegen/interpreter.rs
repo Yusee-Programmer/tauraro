@@ -444,6 +444,7 @@ fn format_value(value: &Value) -> String {
         }
         Value::Dict(map) => {
             let items: Vec<String> = map
+                .borrow()
                 .iter()
                 .map(|(k, v)| format!("{}: {}", format_value(&Value::Str(k.clone())), format_value(v)))
                 .collect();

@@ -1354,7 +1354,7 @@ impl SuperCompiler {
                                 
                                 // Emit a special opcode for zero-argument super() calls
                                 let class_name_const = self.code.add_constant(Value::Str(class_name.clone()));
-                                let self_param_const = self.code.add_constant(Value::Str(self_param.clone()));
+                                let _self_param_const = self.code.add_constant(Value::Str(self_param.clone()));
                                 self.emit(OpCode::LoadZeroArgSuper, class_name_const, self_reg, result_reg, self.current_line);
                                 return Ok(result_reg);
                             }
@@ -1611,9 +1611,6 @@ impl SuperCompiler {
                         // Bitwise NOT - for now, just negate the number (simplified)
                         // TODO: Implement proper bitwise NOT
                         self.emit(OpCode::UnaryNegate, operand_reg, result_reg, 0, self.current_line);
-                    }
-                    _ => {
-                        return Err(anyhow!("Unsupported unary operation: {:?}", op));
                     }
                 }
                 
