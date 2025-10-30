@@ -40,6 +40,12 @@ impl fmt::Display for ParseErrorWithLocation {
     }
 }
 
+impl std::error::Error for ParseErrorWithLocation {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
 pub struct Parser {
     tokens: Vec<TokenInfo>,
     current: usize,
@@ -57,6 +63,25 @@ impl Parser {
             });
         }
         Self { tokens, current: 0 }
+    }
+
+    /// Get the current token's line and column information
+    pub fn current_token_location(&self) -> (usize, usize) {
+        if self.current < self.tokens.len() {
+            let token_info = &self.tokens[self.current];
+            (token_info.line, token_info.column)
+        } else {
+            (1, 1) // Default to line 1, column 1 if we're at the end
+        }
+    }
+
+    /// Get the current token information
+    pub fn current_token_info(&self) -> Option<&TokenInfo> {
+        if self.current < self.tokens.len() {
+            Some(&self.tokens[self.current])
+        } else {
+            None
+        }
     }
 
     fn is_keyword_as_identifier(&self) -> bool {
@@ -1178,7 +1203,7 @@ impl Parser {
                 _ => unreachable!(),
             }
         } else if self.is_keyword_as_identifier() {
-            // Allow keywords to be used as identifiers (e.g., match = value)
+            // Allow keywords to be used as identifiers (e2.g., match = value)
             let name = match &self.peek().token {
                 Token::KwMatch => "match".to_string(),
                 Token::KwClass => "class".to_string(),
@@ -1251,6 +1276,11 @@ impl Parser {
                 self.advance();
                 Ok(Expr::List(Vec::new()))
             } else {
+                // Skip newlines after opening bracket
+                while self.check(&Token::Newline) {
+                    self.advance();
+                }
+                
                 let first_expr = self.expression()?;
                 
                 // Check if this is a list comprehension
@@ -1265,10 +1295,39 @@ impl Parser {
                 } else {
                     // Regular list
                     let mut items = vec![first_expr];
-                    while self.match_token(&[Token::Comma]) {
+                    loop {
+                        // Skip newlines
+                        while self.check(&Token::Newline) {
+                            self.advance();
+                        }
+                        
+                        // Check for closing bracket
                         if self.check(&Token::RBracket) {
                             break;
                         }
+                        
+                        // Expect comma or closing bracket
+                        if !self.match_token(&[Token::Comma]) {
+                            // If no comma, we should have a closing bracket
+                            if !self.check(&Token::RBracket) {
+                                return Err(ParseError::UnexpectedToken {
+                                    expected: "',' or ']'".to_string(),
+                                    found: format!("{:?}", self.peek().token),
+                                });
+                            }
+                            break;
+                        }
+                        
+                        // Skip newlines after comma
+                        while self.check(&Token::Newline) {
+                            self.advance();
+                        }
+                        
+                        // Check for closing bracket (allowing trailing comma)
+                        if self.check(&Token::RBracket) {
+                            break;
+                        }
+                        
                         items.push(self.expression()?);
                     }
                     self.consume(Token::RBracket, "Expected ']' after list items")?;

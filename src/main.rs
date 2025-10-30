@@ -29,6 +29,8 @@ mod bytecode;
 mod type_checker;
 mod runtime_error;
 
+
+
 #[derive(Parser)]
 #[command(name = "tauraro")]
 #[command(about = "Tauraro Programming Language - A modern, high-performance programming language with 100% Python syntax compatibility and multilingual support", long_about = None)]
@@ -139,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let source = std::fs::read_to_string(&file)?;
 
             // Always use VM for now
-            if let Err(e) = crate::vm::core::VM::run_file_with_options(&source, &backend, optimization, strict_types) {
+            if let Err(e) = crate::vm::core::VM::run_file_with_options(&source, &file.to_string_lossy(), &backend, optimization, strict_types) {
                 // Error message already includes traceback information from the VM
                 eprintln!("{}", e);
                 std::process::exit(1);
@@ -209,11 +211,11 @@ fn compile_file(
     // Parsing
     let mut parser = parser::Parser::new(tokens);
     let ast = parser.parse().map_err(|e| {
-        // Create a more detailed error message with location information
+        // Find the token that caused the error to get line/column info
+        let (line, column) = parser.current_token_location();
+        let error_with_location = e.with_location(line, column, &file.to_string_lossy());
         eprintln!("Error in parser:");
-        // For now, we'll just show a generic location since we don't have detailed line info in the error
-        eprintln!("  File \"{}\", line 1", file.display());
-        e
+        Box::new(error_with_location) as Box<dyn std::error::Error>
     })?;
     
     // Semantic analysis
@@ -258,7 +260,8 @@ fn compile_file(
                 
                 // Since we don't have the actual codegen, we'll just print a message
                 println!("LLVM backend not available, using VM instead");
-                crate::vm::core::VM::run_file_with_options(&source, "vm", optimization, strict_types)?;
+                crate::vm::core::VM::run_file_with_options(&source, "<main>", "vm", optimization, strict_types)?;
+
             }
         }
         "c" => {
@@ -354,12 +357,12 @@ fn compile_file(
             {
                 // Use VM for now since WASM backend is not available
                 println!("WASM backend not available, using VM instead");
-                crate::vm::core::VM::run_file_with_options(&source, "vm", optimization, strict_types)?;
+                crate::vm::core::VM::run_file_with_options(&source, "<main>", "vm", optimization, strict_types)?;
             }
             #[cfg(not(feature = "wasm"))]
             {
                 println!("WASM backend not available, using VM instead");
-                crate::vm::core::VM::run_file_with_options(&source, "vm", optimization, strict_types)?;
+                crate::vm::core::VM::run_file_with_options(&source, "<main>", "vm", optimization, strict_types)?;
             }
         }
         _ => return Err(format!("Unsupported backend: {}", backend).into()),
@@ -394,10 +397,12 @@ fn debug_ast(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             println!("{:#?}", ast);
         }
         Err(e) => {
+            // Find the token that caused the error to get line/column info
+            let (line, column) = parser.current_token_location();
+            let error_with_location = e.with_location(line, column, &file.to_string_lossy());
             eprintln!("Error in parser:");
-            eprintln!("  File \"{}\", line 1", file.display());
-            eprintln!("Error: {:?}", e);
-            return Err(Box::new(e));
+            eprintln!("{}", error_with_location);
+            return Err(Box::new(error_with_location));
         }
     }
     
@@ -429,11 +434,11 @@ fn debug_ir(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     // Parsing
     let mut parser = parser::Parser::new(tokens);
     let ast = parser.parse().map_err(|e| {
-        // Create a more detailed error message with location information
+        // Find the token that caused the error to get line/column info
+        let (line, column) = parser.current_token_location();
+        let error_with_location = e.with_location(line, column, &file.to_string_lossy());
         eprintln!("Error in parser:");
-        // For now, we'll just show a generic location since we don't have detailed line info in the error
-        eprintln!("  File \"{}\", line 1", file.display());
-        e
+        Box::new(error_with_location) as Box<dyn std::error::Error>
     })?;
     
     // Semantic analysis
@@ -465,11 +470,11 @@ fn debug_bytecode(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     // Parsing
     let mut parser = parser::Parser::new(tokens);
     let ast = parser.parse().map_err(|e| {
-        // Create a more detailed error message with location information
+        // Find the token that caused the error to get line/column info
+        let (line, column) = parser.current_token_location();
+        let error_with_location = e.with_location(line, column, &file.to_string_lossy());
         eprintln!("Error in parser:");
-        // For now, we'll just show a generic location since we don't have detailed line info in the error
-        eprintln!("  File \"{}\", line 1", file.display());
-        e
+        Box::new(error_with_location) as Box<dyn std::error::Error>
     })?;
     
     // Compile to bytecode
