@@ -108,7 +108,11 @@
       "Bash(find:*)",
       "Bash(timeout 180 cargo build:*)",
       "Bash(1)",
-      "Bash(tee:*)"
+      "Bash(tee:*)",
+      "Bash(timeout 30 ./target/debug/tauraro.exe run:*)",
+      "Bash(timeout 15 ./target/debug/tauraro.exe:*)",
+      "Bash(timeout 20 ./target/debug/tauraro.exe:*)",
+      "Bash(timeout 40 ./target/debug/tauraro.exe run:*)"
     ],
     "deny": [],
     "ask": []
