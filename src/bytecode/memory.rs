@@ -184,6 +184,7 @@ pub struct Frame {
     pub return_register: Option<(usize, u32)>, // (caller_frame_idx, result_reg) where return value should be stored
     pub is_property_setter: bool,           // True if this frame is executing a property setter
     pub vars_to_update: Vec<String>,        // Variables to update after property setter completes
+    pub last_loaded_attr: Option<String>,   // Track the last loaded attribute name for module class imports
 }
 
 // Manual implementation of Debug trait for Frame struct
@@ -245,6 +246,7 @@ impl Frame {
             return_register: None,
             is_property_setter: false,
             vars_to_update: Vec::new(),
+            last_loaded_attr: None,
         }
     }
 
@@ -353,6 +355,7 @@ impl Frame {
             return_register: None,
             is_property_setter: false,
             vars_to_update: Vec::new(),
+            last_loaded_attr: None,
         }
     }
 
@@ -395,6 +398,7 @@ impl Frame {
             return_register: None,
             is_property_setter: false,
             vars_to_update: Vec::new(),
+            last_loaded_attr: None,
         }
     }
 

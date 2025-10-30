@@ -122,7 +122,7 @@ impl SuperBytecodeVM {
     }
 
     /// Helper method to compile and execute a module source file
-    fn compile_and_execute_module(&mut self, source: &str, module_name: &str) -> Result<Value> {
+    pub fn compile_and_execute_module(&mut self, source: &str, module_name: &str) -> Result<Value> {
         // Compile the module
         let tokens = crate::lexer::Lexer::new(source)
             .collect::<Result<Vec<_>, _>>()
@@ -1061,18 +1061,43 @@ impl SuperBytecodeVM {
 
                 // Get the function value
                 let func_value = self.frames[frame_idx].registers[func_reg].value.clone();
+                
+                // Special handling for module class imports
+                if let Value::Module(module_name, namespace) = &func_value {
+                    // Check if this is a module attribute access for a class
+                    if frame_idx > 0 && self.frames[frame_idx].pc > 0 {
+                        let prev_pc = self.frames[frame_idx].pc - 1;
+                        if let Some(prev_instr) = self.frames[frame_idx].code.instructions.get(prev_pc) {
+                            if prev_instr.opcode == OpCode::LoadAttr {
+                                let attr_name_idx = prev_instr.arg2 as usize;
+                                if let Some(attr_name) = self.frames[frame_idx].code.names.get(attr_name_idx) {
+                                    if let Some(attr_value) = namespace.get(attr_name) {
+                                        // Direct handling for class and object values
+                                        match attr_value {
+                                            Value::Class { .. } | Value::Object { .. } => {
+                                                // Store the result directly and return
+                                                self.frames[frame_idx].registers[result_reg].value = attr_value.clone();
+                                                return Ok(None);
+                                            },
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 // Debug info removed
                 
                 // Collect arguments from registers
-                let mut args = Vec::new();
+                let mut args = Vec::with_capacity(arg_count); // Pre-allocate capacity for better memory efficiency
                 for i in 0..arg_count {
                     // Arguments are stored in consecutive registers after the function register
                     let arg_reg = func_reg + 1 + i;
                     if arg_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("CallFunction: argument register index {} out of bounds (len: {})", arg_reg, self.frames[frame_idx].registers.len()));
+                        return Err(anyhow!("CallFunction: argument register index {} out of bounds (len: {})", arg_reg, self.frames[frame_idx].registers.len()));
                     }
                     let arg_value = self.frames[frame_idx].registers[arg_reg].value.clone();
-                    // Debug info removed
                     args.push(arg_value);
                 }
                 
@@ -2657,10 +2682,20 @@ impl SuperBytecodeVM {
                             match value {
                                 Value::BuiltinFunction(_, func) => func(args.clone())?,
                                 Value::NativeFunction(func) => func(args.clone())?,
+                                Value::Class { .. } | Value::Object { .. } => {
+                                    // For classes and objects in modules, call through the VM
+                                    // This is the critical fix for module class imports
+                                    self.call_function_fast(value.clone(), args.clone(), HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+                                    // For classes and objects, we don't return a value directly, the VM handles it
+                                    return Ok(None);
+                                },
                                 Value::Closure { .. } => {
                                     // For closures, call through the VM
-                                    self.call_function_fast(value.clone(), args.clone(), HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                                    self.call_function_fast(value.clone(), args.clone(), HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+                                    // For closures, we don't return a value directly, the VM handles it
+                                    return Ok(None);
                                 },
+
                                 _ => {
                                     // If it's not a callable, return an error
                                     return Err(anyhow!("'{}' in module is not callable", method_name));

@@ -1,5 +1,3 @@
-//! Module system for Tauraro
-
 use crate::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -63,7 +61,7 @@ impl ModuleSystem {
         }
     }
     
-    fn load_module_from_file(&self, module_name: &str) -> Result<Value> {
+    fn load_module_from_file(&mut self, module_name: &str) -> Result<Value> {
         // Try to find the module file in search paths
         let mut file_path = None;
         for search_path in &self.search_paths {
@@ -90,12 +88,9 @@ impl ModuleSystem {
             // Read the module file
             let source = fs::read_to_string(&path)?;
             
-            // For now, we'll just return an empty module with the module name
-            // In a full implementation, this would parse and execute the module file
-            let mut namespace = HashMap::new();
-            // Add the module name to the namespace for identification
-            namespace.insert("__name__".to_string(), Value::Str(module_name.to_string()));
-            Ok(Value::Module(module_name.to_string(), namespace))
+            // Use the existing VM method to compile and execute the module
+            let mut vm = crate::bytecode::vm::SuperBytecodeVM::new();
+            vm.compile_and_execute_module(&source, module_name)
         } else {
             // Module file not found, return empty module
             let mut namespace = HashMap::new();
