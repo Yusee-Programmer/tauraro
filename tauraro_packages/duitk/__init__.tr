@@ -1,0 +1,9 @@
+# DUITK Package Initialization
+
+print("Loading DUITK - Desktop UI Toolkit...")
+
+# Simple initialization
+version = "1.0.0"
+name = "DUITK"
+
+print("DUITK - Desktop UI Toolkit loaded successfully!")

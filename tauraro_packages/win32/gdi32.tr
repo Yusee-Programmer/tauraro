@@ -1,0 +1,116 @@
+# Win32 GDI32 Module
+# Windows API functions from gdi32.dll for graphics operations
+
+# Device Context Functions
+GetDC = define_function("gdi32.dll", "GetDC", "pointer", ["pointer"])
+ReleaseDC = define_function("gdi32.dll", "ReleaseDC", "int32", ["pointer", "pointer"])
+GetDeviceCaps = define_function("gdi32.dll", "GetDeviceCaps", "int32", ["pointer", "int32"])
+
+# Drawing Functions
+MoveToEx = define_function("gdi32.dll", "MoveToEx", "bool", ["pointer", "int32", "int32", "pointer"])
+LineTo = define_function("gdi32.dll", "LineTo", "bool", ["pointer", "int32", "int32"])
+
+# Shape Drawing Functions
+Rectangle = define_function("gdi32.dll", "Rectangle", "bool", ["pointer", "int32", "int32", "int32", "int32"])
+Ellipse = define_function("gdi32.dll", "Ellipse", "bool", ["pointer", "int32", "int32", "int32", "int32"])
+RoundRect = define_function("gdi32.dll", "RoundRect", "bool", ["pointer", "int32", "int32", "int32", "int32", "int32", "int32"])
+
+# Pen Functions
+CreatePen = define_function("gdi32.dll", "CreatePen", "pointer", ["int32", "int32", "int32"])
+DeleteObject = define_function("gdi32.dll", "DeleteObject", "bool", ["pointer"])
+
+# Brush Functions
+CreateSolidBrush = define_function("gdi32.dll", "CreateSolidBrush", "pointer", ["int32"])
+CreatePatternBrush = define_function("gdi32.dll", "CreatePatternBrush", "pointer", ["pointer"])
+CreateHatchBrush = define_function("gdi32.dll", "CreateHatchBrush", "pointer", ["int32", "int32"])
+
+# Select Object Functions
+SelectObject = define_function("gdi32.dll", "SelectObject", "pointer", ["pointer", "pointer"])
+
+# Text Functions
+TextOutA = define_function("gdi32.dll", "TextOutA", "bool", ["pointer", "int32", "int32", "pointer", "int32"])
+TextOutW = define_function("gdi32.dll", "TextOutW", "bool", ["pointer", "int32", "int32", "pointer", "int32"])
+
+GetTextExtentPoint32A = define_function("gdi32.dll", "GetTextExtentPoint32A", "bool", ["pointer", "pointer", "int32", "pointer"])
+GetTextExtentPoint32W = define_function("gdi32.dll", "GetTextExtentPoint32W", "bool", ["pointer", "pointer", "int32", "pointer"])
+
+# Bitmap Functions
+CreateCompatibleDC = define_function("gdi32.dll", "CreateCompatibleDC", "pointer", ["pointer"])
+CreateCompatibleBitmap = define_function("gdi32.dll", "CreateCompatibleBitmap", "pointer", ["pointer", "int32", "int32"])
+DeleteDC = define_function("gdi32.dll", "DeleteDC", "bool", ["pointer"])
+
+BitBlt = define_function("gdi32.dll", "BitBlt", "bool", ["pointer", "int32", "int32", "int32", "int32", "pointer", "int32", "int32", "uint32"])
+
+# Stock Object Functions
+GetStockObject = define_function("gdi32.dll", "GetStockObject", "pointer", ["int32"])
+
+# Color Functions
+SetBkColor = define_function("gdi32.dll", "SetBkColor", "int32", ["pointer", "int32"])
+SetTextColor = define_function("gdi32.dll", "SetTextColor", "int32", ["pointer", "int32"])
+SetBkMode = define_function("gdi32.dll", "SetBkMode", "int32", ["pointer", "int32"])
+
+# Coordinate Space and Transformation Functions
+SetMapMode = define_function("gdi32.dll", "SetMapMode", "int32", ["pointer", "int32"])
+GetMapMode = define_function("gdi32.dll", "GetMapMode", "int32", ["pointer"])
+
+SetViewportOrgEx = define_function("gdi32.dll", "SetViewportOrgEx", "bool", ["pointer", "int32", "int32", "pointer"])
+SetWindowOrgEx = define_function("gdi32.dll", "SetWindowOrgEx", "bool", ["pointer", "int32", "int32", "pointer"])
+
+# Path Functions
+BeginPath = define_function("gdi32.dll", "BeginPath", "bool", ["pointer"])
+EndPath = define_function("gdi32.dll", "EndPath", "bool", ["pointer"])
+StrokePath = define_function("gdi32.dll", "StrokePath", "bool", ["pointer"])
+FillPath = define_function("gdi32.dll", "FillPath", "bool", ["pointer"])
+
+# Region Functions
+CreateRectRgn = define_function("gdi32.dll", "CreateRectRgn", "pointer", ["int32", "int32", "int32", "int32"])
+CombineRgn = define_function("gdi32.dll", "CombineRgn", "int32", ["pointer", "pointer", "pointer", "int32"])
+SelectClipRgn = define_function("gdi32.dll", "SelectClipRgn", "int32", ["pointer", "pointer"])
+
+# Device Capabilities Constants
+HORZSIZE = 4
+VERTSIZE = 6
+HORZRES = 8
+VERTRES = 10
+BITSPIXEL = 12
+PLANES = 14
+NUMBRUSHES = 16
+NUMPENS = 18
+NUMMARKERS = 20
+NUMFONTS = 22
+NUMCOLORS = 24
+PDEVICESIZE = 26
+CURVECAPS = 28
+LINECAPS = 30
+POLYGONALCAPS = 32
+TEXTCAPS = 34
+CLIPCAPS = 36
+RASTERCAPS = 38
+ASPECTX = 40
+ASPECTY = 42
+ASPECTXY = 44
+
+# Map Mode Constants
+MM_TEXT = 1
+MM_LOMETRIC = 2
+MM_HIMETRIC = 3
+MM_LOENGLISH = 4
+MM_HIENGLISH = 5
+MM_TWIPS = 6
+MM_ISOTROPIC = 7
+MM_ANISOTROPIC = 8
+
+# Background Mode Constants
+TRANSPARENT = 1
+OPAQUE = 2
+
+# Combine Region Constants
+RGN_AND = 1
+RGN_OR = 2
+RGN_XOR = 3
+RGN_DIFF = 4
+RGN_COPY = 5
+
+# ExtFloodFill Constants
+FLOODFILLBORDER = 0
+FLOODFILLSURFACE = 1

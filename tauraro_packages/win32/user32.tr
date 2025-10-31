@@ -1,0 +1,131 @@
+# Win32 User32 Module
+# Windows API functions from user32.dll for GUI and user interface
+
+# Load required library
+try:
+    load_library("user32.dll")
+except:
+    pass  # Library might already be loaded
+
+# Window Functions
+CreateWindowExA = define_function("user32.dll", "CreateWindowExA", "pointer", ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
+CreateWindowExW = define_function("user32.dll", "CreateWindowExW", "pointer", ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
+
+DefWindowProcA = define_function("user32.dll", "DefWindowProcA", "int64", ["pointer", "uint32", "uint64", "int64"])
+DefWindowProcW = define_function("user32.dll", "DefWindowProcW", "int64", ["pointer", "uint32", "uint64", "int64"])
+
+DestroyWindow = define_function("user32.dll", "DestroyWindow", "bool", ["pointer"])
+
+ShowWindow = define_function("user32.dll", "ShowWindow", "bool", ["pointer", "int32"])
+ShowWindowAsync = define_function("user32.dll", "ShowWindowAsync", "bool", ["pointer", "int32"])
+
+UpdateWindow = define_function("user32.dll", "UpdateWindow", "bool", ["pointer"])
+
+SetWindowPos = define_function("user32.dll", "SetWindowPos", "bool", ["pointer", "pointer", "int32", "int32", "int32", "int32", "uint32"])
+
+GetWindowRect = define_function("user32.dll", "GetWindowRect", "bool", ["pointer", "pointer"])
+GetClientRect = define_function("user32.dll", "GetClientRect", "bool", ["pointer", "pointer"])
+
+MoveWindow = define_function("user32.dll", "MoveWindow", "bool", ["pointer", "int32", "int32", "int32", "int32", "bool"])
+
+SetWindowTextA = define_function("user32.dll", "SetWindowTextA", "bool", ["pointer", "pointer"])
+SetWindowTextW = define_function("user32.dll", "SetWindowTextW", "bool", ["pointer", "pointer"])
+SetWindowText = SetWindowTextA  # Default to ANSI version
+
+GetWindowTextA = define_function("user32.dll", "GetWindowTextA", "int32", ["pointer", "pointer", "int32"])
+GetWindowTextW = define_function("user32.dll", "GetWindowTextW", "int32", ["pointer", "pointer", "int32"])
+GetWindowText = GetWindowTextA  # Default to ANSI version
+
+GetWindowTextLengthA = define_function("user32.dll", "GetWindowTextLengthA", "int32", ["pointer"])
+GetWindowTextLengthW = define_function("user32.dll", "GetWindowTextLengthW", "int32", ["pointer"])
+GetWindowTextLength = GetWindowTextLengthA  # Default to ANSI version
+
+GetWindowThreadProcessId = define_function("user32.dll", "GetWindowThreadProcessId", "uint32", ["pointer", "pointer"])
+
+# Message Functions
+GetMessageA = define_function("user32.dll", "GetMessageA", "bool", ["pointer", "pointer", "uint32", "uint32"])
+GetMessageW = define_function("user32.dll", "GetMessageW", "bool", ["pointer", "pointer", "uint32", "uint32"])
+
+TranslateMessage = define_function("user32.dll", "TranslateMessage", "bool", ["pointer"])
+DispatchMessageA = define_function("user32.dll", "DispatchMessageA", "int64", ["pointer"])
+DispatchMessageW = define_function("user32.dll", "DispatchMessageW", "int64", ["pointer"])
+
+PostMessageA = define_function("user32.dll", "PostMessageA", "bool", ["pointer", "uint32", "uint64", "int64"])
+PostMessageW = define_function("user32.dll", "PostMessageW", "bool", ["pointer", "uint32", "uint64", "int64"])
+
+SendMessageA = define_function("user32.dll", "SendMessageA", "int64", ["pointer", "uint32", "uint64", "int64"])
+SendMessageW = define_function("user32.dll", "SendMessageW", "int64", ["pointer", "uint32", "uint64", "int64"])
+
+PeekMessageA = define_function("user32.dll", "PeekMessageA", "bool", ["pointer", "pointer", "uint32", "uint32", "uint32"])
+PeekMessageW = define_function("user32.dll", "PeekMessageW", "bool", ["pointer", "pointer", "uint32", "uint32", "uint32"])
+
+# Dialog Functions
+MessageBoxA = define_function("user32.dll", "MessageBoxA", "int32", ["pointer", "pointer", "pointer", "uint32"])
+MessageBoxW = define_function("user32.dll", "MessageBoxW", "int32", ["pointer", "pointer", "pointer", "uint32"])
+MessageBox = MessageBoxA  # Default to ANSI version
+
+# Menu Functions
+CreateMenu = define_function("user32.dll", "CreateMenu", "pointer", [])
+CreatePopupMenu = define_function("user32.dll", "CreatePopupMenu", "pointer", [])
+DestroyMenu = define_function("user32.dll", "DestroyMenu", "bool", ["pointer"])
+
+# Message Constants
+PM_NOREMOVE = 0x0000
+PM_REMOVE = 0x0001
+PM_NOYIELD = 0x0002
+
+# Window Position Flags
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOZORDER = 0x0004
+SWP_NOREDRAW = 0x0008
+SWP_NOACTIVATE = 0x0010
+SWP_FRAMECHANGED = 0x0020
+SWP_SHOWWINDOW = 0x0040
+SWP_HIDEWINDOW = 0x0080
+SWP_NOCOPYBITS = 0x0100
+SWP_NOOWNERZORDER = 0x0200
+SWP_NOSENDCHANGING = 0x0400
+
+HWND_TOP = 0
+HWND_BOTTOM = 1
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+
+# Redraw Flags
+RDW_INVALIDATE = 0x0001
+RDW_INTERNALPAINT = 0x0002
+RDW_ERASE = 0x0004
+RDW_VALIDATE = 0x0008
+RDW_NOINTERNALPAINT = 0x0010
+RDW_NOERASE = 0x0020
+RDW_NOCHILDREN = 0x0040
+RDW_ALLCHILDREN = 0x0080
+RDW_UPDATENOW = 0x0100
+RDW_ERASENOW = 0x0200
+RDW_FRAME = 0x0400
+RDW_NOFRAME = 0x0800
+
+# Update Layered Window Flags
+ULW_COLORKEY = 0x00000001
+ULW_ALPHA = 0x00000002
+ULW_OPAQUE = 0x00000004
+ULW_EX_NORESIZE = 0x00000008
+
+# Window Hook Types
+WH_MSGFILTER = -1
+WH_JOURNALRECORD = 0
+WH_JOURNALPLAYBACK = 1
+WH_KEYBOARD = 2
+WH_GETMESSAGE = 3
+WH_CALLWNDPROC = 4
+WH_CBT = 5
+WH_SYSMSGFILTER = 6
+WH_MOUSE = 7
+WH_HARDWARE = 8
+WH_DEBUG = 9
+WH_SHELL = 10
+WH_FOREGROUNDIDLE = 11
+WH_CALLWNDPROCRET = 12
+WH_KEYBOARD_LL = 13
+WH_MOUSE_LL = 14

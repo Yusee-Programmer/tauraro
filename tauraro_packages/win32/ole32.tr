@@ -1,0 +1,106 @@
+# Win32 OLE32 Module
+# COM functions from ole32.dll for Component Object Model
+
+# COM Initialization
+CoInitialize = define_function("ole32.dll", "CoInitialize", "int32", ["pointer"])
+CoInitializeEx = define_function("ole32.dll", "CoInitializeEx", "int32", ["pointer", "uint32"])
+CoUninitialize = define_function("ole32.dll", "CoUninitialize", "void", [])
+
+# COM Memory Management
+CoTaskMemAlloc = define_function("ole32.dll", "CoTaskMemAlloc", "pointer", ["uint64"])
+CoTaskMemFree = define_function("ole32.dll", "CoTaskMemFree", "void", ["pointer"])
+CoTaskMemRealloc = define_function("ole32.dll", "CoTaskMemRealloc", "pointer", ["pointer", "uint64"])
+
+# Class Object Functions
+CoCreateInstance = define_function("ole32.dll", "CoCreateInstance", "int32", ["pointer", "pointer", "uint32", "pointer", "pointer"])
+CoGetClassObject = define_function("ole32.dll", "CoGetClassObject", "int32", ["pointer", "uint32", "pointer", "pointer", "pointer"])
+
+# String Functions
+StringFromCLSID = define_function("ole32.dll", "StringFromCLSID", "int32", ["pointer", "pointer"])
+CLSIDFromString = define_function("ole32.dll", "CLSIDFromString", "int32", ["pointer", "pointer"])
+StringFromIID = define_function("ole32.dll", "StringFromIID", "int32", ["pointer", "pointer"])
+IIDFromString = define_function("ole32.dll", "IIDFromString", "int32", ["pointer", "pointer"])
+
+# Clipboard Functions
+OleSetClipboard = define_function("ole32.dll", "OleSetClipboard", "int32", ["pointer"])
+OleGetClipboard = define_function("ole32.dll", "OleGetClipboard", "int32", ["pointer"])
+OleFlushClipboard = define_function("ole32.dll", "OleFlushClipboard", "int32", [])
+
+# Drag and Drop Functions
+RegisterDragDrop = define_function("ole32.dll", "RegisterDragDrop", "int32", ["pointer", "pointer"])
+RevokeDragDrop = define_function("ole32.dll", "RevokeDragDrop", "int32", ["pointer"])
+DoDragDrop = define_function("ole32.dll", "DoDragDrop", "int32", ["pointer", "pointer", "uint32", "pointer"])
+
+# Storage Functions
+StgCreateDocfile = define_function("ole32.dll", "StgCreateDocfile", "int32", ["pointer", "uint32", "uint32", "pointer"])
+StgOpenStorage = define_function("ole32.dll", "StgOpenStorage", "int32", ["pointer", "pointer", "uint32", "pointer", "uint32", "pointer"])
+
+# Stream Functions
+CreateStreamOnHGlobal = define_function("ole32.dll", "CreateStreamOnHGlobal", "int32", ["pointer", "bool", "pointer"])
+GetHGlobalFromStream = define_function("ole32.dll", "GetHGlobalFromStream", "int32", ["pointer", "pointer"])
+
+# COM Initialization Constants
+COINIT_APARTMENTTHREADED = 0x2
+COINIT_MULTITHREADED = 0x0
+COINIT_DISABLE_OLE1DDE = 0x4
+COINIT_SPEED_OVER_MEMORY = 0x8
+
+# Class Context Constants
+CLSCTX_INPROC_SERVER = 0x1
+CLSCTX_INPROC_HANDLER = 0x2
+CLSCTX_LOCAL_SERVER = 0x4
+CLSCTX_INPROC_SERVER16 = 0x8
+CLSCTX_REMOTE_SERVER = 0x10
+CLSCTX_INPROC_HANDLER16 = 0x20
+CLSCTX_RESERVED1 = 0x40
+CLSCTX_RESERVED2 = 0x80
+CLSCTX_RESERVED3 = 0x100
+CLSCTX_RESERVED4 = 0x200
+CLSCTX_NO_CODE_DOWNLOAD = 0x400
+CLSCTX_RESERVED5 = 0x800
+CLSCTX_NO_CUSTOM_MARSHAL = 0x1000
+CLSCTX_ENABLE_CODE_DOWNLOAD = 0x2000
+CLSCTX_NO_FAILURE_LOG = 0x4000
+CLSCTX_DISABLE_AAA = 0x8000
+CLSCTX_ENABLE_AAA = 0x10000
+CLSCTX_FROM_DEFAULT_CONTEXT = 0x20000
+CLSCTX_ACTIVATE_32_BIT_SERVER = 0x40000
+CLSCTX_ACTIVATE_64_BIT_SERVER = 0x80000
+CLSCTX_ENABLE_CLOAKING = 0x100000
+CLSCTX_APPCONTAINER = 0x400000
+CLSCTX_ACTIVATE_AAA_AS_IU = 0x800000
+CLSCTX_PS_DLL = 0x80000000
+
+# Registration Constants
+REGCLS_SINGLEUSE = 0
+REGCLS_MULTIPLEUSE = 1
+REGCLS_MULTI_SEPARATE = 2
+REGCLS_SUSPENDED = 4
+REGCLS_SURROGATE = 8
+
+# Drag and Drop Effects
+DROPEFFECT_NONE = 0
+DROPEFFECT_COPY = 1
+DROPEFFECT_MOVE = 2
+DROPEFFECT_LINK = 4
+DROPEFFECT_SCROLL = 0x80000000
+
+# Storage Constants
+STGM_READ = 0x00000000
+STGM_WRITE = 0x00000001
+STGM_READWRITE = 0x00000002
+STGM_SHARE_DENY_NONE = 0x00000040
+STGM_SHARE_DENY_READ = 0x00000030
+STGM_SHARE_DENY_WRITE = 0x00000020
+STGM_SHARE_EXCLUSIVE = 0x00000010
+STGM_PRIORITY = 0x00040000
+STGM_CREATE = 0x00001000
+STGM_CONVERT = 0x00020000
+STGM_FAILIFTHERE = 0x00000000
+STGM_DIRECT = 0x00000000
+STGM_TRANSACTED = 0x00010000
+STGM_NOSCRATCH = 0x00100000
+STGM_NOSNAPSHOT = 0x00200000
+STGM_SIMPLE = 0x08000000
+STGM_DIRECT_SWMR = 0x00400000
+STGM_DELETEONRELEASE = 0x04000000

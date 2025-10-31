@@ -1,0 +1,72 @@
+# Win32 Direct2D Module
+# Direct2D functions from d2d1.dll for hardware-accelerated 2D graphics
+
+# Direct2D Factory Functions
+D2D1CreateFactory = define_function("d2d1.dll", "D2D1CreateFactory", "int32", ["uint32", "pointer", "pointer", "pointer"])
+
+# Render Target Functions
+ID2D1Factory_CreateHwndRenderTarget = define_function("d2d1.dll", "ID2D1Factory_CreateHwndRenderTarget", "int32", ["pointer", "pointer", "pointer", "pointer"])
+ID2D1HwndRenderTarget_BeginDraw = define_function("d2d1.dll", "ID2D1HwndRenderTarget_BeginDraw", "void", ["pointer"])
+ID2D1HwndRenderTarget_EndDraw = define_function("d2d1.dll", "ID2D1HwndRenderTarget_EndDraw", "int32", ["pointer", "pointer", "pointer"])
+ID2D1HwndRenderTarget_Clear = define_function("d2d1.dll", "ID2D1HwndRenderTarget_Clear", "void", ["pointer", "pointer"])
+
+# Brush Functions
+ID2D1RenderTarget_CreateSolidColorBrush = define_function("d2d1.dll", "ID2D1RenderTarget_CreateSolidColorBrush", "int32", ["pointer", "pointer", "pointer", "pointer"])
+ID2D1RenderTarget_CreateLinearGradientBrush = define_function("d2d1.dll", "ID2D1RenderTarget_CreateLinearGradientBrush", "int32", ["pointer", "pointer", "pointer", "pointer", "pointer"])
+ID2D1RenderTarget_CreateRadialGradientBrush = define_function("d2d1.dll", "ID2D1RenderTarget_CreateRadialGradientBrush", "int32", ["pointer", "pointer", "pointer", "pointer", "pointer"])
+
+# Drawing Functions
+ID2D1RenderTarget_DrawLine = define_function("d2d1.dll", "ID2D1RenderTarget_DrawLine", "void", ["pointer", "pointer", "pointer", "pointer", "pointer"])
+ID2D1RenderTarget_DrawRectangle = define_function("d2d1.dll", "ID2D1RenderTarget_DrawRectangle", "void", ["pointer", "pointer", "pointer", "pointer"])
+ID2D1RenderTarget_FillRectangle = define_function("d2d1.dll", "ID2D1RenderTarget_FillRectangle", "void", ["pointer", "pointer", "pointer"])
+ID2D1RenderTarget_DrawRoundedRectangle = define_function("d2d1.dll", "ID2D1RenderTarget_DrawRoundedRectangle", "void", ["pointer", "pointer", "pointer", "pointer"])
+ID2D1RenderTarget_FillRoundedRectangle = define_function("d2d1.dll", "ID2D1RenderTarget_FillRoundedRectangle", "void", ["pointer", "pointer", "pointer"])
+ID2D1RenderTarget_DrawEllipse = define_function("d2d1.dll", "ID2D1RenderTarget_DrawEllipse", "void", ["pointer", "pointer", "pointer", "pointer"])
+ID2D1RenderTarget_FillEllipse = define_function("d2d1.dll", "ID2D1RenderTarget_FillEllipse", "void", ["pointer", "pointer", "pointer"])
+
+# Text Functions
+DWriteCreateFactory = define_function("dwrite.dll", "DWriteCreateFactory", "int32", ["uint32", "pointer", "pointer"])
+ID2D1RenderTarget_DrawText = define_function("d2d1.dll", "ID2D1RenderTarget_DrawText", "void", ["pointer", "pointer", "uint32", "pointer", "pointer", "pointer", "pointer"])
+
+# Geometry Functions
+ID2D1Factory_CreateRectangleGeometry = define_function("d2d1.dll", "ID2D1Factory_CreateRectangleGeometry", "int32", ["pointer", "pointer", "pointer"])
+ID2D1Factory_CreateEllipseGeometry = define_function("d2d1.dll", "ID2D1Factory_CreateEllipseGeometry", "int32", ["pointer", "pointer", "pointer"])
+ID2D1Factory_CreatePathGeometry = define_function("d2d1.dll", "ID2D1Factory_CreatePathGeometry", "int32", ["pointer", "pointer"])
+ID2D1RenderTarget_FillGeometry = define_function("d2d1.dll", "ID2D1RenderTarget_FillGeometry", "void", ["pointer", "pointer", "pointer", "pointer"])
+
+# Factory Types
+D2D1_FACTORY_TYPE_SINGLE_THREADED = 0
+D2D1_FACTORY_TYPE_MULTI_THREADED = 1
+
+# Render Target Properties
+D2D1_RENDER_TARGET_TYPE_DEFAULT = 0
+D2D1_RENDER_TARGET_TYPE_SOFTWARE = 1
+D2D1_RENDER_TARGET_TYPE_HARDWARE = 2
+
+# Alpha Mode
+D2D1_ALPHA_MODE_UNKNOWN = 0
+D2D1_ALPHA_MODE_PREMULTIPLIED = 1
+D2D1_ALPHA_MODE_STRAIGHT = 2
+D2D1_ALPHA_MODE_IGNORE = 3
+
+# Present Options
+D2D1_PRESENT_OPTIONS_NONE = 0x00000000
+D2D1_PRESENT_OPTIONS_RETAIN_CONTENTS = 0x00000001
+D2D1_PRESENT_OPTIONS_IMMEDIATELY = 0x00000002
+
+# Draw Text Options
+D2D1_DRAW_TEXT_OPTIONS_NO_SNAP = 0x00000001
+D2D1_DRAW_TEXT_OPTIONS_CLIP = 0x00000002
+D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT = 0x00000004
+D2D1_DRAW_TEXT_OPTIONS_DISABLE_COLOR_BITMAP_SNAPPING = 0x00000008
+D2D1_DRAW_TEXT_OPTIONS_NONE = 0x00000000
+
+# Antialias Mode
+D2D1_ANTIALIAS_MODE_PER_PRIMITIVE = 0
+D2D1_ANTIALIAS_MODE_ALIASED = 1
+
+# Text Antialias Mode
+D2D1_TEXT_ANTIALIAS_MODE_DEFAULT = 0
+D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE = 1
+D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE = 2
+D2D1_TEXT_ANTIALIAS_MODE_ALIASED = 3

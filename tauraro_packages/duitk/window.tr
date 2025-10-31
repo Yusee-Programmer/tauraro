@@ -1,0 +1,96 @@
+# Window management functions for DUITK
+
+# Import win32 module functions within functions to avoid circular dependencies
+# This is the recommended approach for DUITK modules
+
+def test_function():
+    return "Hello, World!"
+
+# Function to create a basic window
+def create_window(title: str, width: int, height: int):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Convert title to UTF-16 for Windows APIs
+    title_utf16 = duitk.events.utf8_to_utf16(title)
+    
+    # Create window with specified parameters
+    hwnd = win32.CreateWindowExW(
+        0,  # dwExStyle
+        "STATIC",  # lpClassName
+        title_utf16,  # lpWindowName
+        0x00CF0000,  # dwStyle (WS_OVERLAPPEDWINDOW)
+        win32.CW_USEDEFAULT,  # X
+        win32.CW_USEDEFAULT,  # Y
+        width,  # nWidth
+        height,  # nHeight
+        null,  # hWndParent
+        null,  # hMenu
+        win32.GetModuleHandle(null),  # hInstance
+        null  # lpParam
+    )
+    
+    # Free allocated buffer
+    win32.string.free(title_utf16)
+    
+    return hwnd
+
+# Function to show a window
+def show_window(hwnd: int, cmd_show: int):
+    # Deferred import to avoid circular dependencies
+    import win32
+    
+    return win32.ShowWindow(hwnd, cmd_show)
+
+# Function to update a window
+def update_window(hwnd: int):
+    # Deferred import to avoid circular dependencies
+    import win32
+    
+    return win32.UpdateWindow(hwnd)
+
+# Function to set window text with UTF-16 support
+def set_window_text(hwnd: int, text: str):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Convert text to UTF-16 for Windows APIs
+    text_utf16 = duitk.events.utf8_to_utf16(text)
+    
+    # Set window text
+    result = win32.SetWindowTextW(hwnd, text_utf16)
+    
+    # Free allocated buffer
+    win32.string.free(text_utf16)
+    
+    return result
+
+# Function to get window text with UTF-16 support
+def get_window_text(hwnd: int):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Get length of window text
+    length = win32.GetWindowTextLengthW(hwnd)
+    if length == 0:
+        return ""
+    
+    # Allocate buffer for UTF-16 string
+    buffer_utf16 = win32.string.malloc(win32.string.GMEM_ZEROINIT, (length + 1) * 2)
+    
+    # Get window text
+    win32.GetWindowTextW(hwnd, buffer_utf16, length + 1)
+    
+    # Convert UTF-16 to UTF-8
+    result = duitk.events.utf16_to_utf8(buffer_utf16)
+    
+    # Free allocated buffer
+    win32.string.free(buffer_utf16)
+    
+    return result
