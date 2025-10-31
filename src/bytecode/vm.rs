@@ -2250,6 +2250,7 @@ impl SuperBytecodeVM {
                     return Err(anyhow!("LoadLocal: local variable index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
                 }
                 
+                // Clone the value to avoid borrowing conflicts
                 let value = self.frames[frame_idx].locals[local_idx].clone();
                 self.frames[frame_idx].set_register(result_reg, value);
                 Ok(None)
@@ -2263,12 +2264,14 @@ impl SuperBytecodeVM {
                     return Err(anyhow!("StoreLocal: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
                 }
                 
+                // Clone the value to avoid borrowing conflicts
+                let value = self.frames[frame_idx].registers[value_reg].clone();
+                
                 if local_idx >= self.frames[frame_idx].locals.len() {
                     // Extend locals if needed
                     self.frames[frame_idx].locals.resize(local_idx + 1, RcValue::new(Value::None));
                 }
                 
-                let value = self.frames[frame_idx].registers[value_reg].clone();
                 self.frames[frame_idx].locals[local_idx] = value;
                 Ok(None)
             }
@@ -2328,17 +2331,25 @@ impl SuperBytecodeVM {
                 let start_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
 
-                let mut items = Vec::with_capacity(num_items);
+                // Collect register indices first to avoid borrowing conflicts
+                let register_indices: Vec<usize> = (0..num_items)
+                    .map(|i| start_reg + i)
+                    .collect();
 
-                for i in 0..num_items {
-                    if start_reg + i >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildList: register index {} out of bounds (len: {})", start_reg + i, self.frames[frame_idx].registers.len()));
+                // Check bounds first
+                for &reg_idx in &register_indices {
+                    if reg_idx >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("BuildList: register index {} out of bounds (len: {})", reg_idx, self.frames[frame_idx].registers.len()));
                     }
-
-                    items.push(self.frames[frame_idx].registers[start_reg + i].clone());
                 }
 
-                let list = Value::List(HPList::from_values(items.into_iter().map(|rc| rc.value).collect()));
+                // Collect values
+                let items: Vec<Value> = register_indices
+                    .into_iter()
+                    .map(|reg_idx| self.frames[frame_idx].registers[reg_idx].value.clone())
+                    .collect();
+
+                let list = Value::List(HPList::from_values(items));
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(list);
                 Ok(None)
             }
@@ -2348,18 +2359,26 @@ impl SuperBytecodeVM {
                 let start_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
 
-                let mut items = Vec::with_capacity(num_items);
+                // Collect register indices first to avoid borrowing conflicts
+                let register_indices: Vec<usize> = (0..num_items)
+                    .map(|i| start_reg + i)
+                    .collect();
 
-                for i in 0..num_items {
-                    if start_reg + i >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildTuple: register index {} out of bounds (len: {})", start_reg + i, self.frames[frame_idx].registers.len()));
+                // Check bounds first
+                for &reg_idx in &register_indices {
+                    if reg_idx >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("BuildTuple: register index {} out of bounds (len: {})", reg_idx, self.frames[frame_idx].registers.len()));
                     }
-
-                    items.push(self.frames[frame_idx].registers[start_reg + i].clone());
                 }
 
-                let list = Value::Tuple(items.into_iter().map(|rc_value| rc_value.value).collect());
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(list);
+                // Collect values
+                let items: Vec<Value> = register_indices
+                    .into_iter()
+                    .map(|reg_idx| self.frames[frame_idx].registers[reg_idx].value.clone())
+                    .collect();
+
+                let tuple = Value::Tuple(items);
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(tuple);
                 Ok(None)
             }
             OpCode::BuildDict => {
@@ -2368,26 +2387,31 @@ impl SuperBytecodeVM {
                 let start_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
 
-                let mut items = HashMap::new();
+                // Collect register indices first to avoid borrowing conflicts
+                let register_pairs: Vec<(usize, usize)> = (0..num_pairs)
+                    .map(|i| (start_reg + i * 2, start_reg + i * 2 + 1))
+                    .collect();
 
-                for i in 0..num_pairs {
-                    let key_reg = start_reg + i * 2;
-                    let value_reg = start_reg + i * 2 + 1;
-
+                // Check bounds first
+                for &(key_reg, value_reg) in &register_pairs {
                     if key_reg >= self.frames[frame_idx].registers.len() || value_reg >= self.frames[frame_idx].registers.len() {
                         return Err(anyhow!("BuildDict: register index out of bounds"));
                     }
+                }
 
-                    let key = &self.frames[frame_idx].registers[key_reg];
-                    let value = &self.frames[frame_idx].registers[value_reg];
+                // Collect key-value pairs
+                let mut items = HashMap::new();
+                for &(key_reg, value_reg) in &register_pairs {
+                    let key_value = &self.frames[frame_idx].registers[key_reg].value;
+                    let value_value = &self.frames[frame_idx].registers[value_reg].value;
 
                     // Keys must be strings
-                    let key_str = match &key.value {
+                    let key_str = match key_value {
                         Value::Str(s) => s.clone(),
-                        _ => format!("{}", key.value),
+                        _ => format!("{}", key_value),
                     };
 
-                    items.insert(key_str, value.value.clone());
+                    items.insert(key_str, value_value.clone());
                 }
 
                 let dict = Value::Dict(Rc::new(RefCell::new(items)));
@@ -2400,17 +2424,25 @@ impl SuperBytecodeVM {
                 let start_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
 
-                let mut items = HashSet::with_capacity(num_items);
+                // Collect register indices first to avoid borrowing conflicts
+                let register_indices: Vec<usize> = (0..num_items)
+                    .map(|i| start_reg + i)
+                    .collect();
 
-                for i in 0..num_items {
-                    if start_reg + i >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildSet: register index {} out of bounds (len: {})", start_reg + i, self.frames[frame_idx].registers.len()));
+                // Check bounds first
+                for &reg_idx in &register_indices {
+                    if reg_idx >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("BuildSet: register index {} out of bounds (len: {})", reg_idx, self.frames[frame_idx].registers.len()));
                     }
-
-                    items.insert(self.frames[frame_idx].registers[start_reg + i].clone());
                 }
 
-                let set = Value::Set(items.into_iter().map(|rc_value| rc_value.value).collect());
+                // Collect values
+                let items: Vec<Value> = register_indices
+                    .into_iter()
+                    .map(|reg_idx| self.frames[frame_idx].registers[reg_idx].value.clone())
+                    .collect();
+
+                let set = Value::Set(items);
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(set);
                 Ok(None)
             }
@@ -3453,6 +3485,76 @@ impl SuperBytecodeVM {
                 // For now, we'll just continue execution
                 // In a full implementation, we would try each pattern in turn
                 Ok(None)
+            }
+            OpCode::ListAppend => {
+                // Append an item to a list
+                let list_reg = arg1 as usize;
+                let item_reg = arg2 as usize;
+                
+                if list_reg >= self.frames[frame_idx].registers.len() || item_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("ListAppend: register index out of bounds"));
+                }
+                
+                let list_value = &mut self.frames[frame_idx].registers[list_reg];
+                let item_value = &self.frames[frame_idx].registers[item_reg];
+                
+                match &mut list_value.value {
+                    Value::List(list) => {
+                        list.push(item_value.value.clone());
+                        Ok(None)
+                    }
+                    _ => Err(anyhow!("ListAppend: expected list, got {}", list_value.value.type_name())),
+                }
+            }
+            OpCode::SetAdd => {
+                // Add an item to a set
+                let set_reg = arg1 as usize;
+                let item_reg = arg2 as usize;
+                
+                if set_reg >= self.frames[frame_idx].registers.len() || item_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("SetAdd: register index out of bounds"));
+                }
+                
+                let set_value = &mut self.frames[frame_idx].registers[set_reg];
+                let item_value = &self.frames[frame_idx].registers[item_reg];
+                
+                match &mut set_value.value {
+                    Value::Set(items) => {
+                        items.push(item_value.value.clone());
+                        Ok(None)
+                    }
+                    _ => Err(anyhow!("SetAdd: expected set, got {}", set_value.value.type_name())),
+                }
+            }
+            OpCode::MapAdd => {
+                // Add a key-value pair to a dictionary
+                let dict_reg = arg1 as usize;
+                let key_reg = arg2 as usize;
+                let value_reg = arg3 as usize;
+                
+                if dict_reg >= self.frames[frame_idx].registers.len() || 
+                   key_reg >= self.frames[frame_idx].registers.len() || 
+                   value_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("MapAdd: register index out of bounds"));
+                }
+                
+                let dict_value = &mut self.frames[frame_idx].registers[dict_reg];
+                let key_value = &self.frames[frame_idx].registers[key_reg];
+                let value_value = &self.frames[frame_idx].registers[value_reg];
+                
+                match &mut dict_value.value {
+                    Value::Dict(dict) => {
+                        // Keys must be strings
+                        let key_str = match &key_value.value {
+                            Value::Str(s) => s.clone(),
+                            _ => format!("{}", key_value.value),
+                        };
+                        
+                        dict.borrow_mut().insert(key_str, value_value.value.clone());
+                        Ok(None)
+                    }
+                    _ => Err(anyhow!("MapAdd: expected dict, got {}", dict_value.value.type_name())),
+                }
             }
             OpCode::YieldValue => {
                 // Yield a value from a generator
