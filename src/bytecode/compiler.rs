@@ -900,119 +900,66 @@ impl SuperCompiler {
             }
             Statement::Try { body, except_handlers, else_branch, finally } => {
                 // Compile try/except/finally statement
-                
-                // First, calculate where the exception handlers will start
-                // This is after the try block and the jump to skip handlers
-                let try_start = self.code.instructions.len();
-                
-                // Temporarily compile the try body to know its size
-                let temp_code_start = self.code.instructions.len();
-                for stmt in &body {
-                    self.compile_statement(stmt.clone())?;
-                }
-                let try_block_size = self.code.instructions.len() - temp_code_start;
-                
-                // Remove the temporarily compiled try block
-                self.code.instructions.truncate(temp_code_start);
-                
-                // Calculate where the handlers will start
-                // It's after: try block + jump to end + SetupExcept instructions
-                let handlers_start = try_start + try_block_size + 1 + except_handlers.len();
-                
-                // Set up exception handlers for each except clause
-                let mut except_handler_positions = Vec::new();
-                for handler in except_handlers.iter() {
-                    // Create a jump target for this exception handler
-                    let handler_start = handlers_start + except_handler_positions.len();
-                    except_handler_positions.push(handler_start);
-                }
-                
-                // Emit SetupExcept instructions to set up the exception handlers
-                for &handler_start in &except_handler_positions {
-                    // Emit SetupExcept instruction to set up the exception handler
-                    // arg1 = handler PC
-                    // arg2 = stack level (for now, we'll use 0)
-                    self.emit(OpCode::SetupExcept, handler_start as u32, 0, 0, self.current_line);
-                }
-                
-                // Now compile the try body for real
+
+                // --- 1. Setup Exception Handler ---
+                let handler_jump = self.emit(OpCode::SetupExcept, 0, 0, 0, self.current_line);
+
+                // --- 2. Compile `try` block ---
                 for stmt in body {
                     self.compile_statement(stmt)?;
                 }
 
-                // Pop the exception handler blocks since try block completed successfully
-                // We need to pop one block for each SetupExcept instruction we emitted
-                for _ in 0..except_handlers.len() {
-                    self.emit(OpCode::PopBlock, 0, 0, 0, self.current_line);
+                // --- 3. Pop the exception handler and jump to `finally` or end ---
+                self.emit(OpCode::PopBlock, 0, 0, 0, self.current_line);
+                let to_finally_or_end_jump = self.emit(OpCode::Jump, 0, 0, 0, self.current_line);
+
+                // --- 4. Set the handler address ---
+                let handler_addr = self.code.instructions.len() as u32;
+                self.code.instructions[handler_jump].arg1 = handler_addr;
+
+                // --- 5. Compile `except` blocks ---
+                let mut to_finally_jumps = vec![];
+                for handler in except_handlers {
+                    let next_handler_jump = self.emit(OpCode::JumpIfFalse, 0, 0, 0, self.current_line);
+
+                    if let Some(name) = handler.name {
+                        let name_idx = self.code.add_name(name);
+                        self.emit(OpCode::StoreGlobal, name_idx, 0, 0, self.current_line);
+                    }
+
+                    for stmt in handler.body {
+                        self.compile_statement(stmt)?;
+                    }
+                    to_finally_jumps.push(self.emit(OpCode::Jump, 0, 0, 0, self.current_line));
+
+                    let next_handler_addr = self.code.instructions.len() as u32;
+                    self.code.instructions[next_handler_jump].arg2 = next_handler_addr;
                 }
 
-                // Jump to end of try/except/finally block (skip except handlers)
-                let end_jump_pos = self.emit(OpCode::Jump, 0, 0, 0, self.current_line); // Will be fixed later
-                
-                // Compile exception handlers
-                let mut except_end_jump_positions = Vec::new();
-                for (i, handler) in except_handlers.iter().enumerate() {
-                    // If handler has a specific exception type, we need to check it
-                    if let Some(ref _exception_type) = handler.exception_type {
-                        // For now, we'll just compile the handler body without type checking
-                        // In a full implementation, we would check the exception type
-                    }
-                    
-                    // If handler has a variable to bind the exception to, we need to handle that
-                    if let Some(ref var_name) = handler.name {
-                        // Emit StoreException instruction to bind the exception value to the variable
-                        let var_idx = self.code.add_varname(var_name.clone());
-                        if self.is_in_function_scope() {
-                            // Store in fast local variable
-                            self.emit(OpCode::StoreException, var_idx, 0, 0, self.current_line);
-                        } else {
-                            // Store in global namespace
-                            self.emit(OpCode::StoreException, var_idx, 1, 0, self.current_line);
-                        }
-                    }
-                    
-                    // Compile the handler body
-                    for stmt in &handler.body {
-                        self.compile_statement(stmt.clone())?;
-                    }
-                    
-                    // Jump to end of try/except/finally block after handling exception
-                    let except_end_jump_pos = self.emit(OpCode::Jump, 0, 0, 0, self.current_line);
-                    except_end_jump_positions.push(except_end_jump_pos);
-                }
-                
-                // Fix the jump from try body to after except handlers
-                let try_end_pos = self.code.instructions.len();
-                self.code.instructions[end_jump_pos].arg1 = try_end_pos as u32;
-                
-                // Compile else branch if it exists (executed only if no exception occurred)
-                if let Some(else_body) = else_branch {
-                    for stmt in else_body {
+                // --- 6. Compile `else` block ---
+                let else_addr = self.code.instructions.len() as u32;
+                if let Some(else_branch) = else_branch {
+                    for stmt in else_branch {
                         self.compile_statement(stmt)?;
                     }
                 }
-                
-                // If we have finally block, set it up
-                if let Some(finally_body) = finally {
-                    // Emit SetupFinally instruction
-                    let finally_start = self.code.instructions.len();
-                    self.emit(OpCode::SetupFinally, finally_start as u32, 0, 0, self.current_line);
-                    
-                    // Compile finally body
-                    for stmt in finally_body {
+
+                // --- 7. Set jump to `else` or `finally` ---
+                self.code.instructions[to_finally_or_end_jump].arg1 = else_addr;
+
+                // --- 8. Compile `finally` block ---
+                let finally_addr = self.code.instructions.len() as u32;
+                if let Some(finally_branch) = finally {
+                    for stmt in finally_branch {
                         self.compile_statement(stmt)?;
                     }
-                    
-                    // Emit EndFinally instruction
-                    self.emit(OpCode::EndFinally, 0, 0, 0, self.current_line);
                 }
-                
-                // Fix jumps from except handlers to end
-                let final_end_pos = self.code.instructions.len();
-                for jump_pos in except_end_jump_positions {
-                    self.code.instructions[jump_pos].arg1 = final_end_pos as u32;
+
+                // --- 9. Set jumps from `except` blocks to `finally` ---
+                for jump in to_finally_jumps {
+                    self.code.instructions[jump].arg1 = finally_addr;
                 }
-                
+
                 Ok(())
             }
             Statement::Match { value, cases } => {

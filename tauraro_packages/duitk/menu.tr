@@ -6,49 +6,29 @@
 # Function to create a menu
 def create_menu():
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
     
     # Create a new menu
-    hmenu = win32.CreateMenu()
+    hmenu = win32.user32.CreateMenu()
     
     return hmenu
 
 # Function to create a popup menu
 def create_popup_menu():
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
     
     # Create a new popup menu
-    hmenu = win32.CreatePopupMenu()
+    hmenu = win32.user32.CreatePopupMenu()
     
     return hmenu
-
-# Function to append a menu item
-def append_menu(hmenu: int, flags: int, id: int, text: str):
-    # Deferred import to avoid circular dependencies
-    import win32
-    
-    # Append a new menu item
-    result = win32.AppendMenu(hmenu, flags, id, text)
-    
-    return result
-
-# Function to set menu for a window
-def set_menu(hwnd: int, hmenu: int):
-    # Deferred import to avoid circular dependencies
-    import win32
-    
-    # Set menu for window
-    result = win32.SetMenu(hwnd, hmenu)
-    
-    return result
 
 # Function to destroy a menu
 def destroy_menu(hmenu: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
     
     # Destroy menu
-    result = win32.DestroyMenu(hmenu)
+    result = win32.user32.DestroyMenu(hmenu)
     
     return result

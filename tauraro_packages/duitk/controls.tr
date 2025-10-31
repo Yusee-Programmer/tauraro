@@ -6,7 +6,8 @@
 # Function to create a button
 def create_button(parent_hwnd: int, text: str, x: int, y: int, width: int, height: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
+    import win32.kernel32
     import win32.string
     import duitk.events
     
@@ -14,7 +15,7 @@ def create_button(parent_hwnd: int, text: str, x: int, y: int, width: int, heigh
     text_utf16 = duitk.events.utf8_to_utf16(text)
     
     # Create button control
-    hwnd = win32.CreateWindowExW(
+    hwnd = win32.user32.CreateWindowExW(
         0,  # dwExStyle
         "BUTTON",  # lpClassName
         text_utf16,  # lpWindowName
@@ -25,19 +26,20 @@ def create_button(parent_hwnd: int, text: str, x: int, y: int, width: int, heigh
         height,  # nHeight
         parent_hwnd,  # hWndParent
         null,  # hMenu
-        win32.GetModuleHandle(null),  # hInstance
+        win32.kernel32.GetModuleHandle(null),  # hInstance
         null  # lpParam
     )
     
     # Free allocated buffer
-    win32.string.free(text_utf16)
+    win32.kernel32.GlobalFree(text_utf16)
     
     return hwnd
 
 # Function to create a static text label
 def create_label(parent_hwnd: int, text: str, x: int, y: int, width: int, height: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
+    import win32.kernel32
     import win32.string
     import duitk.events
     
@@ -45,7 +47,7 @@ def create_label(parent_hwnd: int, text: str, x: int, y: int, width: int, height
     text_utf16 = duitk.events.utf8_to_utf16(text)
     
     # Create static text control
-    hwnd = win32.CreateWindowExW(
+    hwnd = win32.user32.CreateWindowExW(
         0,  # dwExStyle
         "STATIC",  # lpClassName
         text_utf16,  # lpWindowName
@@ -56,19 +58,20 @@ def create_label(parent_hwnd: int, text: str, x: int, y: int, width: int, height
         height,  # nHeight
         parent_hwnd,  # hWndParent
         null,  # hMenu
-        win32.GetModuleHandle(null),  # hInstance
+        win32.kernel32.GetModuleHandle(null),  # hInstance
         null  # lpParam
     )
     
     # Free allocated buffer
-    win32.string.free(text_utf16)
+    win32.kernel32.GlobalFree(text_utf16)
     
     return hwnd
 
 # Function to create an edit box
 def create_edit(parent_hwnd: int, text: str, x: int, y: int, width: int, height: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
+    import win32.kernel32
     import win32.string
     import duitk.events
     
@@ -76,7 +79,7 @@ def create_edit(parent_hwnd: int, text: str, x: int, y: int, width: int, height:
     text_utf16 = duitk.events.utf8_to_utf16(text)
     
     # Create edit control
-    hwnd = win32.CreateWindowExW(
+    hwnd = win32.user32.CreateWindowExW(
         0x200,  # dwExStyle (WS_EX_CLIENTEDGE)
         "EDIT",  # lpClassName
         text_utf16,  # lpWindowName
@@ -87,19 +90,127 @@ def create_edit(parent_hwnd: int, text: str, x: int, y: int, width: int, height:
         height,  # nHeight
         parent_hwnd,  # hWndParent
         null,  # hMenu
-        win32.GetModuleHandle(null),  # hInstance
+        win32.kernel32.GetModuleHandle(null),  # hInstance
         null  # lpParam
     )
     
     # Free allocated buffer
-    win32.string.free(text_utf16)
+    win32.kernel32.GlobalFree(text_utf16)
     
     return hwnd
+
+# Function to create a multiline edit box
+def create_multiline_edit(parent_hwnd: int, text: str, x: int, y: int, width: int, height: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    import win32.kernel32
+    import win32.string
+    import duitk.events
+    
+    # Convert text to UTF-16 for Windows APIs
+    text_utf16 = duitk.events.utf8_to_utf16(text)
+    
+    # Create multiline edit control
+    hwnd = win32.user32.CreateWindowExW(
+        0x200,  # dwExStyle (WS_EX_CLIENTEDGE)
+        "EDIT",  # lpClassName
+        text_utf16,  # lpWindowName
+        0x50050004,  # dwStyle (WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN)
+        x,  # X
+        y,  # Y
+        width,  # nWidth
+        height,  # nHeight
+        parent_hwnd,  # hWndParent
+        null,  # hMenu
+        win32.kernel32.GetModuleHandle(null),  # hInstance
+        null  # lpParam
+    )
+    
+    # Free allocated buffer
+    win32.kernel32.GlobalFree(text_utf16)
+    
+    return hwnd
+
+# Function to create a checkbox
+def create_checkbox(parent_hwnd: int, text: str, x: int, y: int, width: int, height: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    import win32.kernel32
+    import win32.string
+    import duitk.events
+    
+    # Convert text to UTF-16 for Windows APIs
+    text_utf16 = duitk.events.utf8_to_utf16(text)
+    
+    # Create checkbox control
+    hwnd = win32.user32.CreateWindowExW(
+        0,  # dwExStyle
+        "BUTTON",  # lpClassName
+        text_utf16,  # lpWindowName
+        0x50010003,  # dwStyle (WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX)
+        x,  # X
+        y,  # Y
+        width,  # nWidth
+        height,  # nHeight
+        parent_hwnd,  # hWndParent
+        null,  # hMenu
+        win32.kernel32.GetModuleHandle(null),  # hInstance
+        null  # lpParam
+    )
+    
+    # Free allocated buffer
+    win32.kernel32.GlobalFree(text_utf16)
+    
+    return hwnd
+
+# Function to create a listbox
+def create_listbox(parent_hwnd: int, x: int, y: int, width: int, height: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    import win32.kernel32
+    
+    # Create listbox control
+    hwnd = win32.user32.CreateWindowExW(
+        0x200,  # dwExStyle (WS_EX_CLIENTEDGE)
+        "LISTBOX",  # lpClassName
+        null,  # lpWindowName
+        0x50210001,  # dwStyle (WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY)
+        x,  # X
+        y,  # Y
+        width,  # nWidth
+        height,  # nHeight
+        parent_hwnd,  # hWndParent
+        null,  # hMenu
+        win32.kernel32.GetModuleHandle(null),  # hInstance
+        null  # lpParam
+    )
+    
+    return hwnd
+
+# Function to add item to listbox
+def listbox_add_item(hwnd: int, item: str):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    import win32.kernel32
+    import win32.string
+    import duitk.events
+    
+    # Convert item to UTF-16 for Windows APIs
+    item_utf16 = duitk.events.utf8_to_utf16(item)
+    
+    # Add item to listbox
+    result = win32.user32.SendMessageW(hwnd, 0x0180, 0xFFFFFFFF, item_utf16)  # LB_ADDSTRING
+    
+    # Free allocated buffer
+    win32.kernel32.GlobalFree(item_utf16)
+    
+    return result
 
 # Function to set control text with UTF-16 support
 def set_control_text(hwnd: int, text: str):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
+    import win32.kernel32
     import win32.string
     import duitk.events
     
@@ -107,35 +218,52 @@ def set_control_text(hwnd: int, text: str):
     text_utf16 = duitk.events.utf8_to_utf16(text)
     
     # Set control text
-    result = win32.SetWindowTextW(hwnd, text_utf16)
+    result = win32.user32.SetWindowTextW(hwnd, text_utf16)
     
     # Free allocated buffer
-    win32.string.free(text_utf16)
+    win32.kernel32.GlobalFree(text_utf16)
     
     return result
 
 # Function to get control text with UTF-16 support
 def get_control_text(hwnd: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
+    import win32.kernel32
     import win32.string
     import duitk.events
     
     # Get length of control text
-    length = win32.GetWindowTextLengthW(hwnd)
+    length = win32.user32.GetWindowTextLengthW(hwnd)
     if length == 0:
         return ""
     
     # Allocate buffer for UTF-16 string
-    buffer_utf16 = win32.string.malloc(win32.string.GMEM_ZEROINIT, (length + 1) * 2)
+    buffer_utf16 = win32.kernel32.GlobalAlloc(win32.string.GMEM_ZEROINIT, (length + 1) * 2)
     
     # Get control text
-    win32.GetWindowTextW(hwnd, buffer_utf16, length + 1)
+    win32.user32.GetWindowTextW(hwnd, buffer_utf16, length + 1)
     
     # Convert UTF-16 to UTF-8
     result = duitk.events.utf16_to_utf8(buffer_utf16)
     
     # Free allocated buffer
-    win32.string.free(buffer_utf16)
+    win32.kernel32.GlobalFree(buffer_utf16)
     
     return result
+
+# Function to get control integer value
+def get_control_int(hwnd: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    # Get control integer value
+    return win32.user32.GetDlgInt(hwnd, null, null)
+
+# Function to set control integer value
+def set_control_int(hwnd: int, value: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    # Set control integer value
+    return win32.user32.SetDlgItemInt(hwnd, 0, value, True)

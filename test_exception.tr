@@ -1,0 +1,12 @@
+# Test exception handling
+
+print("Testing exception handling...")
+
+try:
+    print("In try block")
+    raise Exception("Test exception")
+except Exception as e:
+    print("In except block")
+    print("Caught exception:", e)
+
+print("After try-except block")

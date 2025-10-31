@@ -1,0 +1,12 @@
+# Test to see if Exception class works
+
+print("Creating exception...")
+
+e = Exception("Test exception")
+print("Exception created:", e)
+
+print("About to raise exception")
+try:
+    raise e
+except Exception as ex:
+    print("Caught exception:", ex)

@@ -1,0 +1,74 @@
+# Advanced GUI example using DUITK
+
+import duitk
+
+def main_window(app):
+    # Create main window
+    window = app.create_window("Advanced DUITK Example", 500, 400)
+    
+    # Create various controls
+    label1 = window.create_label("Welcome to DUITK!", 10, 10, 200, 25)
+    label2 = window.create_label("Enter your name:", 10, 50, 150, 25)
+    
+    # Text input
+    name_edit = window.create_edit("", 160, 50, 200, 25)
+    
+    # Buttons
+    greet_button = window.create_button("Greet", 10, 90, 80, 30)
+    clear_button = window.create_button("Clear", 100, 90, 80, 30)
+    
+    # Checkbox
+    checkbox = window.create_checkbox("Enable greeting", 190, 90, 150, 30)
+    checkbox.set_text("Enable greeting")  # Set text after creation
+    
+    # Multi-line text box
+    result_label = window.create_label("Results:", 10, 130, 100, 25)
+    text_box = window.create_multiline_edit("", 10, 160, 400, 150)
+    
+    # Quit button
+    quit_button = window.create_button("Quit", 420, 350, 70, 30)
+    
+    # Event handlers
+    def on_greet_click():
+        if checkbox.get_text() == "Enable greeting":  # Checkbox is checked
+            name = name_edit.get_text()
+            if name == "":
+                name = "Anonymous"
+            greeting = f"Hello, {name}! Welcome to DUITK.\n"
+            current_text = text_box.get_text()
+            text_box.set_text(current_text + greeting)
+        else:
+            current_text = text_box.get_text()
+            text_box.set_text(current_text + "Greeting is disabled.\n")
+    
+    def on_clear_click():
+        text_box.set_text("")
+    
+    def on_quit_click():
+        # Show confirmation dialog
+        result = duitk.dialogs.message_box(
+            window.hwnd, 
+            "Are you sure you want to quit?", 
+            "Confirm Quit", 
+            duitk.dialogs.MB_YESNO | duitk.dialogs.MB_ICONQUESTION
+        )
+        if result == duitk.dialogs.IDYES:
+            app.quit()
+    
+    # Assign event handlers
+    greet_button.on_click = on_greet_click
+    clear_button.on_click = on_clear_click
+    quit_button.on_click = on_quit_click
+    
+    # Show the window
+    window.show()
+    
+    # Center the window on screen
+    screen_width, screen_height = duitk.system.get_screen_size()
+    window_width, window_height = 500, 400
+    x = (screen_width - window_width) // 2
+    y = (screen_height - window_height) // 2
+    window.move(x, y, window_width, window_height)
+
+# Run the application
+duitk.run_simple_app(main_window)

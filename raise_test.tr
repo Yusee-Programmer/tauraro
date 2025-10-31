@@ -1,0 +1,10 @@
+# Test to see if raise statement works
+
+print("Before raise")
+
+try:
+    raise Exception("Test exception")
+except:
+    print("Exception caught")
+
+print("After exception handling")

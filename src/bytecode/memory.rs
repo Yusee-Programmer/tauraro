@@ -158,7 +158,7 @@ pub struct Block {
     pub level: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BlockType {
     Loop,
     Except,

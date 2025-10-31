@@ -28,7 +28,9 @@ Cargo.lock
 *.bc    # LLVM bitcode files
 *.o     # Object files
 *.obj   # Windows object files
-*.tr
+!*.tr
+!*.tau
+!*.tauraro
 
 # Build and error logs
 *.txt

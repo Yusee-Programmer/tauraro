@@ -11,116 +11,58 @@ WM_CREATE = 0x0001
 WM_DESTROY = 0x0002
 WM_MOVE = 0x0003
 WM_SIZE = 0x0005
+WM_ACTIVATE = 0x0006
+WM_SETFOCUS = 0x0007
+WM_KILLFOCUS = 0x0008
+WM_ENABLE = 0x000A
+WM_SETTEXT = 0x000C
+WM_GETTEXT = 0x000D
+WM_GETTEXTLENGTH = 0x000E
+WM_PAINT = 0x000F
+WM_CLOSE = 0x0010
+WM_QUIT = 0x0012
+WM_SHOWWINDOW = 0x0018
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_CHAR = 0x0102
+WM_COMMAND = 0x0111
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
+WM_LBUTTONDBLCLK = 0x0203
+WM_RBUTTONDOWN = 0x0204
+WM_RBUTTONUP = 0x0205
+WM_RBUTTONDBLCLK = 0x0206
+WM_MBUTTONDOWN = 0x0207
+WM_MBUTTONUP = 0x0208
+WM_MBUTTONDBLCLK = 0x0209
+
+# Button notification codes
+BN_CLICKED = 0
 
 # Function to send a message
 def send_message(hwnd: int, msg: int, wparam: int, lparam: int):
-    # In a real implementation, this would call the Windows API
-    # For now, we'll just return a dummy value
-    return 0
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    # Send message
+    result = win32.user32.SendMessage(hwnd, msg, wparam, lparam)
+    
+    return result
 
 # Function to post a message
 def post_message(hwnd: int, msg: int, wparam: int, lparam: int):
-    # In a real implementation, this would call the Windows API
-    # For now, we'll just return a dummy value
-    return 0
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    # Post message
+    result = win32.user32.PostMessage(hwnd, msg, wparam, lparam)
+    
+    return result
 
 # UTF-8 to UTF-16 conversion function
 def utf8_to_utf16(utf8_str: str):
-    # In a real implementation, this would convert the string
-    # For now, we'll just return the original string
-    return utf8_str
-
-# UTF-16 to UTF-8 conversion function
-def utf16_to_utf8(utf16_str):
-    # In a real implementation, this would convert the string
-    # For now, we'll just return the original string
-    return utf16_str
-
-# Function to translate message
-def translate_message(msg_ptr: int):
     # Deferred import to avoid circular dependencies
-    import win32
-    
-    # Translate message
-    result = win32.TranslateMessage(msg_ptr)
-    
-    return result
-
-# Function to dispatch message
-def dispatch_message(msg_ptr: int):
-    # Deferred import to avoid circular dependencies
-    import win32
-    
-    # Dispatch message
-    result = win32.DispatchMessage(msg_ptr)
-    
-    return result
-
-# Function to get message
-def get_message(msg_ptr: int, hwnd: int, wMsgFilterMin: int, wMsgFilterMax: int):
-    # Deferred import to avoid circular dependencies
-    import win32
-    
-    # Get message
-    result = win32.GetMessage(msg_ptr, hwnd, wMsgFilterMin, wMsgFilterMax)
-    
-    return result
-
-# Function to translate and dispatch message with UTF-16 support
-def translate_and_dispatch_message(msg_ptr: int):
-    # Deferred import to avoid circular dependencies
-    import win32
-    
-    # Translate message (handles UTF-16)
-    win32.TranslateMessage(msg_ptr)
-    
-    # Dispatch message
-    result = win32.DispatchMessage(msg_ptr)
-    
-    return result
-
-# Function to peek message
-def peek_message(msg_ptr: int, hwnd: int, wMsgFilterMin: int, wMsgFilterMax: int, wRemoveMsg: int):
-    # Deferred import to avoid circular dependencies
-    import win32
-    
-    # Peek message
-    result = win32.PeekMessage(msg_ptr, hwnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg)
-    
-    return result
-
-# Function to post quit message
-def post_quit_message(exit_code: int):
-    # Deferred import to avoid circular dependencies
-    import win32
-    
-    # Post quit message
-    win32.PostQuitMessage(exit_code)
-
-# Function to send message
-def send_message(hwnd: int, msg: int, wparam: int, lparam: int):
-    # Deferred import to avoid circular dependencies
-    import win32
-    
-    # Send message
-    result = win32.SendMessage(hwnd, msg, wparam, lparam)
-    
-    return result
-
-# Function to post message
-def post_message(hwnd: int, msg: int, wparam: int, lparam: int):
-    # Deferred import to avoid circular dependencies
-    import win32
-    
-    # Post message
-    result = win32.PostMessage(hwnd, msg, wparam, lparam)
-    
-    return result
-
-# Function to convert UTF-8 string to UTF-16 for Windows APIs
-def utf8_to_utf16(utf8_str: str):
-    # Deferred import to avoid circular dependencies
-    import win32
+    import win32.kernel32
     import win32.string
     
     # Get length of UTF-8 string
@@ -138,7 +80,7 @@ def utf8_to_utf16(utf8_str: str):
     )
     
     # Allocate buffer for UTF-16 string
-    utf16_buffer = win32.string.malloc(win32.string.GMEM_ZEROINIT, utf16_len * 2 + 2)
+    utf16_buffer = win32.kernel32.GlobalAlloc(win32.string.GMEM_ZEROINIT, utf16_len * 2 + 2)
     
     # Convert UTF-8 to UTF-16
     win32.string.MultiByteToWideChar(
@@ -156,10 +98,10 @@ def utf8_to_utf16(utf8_str: str):
     
     return utf16_buffer
 
-# Function to convert UTF-16 string to UTF-8 for internal processing
+# UTF-16 to UTF-8 conversion function
 def utf16_to_utf8(utf16_ptr: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.kernel32
     import win32.string
     
     # Get length of UTF-16 string
@@ -181,7 +123,7 @@ def utf16_to_utf8(utf16_ptr: int):
     )
     
     # Allocate buffer for UTF-8 string
-    utf8_buffer = win32.string.malloc(win32.string.GMEM_ZEROINIT, utf8_len + 1)
+    utf8_buffer = win32.kernel32.GlobalAlloc(win32.string.GMEM_ZEROINIT, utf8_len + 1)
     
     # Convert UTF-16 to UTF-8
     win32.string.WideCharToMultiByte(
@@ -198,68 +140,151 @@ def utf16_to_utf8(utf16_ptr: int):
     # Null-terminate the UTF-8 string
     *(utf8_buffer + utf8_len) = 0
     
-    return utf8_buffer
+    # Convert buffer to string (this is a simplified approach)
+    # In a real implementation, we would need to properly convert the buffer to a string
+    result = ""
+    for i in range(utf8_len):
+        result += chr(*(utf8_buffer + i))
+    
+    # Free the buffer
+    win32.kernel32.GlobalFree(utf8_buffer)
+    
+    return result
+
+# Function to translate message
+def translate_message(msg_ptr: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    # Translate message
+    result = win32.user32.TranslateMessage(msg_ptr)
+    
+    return result
+
+# Function to dispatch message
+def dispatch_message(msg_ptr: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    # Dispatch message
+    result = win32.user32.DispatchMessage(msg_ptr)
+    
+    return result
+
+# Function to get message
+def get_message(msg_ptr: int, hwnd: int, wMsgFilterMin: int, wMsgFilterMax: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    # Get message
+    result = win32.user32.GetMessage(msg_ptr, hwnd, wMsgFilterMin, wMsgFilterMax)
+    
+    return result
+
+# Function to translate and dispatch message with UTF-16 support
+def translate_and_dispatch_message(msg_ptr: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    # Translate message (handles UTF-16)
+    win32.user32.TranslateMessage(msg_ptr)
+    
+    # Dispatch message
+    result = win32.user32.DispatchMessage(msg_ptr)
+    
+    return result
+
+# Function to peek message
+def peek_message(msg_ptr: int, hwnd: int, wMsgFilterMin: int, wMsgFilterMax: int, wRemoveMsg: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    # Peek message
+    result = win32.user32.PeekMessage(msg_ptr, hwnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg)
+    
+    return result
+
+# Function to post quit message
+def post_quit_message(exit_code: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    # Post quit message
+    win32.user32.PostQuitMessage(exit_code)
 
 # Function to handle UTF-16 encoded text in messages
 def handle_unicode_text_message(hwnd: int, msg: int, wparam: int, lparam: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
     
     # Handle Unicode text message (UTF-16 support)
     if msg == WM_CHAR or msg == WM_SYSCHAR:
         # For character messages, we can directly use the character value
-        return win32.SendMessage(hwnd, msg, wparam, lparam)
+        return win32.user32.SendMessage(hwnd, msg, wparam, lparam)
     elif msg == WM_UNICHAR:
         # For Unicode character messages, ensure proper UTF-16 handling
         if wparam == 0xFFFF:  # UNICODE_NOCHAR
             return 1  # Indicate that we support Unicode
         else:
             # Process the Unicode character
-            return win32.SendMessage(hwnd, msg, wparam, lparam)
+            return win32.user32.SendMessage(hwnd, msg, wparam, lparam)
     else:
         # For other messages, process normally
-        return win32.SendMessage(hwnd, msg, wparam, lparam)
+        return win32.user32.SendMessage(hwnd, msg, wparam, lparam)
 
 # Function to process window messages with UTF-16 support
 def process_window_message(hwnd: int, msg: int, wparam: int, lparam: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
     
     # Process window messages with UTF-16 support
     if msg == WM_CREATE:
         # Handle window creation
-        return win32.DefWindowProc(hwnd, msg, wparam, lparam)
+        return win32.user32.DefWindowProc(hwnd, msg, wparam, lparam)
     elif msg == WM_DESTROY:
         # Handle window destruction
-        win32.PostQuitMessage(0)
+        win32.user32.PostQuitMessage(0)
         return 0
     elif msg == WM_PAINT:
         # Handle paint message
-        ps = win32.PAINTSTRUCT()
-        hdc = win32.BeginPaint(hwnd, ps)
-        win32.EndPaint(hwnd, ps)
+        ps = win32.user32.PAINTSTRUCT()
+        hdc = win32.user32.BeginPaint(hwnd, ps)
+        win32.user32.EndPaint(hwnd, ps)
         return 0
     elif msg == WM_SIZE:
         # Handle resize message
-        return win32.DefWindowProc(hwnd, msg, wparam, lparam)
+        return win32.user32.DefWindowProc(hwnd, msg, wparam, lparam)
     elif msg == WM_COMMAND:
         # Handle command message
-        return win32.DefWindowProc(hwnd, msg, wparam, lparam)
+        return win32.user32.DefWindowProc(hwnd, msg, wparam, lparam)
     elif msg == WM_KEYDOWN:
         # Handle key down message
-        return win32.DefWindowProc(hwnd, msg, wparam, lparam)
+        return win32.user32.DefWindowProc(hwnd, msg, wparam, lparam)
     elif msg == WM_CHAR:
         # Handle character message with UTF-16 support
         char_code = wparam & 0xFFFF
         # Process the character (could be ASCII or Unicode)
-        return win32.DefWindowProc(hwnd, msg, wparam, lparam)
+        return win32.user32.DefWindowProc(hwnd, msg, wparam, lparam)
     elif msg == WM_UNICHAR:
         # Handle Unicode character message
         if wparam == 0xFFFF:  # UNICODE_NOCHAR
             return 1  # Indicate that we support Unicode
         else:
             # Process the Unicode character
-            return win32.DefWindowProc(hwnd, msg, wparam, lparam)
+            return win32.user32.DefWindowProc(hwnd, msg, wparam, lparam)
     else:
         # Default message processing
-        return win32.DefWindowProc(hwnd, msg, wparam, lparam)
+        return win32.user32.DefWindowProc(hwnd, msg, wparam, lparam)
+
+# Function to check if a message is a command message from a button click
+def is_button_click(msg: int, wparam: int):
+    # Check if this is a command message from a button
+    if msg == WM_COMMAND:
+        notify_code = (wparam >> 16) & 0xFFFF
+        return notify_code == BN_CLICKED
+    return False
+
+# Function to get the control ID from a command message
+def get_control_id(wparam: int):
+    # Extract control ID from WPARAM in WM_COMMAND message
+    return wparam & 0xFFFF
