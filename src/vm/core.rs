@@ -3,7 +3,7 @@
 use anyhow::{Result, anyhow};
 use crate::bytecode::{SuperCompiler, SuperBytecodeVM};
 use crate::lexer::Lexer;
-use crate::parser::Parser;
+use crate::parser::{Parser, ParseError};
 use crate::semantic::Analyzer;
 use crate::value::Value;
 
@@ -18,7 +18,7 @@ impl VM {
         }
     }
     
-    pub fn run_file_with_options(source: &str, _backend: &str, _optimization: u8, strict_types: bool) -> Result<()> {
+    pub fn run_file_with_options(source: &str, filename: &str, _backend: &str, _optimization: u8, strict_types: bool) -> Result<()> {
         println!("Running file with VM backend");
         
         // Lexical analysis
@@ -28,14 +28,19 @@ impl VM {
         // Parsing
         let mut parser = Parser::new(tokens);
         let ast = parser.parse()
-            .map_err(|e| anyhow!("{}", e))?;
+            .map_err(|e| {
+                // Find the token that caused the error to get line/column info
+                let (line, column) = parser.current_token_location();
+                let error_with_location = e.with_location(line, column, filename);
+                anyhow!("{}", error_with_location)
+            })?;
         
         // Semantic analysis
         let semantic_ast = Analyzer::new(strict_types).analyze(ast)
             .map_err(|e| anyhow!("Semantic errors: {:?}", e))?;
         
         // Compile to bytecode
-        let mut compiler = SuperCompiler::new("<main>".to_string());
+        let mut compiler = SuperCompiler::new(filename.to_string());
         let code_object = compiler.compile(semantic_ast)?;
         
         // Execute with VM
@@ -77,7 +82,12 @@ impl VM {
         let mut parser = Parser::new(tokens);
 
         let program = parser.parse()
-            .map_err(|e| anyhow!("Parse error: {}", e))?;
+            .map_err(|e| {
+                // Find the token that caused the error to get line/column info
+                let (line, column) = parser.current_token_location();
+                let error_with_location = e.with_location(line, column, "<main>");
+                anyhow!("{}", error_with_location)
+            })?;
         
         // Optional semantic analysis based on strict mode
         let program = Analyzer::new(false).analyze(program)
