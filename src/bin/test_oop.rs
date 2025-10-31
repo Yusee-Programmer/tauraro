@@ -30,7 +30,7 @@ print(isinstance(person, Person))  # Should print True
 "#;
 
     // Run the code using the VM
-    VM::run_file_with_options(code, "vm", 0, false)?;
+    VM::run_file_with_options(code, "test_oop.tr", "vm", 0, false)?;
     
     Ok(())
 }

@@ -1651,6 +1651,15 @@ impl Parser {
         
         if !self.check(&Token::RParen) {
             loop {
+                // Skip newlines and comments between arguments
+                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                    if matches!(self.peek().token, Token::Comment(_)) {
+                        self.advance(); // Skip the comment
+                    } else {
+                        self.advance(); // Skip the newline
+                    }
+                }
+                
                 // Check for starred expressions (*args, **kwargs)
                 if self.match_token(&[Token::Star]) {
                     if self.match_token(&[Token::Star]) {
@@ -1682,9 +1691,36 @@ impl Parser {
                     args.push(self.expression()?);
                 }
                 
+                // Skip newlines and comments after argument
+                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                    if matches!(self.peek().token, Token::Comment(_)) {
+                        self.advance(); // Skip the comment
+                    } else {
+                        self.advance(); // Skip the newline
+                    }
+                }
+                
                 if !self.match_token(&[Token::Comma]) {
                     break;
                 }
+                
+                // Skip newlines and comments after comma
+                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                    if matches!(self.peek().token, Token::Comment(_)) {
+                        self.advance(); // Skip the comment
+                    } else {
+                        self.advance(); // Skip the newline
+                    }
+                }
+            }
+        }
+        
+        // Skip newlines and comments before closing parenthesis
+        while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+            if matches!(self.peek().token, Token::Comment(_)) {
+                self.advance(); // Skip the comment
+            } else {
+                self.advance(); // Skip the newline
             }
         }
         
@@ -1703,6 +1739,15 @@ impl Parser {
         
         if !self.check(&Token::RParen) {
             loop {
+                // Skip newlines and comments between arguments
+                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                    if matches!(self.peek().token, Token::Comment(_)) {
+                        self.advance(); // Skip the comment
+                    } else {
+                        self.advance(); // Skip the newline
+                    }
+                }
+                
                 // Check for starred expressions (*args, **kwargs)
                 if self.match_token(&[Token::Star]) {
                     if self.match_token(&[Token::Star]) {
@@ -1734,9 +1779,36 @@ impl Parser {
                     args.push(self.expression()?);
                 }
                 
+                // Skip newlines and comments after argument
+                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                    if matches!(self.peek().token, Token::Comment(_)) {
+                        self.advance(); // Skip the comment
+                    } else {
+                        self.advance(); // Skip the newline
+                    }
+                }
+                
                 if !self.match_token(&[Token::Comma]) {
                     break;
                 }
+                
+                // Skip newlines and comments after comma
+                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                    if matches!(self.peek().token, Token::Comment(_)) {
+                        self.advance(); // Skip the comment
+                    } else {
+                        self.advance(); // Skip the newline
+                    }
+                }
+            }
+        }
+        
+        // Skip newlines and comments before closing parenthesis
+        while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+            if matches!(self.peek().token, Token::Comment(_)) {
+                self.advance(); // Skip the comment
+            } else {
+                self.advance(); // Skip the newline
             }
         }
         
