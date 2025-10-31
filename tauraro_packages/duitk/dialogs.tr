@@ -6,7 +6,8 @@
 # Function to show a message box
 def message_box(hwnd: int, text: str, caption: str, type: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
+    import win32.kernel32
     import win32.string
     import duitk.events
     
@@ -14,79 +15,72 @@ def message_box(hwnd: int, text: str, caption: str, type: int):
     text_utf16 = duitk.events.utf8_to_utf16(text)
     caption_utf16 = duitk.events.utf8_to_utf16(caption)
     
-    # Show message box dialog
-    result = win32.MessageBoxW(hwnd, text_utf16, caption_utf16, type)
+    # Show message box
+    result = win32.user32.MessageBoxW(0, text_utf16, caption_utf16, type)
     
     # Free allocated buffers
-    win32.string.free(text_utf16)
-    win32.string.free(caption_utf16)
+    win32.kernel32.GlobalFree(text_utf16)
+    win32.kernel32.GlobalFree(caption_utf16)
     
     return result
 
-# Function to get open file name
-def get_open_file_name(hwnd: int, filter: str, title: str):
-    # Deferred import to avoid circular dependencies
-    import win32
-    import win32.string
-    import duitk.events
-    
-    # Convert strings to UTF-16 for Windows APIs
-    filter_utf16 = duitk.events.utf8_to_utf16(filter)
-    title_utf16 = duitk.events.utf8_to_utf16(title)
-    
-    # Prepare OPENFILENAME structure
-    ofn = win32.OPENFILENAME()
-    ofn.lStructSize = win32.sizeof(win32.OPENFILENAME)
-    ofn.hwndOwner = hwnd
-    ofn.lpstrFilter = filter_utf16
-    ofn.lpstrFile = win32.string.malloc(win32.string.GMEM_ZEROINIT, 260 * 2)  # MAX_PATH * sizeof(WCHAR)
-    ofn.nMaxFile = 260
-    ofn.lpstrTitle = title_utf16
-    ofn.Flags = 0x00080000  # OFN_FILEMUSTEXIST
-    
-    # Show open file dialog
-    if win32.GetOpenFileName(ofn):
-        result = duitk.events.utf16_to_utf8(ofn.lpstrFile)
-        win32.string.free(ofn.lpstrFile)
-        win32.string.free(filter_utf16)
-        win32.string.free(title_utf16)
-        return result
-    else:
-        win32.string.free(ofn.lpstrFile)
-        win32.string.free(filter_utf16)
-        win32.string.free(title_utf16)
-        return null
+# Function to show an input box (simplified implementation)
+def input_box(hwnd: int, prompt: str, title: str, default: str = ""):
+    # This is a simplified implementation that would need a custom dialog in a full implementation
+    # For now, we'll show a message box with the prompt and return the default value
+    message_box(hwnd, prompt, title, 0)  # MB_OK
+    return default
 
-# Function to get save file name
-def get_save_file_name(hwnd: int, filter: str, title: str):
-    # Deferred import to avoid circular dependencies
-    import win32
-    import win32.string
-    import duitk.events
-    
-    # Convert strings to UTF-16 for Windows APIs
-    filter_utf16 = duitk.events.utf8_to_utf16(filter)
-    title_utf16 = duitk.events.utf8_to_utf16(title)
-    
-    # Prepare OPENFILENAME structure
-    ofn = win32.OPENFILENAME()
-    ofn.lStructSize = win32.sizeof(win32.OPENFILENAME)
-    ofn.hwndOwner = hwnd
-    ofn.lpstrFilter = filter_utf16
-    ofn.lpstrFile = win32.string.malloc(win32.string.GMEM_ZEROINIT, 260 * 2)  # MAX_PATH * sizeof(WCHAR)
-    ofn.nMaxFile = 260
-    ofn.lpstrTitle = title_utf16
-    ofn.Flags = 0x00000002  # OFN_OVERWRITEPROMPT
-    
-    # Show save file dialog
-    if win32.GetSaveFileName(ofn):
-        result = duitk.events.utf16_to_utf8(ofn.lpstrFile)
-        win32.string.free(ofn.lpstrFile)
-        win32.string.free(filter_utf16)
-        win32.string.free(title_utf16)
-        return result
-    else:
-        win32.string.free(ofn.lpstrFile)
-        win32.string.free(filter_utf16)
-        win32.string.free(title_utf16)
-        return null
+# Function to show a file open dialog (simplified implementation)
+def file_open_dialog(hwnd: int, filter: str = "All Files (*.*)|*.*"):
+    # This is a simplified implementation that would need a custom dialog in a full implementation
+    # For now, we'll show a message box and return an empty string
+    message_box(hwnd, "File Open Dialog: " + filter, "Open File", 0)  # MB_OK
+    return ""
+
+# Function to show a file save dialog (simplified implementation)
+def file_save_dialog(hwnd: int, filter: str = "All Files (*.*)|*.*"):
+    # This is a simplified implementation that would need a custom dialog in a full implementation
+    # For now, we'll show a message box and return an empty string
+    message_box(hwnd, "File Save Dialog: " + filter, "Save File", 0)  # MB_OK
+    return ""
+
+# Function to show a color dialog (simplified implementation)
+def color_dialog(hwnd: int, initial_color: int = 0):
+    # This is a simplified implementation that would need a custom dialog in a full implementation
+    # For now, we'll show a message box and return the initial color
+    message_box(hwnd, "Color Dialog", "Choose Color", 0)  # MB_OK
+    return initial_color
+
+# Function to show a font dialog (simplified implementation)
+def font_dialog(hwnd: int):
+    # This is a simplified implementation that would need a custom dialog in a full implementation
+    # For now, we'll show a message box and return None
+    message_box(hwnd, "Font Dialog", "Choose Font", 0)  # MB_OK
+    return None
+
+# Common message box types
+MB_OK = 0x00000000
+MB_OKCANCEL = 0x00000001
+MB_ABORTRETRYIGNORE = 0x00000002
+MB_YESNOCANCEL = 0x00000003
+MB_YESNO = 0x00000004
+MB_RETRYCANCEL = 0x00000005
+
+MB_ICONERROR = 0x00000010
+MB_ICONQUESTION = 0x00000020
+MB_ICONWARNING = 0x00000030
+MB_ICONINFORMATION = 0x00000040
+
+MB_DEFBUTTON1 = 0x00000000
+MB_DEFBUTTON2 = 0x00000100
+MB_DEFBUTTON3 = 0x00000200
+
+# Message box return values
+IDOK = 1
+IDCANCEL = 2
+IDABORT = 3
+IDRETRY = 4
+IDIGNORE = 5
+IDYES = 6
+IDNO = 7

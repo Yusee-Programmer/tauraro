@@ -1,0 +1,11 @@
+# Test win32 module
+
+import win32.kernel32
+
+print("Testing win32 module...")
+
+# Test basic functionality
+handle = win32.kernel32.GetModuleHandle(null)
+print("Module handle:", handle)
+
+print("win32 module test completed successfully!")

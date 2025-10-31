@@ -3,13 +3,11 @@
 # Import win32 module functions within functions to avoid circular dependencies
 # This is the recommended approach for DUITK modules
 
-def test_function():
-    return "Hello, World!"
-
 # Function to create a basic window
 def create_window(title: str, width: int, height: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
+    import win32.kernel32
     import win32.string
     import duitk.events
     
@@ -17,18 +15,18 @@ def create_window(title: str, width: int, height: int):
     title_utf16 = duitk.events.utf8_to_utf16(title)
     
     # Create window with specified parameters
-    hwnd = win32.CreateWindowExW(
+    hwnd = win32.user32.CreateWindowExW(
         0,  # dwExStyle
         "STATIC",  # lpClassName
         title_utf16,  # lpWindowName
         0x00CF0000,  # dwStyle (WS_OVERLAPPEDWINDOW)
-        win32.CW_USEDEFAULT,  # X
-        win32.CW_USEDEFAULT,  # Y
+        win32.user32.CW_USEDEFAULT,  # X
+        win32.user32.CW_USEDEFAULT,  # Y
         width,  # nWidth
         height,  # nHeight
         null,  # hWndParent
         null,  # hMenu
-        win32.GetModuleHandle(null),  # hInstance
+        win32.kernel32.GetModuleHandle(null),  # hInstance
         null  # lpParam
     )
     
@@ -37,24 +35,79 @@ def create_window(title: str, width: int, height: int):
     
     return hwnd
 
+# Function to create a custom window with specific class
+def create_custom_window(class_name: str, title: str, style: int, ex_style: int, x: int, y: int, width: int, height: int, parent: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    import win32.kernel32
+    import win32.string
+    import duitk.events
+    
+    # Convert strings to UTF-16 for Windows APIs
+    class_name_utf16 = duitk.events.utf8_to_utf16(class_name)
+    title_utf16 = duitk.events.utf8_to_utf16(title)
+    
+    # Create window with specified parameters
+    hwnd = win32.user32.CreateWindowExW(
+        ex_style,  # dwExStyle
+        class_name_utf16,  # lpClassName
+        title_utf16,  # lpWindowName
+        style,  # dwStyle
+        x,  # X
+        y,  # Y
+        width,  # nWidth
+        height,  # nHeight
+        parent,  # hWndParent
+        null,  # hMenu
+        win32.kernel32.GetModuleHandle(null),  # hInstance
+        null  # lpParam
+    )
+    
+    # Free allocated buffers
+    win32.string.free(class_name_utf16)
+    win32.string.free(title_utf16)
+    
+    return hwnd
+
 # Function to show a window
 def show_window(hwnd: int, cmd_show: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
     
-    return win32.ShowWindow(hwnd, cmd_show)
+    return win32.user32.ShowWindow(hwnd, cmd_show)
 
 # Function to update a window
 def update_window(hwnd: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
     
-    return win32.UpdateWindow(hwnd)
+    return win32.user32.UpdateWindow(hwnd)
+
+# Function to destroy a window
+def destroy_window(hwnd: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    return win32.user32.DestroyWindow(hwnd)
+
+# Function to set window position
+def set_window_pos(hwnd: int, hwnd_insert_after: int, x: int, y: int, cx: int, cy: int, flags: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    return win32.user32.SetWindowPos(hwnd, hwnd_insert_after, x, y, cx, cy, flags)
+
+# Function to move a window
+def move_window(hwnd: int, x: int, y: int, width: int, height: int, repaint: bool):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    return win32.user32.MoveWindow(hwnd, x, y, width, height, repaint)
 
 # Function to set window text with UTF-16 support
 def set_window_text(hwnd: int, text: str):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
     import win32.string
     import duitk.events
     
@@ -62,7 +115,7 @@ def set_window_text(hwnd: int, text: str):
     text_utf16 = duitk.events.utf8_to_utf16(text)
     
     # Set window text
-    result = win32.SetWindowTextW(hwnd, text_utf16)
+    result = win32.user32.SetWindowTextW(hwnd, text_utf16)
     
     # Free allocated buffer
     win32.string.free(text_utf16)
@@ -72,25 +125,46 @@ def set_window_text(hwnd: int, text: str):
 # Function to get window text with UTF-16 support
 def get_window_text(hwnd: int):
     # Deferred import to avoid circular dependencies
-    import win32
+    import win32.user32
+    import win32.kernel32
     import win32.string
     import duitk.events
     
     # Get length of window text
-    length = win32.GetWindowTextLengthW(hwnd)
+    length = win32.user32.GetWindowTextLengthW(hwnd)
     if length == 0:
         return ""
     
     # Allocate buffer for UTF-16 string
-    buffer_utf16 = win32.string.malloc(win32.string.GMEM_ZEROINIT, (length + 1) * 2)
+    buffer_utf16 = win32.kernel32.GlobalAlloc(win32.string.GMEM_ZEROINIT, (length + 1) * 2)
     
     # Get window text
-    win32.GetWindowTextW(hwnd, buffer_utf16, length + 1)
+    win32.user32.GetWindowTextW(hwnd, buffer_utf16, length + 1)
     
     # Convert UTF-16 to UTF-8
     result = duitk.events.utf16_to_utf8(buffer_utf16)
     
     # Free allocated buffer
-    win32.string.free(buffer_utf16)
+    win32.kernel32.GlobalFree(buffer_utf16)
     
     return result
+
+# Function to get window rectangle
+def get_window_rect(hwnd: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    rect = win32.user32.RECT()
+    if win32.user32.GetWindowRect(hwnd, rect):
+        return (rect.left, rect.top, rect.right, rect.bottom)
+    return None
+
+# Function to get client rectangle
+def get_client_rect(hwnd: int):
+    # Deferred import to avoid circular dependencies
+    import win32.user32
+    
+    rect = win32.user32.RECT()
+    if win32.user32.GetClientRect(hwnd, rect):
+        return (rect.left, rect.top, rect.right, rect.bottom)
+    return None

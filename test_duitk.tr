@@ -1,0 +1,15 @@
+# Test DUITK framework
+
+import duitk
+
+print("Testing DUITK framework...")
+
+# Test basic functionality
+print("DUITK version:", duitk.version)
+print("DUITK name:", duitk.name)
+
+# Test system functions
+screen_size = duitk.system.get_screen_size()
+print("Screen size:", screen_size)
+
+print("DUITK framework test completed successfully!")

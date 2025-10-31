@@ -1,0 +1,10 @@
+# Minimal DUITK test
+
+print("Loading minimal DUITK...")
+
+# Version information
+version = "1.0.0"
+name = "DUITK"
+description = "Desktop UI Toolkit for Tauraro"
+
+print("Minimal DUITK loaded successfully!")

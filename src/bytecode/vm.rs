@@ -9,7 +9,7 @@ use crate::bytecode::memory::{CodeObject, Frame, Block, BlockType, MemoryOps};
 // use crate::bytecode::arithmetic;
 // Import necessary types for Closure handling
 use anyhow::{Result, anyhow};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::cell::RefCell;
 // Import module system for dynamic module loading
@@ -503,6 +503,8 @@ impl SuperBytecodeVM {
                             let top_exc = self.frames[frame_idx].registers.last().unwrap().clone();
                             self.frames[frame_idx].registers.push(top_exc);
                         }
+                        // Continue execution at the exception handler
+                        continue;
                     } else {
                         // No handler found, propagate the exception
                         return Err(e);
@@ -515,8 +517,6 @@ impl SuperBytecodeVM {
     /// Optimized instruction execution with computed GOTOs for maximum performance
     #[inline(always)]
     fn execute_instruction_fast(&mut self, frame_idx: usize, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
-        // For now, we'll just return an error
-        // In a complete implementation, this would dispatch to the appropriate handler
         match opcode {
             OpCode::LoadConst => {
                 let const_idx = arg1 as usize;
@@ -707,33 +707,13 @@ impl SuperBytecodeVM {
                 let iter_reg = arg1 as usize;
                 let result_reg = arg2 as usize;
                 
-                if iter_reg >= self.frames[frame_idx].registers.len() || result_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("Next: register index out of bounds"));
+                if iter_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("Next: iterator register index {} out of bounds", iter_reg));
                 }
                 
                 // Clone the iterator value to avoid borrowing issues
                 let iter_value = self.frames[frame_idx].registers[iter_reg].value.clone();
                 match iter_value {
-                    Value::Iterator { ref items, ref current_index } => {
-                        // For Iterator objects, check if we've reached the end
-                        if *current_index < items.len() {
-                            // Store the current value in the result register
-                            let value = RcValue::new(items[*current_index].clone());
-                            self.frames[frame_idx].set_register(result_reg as u32, value);
-                            
-                            // Update the iterator's current position
-                            let updated_iterator = Value::Iterator {
-                                items: items.clone(),
-                                current_index: current_index + 1,
-                            };
-                            self.frames[frame_idx].registers[iter_reg] = RcValue::new(updated_iterator);
-                            
-                            Ok(None)
-                        } else {
-                            // Iterator exhausted, raise StopIteration
-                            Err(anyhow!("StopIteration"))
-                        }
-                    },
                     Value::RangeIterator { start, stop, step, current } => {
                         // Check if we've reached the end of the range
                         let should_continue = if step > 0 {
@@ -759,7 +739,6 @@ impl SuperBytecodeVM {
                                 current: new_current,
                             };
                             self.frames[frame_idx].registers[iter_reg] = RcValue::new(updated_iterator);
-                            
                             Ok(None)
                         } else {
                             // Iterator exhausted, raise StopIteration
@@ -786,168 +765,62 @@ impl SuperBytecodeVM {
 
                 let left = &self.frames[frame_idx].registers[left_reg as usize];
                 let right = &self.frames[frame_idx].registers[right_reg as usize];
-
-                // Check for __add__ method (operator overloading)
-                if let Some(add_method) = left.value.get_method("__add__") {
-                    // Call __add__(self, other)
-                    let add_args = vec![left.value.clone(), right.value.clone()];
-                    let return_value = self.call_function_fast(
-                        add_method,
-                        add_args,
-                        HashMap::new(),
-                        Some(frame_idx),
-                        Some(result_reg)
-                    )?;
-
-                    // Store the result
-                    self.frames[frame_idx].registers[result_reg as usize] = RcValue::new(return_value);
-                    return Ok(None);
-                }
-
-                // Fast path for common operations
+                
+                // Fast path for integer addition
                 let result = match (&left.value, &right.value) {
                     (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
                     (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
-                    (Value::Str(a), Value::Str(b)) => {
-                        // Preallocate capacity for string concatenation to avoid intermediate formatting allocations
-                        let mut s = String::with_capacity(a.len() + b.len());
-                        s.push_str(a);
-                        s.push_str(b);
-                        Value::Str(s)
-                    },
-                    (Value::List(a), Value::List(b)) => {
-                        // Avoid intermediate clones; allocate exact capacity and clone elements once
-                        let mut c = HPList::with_capacity(a.len() + b.len());
-                        for item in a {
-                            c.append((*item).clone());
-                        }
-                        for item in b {
-                            c.append((*item).clone());
-                        }
-                        Value::List(c)
-                    },
+                    (Value::Str(a), Value::Str(b)) => Value::Str(format!("{}{}", a, b)),
                     _ => {
                         // For less common cases, use the general implementation
-                        // Try to convert values to strings if they're not already
-                        let left_val = left.value.clone();
-                        let right_val = right.value.clone();
-                        
-                        match (&left_val, &right_val) {
-                            // If either is a string, convert both to strings
-                            (Value::Str(_), _) | (_, Value::Str(_)) => {
-                                let left_str = match left_val {
-                                    Value::Str(s) => s,
-                                    _ => format!("{}", left_val),
-                                };
-                                let right_str = match right_val {
-                                    Value::Str(s) => s,
-                                    _ => format!("{}", right_val),
-                                };
-                                let mut s = String::with_capacity(left_str.len() + right_str.len());
-                                s.push_str(&left_str);
-                                s.push_str(&right_str);
-                                Value::Str(s)
-                            },
-                            // Otherwise, use the general arithmetic implementation
-                            _ => {
-                                self.add_values(left_val, right_val)
-                                    .map_err(|e| anyhow!("Error in BinaryAddRR: {}", e))?
-                            }
-                        }
+                        self.add_values(left.value.clone(), right.value.clone())
+                            .map_err(|e| anyhow!("Error in BinaryAddRR: {}", e))?
                     }
                 };
                 
                 self.frames[frame_idx].registers[result_reg as usize] = RcValue::new(result);
                 Ok(None)
             }
-            OpCode::StoreGlobal => {
-                // Store value from register to global namespace
-                let name_idx = arg1 as usize;
-                let value_reg = arg2;
-                
-                if name_idx >= self.frames[frame_idx].code.names.len() {
-                    return Err(anyhow!("StoreGlobal: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
+            OpCode::Raise => {
+                // Raise an exception
+                let exception_reg = arg1 as usize;
+
+                if exception_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!(
+                        "Raise: exception register index {} out of bounds (len: {})",
+                        exception_reg,
+                        self.frames[frame_idx].registers.len()
+                    ));
                 }
-                
-                if value_reg as usize >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("StoreGlobal: register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
-                }
-                
-                // Clone the values first to avoid borrowing issues
-                let name = self.frames[frame_idx].code.names[name_idx].clone();
-                let value = self.frames[frame_idx].registers[value_reg as usize].clone();
-                
-                // Store in both frame globals and VM globals
-                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name.clone(), value.clone());
-                self.globals.insert(name, value);
-                
-                Ok(None)
-            }
-            OpCode::LoadGlobal => {
-                // Load value from global namespace to register
-                let name_idx = arg1 as usize;
-                let _cache_idx = arg2 as usize; // Not used in this simple implementation
-                let result_reg = arg3;
-                
-                if name_idx >= self.frames[frame_idx].code.names.len() {
-                    return Err(anyhow!("LoadGlobal: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
-                }
-                
-                let name = &self.frames[frame_idx].code.names[name_idx];
-                
-                // Try to get from frame globals first, then VM globals
-                let value = if let Some(value) = self.frames[frame_idx].globals.get(name) {
-                    value.clone()
-                } else if let Some(value) = self.globals.get(name) {
-                    value.clone()
+
+                let exception_value = self.frames[frame_idx].registers[exception_reg].value.clone();
+
+                // Find the innermost exception handler
+                if let Some(block) = self.frames[frame_idx]
+                    .block_stack
+                    .iter()
+                    .rfind(|b| b.block_type == BlockType::Except)
+                {
+                    self.frames[frame_idx].pc = block.handler;
+                    self.frames[frame_idx].registers.push(RcValue::new(exception_value));
+                    Ok(None) // Continue execution at the handler
                 } else {
-                    return Err(anyhow!("LoadGlobal: name '{}' not found in global namespace", name));
-                };
-                
-                self.frames[frame_idx].set_register(result_reg, value);
+                    // No handler found, unwind the stack
+                    Err(anyhow!("Unhandled exception: {}", exception_value))
+                }
+            }
+            OpCode::SetupExcept => {
+                let handler_pc = arg1 as usize;
+                let stack_level = self.frames[frame_idx].registers.len();
+                self.frames[frame_idx].block_stack.push(Block {
+                    block_type: BlockType::Except,
+                    handler: handler_pc,
+                    level: stack_level,
+                });
                 Ok(None)
             }
-            OpCode::LoadFast => {
-                // Load value from local variable (fast access) to register
-                let local_idx = arg1 as usize;
-                let result_reg = arg2;
-                
-                if local_idx >= self.frames[frame_idx].locals.len() {
-                    return Err(anyhow!("LoadFast: local index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
-                }
-                
-                let value = self.frames[frame_idx].locals[local_idx].clone();
-                self.frames[frame_idx].set_register(result_reg, value);
-                Ok(None)
-            }
-            OpCode::LoadLocal => {
-                // Load value from register to register
-                let source_reg = arg1 as usize;
-                let result_reg = arg2;
-                
-                if source_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("LoadLocal: register index {} out of bounds (len: {})", source_reg, self.frames[frame_idx].registers.len()));
-                }
-                
-                let value = self.frames[frame_idx].registers[source_reg].clone();
-                self.frames[frame_idx].set_register(result_reg, value);
-                Ok(None)
-            }
-            OpCode::StoreFast => {
-                // Store value from register to local variable (fast access)
-                let local_idx = arg1 as usize;
-                let value_reg = arg2;
-                
-                if local_idx >= self.frames[frame_idx].locals.len() {
-                    return Err(anyhow!("StoreFast: local index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
-                }
-                
-                if value_reg as usize >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("StoreFast: register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
-                }
-                
-                let value = self.frames[frame_idx].registers[value_reg as usize].clone();
-                self.frames[frame_idx].locals[local_idx] = value;
+            OpCode::PopBlock => {
+                self.frames[frame_idx].block_stack.pop();
                 Ok(None)
             }
             OpCode::FastIntAdd => {
@@ -955,25 +828,7 @@ impl SuperBytecodeVM {
                 let left_reg = arg1 as usize;
                 let right_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
-
-                // Check for __add__ method first (operator overloading)
-                let left_val = &self.frames[frame_idx].registers[left_reg].value;
-                if let Some(add_method) = left_val.get_method("__add__") {
-                    let left_clone = left_val.clone();
-                    let right_clone = self.frames[frame_idx].registers[right_reg].value.clone();
-                    let add_args = vec![left_clone, right_clone];
-                    let return_value = self.call_function_fast(
-                        add_method,
-                        add_args,
-                        HashMap::new(),
-                        Some(frame_idx),
-                        Some(result_reg as u32)
-                    )?;
-
-                    self.frames[frame_idx].registers[result_reg] = RcValue::new(return_value);
-                    return Ok(None);
-                }
-
+                
                 // Direct access to integer values without cloning for maximum performance
                 if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
                     if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
@@ -1325,6 +1180,60 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
+            OpCode::CompareNotInRR => {
+                // Register-Register non-membership test (not in)
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("CompareNotInRR: register index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+                
+                // Check non-membership (opposite of membership)
+                let result = match (&left.value, &right.value) {
+                    // String non-membership
+                    (Value::Str(item), Value::Str(container)) => Value::Bool(!container.contains(item)),
+                    // List non-membership
+                    (item, Value::List(container)) => {
+                        let found = container.iter().any(|list_item| list_item == item);
+                        Value::Bool(!found)
+                    },
+                    // Tuple non-membership
+                    (item, Value::Tuple(container)) => {
+                        let found = container.iter().any(|tuple_item| tuple_item == item);
+                        Value::Bool(!found)
+                    },
+                    // Set non-membership
+                    (item, Value::Set(container)) => {
+                        let found = container.iter().any(|set_item| set_item == item);
+                        Value::Bool(!found)
+                    },
+                    // Dict non-membership (check keys)
+                    (item, Value::Dict(container)) => {
+                        // For dict non-membership, we check if the item is NOT a key in the dict
+                        match item {
+                            Value::Str(key) => Value::Bool(!container.borrow().contains_key(key)),
+                            _ => {
+                                let key_str = format!("{}", item);
+                                Value::Bool(!container.borrow().contains_key(&key_str))
+                            }
+                        }
+                    },
+                    _ => {
+                        // For other types, try to convert to string and check string non-membership
+                        let left_str = format!("{}", left.value);
+                        let right_str = format!("{}", right.value);
+                        Value::Bool(!right_str.contains(&left_str))
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
             OpCode::BuildList => {
                 // Build a list from items on the stack/register
                 let item_count = arg1 as usize;
@@ -1622,14 +1531,14 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
-            OpCode::BinaryDivIR => {
-                // Immediate-Register division
+            OpCode::BinaryAddIR => {
+                // Immediate-Register addition
                 let left_imm = arg1 as usize; // Immediate value index in constants
                 let right_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
                 
                 if left_imm >= self.frames[frame_idx].code.constants.len() || right_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("BinaryDivIR: constant or register index out of bounds"));
+                    return Err(anyhow!("BinaryAddIR: constant or register index out of bounds"));
                 }
                 
                 let left = &self.frames[frame_idx].code.constants[left_imm];
@@ -1637,22 +1546,176 @@ impl SuperBytecodeVM {
                 
                 // Fast path for common operations
                 let result = match (left, &right.value) {
-                    (Value::Int(a), Value::Int(b)) => {
-                        if *b == 0 {
-                            return Err(anyhow!("Division by zero"));
-                        }
-                        Value::Int(a / b)
-                    },
-                    (Value::Float(a), Value::Float(b)) => {
-                        if *b == 0.0 {
-                            return Err(anyhow!("Division by zero"));
-                        }
-                        Value::Float(a / b)
-                    },
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                    (Value::Str(a), Value::Str(b)) => Value::Str(format!("{}{}", a, b)),
                     _ => {
                         // For less common cases, use the general implementation
-                        self.div_values(left.clone(), right.value.clone())
-                            .map_err(|e| anyhow!("Error in BinaryDivIR: {}", e))?
+                        self.add_values(left.clone(), right.value.clone())
+                            .map_err(|e| anyhow!("Error in BinaryAddIR: {}", e))?
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryAddRI => {
+                // Register-Immediate addition
+                let left_reg = arg1 as usize;
+                let right_imm = arg2 as usize; // Immediate value index in constants
+                let result_reg = arg3 as usize;
+                
+                if left_reg >= self.frames[frame_idx].registers.len() || right_imm >= self.frames[frame_idx].code.constants.len() {
+                    return Err(anyhow!("BinaryAddRI: register or constant index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].code.constants[right_imm];
+                
+                // Fast path for common operations
+                let result = match (&left.value, right) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                    (Value::Str(a), Value::Str(b)) => Value::Str(format!("{}{}", a, b)),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.add_values(left.value.clone(), right.clone())
+                            .map_err(|e| anyhow!("Error in BinaryAddRI: {}", e))?
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinarySubRR => {
+                // Register-Register subtraction
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinarySubRR: register index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+                
+                // Fast path for common operations
+                let result = match (&left.value, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a - b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.sub_values(left.value.clone(), right.value.clone())
+                            .map_err(|e| anyhow!("Error in BinarySubRR: {}", e))?
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinarySubRI => {
+                // Register-Immediate subtraction
+                let left_reg = arg1 as usize;
+                let right_imm = arg2 as usize; // Immediate value index in constants
+                let result_reg = arg3 as usize;
+                
+                if left_reg >= self.frames[frame_idx].registers.len() || right_imm >= self.frames[frame_idx].code.constants.len() {
+                    return Err(anyhow!("BinarySubRI: register or constant index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].code.constants[right_imm];
+                
+                // Fast path for common operations
+                let result = match (&left.value, right) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a - b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.sub_values(left.value.clone(), right.clone())
+                            .map_err(|e| anyhow!("Error in BinarySubRI: {}", e))?
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinarySubIR => {
+                // Immediate-Register subtraction
+                let left_imm = arg1 as usize; // Immediate value index in constants
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                if left_imm >= self.frames[frame_idx].code.constants.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinarySubIR: constant or register index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].code.constants[left_imm];
+                let right = &self.frames[frame_idx].registers[right_reg];
+                
+                // Fast path for common operations
+                let result = match (left, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a - b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.sub_values(left.clone(), right.value.clone())
+                            .map_err(|e| anyhow!("Error in BinarySubIR: {}", e))?
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryMulRI => {
+                // Register-Immediate multiplication
+                let left_reg = arg1 as usize;
+                let right_imm = arg2 as usize; // Immediate value index in constants
+                let result_reg = arg3 as usize;
+                
+                if left_reg >= self.frames[frame_idx].registers.len() || right_imm >= self.frames[frame_idx].code.constants.len() {
+                    return Err(anyhow!("BinaryMulRI: register or constant index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].code.constants[right_imm];
+                
+                // Fast path for common operations
+                let result = match (&left.value, right) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.mul_values(left.value.clone(), right.clone())
+                            .map_err(|e| anyhow!("Error in BinaryMulRI: {}", e))?
+                    }
+                };
+                
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryMulIR => {
+                // Immediate-Register multiplication
+                let left_imm = arg1 as usize; // Immediate value index in constants
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+                
+                if left_imm >= self.frames[frame_idx].code.constants.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryMulIR: constant or register index out of bounds"));
+                }
+                
+                let left = &self.frames[frame_idx].code.constants[left_imm];
+                let right = &self.frames[frame_idx].registers[right_reg];
+                
+                // Fast path for common operations
+                let result = match (left, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.mul_values(left.clone(), right.value.clone())
+                            .map_err(|e| anyhow!("Error in BinaryMulIR: {}", e))?
                     }
                 };
                 
@@ -2145,6 +2208,210 @@ impl SuperBytecodeVM {
                 };
                 
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::LoadFast => {
+                // Load from fast local variable (indexed access)
+                let local_idx = arg1 as usize;
+                let result_reg = arg2 as u32;
+                
+                if local_idx >= self.frames[frame_idx].locals.len() {
+                    return Err(anyhow!("LoadFast: local variable index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
+                }
+                
+                let value = self.frames[frame_idx].locals[local_idx].clone();
+                self.frames[frame_idx].set_register(result_reg, value);
+                Ok(None)
+            }
+            OpCode::StoreFast => {
+                // Store to fast local variable (indexed access)
+                let value_reg = arg1 as usize;
+                let local_idx = arg2 as usize;
+                
+                if value_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("StoreFast: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                if local_idx >= self.frames[frame_idx].locals.len() {
+                    // Extend locals if needed
+                    self.frames[frame_idx].locals.resize(local_idx + 1, RcValue::new(Value::None));
+                }
+                
+                let value = self.frames[frame_idx].registers[value_reg].clone();
+                self.frames[frame_idx].locals[local_idx] = value;
+                Ok(None)
+            }
+            OpCode::LoadLocal => {
+                // Load from local register
+                let local_idx = arg1 as usize;
+                let result_reg = arg2 as u32;
+                
+                if local_idx >= self.frames[frame_idx].locals.len() {
+                    return Err(anyhow!("LoadLocal: local variable index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
+                }
+                
+                let value = self.frames[frame_idx].locals[local_idx].clone();
+                self.frames[frame_idx].set_register(result_reg, value);
+                Ok(None)
+            }
+            OpCode::StoreLocal => {
+                // Store to local register
+                let value_reg = arg1 as usize;
+                let local_idx = arg2 as usize;
+                
+                if value_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("StoreLocal: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                if local_idx >= self.frames[frame_idx].locals.len() {
+                    // Extend locals if needed
+                    self.frames[frame_idx].locals.resize(local_idx + 1, RcValue::new(Value::None));
+                }
+                
+                let value = self.frames[frame_idx].registers[value_reg].clone();
+                self.frames[frame_idx].locals[local_idx] = value;
+                Ok(None)
+            }
+            OpCode::LoadGlobal => {
+                // Load from global namespace
+                let name_idx = arg1 as usize;
+                let result_reg = arg2 as u32;
+                
+                if name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("LoadGlobal: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
+                }
+                
+                let name = &self.frames[frame_idx].code.names[name_idx];
+                
+                // First check frame globals
+                if let Some(value) = self.frames[frame_idx].globals.get(name) {
+                    self.frames[frame_idx].set_register(result_reg, value.clone());
+                    Ok(None)
+                } 
+                // Then check builtins
+                else if let Some(value) = self.frames[frame_idx].builtins.get(name) {
+                    self.frames[frame_idx].set_register(result_reg, value.clone());
+                    Ok(None)
+                }
+                // Then check VM globals
+                else if let Some(value) = self.globals.get(name) {
+                    self.frames[frame_idx].set_register(result_reg, value.clone());
+                    Ok(None)
+                }
+                else {
+                    Err(anyhow!("LoadGlobal: name '{}' not found in globals", name))
+                }
+            }
+            OpCode::StoreGlobal => {
+                // Store to global namespace
+                let value_reg = arg1 as usize;
+                let name_idx = arg2 as usize;
+                
+                if value_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("StoreGlobal: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                if name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("StoreGlobal: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
+                }
+                
+                let value = self.frames[frame_idx].registers[value_reg].clone();
+                let name = self.frames[frame_idx].code.names[name_idx].clone();
+                
+                // Store in frame globals
+                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name, value);
+                Ok(None)
+            }
+            OpCode::BuildList => {
+                // Build a list from a set of registers
+                let num_items = arg1 as usize;
+                let start_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                let mut items = Vec::with_capacity(num_items);
+
+                for i in 0..num_items {
+                    if start_reg + i >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("BuildList: register index {} out of bounds (len: {})", start_reg + i, self.frames[frame_idx].registers.len()));
+                    }
+
+                    items.push(self.frames[frame_idx].registers[start_reg + i].clone());
+                }
+
+                let list = Value::List(HPList::from_values(items.into_iter().map(|rc| rc.value).collect()));
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(list);
+                Ok(None)
+            }
+            OpCode::BuildTuple => {
+                // Build a tuple from a set of registers
+                let num_items = arg1 as usize;
+                let start_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                let mut items = Vec::with_capacity(num_items);
+
+                for i in 0..num_items {
+                    if start_reg + i >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("BuildTuple: register index {} out of bounds (len: {})", start_reg + i, self.frames[frame_idx].registers.len()));
+                    }
+
+                    items.push(self.frames[frame_idx].registers[start_reg + i].clone());
+                }
+
+                let list = Value::Tuple(items.into_iter().map(|rc_value| rc_value.value).collect());
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(list);
+                Ok(None)
+            }
+            OpCode::BuildDict => {
+                // Build a dictionary from a set of key-value pairs in registers
+                let num_pairs = arg1 as usize;
+                let start_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                let mut items = HashMap::new();
+
+                for i in 0..num_pairs {
+                    let key_reg = start_reg + i * 2;
+                    let value_reg = start_reg + i * 2 + 1;
+
+                    if key_reg >= self.frames[frame_idx].registers.len() || value_reg >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("BuildDict: register index out of bounds"));
+                    }
+
+                    let key = &self.frames[frame_idx].registers[key_reg];
+                    let value = &self.frames[frame_idx].registers[value_reg];
+
+                    // Keys must be strings
+                    let key_str = match &key.value {
+                        Value::Str(s) => s.clone(),
+                        _ => format!("{}", key.value),
+                    };
+
+                    items.insert(key_str, value.value.clone());
+                }
+
+                let dict = Value::Dict(Rc::new(RefCell::new(items)));
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(dict);
+                Ok(None)
+            }
+            OpCode::BuildSet => {
+                // Build a set from a set of registers
+                let num_items = arg1 as usize;
+                let start_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                let mut items = HashSet::with_capacity(num_items);
+
+                for i in 0..num_items {
+                    if start_reg + i >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("BuildSet: register index {} out of bounds (len: {})", start_reg + i, self.frames[frame_idx].registers.len()));
+                    }
+
+                    items.insert(self.frames[frame_idx].registers[start_reg + i].clone());
+                }
+
+                let set = Value::Set(items.into_iter().map(|rc_value| rc_value.value).collect());
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(set);
                 Ok(None)
             }
             OpCode::Jump => {
@@ -3290,10 +3557,8 @@ impl SuperBytecodeVM {
                                         };
                                         self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
                                         return Ok(None);
-                                    } else {
                                     }
                                 }
-                            } else {
                             }
                             
                             // If not found through MRO, check parent_methods as fallback
@@ -3306,24 +3571,14 @@ impl SuperBytecodeVM {
                                     };
                                     self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
                                     return Ok(None);
-                                } else {
-                                    // If still not found, check if this is a special case
-                                    // For methods that might not be in the class methods, try to find them in the instance
-                                    if let Value::Object { class_methods, .. } = instance_value.as_ref() {
-                                        if let Some(method) = class_methods.get(&attr_name) {
-                                            // Found the method in the instance's class methods, create a BoundMethod
-                                            let bound_method = Value::BoundMethod {
-                                                object: instance_value.clone(),
-                                                method_name: attr_name.clone(),
-                                            };
-                                            self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
-                                            return Ok(None);
-                                        } else {
-                                        }
-                                    }
-                                    
-                                    // If still not found, create a BoundMethod but it will fail at call time
-                                    // This maintains compatibility with the existing approach
+                                }
+                            }
+                            
+                            // If still not found, check if this is a special case
+                            // For methods that might not be in the class methods, try to find them in the instance
+                            if let Value::Object { class_methods, .. } = instance_value.as_ref() {
+                                if let Some(method) = class_methods.get(&attr_name) {
+                                    // Found the method in the instance's class methods, create a BoundMethod
                                     let bound_method = Value::BoundMethod {
                                         object: instance_value.clone(),
                                         method_name: attr_name.clone(),
@@ -3331,32 +3586,16 @@ impl SuperBytecodeVM {
                                     self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
                                     return Ok(None);
                                 }
-                            } else {
-                                
-                                // If no parent_methods provided, check if this is a special case
-                                // For methods that might not be in the class methods, try to find them in the instance
-                                if let Value::Object { class_methods, .. } = instance_value.as_ref() {
-                                    if let Some(method) = class_methods.get(&attr_name) {
-                                        // Found the method in the instance's class methods, create a BoundMethod
-                                        let bound_method = Value::BoundMethod {
-                                            object: instance_value.clone(),
-                                            method_name: attr_name.clone(),
-                                        };
-                                        self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
-                                        return Ok(None);
-                                    } else {
-                                    }
-                                }
-                                
-                                // If still not found, create a BoundMethod but it will fail at call time
-                                // This maintains compatibility with the existing approach
-                                let bound_method = Value::BoundMethod {
-                                    object: instance_value.clone(),
-                                    method_name: attr_name.clone(),
-                                };
-                                self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
-                                return Ok(None);
                             }
+                            
+                            // If still not found, create a BoundMethod but it will fail at call time
+                            // This maintains compatibility with the existing approach
+                            let bound_method = Value::BoundMethod {
+                                object: instance_value.clone(),
+                                method_name: attr_name.clone(),
+                            };
+                            self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                            return Ok(None);
                         } else {
                             return Err(anyhow!("super(): unbound super object has no attribute '{}'", attr_name));
                         }
@@ -4480,5 +4719,5 @@ impl SuperBytecodeVM {
         
         Ok(processed_args)
     }
-
 }
+

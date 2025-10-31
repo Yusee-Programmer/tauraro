@@ -1,0 +1,17 @@
+# Minimal DUITK test
+
+import duitk.test_minimal
+
+version = "1.0.0"
+name = "DUITK"
+description = "Desktop UI Toolkit for Tauraro"
+
+class Application:
+    def __init__(self):
+        self.windows = []
+        self.running = False
+
+print("DUITK - Desktop UI Toolkit loaded successfully!")
+
+print("Successfully imported duitk.test_minimal")
+print("Version:", duitk.test_minimal.version)

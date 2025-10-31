@@ -4,7 +4,7 @@ use crate::value::Value;
 use std::fmt::Debug;
 
 /// Reference counted value for optimized memory management
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RcValue {
     pub value: Value,
     pub ref_count: usize,
@@ -19,13 +19,6 @@ pub struct RangeIterator {
     pub current: i64,
 }
 
-impl PartialEq for RcValue {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl Eq for RcValue {}
 
 // Remove the Hash implementation since Value doesn't implement Hash properly
 // impl Hash for RcValue {
