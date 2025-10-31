@@ -2280,28 +2280,36 @@ impl SuperBytecodeVM {
                 let name_idx = arg1 as usize;
                 let result_reg = arg2 as u32;
                 
-                if name_idx >= self.frames[frame_idx].code.names.len() {
-                    return Err(anyhow!("LoadGlobal: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
-                }
+                // Get the name first to avoid borrowing conflicts
+                let name = {
+                    if name_idx >= self.frames[frame_idx].code.names.len() {
+                        return Err(anyhow!("LoadGlobal: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
+                    }
+                    self.frames[frame_idx].code.names[name_idx].clone()
+                };
                 
-                let name = &self.frames[frame_idx].code.names[name_idx];
+                // Check if the name exists in any of the global scopes
+                let value = {
+                    // Check frame globals
+                    if self.frames[frame_idx].globals.contains_key(&name) {
+                        self.frames[frame_idx].globals.get(&name).cloned()
+                    }
+                    // Then check builtins
+                    else if self.frames[frame_idx].builtins.contains_key(&name) {
+                        self.frames[frame_idx].builtins.get(&name).cloned()
+                    }
+                    // Then check VM globals
+                    else if self.globals.contains_key(&name) {
+                        self.globals.get(&name).cloned()
+                    } else {
+                        None
+                    }
+                };
                 
-                // First check frame globals
-                if let Some(value) = self.frames[frame_idx].globals.get(name) {
-                    self.frames[frame_idx].set_register(result_reg, value.clone());
+                if let Some(value) = value {
+                    self.frames[frame_idx].set_register(result_reg, value);
                     Ok(None)
-                } 
-                // Then check builtins
-                else if let Some(value) = self.frames[frame_idx].builtins.get(name) {
-                    self.frames[frame_idx].set_register(result_reg, value.clone());
-                    Ok(None)
-                }
-                // Then check VM globals
-                else if let Some(value) = self.globals.get(name) {
-                    self.frames[frame_idx].set_register(result_reg, value.clone());
-                    Ok(None)
-                }
-                else {
+                } else {
                     Err(anyhow!("LoadGlobal: name '{}' not found in globals", name))
                 }
             }
@@ -2751,6 +2759,63 @@ impl SuperBytecodeVM {
 
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
+            }
+            OpCode::SubscrDelete => {
+                // Delete item from sequence (del obj[key])
+                let object_reg = arg1 as usize;
+                let index_reg = arg2 as usize;
+
+                if object_reg >= self.frames[frame_idx].registers.len() || index_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("SubscrDelete: register index out of bounds"));
+                }
+
+                // Clone the values we need to avoid borrowing issues
+                let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
+                let index_value = self.frames[frame_idx].registers[index_reg].value.clone();
+
+                // Handle different sequence types
+                match object_value {
+                    Value::List(mut items) => {
+                        if let Value::Int(index) = index_value {
+                            let normalized_index = if index < 0 {
+                                items.len() as i64 + index
+                            } else {
+                                index
+                            };
+
+                            if normalized_index >= 0 && normalized_index < items.len() as i64 {
+                                items.remove(normalized_index as usize);
+                                self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::List(items));
+                                Ok(None)
+                            } else {
+                                Err(anyhow!("Index {} out of range for list of length {}", index, items.len()))
+                            }
+                        } else {
+                            Err(anyhow!("List indices must be integers, not {}", index_value.type_name()))
+                        }
+                    },
+                    Value::Dict(dict_ref) => {
+                        // For dictionaries, convert key to string for lookup
+                        let key_str = match index_value {
+                            Value::Str(s) => s,
+                            Value::Int(n) => n.to_string(),
+                            _ => format!("{}", index_value),
+                        };
+
+                        dict_ref.borrow_mut().remove(&key_str);
+                        Ok(None)
+                    },
+                    Value::Set(mut items) => {
+                        // For sets, we remove the item if it exists
+                        items.retain(|item| item != &index_value);
+                        self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::Set(items));
+                        Ok(None)
+                    },
+                    _ => {
+                        Err(anyhow!("Subscript deletion not supported for type {}",
+                                  object_value.type_name()))
+                    }
+                }
             }
             OpCode::SubscrStore => {
                 // Store item to sequence (obj[key] = value)
@@ -3443,6 +3508,35 @@ impl SuperBytecodeVM {
                     }
                 }
             }
+            OpCode::MakeFunction => {
+                // Create a function object from a code object
+                let code_reg = arg1 as usize;
+                let result_reg = arg2 as u32;
+                
+                if code_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("MakeFunction: code register index {} out of bounds (len: {})", code_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                let code_value = &self.frames[frame_idx].registers[code_reg];
+                
+                match &code_value.value {
+                    Value::Code(code_obj) => {
+                        // Create a closure with the code object
+                        let closure = Value::Closure {
+                            name: code_obj.name.clone(),
+                            params: code_obj.params.clone(),
+                            body: None, // Body is in the compiled code
+                            captured_scope: None, // No captured scope for now
+                            docstring: None, // No docstring for now
+                            compiled_code: Some(Box::new(code_obj.clone())),
+                        };
+                        
+                        self.frames[frame_idx].set_register(result_reg, RcValue::new(closure));
+                        Ok(None)
+                    }
+                    _ => Err(anyhow!("MakeFunction: expected code object, got {}", code_value.value.type_name())),
+                }
+            }
             OpCode::MatchMapping => {
                 // Match mapping pattern
                 let mapping_reg = arg1 as usize;
@@ -3491,19 +3585,23 @@ impl SuperBytecodeVM {
                 let list_reg = arg1 as usize;
                 let item_reg = arg2 as usize;
                 
-                if list_reg >= self.frames[frame_idx].registers.len() || item_reg >= self.frames[frame_idx].registers.len() {
+                // Check bounds first to avoid borrowing conflicts
+                let frames_len = self.frames[frame_idx].registers.len();
+                if list_reg >= frames_len || item_reg >= frames_len {
                     return Err(anyhow!("ListAppend: register index out of bounds"));
                 }
                 
-                let list_value = &mut self.frames[frame_idx].registers[list_reg];
-                let item_value = &self.frames[frame_idx].registers[item_reg];
+                // Clone values to avoid borrowing conflicts
+                let list_value = self.frames[frame_idx].registers[list_reg].value.clone();
+                let item_value = self.frames[frame_idx].registers[item_reg].value.clone();
                 
-                match &mut list_value.value {
-                    Value::List(list) => {
-                        list.push(item_value.value.clone());
+                match list_value {
+                    Value::List(mut list) => {
+                        list.push(item_value);
+                        self.frames[frame_idx].registers[list_reg] = RcValue::new(Value::List(list));
                         Ok(None)
                     }
-                    _ => Err(anyhow!("ListAppend: expected list, got {}", list_value.value.type_name())),
+                    _ => Err(anyhow!("ListAppend: expected list, got {}", list_value.type_name())),
                 }
             }
             OpCode::SetAdd => {
@@ -3511,19 +3609,23 @@ impl SuperBytecodeVM {
                 let set_reg = arg1 as usize;
                 let item_reg = arg2 as usize;
                 
-                if set_reg >= self.frames[frame_idx].registers.len() || item_reg >= self.frames[frame_idx].registers.len() {
+                // Check bounds first to avoid borrowing conflicts
+                let frames_len = self.frames[frame_idx].registers.len();
+                if set_reg >= frames_len || item_reg >= frames_len {
                     return Err(anyhow!("SetAdd: register index out of bounds"));
                 }
                 
-                let set_value = &mut self.frames[frame_idx].registers[set_reg];
-                let item_value = &self.frames[frame_idx].registers[item_reg];
+                // Clone values to avoid borrowing conflicts
+                let set_value = self.frames[frame_idx].registers[set_reg].value.clone();
+                let item_value = self.frames[frame_idx].registers[item_reg].value.clone();
                 
-                match &mut set_value.value {
-                    Value::Set(items) => {
-                        items.push(item_value.value.clone());
+                match set_value {
+                    Value::Set(mut items) => {
+                        items.push(item_value);
+                        self.frames[frame_idx].registers[set_reg] = RcValue::new(Value::Set(items));
                         Ok(None)
                     }
-                    _ => Err(anyhow!("SetAdd: expected set, got {}", set_value.value.type_name())),
+                    _ => Err(anyhow!("SetAdd: expected set, got {}", set_value.type_name())),
                 }
             }
             OpCode::MapAdd => {
@@ -3532,28 +3634,29 @@ impl SuperBytecodeVM {
                 let key_reg = arg2 as usize;
                 let value_reg = arg3 as usize;
                 
-                if dict_reg >= self.frames[frame_idx].registers.len() || 
-                   key_reg >= self.frames[frame_idx].registers.len() || 
-                   value_reg >= self.frames[frame_idx].registers.len() {
+                // Check bounds first to avoid borrowing conflicts
+                let frames_len = self.frames[frame_idx].registers.len();
+                if dict_reg >= frames_len || key_reg >= frames_len || value_reg >= frames_len {
                     return Err(anyhow!("MapAdd: register index out of bounds"));
                 }
                 
-                let dict_value = &mut self.frames[frame_idx].registers[dict_reg];
-                let key_value = &self.frames[frame_idx].registers[key_reg];
-                let value_value = &self.frames[frame_idx].registers[value_reg];
+                // Clone values to avoid borrowing conflicts
+                let dict_value = self.frames[frame_idx].registers[dict_reg].value.clone();
+                let key_value = self.frames[frame_idx].registers[key_reg].value.clone();
+                let value_value = self.frames[frame_idx].registers[value_reg].value.clone();
                 
-                match &mut dict_value.value {
+                match dict_value {
                     Value::Dict(dict) => {
                         // Keys must be strings
-                        let key_str = match &key_value.value {
+                        let key_str = match &key_value {
                             Value::Str(s) => s.clone(),
-                            _ => format!("{}", key_value.value),
+                            _ => format!("{}", key_value),
                         };
                         
-                        dict.borrow_mut().insert(key_str, value_value.value.clone());
+                        dict.borrow_mut().insert(key_str, value_value);
                         Ok(None)
                     }
-                    _ => Err(anyhow!("MapAdd: expected dict, got {}", dict_value.value.type_name())),
+                    _ => Err(anyhow!("MapAdd: expected dict, got {}", dict_value.type_name())),
                 }
             }
             OpCode::YieldValue => {
