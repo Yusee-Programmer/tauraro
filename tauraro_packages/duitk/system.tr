@@ -1,0 +1,58 @@
+# System functions for DUITK
+
+# Import win32 module functions within functions to avoid circular dependencies
+# This is the recommended approach for DUITK modules
+
+# Function to get system metrics
+def get_system_metrics(index: int):
+    # Deferred import to avoid circular dependencies
+    import win32
+    
+    # Get system metric value
+    result = win32.GetSystemMetrics(index)
+    
+    return result
+
+# Function to get cursor position
+def get_cursor_pos():
+    # Deferred import to avoid circular dependencies
+    import win32
+    
+    # Prepare POINT structure
+    pt = win32.POINT()
+    
+    # Get cursor position
+    if win32.GetCursorPos(pt):
+        return [pt.x, pt.y]
+    else:
+        return null
+
+# Function to get module handle
+def get_module_handle(module_name: str):
+    # Deferred import to avoid circular dependencies
+    import win32
+    
+    # Get module handle
+    result = win32.GetModuleHandle(module_name)
+    
+    return result
+
+# Function to get current thread ID
+def get_current_thread_id():
+    # Deferred import to avoid circular dependencies
+    import win32
+    
+    # Get current thread ID
+    result = win32.GetCurrentThreadId()
+    
+    return result
+
+# Function to get current process ID
+def get_current_process_id():
+    # Deferred import to avoid circular dependencies
+    import win32
+    
+    # Get current process ID
+    result = win32.GetCurrentProcessId()
+    
+    return result

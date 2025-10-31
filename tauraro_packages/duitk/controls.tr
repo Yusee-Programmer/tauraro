@@ -1,0 +1,141 @@
+# Control creation functions for DUITK
+
+# Import win32 module functions within functions to avoid circular dependencies
+# This is the recommended approach for DUITK modules
+
+# Function to create a button
+def create_button(parent_hwnd: int, text: str, x: int, y: int, width: int, height: int):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Convert text to UTF-16 for Windows APIs
+    text_utf16 = duitk.events.utf8_to_utf16(text)
+    
+    # Create button control
+    hwnd = win32.CreateWindowExW(
+        0,  # dwExStyle
+        "BUTTON",  # lpClassName
+        text_utf16,  # lpWindowName
+        0x50010000,  # dwStyle (WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON)
+        x,  # X
+        y,  # Y
+        width,  # nWidth
+        height,  # nHeight
+        parent_hwnd,  # hWndParent
+        null,  # hMenu
+        win32.GetModuleHandle(null),  # hInstance
+        null  # lpParam
+    )
+    
+    # Free allocated buffer
+    win32.string.free(text_utf16)
+    
+    return hwnd
+
+# Function to create a static text label
+def create_label(parent_hwnd: int, text: str, x: int, y: int, width: int, height: int):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Convert text to UTF-16 for Windows APIs
+    text_utf16 = duitk.events.utf8_to_utf16(text)
+    
+    # Create static text control
+    hwnd = win32.CreateWindowExW(
+        0,  # dwExStyle
+        "STATIC",  # lpClassName
+        text_utf16,  # lpWindowName
+        0x50000000,  # dwStyle (WS_CHILD | WS_VISIBLE)
+        x,  # X
+        y,  # Y
+        width,  # nWidth
+        height,  # nHeight
+        parent_hwnd,  # hWndParent
+        null,  # hMenu
+        win32.GetModuleHandle(null),  # hInstance
+        null  # lpParam
+    )
+    
+    # Free allocated buffer
+    win32.string.free(text_utf16)
+    
+    return hwnd
+
+# Function to create an edit box
+def create_edit(parent_hwnd: int, text: str, x: int, y: int, width: int, height: int):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Convert text to UTF-16 for Windows APIs
+    text_utf16 = duitk.events.utf8_to_utf16(text)
+    
+    # Create edit control
+    hwnd = win32.CreateWindowExW(
+        0x200,  # dwExStyle (WS_EX_CLIENTEDGE)
+        "EDIT",  # lpClassName
+        text_utf16,  # lpWindowName
+        0x50010000,  # dwStyle (WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL)
+        x,  # X
+        y,  # Y
+        width,  # nWidth
+        height,  # nHeight
+        parent_hwnd,  # hWndParent
+        null,  # hMenu
+        win32.GetModuleHandle(null),  # hInstance
+        null  # lpParam
+    )
+    
+    # Free allocated buffer
+    win32.string.free(text_utf16)
+    
+    return hwnd
+
+# Function to set control text with UTF-16 support
+def set_control_text(hwnd: int, text: str):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Convert text to UTF-16 for Windows APIs
+    text_utf16 = duitk.events.utf8_to_utf16(text)
+    
+    # Set control text
+    result = win32.SetWindowTextW(hwnd, text_utf16)
+    
+    # Free allocated buffer
+    win32.string.free(text_utf16)
+    
+    return result
+
+# Function to get control text with UTF-16 support
+def get_control_text(hwnd: int):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Get length of control text
+    length = win32.GetWindowTextLengthW(hwnd)
+    if length == 0:
+        return ""
+    
+    # Allocate buffer for UTF-16 string
+    buffer_utf16 = win32.string.malloc(win32.string.GMEM_ZEROINIT, (length + 1) * 2)
+    
+    # Get control text
+    win32.GetWindowTextW(hwnd, buffer_utf16, length + 1)
+    
+    # Convert UTF-16 to UTF-8
+    result = duitk.events.utf16_to_utf8(buffer_utf16)
+    
+    # Free allocated buffer
+    win32.string.free(buffer_utf16)
+    
+    return result

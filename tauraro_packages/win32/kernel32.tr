@@ -1,0 +1,142 @@
+# Win32 Kernel32 Module
+# Core Windows API functions from kernel32.dll
+
+# Load required library
+try:
+    load_library("kernel32.dll")
+except:
+    pass  # Library might already be loaded
+
+# Process and Thread Functions
+GetModuleHandleA = define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
+GetModuleHandleW = define_function("kernel32.dll", "GetModuleHandleW", "pointer", ["pointer"])
+GetModuleHandle = GetModuleHandleA  # Default to ANSI version
+
+GetCurrentProcessId = define_function("kernel32.dll", "GetCurrentProcessId", "uint32", [])
+GetCurrentThreadId = define_function("kernel32.dll", "GetCurrentThreadId", "uint32", [])
+GetCurrentProcess = define_function("kernel32.dll", "GetCurrentProcess", "pointer", [])
+
+# Sleep Functions
+Sleep = define_function("kernel32.dll", "Sleep", "void", ["uint32"])
+SleepEx = define_function("kernel32.dll", "SleepEx", "uint32", ["uint32", "bool"])
+
+# Error Handling
+GetLastError = define_function("kernel32.dll", "GetLastError", "uint32", [])
+SetLastError = define_function("kernel32.dll", "SetLastError", "void", ["uint32"])
+
+# Time Functions
+GetSystemTime = define_function("kernel32.dll", "GetSystemTime", "void", ["pointer"])
+GetLocalTime = define_function("kernel32.dll", "GetLocalTime", "void", ["pointer"])
+GetTickCount = define_function("kernel32.dll", "GetTickCount", "uint32", [])
+GetTickCount64 = define_function("kernel32.dll", "GetTickCount64", "uint64", [])
+
+# File I/O Functions
+CreateFileA = define_function("kernel32.dll", "CreateFileA", "pointer", ["pointer", "uint32", "uint32", "pointer", "uint32", "uint32", "pointer"])
+CreateFileW = define_function("kernel32.dll", "CreateFileW", "pointer", ["pointer", "uint32", "uint32", "pointer", "uint32", "uint32", "pointer"])
+
+CloseHandle = define_function("kernel32.dll", "CloseHandle", "bool", ["pointer"])
+
+ReadFile = define_function("kernel32.dll", "ReadFile", "bool", ["pointer", "pointer", "uint32", "pointer", "pointer"])
+WriteFile = define_function("kernel32.dll", "WriteFile", "bool", ["pointer", "pointer", "uint32", "pointer", "pointer"])
+
+GetFileSize = define_function("kernel32.dll", "GetFileSize", "uint32", ["pointer", "pointer"])
+GetFileSizeEx = define_function("kernel32.dll", "GetFileSizeEx", "bool", ["pointer", "pointer"])
+
+SetFilePointer = define_function("kernel32.dll", "SetFilePointer", "uint32", ["pointer", "int32", "pointer", "uint32"])
+SetFilePointerEx = define_function("kernel32.dll", "SetFilePointerEx", "bool", ["pointer", "int64", "pointer", "uint32"])
+
+# Console Functions
+GetConsoleWindow = define_function("kernel32.dll", "GetConsoleWindow", "pointer", [])
+
+AllocConsole = define_function("kernel32.dll", "AllocConsole", "bool", [])
+FreeConsole = define_function("kernel32.dll", "FreeConsole", "bool", [])
+
+GetStdHandle = define_function("kernel32.dll", "GetStdHandle", "pointer", ["uint32"])
+SetStdHandle = define_function("kernel32.dll", "SetStdHandle", "bool", ["uint32", "pointer"])
+
+# System Information
+GetComputerNameA = define_function("kernel32.dll", "GetComputerNameA", "bool", ["pointer", "pointer"])
+GetComputerNameW = define_function("kernel32.dll", "GetComputerNameW", "bool", ["pointer", "pointer"])
+
+# Library Functions
+LoadLibraryA = define_function("kernel32.dll", "LoadLibraryA", "pointer", ["pointer"])
+LoadLibraryW = define_function("kernel32.dll", "LoadLibraryW", "pointer", ["pointer"])
+LoadLibrary = LoadLibraryA  # Default to ANSI version
+
+GetProcAddress = define_function("kernel32.dll", "GetProcAddress", "pointer", ["pointer", "pointer"])
+
+FreeLibrary = define_function("kernel32.dll", "FreeLibrary", "bool", ["pointer"])
+
+# Memory Functions
+GlobalAlloc = define_function("kernel32.dll", "GlobalAlloc", "pointer", ["uint32", "uint64"])
+GlobalFree = define_function("kernel32.dll", "GlobalFree", "pointer", ["pointer"])
+GlobalLock = define_function("kernel32.dll", "GlobalLock", "pointer", ["pointer"])
+GlobalUnlock = define_function("kernel32.dll", "GlobalUnlock", "bool", ["pointer"])
+
+# Standard handles
+STD_INPUT_HANDLE = 0xFFFFFFF6
+STD_OUTPUT_HANDLE = 0xFFFFFFF5
+STD_ERROR_HANDLE = 0xFFFFFFF4
+
+# File access constants
+GENERIC_READ = 0x80000000
+GENERIC_WRITE = 0x40000000
+GENERIC_EXECUTE = 0x20000000
+GENERIC_ALL = 0x10000000
+
+# File share constants
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_WRITE = 0x00000002
+FILE_SHARE_DELETE = 0x00000004
+
+# File creation disposition
+CREATE_NEW = 1
+CREATE_ALWAYS = 2
+OPEN_EXISTING = 3
+OPEN_ALWAYS = 4
+TRUNCATE_EXISTING = 5
+
+# File attributes
+FILE_ATTRIBUTE_READONLY = 0x00000001
+FILE_ATTRIBUTE_HIDDEN = 0x00000002
+FILE_ATTRIBUTE_SYSTEM = 0x00000004
+FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+FILE_ATTRIBUTE_ARCHIVE = 0x00000020
+FILE_ATTRIBUTE_DEVICE = 0x00000040
+FILE_ATTRIBUTE_NORMAL = 0x00000080
+FILE_ATTRIBUTE_TEMPORARY = 0x00000100
+FILE_ATTRIBUTE_SPARSE_FILE = 0x00000200
+FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+FILE_ATTRIBUTE_COMPRESSED = 0x00000800
+FILE_ATTRIBUTE_OFFLINE = 0x00001000
+FILE_ATTRIBUTE_NOT_CONTENT_INDEXED = 0x00002000
+FILE_ATTRIBUTE_ENCRYPTED = 0x00004000
+FILE_ATTRIBUTE_INTEGRITY_STREAM = 0x00008000
+FILE_ATTRIBUTE_VIRTUAL = 0x00010000
+FILE_ATTRIBUTE_NO_SCRUB_DATA = 0x00020000
+FILE_ATTRIBUTE_EA = 0x00040000
+FILE_ATTRIBUTE_PINNED = 0x00080000
+FILE_ATTRIBUTE_UNPINNED = 0x00100000
+FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000
+FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
+
+# Move methods
+FILE_BEGIN = 0
+FILE_CURRENT = 1
+FILE_END = 2
+
+# Memory allocation flags
+GMEM_FIXED = 0x0000
+GMEM_MOVEABLE = 0x0002
+GMEM_NOCOMPACT = 0x0010
+GMEM_NODISCARD = 0x0020
+GMEM_ZEROINIT = 0x0040
+GMEM_MODIFY = 0x0080
+GMEM_DISCARDABLE = 0x0100
+GMEM_NOT_BANKED = 0x1000
+GMEM_SHARE = 0x2000
+GMEM_DDESHARE = 0x2000
+GMEM_NOTIFY = 0x4000
+GMEM_LOWER = GMEM_NOT_BANKED
+GMEM_DISCARDED = 0x4000
+GMEM_LOCKCOUNT = 0x00FF

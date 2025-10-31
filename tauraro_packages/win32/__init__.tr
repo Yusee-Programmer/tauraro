@@ -1,0 +1,26 @@
+# Win32 Package - Main Module
+# This module provides access to Windows API functions and constants
+
+# Load required Windows libraries
+print("Loading Win32 libraries...")
+
+# Core Windows API libraries (always available)
+load_library("kernel32.dll")
+load_library("user32.dll")
+load_library("gdi32.dll")
+
+# Common Controls v6 (preinstalled, requires manifest)
+load_library("comctl32.dll")
+
+# Direct2D / DirectWrite / DirectComposition (preinstalled, requires SDK headers)
+load_library("d2d1.dll")      # Direct2D
+load_library("dwrite.dll")    # DirectWrite
+load_library("dcomp.dll")     # DirectComposition
+
+# COM / Shell APIs (preinstalled, optional SDK)
+load_library("ole32.dll")     # COM
+load_library("oleaut32.dll")  # COM Automation
+load_library("shell32.dll")   # Shell APIs
+load_library("shlwapi.dll")   # Shell Light-weight Utilities
+
+print("Win32 libraries loaded successfully!")

@@ -1,0 +1,92 @@
+# Dialog functions for DUITK
+
+# Import win32 module functions within functions to avoid circular dependencies
+# This is the recommended approach for DUITK modules
+
+# Function to show a message box
+def message_box(hwnd: int, text: str, caption: str, type: int):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Convert strings to UTF-16 for Windows APIs
+    text_utf16 = duitk.events.utf8_to_utf16(text)
+    caption_utf16 = duitk.events.utf8_to_utf16(caption)
+    
+    # Show message box dialog
+    result = win32.MessageBoxW(hwnd, text_utf16, caption_utf16, type)
+    
+    # Free allocated buffers
+    win32.string.free(text_utf16)
+    win32.string.free(caption_utf16)
+    
+    return result
+
+# Function to get open file name
+def get_open_file_name(hwnd: int, filter: str, title: str):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Convert strings to UTF-16 for Windows APIs
+    filter_utf16 = duitk.events.utf8_to_utf16(filter)
+    title_utf16 = duitk.events.utf8_to_utf16(title)
+    
+    # Prepare OPENFILENAME structure
+    ofn = win32.OPENFILENAME()
+    ofn.lStructSize = win32.sizeof(win32.OPENFILENAME)
+    ofn.hwndOwner = hwnd
+    ofn.lpstrFilter = filter_utf16
+    ofn.lpstrFile = win32.string.malloc(win32.string.GMEM_ZEROINIT, 260 * 2)  # MAX_PATH * sizeof(WCHAR)
+    ofn.nMaxFile = 260
+    ofn.lpstrTitle = title_utf16
+    ofn.Flags = 0x00080000  # OFN_FILEMUSTEXIST
+    
+    # Show open file dialog
+    if win32.GetOpenFileName(ofn):
+        result = duitk.events.utf16_to_utf8(ofn.lpstrFile)
+        win32.string.free(ofn.lpstrFile)
+        win32.string.free(filter_utf16)
+        win32.string.free(title_utf16)
+        return result
+    else:
+        win32.string.free(ofn.lpstrFile)
+        win32.string.free(filter_utf16)
+        win32.string.free(title_utf16)
+        return null
+
+# Function to get save file name
+def get_save_file_name(hwnd: int, filter: str, title: str):
+    # Deferred import to avoid circular dependencies
+    import win32
+    import win32.string
+    import duitk.events
+    
+    # Convert strings to UTF-16 for Windows APIs
+    filter_utf16 = duitk.events.utf8_to_utf16(filter)
+    title_utf16 = duitk.events.utf8_to_utf16(title)
+    
+    # Prepare OPENFILENAME structure
+    ofn = win32.OPENFILENAME()
+    ofn.lStructSize = win32.sizeof(win32.OPENFILENAME)
+    ofn.hwndOwner = hwnd
+    ofn.lpstrFilter = filter_utf16
+    ofn.lpstrFile = win32.string.malloc(win32.string.GMEM_ZEROINIT, 260 * 2)  # MAX_PATH * sizeof(WCHAR)
+    ofn.nMaxFile = 260
+    ofn.lpstrTitle = title_utf16
+    ofn.Flags = 0x00000002  # OFN_OVERWRITEPROMPT
+    
+    # Show save file dialog
+    if win32.GetSaveFileName(ofn):
+        result = duitk.events.utf16_to_utf8(ofn.lpstrFile)
+        win32.string.free(ofn.lpstrFile)
+        win32.string.free(filter_utf16)
+        win32.string.free(title_utf16)
+        return result
+    else:
+        win32.string.free(ofn.lpstrFile)
+        win32.string.free(filter_utf16)
+        win32.string.free(title_utf16)
+        return null

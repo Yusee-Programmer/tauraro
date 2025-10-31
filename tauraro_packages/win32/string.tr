@@ -1,0 +1,59 @@
+# Win32 String Conversion Module
+# String conversion functions from kernel32.dll
+
+# Load required library
+try:
+    load_library("kernel32.dll")
+except:
+    pass  # Library might already be loaded
+
+# String Conversion Functions
+MultiByteToWideChar = define_function("kernel32.dll", "MultiByteToWideChar", "int32", ["uint32", "uint32", "pointer", "int32", "pointer", "int32"])
+WideCharToMultiByte = define_function("kernel32.dll", "WideCharToMultiByte", "int32", ["uint32", "uint32", "pointer", "int32", "pointer", "int32", "pointer", "pointer"])
+
+# Code Page Constants
+CP_ACP = 0  # ANSI code page
+CP_OEMCP = 1  # OEM code page
+CP_MACCP = 2  # MAC code page
+CP_THREAD_ACP = 3  # Thread ANSI code page
+CP_SYMBOL = 42  # Symbol code page
+CP_UTF7 = 65000  # UTF-7 code page
+CP_UTF8 = 65001  # UTF-8 code page
+
+# Character Type Flags
+CT_CTYPE1 = 0x00000001
+CT_CTYPE2 = 0x00000002
+CT_CTYPE3 = 0x00000004
+
+# Character Type Constants
+C1_UPPER = 0x0001
+C1_LOWER = 0x0002
+C1_DIGIT = 0x0004
+C1_SPACE = 0x0008
+C1_PUNCT = 0x0010
+C1_CNTRL = 0x0020
+C1_BLANK = 0x0040
+C1_XDIGIT = 0x0080
+C1_ALPHA = 0x0100
+C1_DEFINED = 0x0200
+
+# String Mapping Flags
+LCMAP_LOWERCASE = 0x00000100
+LCMAP_UPPERCASE = 0x00000200
+LCMAP_SORTKEY = 0x00000400
+LCMAP_BYTEREV = 0x00000800
+LCMAP_HIRAGANA = 0x00100000
+LCMAP_KATAKANA = 0x00200000
+LCMAP_HALFWIDTH = 0x00400000
+LCMAP_FULLWIDTH = 0x00800000
+LCMAP_LINGUISTIC_CASING = 0x01000000
+
+# Locale Functions
+GetUserDefaultLCID = define_function("kernel32.dll", "GetUserDefaultLCID", "uint32", [])
+GetSystemDefaultLCID = define_function("kernel32.dll", "GetSystemDefaultLCID", "uint32", [])
+
+# Memory Functions for String Buffers
+malloc = define_function("kernel32.dll", "GlobalAlloc", "pointer", ["uint32", "uint64"])
+free = define_function("kernel32.dll", "GlobalFree", "pointer", ["pointer"])
+GMEM_ZEROINIT = 0x0040
+GMEM_FIXED = 0x0000

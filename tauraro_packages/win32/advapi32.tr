@@ -1,0 +1,49 @@
+# Win32 Advapi32 Module
+# Windows API functions from advapi32.dll for security and registry operations
+
+# Load required library
+try:
+    load_library("advapi32.dll")
+except:
+    pass  # Library might already be loaded
+
+# Security and User Functions
+GetUserNameA = define_function("advapi32.dll", "GetUserNameA", "bool", ["pointer", "pointer"])
+GetUserNameW = define_function("advapi32.dll", "GetUserNameW", "bool", ["pointer", "pointer"])
+GetUserName = GetUserNameA  # Default to ANSI version
+
+# Registry Functions
+RegOpenKeyExA = define_function("advapi32.dll", "RegOpenKeyExA", "int32", ["pointer", "pointer", "uint32", "uint32", "pointer"])
+RegOpenKeyExW = define_function("advapi32.dll", "RegOpenKeyExW", "int32", ["pointer", "pointer", "uint32", "uint32", "pointer"])
+
+RegQueryValueExA = define_function("advapi32.dll", "RegQueryValueExA", "int32", ["pointer", "pointer", "pointer", "pointer", "pointer", "pointer"])
+RegQueryValueExW = define_function("advapi32.dll", "RegQueryValueExW", "int32", ["pointer", "pointer", "pointer", "pointer", "pointer", "pointer"])
+
+RegCloseKey = define_function("advapi32.dll", "RegCloseKey", "int32", ["pointer"])
+
+# Access Rights for Registry
+KEY_QUERY_VALUE = 0x0001
+KEY_SET_VALUE = 0x0002
+KEY_CREATE_SUB_KEY = 0x0004
+KEY_ENUMERATE_SUB_KEYS = 0x0008
+KEY_NOTIFY = 0x0010
+KEY_CREATE_LINK = 0x0020
+KEY_WOW64_32KEY = 0x0200
+KEY_WOW64_64KEY = 0x0100
+KEY_WOW64_RES = 0x0300
+
+# Registry Value Types
+REG_NONE = 0
+REG_SZ = 1
+REG_EXPAND_SZ = 2
+REG_BINARY = 3
+REG_DWORD = 4
+REG_DWORD_LITTLE_ENDIAN = 4
+REG_DWORD_BIG_ENDIAN = 5
+REG_LINK = 6
+REG_MULTI_SZ = 7
+REG_RESOURCE_LIST = 8
+REG_FULL_RESOURCE_DESCRIPTOR = 9
+REG_RESOURCE_REQUIREMENTS_LIST = 10
+REG_QWORD = 11
+REG_QWORD_LITTLE_ENDIAN = 11

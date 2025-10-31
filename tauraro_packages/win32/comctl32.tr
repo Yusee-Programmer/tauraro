@@ -1,0 +1,77 @@
+# Win32 ComCtl32 Module
+# Windows Common Controls functions from comctl32.dll
+
+# Initialize Common Controls
+InitCommonControls = define_function("comctl32.dll", "InitCommonControls", "void", [])
+
+# Toolbar Functions
+CreateToolbarEx = define_function("comctl32.dll", "CreateToolbarEx", "pointer", ["pointer", "uint32", "uint32", "int32", "pointer", "uint32", "pointer", "pointer", "int32", "int32", "int32", "int32", "uint32"])
+
+# Status Bar Functions
+CreateStatusWindowA = define_function("comctl32.dll", "CreateStatusWindowA", "pointer", ["int32", "pointer", "pointer", "uint32"])
+CreateStatusWindowW = define_function("comctl32.dll", "CreateStatusWindowW", "pointer", ["int32", "pointer", "pointer", "uint32"])
+
+# Rebar Functions
+CreateReBarWindow = define_function("comctl32.dll", "CreateReBarWindow", "pointer", ["pointer", "pointer", "uint32"])
+
+# List View Functions
+ListView_InsertItem = define_function("comctl32.dll", "ListView_InsertItem", "int32", ["pointer", "pointer"])
+ListView_SetItemTextA = define_function("comctl32.dll", "ListView_SetItemTextA", "bool", ["pointer", "int32", "int32", "pointer"])
+ListView_SetItemTextW = define_function("comctl32.dll", "ListView_SetItemTextW", "bool", ["pointer", "int32", "int32", "pointer"])
+
+# Tree View Functions
+TreeView_InsertItem = define_function("comctl32.dll", "TreeView_InsertItem", "pointer", ["pointer", "pointer"])
+TreeView_DeleteItem = define_function("comctl32.dll", "TreeView_DeleteItem", "bool", ["pointer", "pointer"])
+
+# Tab Control Functions
+TabCtrl_InsertItem = define_function("comctl32.dll", "TabCtrl_InsertItem", "int32", ["pointer", "int32", "pointer"])
+TabCtrl_DeleteItem = define_function("comctl32.dll", "TabCtrl_DeleteItem", "bool", ["pointer", "int32"])
+
+# Progress Bar Functions
+SendMessage = define_function("user32.dll", "SendMessageA", "int64", ["pointer", "uint32", "uint64", "int64"])
+
+# Common Control Styles
+CCS_TOP = 0x00000001
+CCS_NOMOVEY = 0x00000002
+CCS_BOTTOM = 0x00000003
+CCS_NORESIZE = 0x00000004
+CCS_NOPARENTALIGN = 0x00000008
+CCS_ADJUSTABLE = 0x00000020
+CCS_NODIVIDER = 0x00000040
+CCS_VERT = 0x00000080
+CCS_LEFT = 0x00000081
+CCS_RIGHT = 0x00000083
+CCS_NOMOVEX = 0x00000082
+
+# Toolbar Styles
+TBSTYLE_BUTTON = 0x00000000
+TBSTYLE_SEP = 0x00000001
+TBSTYLE_CHECK = 0x00000002
+TBSTYLE_GROUP = 0x00000004
+TBSTYLE_DROPDOWN = 0x00000008
+TBSTYLE_AUTOSIZE = 0x00000010
+TBSTYLE_NOPREFIX = 0x00000020
+TBSTYLE_TOOLTIPS = 0x00000100
+TBSTYLE_WRAPABLE = 0x00000200
+TBSTYLE_ALTDRAG = 0x00000400
+TBSTYLE_FLAT = 0x00000800
+TBSTYLE_LIST = 0x00001000
+TBSTYLE_CUSTOMERASE = 0x00002000
+TBSTYLE_REGISTERDROP = 0x00004000
+TBSTYLE_TRANSPARENT = 0x00008000
+
+# Toolbar Extended Styles
+TBSTYLE_EX_DRAWDDARROWS = 0x00000001
+TBSTYLE_EX_MIXEDBUTTONS = 0x00000008
+TBSTYLE_EX_HIDECLIPPEDBUTTONS = 0x00000010
+TBSTYLE_EX_DOUBLEBUFFER = 0x00000080
+
+# Toolbar Messages
+TB_ADDSTRINGA = 0x041C
+TB_ADDSTRINGW = 0x044D
+TB_INSERTBUTTONA = 0x0415
+TB_INSERTBUTTONW = 0x0443
+TB_DELETEBUTTON = 0x0416
+TB_GETBUTTON = 0x0417
+TB_BUTTONCOUNT = 0x0418
+TB_COMMANDTOINDEX = 0x0419
