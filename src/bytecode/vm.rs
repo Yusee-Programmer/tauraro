@@ -751,6 +751,183 @@ impl SuperBytecodeVM {
                     }
                 }
             }
+            OpCode::LoadAndAdd => {
+                // Load + Add in one instruction
+                // arg1 = load register, arg2 = add register, arg3 = result register
+                let load_reg = arg1 as usize;
+                let add_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if load_reg >= self.frames[frame_idx].registers.len() || 
+                   add_reg >= self.frames[frame_idx].registers.len() ||
+                   result_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("LoadAndAdd: register index out of bounds"));
+                }
+
+                // Load the value
+                let load_value = &self.frames[frame_idx].registers[load_reg];
+                // Get the value to add
+                let add_value = &self.frames[frame_idx].registers[add_reg];
+
+                // Perform addition
+                let result = match (&load_value.value, &add_value.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                    (Value::Str(a), Value::Str(b)) => Value::Str(format!("{}{}", a, b)),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.add_values(load_value.value.clone(), add_value.value.clone())
+                            .map_err(|e| anyhow!("Error in LoadAndAdd: {}", e))?
+                    }
+                };
+
+                // Store the result
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::LoadAddStore => {
+                // Load + Add + Store in one instruction
+                // arg1 = load register, arg2 = add register, arg3 = store register
+                let load_reg = arg1 as usize;
+                let add_reg = arg2 as usize;
+                let store_reg = arg3 as usize;
+
+                if load_reg >= self.frames[frame_idx].registers.len() || 
+                   add_reg >= self.frames[frame_idx].registers.len() ||
+                   store_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("LoadAddStore: register index out of bounds"));
+                }
+
+                // Load the value
+                let load_value = &self.frames[frame_idx].registers[load_reg];
+                // Get the value to add
+                let add_value = &self.frames[frame_idx].registers[add_reg];
+
+                // Perform addition
+                let result = match (&load_value.value, &add_value.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                    (Value::Str(a), Value::Str(b)) => Value::Str(format!("{}{}", a, b)),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.add_values(load_value.value.clone(), add_value.value.clone())
+                            .map_err(|e| anyhow!("Error in LoadAddStore: {}", e))?
+                    }
+                };
+
+                // Store the result
+                self.frames[frame_idx].registers[store_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::LoadSubStore => {
+                // Load + Sub + Store in one instruction
+                // arg1 = load register, arg2 = sub register, arg3 = store register
+                let load_reg = arg1 as usize;
+                let sub_reg = arg2 as usize;
+                let store_reg = arg3 as usize;
+
+                if load_reg >= self.frames[frame_idx].registers.len() || 
+                   sub_reg >= self.frames[frame_idx].registers.len() ||
+                   store_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("LoadSubStore: register index out of bounds"));
+                }
+
+                // Load the value
+                let load_value = &self.frames[frame_idx].registers[load_reg];
+                // Get the value to subtract
+                let sub_value = &self.frames[frame_idx].registers[sub_reg];
+
+                // Perform subtraction
+                let result = match (&load_value.value, &sub_value.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a - b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.sub_values(load_value.value.clone(), sub_value.value.clone())
+                            .map_err(|e| anyhow!("Error in LoadSubStore: {}", e))?
+                    }
+                };
+
+                // Store the result
+                self.frames[frame_idx].registers[store_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::LoadMulStore => {
+                // Load + Mul + Store in one instruction
+                // arg1 = load register, arg2 = mul register, arg3 = store register
+                let load_reg = arg1 as usize;
+                let mul_reg = arg2 as usize;
+                let store_reg = arg3 as usize;
+
+                if load_reg >= self.frames[frame_idx].registers.len() || 
+                   mul_reg >= self.frames[frame_idx].registers.len() ||
+                   store_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("LoadMulStore: register index out of bounds"));
+                }
+
+                // Load the value
+                let load_value = &self.frames[frame_idx].registers[load_reg];
+                // Get the value to multiply
+                let mul_value = &self.frames[frame_idx].registers[mul_reg];
+
+                // Perform multiplication
+                let result = match (&load_value.value, &mul_value.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.mul_values(load_value.value.clone(), mul_value.value.clone())
+                            .map_err(|e| anyhow!("Error in LoadMulStore: {}", e))?
+                    }
+                };
+
+                // Store the result
+                self.frames[frame_idx].registers[store_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::LoadDivStore => {
+                // Load + Div + Store in one instruction
+                // arg1 = load register, arg2 = div register, arg3 = store register
+                let load_reg = arg1 as usize;
+                let div_reg = arg2 as usize;
+                let store_reg = arg3 as usize;
+
+                if load_reg >= self.frames[frame_idx].registers.len() || 
+                   div_reg >= self.frames[frame_idx].registers.len() ||
+                   store_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("LoadDivStore: register index out of bounds"));
+                }
+
+                // Load the value
+                let load_value = &self.frames[frame_idx].registers[load_reg];
+                // Get the value to divide
+                let div_value = &self.frames[frame_idx].registers[div_reg];
+
+                // Perform division
+                let result = match (&load_value.value, &div_value.value) {
+                    (Value::Int(a), Value::Int(b)) => {
+                        if *b == 0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Int(a / b)
+                    },
+                    (Value::Float(a), Value::Float(b)) => {
+                        if *b == 0.0 {
+                            return Err(anyhow!("Division by zero"));
+                        }
+                        Value::Float(a / b)
+                    },
+                    _ => {
+                        // For less common cases, use the general implementation
+                        self.div_values(load_value.value.clone(), div_value.value.clone())
+                            .map_err(|e| anyhow!("Error in LoadDivStore: {}", e))?
+                    }
+                };
+
+                // Store the result
+                self.frames[frame_idx].registers[store_reg] = RcValue::new(result);
+                Ok(None)
+            }
             OpCode::BinaryAddRR => {
                 // Register-Register addition
                 let left_reg = arg1;
@@ -779,44 +956,6 @@ impl SuperBytecodeVM {
                 };
                 
                 self.frames[frame_idx].registers[result_reg as usize] = RcValue::new(result);
-                Ok(None)
-            }
-            OpCode::Raise => {
-                // Raise an exception
-                let exception_reg = arg1 as usize;
-
-                if exception_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!(
-                        "Raise: exception register index {} out of bounds (len: {})",
-                        exception_reg,
-                        self.frames[frame_idx].registers.len()
-                    ));
-                }
-
-                let exception_value = self.frames[frame_idx].registers[exception_reg].value.clone();
-
-                // Find the innermost exception handler
-                if let Some(block) = self.frames[frame_idx]
-                    .block_stack
-                    .iter()
-                    .rfind(|b| b.block_type == BlockType::Except)
-                {
-                    self.frames[frame_idx].pc = block.handler;
-                    self.frames[frame_idx].registers.push(RcValue::new(exception_value));
-                    Ok(None) // Continue execution at the handler
-                } else {
-                    // No handler found, unwind the stack
-                    Err(anyhow!("Unhandled exception: {}", exception_value))
-                }
-            }
-            OpCode::SetupExcept => {
-                let handler_pc = arg1 as usize;
-                let stack_level = self.frames[frame_idx].registers.len();
-                self.frames[frame_idx].block_stack.push(Block {
-                    block_type: BlockType::Except,
-                    handler: handler_pc,
-                    level: stack_level,
-                });
                 Ok(None)
             }
             OpCode::PopBlock => {
@@ -3026,13 +3165,14 @@ impl SuperBytecodeVM {
                             body: vec![], // Empty body since it's in the compiled code
                             captured_scope: HashMap::new(), // No captured scope for now
                             docstring: None, // No docstring for now
-                            compiled_code: Some(Box::new((**code_obj).clone())),
+                            compiled_code: Some(Box::new(*code_obj.clone())),
                         };
                         
                         self.frames[frame_idx].set_register(result_reg, RcValue::new(closure));
                         Ok(None)
                     }
                     _ => Err(anyhow!("MakeFunction: expected code object, got {}", code_value.value.type_name())),
+
                 }
             }
             OpCode::SubscrStore => {
@@ -3535,7 +3675,7 @@ impl SuperBytecodeVM {
                 };
 
                 // Update method cache
-                self.frames[frame_idx].update_method_cache(class_name, method_name, Some(method_value.clone()));
+                self.frames[frame_idx].update_method_cache(class_name.to_string(), method_name, Some(method_value.clone()));
 
                 // Store the method in the result register
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(method_value);
@@ -5022,6 +5162,90 @@ impl SuperBytecodeVM {
 
                 Ok(None)
             }
+            OpCode::ImportFrom => {
+                // Import specific names from a module
+                // arg1: module name index
+                // arg2: name to import index
+                // arg3: result register
+                let module_name_idx = arg1 as usize;
+                let import_name_idx = arg2 as usize;
+                let result_reg = arg3;
+
+                if module_name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("ImportFrom: module name index {} out of bounds (len: {})", module_name_idx, self.frames[frame_idx].code.names.len()));
+                }
+
+                if import_name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("ImportFrom: import name index {} out of bounds (len: {})", import_name_idx, self.frames[frame_idx].code.names.len()));
+                }
+
+                let module_name = self.frames[frame_idx].code.names[module_name_idx].clone();
+                let import_name = self.frames[frame_idx].code.names[import_name_idx].clone();
+
+                // Try to load the builtin module first
+                let module_value = if let Some(module) = modules::get_builtin_module(&module_name) {
+                    module
+                } else {
+                    // Try to load from file system
+                    match self.load_module_from_file(&module_name) {
+                        Ok(module) => module,
+                        Err(e) => {
+                            // If this is a circular import error, re-raise it without wrapping
+                            if e.to_string().contains("circular import") {
+                                return Err(e);
+                            }
+                            return Err(anyhow!("ImportFrom: module '{}' not found: {}", module_name, e));
+                        }
+                    }
+                };
+
+                // Check if this is a star import (from module import *)
+                if import_name == "*" {
+                    // Import all names from the module (star import)
+                    match &module_value {
+                        Value::Module(_, namespace) => {
+                            // Import all names from the module namespace
+                            for (name, value) in namespace {
+                                // Skip private names (starting with _) unless they're special like __all__
+                                if !name.starts_with("_") || name == "__all__" {
+                                    let rc_value = RcValue::new(value.clone());
+                                    self.globals.insert(name.clone(), rc_value.clone());
+                                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name.clone(), rc_value.clone());
+                                }
+                            }
+
+                            // For star imports, we don't store anything in the result register
+                            // Just put None there
+                            self.frames[frame_idx].set_register(result_reg, RcValue::new(Value::None));
+                        }
+                        _ => {
+                            return Err(anyhow!("ImportFrom: '{}' is not a module", module_name));
+                        }
+                    }
+                } else {
+                    // Regular from-import (specific name)
+                    let imported_value = match &module_value {
+                        Value::Module(_, namespace) => {
+                            if let Some(value) = namespace.get(&import_name) {
+                                value.clone()
+                            } else {
+                                return Err(anyhow!("ImportFrom: cannot import name '{}' from module '{}'", import_name, module_name));
+                            }
+                        }
+                        _ => {
+                            return Err(anyhow!("ImportFrom: '{}' is not a module", module_name));
+                        }
+                    };
+
+                    // Store the imported value in globals and the result register
+                    let rc_value = RcValue::new(imported_value);
+                    self.globals.insert(import_name.clone(), rc_value.clone());
+                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(import_name.clone(), rc_value.clone());
+                    self.frames[frame_idx].set_register(result_reg, rc_value);
+                }
+
+                Ok(None)
+            }
             _ => {
                 // For unimplemented opcodes, we'll just return an error
                 // In a complete implementation, we would handle all opcodes
@@ -5387,4 +5611,3 @@ impl SuperBytecodeVM {
         Ok(processed_args)
     }
 }
-
