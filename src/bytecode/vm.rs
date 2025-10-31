@@ -1062,6 +1062,114 @@ impl SuperBytecodeVM {
 
                 Ok(None)
             }
+            OpCode::CallFunctionKw => {
+                // Call a function with keyword arguments
+                // arg1 = function register, arg2 = positional argument count, arg3 = result register
+                let func_reg = arg1 as usize;
+                let pos_arg_count = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if func_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("CallFunctionKw: function register index {} out of bounds (len: {})", func_reg, self.frames[frame_idx].registers.len()));
+                }
+
+                // Get the function value
+                let func_value = self.frames[frame_idx].registers[func_reg].value.clone();
+
+                // Collect positional arguments from registers
+                let mut args = Vec::with_capacity(pos_arg_count);
+                for i in 0..pos_arg_count {
+                    // Arguments are stored in consecutive registers after the function register
+                    let arg_reg = func_reg + 1 + i;
+                    if arg_reg >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("CallFunctionKw: argument register index {} out of bounds (len: {})", arg_reg, self.frames[frame_idx].registers.len()));
+                    }
+                    let arg_value = self.frames[frame_idx].registers[arg_reg].value.clone();
+                    args.push(arg_value);
+                }
+
+                // The next register after positional arguments should contain the keyword arguments dict
+                let kwargs_reg = func_reg + 1 + pos_arg_count;
+                if kwargs_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("CallFunctionKw: kwargs register index {} out of bounds (len: {})", kwargs_reg, self.frames[frame_idx].registers.len()));
+                }
+
+                // Get the keyword arguments dictionary
+                let kwargs_dict = match &self.frames[frame_idx].registers[kwargs_reg].value {
+                    Value::Dict(dict_ref) => dict_ref.borrow().clone(),
+                    Value::KwargsMarker(dict) => dict.clone(),
+                    _ => return Err(anyhow!("CallFunctionKw: kwargs must be a dictionary, got {}", self.frames[frame_idx].registers[kwargs_reg].value.type_name())),
+                };
+
+                // Process starred arguments in the args vector
+                let processed_args = self.process_starred_arguments(args)?;
+
+                // Call the function using the fast path
+                let result = self.call_function_fast(func_value, processed_args, kwargs_dict, Some(frame_idx), Some(result_reg as u32))?;
+
+                // If the function returned a value directly, store it in the result register
+                if !matches!(result, Value::None) {
+                    self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(result));
+                }
+
+                Ok(None)
+            }
+            OpCode::CallFunctionEx => {
+                // Call a function with extended arguments (positional args as tuple, keyword args as dict)
+                // arg1 = function register, arg2 = flags (0 = no kwargs, 1 = has kwargs), arg3 = result register
+                let func_reg = arg1 as usize;
+                let has_kwargs = arg2 != 0;
+                let result_reg = arg3 as usize;
+
+                if func_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("CallFunctionEx: function register index {} out of bounds (len: {})", func_reg, self.frames[frame_idx].registers.len()));
+                }
+
+                // Get the function value
+                let func_value = self.frames[frame_idx].registers[func_reg].value.clone();
+
+                // The next register should contain the positional arguments as a tuple
+                let args_reg = func_reg + 1;
+                if args_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("CallFunctionEx: args register index {} out of bounds (len: {})", args_reg, self.frames[frame_idx].registers.len()));
+                }
+
+                // Extract arguments from the tuple
+                let args = match &self.frames[frame_idx].registers[args_reg].value {
+                    Value::Tuple(items) => items.clone(),
+                    Value::List(list) => list.as_vec().clone(),
+                    _ => return Err(anyhow!("CallFunctionEx: args must be a tuple or list, got {}", self.frames[frame_idx].registers[args_reg].value.type_name())),
+                };
+
+                // Get keyword arguments if present
+                let kwargs_dict = if has_kwargs {
+                    let kwargs_reg = args_reg + 1;
+                    if kwargs_reg >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("CallFunctionEx: kwargs register index {} out of bounds (len: {})", kwargs_reg, self.frames[frame_idx].registers.len()));
+                    }
+
+                    match &self.frames[frame_idx].registers[kwargs_reg].value {
+                        Value::Dict(dict_ref) => dict_ref.borrow().clone(),
+                        Value::KwargsMarker(dict) => dict.clone(),
+                        _ => return Err(anyhow!("CallFunctionEx: kwargs must be a dictionary, got {}", self.frames[frame_idx].registers[kwargs_reg].value.type_name())),
+                    }
+                } else {
+                    HashMap::new()
+                };
+
+                // Process starred arguments in the args vector
+                let processed_args = self.process_starred_arguments(args)?;
+
+                // Call the function using the fast path
+                let result = self.call_function_fast(func_value, processed_args, kwargs_dict, Some(frame_idx), Some(result_reg as u32))?;
+
+                // If the function returned a value directly, store it in the result register
+                if !matches!(result, Value::None) {
+                    self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(result));
+                }
+
+                Ok(None)
+            }
             OpCode::BinaryDivRRFastInt => {
                 // Fast path for integer Register-Register division
                 let left_reg = arg1 as usize;
@@ -2241,6 +2349,37 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].locals[local_idx] = value;
                 Ok(None)
             }
+            OpCode::LoadClosure => {
+                // Load from closure variable
+                let closure_idx = arg1 as usize;
+                let result_reg = arg2 as u32;
+                
+                if closure_idx >= self.frames[frame_idx].free_vars.len() {
+                    return Err(anyhow!("LoadClosure: closure variable index {} out of bounds (len: {})", closure_idx, self.frames[frame_idx].free_vars.len()));
+                }
+                
+                let value = self.frames[frame_idx].free_vars[closure_idx].clone();
+                self.frames[frame_idx].set_register(result_reg, value);
+                Ok(None)
+            }
+            OpCode::StoreClosure => {
+                // Store to closure variable
+                let value_reg = arg1 as usize;
+                let closure_idx = arg2 as usize;
+                
+                if value_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("StoreClosure: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                if closure_idx >= self.frames[frame_idx].free_vars.len() {
+                    // Extend free_vars if needed
+                    self.frames[frame_idx].free_vars.resize(closure_idx + 1, RcValue::new(Value::None));
+                }
+                
+                let value = self.frames[frame_idx].registers[value_reg].clone();
+                self.frames[frame_idx].free_vars[closure_idx] = value;
+                Ok(None)
+            }
             OpCode::LoadLocal => {
                 // Load from local register
                 let local_idx = arg1 as usize;
@@ -2332,6 +2471,60 @@ impl SuperBytecodeVM {
                 // Store in frame globals
                 Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name, value);
                 Ok(None)
+            }
+            OpCode::LoadClassDeref => {
+                // Load from class dereference (for super() calls and class variables)
+                // arg1 = name index, arg2 = result register
+                let name_idx = arg1 as usize;
+                let result_reg = arg2 as u32;
+                
+                if name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("LoadClassDeref: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
+                }
+                
+                let name = self.frames[frame_idx].code.names[name_idx].clone();
+                
+                // First, try to find the name in the current class's namespace
+                // This is used for accessing class variables from within methods
+                if let Some(current_class_name) = &self.frames[frame_idx].code.name.strip_prefix("<fn:") {
+                    if let Some(class_name) = current_class_name.strip_suffix(">") {
+                        // Look for the class in globals
+                        if let Some(class_value) = self.globals.get(class_name) {
+                            if let Value::Class { methods, .. } = &class_value.value {
+                                // Check if the name is a class method
+                                if let Some(method) = methods.get(&name) {
+                                    self.frames[frame_idx].set_register(result_reg, RcValue::new(method.clone()));
+                                    return Ok(None);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // If not found in class, fall back to global lookup
+                let value = {
+                    // Check frame globals
+                    if self.frames[frame_idx].globals.contains_key(&name) {
+                        self.frames[frame_idx].globals.get(&name).cloned()
+                    }
+                    // Then check builtins
+                    else if self.frames[frame_idx].builtins.contains_key(&name) {
+                        self.frames[frame_idx].builtins.get(&name).cloned()
+                    }
+                    // Then check VM globals
+                    else if self.globals.contains_key(&name) {
+                        self.globals.get(&name).cloned()
+                    } else {
+                        None
+                    }
+                };
+                
+                if let Some(value) = value {
+                    self.frames[frame_idx].set_register(result_reg, value);
+                    Ok(None)
+                } else {
+                    Err(anyhow!("LoadClassDeref: name '{}' not found", name))
+                }
             }
             OpCode::BuildList => {
                 // Build a list from a set of registers
@@ -2777,19 +2970,14 @@ impl SuperBytecodeVM {
                 match object_value {
                     Value::List(mut items) => {
                         if let Value::Int(index) = index_value {
-                            let normalized_index = if index < 0 {
-                                items.len() as i64 + index
-                            } else {
-                                index
-                            };
-
-                            if normalized_index >= 0 && normalized_index < items.len() as i64 {
-                                // Remove the item at the normalized index
-                                let _ = items.remove(normalized_index as usize);
-                                self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::List(items));
-                                Ok(None)
-                            } else {
-                                Err(anyhow!("Index {} out of range for list of length {}", index, items.len()))
+                            // Use pop_at to remove the item at the specified index
+                            // Convert i64 to isize for the HPList API
+                            match items.pop_at(index as isize) {
+                                Ok(_) => {
+                                    self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::List(items));
+                                    Ok(None)
+                                }
+                                Err(_) => Err(anyhow!("Index {} out of range for list of length {}", index, items.len()))
                             }
                         } else {
                             Err(anyhow!("List indices must be integers, not {}", index_value.type_name()))
@@ -2816,6 +3004,35 @@ impl SuperBytecodeVM {
                         Err(anyhow!("Subscript deletion not supported for type {}",
                                   object_value.type_name()))
                     }
+                }
+            }
+            OpCode::MakeFunction => {
+                // Create a function object from a code object
+                let code_reg = arg1 as usize;
+                let result_reg = arg2 as u32;
+                
+                if code_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("MakeFunction: code register index {} out of bounds (len: {})", code_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                let code_value = &self.frames[frame_idx].registers[code_reg];
+                
+                match &code_value.value {
+                    Value::Code(code_obj) => {
+                        // Create a closure with the code object
+                        let closure = Value::Closure {
+                            name: code_obj.name.clone(),
+                            params: code_obj.params.clone(),
+                            body: vec![], // Empty body since it's in the compiled code
+                            captured_scope: HashMap::new(), // No captured scope for now
+                            docstring: None, // No docstring for now
+                            compiled_code: Some(Box::new((**code_obj).clone())),
+                        };
+                        
+                        self.frames[frame_idx].set_register(result_reg, RcValue::new(closure));
+                        Ok(None)
+                    }
+                    _ => Err(anyhow!("MakeFunction: expected code object, got {}", code_value.value.type_name())),
                 }
             }
             OpCode::SubscrStore => {
@@ -3134,6 +3351,250 @@ impl SuperBytecodeVM {
                 } else {
                     // Method returned an actual value - store it
                     self.frames[frame_idx].registers[object_reg] = RcValue::new(result_value);
+                }
+                Ok(None)
+            }
+            OpCode::LoadMethod => {
+                // Load method with caching
+                // arg1 = object register, arg2 = method name index, arg3 = result register
+                let object_reg = arg1 as usize;
+                let method_name_idx = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if object_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("LoadMethod: object register index {} out of bounds (len: {})", object_reg, self.frames[frame_idx].registers.len()));
+                }
+
+                if method_name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("LoadMethod: method name index {} out of bounds (len: {})", method_name_idx, self.frames[frame_idx].code.names.len()));
+                }
+
+                // Get the object and method name
+                let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
+                let method_name = self.frames[frame_idx].code.names[method_name_idx].clone();
+
+                // Try to get the method from the object
+                let method_value = match &object_value {
+                    Value::Object { class_methods, mro, .. } => {
+                        // First check class methods
+                        if let Some(method) = class_methods.get(&method_name) {
+                            // Create a BoundMethod to bind self to the method
+                            Value::BoundMethod {
+                                object: Box::new(object_value.clone()),
+                                method_name: method_name.clone(),
+                            }
+                        } else {
+                            // Then check MRO for inherited methods
+                            // Convert globals from RcValue to Value for MRO lookup
+                            let globals_values: HashMap<String, Value> = self.globals
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.value.clone()))
+                                .collect();
+                            if let Some(method) = mro.find_method_in_mro(&method_name, &globals_values) {
+                                // If we found a method in the MRO, create a BoundMethod
+                                Value::BoundMethod {
+                                    object: Box::new(object_value.clone()),
+                                    method_name: method_name.clone(),
+                                }
+                            } else {
+                                return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
+                            }
+                        }
+                    },
+                    Value::Class { methods, mro, .. } => {
+                        // Check class methods
+                        if let Some(method) = methods.get(&method_name) {
+                            method.clone()
+                        } else {
+                            // Then check MRO for inherited methods
+                            // Convert globals from RcValue to Value for MRO lookup
+                            let globals_values: HashMap<String, Value> = self.globals
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.value.clone()))
+                                .collect();
+                            if let Some(method) = mro.find_method_in_mro(&method_name, &globals_values) {
+                                method.clone()
+                            } else {
+                                return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
+                            }
+                        }
+                    },
+                    Value::Module(_, namespace) => {
+                        // Check module attributes
+                        if let Some(value) = namespace.get(&method_name) {
+                            value.clone()
+                        } else {
+                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
+                        }
+                    },
+                    _ => {
+                        // For other objects, try to get method
+                        if let Some(method) = object_value.get_method(&method_name) {
+                            method
+                        } else {
+                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
+                        }
+                    }
+                };
+
+                // Store the method in the result register
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(method_value);
+                Ok(None)
+            }
+            OpCode::LoadMethodCached => {
+                // Load method from cache
+                // arg1 = object register, arg2 = method name index, arg3 = result register
+                let object_reg = arg1 as usize;
+                let method_name_idx = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if object_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("LoadMethodCached: object register index {} out of bounds (len: {})", object_reg, self.frames[frame_idx].registers.len()));
+                }
+
+                if method_name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("LoadMethodCached: method name index {} out of bounds (len: {})", method_name_idx, self.frames[frame_idx].code.names.len()));
+                }
+
+                // Get the object and method name
+                let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
+                let method_name = self.frames[frame_idx].code.names[method_name_idx].clone();
+
+                // Try to lookup method in cache first
+                let class_name = object_value.type_name();
+                if let Some(cache_entry) = self.frames[frame_idx].lookup_method_cache(&class_name, &method_name) {
+                    if let Some(method) = &cache_entry.method {
+                        // Found in cache, use cached method
+                        self.frames[frame_idx].registers[result_reg] = RcValue::new(method.clone());
+                        return Ok(None);
+                    }
+                }
+
+                // Not in cache, load method normally
+                let method_value = match &object_value {
+                    Value::Object { class_methods, mro, .. } => {
+                        // First check class methods
+                        if let Some(method) = class_methods.get(&method_name) {
+                            // Create a BoundMethod to bind self to the method
+                            Value::BoundMethod {
+                                object: Box::new(object_value.clone()),
+                                method_name: method_name.clone(),
+                            }
+                        } else {
+                            // Then check MRO for inherited methods
+                            // Convert globals from RcValue to Value for MRO lookup
+                            let globals_values: HashMap<String, Value> = self.globals
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.value.clone()))
+                                .collect();
+                            if let Some(method) = mro.find_method_in_mro(&method_name, &globals_values) {
+                                // If we found a method in the MRO, create a BoundMethod
+                                Value::BoundMethod {
+                                    object: Box::new(object_value.clone()),
+                                    method_name: method_name.clone(),
+                                }
+                            } else {
+                                return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
+                            }
+                        }
+                    },
+                    Value::Class { methods, mro, .. } => {
+                        // Check class methods
+                        if let Some(method) = methods.get(&method_name) {
+                            method.clone()
+                        } else {
+                            // Then check MRO for inherited methods
+                            // Convert globals from RcValue to Value for MRO lookup
+                            let globals_values: HashMap<String, Value> = self.globals
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.value.clone()))
+                                .collect();
+                            if let Some(method) = mro.find_method_in_mro(&method_name, &globals_values) {
+                                method.clone()
+                            } else {
+                                return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
+                            }
+                        }
+                    },
+                    Value::Module(_, namespace) => {
+                        // Check module attributes
+                        if let Some(value) = namespace.get(&method_name) {
+                            value.clone()
+                        } else {
+                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
+                        }
+                    },
+                    _ => {
+                        // For other objects, try to get method
+                        if let Some(method) = object_value.get_method(&method_name) {
+                            method
+                        } else {
+                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
+                        }
+                    }
+                };
+
+                // Update method cache
+                self.frames[frame_idx].update_method_cache(class_name, method_name, Some(method_value.clone()));
+
+                // Store the method in the result register
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(method_value);
+                Ok(None)
+            }
+            OpCode::CallMethodCached => {
+                // Call method from cache
+                // arg1 = object register, arg2 = argument count, arg3 = result register
+                let object_reg = arg1 as usize;
+                let arg_count = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if object_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("CallMethodCached: object register index {} out of bounds (len: {})", object_reg, self.frames[frame_idx].registers.len()));
+                }
+
+                // Collect arguments from registers
+                let mut args = Vec::new();
+                for i in 0..arg_count {
+                    // Arguments are stored in consecutive registers after the object register
+                    let arg_reg = object_reg + 1 + i;
+                    if arg_reg >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("CallMethodCached: argument register index {} out of bounds (len: {})", arg_reg, self.frames[frame_idx].registers.len()));
+                    }
+                    args.push(self.frames[frame_idx].registers[arg_reg].value.clone());
+                }
+
+                // Get the method value (should be a BoundMethod or regular method)
+                let method_value = self.frames[frame_idx].registers[object_reg].value.clone();
+
+                // Call the method
+                let result = match method_value {
+                    Value::BoundMethod { object, method_name } => {
+                        // Handle bound method calls
+                        match object.as_ref() {
+                            Value::Object { class_methods, .. } => {
+                                if let Some(method) = class_methods.get(&method_name) {
+                                    // Create arguments with self as the first argument
+                                    let mut method_args = vec![*object.clone()];
+                                    method_args.extend(args);
+                                    
+                                    // Call the method through the VM
+                                    self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?
+                                } else {
+                                    return Err(anyhow!("Method '{}' not found in class methods", method_name));
+                                }
+                            },
+                            _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.as_ref().type_name())),
+                        }
+                    },
+                    _ => {
+                        // For regular methods, call directly
+                        self.call_function_fast(method_value, args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?
+                    }
+                };
+
+                // Store the result
+                if !matches!(result, Value::None) {
+                    self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(result));
                 }
                 Ok(None)
             }
@@ -3526,10 +3987,10 @@ impl SuperBytecodeVM {
                         let closure = Value::Closure {
                             name: code_obj.name.clone(),
                             params: code_obj.params.clone(),
-                            body: None, // Body is in the compiled code
-                            captured_scope: None, // No captured scope for now
+                            body: vec![], // Empty body since it's in the compiled code
+                            captured_scope: HashMap::new(), // No captured scope for now
                             docstring: None, // No docstring for now
-                            compiled_code: Some(Box::new(code_obj.clone())),
+                            compiled_code: Some(Box::new(*code_obj.clone())),
                         };
                         
                         self.frames[frame_idx].set_register(result_reg, RcValue::new(closure));
