@@ -2784,7 +2784,8 @@ impl SuperBytecodeVM {
                             };
 
                             if normalized_index >= 0 && normalized_index < items.len() as i64 {
-                                items.remove(normalized_index as usize);
+                                // Remove the item at the normalized index
+                                let _ = items.remove(normalized_index as usize);
                                 self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::List(items));
                                 Ok(None)
                             } else {
