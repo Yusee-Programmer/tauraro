@@ -1,11 +1,10 @@
-//! Core virtual machine implementation
-
 use anyhow::{Result, anyhow};
 use crate::bytecode::{SuperCompiler, SuperBytecodeVM};
 use crate::lexer::Lexer;
 use crate::parser::{Parser, ParseError};
 use crate::semantic::Analyzer;
 use crate::value::Value;
+use std::path::Path;
 
 pub struct VM {
     bytecode_vm: SuperBytecodeVM,
@@ -21,33 +20,29 @@ impl VM {
     pub fn run_file_with_options(source: &str, filename: &str, _backend: &str, _optimization: u8, strict_types: bool) -> Result<()> {
         println!("Running file with VM backend");
         
-        // Lexical analysis
-        let tokens = Lexer::new(source).collect::<Result<Vec<_>, String>>()
-            .map_err(|e| anyhow!("{}", e))?;
+        // Create a VM instance and use it for execution
+        let mut vm = VM::new();
         
-        // Parsing
-        let mut parser = Parser::new(tokens);
-        let ast = parser.parse()
-            .map_err(|e| {
-                // Find the token that caused the error to get line/column info
-                let (line, column) = parser.current_token_location();
-                let error_with_location = e.with_location(line, column, filename);
-                anyhow!("{}", error_with_location)
-            })?;
+        // Normalize the module name by removing the extension
+        let main_module_name = Path::new(filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(filename)
+            .to_string();
+            
+        // Track main module loading to prevent circular imports
+        if vm.bytecode_vm.loading_modules.contains(&main_module_name) {
+            return Err(anyhow!("ImportError: cannot import name '{}' (circular import)", main_module_name));
+        }
+        vm.bytecode_vm.loading_modules.insert(main_module_name.clone());
         
-        // Semantic analysis
-        let semantic_ast = Analyzer::new(strict_types).analyze(ast)
-            .map_err(|e| anyhow!("Semantic errors: {:?}", e))?;
+        // Execute the code through the VM's execute_script method
+        let result = vm.execute_script(source, vec![]);
         
-        // Compile to bytecode
-        let mut compiler = SuperCompiler::new(filename.to_string());
-        let code_object = compiler.compile(semantic_ast)?;
+        // Remove main module from loading set
+        vm.bytecode_vm.loading_modules.remove(&main_module_name);
         
-        // Execute with VM
-        let mut vm = SuperBytecodeVM::new();
-        // Disable type checking for better performance unless explicitly requested
-        vm.enable_type_checking = strict_types;
-        vm.execute(code_object)?;
+        result?;
         
         Ok(())
     }
@@ -103,11 +98,5 @@ impl VM {
         let result = self.bytecode_vm.execute(code_object)?;
         
         Ok(result)
-    }
-}
-
-impl Default for VM {
-    fn default() -> Self {
-        Self::new()
     }
 }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::path::PathBuf;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use std::fs;
 
 /// Module system for managing loaded modules and searching for modules in the filesystem
@@ -62,6 +62,22 @@ impl ModuleSystem {
     }
     
     fn load_module_from_file(&mut self, module_name: &str) -> Result<Value> {
+        // Try to load built-in modules first
+        if let Some(builtin_module) = self.load_builtin_module(module_name) {
+            self.modules.insert(module_name.to_string(), builtin_module.clone());
+            return Ok(builtin_module);
+        }
+        
+        // Try to load from file system
+        self.load_module_from_filesystem(module_name)
+    }
+    
+    fn load_module_from_filesystem(&mut self, module_name: &str) -> Result<Value> {
+        // Check if module is already loaded
+        if let Some(module) = self.modules.get(module_name) {
+            return Ok(module.clone());
+        }
+        
         // Try to find the module file in search paths
         let mut file_path = None;
         for search_path in &self.search_paths {
@@ -86,15 +102,15 @@ impl ModuleSystem {
         
         if let Some(path) = file_path {
             // Read the module file
-            let source = fs::read_to_string(&path)?;
+            let source = fs::read_to_string(&path)
+                .map_err(|e| anyhow!("Failed to read module file '{}': {}", path.display(), e))?;
             
             // Use the existing VM method to compile and execute the module
             let mut vm = crate::bytecode::vm::SuperBytecodeVM::new();
             vm.compile_and_execute_module(&source, module_name)
+                .map_err(|e| anyhow!("Error in module '{}': {}", module_name, e))
         } else {
-            // Module file not found, return empty module
-            let mut namespace = HashMap::new();
-            Ok(Value::Module(module_name.to_string(), namespace))
+            Err(anyhow!("Module file '{}' not found", module_name))
         }
     }
     

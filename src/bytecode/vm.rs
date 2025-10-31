@@ -46,6 +46,8 @@ pub struct SuperBytecodeVM {
 
     // Module cache for preventing duplicate module loads (like Python's sys.modules)
     loaded_modules: HashMap<String, Value>,
+    /// Stack of modules currently being loaded to detect circular imports
+    pub loading_modules: std::collections::HashSet<String>,
 }
 
 // Type alias for builtin functions
@@ -125,11 +127,31 @@ impl SuperBytecodeVM {
 
             // Initialize module cache
             loaded_modules: HashMap::new(),
+            loading_modules: std::collections::HashSet::new(),
         }
     }
 
     /// Helper method to compile and execute a module source file
     pub fn compile_and_execute_module(&mut self, source: &str, module_name: &str) -> Result<Value> {
+        // Check for circular import
+        if self.loading_modules.contains(module_name) {
+            return Err(anyhow!("ImportError: cannot import name '{}' (circular import)", module_name));
+        }
+        
+        // Add module to loading set
+        self.loading_modules.insert(module_name.to_string());
+        
+        // Ensure we remove the module from loading set even if an error occurs
+        let result = self.compile_and_execute_module_inner(source, module_name);
+        
+        // Remove module from loading set now that it's fully executed and cached
+        self.loading_modules.remove(module_name);
+        
+        result
+    }
+
+    /// Helper method to compile and execute a module source file
+    fn compile_and_execute_module_inner(&mut self, source: &str, module_name: &str) -> Result<Value> {
         // Compile the module
         let tokens = crate::lexer::Lexer::new(source)
             .collect::<Result<Vec<_>, _>>()
@@ -161,6 +183,7 @@ impl SuperBytecodeVM {
         // Create the module and cache it
         let module = Value::Module(module_name.to_string(), module_namespace);
         self.loaded_modules.insert(module_name.to_string(), module.clone());
+        
         Ok(module)
     }
 
@@ -171,6 +194,11 @@ impl SuperBytecodeVM {
         // Check if module is already loaded (module caching like Python's sys.modules)
         if let Some(cached_module) = self.loaded_modules.get(module_name) {
             return Ok(cached_module.clone());
+        }
+        
+        // Check if module is currently being loaded (circular import detection)
+        if self.loading_modules.contains(module_name) {
+            return Err(anyhow!("ImportError: cannot import name '{}' (circular import)", module_name));
         }
 
         let search_paths = vec![
@@ -3931,7 +3959,13 @@ impl SuperBytecodeVM {
                     // Try to load from file system
                     match self.load_module_from_file(&module_name) {
                         Ok(module) => module,
-                        Err(e) => return Err(anyhow!("ImportModule: module '{}' not found: {}", module_name, e)),
+                        Err(e) => {
+                            // If this is a circular import error, re-raise it without wrapping
+                            if e.to_string().contains("circular import") {
+                                return Err(e);
+                            }
+                            return Err(anyhow!("ImportModule: module '{}' not found: {}", module_name, e));
+                        }
                     }
                 };
 
@@ -4025,7 +4059,13 @@ impl SuperBytecodeVM {
                     // Try to load from file system
                     match self.load_module_from_file(&module_name) {
                         Ok(module) => module,
-                        Err(e) => return Err(anyhow!("ImportFrom: module '{}' not found: {}", module_name, e)),
+                        Err(e) => {
+                            // If this is a circular import error, re-raise it without wrapping
+                            if e.to_string().contains("circular import") {
+                                return Err(e);
+                            }
+                            return Err(anyhow!("ImportFrom: module '{}' not found: {}", module_name, e));
+                        }
                     }
                 };
 
