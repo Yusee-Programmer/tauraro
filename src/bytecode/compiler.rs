@@ -1664,7 +1664,7 @@ impl SuperCompiler {
                     let mutating_methods = vec!["append", "extend", "insert", "remove", "pop", "clear", "sort", "reverse"];
                     if mutating_methods.contains(&method.as_str()) {
                         let name_idx = self.code.add_name(var_name);
-                        self.emit(OpCode::StoreGlobal, name_idx, object_reg, 0, self.current_line);
+                        self.emit(OpCode::StoreGlobal, object_reg, name_idx, 0, self.current_line);
                     }
                 }
 
