@@ -1482,7 +1482,7 @@ impl SuperCompiler {
                             self.allocate_register();
                         }
                         // Copy item to consecutive position
-                        self.emit(OpCode::LoadLocal, item_reg, target_reg, 0, self.current_line);
+                        self.emit(OpCode::MoveReg, item_reg, target_reg, 0, self.current_line);
                     }
                 }
 
@@ -1514,7 +1514,7 @@ impl SuperCompiler {
                             self.allocate_register();
                         }
                         // Copy item to consecutive position
-                        self.emit(OpCode::LoadLocal, item_reg, target_reg, 0, self.current_line);
+                        self.emit(OpCode::MoveReg, item_reg, target_reg, 0, self.current_line);
                     }
                 }
 
