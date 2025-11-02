@@ -517,6 +517,9 @@ impl SuperBytecodeVM {
     /// Optimized instruction execution with computed GOTOs for maximum performance
     #[inline(always)]
     fn execute_instruction_fast(&mut self, frame_idx: usize, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Debug output for instruction execution
+        eprintln!("DEBUG: Executing opcode {:?} with args {}, {}, {}", opcode, arg1, arg2, arg3);
+        
         match opcode {
             OpCode::LoadConst => {
                 let const_idx = arg1 as usize;
@@ -2553,6 +2556,56 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].locals[local_idx] = value;
                 Ok(None)
             }
+            OpCode::MoveReg => {
+                // Move value from one register to another
+                let source_reg = arg1 as usize;
+                let target_reg = arg2 as usize;
+                
+                if source_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("MoveReg: source register index {} out of bounds (len: {})", source_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                if target_reg >= self.frames[frame_idx].registers.len() {
+                    // Extend registers if needed
+                    while self.frames[frame_idx].registers.len() <= target_reg {
+                        self.frames[frame_idx].registers.push(RcValue::new(Value::None));
+                    }
+                }
+                
+                // Clone the value to avoid borrowing conflicts
+                let value = self.frames[frame_idx].registers[source_reg].clone();
+                self.frames[frame_idx].registers[target_reg] = value;
+                Ok(None)
+            }
+            OpCode::StoreGlobal => {
+                // Store to global namespace
+                let value_reg = arg1 as usize;
+                let name_idx = arg2 as usize;
+                
+                if value_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("StoreGlobal: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
+                }
+                
+                if name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("StoreGlobal: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
+                }
+                
+                let value = self.frames[frame_idx].registers[value_reg].clone();
+                let name = self.frames[frame_idx].code.names[name_idx].clone();
+                
+                // Debug output
+                // eprintln!("DEBUG StoreGlobal: storing '{}' = {:?}", name, value.value);
+                
+                // Store in frame globals
+                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name.clone(), value.clone());
+                
+                // Also store in VM globals to ensure consistency across frames
+                self.globals.insert(name.clone(), value.clone());
+                
+                // Debug output
+                // eprintln!("DEBUG StoreGlobal: stored '{}' in frame globals and VM globals", name);
+                Ok(None)
+            }
             OpCode::LoadGlobal => {
                 // Load from global namespace
                 let name_idx = arg1 as usize;
@@ -2588,28 +2641,9 @@ impl SuperBytecodeVM {
                     self.frames[frame_idx].set_register(result_reg, value);
                     Ok(None)
                 } else {
-                    Err(anyhow!("LoadGlobal: name '{}' not found in globals", name))
+                    // More descriptive error message to help debugging
+                    Err(anyhow!("NameError: name '{}' is not defined", name))
                 }
-            }
-            OpCode::StoreGlobal => {
-                // Store to global namespace
-                let value_reg = arg1 as usize;
-                let name_idx = arg2 as usize;
-                
-                if value_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("StoreGlobal: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
-                }
-                
-                if name_idx >= self.frames[frame_idx].code.names.len() {
-                    return Err(anyhow!("StoreGlobal: name index {} out of bounds (len: {})", name_idx, self.frames[frame_idx].code.names.len()));
-                }
-                
-                let value = self.frames[frame_idx].registers[value_reg].clone();
-                let name = self.frames[frame_idx].code.names[name_idx].clone();
-                
-                // Store in frame globals
-                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name, value);
-                Ok(None)
             }
             OpCode::LoadClassDeref => {
                 // Load from class dereference (for super() calls and class variables)

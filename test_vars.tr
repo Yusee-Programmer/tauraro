@@ -1,0 +1,3 @@
+# Test variable assignment and retrieval
+a = 10
+print("a =", a)

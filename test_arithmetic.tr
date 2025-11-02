@@ -1,0 +1,48 @@
+# Test basic arithmetic operations
+print("Testing basic arithmetic operations...")
+
+# Integer operations
+a = 10
+b = 5
+print("a =", a)
+print("b =", b)
+
+# Addition
+c = a + b
+print("a + b =", c)
+
+# Subtraction
+d = a - b
+print("a - b =", d)
+
+# Multiplication
+e = a * b
+print("a * b =", e)
+
+# Division
+f = a / b
+print("a / b =", f)
+
+# Modulo
+g = a % b
+print("a % b =", g)
+
+# Power
+h = a ** b
+print("a ** b =", h)
+
+# Float operations
+x = 3.14
+y = 2.5
+print("x =", x)
+print("y =", y)
+
+# Addition
+z = x + y
+print("x + y =", z)
+
+# Mixed operations
+m = a + x
+print("a + x =", m)
+
+print("All arithmetic tests passed!")

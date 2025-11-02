@@ -143,6 +143,7 @@ pub enum OpCode {
     LoadAndAdd,     // Load + Add in one instruction
     LoadAndMul,     // Load + Mul in one instruction
     LoadAndStore,   // Load + Store in one instruction
+    MoveReg,        // Move value from one register to another
     IncLocal,       // Increment local variable
     DecLocal,       // Decrement local variable
     LoopCond,       // Loop condition check,
