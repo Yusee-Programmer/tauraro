@@ -86,6 +86,12 @@ pub fn init_builtins() -> HashMap<String, Value> {
     builtins.insert("ValueError".to_string(), Value::BuiltinFunction("ValueError".to_string(), value_error_builtin));
     builtins.insert("TypeError".to_string(), Value::BuiltinFunction("TypeError".to_string(), type_error_builtin));
     builtins.insert("RuntimeError".to_string(), Value::BuiltinFunction("RuntimeError".to_string(), runtime_error_builtin));
+    builtins.insert("ZeroDivisionError".to_string(), Value::BuiltinFunction("ZeroDivisionError".to_string(), zero_division_error_builtin));
+    builtins.insert("IndexError".to_string(), Value::BuiltinFunction("IndexError".to_string(), index_error_builtin));
+    builtins.insert("KeyError".to_string(), Value::BuiltinFunction("KeyError".to_string(), key_error_builtin));
+    builtins.insert("NameError".to_string(), Value::BuiltinFunction("NameError".to_string(), name_error_builtin));
+    builtins.insert("AttributeError".to_string(), Value::BuiltinFunction("AttributeError".to_string(), attribute_error_builtin));
+    builtins.insert("AssertionError".to_string(), Value::BuiltinFunction("AssertionError".to_string(), assertion_error_builtin));
 
     // FFI builtins (when feature is enabled)
     #[cfg(feature = "ffi")]
@@ -1596,6 +1602,79 @@ fn runtime_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         ))
     }
 }
+
+fn zero_division_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("ZeroDivisionError".to_string(), message, None))
+}
+
+fn index_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("IndexError".to_string(), message, None))
+}
+
+fn key_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("KeyError".to_string(), message, None))
+}
+
+fn name_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("NameError".to_string(), message, None))
+}
+
+fn attribute_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("AttributeError".to_string(), message, None))
+}
+
+fn assertion_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("AssertionError".to_string(), message, None))
+}
+
 // ============================================================================
 // FFI Builtin Functions
 // ============================================================================

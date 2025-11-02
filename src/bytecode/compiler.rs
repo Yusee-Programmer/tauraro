@@ -912,22 +912,58 @@ impl SuperCompiler {
 
                 // --- 5. Compile `except` blocks ---
                 let mut to_finally_jumps = vec![];
+
+                // Pop the exception value pushed by VM into a known register
+                let exception_reg = self.allocate_register();
+                self.emit(OpCode::GetExceptionValue, exception_reg, 0, 0, self.current_line);
+
                 for handler in except_handlers {
-                    let next_handler_jump = self.emit(OpCode::JumpIfFalse, 0, 0, 0, self.current_line);
+                    // Check if this handler matches the exception type
+                    let next_handler_jump = if let Some(exc_type_expr) = &handler.exception_type {
+                        // Get the exception type name from the expression
+                        // e.g., "ValueError", "TypeError", etc.
+                        let type_name = match exc_type_expr {
+                            Expr::Identifier(name) => name.clone(),
+                            _ => return Err(anyhow!("Exception type must be an identifier")),
+                        };
 
-                    if let Some(name) = handler.name {
-                        let name_idx = self.code.add_name(name);
-                        self.emit(OpCode::StoreGlobal, name_idx, 0, 0, self.current_line);
+                        let type_name_idx = self.code.add_name(type_name);
+                        let match_reg = self.allocate_register();
+
+                        // Check if exception matches this type
+                        self.emit(OpCode::MatchExceptionType, exception_reg, type_name_idx, match_reg, self.current_line);
+
+                        // If no match, jump to next handler
+                        Some(self.emit(OpCode::JumpIfFalse, match_reg, 0, 0, self.current_line))
+                    } else {
+                        // Bare except - catches any exception
+                        None
+                    };
+
+                    // Store exception in variable if "as name" is specified
+                    if let Some(name) = &handler.name {
+                        let name_idx = self.code.add_name(name.clone());
+                        // Use StoreGlobal with correct argument order (value_reg, name_idx)
+                        self.emit(OpCode::StoreGlobal, exception_reg, name_idx, 0, self.current_line);
                     }
 
-                    for stmt in handler.body {
-                        self.compile_statement(stmt)?;
+                    // Compile handler body
+                    for stmt in &handler.body {
+                        self.compile_statement(stmt.clone())?;
                     }
+
+                    // After handling, jump to finally or end
                     to_finally_jumps.push(self.emit(OpCode::Jump, 0, 0, 0, self.current_line));
 
-                    let next_handler_addr = self.code.instructions.len() as u32;
-                    self.code.instructions[next_handler_jump].arg2 = next_handler_addr;
+                    // Set jump target for next handler (if type checking failed)
+                    if let Some(jump_idx) = next_handler_jump {
+                        let next_handler_addr = self.code.instructions.len() as u32;
+                        self.code.instructions[jump_idx].arg2 = next_handler_addr;
+                    }
                 }
+
+                // If no handler matched, re-raise the exception
+                self.emit(OpCode::Raise, exception_reg, 0, 0, self.current_line);
 
                 // --- 6. Compile `else` block ---
                 let else_addr = self.code.instructions.len() as u32;

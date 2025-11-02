@@ -497,12 +497,38 @@ impl SuperBytecodeVM {
                     if let Some(handler_pos) = handler_pos_opt {
                         // Unwind the stack to the handler position
                         self.frames[frame_idx].pc = handler_pos;
-                        // Push the exception value onto the stack
-                        // We need to get the top value before handling the exception
-                        if !self.frames[frame_idx].registers.is_empty() {
-                            let top_exc = self.frames[frame_idx].registers.last().unwrap().clone();
-                            self.frames[frame_idx].registers.push(top_exc);
-                        }
+
+                        // Convert the Rust error to a Python exception object
+                        let error_msg = format!("{}", e);
+                        let error_msg_lower = error_msg.to_lowercase();
+                        let exception_class = if error_msg_lower.contains("division by zero") || error_msg_lower.contains("divide by zero") {
+                            "ZeroDivisionError"
+                        } else if error_msg_lower.contains("assertionerror") {
+                            "AssertionError"
+                        } else if error_msg_lower.contains("nameerror") || error_msg_lower.contains("not defined") {
+                            "NameError"
+                        } else if error_msg_lower.contains("indexerror") || error_msg_lower.contains("index") && error_msg_lower.contains("out of") {
+                            "IndexError"
+                        } else if error_msg_lower.contains("keyerror") || (error_msg_lower.contains("key") && error_msg_lower.contains("not found")) {
+                            "KeyError"
+                        } else if error_msg_lower.contains("typeerror") {
+                            "TypeError"
+                        } else if error_msg_lower.contains("valueerror") {
+                            "ValueError"
+                        } else if error_msg_lower.contains("attributeerror") || error_msg_lower.contains("attribute") {
+                            "AttributeError"
+                        } else {
+                            "RuntimeError"
+                        };
+
+                        let exception = Value::new_exception(
+                            exception_class.to_string(),
+                            error_msg,
+                            None
+                        );
+
+                        // Push the exception onto the registers stack
+                        self.frames[frame_idx].registers.push(RcValue::new(exception));
                         // Continue execution at the exception handler
                         continue;
                     } else {
@@ -4193,6 +4219,62 @@ impl SuperBytecodeVM {
                     }
                     Err(anyhow!("Unhandled exception: {}", enhanced_exception))
                 }
+            }
+            OpCode::GetExceptionValue => {
+                // Pop exception value from stack and store in register
+                // arg1 = destination register
+                let dest_reg = arg1 as usize;
+
+                if self.frames[frame_idx].registers.is_empty() {
+                    return Err(anyhow!("GetExceptionValue: no exception on stack"));
+                }
+
+                // Pop the exception value
+                let exception_value = self.frames[frame_idx].registers.pop().unwrap();
+
+                // Ensure we have enough registers
+                while self.frames[frame_idx].registers.len() <= dest_reg {
+                    self.frames[frame_idx].registers.push(RcValue::new(Value::None));
+                }
+
+                // Store in destination register
+                self.frames[frame_idx].registers[dest_reg] = exception_value;
+                Ok(None)
+            }
+            OpCode::MatchExceptionType => {
+                // Check if exception matches a specific type
+                // arg1 = exception register
+                // arg2 = type name string index
+                // arg3 = result register (will be set to Bool)
+                let exc_reg = arg1 as usize;
+                let type_name_idx = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if exc_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("MatchExceptionType: exception register {} out of bounds", exc_reg));
+                }
+
+                if type_name_idx >= self.frames[frame_idx].code.names.len() {
+                    return Err(anyhow!("MatchExceptionType: type name index {} out of bounds", type_name_idx));
+                }
+
+                let exception_value = &self.frames[frame_idx].registers[exc_reg].value;
+                let expected_type_name = &self.frames[frame_idx].code.names[type_name_idx];
+
+                // Check if exception matches the expected type
+                let matches = if let Value::Exception { class_name, .. } = exception_value {
+                    class_name == expected_type_name
+                } else {
+                    false
+                };
+
+                // Ensure result register exists
+                while self.frames[frame_idx].registers.len() <= result_reg {
+                    self.frames[frame_idx].registers.push(RcValue::new(Value::None));
+                }
+
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(Value::Bool(matches));
+                Ok(None)
             }
             OpCode::Assert => {
                 // Assert statement
