@@ -3622,22 +3622,88 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("module has no function '{}'", method_name));
                         }
                     },
-                    _ => {
-                        // For builtin types, try to get method and call it
-                        if let Some(method) = object_value.get_method(&method_name) {
-                            // Create arguments with self as the first argument
-                            let mut method_args = vec![self.frames[frame_idx].registers[object_reg].value.clone()];
-                            method_args.extend(args.clone());
-
-                            // Call the method
-                            match method {
-                                Value::BuiltinFunction(_, func) => func(method_args)?,
-                                Value::NativeFunction(func) => func(method_args)?,
-                                _ => return Err(anyhow!("Method '{}' cannot be called directly", method_name)),
+                    Value::List(_) => {
+                        // Handle list methods directly in the VM
+                        match method_name.as_str() {
+                            "append" => {
+                                if args.len() != 1 {
+                                    return Err(anyhow!("append() takes exactly one argument ({} given)", args.len()));
+                                }
+                                // Get mutable reference to the list in the register
+                                if let Value::List(list) = &mut self.frames[frame_idx].registers[object_reg].value {
+                                    list.push(args[0].clone());
+                                }
+                                Value::None
                             }
-                        } else {
-                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
+                            "extend" => {
+                                if args.len() != 1 {
+                                    return Err(anyhow!("extend() takes exactly one argument ({} given)", args.len()));
+                                }
+                                // Get the iterable to extend with
+                                let items_to_add = match &args[0] {
+                                    Value::List(other_list) => other_list.as_vec().clone(),
+                                    Value::Tuple(tuple) => tuple.clone(),
+                                    _ => return Err(anyhow!("extend() argument must be iterable")),
+                                };
+                                // Extend the list
+                                if let Value::List(list) = &mut self.frames[frame_idx].registers[object_reg].value {
+                                    for item in items_to_add {
+                                        list.push(item);
+                                    }
+                                }
+                                Value::None
+                            }
+                            "pop" => {
+                                let index = if args.is_empty() {
+                                    -1i64  // Default to last element
+                                } else if let Value::Int(idx) = args[0] {
+                                    idx
+                                } else {
+                                    return Err(anyhow!("pop() argument must be an integer"));
+                                };
+
+                                if let Value::List(list) = &mut self.frames[frame_idx].registers[object_reg].value {
+                                    match list.pop_at(index as isize) {
+                                        Ok(value) => value,
+                                        Err(_) => return Err(anyhow!("pop index out of range")),
+                                    }
+                                } else {
+                                    Value::None
+                                }
+                            }
+                            _ => {
+                                return Err(anyhow!("List has no method '{}'", method_name));
+                            }
                         }
+                    }
+                    Value::Str(_) => {
+                        // Handle string methods directly in the VM
+                        let s_clone = if let Value::Str(s) = &object_value {
+                            s.clone()
+                        } else {
+                            return Err(anyhow!("Internal error: expected string"));
+                        };
+                        match method_name.as_str() {
+                            "upper" => Value::Str(s_clone.to_uppercase()),
+                            "lower" => Value::Str(s_clone.to_lowercase()),
+                            "capitalize" => {
+                                let mut chars = s_clone.chars();
+                                match chars.next() {
+                                    None => Value::Str(String::new()),
+                                    Some(first) => Value::Str(first.to_uppercase().collect::<String>() + chars.as_str().to_lowercase().as_str()),
+                                }
+                            }
+                            "strip" => Value::Str(s_clone.trim().to_string()),
+                            "lstrip" => Value::Str(s_clone.trim_start().to_string()),
+                            "rstrip" => Value::Str(s_clone.trim_end().to_string()),
+                            _ => {
+                                return Err(anyhow!("String has no method '{}'", method_name));
+                            }
+                        }
+                    }
+                    _ => {
+                        // For other builtin types that don't have direct VM support yet
+                        return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
                     }
                 };
 
