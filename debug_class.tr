@@ -1,0 +1,6 @@
+# Simple class test
+class Test:
+    pass
+
+print("Class defined")
+print(Test)

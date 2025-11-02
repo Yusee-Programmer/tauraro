@@ -2611,6 +2611,10 @@ impl SuperBytecodeVM {
                 let name_idx = arg1 as usize;
                 let result_reg = arg2 as u32;
                 
+                // DEBUG: Print the names vector for debugging
+                eprintln!("DEBUG: Names vector: {:?}", self.frames[frame_idx].code.names);
+                eprintln!("DEBUG: Trying to load name at index {}", name_idx);
+                
                 // Get the name first to avoid borrowing conflicts
                 let name = {
                     if name_idx >= self.frames[frame_idx].code.names.len() {
@@ -2618,6 +2622,9 @@ impl SuperBytecodeVM {
                     }
                     self.frames[frame_idx].code.names[name_idx].clone()
                 };
+                
+                // DEBUG: Print the name being loaded
+                eprintln!("DEBUG: Loading name '{}' from index {}", name, name_idx);
                 
                 // Check if the name exists in any of the global scopes
                 let value = {
@@ -2627,6 +2634,8 @@ impl SuperBytecodeVM {
                     }
                     // Then check builtins
                     else if self.frames[frame_idx].builtins.contains_key(&name) {
+                        // DEBUG: Print if found in builtins
+                        eprintln!("DEBUG: Found '{}' in builtins", name);
                         self.frames[frame_idx].builtins.get(&name).cloned()
                     }
                     // Then check VM globals

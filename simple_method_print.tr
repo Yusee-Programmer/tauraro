@@ -1,0 +1,10 @@
+# Simple method call test with print
+class Person:
+    def greet(self):
+        return "Hello"
+
+# Create instance
+p = Person()
+# Just call the method directly
+result = p.greet()
+print(result)

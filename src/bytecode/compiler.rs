@@ -1212,13 +1212,13 @@ impl SuperCompiler {
                         self.emit(OpCode::LoadFast, local_idx as u32, reg, 0, self.current_line);
                     } else {
                         // Not a local variable, treat as global
-                        let name_idx = self.code.add_name(name);
+                        let name_idx = self.code.add_name(name.clone());
                         let cache_idx = self.code.add_inline_cache();
                         self.emit(OpCode::LoadGlobal, name_idx, reg, cache_idx, self.current_line);
                     }
                 } else {
                     // Global scope - always treat as global variable
-                    let name_idx = self.code.add_name(name);
+                    let name_idx = self.code.add_name(name.clone());
                     let cache_idx = self.code.add_inline_cache();
                     self.emit(OpCode::LoadGlobal, name_idx, reg, cache_idx, self.current_line);
                 }
@@ -1323,8 +1323,11 @@ impl SuperCompiler {
                     }
                 }
                 
+                // DEBUG: Print information about the call being compiled
+                // eprintln!("DEBUG: Compiling Call expression");
                 let func_reg = self.compile_expression(*func)?;
-                // eprintln!("DEBUG: func_reg = {}", func_reg); // Debug output
+                // DEBUG: Print the function register
+                // eprintln!("DEBUG: Function register = {}", func_reg);
 
                 // Compile all positional arguments first
                 let mut compiled_arg_regs = Vec::new();
@@ -1436,8 +1439,9 @@ impl SuperCompiler {
                     }
                 }
                 let result_reg = self.allocate_register();
+                // DEBUG: Print call function information
                 // eprintln!("DEBUG: Emitting CallFunction with func_reg={}, arg_count={}, result_reg={}", 
-                //          func_reg, compiled_arg_regs.len(), result_reg); // Debug output
+                //          func_reg, compiled_arg_regs.len(), result_reg);
                 self.emit(OpCode::CallFunction, func_reg, compiled_arg_regs.len() as u32, result_reg, self.current_line);
 
                 Ok(result_reg)
@@ -1671,8 +1675,8 @@ impl SuperCompiler {
                 }
 
                 // Load the result from the object register (CallMethod stores result there)
-                // We use LoadLocal to copy it to the result register
-                self.emit(OpCode::LoadLocal, object_reg, result_reg, 0, self.current_line);
+                // We use MoveReg to copy it to the result register
+                self.emit(OpCode::MoveReg, object_reg, result_reg, 0, self.current_line);
                 Ok(result_reg)
             }
             Expr::Attribute { object, name } => {
@@ -1707,11 +1711,11 @@ impl SuperCompiler {
                             let str_func_idx = self.code.add_name("str".to_string());
                             let str_func_reg = self.allocate_register();
                             let cache_idx = self.code.add_inline_cache();
-                            self.emit(OpCode::LoadGlobal, str_func_idx, cache_idx, str_func_reg, self.current_line);
+                            self.emit(OpCode::LoadGlobal, str_func_idx, str_func_reg, cache_idx, self.current_line);
 
                             // Move the expression result to the next register (argument position)
                             let arg_reg = str_func_reg + 1;
-                            self.emit(OpCode::LoadLocal, expr_reg, arg_reg, 0, self.current_line);
+                            self.emit(OpCode::MoveReg, expr_reg, arg_reg, 0, self.current_line);
 
                             // Call str() with the expression result as argument
                             let result_reg = self.allocate_register();

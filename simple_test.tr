@@ -1,5 +1,16 @@
 # Simple test
-print("Hello, World!")
+class Person:
+    def __init__(self, name):
+        self.name = name
+    
+    def greet(self):
+        return f"Hello, I'm {self.name}"
+
+# Create instance
+p = Person("Alice")
+# Just call the method directly without print
+result = p.greet()
+print(result)
 
 # Simple test to check exception handling
 
@@ -39,3 +50,5 @@ result = test_func(
 
 print("Function call with comments result:", result)
 print("All tests completed successfully!")
+
+print("Hello World")

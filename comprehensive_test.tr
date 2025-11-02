@@ -1,0 +1,70 @@
+# Test normal functions
+def greet(name):
+    return f"Hello, {name}!"
+
+def add(a, b):
+    return a + b
+
+# Test function as object
+func_var = greet
+print(func_var("World"))
+
+# Test built-in functions as objects
+print_func = print
+print_func("This is print function assigned to a variable")
+
+# Test data types as objects
+my_list = [1, 2, 3]
+print(my_list.__class__.__name__)
+
+my_dict = {"key": "value"}
+print(my_dict.__class__.__name__)
+
+my_str = "Hello"
+print(my_str.__class__.__name__)
+
+# Test method calls on objects
+print(my_list.append.__class__.__name__)
+my_list.append(4)
+print(my_list)
+
+# Test decorator syntax (if supported)
+def my_decorator(func):
+    def wrapper(*args, **kwargs):
+        print("Before function call")
+        result = func(*args, **kwargs)
+        print("After function call")
+        return result
+    return wrapper
+
+@my_decorator
+def say_hello(name):
+    return f"Hello, {name}!"
+
+print(say_hello("Alice"))
+
+# Test lambda functions
+square = lambda x: x * x
+print(square(5))
+
+# Test function in data structures
+functions = [greet, add, square]
+print(functions[0]("Bob"))
+print(functions[1](3, 4))
+print(functions[2](6))
+
+# Test nested functions
+def outer_func(x):
+    def inner_func(y):
+        return x + y
+    return inner_func
+
+add_five = outer_func(5)
+print(add_five(3))
+
+# Test function attributes
+def sample_func():
+    pass
+
+sample_func.custom_attr = "I'm a custom attribute"
+print(sample_func.custom_attr)

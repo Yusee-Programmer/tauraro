@@ -1,0 +1,11 @@
+# Class with instantiation test
+class Person:
+    def __init__(self, name):
+        self.name = name
+    
+    def greet(self):
+        return f"Hello, I'm {self.name}"
+
+# Create instance
+p = Person("Alice")
+print(p.greet())

@@ -82,7 +82,7 @@ impl CodeObject {
             pos as u32
         } else {
             let pos = self.names.len() as u32;
-            self.names.push(name);
+            self.names.push(name.clone());
             pos
         }
     }
