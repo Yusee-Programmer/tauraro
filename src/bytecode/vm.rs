@@ -513,7 +513,7 @@ impl SuperBytecodeVM {
                             "KeyError"
                         } else if error_msg_lower.contains("typeerror") {
                             "TypeError"
-                        } else if error_msg_lower.contains("valueerror") {
+                        } else if error_msg_lower.contains("valueerror") || error_msg_lower.contains("invalid literal") || error_msg_lower.contains("could not convert") {
                             "ValueError"
                         } else if error_msg_lower.contains("attributeerror") || error_msg_lower.contains("attribute") {
                             "AttributeError"
