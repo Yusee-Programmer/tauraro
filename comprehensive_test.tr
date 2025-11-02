@@ -3,22 +3,25 @@ print("Testing basic functionality...")
 
 # Test data types as objects
 my_list = [1, 2, 3]
-print("List type:", my_list.__class__.__name__)
+print("List created:", my_list)
 my_list.append(4)
 print("List after append:", my_list)
 
 my_dict = {"key": "value"}
-print("Dict type:", my_dict.__class__.__name__)
+print("Dict created:", my_dict)
+print("Dict access:", my_dict["key"])
 
 my_str = "Hello"
-print("String type:", my_str.__class__.__name__)
+print("String created:", my_str)
+print("String upper:", my_str.upper())
 
 # Test built-in functions as objects
 print_func = print
 print_func("Built-in function as object works!")
 
-# Test method calls on objects
-print("List append method type:", my_list.append.__class__.__name__)
+# Test list slicing
+slice_result = my_list[1:3]
+print("List slice [1:3]:", slice_result)
 
 # Test nested function calls (the original issue we fixed)
 class Person:
