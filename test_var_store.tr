@@ -1,0 +1,3 @@
+# Simple variable storage and retrieval test
+a = 42
+print("Value of a:", a)

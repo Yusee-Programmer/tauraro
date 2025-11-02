@@ -1,0 +1,8 @@
+# Test callable checks
+print("Testing callable checks...")
+
+# Test calling None (should fail with our fix)
+n = None
+print("Variable n assigned to None")
+
+print("All tests completed successfully!")

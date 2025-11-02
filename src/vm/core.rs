@@ -89,7 +89,7 @@ impl VM {
             .map_err(|e| anyhow!("Semantic errors: {:?}", e))?;
         
         // Compile to bytecode
-        let mut compiler = SuperCompiler::new("<main>".to_string());
+        let mut compiler = SuperCompiler::new("<module>".to_string());
         let code_object = compiler.compile(program)?;
         
         // Execute the program

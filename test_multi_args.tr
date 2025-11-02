@@ -1,0 +1,3 @@
+# Multiple argument function call test
+a = 42
+print("Value:", a)

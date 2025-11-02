@@ -241,6 +241,7 @@ impl SuperCompiler {
     }
     
     fn emit(&mut self, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32, line: u32) -> usize {
+        // eprintln!("DEBUG: Emitting opcode {:?} with args {}, {}, {}", opcode, arg1, arg2, arg3); // Debug output
         let pos = self.code.instructions.len();
         self.code.add_instruction(opcode, arg1, arg2, arg3, line);
         pos
@@ -253,13 +254,14 @@ impl SuperCompiler {
     }
     
     pub fn compile_statement(&mut self, stmt: Statement) -> Result<()> {
+        // eprintln!("DEBUG: Compiling statement: {:?}", stmt); // Debug output
         match stmt {
             Statement::Expression(expr) => {
                 let reg = self.compile_expression(expr)?;
                 // In module scope, save expression result to special global for REPL
                 if !self.is_in_function_scope() {
                     let name_idx = self.code.add_name("__last_expr__".to_string());
-                    self.emit(OpCode::StoreGlobal, name_idx, reg, 0, self.current_line);
+                    self.emit(OpCode::StoreGlobal, reg, name_idx, 0, self.current_line);
                 }
                 Ok(())
             }
@@ -306,8 +308,8 @@ impl SuperCompiler {
                         self.emit(OpCode::StoreFast, local_idx, value_reg, 0, self.current_line);
                     } else {
                         // Global scope - use StoreGlobal
-                        let name_idx = self.code.add_name(name);
-                        self.emit(OpCode::StoreGlobal, name_idx, value_reg, 0, self.current_line);
+                        let name_idx = self.code.add_name(name.clone());
+                        self.emit(OpCode::StoreGlobal, value_reg, name_idx, 0, self.current_line);
                     }
                 } else {
                     let none_const = self.code.add_constant(Value::None);
@@ -320,7 +322,7 @@ impl SuperCompiler {
                     } else {
                         // Global scope - use StoreGlobal
                         let name_idx = self.code.add_name(name);
-                        self.emit(OpCode::StoreGlobal, name_idx, reg, 0, self.current_line);
+                        self.emit(OpCode::StoreGlobal, reg, name_idx, 0, self.current_line);
                     }
                 }
                 Ok(())
@@ -1212,13 +1214,13 @@ impl SuperCompiler {
                         // Not a local variable, treat as global
                         let name_idx = self.code.add_name(name);
                         let cache_idx = self.code.add_inline_cache();
-                        self.emit(OpCode::LoadGlobal, name_idx, cache_idx, reg, self.current_line);
+                        self.emit(OpCode::LoadGlobal, name_idx, reg, cache_idx, self.current_line);
                     }
                 } else {
                     // Global scope - always treat as global variable
                     let name_idx = self.code.add_name(name);
                     let cache_idx = self.code.add_inline_cache();
-                    self.emit(OpCode::LoadGlobal, name_idx, cache_idx, reg, self.current_line);
+                    self.emit(OpCode::LoadGlobal, name_idx, reg, cache_idx, self.current_line);
                 }
                 Ok(reg)
             }
@@ -1322,6 +1324,7 @@ impl SuperCompiler {
                 }
                 
                 let func_reg = self.compile_expression(*func)?;
+                // eprintln!("DEBUG: func_reg = {}", func_reg); // Debug output
 
                 // Compile all positional arguments first
                 let mut compiled_arg_regs = Vec::new();
@@ -1382,15 +1385,59 @@ impl SuperCompiler {
                 }
                 // CRITICAL: Move arguments to consecutive registers starting from func_reg + 1
                 // The CallFunction handler expects arguments in consecutive registers
-                for (i, &arg_reg) in compiled_arg_regs.iter().enumerate() {
-                    let target_reg = func_reg + 1 + i as u32;
-                    if arg_reg != target_reg {
-                        // Only emit LoadLocal if the register is different
-                        // Make sure both source and target registers are within bounds
-                        self.emit(OpCode::LoadLocal, arg_reg, target_reg, 0, self.current_line);
+                // We need to be careful not to overwrite the function register or other important registers
+                let start_arg_reg = func_reg + 1;
+                
+                // First, collect all the target registers we'll need
+                let target_regs: Vec<u32> = (0..compiled_arg_regs.len())
+                    .map(|i| start_arg_reg + i as u32)
+                    .collect();
+                
+                // Check if any source registers conflict with target registers or the function register
+                let has_conflicts = compiled_arg_regs.iter().any(|&src_reg| {
+                    src_reg == func_reg || target_regs.contains(&src_reg)
+                }) || target_regs.contains(&(func_reg as u32));
+                
+                if has_conflicts {
+                    // We have conflicts, need to use a different approach
+                    // Allocate new registers for the arguments and move them there
+                    let mut new_arg_regs = Vec::new();
+                    for _ in 0..compiled_arg_regs.len() {
+                        new_arg_regs.push(self.allocate_register());
+                    }
+                    
+                    // Move arguments to the new registers
+                    for (i, &arg_reg) in compiled_arg_regs.iter().enumerate() {
+                        self.emit(OpCode::MoveReg, arg_reg, new_arg_regs[i], 0, self.current_line);
+                    }
+                    
+                    // Then move from new registers to target positions
+                    for (i, &new_reg) in new_arg_regs.iter().enumerate() {
+                        let target_reg = start_arg_reg + i as u32;
+                        // Allocate the target register if needed
+                        while self.next_register <= target_reg {
+                            self.allocate_register();
+                        }
+                        if new_reg != target_reg {
+                            self.emit(OpCode::MoveReg, new_reg, target_reg, 0, self.current_line);
+                        }
+                    }
+                } else {
+                    // No conflicts, can move directly
+                    for (i, &arg_reg) in compiled_arg_regs.iter().enumerate() {
+                        let target_reg = start_arg_reg + i as u32;
+                        // Allocate the target register if needed
+                        while self.next_register <= target_reg {
+                            self.allocate_register();
+                        }
+                        if arg_reg != target_reg {
+                            self.emit(OpCode::MoveReg, arg_reg, target_reg, 0, self.current_line);
+                        }
                     }
                 }
                 let result_reg = self.allocate_register();
+                // eprintln!("DEBUG: Emitting CallFunction with func_reg={}, arg_count={}, result_reg={}", 
+                //          func_reg, compiled_arg_regs.len(), result_reg); // Debug output
                 self.emit(OpCode::CallFunction, func_reg, compiled_arg_regs.len() as u32, result_reg, self.current_line);
 
                 Ok(result_reg)
