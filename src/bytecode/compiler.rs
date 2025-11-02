@@ -522,7 +522,7 @@ impl SuperCompiler {
                         if self.is_in_function_scope() {
                             self.emit(OpCode::StoreFast, var_idx, elem_reg, 0, self.current_line);
                         } else {
-                            self.emit(OpCode::StoreGlobal, var_idx, elem_reg, 0, self.current_line);
+                            self.emit(OpCode::StoreGlobal, elem_reg, var_idx, 0, self.current_line);
                         }
                     }
                 } else {
@@ -541,7 +541,7 @@ impl SuperCompiler {
                         self.emit(OpCode::StoreFast, loop_var_idx, value_reg, 0, self.current_line);
                     } else {
                         // In global scope, use StoreGlobal
-                        self.emit(OpCode::StoreGlobal, loop_var_idx, value_reg, 0, self.current_line);
+                        self.emit(OpCode::StoreGlobal, value_reg, loop_var_idx, 0, self.current_line);
                     }
                 }
 
@@ -844,7 +844,7 @@ impl SuperCompiler {
                 self.emit(OpCode::LoadConst, class_const_idx, reg, 0, self.current_line);
 
                 let name_idx = self.code.add_name(name.clone());
-                self.emit(OpCode::StoreGlobal, name_idx, reg, 0, self.current_line);
+                self.emit(OpCode::StoreGlobal, reg, name_idx, 0, self.current_line);
 
                 Ok(())
             }
@@ -1041,7 +1041,7 @@ impl SuperCompiler {
                     } else {
                         // Global scope - use StoreGlobal
                         let name_idx = self.code.add_name(target.clone());
-                        self.emit(OpCode::StoreGlobal, name_idx, item_reg, 0, self.current_line);
+                        self.emit(OpCode::StoreGlobal, item_reg, name_idx, 0, self.current_line);
                     }
                 }
                 Ok(())
@@ -1058,7 +1058,7 @@ impl SuperCompiler {
                 // Use the alias if provided, otherwise use the module name
                 let store_name = alias.as_ref().unwrap_or(&module);
                 let store_name_idx = self.code.add_name(store_name.clone());
-                self.emit(OpCode::StoreGlobal, store_name_idx, result_reg, 0, self.current_line);
+                self.emit(OpCode::StoreGlobal, result_reg, store_name_idx, 0, self.current_line);
 
                 Ok(())
             }
@@ -1076,7 +1076,7 @@ impl SuperCompiler {
                     // Use the alias if provided, otherwise use the imported name
                     let store_name = alias.as_ref().unwrap_or(&name);
                     let store_name_idx = self.code.add_name(store_name.clone());
-                    self.emit(OpCode::StoreGlobal, store_name_idx, result_reg, 0, self.current_line);
+                    self.emit(OpCode::StoreGlobal, result_reg, store_name_idx, 0, self.current_line);
                 }
 
                 Ok(())
