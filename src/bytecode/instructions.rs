@@ -115,6 +115,7 @@ pub enum OpCode {
     SubscrLoad,     // Load item from sequence (obj[key])
     SubscrStore,    // Store item to sequence (obj[key] = value)
     SubscrDelete,   // Delete item from sequence (del obj[key])
+    Slice,          // Create a slice (obj[start:stop:step])
     
     // Attribute operations
     LoadAttr,       // Load attribute from object (obj.attr)

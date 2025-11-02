@@ -450,35 +450,26 @@ impl SuperCompiler {
                     for decorator_expr in decorators.iter().rev() {
                         // Load the decorator
                         let decorator_reg = self.compile_expression(decorator_expr.clone())?;
-                        
+
+                        // Move the function to the next register for the call
+                        let arg_reg = decorator_reg + 1;
+                        while self.next_register <= arg_reg {
+                            self.allocate_register();
+                        }
+                        self.emit(OpCode::MoveReg, func_reg, arg_reg, 0, self.current_line);
+
                         // Call the decorator with the function as argument
                         let result_reg = self.allocate_register();
                         self.emit(OpCode::CallFunction, decorator_reg, 1, result_reg, self.current_line);
-                        
-                        // Move the function to the next register for the call
-                        let temp_reg = self.allocate_register();
-                        self.emit(OpCode::LoadLocal, func_reg, temp_reg, 0, self.current_line);
-                        
+
                         // Update the function register to the decorated result
                         func_reg = result_reg;
                     }
-                    
-                    // Update the closure value with the decorated result
-                    // Load the decorated result from register to get the actual value
-                    // For now, we'll assume the decorator returns the modified closure
-                    // In a full implementation, we would need to handle this properly
                 }
-                
-                // Store the closure in constants
-                let closure_const_idx = self.code.add_constant(closure_value);
-                
-                // Load the closure
-                let reg = self.allocate_register();
-                self.emit(OpCode::LoadConst, closure_const_idx, reg, 0, self.current_line);
-                
+
                 // Store the function in global namespace
                 let name_idx = self.code.add_name(name.clone());
-                self.emit(OpCode::StoreGlobal, name_idx, reg, 0, self.current_line);
+                self.emit(OpCode::StoreGlobal, func_reg, name_idx, 0, self.current_line);
                 
                 // Debug output to see what's stored in constants
 
@@ -1575,7 +1566,8 @@ impl SuperCompiler {
                             self.allocate_register();
                         }
                         // Copy item to consecutive position
-                        self.emit(OpCode::LoadLocal, item_reg, target_reg, 0, self.current_line);
+                        // FIX: Use MoveReg instead of LoadLocal
+                        self.emit(OpCode::MoveReg, item_reg, target_reg, 0, self.current_line);
                     }
                 }
 
@@ -1599,7 +1591,8 @@ impl SuperCompiler {
                     }
                     UnaryOp::UAdd => {
                         // For unary plus, we just return the operand
-                        self.emit(OpCode::LoadLocal, operand_reg, result_reg, 0, self.current_line);
+                        // FIX: Use MoveReg instead of LoadLocal
+                        self.emit(OpCode::MoveReg, operand_reg, result_reg, 0, self.current_line);
                     }
                     UnaryOp::Not => {
                         // Logical NOT operation
@@ -1647,7 +1640,8 @@ impl SuperCompiler {
                     let target_reg = object_reg + 1 + i as u32;
                     if arg_reg != target_reg {
                         // Only emit LoadLocal if the register is different
-                        self.emit(OpCode::LoadLocal, arg_reg, target_reg, 0, self.current_line);
+                        // FIX: Use MoveReg instead of LoadLocal
+                        self.emit(OpCode::MoveReg, arg_reg, target_reg, 0, self.current_line);
                     }
                 }
 
@@ -1784,10 +1778,64 @@ impl SuperCompiler {
             Expr::Await(expr) => {
                 // Handle await expression
                 let value_reg = self.compile_expression(*expr)?;
-                
+
                 // Emit Await instruction
                 let result_reg = self.allocate_register();
                 self.emit(OpCode::Await, value_reg, result_reg, 0, self.current_line);
+                Ok(result_reg)
+            }
+            Expr::Slice { object, start, stop, step } => {
+                // Handle slice expression: object[start:stop:step]
+                let object_reg = self.compile_expression(*object)?;
+
+                // Compile start, stop, and step expressions
+                let start_reg = if let Some(start_expr) = start {
+                    self.compile_expression(*start_expr)?
+                } else {
+                    // None for start means slice from beginning
+                    let none_const = self.code.add_constant(Value::None);
+                    let reg = self.allocate_register();
+                    self.emit(OpCode::LoadConst, none_const, reg, 0, self.current_line);
+                    reg
+                };
+
+                let stop_reg = if let Some(stop_expr) = stop {
+                    self.compile_expression(*stop_expr)?
+                } else {
+                    // None for stop means slice to end
+                    let none_const = self.code.add_constant(Value::None);
+                    let reg = self.allocate_register();
+                    self.emit(OpCode::LoadConst, none_const, reg, 0, self.current_line);
+                    reg
+                };
+
+                let step_reg = if let Some(step_expr) = step {
+                    self.compile_expression(*step_expr)?
+                } else {
+                    // None for step means step of 1
+                    let none_const = self.code.add_constant(Value::None);
+                    let reg = self.allocate_register();
+                    self.emit(OpCode::LoadConst, none_const, reg, 0, self.current_line);
+                    reg
+                };
+
+                // Build a slice object with start, stop, and step
+                // We'll use the BuildSlice opcode for this
+                let result_reg = self.allocate_register();
+
+                // Emit BuildSlice instruction
+                // arg1 = object register, arg2 = start register, arg3 = result register
+                // We need to pass stop and step as well, but we only have 3 args
+                // Let's use a different approach: create a tuple with (start, stop, step) and use SubscrLoad
+
+                // For now, let's implement a simple slice that uses a special Slice opcode
+                // arg1 = object, arg2 = start, arg3 = stop
+                // We'll handle step later
+                self.emit(OpCode::Slice, object_reg, start_reg, stop_reg, self.current_line);
+
+                // The result is stored in object_reg, so copy it to result_reg
+                self.emit(OpCode::MoveReg, object_reg, result_reg, 0, self.current_line);
+
                 Ok(result_reg)
             }
             _ => Err(anyhow!("Unsupported expression type: {:?}", expr)),

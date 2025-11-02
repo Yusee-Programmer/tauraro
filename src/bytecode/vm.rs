@@ -3278,6 +3278,133 @@ impl SuperBytecodeVM {
 
                 Ok(None)
             }
+            OpCode::Slice => {
+                // Create a slice: object[start:stop:step]
+                let object_reg = arg1 as usize;
+                let start_reg = arg2 as usize;
+                let stop_reg = arg3 as usize;
+
+                if object_reg >= self.frames[frame_idx].registers.len() ||
+                   start_reg >= self.frames[frame_idx].registers.len() ||
+                   stop_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("Slice: register index out of bounds"));
+                }
+
+                let object_value = &self.frames[frame_idx].registers[object_reg].value;
+                let start_value = &self.frames[frame_idx].registers[start_reg].value;
+                let stop_value = &self.frames[frame_idx].registers[stop_reg].value;
+
+                // Extract start and stop indices
+                let start_idx = match start_value {
+                    Value::Int(n) => Some(*n),
+                    Value::None => None,
+                    _ => return Err(anyhow!("Slice start must be an integer or None")),
+                };
+
+                let stop_idx = match stop_value {
+                    Value::Int(n) => Some(*n),
+                    Value::None => None,
+                    _ => return Err(anyhow!("Slice stop must be an integer or None")),
+                };
+
+                // Perform slicing based on object type
+                let result = match object_value {
+                    Value::List(items) => {
+                        let len = items.len() as i64;
+
+                        // Normalize indices
+                        let start = start_idx.unwrap_or(0);
+                        let stop = stop_idx.unwrap_or(len);
+
+                        let normalized_start = if start < 0 {
+                            (len + start).max(0) as usize
+                        } else {
+                            start.min(len) as usize
+                        };
+
+                        let normalized_stop = if stop < 0 {
+                            (len + stop).max(0) as usize
+                        } else {
+                            stop.min(len) as usize
+                        };
+
+                        // Extract slice
+                        let slice: Vec<Value> = items.as_vec()
+                            .iter()
+                            .skip(normalized_start)
+                            .take(normalized_stop.saturating_sub(normalized_start))
+                            .cloned()
+                            .collect();
+
+                        Value::List(crate::modules::hplist::HPList::from_values(slice))
+                    },
+                    Value::Tuple(items) => {
+                        let len = items.len() as i64;
+
+                        // Normalize indices
+                        let start = start_idx.unwrap_or(0);
+                        let stop = stop_idx.unwrap_or(len);
+
+                        let normalized_start = if start < 0 {
+                            (len + start).max(0) as usize
+                        } else {
+                            start.min(len) as usize
+                        };
+
+                        let normalized_stop = if stop < 0 {
+                            (len + stop).max(0) as usize
+                        } else {
+                            stop.min(len) as usize
+                        };
+
+                        // Extract slice
+                        let slice: Vec<Value> = items
+                            .iter()
+                            .skip(normalized_start)
+                            .take(normalized_stop.saturating_sub(normalized_start))
+                            .cloned()
+                            .collect();
+
+                        Value::Tuple(slice)
+                    },
+                    Value::Str(s) => {
+                        let len = s.len() as i64;
+
+                        // Normalize indices
+                        let start = start_idx.unwrap_or(0);
+                        let stop = stop_idx.unwrap_or(len);
+
+                        let normalized_start = if start < 0 {
+                            (len + start).max(0) as usize
+                        } else {
+                            start.min(len) as usize
+                        };
+
+                        let normalized_stop = if stop < 0 {
+                            (len + stop).max(0) as usize
+                        } else {
+                            stop.min(len) as usize
+                        };
+
+                        // Extract substring
+                        let slice: String = s
+                            .chars()
+                            .skip(normalized_start)
+                            .take(normalized_stop.saturating_sub(normalized_start))
+                            .collect();
+
+                        Value::Str(slice)
+                    },
+                    _ => {
+                        return Err(anyhow!("Slicing not supported for type {}",
+                                          object_value.type_name()));
+                    }
+                };
+
+                // Store result back in object register
+                self.frames[frame_idx].registers[object_reg] = RcValue::new(result);
+                Ok(None)
+            }
             OpCode::CallMethod => {
                 // Call a method on an object
                 let object_reg = arg1 as usize;
