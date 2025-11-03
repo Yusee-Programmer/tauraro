@@ -1,8 +1,0 @@
-# Test to see name indices
-class Person:
-    def greet(self):
-        return "Hello"
-
-p = Person()
-result = p.greet()  # This should add "greet" to names
-print("After method call")  # This should use "print" from names

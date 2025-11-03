@@ -1,3 +1,0 @@
-print("Hello, world!")
-x = 42
-print("x =", x)

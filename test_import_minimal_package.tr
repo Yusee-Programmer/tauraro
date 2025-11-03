@@ -1,6 +1,0 @@
-# Test importing duitk with absolutely minimal code
-
-print("Before import")
-import duitk
-print("After import")
-print("duitk.version:", duitk.version)

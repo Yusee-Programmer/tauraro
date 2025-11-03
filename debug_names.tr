@@ -1,4 +1,0 @@
-# Debug names test
-print("Test 1")
-x = 10
-print("Test 2")

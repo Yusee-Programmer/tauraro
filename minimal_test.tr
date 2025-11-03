@@ -1,7 +1,0 @@
-# Minimal test to reproduce the issue
-class Test:
-    def method(self):
-        return "result"
-
-t = Test()
-print(t.method())

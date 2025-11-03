@@ -1,5 +1,0 @@
-# Absolutely minimal DUITK package
-
-print("Loading DUITK...")
-version = "1.0.0"
-print("DUITK loaded!")

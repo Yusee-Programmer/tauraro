@@ -1,6 +1,0 @@
-# Test importing a simple module file
-
-print("Before import")
-import simple_module
-print("After import")
-print("Module variable:", simple_module.test_var)

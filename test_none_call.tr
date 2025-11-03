@@ -1,3 +1,0 @@
-# Test calling None (should give a proper error message)
-a = None
-a()

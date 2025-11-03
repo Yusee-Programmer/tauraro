@@ -1,8 +1,0 @@
-# Test DUITK import
-
-try:
-    import duitk
-    print("DUITK imported successfully!")
-    print("Version:", duitk.version)
-except Exception as e:
-    print("Error importing DUITK:", e)

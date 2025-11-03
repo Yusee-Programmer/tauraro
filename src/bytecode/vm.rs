@@ -133,47 +133,47 @@ impl SuperBytecodeVM {
 
     /// Helper method to compile and execute a module source file
     pub fn compile_and_execute_module(&mut self, source: &str, module_name: &str) -> Result<Value> {
-        eprintln!("DEBUG compile_and_execute_module: START for module '{}'", module_name);
-        eprintln!("DEBUG compile_and_execute_module: loading_modules before: {:?}", self.loading_modules);
+        // eprintln!("DEBUG compile_and_execute_module: START for module '{}'", module_name);
+        // eprintln!("DEBUG compile_and_execute_module: loading_modules before: {:?}", self.loading_modules);
 
         // Check for circular import
         if self.loading_modules.contains(module_name) {
-            eprintln!("DEBUG compile_and_execute_module: circular import detected for '{}'", module_name);
+            // eprintln!("DEBUG compile_and_execute_module: circular import detected for '{}'", module_name);
             return Err(anyhow!("ImportError: cannot import name '{}' (circular import)", module_name));
         }
 
         // Add module to loading set
         self.loading_modules.insert(module_name.to_string());
-        eprintln!("DEBUG compile_and_execute_module: added '{}' to loading_modules: {:?}", module_name, self.loading_modules);
+        // eprintln!("DEBUG compile_and_execute_module: added '{}' to loading_modules: {:?}", module_name, self.loading_modules);
 
         // Ensure we remove the module from loading set even if an error occurs
-        eprintln!("DEBUG compile_and_execute_module: calling compile_and_execute_module_inner for '{}'", module_name);
+        // eprintln!("DEBUG compile_and_execute_module: calling compile_and_execute_module_inner for '{}'", module_name);
         let result = self.compile_and_execute_module_inner(source, module_name);
-        eprintln!("DEBUG compile_and_execute_module: compile_and_execute_module_inner returned for '{}'", module_name);
+        // eprintln!("DEBUG compile_and_execute_module: compile_and_execute_module_inner returned for '{}'", module_name);
 
         // Remove module from loading set now that it's fully executed and cached
         self.loading_modules.remove(module_name);
-        eprintln!("DEBUG compile_and_execute_module: removed '{}' from loading_modules", module_name);
+        // eprintln!("DEBUG compile_and_execute_module: removed '{}' from loading_modules", module_name);
 
         result
     }
 
     /// Helper method to compile and execute a module source file
     fn compile_and_execute_module_inner(&mut self, source: &str, module_name: &str) -> Result<Value> {
-        eprintln!("DEBUG compile_and_execute_module_inner: START for module '{}'", module_name);
+        // eprintln!("DEBUG compile_and_execute_module_inner: START for module '{}'", module_name);
 
         // Compile the module
-        eprintln!("DEBUG compile_and_execute_module_inner: lexing module '{}'", module_name);
+        // eprintln!("DEBUG compile_and_execute_module_inner: lexing module '{}'", module_name);
         let tokens = crate::lexer::Lexer::new(source)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow!("Lexer error in module '{}': {}", module_name, e))?;
 
-        eprintln!("DEBUG compile_and_execute_module_inner: parsing module '{}'", module_name);
+        // eprintln!("DEBUG compile_and_execute_module_inner: parsing module '{}'", module_name);
         let mut parser = crate::parser::Parser::new(tokens);
         let ast = parser.parse()
             .map_err(|e| anyhow!("Parser error in module '{}': {}", module_name, e))?;
 
-        eprintln!("DEBUG compile_and_execute_module_inner: compiling module '{}'", module_name);
+        // eprintln!("DEBUG compile_and_execute_module_inner: compiling module '{}'", module_name);
         let mut compiler = crate::bytecode::compiler::SuperCompiler::new(module_name.to_string());
         let code_object = compiler.compile(ast)
             .map_err(|e| anyhow!("Compiler error in module '{}': {}", module_name, e))?;
@@ -182,10 +182,10 @@ impl SuperBytecodeVM {
         let globals_before: std::collections::HashSet<String> = self.globals.borrow().keys().cloned().collect();
 
         // Execute the module
-        eprintln!("DEBUG compile_and_execute_module_inner: executing module '{}' with {} frames currently", module_name, self.frames.len());
+        // eprintln!("DEBUG compile_and_execute_module_inner: executing module '{}' with {} frames currently", module_name, self.frames.len());
         self.execute(code_object)
             .map_err(|e| anyhow!("Error executing module '{}': {}", module_name, e))?;
-        eprintln!("DEBUG compile_and_execute_module_inner: execution completed for module '{}'", module_name);
+        // eprintln!("DEBUG compile_and_execute_module_inner: execution completed for module '{}'", module_name);
 
         // Get the module's globals (namespace) - only new names added by the module
         let mut module_namespace = HashMap::new();
@@ -206,19 +206,19 @@ impl SuperBytecodeVM {
     /// Searches sys.path directories for module files with supported extensions
     /// Supported extensions: .py, .tr, .tau, .tauraro
     fn load_module_from_file(&mut self, module_name: &str) -> Result<Value> {
-        eprintln!("DEBUG load_module_from_file: attempting to load module '{}'", module_name);
-        eprintln!("DEBUG load_module_from_file: loaded_modules keys: {:?}", self.loaded_modules.keys().collect::<Vec<_>>());
-        eprintln!("DEBUG load_module_from_file: loading_modules: {:?}", self.loading_modules);
+        // eprintln!("DEBUG load_module_from_file: attempting to load module '{}'", module_name);
+        // eprintln!("DEBUG load_module_from_file: loaded_modules keys: {:?}", self.loaded_modules.keys().collect::<Vec<_>>());
+        // eprintln!("DEBUG load_module_from_file: loading_modules: {:?}", self.loading_modules);
 
         // Check if module is already loaded (module caching like Python's sys.modules)
         if let Some(cached_module) = self.loaded_modules.get(module_name) {
-            eprintln!("DEBUG load_module_from_file: found cached module '{}'", module_name);
+            // eprintln!("DEBUG load_module_from_file: found cached module '{}'", module_name);
             return Ok(cached_module.clone());
         }
 
         // Check if module is currently being loaded (circular import detection)
         if self.loading_modules.contains(module_name) {
-            eprintln!("DEBUG load_module_from_file: circular import detected for '{}'", module_name);
+            // eprintln!("DEBUG load_module_from_file: circular import detected for '{}'", module_name);
             return Err(anyhow!("ImportError: cannot import name '{}' (circular import)", module_name));
         }
 
@@ -559,7 +559,7 @@ impl SuperBytecodeVM {
     #[inline(always)]
     fn execute_instruction_fast(&mut self, frame_idx: usize, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
         // Debug output for instruction execution
-        eprintln!("DEBUG: Executing opcode {:?} with args {}, {}, {}", opcode, arg1, arg2, arg3);
+        // eprintln!("DEBUG: Executing opcode {:?} with args {}, {}, {}", opcode, arg1, arg2, arg3);
         
         match opcode {
             OpCode::LoadConst => {
@@ -2650,8 +2650,8 @@ impl SuperBytecodeVM {
                 let result_reg = arg2 as u32;
                 
                 // DEBUG: Print the names vector for debugging
-                eprintln!("DEBUG: Names vector: {:?}", self.frames[frame_idx].code.names);
-                eprintln!("DEBUG: Trying to load name at index {}", name_idx);
+                // eprintln!("DEBUG: Names vector: {:?}", self.frames[frame_idx].code.names);
+                // eprintln!("DEBUG: Trying to load name at index {}", name_idx);
                 
                 // Get the name first to avoid borrowing conflicts
                 let name = {
@@ -2662,7 +2662,7 @@ impl SuperBytecodeVM {
                 };
                 
                 // DEBUG: Print the name being loaded
-                eprintln!("DEBUG: Loading name '{}' from index {}", name, name_idx);
+                // eprintln!("DEBUG: Loading name '{}' from index {}", name, name_idx);
                 
                 // Check if the name exists in any of the global scopes
                 let value = {
@@ -2673,7 +2673,7 @@ impl SuperBytecodeVM {
                     // Then check builtins
                     else if self.frames[frame_idx].builtins.borrow().contains_key(&name) {
                         // DEBUG: Print if found in builtins
-                        eprintln!("DEBUG: Found '{}' in builtins", name);
+                        // eprintln!("DEBUG: Found '{}' in builtins", name);
                         self.frames[frame_idx].builtins.borrow().get(&name).cloned()
                     }
                     // Then check VM globals

@@ -1,5 +1,0 @@
-# Simple module file (not a package)
-
-print("Loading simple_module...")
-test_var = "Hello from simple_module"
-print("simple_module loaded!")
