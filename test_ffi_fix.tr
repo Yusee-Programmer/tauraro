@@ -1,0 +1,25 @@
+# Test FFI Fix
+print("Testing FFI functionality fix...")
+
+# Load a Windows library
+try:
+    load_library("user32.dll")
+    print("Successfully loaded user32.dll")
+except Exception as e:
+    print(f"Failed to load user32.dll: {e}")
+
+# Define a simple function
+try:
+    MessageBoxA = define_function("user32.dll", "MessageBoxA", "int32", ["pointer", "pointer", "pointer", "uint32"])
+    print("Successfully defined MessageBoxA function")
+except Exception as e:
+    print(f"Failed to define MessageBoxA function: {e}")
+
+# Test calling the function directly
+try:
+    result = call_function("user32.dll", "MessageBoxA", [0, "Hello from Tauraro FFI!", "FFI Test", 0])
+    print(f"MessageBoxA returned: {result}")
+except Exception as e:
+    print(f"Failed to call MessageBoxA function: {e}")
+
+print("FFI test completed!")
