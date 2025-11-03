@@ -1,6 +1,12 @@
 # Win32 GDI32 Module
 # Windows API functions from gdi32.dll for graphics operations
 
+# Load required library
+try:
+    load_library("gdi32.dll")
+except:
+    pass
+
 # Device Context Functions
 GetDC = define_function("gdi32.dll", "GetDC", "pointer", ["pointer"])
 ReleaseDC = define_function("gdi32.dll", "ReleaseDC", "int32", ["pointer", "pointer"])

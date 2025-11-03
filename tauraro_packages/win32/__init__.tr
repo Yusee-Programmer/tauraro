@@ -1,26 +1,23 @@
 # Win32 Package - Main Module
 # This module provides access to Windows API functions and constants
 
-# Load required Windows libraries
-print("Loading Win32 libraries...")
+print("Loading Win32 API Package...")
 
-# Core Windows API libraries (always available)
+# Load the core Win32 libraries first
+print("  Loading core DLLs...")
 load_library("kernel32.dll")
 load_library("user32.dll")
-load_library("gdi32.dll")
 
-# Common Controls v6 (preinstalled, requires manifest)
-load_library("comctl32.dll")
+# Import constants module first (needed by other modules)
+import win32.constants
 
-# Direct2D / DirectWrite / DirectComposition (preinstalled, requires SDK headers)
-load_library("d2d1.dll")      # Direct2D
-load_library("dwrite.dll")    # DirectWrite
-load_library("dcomp.dll")     # DirectComposition
+# Import core Win32 API modules
+import win32.kernel32
+import win32.user32
 
-# COM / Shell APIs (preinstalled, optional SDK)
-load_library("ole32.dll")     # COM
-load_library("oleaut32.dll")  # COM Automation
-load_library("shell32.dll")   # Shell APIs
-load_library("shlwapi.dll")   # Shell Light-weight Utilities
+print("Win32 API Package loaded successfully!")
 
-print("Win32 libraries loaded successfully!")
+# Package metadata
+__version__ = "1.0.0"
+__author__ = "Tauraro Team"
+__description__ = "Windows API (Win32) bindings for Tauraro"
