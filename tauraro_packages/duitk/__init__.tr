@@ -64,18 +64,40 @@ class Window:
             win32.kernel32.GetModuleHandle(0),  # hInstance
             0  # lpParam
         )
+        
+        # Show the window immediately after creation
+        try:
+            win32.user32.ShowWindow(self.hwnd, win32.constants.SW_SHOW)
+            win32.user32.UpdateWindow(self.hwnd)
+        except:
+            pass
 
     def show(self, cmd_show=win32.constants.SW_SHOW):
-        # Simplified implementation
+        # Actually show the window using win32 APIs
+        try:
+            win32.user32.ShowWindow(self.hwnd, cmd_show)
+            win32.user32.UpdateWindow(self.hwnd)
+        except:
+            pass
         print(f"Showing window: {self.title}")
         return self
 
     def hide(self):
+        # Actually hide the window using win32 APIs
+        try:
+            win32.user32.ShowWindow(self.hwnd, win32.constants.SW_HIDE)
+        except:
+            pass
         print(f"Hiding window: {self.title}")
         return self
 
     def set_title(self, title):
         self.title = title
+        # Actually set the window title using win32 APIs
+        try:
+            win32.user32.SetWindowTextW(self.hwnd, title)
+        except:
+            pass
         print(f"Window title set to: {title}")
         return self
 
@@ -87,6 +109,11 @@ class Window:
         self.y = y
         self.width = width
         self.height = height
+        # Actually move the window using win32 APIs
+        try:
+            win32.user32.MoveWindow(self.hwnd, x, y, width, height, True)
+        except:
+            pass
         print(f"Moving window to: ({x}, {y}), size: {width}x{height}")
         return self
 
@@ -119,6 +146,11 @@ class Control:
         self.controls = []
 
     def set_text(self, text):
+        # Actually set the control text using win32 APIs
+        try:
+            win32.user32.SetWindowTextW(self.hwnd, text)
+        except:
+            pass
         print(f"Control text set to: {text}")
         return self
 
@@ -126,32 +158,99 @@ class Control:
         return ""
 
     def show(self):
+        # Actually show the control using win32 APIs
+        try:
+            win32.user32.ShowWindow(self.hwnd, win32.constants.SW_SHOW)
+        except:
+            pass
         print("Control shown")
         return self
 
     def hide(self):
+        # Actually hide the control using win32 APIs
+        try:
+            win32.user32.ShowWindow(self.hwnd, win32.constants.SW_HIDE)
+        except:
+            pass
         print("Control hidden")
         return self
 
 class Button(Control):
     def __init__(self, parent_hwnd, text, x, y, width, height):
-        # Simplified implementation
-        super().__init__(parent_hwnd, 0)
+        # Create actual button using win32 APIs
+        hwnd = win32.user32.CreateWindowExW(
+            0,  # dwExStyle
+            "BUTTON",  # lpClassName
+            text,  # lpWindowName
+            win32.constants.WS_CHILD | win32.constants.WS_VISIBLE,  # dwStyle
+            x,  # X
+            y,  # Y
+            width,  # nWidth
+            height,  # nHeight
+            parent_hwnd,  # hWndParent
+            0,  # hMenu
+            win32.kernel32.GetModuleHandle(0),  # hInstance
+            0  # lpParam
+        )
+        super().__init__(parent_hwnd, hwnd)
         self.text = text
+        # Show the button immediately
+        try:
+            win32.user32.ShowWindow(self.hwnd, win32.constants.SW_SHOW)
+        except:
+            pass
         print(f"Button created: {text}")
 
 class Label(Control):
     def __init__(self, parent_hwnd, text, x, y, width, height):
-        # Simplified implementation
-        super().__init__(parent_hwnd, 0)
+        # Create actual label using win32 APIs
+        hwnd = win32.user32.CreateWindowExW(
+            0,  # dwExStyle
+            "STATIC",  # lpClassName
+            text,  # lpWindowName
+            win32.constants.WS_CHILD | win32.constants.WS_VISIBLE,  # dwStyle
+            x,  # X
+            y,  # Y
+            width,  # nWidth
+            height,  # nHeight
+            parent_hwnd,  # hWndParent
+            0,  # hMenu
+            win32.kernel32.GetModuleHandle(0),  # hInstance
+            0  # lpParam
+        )
+        super().__init__(parent_hwnd, hwnd)
         self.text = text
+        # Show the label immediately
+        try:
+            win32.user32.ShowWindow(self.hwnd, win32.constants.SW_SHOW)
+        except:
+            pass
         print(f"Label created: {text}")
 
 class Edit(Control):
     def __init__(self, parent_hwnd, text, x, y, width, height):
-        # Simplified implementation
-        super().__init__(parent_hwnd, 0)
+        # Create actual edit control using win32 APIs
+        hwnd = win32.user32.CreateWindowExW(
+            0,  # dwExStyle
+            "EDIT",  # lpClassName
+            text,  # lpWindowName
+            win32.constants.WS_CHILD | win32.constants.WS_VISIBLE | win32.constants.WS_BORDER,  # dwStyle
+            x,  # X
+            y,  # Y
+            width,  # nWidth
+            height,  # nHeight
+            parent_hwnd,  # hWndParent
+            0,  # hMenu
+            win32.kernel32.GetModuleHandle(0),  # hInstance
+            0  # lpParam
+        )
+        super().__init__(parent_hwnd, hwnd)
         self.text = text
+        # Show the edit control immediately
+        try:
+            win32.user32.ShowWindow(self.hwnd, win32.constants.SW_SHOW)
+        except:
+            pass
         print(f"Edit created: {text}")
 
 # Utility functions
@@ -162,8 +261,13 @@ def get_screen_size():
     return (1920, 1080)
 
 def message_box(hwnd, text, caption, type=0):
+    # Actually show a message box using win32 APIs
+    try:
+        result = win32.user32.MessageBoxW(hwnd, text, caption, type)
+    except:
+        result = win32.user32.MessageBoxW(0, text, caption, type)
     print(f"MessageBox: {caption} - {text}")
-    return 1
+    return result
 
 def run_simple_app(main_window_func):
     app = Application()
