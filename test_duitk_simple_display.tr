@@ -1,0 +1,24 @@
+# Test DUITK Simple Window Display
+print("Testing DUITK Simple Window Display...")
+
+import duitk
+import win32.kernel32
+
+print("DUITK imported successfully!")
+
+# Test creating a window that should appear briefly
+window = duitk.create_window("Brief Window", 400, 300)
+window.show()
+
+# Test creating controls
+button = window.create_button("Button", 20, 20, 100, 30)
+label = window.create_label("Label", 20, 70, 100, 25)
+edit = window.create_edit("Edit", 20, 110, 100, 25)
+
+print("Window and controls created!")
+print("Window should be visible for 3 seconds...")
+
+# Sleep for 3 seconds so we can see the window
+win32.kernel32.Sleep(3000)
+
+print("Test completed!")

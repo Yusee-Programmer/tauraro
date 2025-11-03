@@ -1,5 +1,0 @@
-print("Starting test")
-a = 10
-print("Assigned a =", a)
-print("Trying to access a...")
-print("a =", a)

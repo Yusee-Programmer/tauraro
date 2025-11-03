@@ -82,7 +82,7 @@ impl CodeObject {
             pos as u32
         } else {
             let pos = self.names.len() as u32;
-            self.names.push(name);
+            self.names.push(name.clone());
             pos
         }
     }
@@ -175,8 +175,8 @@ pub struct Frame {
     pub registers: SmallVec<[RcValue; 64]>, // Register file with reference counting
     pub locals: Vec<RcValue>,               // Local variables with direct indexing (faster than HashMap)
     pub locals_map: HashMap<String, usize>, // Maps variable names to indices for debugging
-    pub globals: Rc<HashMap<String, RcValue>>,  // OPTIMIZATION: Shared globals (cheap clone)
-    pub builtins: Rc<HashMap<String, RcValue>>, // OPTIMIZATION: Shared builtins (cheap clone)
+    pub globals: Rc<RefCell<HashMap<String, RcValue>>>,  // OPTIMIZATION: Shared globals with interior mutability
+    pub builtins: Rc<RefCell<HashMap<String, RcValue>>>, // OPTIMIZATION: Shared builtins with interior mutability
     pub free_vars: Vec<RcValue>,            // Free variables for closures with reference counting
     pub block_stack: Vec<Block>,            // Block stack for control flow
     pub cache_version: u32,                 // Current cache version
@@ -203,7 +203,7 @@ impl std::fmt::Debug for Frame {
 }
 
 impl Frame {
-    pub fn new(code: CodeObject, globals: HashMap<String, Value>, builtins: HashMap<String, Value>) -> Self {
+    pub fn new(code: CodeObject, globals: Rc<RefCell<HashMap<String, RcValue>>>, builtins: Rc<RefCell<HashMap<String, RcValue>>>) -> Self {
         // Initialize registers
         let mut registers = SmallVec::new();
         registers.resize(code.registers as usize, RcValue::new(Value::None));
@@ -226,9 +226,7 @@ impl Frame {
             locals_map.insert(name.clone(), i);
         }
 
-        // OPTIMIZATION: Wrap in Rc so future function calls just clone the pointer
-        let rc_globals = Rc::new(globals.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect());
-        let rc_builtins = Rc::new(builtins.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect());
+        // Globals and builtins are already wrapped in Rc, just clone the pointer
 
         Self {
             code,
@@ -237,8 +235,8 @@ impl Frame {
             registers,
             locals,
             locals_map,
-            globals: rc_globals,
-            builtins: rc_builtins,
+            globals,
+            builtins,
             free_vars: Vec::new(),
             block_stack: Vec::new(),
             cache_version: 0,
@@ -251,7 +249,7 @@ impl Frame {
     }
 
     /// Create a frame optimized for function calls with pre-allocated registers
-    pub fn new_function_frame(code: CodeObject, globals: HashMap<String, Value>, builtins: HashMap<String, Value>, args: Vec<Value>, kwargs: HashMap<String, Value>) -> Self {
+    pub fn new_function_frame(code: CodeObject, globals: Rc<RefCell<HashMap<String, RcValue>>>, builtins: Rc<RefCell<HashMap<String, RcValue>>>, args: Vec<Value>, kwargs: HashMap<String, Value>) -> Self {
         // Initialize registers
         let mut registers = SmallVec::new();
         registers.resize(code.registers as usize, RcValue::new(Value::None));
@@ -335,9 +333,7 @@ impl Frame {
             }
         }
 
-        // OPTIMIZATION: Wrap in Rc so cloning is cheap
-        let rc_globals = Rc::new(globals.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect());
-        let rc_builtins = Rc::new(builtins.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect());
+        // Globals and builtins are already wrapped in Rc, just use them
 
         Self {
             code,
@@ -346,8 +342,8 @@ impl Frame {
             registers,
             locals,
             locals_map,
-            globals: rc_globals,
-            builtins: rc_builtins,
+            globals,
+            builtins,
             free_vars: Vec::new(),
             block_stack: Vec::new(),
             cache_version: 0,
@@ -360,7 +356,7 @@ impl Frame {
     }
 
     /// Create a frame with Rc-wrapped globals/builtins (OPTIMIZATION: no HashMap conversion)
-    pub fn new_with_rc(code: CodeObject, globals: Rc<HashMap<String, RcValue>>, builtins: Rc<HashMap<String, RcValue>>) -> Self {
+    pub fn new_with_rc(code: CodeObject, globals: Rc<RefCell<HashMap<String, RcValue>>>, builtins: Rc<RefCell<HashMap<String, RcValue>>>) -> Self {
         // Initialize registers
         let mut registers = SmallVec::new();
         registers.resize(code.registers as usize, RcValue::new(Value::None));

@@ -4,7 +4,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use anyhow::Result;
 
-use crate::codegen::{CodeGenerator, CTranspiler};  // Fix the import
+use crate::codegen::c_transpiler::CTranspiler;
+use crate::codegen::CodeGenerator;
 
 mod lexer;
 mod parser;
@@ -13,12 +14,18 @@ mod semantic;
 mod ir;
 mod codegen;
 mod value;
+
+// FFI modules (declare before builtins so it can be imported)
+#[cfg(feature = "ffi")]
+mod ffi;
+
+#[cfg(feature = "ffi")]
+mod ffi_builtins;
+
 mod builtins;
 mod builtins_super;
-// Note: builtins_ffi is compiled separately for C FFI, not included in main binary
 mod vm;
 mod runtime;
-mod ffi;
 mod modules;
 mod module_system;
 mod module_cache;

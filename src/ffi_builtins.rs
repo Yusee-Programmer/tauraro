@@ -15,7 +15,7 @@ use anyhow::{Result, anyhow};
 #[cfg(feature = "ffi")]
 lazy_static::lazy_static! {
     /// Global FFI manager shared across the runtime
-    static ref GLOBAL_FFI_MANAGER: Arc<Mutex<FFIManager>> = Arc::new(Mutex::new(FFIManager::new()));
+    pub static ref GLOBAL_FFI_MANAGER: Arc<Mutex<FFIManager>> = Arc::new(Mutex::new(FFIManager::new()));
 }
 
 /// Load a dynamic library

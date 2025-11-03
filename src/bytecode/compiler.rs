@@ -450,35 +450,26 @@ impl SuperCompiler {
                     for decorator_expr in decorators.iter().rev() {
                         // Load the decorator
                         let decorator_reg = self.compile_expression(decorator_expr.clone())?;
-                        
+
+                        // Move the function to the next register for the call
+                        let arg_reg = decorator_reg + 1;
+                        while self.next_register <= arg_reg {
+                            self.allocate_register();
+                        }
+                        self.emit(OpCode::MoveReg, func_reg, arg_reg, 0, self.current_line);
+
                         // Call the decorator with the function as argument
                         let result_reg = self.allocate_register();
                         self.emit(OpCode::CallFunction, decorator_reg, 1, result_reg, self.current_line);
-                        
-                        // Move the function to the next register for the call
-                        let temp_reg = self.allocate_register();
-                        self.emit(OpCode::LoadLocal, func_reg, temp_reg, 0, self.current_line);
-                        
+
                         // Update the function register to the decorated result
                         func_reg = result_reg;
                     }
-                    
-                    // Update the closure value with the decorated result
-                    // Load the decorated result from register to get the actual value
-                    // For now, we'll assume the decorator returns the modified closure
-                    // In a full implementation, we would need to handle this properly
                 }
-                
-                // Store the closure in constants
-                let closure_const_idx = self.code.add_constant(closure_value);
-                
-                // Load the closure
-                let reg = self.allocate_register();
-                self.emit(OpCode::LoadConst, closure_const_idx, reg, 0, self.current_line);
-                
+
                 // Store the function in global namespace
                 let name_idx = self.code.add_name(name.clone());
-                self.emit(OpCode::StoreGlobal, name_idx, reg, 0, self.current_line);
+                self.emit(OpCode::StoreGlobal, func_reg, name_idx, 0, self.current_line);
                 
                 // Debug output to see what's stored in constants
 
@@ -531,7 +522,7 @@ impl SuperCompiler {
                         if self.is_in_function_scope() {
                             self.emit(OpCode::StoreFast, var_idx, elem_reg, 0, self.current_line);
                         } else {
-                            self.emit(OpCode::StoreGlobal, var_idx, elem_reg, 0, self.current_line);
+                            self.emit(OpCode::StoreGlobal, elem_reg, var_idx, 0, self.current_line);
                         }
                     }
                 } else {
@@ -550,7 +541,7 @@ impl SuperCompiler {
                         self.emit(OpCode::StoreFast, loop_var_idx, value_reg, 0, self.current_line);
                     } else {
                         // In global scope, use StoreGlobal
-                        self.emit(OpCode::StoreGlobal, loop_var_idx, value_reg, 0, self.current_line);
+                        self.emit(OpCode::StoreGlobal, value_reg, loop_var_idx, 0, self.current_line);
                     }
                 }
 
@@ -853,7 +844,7 @@ impl SuperCompiler {
                 self.emit(OpCode::LoadConst, class_const_idx, reg, 0, self.current_line);
 
                 let name_idx = self.code.add_name(name.clone());
-                self.emit(OpCode::StoreGlobal, name_idx, reg, 0, self.current_line);
+                self.emit(OpCode::StoreGlobal, reg, name_idx, 0, self.current_line);
 
                 Ok(())
             }
@@ -921,22 +912,58 @@ impl SuperCompiler {
 
                 // --- 5. Compile `except` blocks ---
                 let mut to_finally_jumps = vec![];
+
+                // Pop the exception value pushed by VM into a known register
+                let exception_reg = self.allocate_register();
+                self.emit(OpCode::GetExceptionValue, exception_reg, 0, 0, self.current_line);
+
                 for handler in except_handlers {
-                    let next_handler_jump = self.emit(OpCode::JumpIfFalse, 0, 0, 0, self.current_line);
+                    // Check if this handler matches the exception type
+                    let next_handler_jump = if let Some(exc_type_expr) = &handler.exception_type {
+                        // Get the exception type name from the expression
+                        // e.g., "ValueError", "TypeError", etc.
+                        let type_name = match exc_type_expr {
+                            Expr::Identifier(name) => name.clone(),
+                            _ => return Err(anyhow!("Exception type must be an identifier")),
+                        };
 
-                    if let Some(name) = handler.name {
-                        let name_idx = self.code.add_name(name);
-                        self.emit(OpCode::StoreGlobal, name_idx, 0, 0, self.current_line);
+                        let type_name_idx = self.code.add_name(type_name);
+                        let match_reg = self.allocate_register();
+
+                        // Check if exception matches this type
+                        self.emit(OpCode::MatchExceptionType, exception_reg, type_name_idx, match_reg, self.current_line);
+
+                        // If no match, jump to next handler
+                        Some(self.emit(OpCode::JumpIfFalse, match_reg, 0, 0, self.current_line))
+                    } else {
+                        // Bare except - catches any exception
+                        None
+                    };
+
+                    // Store exception in variable if "as name" is specified
+                    if let Some(name) = &handler.name {
+                        let name_idx = self.code.add_name(name.clone());
+                        // Use StoreGlobal with correct argument order (value_reg, name_idx)
+                        self.emit(OpCode::StoreGlobal, exception_reg, name_idx, 0, self.current_line);
                     }
 
-                    for stmt in handler.body {
-                        self.compile_statement(stmt)?;
+                    // Compile handler body
+                    for stmt in &handler.body {
+                        self.compile_statement(stmt.clone())?;
                     }
+
+                    // After handling, jump to finally or end
                     to_finally_jumps.push(self.emit(OpCode::Jump, 0, 0, 0, self.current_line));
 
-                    let next_handler_addr = self.code.instructions.len() as u32;
-                    self.code.instructions[next_handler_jump].arg2 = next_handler_addr;
+                    // Set jump target for next handler (if type checking failed)
+                    if let Some(jump_idx) = next_handler_jump {
+                        let next_handler_addr = self.code.instructions.len() as u32;
+                        self.code.instructions[jump_idx].arg2 = next_handler_addr;
+                    }
                 }
+
+                // If no handler matched, re-raise the exception
+                self.emit(OpCode::Raise, exception_reg, 0, 0, self.current_line);
 
                 // --- 6. Compile `else` block ---
                 let else_addr = self.code.instructions.len() as u32;
@@ -1050,7 +1077,7 @@ impl SuperCompiler {
                     } else {
                         // Global scope - use StoreGlobal
                         let name_idx = self.code.add_name(target.clone());
-                        self.emit(OpCode::StoreGlobal, name_idx, item_reg, 0, self.current_line);
+                        self.emit(OpCode::StoreGlobal, item_reg, name_idx, 0, self.current_line);
                     }
                 }
                 Ok(())
@@ -1067,7 +1094,7 @@ impl SuperCompiler {
                 // Use the alias if provided, otherwise use the module name
                 let store_name = alias.as_ref().unwrap_or(&module);
                 let store_name_idx = self.code.add_name(store_name.clone());
-                self.emit(OpCode::StoreGlobal, store_name_idx, result_reg, 0, self.current_line);
+                self.emit(OpCode::StoreGlobal, result_reg, store_name_idx, 0, self.current_line);
 
                 Ok(())
             }
@@ -1085,7 +1112,7 @@ impl SuperCompiler {
                     // Use the alias if provided, otherwise use the imported name
                     let store_name = alias.as_ref().unwrap_or(&name);
                     let store_name_idx = self.code.add_name(store_name.clone());
-                    self.emit(OpCode::StoreGlobal, store_name_idx, result_reg, 0, self.current_line);
+                    self.emit(OpCode::StoreGlobal, result_reg, store_name_idx, 0, self.current_line);
                 }
 
                 Ok(())
@@ -1212,13 +1239,13 @@ impl SuperCompiler {
                         self.emit(OpCode::LoadFast, local_idx as u32, reg, 0, self.current_line);
                     } else {
                         // Not a local variable, treat as global
-                        let name_idx = self.code.add_name(name);
+                        let name_idx = self.code.add_name(name.clone());
                         let cache_idx = self.code.add_inline_cache();
                         self.emit(OpCode::LoadGlobal, name_idx, reg, cache_idx, self.current_line);
                     }
                 } else {
                     // Global scope - always treat as global variable
-                    let name_idx = self.code.add_name(name);
+                    let name_idx = self.code.add_name(name.clone());
                     let cache_idx = self.code.add_inline_cache();
                     self.emit(OpCode::LoadGlobal, name_idx, reg, cache_idx, self.current_line);
                 }
@@ -1323,8 +1350,11 @@ impl SuperCompiler {
                     }
                 }
                 
+                // DEBUG: Print information about the call being compiled
+                // eprintln!("DEBUG: Compiling Call expression");
                 let func_reg = self.compile_expression(*func)?;
-                // eprintln!("DEBUG: func_reg = {}", func_reg); // Debug output
+                // DEBUG: Print the function register
+                // eprintln!("DEBUG: Function register = {}", func_reg);
 
                 // Compile all positional arguments first
                 let mut compiled_arg_regs = Vec::new();
@@ -1436,8 +1466,9 @@ impl SuperCompiler {
                     }
                 }
                 let result_reg = self.allocate_register();
+                // DEBUG: Print call function information
                 // eprintln!("DEBUG: Emitting CallFunction with func_reg={}, arg_count={}, result_reg={}", 
-                //          func_reg, compiled_arg_regs.len(), result_reg); // Debug output
+                //          func_reg, compiled_arg_regs.len(), result_reg);
                 self.emit(OpCode::CallFunction, func_reg, compiled_arg_regs.len() as u32, result_reg, self.current_line);
 
                 Ok(result_reg)
@@ -1487,7 +1518,7 @@ impl SuperCompiler {
                             self.allocate_register();
                         }
                         // Copy item to consecutive position
-                        self.emit(OpCode::LoadLocal, item_reg, target_reg, 0, self.current_line);
+                        self.emit(OpCode::MoveReg, item_reg, target_reg, 0, self.current_line);
                     }
                 }
 
@@ -1519,7 +1550,7 @@ impl SuperCompiler {
                             self.allocate_register();
                         }
                         // Copy item to consecutive position
-                        self.emit(OpCode::LoadLocal, item_reg, target_reg, 0, self.current_line);
+                        self.emit(OpCode::MoveReg, item_reg, target_reg, 0, self.current_line);
                     }
                 }
 
@@ -1571,7 +1602,8 @@ impl SuperCompiler {
                             self.allocate_register();
                         }
                         // Copy item to consecutive position
-                        self.emit(OpCode::LoadLocal, item_reg, target_reg, 0, self.current_line);
+                        // FIX: Use MoveReg instead of LoadLocal
+                        self.emit(OpCode::MoveReg, item_reg, target_reg, 0, self.current_line);
                     }
                 }
 
@@ -1595,7 +1627,8 @@ impl SuperCompiler {
                     }
                     UnaryOp::UAdd => {
                         // For unary plus, we just return the operand
-                        self.emit(OpCode::LoadLocal, operand_reg, result_reg, 0, self.current_line);
+                        // FIX: Use MoveReg instead of LoadLocal
+                        self.emit(OpCode::MoveReg, operand_reg, result_reg, 0, self.current_line);
                     }
                     UnaryOp::Not => {
                         // Logical NOT operation
@@ -1643,7 +1676,8 @@ impl SuperCompiler {
                     let target_reg = object_reg + 1 + i as u32;
                     if arg_reg != target_reg {
                         // Only emit LoadLocal if the register is different
-                        self.emit(OpCode::LoadLocal, arg_reg, target_reg, 0, self.current_line);
+                        // FIX: Use MoveReg instead of LoadLocal
+                        self.emit(OpCode::MoveReg, arg_reg, target_reg, 0, self.current_line);
                     }
                 }
 
@@ -1666,13 +1700,13 @@ impl SuperCompiler {
                     let mutating_methods = vec!["append", "extend", "insert", "remove", "pop", "clear", "sort", "reverse"];
                     if mutating_methods.contains(&method.as_str()) {
                         let name_idx = self.code.add_name(var_name);
-                        self.emit(OpCode::StoreGlobal, name_idx, object_reg, 0, self.current_line);
+                        self.emit(OpCode::StoreGlobal, object_reg, name_idx, 0, self.current_line);
                     }
                 }
 
                 // Load the result from the object register (CallMethod stores result there)
-                // We use LoadLocal to copy it to the result register
-                self.emit(OpCode::LoadLocal, object_reg, result_reg, 0, self.current_line);
+                // We use MoveReg to copy it to the result register
+                self.emit(OpCode::MoveReg, object_reg, result_reg, 0, self.current_line);
                 Ok(result_reg)
             }
             Expr::Attribute { object, name } => {
@@ -1707,11 +1741,11 @@ impl SuperCompiler {
                             let str_func_idx = self.code.add_name("str".to_string());
                             let str_func_reg = self.allocate_register();
                             let cache_idx = self.code.add_inline_cache();
-                            self.emit(OpCode::LoadGlobal, str_func_idx, cache_idx, str_func_reg, self.current_line);
+                            self.emit(OpCode::LoadGlobal, str_func_idx, str_func_reg, cache_idx, self.current_line);
 
                             // Move the expression result to the next register (argument position)
                             let arg_reg = str_func_reg + 1;
-                            self.emit(OpCode::LoadLocal, expr_reg, arg_reg, 0, self.current_line);
+                            self.emit(OpCode::MoveReg, expr_reg, arg_reg, 0, self.current_line);
 
                             // Call str() with the expression result as argument
                             let result_reg = self.allocate_register();
@@ -1780,10 +1814,64 @@ impl SuperCompiler {
             Expr::Await(expr) => {
                 // Handle await expression
                 let value_reg = self.compile_expression(*expr)?;
-                
+
                 // Emit Await instruction
                 let result_reg = self.allocate_register();
                 self.emit(OpCode::Await, value_reg, result_reg, 0, self.current_line);
+                Ok(result_reg)
+            }
+            Expr::Slice { object, start, stop, step } => {
+                // Handle slice expression: object[start:stop:step]
+                let object_reg = self.compile_expression(*object)?;
+
+                // Compile start, stop, and step expressions
+                let start_reg = if let Some(start_expr) = start {
+                    self.compile_expression(*start_expr)?
+                } else {
+                    // None for start means slice from beginning
+                    let none_const = self.code.add_constant(Value::None);
+                    let reg = self.allocate_register();
+                    self.emit(OpCode::LoadConst, none_const, reg, 0, self.current_line);
+                    reg
+                };
+
+                let stop_reg = if let Some(stop_expr) = stop {
+                    self.compile_expression(*stop_expr)?
+                } else {
+                    // None for stop means slice to end
+                    let none_const = self.code.add_constant(Value::None);
+                    let reg = self.allocate_register();
+                    self.emit(OpCode::LoadConst, none_const, reg, 0, self.current_line);
+                    reg
+                };
+
+                let step_reg = if let Some(step_expr) = step {
+                    self.compile_expression(*step_expr)?
+                } else {
+                    // None for step means step of 1
+                    let none_const = self.code.add_constant(Value::None);
+                    let reg = self.allocate_register();
+                    self.emit(OpCode::LoadConst, none_const, reg, 0, self.current_line);
+                    reg
+                };
+
+                // Build a slice object with start, stop, and step
+                // We'll use the BuildSlice opcode for this
+                let result_reg = self.allocate_register();
+
+                // Emit BuildSlice instruction
+                // arg1 = object register, arg2 = start register, arg3 = result register
+                // We need to pass stop and step as well, but we only have 3 args
+                // Let's use a different approach: create a tuple with (start, stop, step) and use SubscrLoad
+
+                // For now, let's implement a simple slice that uses a special Slice opcode
+                // arg1 = object, arg2 = start, arg3 = stop
+                // We'll handle step later
+                self.emit(OpCode::Slice, object_reg, start_reg, stop_reg, self.current_line);
+
+                // The result is stored in object_reg, so copy it to result_reg
+                self.emit(OpCode::MoveReg, object_reg, result_reg, 0, self.current_line);
+
                 Ok(result_reg)
             }
             _ => Err(anyhow!("Unsupported expression type: {:?}", expr)),

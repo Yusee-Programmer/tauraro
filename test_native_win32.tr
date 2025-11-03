@@ -1,0 +1,87 @@
+# Native Win32 API Test
+print("Testing native Win32 API usage...")
+
+# Load Windows libraries directly
+print("Loading user32.dll...")
+user32 = load_library("user32.dll")
+print(f"user32 loaded: {user32}")
+
+print("Loading kernel32.dll...")
+kernel32 = load_library("kernel32.dll")
+print(f"kernel32 loaded: {kernel32}")
+
+# Define Win32 functions
+print("Defining Win32 functions...")
+
+# MessageBox function
+MessageBoxA = define_function("user32.dll", "MessageBoxA", "int32", ["pointer", "pointer", "pointer", "uint32"])
+print("MessageBoxA defined")
+
+# Sleep function
+Sleep = define_function("kernel32.dll", "Sleep", "void", ["uint32"])
+print("Sleep defined")
+
+# GetModuleHandle function
+GetModuleHandleA = define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
+print("GetModuleHandleA defined")
+
+# CreateWindowEx function
+CreateWindowExA = define_function("user32.dll", "CreateWindowExA", "pointer", ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
+print("CreateWindowExA defined")
+
+# ShowWindow function
+ShowWindow = define_function("user32.dll", "ShowWindow", "bool", ["pointer", "int32"])
+print("ShowWindow defined")
+
+# UpdateWindow function
+UpdateWindow = define_function("user32.dll", "UpdateWindow", "bool", ["pointer"])
+print("UpdateWindow defined")
+
+# Test MessageBox
+print("Testing MessageBox...")
+result = MessageBoxA(0, "Hello from native Win32!", "Native Win32 Test", 0)
+print(f"MessageBox result: {result}")
+
+# Test Sleep
+print("Testing Sleep...")
+Sleep(1000)
+print("Sleep completed!")
+
+# Try to create a simple window
+print("Attempting to create a window...")
+
+# Get module handle
+hInstance = GetModuleHandleA(0)
+print(f"Module handle: {hInstance}")
+
+# Try to create a window with a standard class
+hwnd = CreateWindowExA(
+    0,  # dwExStyle
+    "Button",  # lpClassName - using a standard class
+    "Native Win32 Window",  # lpWindowName
+    0x00CF0000,  # dwStyle (WS_OVERLAPPEDWINDOW)
+    0x80000000,  # X (CW_USEDEFAULT)
+    0x80000000,  # Y (CW_USEDEFAULT)
+    400,  # nWidth
+    300,  # nHeight
+    0,  # hWndParent
+    0,  # hMenu
+    hInstance,  # hInstance
+    0  # lpParam
+)
+
+print(f"Window handle: {hwnd}")
+
+if hwnd:
+    print("Window created successfully!")
+    # Try to show the window
+    ShowWindow(hwnd, 1)  # SW_SHOWNORMAL
+    UpdateWindow(hwnd)
+    print("Window should be visible now...")
+    
+    # Keep it visible for a few seconds
+    Sleep(3000)
+else:
+    print("Failed to create window")
+
+print("Native Win32 test completed!")

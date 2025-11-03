@@ -1,0 +1,31 @@
+# DUITK Win32 Integration Demo
+print("DUITK Win32 Integration Demo")
+
+import duitk
+import win32.user32
+import win32.kernel32
+import win32.constants
+
+print("Libraries loaded successfully!")
+
+# Demonstrate that win32 functions work
+print("Showing a message box...")
+result = win32.user32.MessageBoxA(0, "This message box was created using win32 APIs through DUITK!", "Win32 Integration Test", 0)
+print(f"MessageBox result: {result}")
+
+# Demonstrate sleep function
+print("Sleeping for 2 seconds...")
+win32.kernel32.Sleep(2000)
+print("Awake!")
+
+# Demonstrate DUITK wrapper functions
+print("Using DUITK wrapper functions...")
+duitk.message_box(0, "This message box was created using DUITK wrapper functions!", "DUITK Test")
+
+print("Demo completed successfully!")
+print("")
+print("Summary:")
+print("- DUITK is successfully built on top of the win32 library")
+print("- Win32 APIs are accessible through DUITK")
+print("- Functions like MessageBox and Sleep work correctly")
+print("- DUITK provides a higher-level interface for Windows GUI development")

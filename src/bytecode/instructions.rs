@@ -81,6 +81,8 @@ pub enum OpCode {
     PopBlock,       // Pop a block from the block stack
     Raise,          // Raise an exception
     StoreException, // Store exception value in variable (used in except handlers)
+    GetExceptionValue,    // Pop exception from stack and store in register (arg1 = dest_reg)
+    MatchExceptionType,   // Check if exception matches type (arg1 = exc_reg, arg2 = type_name_idx, arg3 = result_reg)
     
     // Assertions
     Assert,         // Assert statement
@@ -115,6 +117,7 @@ pub enum OpCode {
     SubscrLoad,     // Load item from sequence (obj[key])
     SubscrStore,    // Store item to sequence (obj[key] = value)
     SubscrDelete,   // Delete item from sequence (del obj[key])
+    Slice,          // Create a slice (obj[start:stop:step])
     
     // Attribute operations
     LoadAttr,       // Load attribute from object (obj.attr)

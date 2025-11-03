@@ -1,4 +1,0 @@
-import duitk
-
-print("DUITK imported successfully!")
-print("Version:", duitk.version)
