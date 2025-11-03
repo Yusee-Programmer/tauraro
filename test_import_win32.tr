@@ -1,0 +1,6 @@
+# Test importing win32 package
+
+print("Before import")
+import win32
+print("After import")
+print("win32 imported:", type(win32))

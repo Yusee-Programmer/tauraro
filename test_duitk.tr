@@ -1,15 +1,43 @@
-# Test DUITK framework
+# Test DUITK (Desktop UI Toolkit) library
+print("Testing DUITK library...")
 
 import duitk
 
-print("Testing DUITK framework...")
-
-# Test basic functionality
+print("DUITK imported successfully!")
 print("DUITK version:", duitk.version)
 print("DUITK name:", duitk.name)
+print("DUITK description:", duitk.description)
 
-# Test system functions
-screen_size = duitk.system.get_screen_size()
+# Test creating an application
+print("\nCreating application...")
+app = duitk.Application()
+print("Application created!")
+
+# Test creating a window
+print("\nCreating window...")
+window = app.create_window("Test Window", 800, 600)
+print("Window created!")
+
+# Test window methods
+print("\nTesting window methods...")
+window.show()
+window.set_title("Updated Title")
+title = window.get_title()
+print("Window title:", title)
+
+# Test creating controls
+print("\nCreating controls...")
+button = window.create_button("Click Me", 10, 10, 100, 30)
+label = window.create_label("Hello, DUITK!", 10, 50, 200, 20)
+edit = window.create_edit("Enter text", 10, 80, 200, 20)
+print("Controls created!")
+
+# Test screen size
+print("\nTesting utility functions...")
+screen_size = duitk.get_screen_size()
 print("Screen size:", screen_size)
 
-print("DUITK framework test completed successfully!")
+# Test message box
+duitk.message_box(0, "This is a test", "Test Message")
+
+print("\n✅ All DUITK tests passed!")

@@ -1,0 +1,14 @@
+# Test while with break - more statements
+
+class App:
+    def run(self):
+        self.running = True
+        result = 0
+        while self.running:
+            result = 1
+            if result == 0:
+                break
+        print("After while")
+
+app = App()
+print("Test complete!")

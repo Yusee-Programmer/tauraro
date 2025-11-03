@@ -20,8 +20,8 @@ use crate::type_checker::TypeChecker;
 /// Register-based bytecode virtual machine with computed GOTOs for maximum performance
 pub struct SuperBytecodeVM {
     pub frames: Vec<Frame>,
-    pub builtins: HashMap<String, RcValue>,
-    pub globals: HashMap<String, RcValue>,
+    pub builtins: Rc<RefCell<HashMap<String, RcValue>>>,
+    pub globals: Rc<RefCell<HashMap<String, RcValue>>>,
     pub globals_version: u32,
     
     // Memory management and stack overflow protection
@@ -105,8 +105,8 @@ impl SuperBytecodeVM {
 
         Self {
             frames: Vec::new(),
-            builtins,
-            globals,
+            builtins: Rc::new(RefCell::new(builtins)),
+            globals: Rc::new(RefCell::new(globals)),
             globals_version: 0,
             memory_ops,
             function_code_cache: HashMap::new(),
@@ -133,48 +133,63 @@ impl SuperBytecodeVM {
 
     /// Helper method to compile and execute a module source file
     pub fn compile_and_execute_module(&mut self, source: &str, module_name: &str) -> Result<Value> {
+        eprintln!("DEBUG compile_and_execute_module: START for module '{}'", module_name);
+        eprintln!("DEBUG compile_and_execute_module: loading_modules before: {:?}", self.loading_modules);
+
         // Check for circular import
         if self.loading_modules.contains(module_name) {
+            eprintln!("DEBUG compile_and_execute_module: circular import detected for '{}'", module_name);
             return Err(anyhow!("ImportError: cannot import name '{}' (circular import)", module_name));
         }
-        
+
         // Add module to loading set
         self.loading_modules.insert(module_name.to_string());
-        
+        eprintln!("DEBUG compile_and_execute_module: added '{}' to loading_modules: {:?}", module_name, self.loading_modules);
+
         // Ensure we remove the module from loading set even if an error occurs
+        eprintln!("DEBUG compile_and_execute_module: calling compile_and_execute_module_inner for '{}'", module_name);
         let result = self.compile_and_execute_module_inner(source, module_name);
-        
+        eprintln!("DEBUG compile_and_execute_module: compile_and_execute_module_inner returned for '{}'", module_name);
+
         // Remove module from loading set now that it's fully executed and cached
         self.loading_modules.remove(module_name);
-        
+        eprintln!("DEBUG compile_and_execute_module: removed '{}' from loading_modules", module_name);
+
         result
     }
 
     /// Helper method to compile and execute a module source file
     fn compile_and_execute_module_inner(&mut self, source: &str, module_name: &str) -> Result<Value> {
+        eprintln!("DEBUG compile_and_execute_module_inner: START for module '{}'", module_name);
+
         // Compile the module
+        eprintln!("DEBUG compile_and_execute_module_inner: lexing module '{}'", module_name);
         let tokens = crate::lexer::Lexer::new(source)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow!("Lexer error in module '{}': {}", module_name, e))?;
 
+        eprintln!("DEBUG compile_and_execute_module_inner: parsing module '{}'", module_name);
         let mut parser = crate::parser::Parser::new(tokens);
         let ast = parser.parse()
             .map_err(|e| anyhow!("Parser error in module '{}': {}", module_name, e))?;
 
+        eprintln!("DEBUG compile_and_execute_module_inner: compiling module '{}'", module_name);
         let mut compiler = crate::bytecode::compiler::SuperCompiler::new(module_name.to_string());
         let code_object = compiler.compile(ast)
             .map_err(|e| anyhow!("Compiler error in module '{}': {}", module_name, e))?;
 
         // Save current globals to determine what the module adds
-        let globals_before: std::collections::HashSet<String> = self.globals.keys().cloned().collect();
+        let globals_before: std::collections::HashSet<String> = self.globals.borrow().keys().cloned().collect();
 
         // Execute the module
+        eprintln!("DEBUG compile_and_execute_module_inner: executing module '{}' with {} frames currently", module_name, self.frames.len());
         self.execute(code_object)
             .map_err(|e| anyhow!("Error executing module '{}': {}", module_name, e))?;
+        eprintln!("DEBUG compile_and_execute_module_inner: execution completed for module '{}'", module_name);
 
         // Get the module's globals (namespace) - only new names added by the module
         let mut module_namespace = HashMap::new();
-        for (name, value) in &self.globals {
+        for (name, value) in self.globals.borrow().iter() {
             if !globals_before.contains(name) && !name.starts_with("__") && name != "builtins" {
                 module_namespace.insert(name.clone(), value.value.clone());
             }
@@ -191,13 +206,19 @@ impl SuperBytecodeVM {
     /// Searches sys.path directories for module files with supported extensions
     /// Supported extensions: .py, .tr, .tau, .tauraro
     fn load_module_from_file(&mut self, module_name: &str) -> Result<Value> {
+        eprintln!("DEBUG load_module_from_file: attempting to load module '{}'", module_name);
+        eprintln!("DEBUG load_module_from_file: loaded_modules keys: {:?}", self.loaded_modules.keys().collect::<Vec<_>>());
+        eprintln!("DEBUG load_module_from_file: loading_modules: {:?}", self.loading_modules);
+
         // Check if module is already loaded (module caching like Python's sys.modules)
         if let Some(cached_module) = self.loaded_modules.get(module_name) {
+            eprintln!("DEBUG load_module_from_file: found cached module '{}'", module_name);
             return Ok(cached_module.clone());
         }
-        
+
         // Check if module is currently being loaded (circular import detection)
         if self.loading_modules.contains(module_name) {
+            eprintln!("DEBUG load_module_from_file: circular import detected for '{}'", module_name);
             return Err(anyhow!("ImportError: cannot import name '{}' (circular import)", module_name));
         }
 
@@ -255,8 +276,8 @@ impl SuperBytecodeVM {
 
     /// Track instruction execution for profiling and JIT compilation
     /// Get a global variable by name (for REPL)
-    pub fn get_global(&self, name: &str) -> Option<&RcValue> {
-        self.globals.get(name)
+    pub fn get_global(&self, name: &str) -> Option<RcValue> {
+        self.globals.borrow().get(name).cloned()
     }
 
     fn track_instruction_execution(&mut self, function_name: &str, instruction_index: usize) {
@@ -292,25 +313,23 @@ impl SuperBytecodeVM {
     }
     
     pub fn execute(&mut self, code: CodeObject) -> Result<Value> {
-        // Convert globals and builtins from RcValue to Value for Frame::new
-        let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
-        let builtins_values: HashMap<String, Value> = self.builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+        // Just clone the Rc pointers (cheap!) instead of cloning the entire HashMap
+        let globals_rc = Rc::clone(&self.globals);
+        let builtins_rc = Rc::clone(&self.builtins);
 
-        let frame = Frame::new(code, globals_values, builtins_values);
+        let frame = Frame::new(code, globals_rc, builtins_rc);
         self.frames.push(frame);
 
         let result = self.run_frame()?;
-        
-        // Update globals from the executed frame and pop it
-        if let Some(frame) = self.frames.pop() {
-            self.globals = (*frame.globals).clone();
-        }
+
+        // Globals are shared via Rc<RefCell>, so no need to update
+        // All modifications are already visible in self.globals
+        self.frames.pop();
 
         Ok(result)
     }
     
     /// Optimized frame execution using computed GOTOs for maximum performance
-    #[inline(always)]
     fn run_frame(&mut self) -> Result<Value> {
         // Check for stack overflow using a simple counter
         if self.frames.len() > 1000 {
@@ -330,10 +349,7 @@ impl SuperBytecodeVM {
             
             // Safety check: if there are no instructions, return None immediately
             if self.frames[frame_idx].code.instructions.is_empty() {
-                // Update globals before popping any frame (REPL needs this)
-                if let Some(frame) = self.frames.last() {
-                    self.globals = (*frame.globals).clone();
-                }
+                // Globals are shared via Rc<RefCell>, no need to update
                 self.frames.pop();
                 return Ok(Value::None);
             }
@@ -391,10 +407,9 @@ impl SuperBytecodeVM {
                         
                         // Update frame index to point to the calling frame
                         frame_idx = self.frames.len() - 1;
-                        
-                        // Update globals from the returned frame
-                        self.globals = (*returned_frame.globals).clone();
-                        
+
+                        // Globals are shared via Rc<RefCell>, no need to update
+
                         // Store the return value in the calling frame if return_register is set
                         if let Some((caller_frame_idx, result_reg)) = returned_frame.return_register {
                             // Make sure the caller frame index is valid
@@ -426,14 +441,14 @@ impl SuperBytecodeVM {
                                         let parts: Vec<&str> = var_spec.split(':').collect();
                                         match parts[0] {
                                             "global" => {
-                                                if let Some(global_value) = self.globals.get_mut(parts[1]) {
-                                                    *global_value = modified_object.clone();
+                                                if self.globals.borrow().contains_key(parts[1]) {
+                                                    self.globals.borrow_mut().insert(parts[1].to_string(), modified_object.clone());
                                                 }
                                             }
                                             "frame_global" => {
                                                 if caller_frame_idx < self.frames.len() {
-                                                    if let Some(frame_global_value) = Rc::make_mut(&mut self.frames[caller_frame_idx].globals).get_mut(parts[1]) {
-                                                        *frame_global_value = modified_object.clone();
+                                                    if self.frames[caller_frame_idx].globals.borrow().contains_key(parts[1]) {
+                                                        self.frames[caller_frame_idx].globals.borrow_mut().insert(parts[1].to_string(), modified_object.clone());
                                                     }
                                                 }
                                             }
@@ -683,9 +698,9 @@ impl SuperBytecodeVM {
                                 *f
                             } else {
                                 // Create a new frame for the generator
-                                let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
-                                let builtins_values: HashMap<String, Value> = self.builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
-                                Frame::new_function_frame(*code, globals_values, builtins_values, vec![], HashMap::new())
+                                let globals_rc = Rc::clone(&self.globals);
+                                let builtins_rc = Rc::clone(&self.builtins);
+                                Frame::new_function_frame(*code, globals_rc, builtins_rc, vec![], HashMap::new())
                             };
                             
                             // Set up return register so the generator can return yielded values to this frame
@@ -2621,15 +2636,12 @@ impl SuperBytecodeVM {
                 
                 // Debug output
                 // eprintln!("DEBUG StoreGlobal: storing '{}' = {:?}", name, value.value);
-                
-                // Store in frame globals
-                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name.clone(), value.clone());
-                
-                // Also store in VM globals to ensure consistency across frames
-                self.globals.insert(name.clone(), value.clone());
-                
+
+                // Store in frame globals (which is shared with self.globals via Rc<RefCell>)
+                self.frames[frame_idx].globals.borrow_mut().insert(name.clone(), value.clone());
+
                 // Debug output
-                // eprintln!("DEBUG StoreGlobal: stored '{}' in frame globals and VM globals", name);
+                // eprintln!("DEBUG StoreGlobal: stored '{}' in globals", name);
                 Ok(None)
             }
             OpCode::LoadGlobal => {
@@ -2655,18 +2667,18 @@ impl SuperBytecodeVM {
                 // Check if the name exists in any of the global scopes
                 let value = {
                     // Check frame globals
-                    if self.frames[frame_idx].globals.contains_key(&name) {
-                        self.frames[frame_idx].globals.get(&name).cloned()
+                    if self.frames[frame_idx].globals.borrow().contains_key(&name) {
+                        self.frames[frame_idx].globals.borrow().get(&name).cloned()
                     }
                     // Then check builtins
-                    else if self.frames[frame_idx].builtins.contains_key(&name) {
+                    else if self.frames[frame_idx].builtins.borrow().contains_key(&name) {
                         // DEBUG: Print if found in builtins
                         eprintln!("DEBUG: Found '{}' in builtins", name);
-                        self.frames[frame_idx].builtins.get(&name).cloned()
+                        self.frames[frame_idx].builtins.borrow().get(&name).cloned()
                     }
                     // Then check VM globals
-                    else if self.globals.contains_key(&name) {
-                        self.globals.get(&name).cloned()
+                    else if self.globals.borrow().contains_key(&name) {
+                        self.globals.borrow().get(&name).cloned()
                     } else {
                         None
                     }
@@ -2697,7 +2709,7 @@ impl SuperBytecodeVM {
                 if let Some(current_class_name) = &self.frames[frame_idx].code.name.strip_prefix("<fn:") {
                     if let Some(class_name) = current_class_name.strip_suffix(">") {
                         // Look for the class in globals
-                        if let Some(class_value) = self.globals.get(class_name) {
+                        if let Some(class_value) = self.globals.borrow().get(class_name).cloned() {
                             if let Value::Class { methods, .. } = &class_value.value {
                                 // Check if the name is a class method
                                 if let Some(method) = methods.get(&name) {
@@ -2712,16 +2724,16 @@ impl SuperBytecodeVM {
                 // If not found in class, fall back to global lookup
                 let value = {
                     // Check frame globals
-                    if self.frames[frame_idx].globals.contains_key(&name) {
-                        self.frames[frame_idx].globals.get(&name).cloned()
+                    if self.frames[frame_idx].globals.borrow().contains_key(&name) {
+                        self.frames[frame_idx].globals.borrow().get(&name).cloned()
                     }
                     // Then check builtins
-                    else if self.frames[frame_idx].builtins.contains_key(&name) {
-                        self.frames[frame_idx].builtins.get(&name).cloned()
+                    else if self.frames[frame_idx].builtins.borrow().contains_key(&name) {
+                        self.frames[frame_idx].builtins.borrow().get(&name).cloned()
                     }
                     // Then check VM globals
-                    else if self.globals.contains_key(&name) {
-                        self.globals.get(&name).cloned()
+                    else if self.globals.borrow().contains_key(&name) {
+                        self.globals.borrow().get(&name).cloned()
                     } else {
                         None
                     }
@@ -3469,7 +3481,7 @@ impl SuperBytecodeVM {
 
                         if let Some(instance_value) = instance {
                             // Look up the parent class and search for the method
-                            let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+                            let globals_values: HashMap<String, Value> = self.globals.borrow().iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
                             let method = if let Some(parent_class_value) = globals_values.get(&parent_class) {
                                 if let Value::Class { methods, mro, .. } = parent_class_value {
                                     // First check the class's own methods
@@ -3557,7 +3569,7 @@ impl SuperBytecodeVM {
                             // Use MRO to find the method in parent classes
                             // Convert globals from HashMap<String, RcValue> to HashMap<String, Value>
                             let globals_values: HashMap<String, Value> = self.frames[frame_idx].globals
-                                .iter()
+                                .borrow().iter()
                                 .map(|(k, v)| (k.clone(), v.value.clone()))
                                 .collect();
                             mro.find_method_in_mro(&method_name, &globals_values)
@@ -3789,7 +3801,7 @@ impl SuperBytecodeVM {
                             // Then check MRO for inherited methods
                             // Convert globals from RcValue to Value for MRO lookup
                             let globals_values: HashMap<String, Value> = self.globals
-                                .iter()
+                                .borrow().iter()
                                 .map(|(k, v)| (k.clone(), v.value.clone()))
                                 .collect();
                             if let Some(method) = mro.find_method_in_mro(&method_name, &globals_values) {
@@ -3811,7 +3823,7 @@ impl SuperBytecodeVM {
                             // Then check MRO for inherited methods
                             // Convert globals from RcValue to Value for MRO lookup
                             let globals_values: HashMap<String, Value> = self.globals
-                                .iter()
+                                .borrow().iter()
                                 .map(|(k, v)| (k.clone(), v.value.clone()))
                                 .collect();
                             if let Some(method) = mro.find_method_in_mro(&method_name, &globals_values) {
@@ -3886,7 +3898,7 @@ impl SuperBytecodeVM {
                             // Then check MRO for inherited methods
                             // Convert globals from RcValue to Value for MRO lookup
                             let globals_values: HashMap<String, Value> = self.globals
-                                .iter()
+                                .borrow().iter()
                                 .map(|(k, v)| (k.clone(), v.value.clone()))
                                 .collect();
                             if let Some(method) = mro.find_method_in_mro(&method_name, &globals_values) {
@@ -3908,7 +3920,7 @@ impl SuperBytecodeVM {
                             // Then check MRO for inherited methods
                             // Convert globals from RcValue to Value for MRO lookup
                             let globals_values: HashMap<String, Value> = self.globals
-                                .iter()
+                                .borrow().iter()
                                 .map(|(k, v)| (k.clone(), v.value.clone()))
                                 .collect();
                             if let Some(method) = mro.find_method_in_mro(&method_name, &globals_values) {
@@ -4160,7 +4172,7 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("StoreException: varname index {} out of bounds", var_idx));
                         }
                         let var_name = self.frames[frame_idx].code.varnames[var_idx].clone();
-                        Rc::make_mut(&mut self.frames[frame_idx].globals).insert(var_name, exception_value);
+                        self.frames[frame_idx].globals.borrow_mut().insert(var_name, exception_value);
                     }
                     _ => return Err(anyhow!("StoreException: invalid storage type {}", storage_type)),
                 }
@@ -4665,7 +4677,7 @@ impl SuperBytecodeVM {
                             // First, try to find the current class in globals to get its MRO
                             // Convert globals from RcValue to Value for MRO lookup
                             let globals_values: HashMap<String, Value> = self.globals
-                                .iter()
+                                .borrow().iter()
                                 .map(|(k, v)| (k.clone(), v.value.clone()))
                                 .collect();
                             
@@ -4786,7 +4798,7 @@ impl SuperBytecodeVM {
                         else {
                             // Convert globals from RcValue to Value for MRO lookup
                             let globals_values: HashMap<String, Value> = self.globals
-                                .iter()
+                                .borrow().iter()
                                 .map(|(k, v)| (k.clone(), v.value.clone()))
                                 .collect();
                             if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
@@ -4856,7 +4868,7 @@ impl SuperBytecodeVM {
                         else {
                             // Convert globals from RcValue to Value for MRO lookup
                             let globals_values: HashMap<String, Value> = self.globals
-                                .iter()
+                                .borrow().iter()
                                 .map(|(k, v)| (k.clone(), v.value.clone()))
                                 .collect();
                             if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
@@ -4928,18 +4940,18 @@ impl SuperBytecodeVM {
                     let obj_ptr = Rc::as_ptr(obj_fields);
 
                     // Check globals
-                    for (name, global_value) in self.globals.iter() {
+                    for (name, global_value) in self.globals.borrow().iter() {
                         if let Value::Object { fields: global_fields, .. } = &global_value.value {
-                            if Rc::as_ptr(global_fields) == obj_ptr {
+                            if Rc::as_ptr(&global_fields) == obj_ptr {
                                 vars_to_update.push(format!("global:{}", name));
                             }
                         }
                     }
 
                     // Check frame globals
-                    for (name, frame_global_value) in self.frames[frame_idx].globals.iter() {
+                    for (name, frame_global_value) in self.frames[frame_idx].globals.borrow().iter() {
                         if let Value::Object { fields: frame_fields, .. } = &frame_global_value.value {
-                            if Rc::as_ptr(frame_fields) == obj_ptr {
+                            if Rc::as_ptr(&frame_fields) == obj_ptr {
                                 vars_to_update.push(format!("frame_global:{}", name));
                             }
                         }
@@ -4985,10 +4997,10 @@ impl SuperBytecodeVM {
                                                 Value::NativeFunction(func) => Some(func(args.clone())),
                                                 Value::Closure { compiled_code: Some(code_obj), .. } => {
                                                     // For property setters, we need to create a frame and mark it as a setter
-                                                    let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
-                                                    let builtins_values: HashMap<String, Value> = self.builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+                                                    let globals_rc = Rc::clone(&self.globals);
+                                                    let builtins_rc = Rc::clone(&self.builtins);
 
-                                                    let mut setter_frame = Frame::new_function_frame(code_obj.as_ref().clone(), globals_values, builtins_values, args, HashMap::new());
+                                                    let mut setter_frame = Frame::new_function_frame(code_obj.as_ref().clone(), globals_rc, builtins_rc, args, HashMap::new());
 
                                                     // Mark this frame as a property setter
                                                     setter_frame.is_property_setter = true;
@@ -5115,13 +5127,13 @@ impl SuperBytecodeVM {
                     let parts: Vec<&str> = var_spec.split(':').collect();
                     match parts[0] {
                         "global" => {
-                            if let Some(global_value) = self.globals.get_mut(parts[1]) {
-                                *global_value = modified_object.clone();
+                            if self.globals.borrow().contains_key(parts[1]) {
+                                self.globals.borrow_mut().insert(parts[1].to_string(), modified_object.clone());
                             }
                         }
                         "frame_global" => {
-                            if let Some(frame_global_value) = Rc::make_mut(&mut self.frames[frame_idx].globals).get_mut(parts[1]) {
-                                *frame_global_value = modified_object.clone();
+                            if self.frames[frame_idx].globals.borrow().contains_key(parts[1]) {
+                                self.frames[frame_idx].globals.borrow_mut().insert(parts[1].to_string(), modified_object.clone());
                             }
                         }
                         "local" => {
@@ -5246,7 +5258,7 @@ impl SuperBytecodeVM {
                 };
                 
                 // Get the class methods from globals
-                let super_obj = if let Some(class_value) = self.frames[frame_idx].globals.get(&class_name) {
+                let super_obj = if let Some(class_value) = self.frames[frame_idx].globals.borrow().get(&class_name).cloned() {
                     match &class_value.value {
                         Value::Class { name, methods, mro, .. } => {
                             // CRITICAL FIX: For correct diamond inheritance, we need to use the instance's actual MRO,
@@ -5277,7 +5289,7 @@ impl SuperBytecodeVM {
 
                             // Get parent class and its MRO - use VM globals instead of frame globals
                             // to ensure we can find all classes defined in the module
-                            let (parent_methods, parent_mro) = if let Some(parent_class_value) = self.globals.get(&parent_class) {
+                            let (parent_methods, parent_mro) = if let Some(parent_class_value) = self.globals.borrow().get(&parent_class).cloned() {
                                 match &parent_class_value.value {
                                     Value::Class { methods, mro, .. } => {
                                         (Some(methods.clone()), Some(mro.clone()))
@@ -5335,8 +5347,8 @@ impl SuperBytecodeVM {
 
                 // Store the module in both globals and the result register
                 let rc_module = RcValue::new(module_value.clone());
-                self.globals.insert(module_name.clone(), rc_module.clone());
-                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(module_name.clone(), rc_module.clone());
+                self.globals.borrow_mut().insert(module_name.clone(), rc_module.clone());
+                self.frames[frame_idx].globals.borrow_mut().insert(module_name.clone(), rc_module.clone());
 
                 // Handle hierarchical packages (e.g., "win32.constants")
                 if module_name.contains('.') {
@@ -5354,36 +5366,40 @@ impl SuperBytecodeVM {
                             rc_module.clone()
                         } else {
                             // This is an intermediate package - get or create it
-                            self.globals.get(&child_full_name)
-                                .cloned()
-                                .unwrap_or_else(|| {
-                                    let new_mod = RcValue::new(Value::Module(child_full_name.clone(), std::collections::HashMap::new()));
-                                    self.globals.insert(child_full_name.clone(), new_mod.clone());
-                                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(child_full_name.clone(), new_mod.clone());
-                                    new_mod
-                                })
+                            let existing_child = self.globals.borrow().get(&child_full_name).cloned();
+                            if let Some(child) = existing_child {
+                                child
+                            } else {
+                                let new_mod = RcValue::new(Value::Module(child_full_name.clone(), std::collections::HashMap::new()));
+                                self.globals.borrow_mut().insert(child_full_name.clone(), new_mod.clone());
+                                self.frames[frame_idx].globals.borrow_mut().insert(child_full_name.clone(), new_mod.clone());
+                                new_mod
+                            }
                         };
 
                         // Get or create parent module with updated namespace
-                        let _parent_module = if let Some(existing) = self.globals.get(&parent_name) {
-                            // Parent exists - need to create new version with updated namespace
-                            if let Value::Module(name, mut namespace) = existing.value.clone() {
-                                namespace.insert(child_name, child_module.value.clone());
-                                let updated_parent = RcValue::new(Value::Module(name, namespace));
-                                self.globals.insert(parent_name.clone(), updated_parent.clone());
-                                Rc::make_mut(&mut self.frames[frame_idx].globals).insert(parent_name.clone(), updated_parent.clone());
-                                updated_parent
+                        let _parent_module = {
+                            let existing_parent = self.globals.borrow().get(&parent_name).cloned();
+                            if let Some(existing) = existing_parent {
+                                // Parent exists - need to create new version with updated namespace
+                                if let Value::Module(name, mut namespace) = existing.value.clone() {
+                                    namespace.insert(child_name, child_module.value.clone());
+                                    let updated_parent = RcValue::new(Value::Module(name, namespace));
+                                    self.globals.borrow_mut().insert(parent_name.clone(), updated_parent.clone());
+                                    self.frames[frame_idx].globals.borrow_mut().insert(parent_name.clone(), updated_parent.clone());
+                                    updated_parent
+                                } else {
+                                    existing.clone()
+                                }
                             } else {
-                                existing.clone()
+                                // Create new parent module
+                                let mut namespace = std::collections::HashMap::new();
+                                namespace.insert(child_name, child_module.value.clone());
+                                let new_parent = RcValue::new(Value::Module(parent_name.clone(), namespace));
+                                self.globals.borrow_mut().insert(parent_name.clone(), new_parent.clone());
+                                self.frames[frame_idx].globals.borrow_mut().insert(parent_name.clone(), new_parent.clone());
+                                new_parent
                             }
-                        } else {
-                            // Create new parent module
-                            let mut namespace = std::collections::HashMap::new();
-                            namespace.insert(child_name, child_module.value.clone());
-                            let new_parent = RcValue::new(Value::Module(parent_name.clone(), namespace));
-                            self.globals.insert(parent_name.clone(), new_parent.clone());
-                            Rc::make_mut(&mut self.frames[frame_idx].globals).insert(parent_name.clone(), new_parent.clone());
-                            new_parent
                         };
                     }
 
@@ -5443,8 +5459,8 @@ impl SuperBytecodeVM {
                                 // Skip private names (starting with _) unless they're special like __all__
                                 if !name.starts_with("_") || name == "__all__" {
                                     let rc_value = RcValue::new(value.clone());
-                                    self.globals.insert(name.clone(), rc_value.clone());
-                                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name.clone(), rc_value.clone());
+                                    self.globals.borrow_mut().insert(name.clone(), rc_value.clone());
+                                    self.frames[frame_idx].globals.borrow_mut().insert(name.clone(), rc_value.clone());
                                 }
                             }
 
@@ -5473,8 +5489,8 @@ impl SuperBytecodeVM {
 
                     // Store the imported value in globals and the result register
                     let rc_value = RcValue::new(imported_value);
-                    self.globals.insert(import_name.clone(), rc_value.clone());
-                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(import_name.clone(), rc_value.clone());
+                    self.globals.borrow_mut().insert(import_name.clone(), rc_value.clone());
+                    self.frames[frame_idx].globals.borrow_mut().insert(import_name.clone(), rc_value.clone());
                     self.frames[frame_idx].set_register(result_reg, rc_value);
                 }
 
@@ -5527,8 +5543,8 @@ impl SuperBytecodeVM {
                                 // Skip private names (starting with _) unless they're special like __all__
                                 if !name.starts_with("_") || name == "__all__" {
                                     let rc_value = RcValue::new(value.clone());
-                                    self.globals.insert(name.clone(), rc_value.clone());
-                                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(name.clone(), rc_value.clone());
+                                    self.globals.borrow_mut().insert(name.clone(), rc_value.clone());
+                                    self.frames[frame_idx].globals.borrow_mut().insert(name.clone(), rc_value.clone());
                                 }
                             }
 
@@ -5557,8 +5573,8 @@ impl SuperBytecodeVM {
 
                     // Store the imported value in globals and the result register
                     let rc_value = RcValue::new(imported_value);
-                    self.globals.insert(import_name.clone(), rc_value.clone());
-                    Rc::make_mut(&mut self.frames[frame_idx].globals).insert(import_name.clone(), rc_value.clone());
+                    self.globals.borrow_mut().insert(import_name.clone(), rc_value.clone());
+                    self.frames[frame_idx].globals.borrow_mut().insert(import_name.clone(), rc_value.clone());
                     self.frames[frame_idx].set_register(result_reg, rc_value);
                 }
 
@@ -5650,10 +5666,10 @@ impl SuperBytecodeVM {
                         Ok(generator_value)
                     } else {
                         // For regular functions, create a new frame for the function call
-                        let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
-                        let builtins_values: HashMap<String, Value> = self.builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+                        let globals_rc = Rc::clone(&self.globals);
+                        let builtins_rc = Rc::clone(&self.builtins);
 
-                        let mut frame = Frame::new_function_frame(*code_obj, globals_values, builtins_values, args, kwargs);
+                        let mut frame = Frame::new_function_frame(*code_obj, globals_rc, builtins_rc, args, kwargs);
 
                         // Set the return register information if provided
                         if let (Some(caller_frame_idx), Some(result_reg)) = (frame_idx, result_reg) {
@@ -5686,7 +5702,7 @@ impl SuperBytecodeVM {
                 };
 
                 // Look for __init__ method in the class or its parents via MRO
-                let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+                let globals_values: HashMap<String, Value> = self.globals.borrow().iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
                 let init_method = methods.get("__init__").cloned().or_else(|| mro.find_method_in_mro("__init__", &globals_values));
 
                 // If the instance has an __init__ method, call it
@@ -5710,16 +5726,16 @@ impl SuperBytecodeVM {
                             // For user-defined __init__ methods, we need to call them in a way that
                             // ensures modifications to the instance are visible
                             if let Some(code_obj) = compiled_code {
-                                // Convert globals and builtins from RcValue to Value for Frame::new_function_frame
-                                let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
-                                let builtins_values: HashMap<String, Value> = self.builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
-                                
+                                // Use Rc-wrapped globals and builtins
+                                let globals_rc = Rc::clone(&self.globals);
+                                let builtins_rc = Rc::clone(&self.builtins);
+
                                 // Create arguments with self as the first argument
                                 let mut init_args = vec![instance.clone()];
                                 init_args.extend(args.clone());
-                                
+
                                 // Create a new frame for the __init__ method
-                                let mut init_frame = Frame::new_function_frame(code_obj.as_ref().clone(), globals_values, builtins_values, init_args, HashMap::new());
+                                let mut init_frame = Frame::new_function_frame(code_obj.as_ref().clone(), globals_rc, builtins_rc, init_args, HashMap::new());
                                 
                                 // Store the instance in the result register BEFORE creating the __init__ frame
                                 // This ensures that the instance is available for modification during __init__ execution
@@ -5778,16 +5794,16 @@ impl SuperBytecodeVM {
                             // For user-defined __init__ methods, we need to call them in a way that
                             // ensures modifications to the instance are visible
                             if let Some(code_obj) = compiled_code {
-                                // Convert globals and builtins from RcValue to Value for Frame::new_function_frame
-                                let globals_values: HashMap<String, Value> = self.globals.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
-                                let builtins_values: HashMap<String, Value> = self.builtins.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+                                // Use Rc-wrapped globals and builtins
+                                let globals_rc = Rc::clone(&self.globals);
+                                let builtins_rc = Rc::clone(&self.builtins);
 
                                 // Create arguments with self as the first argument
                                 let mut init_args = vec![instance.clone()];
                                 init_args.extend(args.clone());
 
                                 // Create a new frame for the __init__ method
-                                let mut init_frame = Frame::new_function_frame(code_obj.as_ref().clone(), globals_values, builtins_values, init_args, HashMap::new());
+                                let mut init_frame = Frame::new_function_frame(code_obj.as_ref().clone(), globals_rc, builtins_rc, init_args, HashMap::new());
 
                                 // Store the instance in the result register BEFORE creating the __init__ frame
                                 // This ensures that the instance is available for modification during __init__ execution

@@ -1,0 +1,12 @@
+# Test while with break and code after
+
+class App:
+    def run(self):
+        running = True
+        while running:
+            if True:
+                break
+        print("After while")
+
+app = App()
+app.run()

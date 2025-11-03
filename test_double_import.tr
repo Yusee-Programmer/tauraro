@@ -1,0 +1,15 @@
+# Test double import
+
+class App:
+    def run(self):
+        import win32.user32
+        import duitk.events
+
+        msg = {}
+        while True:
+            if True:
+                break
+            print("After if")
+
+app = App()
+print("Test complete!")

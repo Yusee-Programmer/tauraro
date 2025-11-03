@@ -1,0 +1,66 @@
+# DUITK Package Initialization - No super() version
+# Desktop UI Toolkit - A high-level GUI framework for Tauraro built on win32
+
+print("Loading DUITK - Desktop UI Toolkit...")
+
+# Version information
+version = "1.0.0"
+name = "DUITK"
+description = "Desktop UI Toolkit for Tauraro"
+
+# Core DUITK classes and functions
+
+class Application:
+    def __init__(self):
+        self.windows = []
+        self.running = False
+
+    def create_window(self, title, width, height):
+        # Deferred import to avoid circular dependencies
+        window = Window(title, width, height)
+        self.windows.append(window)
+        return window
+
+    def run(self):
+        self.running = True
+        # Main message loop - simplified to avoid import issues
+        print("Application running... (message loop not implemented yet)")
+
+    def quit(self):
+        self.running = False
+        print("Application quit")
+
+class Window:
+    def __init__(self, title, width, height):
+        self.title = title
+        self.width = width
+        self.height = height
+        self.controls = []
+        self.on_close = None
+        self.hwnd = 0  # Placeholder
+
+    def show(self, cmd_show=5):
+        print(f"Showing window: {self.title}")
+
+    def hide(self):
+        print(f"Hiding window: {self.title}")
+
+class Control:
+    def __init__(self, parent_hwnd, hwnd):
+        self.parent_hwnd = parent_hwnd
+        self.hwnd = hwnd
+        self.on_click = None
+
+    def set_text(self, text):
+        print(f"Control text set to: {text}")
+
+class Button:
+    def __init__(self, parent_hwnd, text, x, y, width, height):
+        # No super() call - initialize directly
+        self.parent_hwnd = parent_hwnd
+        self.hwnd = 0
+        self.on_click = None
+        self.text = text
+        print(f"Button created: {text}")
+
+print("DUITK - Desktop UI Toolkit loaded successfully!")

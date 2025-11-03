@@ -1,0 +1,22 @@
+# Test break with method calls
+
+class Events:
+    def get_message(self, msg, a, b, c):
+        return 0
+
+    def translate_and_dispatch_message(self, msg):
+        pass
+
+class App:
+    def run(self):
+        events = Events()
+        self.running = True
+        msg = {}
+        while self.running:
+            result = events.get_message(msg, 0, 0, 0)
+            if result == 0:
+                break
+            events.translate_and_dispatch_message(msg)
+
+app = App()
+print("Test complete!")

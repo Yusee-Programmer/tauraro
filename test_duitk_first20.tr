@@ -1,0 +1,20 @@
+# DUITK Package Initialization
+# Desktop UI Toolkit - A high-level GUI framework for Tauraro built on win32
+
+print("Loading DUITK - Desktop UI Toolkit...")
+
+# Version information
+version = "1.0.0"
+name = "DUITK"
+description = "Desktop UI Toolkit for Tauraro"
+
+# Core DUITK classes and functions
+
+class Application:
+    def __init__(self):
+        self.windows = []
+        self.running = False
+    
+    def create_window(self, title: str, width: int, height: int):
+        # Deferred import to avoid circular dependencies
+        import duitk.window

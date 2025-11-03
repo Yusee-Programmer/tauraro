@@ -95,6 +95,15 @@ type_checking = []  # Runtime type checking support
 [dev-dependencies]
 pretty_assertions = "1.4"
 
+[profile.dev]
+# Increase stack size to 8MB to handle deep recursion and large frames
+# Windows default is 1MB which is too small for our VM
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = true
+
 [[bin]]
 name = "tauraro"
 path = "src/main.rs"

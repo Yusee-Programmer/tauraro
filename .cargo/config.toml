@@ -1,0 +1,7 @@
+# Increase stack size to 16MB (default is 1MB on Windows)
+# This is needed to handle deep recursion and large stack frames in the VM
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-args=/STACK:16777216"]
+
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-args=-Wl,--stack,16777216"]

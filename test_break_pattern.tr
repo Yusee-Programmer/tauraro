@@ -1,0 +1,14 @@
+# Test break with code after in same loop
+
+class App:
+    def run(self):
+        running = True
+        while running:
+            result = 1
+            if result == 0:
+                break
+            print("After if, still in while")
+        print("After while")
+
+app = App()
+app.run()
