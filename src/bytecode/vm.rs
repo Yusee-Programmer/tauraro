@@ -3711,9 +3711,12 @@ impl SuperBytecodeVM {
                                 if args.len() != 1 {
                                     return Err(anyhow!("append() takes exactly one argument ({} given)", args.len()));
                                 }
-                                // Get mutable reference to the list in the register
-                                if let Value::List(list) = &mut self.frames[frame_idx].registers[object_reg].value {
-                                    list.push(args[0].clone());
+                                // CRITICAL FIX: Clone the list, modify it, and replace the register value
+                                // The previous code used &mut which created a temporary borrow that didn't persist
+                                if let Value::List(list) = &self.frames[frame_idx].registers[object_reg].value {
+                                    let mut new_list = list.clone();
+                                    new_list.push(args[0].clone());
+                                    self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::List(new_list));
                                 }
                                 Value::None
                             }
@@ -3727,11 +3730,13 @@ impl SuperBytecodeVM {
                                     Value::Tuple(tuple) => tuple.clone(),
                                     _ => return Err(anyhow!("extend() argument must be iterable")),
                                 };
-                                // Extend the list
-                                if let Value::List(list) = &mut self.frames[frame_idx].registers[object_reg].value {
+                                // CRITICAL FIX: Clone the list, modify it, and replace the register value
+                                if let Value::List(list) = &self.frames[frame_idx].registers[object_reg].value {
+                                    let mut new_list = list.clone();
                                     for item in items_to_add {
-                                        list.push(item);
+                                        new_list.push(item);
                                     }
+                                    self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::List(new_list));
                                 }
                                 Value::None
                             }
@@ -3744,9 +3749,14 @@ impl SuperBytecodeVM {
                                     return Err(anyhow!("pop() argument must be an integer"));
                                 };
 
-                                if let Value::List(list) = &mut self.frames[frame_idx].registers[object_reg].value {
-                                    match list.pop_at(index as isize) {
-                                        Ok(value) => value,
+                                // CRITICAL FIX: Clone the list, modify it, and replace the register value
+                                if let Value::List(list) = &self.frames[frame_idx].registers[object_reg].value {
+                                    let mut new_list = list.clone();
+                                    match new_list.pop_at(index as isize) {
+                                        Ok(value) => {
+                                            self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::List(new_list));
+                                            value
+                                        },
                                         Err(_) => return Err(anyhow!("pop index out of range")),
                                     }
                                 } else {
