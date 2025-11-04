@@ -1122,6 +1122,107 @@ impl SuperCompiler {
 
                 Ok(())
             }
+            Statement::With { context, alias, body } => {
+                // Compile with statement: with context [as alias]: body
+                // This implements the context manager protocol:
+                // 1. Evaluate context expression
+                // 2. Call __enter__() method and bind result to alias if provided
+                // 3. Execute body
+                // 4. Call __exit__() method (even if exception occurs)
+
+                // 1. Compile the context expression
+                let context_reg = self.compile_expression(context)?;
+
+                // 2. Call __enter__() method on the context
+                let enter_method_idx = self.code.add_name("__enter__".to_string());
+                let enter_result_reg = self.allocate_register();
+
+                // Load __enter__ method
+                self.emit(OpCode::LoadMethod, context_reg, enter_method_idx, enter_result_reg, self.current_line);
+
+                // Call __enter__() with no arguments
+                let enter_call_result_reg = self.allocate_register();
+                self.emit(OpCode::CallMethod, context_reg, 0, enter_call_result_reg, self.current_line);
+
+                // 3. Store the result in the alias variable if provided
+                if let Some(var_name) = alias {
+                    if self.is_in_function_scope() {
+                        let local_idx = self.get_local_index(&var_name);
+                        self.emit(OpCode::StoreFast, enter_call_result_reg, local_idx, 0, self.current_line);
+                    } else {
+                        let name_idx = self.code.add_name(var_name.clone());
+                        self.emit(OpCode::StoreGlobal, enter_call_result_reg, name_idx, 0, self.current_line);
+                    }
+                }
+
+                // 4. Setup exception handler for __exit__() call
+                let exit_handler_jump = self.emit(OpCode::SetupFinally, 0, 0, 0, self.current_line);
+
+                // 5. Compile the with body
+                for stmt in body {
+                    self.compile_statement(stmt)?;
+                }
+
+                // 6. Pop the finally handler
+                self.emit(OpCode::PopBlock, 0, 0, 0, self.current_line);
+
+                // 7. Call __exit__(None, None, None) on normal exit
+                let exit_method_idx = self.code.add_name("__exit__".to_string());
+                let exit_result_reg = self.allocate_register();
+
+                // Load __exit__ method
+                self.emit(OpCode::LoadMethod, context_reg, exit_method_idx, exit_result_reg, self.current_line);
+
+                // Load None arguments for __exit__(None, None, None)
+                let none_const = self.code.add_constant(Value::None);
+                let none_reg1 = self.allocate_register();
+                let none_reg2 = self.allocate_register();
+                let none_reg3 = self.allocate_register();
+                self.emit(OpCode::LoadConst, none_const, none_reg1, 0, self.current_line);
+                self.emit(OpCode::LoadConst, none_const, none_reg2, 0, self.current_line);
+                self.emit(OpCode::LoadConst, none_const, none_reg3, 0, self.current_line);
+
+                // Call __exit__(None, None, None) with 3 arguments
+                let exit_call_result_reg = self.allocate_register();
+                self.emit(OpCode::CallMethod, context_reg, 3, exit_call_result_reg, self.current_line);
+
+                // Jump to end
+                let to_end_jump = self.emit(OpCode::Jump, 0, 0, 0, self.current_line);
+
+                // 8. Set the finally handler address for exception path
+                let finally_addr = self.code.instructions.len() as u32;
+                self.code.instructions[exit_handler_jump].arg1 = finally_addr;
+
+                // 9. On exception, call __exit__(exc_type, exc_value, traceback)
+                // Get the exception value
+                let exc_reg = self.allocate_register();
+                self.emit(OpCode::GetExceptionValue, exc_reg, 0, 0, self.current_line);
+
+                // Load __exit__ method again
+                let exit_method_idx2 = self.code.add_name("__exit__".to_string());
+                let exit_result_reg2 = self.allocate_register();
+                self.emit(OpCode::LoadMethod, context_reg, exit_method_idx2, exit_result_reg2, self.current_line);
+
+                // For now, pass the exception as the second argument and None for the others
+                // Full implementation would extract type and traceback
+                let none_reg_exc1 = self.allocate_register();
+                let none_reg_exc3 = self.allocate_register();
+                self.emit(OpCode::LoadConst, none_const, none_reg_exc1, 0, self.current_line);
+                self.emit(OpCode::LoadConst, none_const, none_reg_exc3, 0, self.current_line);
+
+                // Call __exit__(None, exc, None)
+                let exit_exc_result_reg = self.allocate_register();
+                self.emit(OpCode::CallMethod, context_reg, 3, exit_exc_result_reg, self.current_line);
+
+                // Re-raise the exception after calling __exit__
+                self.emit(OpCode::Raise, exc_reg, 0, 0, self.current_line);
+
+                // 10. Fix the jump to end
+                let end_addr = self.code.instructions.len() as u32;
+                self.code.instructions[to_end_jump].arg1 = end_addr;
+
+                Ok(())
+            }
             _ => {
                 // For unimplemented statements, we'll just return Ok for now
                 // In a complete implementation, we would handle all statement types

@@ -1254,8 +1254,223 @@ fn open_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() || args.len() > 3 {
         return Err(anyhow::anyhow!("open() takes at most 3 arguments ({} given)", args.len()));
     }
-    
-    // For now, we'll just return None as file operations are complex
+
+    // Get filename
+    let filename = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow::anyhow!("open() filename must be a string")),
+    };
+
+    // Get mode (default is 'r')
+    let mode = if args.len() > 1 {
+        match &args[1] {
+            Value::Str(s) => s.clone(),
+            _ => "r".to_string(),
+        }
+    } else {
+        "r".to_string()
+    };
+
+    // Get encoding (default is 'utf-8')
+    let encoding = if args.len() > 2 {
+        match &args[2] {
+            Value::Str(s) => s.clone(),
+            _ => "utf-8".to_string(),
+        }
+    } else {
+        "utf-8".to_string()
+    };
+
+    // Create a file object with context manager support
+    let mut file_fields = HashMap::new();
+    file_fields.insert("filename".to_string(), Value::Str(filename.clone()));
+    file_fields.insert("mode".to_string(), Value::Str(mode.clone()));
+    file_fields.insert("encoding".to_string(), Value::Str(encoding));
+    file_fields.insert("closed".to_string(), Value::Bool(false));
+
+    // Add file methods
+    file_fields.insert("read".to_string(), Value::NativeFunction(file_read));
+    file_fields.insert("write".to_string(), Value::NativeFunction(file_write));
+    file_fields.insert("close".to_string(), Value::NativeFunction(file_close));
+    file_fields.insert("__enter__".to_string(), Value::NativeFunction(file_enter));
+    file_fields.insert("__exit__".to_string(), Value::NativeFunction(file_exit));
+    file_fields.insert("readline".to_string(), Value::NativeFunction(file_readline));
+    file_fields.insert("readlines".to_string(), Value::NativeFunction(file_readlines));
+    file_fields.insert("writelines".to_string(), Value::NativeFunction(file_writelines));
+
+    Ok(Value::Object {
+        class_name: "file".to_string(),
+        fields: Rc::new(file_fields),
+        class_methods: HashMap::new(),
+        base_object: BaseObject::new("file".to_string(), vec!["object".to_string()]),
+        mro: MRO::from_linearization(vec!["file".to_string(), "object".to_string()]),
+    })
+}
+
+// File method implementations
+fn file_read(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("read() requires file object as first argument"));
+    }
+
+    // Extract filename from file object
+    let filename = if let Value::Object { fields, .. } = &args[0] {
+        if let Some(Value::Str(name)) = fields.get("filename") {
+            name.clone()
+        } else {
+            return Err(anyhow::anyhow!("File object missing filename"));
+        }
+    } else {
+        return Err(anyhow::anyhow!("read() requires file object"));
+    };
+
+    // Read the file
+    let contents = std::fs::read_to_string(&filename)
+        .map_err(|e| anyhow::anyhow!("Failed to read file '{}': {}", filename, e))?;
+
+    Ok(Value::Str(contents))
+}
+
+fn file_write(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("write() requires file object and content"));
+    }
+
+    // Extract filename from file object
+    let filename = if let Value::Object { fields, .. } = &args[0] {
+        if let Some(Value::Str(name)) = fields.get("filename") {
+            name.clone()
+        } else {
+            return Err(anyhow::anyhow!("File object missing filename"));
+        }
+    } else {
+        return Err(anyhow::anyhow!("write() requires file object"));
+    };
+
+    // Get content to write
+    let content = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow::anyhow!("write() content must be a string")),
+    };
+
+    // Write to file
+    std::fs::write(&filename, &content)
+        .map_err(|e| anyhow::anyhow!("Failed to write file '{}': {}", filename, e))?;
+
+    Ok(Value::Int(content.len() as i64))
+}
+
+fn file_close(_args: Vec<Value>) -> anyhow::Result<Value> {
+    // Mark file as closed (in a real implementation, this would close file handles)
+    Ok(Value::None)
+}
+
+fn file_enter(args: Vec<Value>) -> anyhow::Result<Value> {
+    // __enter__ returns self for context manager protocol
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("__enter__() requires file object"));
+    }
+    Ok(args[0].clone())
+}
+
+fn file_exit(args: Vec<Value>) -> anyhow::Result<Value> {
+    // __exit__ closes the file
+    // args: self, exc_type, exc_value, traceback
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("__exit__() requires file object"));
+    }
+
+    // Close the file (currently a no-op)
+    file_close(vec![args[0].clone()])?;
+
+    // Return False to propagate exceptions
+    Ok(Value::Bool(false))
+}
+
+fn file_readline(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("readline() requires file object"));
+    }
+
+    // Extract filename
+    let filename = if let Value::Object { fields, .. } = &args[0] {
+        if let Some(Value::Str(name)) = fields.get("filename") {
+            name.clone()
+        } else {
+            return Err(anyhow::anyhow!("File object missing filename"));
+        }
+    } else {
+        return Err(anyhow::anyhow!("readline() requires file object"));
+    };
+
+    // Read first line (simplified implementation)
+    let contents = std::fs::read_to_string(&filename)
+        .map_err(|e| anyhow::anyhow!("Failed to read file '{}': {}", filename, e))?;
+
+    let first_line = contents.lines().next().unwrap_or("").to_string();
+    Ok(Value::Str(first_line))
+}
+
+fn file_readlines(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() {
+        return Err(anyhow::anyhow!("readlines() requires file object"));
+    }
+
+    // Extract filename
+    let filename = if let Value::Object { fields, .. } = &args[0] {
+        if let Some(Value::Str(name)) = fields.get("filename") {
+            name.clone()
+        } else {
+            return Err(anyhow::anyhow!("File object missing filename"));
+        }
+    } else {
+        return Err(anyhow::anyhow!("readlines() requires file object"));
+    };
+
+    // Read all lines
+    let contents = std::fs::read_to_string(&filename)
+        .map_err(|e| anyhow::anyhow!("Failed to read file '{}': {}", filename, e))?;
+
+    let lines: Vec<Value> = contents.lines().map(|line| Value::Str(line.to_string() + "\n")).collect();
+    Ok(Value::List(HPList::from_values(lines)))
+}
+
+fn file_writelines(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("writelines() requires file object and lines"));
+    }
+
+    // Extract filename
+    let filename = if let Value::Object { fields, .. } = &args[0] {
+        if let Some(Value::Str(name)) = fields.get("filename") {
+            name.clone()
+        } else {
+            return Err(anyhow::anyhow!("File object missing filename"));
+        }
+    } else {
+        return Err(anyhow::anyhow!("writelines() requires file object"));
+    };
+
+    // Get lines to write
+    let lines = match &args[1] {
+        Value::List(items) => {
+            let mut result = String::new();
+            for item in items.iter() {
+                if let Value::Str(s) = item {
+                    result.push_str(s);
+                } else {
+                    return Err(anyhow::anyhow!("writelines() requires list of strings"));
+                }
+            }
+            result
+        }
+        _ => return Err(anyhow::anyhow!("writelines() requires a list")),
+    };
+
+    // Write to file
+    std::fs::write(&filename, lines)
+        .map_err(|e| anyhow::anyhow!("Failed to write file '{}': {}", filename, e))?;
+
     Ok(Value::None)
 }
 
