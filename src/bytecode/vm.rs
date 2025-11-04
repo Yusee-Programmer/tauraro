@@ -2255,14 +2255,20 @@ impl SuperBytecodeVM {
                 let left_reg = arg1 as usize;
                 let right_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
-                
+
+                eprintln!("DEBUG BinaryBitOrRR: left_reg={}, right_reg={}, result_reg={}", left_reg, right_reg, result_reg);
+                eprintln!("DEBUG BinaryBitOrRR: registers.len()={}", self.frames[frame_idx].registers.len());
+
                 if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("BinaryBitOrRR: register index out of bounds"));
                 }
-                
+
                 let left = &self.frames[frame_idx].registers[left_reg];
                 let right = &self.frames[frame_idx].registers[right_reg];
-                
+
+                eprintln!("DEBUG BinaryBitOrRR: left value = {:?}", left.value);
+                eprintln!("DEBUG BinaryBitOrRR: right value = {:?}", right.value);
+
                 // Fast path for common operations
                 let result = match (&left.value, &right.value) {
                     (Value::Int(a), Value::Int(b)) => Value::Int(a | b),
@@ -2273,8 +2279,21 @@ impl SuperBytecodeVM {
                             .map_err(|e| anyhow!("Error in BinaryBitOrRR: {}", e))?
                     }
                 };
-                
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+
+                eprintln!("DEBUG BinaryBitOrRR: result = {:?}", result);
+                eprintln!("DEBUG BinaryBitOrRR: storing in result_reg={}", result_reg);
+
+                // Ensure result register exists, expand if needed
+                if result_reg >= self.frames[frame_idx].registers.len() {
+                    eprintln!("DEBUG BinaryBitOrRR: WARNING - result_reg {} >= registers.len() {}", result_reg, self.frames[frame_idx].registers.len());
+                    // Expand the register array
+                    self.frames[frame_idx].registers.resize(result_reg + 1, RcValue::new(Value::None));
+                    eprintln!("DEBUG BinaryBitOrRR: Expanded registers to {}", self.frames[frame_idx].registers.len());
+                }
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result.clone());
+
+                eprintln!("DEBUG BinaryBitOrRR: Stored result, verifying...");
+                eprintln!("DEBUG BinaryBitOrRR: registers[{}] = {:?}", result_reg, self.frames[frame_idx].registers[result_reg].value);
                 Ok(None)
             }
             OpCode::CompareEqualRR => {
@@ -2505,31 +2524,44 @@ impl SuperBytecodeVM {
                 // Load from fast local variable (indexed access)
                 let local_idx = arg1 as usize;
                 let result_reg = arg2 as u32;
-                
+
+                eprintln!("DEBUG LoadFast: local_idx={}, result_reg={}", local_idx, result_reg);
+                eprintln!("DEBUG LoadFast: locals.len()={}", self.frames[frame_idx].locals.len());
+
                 if local_idx >= self.frames[frame_idx].locals.len() {
                     return Err(anyhow!("LoadFast: local variable index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
                 }
-                
+
                 let value = self.frames[frame_idx].locals[local_idx].clone();
-                self.frames[frame_idx].set_register(result_reg, value);
+                eprintln!("DEBUG LoadFast: Loading locals[{}] = {:?} into register {}", local_idx, value.value, result_reg);
+                self.frames[frame_idx].set_register(result_reg, value.clone());
+                eprintln!("DEBUG LoadFast: Loaded! registers[{}] = {:?}", result_reg, value.value);
                 Ok(None)
             }
             OpCode::StoreFast => {
                 // Store to fast local variable (indexed access)
                 let value_reg = arg1 as usize;
                 let local_idx = arg2 as usize;
-                
+
+                eprintln!("DEBUG StoreFast: value_reg={}, local_idx={}", value_reg, local_idx);
+                eprintln!("DEBUG StoreFast: registers.len()={}, locals.len()={}",
+                    self.frames[frame_idx].registers.len(), self.frames[frame_idx].locals.len());
+
                 if value_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("StoreFast: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
                 }
-                
+
+                let value = self.frames[frame_idx].registers[value_reg].clone();
+                eprintln!("DEBUG StoreFast: Storing value {:?} from register {} to local {}", value.value, value_reg, local_idx);
+
                 if local_idx >= self.frames[frame_idx].locals.len() {
                     // Extend locals if needed
+                    eprintln!("DEBUG StoreFast: Extending locals from {} to {}", self.frames[frame_idx].locals.len(), local_idx + 1);
                     self.frames[frame_idx].locals.resize(local_idx + 1, RcValue::new(Value::None));
                 }
-                
-                let value = self.frames[frame_idx].registers[value_reg].clone();
-                self.frames[frame_idx].locals[local_idx] = value;
+
+                self.frames[frame_idx].locals[local_idx] = value.clone();
+                eprintln!("DEBUG StoreFast: Stored! Verifying locals[{}] = {:?}", local_idx, self.frames[frame_idx].locals[local_idx].value);
                 Ok(None)
             }
             OpCode::LoadClosure => {
@@ -2567,34 +2599,46 @@ impl SuperBytecodeVM {
                 // Load from local register
                 let local_idx = arg1 as usize;
                 let result_reg = arg2 as u32;
-                
+
+                eprintln!("DEBUG LoadLocal: local_idx={}, result_reg={}", local_idx, result_reg);
+                eprintln!("DEBUG LoadLocal: locals.len()={}", self.frames[frame_idx].locals.len());
+
                 if local_idx >= self.frames[frame_idx].locals.len() {
                     return Err(anyhow!("LoadLocal: local variable index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
                 }
-                
+
                 // Clone the value to avoid borrowing conflicts
                 let value = self.frames[frame_idx].locals[local_idx].clone();
-                self.frames[frame_idx].set_register(result_reg, value);
+                eprintln!("DEBUG LoadLocal: Loading locals[{}] = {:?} into register {}", local_idx, value.value, result_reg);
+                self.frames[frame_idx].set_register(result_reg, value.clone());
+                eprintln!("DEBUG LoadLocal: Loaded! registers[{}] = {:?}", result_reg, value.value);
                 Ok(None)
             }
             OpCode::StoreLocal => {
                 // Store to local register
                 let value_reg = arg1 as usize;
                 let local_idx = arg2 as usize;
-                
+
+                eprintln!("DEBUG StoreLocal: value_reg={}, local_idx={}", value_reg, local_idx);
+                eprintln!("DEBUG StoreLocal: registers.len()={}, locals.len()={}",
+                    self.frames[frame_idx].registers.len(), self.frames[frame_idx].locals.len());
+
                 if value_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("StoreLocal: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
                 }
-                
+
                 // Clone the value to avoid borrowing conflicts
                 let value = self.frames[frame_idx].registers[value_reg].clone();
-                
+                eprintln!("DEBUG StoreLocal: Storing value {:?} from register {} to local {}", value.value, value_reg, local_idx);
+
                 if local_idx >= self.frames[frame_idx].locals.len() {
                     // Extend locals if needed
+                    eprintln!("DEBUG StoreLocal: Extending locals from {} to {}", self.frames[frame_idx].locals.len(), local_idx + 1);
                     self.frames[frame_idx].locals.resize(local_idx + 1, RcValue::new(Value::None));
                 }
-                
-                self.frames[frame_idx].locals[local_idx] = value;
+
+                self.frames[frame_idx].locals[local_idx] = value.clone();
+                eprintln!("DEBUG StoreLocal: Stored! Verifying locals[{}] = {:?}", local_idx, self.frames[frame_idx].locals[local_idx].value);
                 Ok(None)
             }
             OpCode::MoveReg => {
