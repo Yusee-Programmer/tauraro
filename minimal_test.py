@@ -59,3 +59,28 @@ else:
         print(f"Last error code: {error}")
     except:
         pass
+
+# Minimal test to isolate the issue
+
+print("Loading DUITK...")
+import duitk
+
+print("Creating application...")
+app = duitk.Application("Test App")
+
+print("Creating window...")
+window = app.create_window("Test Window", 400, 300)
+
+if window and window.hwnd:
+    print(f"Window created successfully (HWND: {window.hwnd})")
+    print("Window attributes:", list(window.__dict__.keys()))
+    
+    # Try to access controls
+    print("Controls list:", window.controls)
+    print("Number of controls:", len(window.controls))
+    
+    print("Test completed successfully.")
+else:
+    print("Failed to create window!")
+
+print("Done.")

@@ -114,7 +114,9 @@
       "Bash(timeout 20 ./target/debug/tauraro.exe:*)",
       "Bash(timeout 40 ./target/debug/tauraro.exe run:*)",
       "Bash(timeout 60 cargo build:*)",
-      "Bash(timeout 5 tail:*)"
+      "Bash(timeout 5 tail:*)",
+      "Bash(timeout 30 ./target/release/tauraro.exe:*)",
+      "Bash(timeout 45 ./target/release/tauraro.exe run:*)"
     ],
     "deny": [],
     "ask": []

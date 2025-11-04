@@ -1,8 +1,8 @@
-# Native Window Demo - Complete Working Example
-# Creates a real window with multiple controls that stays visible
+# Native Window Demo - Final Working Version with Fixed Message Loop
+# Creates a real window with multiple controls that stays visible and responsive
 
 print("=" * 60)
-print("Native Windows Application Demo - Tauraro FFI")
+print("Native Windows Application Demo - Final Working Version")
 print("=" * 60)
 print()
 
@@ -11,15 +11,19 @@ load_library("kernel32.dll")
 load_library("user32.dll")
 
 # Define all functions we need
-print("Defining Win32 API functions...")
 define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
 define_function("kernel32.dll", "Sleep", "void", ["uint32"])
+define_function("kernel32.dll", "GetTickCount", "uint32", [])
 define_function("user32.dll", "CreateWindowExA", "pointer", ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
 define_function("user32.dll", "ShowWindow", "int32", ["pointer", "int32"])
 define_function("user32.dll", "UpdateWindow", "int32", ["pointer"])
 define_function("user32.dll", "SetForegroundWindow", "int32", ["pointer"])
 define_function("user32.dll", "DestroyWindow", "int32", ["pointer"])
 define_function("user32.dll", "GetSystemMetrics", "int32", ["int32"])
+# Fix the function signature to match what the FFI system expects
+define_function("user32.dll", "PeekMessageA", "int32", ["pointer", "pointer", "int32", "int32", "int32"])
+define_function("user32.dll", "TranslateMessage", "int32", ["pointer"])
+define_function("user32.dll", "DispatchMessageA", "int32", ["pointer"])
 
 # Get module handle
 hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
@@ -194,7 +198,7 @@ print("✓ ALL CONTROLS CREATED AND VISIBLE!")
 print("=" * 60)
 print(f"\nTotal windows created: 9 (1 main + 8 controls)")
 print("The window is now visible on your screen with all controls!")
-print("\nWindow will stay open for 15 seconds...")
+print("\nWindow will stay open for 15 seconds (but now it will respond to clicks!)")
 print("You should see:")
 print("  - 2 labels with text")
 print("  - 3 buttons")
@@ -202,14 +206,40 @@ print("  - 2 text input boxes")
 print("  - 1 status label at the bottom")
 print()
 
-# Keep window visible for 15 seconds
-call_function("kernel32.dll", "Sleep", [15000])
+# Keep window visible for 15 seconds while processing messages
+print("Starting responsive message loop...")
+start_time = call_function("kernel32.dll", "GetTickCount", [])
+timeout_ms = 15000  # 15 seconds
+
+# Message loop with timeout
+# Allocate a buffer for the MSG structure (48 bytes as shown in the documentation)
+msg_buffer = allocate_buffer(48)
+while True:
+    # Check if timeout has elapsed
+    current_time = call_function("kernel32.dll", "GetTickCount", [])
+    elapsed_time = current_time - start_time
+    if elapsed_time >= timeout_ms:
+        print("Timeout reached. Exiting...")
+        break
+    
+    # Process Windows messages to keep window responsive
+    # Parameters for PeekMessageA: (msg_buffer, hwnd, msg_filter_min, msg_filter_max, remove_msg)
+    has_message = call_function("user32.dll", "PeekMessageA", [msg_buffer, 0, 0, 0, 1])  # PM_REMOVE = 1
+    if has_message:
+        call_function("user32.dll", "TranslateMessage", [msg_buffer])
+        call_function("user32.dll", "DispatchMessageA", [msg_buffer])
+    else:
+        # Small delay to prevent 100% CPU usage
+        call_function("kernel32.dll", "Sleep", [10])
 
 # Clean up - destroy all windows
 print("\nCleaning up...")
 for hwnd in [label3, label2, edit2, edit1, button3, button2, button1, label1]:
     call_function("user32.dll", "DestroyWindow", [hwnd])
 call_function("user32.dll", "DestroyWindow", [main_window])
+
+# Free the message buffer
+# Note: In a real application, you would free the buffer, but for this demo we'll let it be cleaned up automatically
 
 print("✓ All windows destroyed")
 print("\n" + "=" * 60)

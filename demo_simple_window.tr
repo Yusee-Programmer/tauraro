@@ -1,0 +1,97 @@
+# Simple Window Demo - Test if the window stays responsive
+# Creates a simple window that should not show "Not Responding"
+
+print("Simple Window Demo - Test")
+print()
+
+# Load libraries
+load_library("kernel32.dll")
+load_library("user32.dll")
+
+# Define all functions we need
+define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
+define_function("kernel32.dll", "Sleep", "void", ["uint32"])
+define_function("kernel32.dll", "GetTickCount", "uint32", [])
+define_function("user32.dll", "CreateWindowExA", "pointer", ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
+define_function("user32.dll", "ShowWindow", "int32", ["pointer", "int32"])
+define_function("user32.dll", "UpdateWindow", "int32", ["pointer"])
+define_function("user32.dll", "SetForegroundWindow", "int32", ["pointer"])
+define_function("user32.dll", "DestroyWindow", "int32", ["pointer"])
+define_function("user32.dll", "PeekMessageA", "int32", ["pointer", "pointer", "int32", "int32", "int32"])
+define_function("user32.dll", "TranslateMessage", "int32", ["pointer"])
+define_function("user32.dll", "DispatchMessageA", "int32", ["pointer"])
+
+# Get module handle
+hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+print(f"Module Handle: {hinstance}")
+
+# Create a simple window
+print("\nCreating window...")
+
+# Window style: WS_OVERLAPPEDWINDOW | WS_VISIBLE
+style = 0x10000000 | 0x00CF0000
+
+# Create main window
+main_window = call_function("user32.dll", "CreateWindowExA", [
+    0,
+    "BUTTON",
+    "Test Window - Should Not Respond",
+    style,
+    100,
+    100,
+    400,
+    300,
+    0,
+    0,
+    hinstance,
+    0
+])
+
+print(f"✓ Window Created! HWND: {main_window}")
+
+# Show and update main window
+call_function("user32.dll", "ShowWindow", [main_window, 5])
+call_function("user32.dll", "UpdateWindow", [main_window])
+call_function("user32.dll", "SetForegroundWindow", [main_window])
+
+print("\nWindow should now be visible on your screen!")
+print("It will stay open for 10 seconds and should remain responsive.")
+
+# Keep window visible for 10 seconds while processing messages
+print("\nStarting responsive message loop for 10 seconds...")
+start_time = call_function("kernel32.dll", "GetTickCount", [])
+timeout_ms = 10000  # 10 seconds
+
+# Message loop with timeout
+# Allocate a buffer for the MSG structure (48 bytes)
+msg_buffer = allocate_buffer(48)
+message_count = 0
+
+while True:
+    # Check if timeout has elapsed
+    current_time = call_function("kernel32.dll", "GetTickCount", [])
+    elapsed_time = current_time - start_time
+    if elapsed_time >= timeout_ms:
+        print("Timeout reached. Exiting...")
+        break
+    
+    # Process Windows messages to keep window responsive
+    has_message = call_function("user32.dll", "PeekMessageA", [msg_buffer, 0, 0, 0, 1])  # PM_REMOVE = 1
+    if has_message:
+        call_function("user32.dll", "TranslateMessage", [msg_buffer])
+        call_function("user32.dll", "DispatchMessageA", [msg_buffer])
+        message_count += 1
+        # Print a message every 100 processed messages to show progress
+        if message_count % 100 == 0:
+            print(f"Processed {message_count} messages...")
+    else:
+        # Small delay to prevent 100% CPU usage
+        call_function("kernel32.dll", "Sleep", [10])
+
+# Clean up - destroy the window
+print("\nCleaning up...")
+call_function("user32.dll", "DestroyWindow", [main_window])
+
+print("✓ Window destroyed")
+print("\nDemo Complete!")
+print("If the window stayed visible for 10 seconds without showing 'Not Responding', the fix worked!")
