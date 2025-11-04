@@ -1,5 +1,7 @@
 # DUITK - Desktop UI Toolkit
-print("Loading DUITK - Desktop UI Toolkit v3.5 (Modern UI Edition)...")
+print("Loading DUITK - Desktop UI Toolkit v2.0...")
+# A high-level GUI framework for Tauraro built on native Win32 APIs
+# Version: 2.0.0 - Fully native Win32 implementation using FFI
 
 # Import Win32 API package
 import win32
@@ -7,571 +9,598 @@ import win32
 # Load required libraries first
 load_library("kernel32.dll")
 load_library("user32.dll")
-load_library("comctl32.dll")
-load_library("uxtheme.dll")
-load_library("gdi32.dll")
 
 # Define required functions for direct FFI calls
+# These need to be defined before calling call_function
 define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
-define_function("kernel32.dll", "GetProcAddress", "pointer", ["pointer", "pointer"])
-
-# User32 - Window management
-define_function("user32.dll", "RegisterClassExA", "uint16", ["pointer"])
-define_function("user32.dll", "DefWindowProcA", "int64", ["pointer", "uint32", "uint64", "int64"])
+define_function("kernel32.dll", "GetLastError", "uint32", [])
 define_function("user32.dll", "CreateWindowExA", "pointer", ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
 define_function("user32.dll", "ShowWindow", "int32", ["pointer", "int32"])
 define_function("user32.dll", "UpdateWindow", "int32", ["pointer"])
-define_function("user32.dll", "IsWindow", "int32", ["pointer"])
-define_function("user32.dll", "GetMessageA", "int32", ["pointer", "pointer", "int32", "int32"])
-define_function("user32.dll", "TranslateMessage", "int32", ["pointer"])
-define_function("user32.dll", "DispatchMessageA", "int32", ["pointer"])
-define_function("user32.dll", "PostQuitMessage", "void", ["int32"])
-define_function("user32.dll", "LoadCursorA", "pointer", ["pointer", "int32"])
-define_function("user32.dll", "LoadIconA", "pointer", ["pointer", "int32"])
+define_function("user32.dll", "SetForegroundWindow", "int32", ["pointer"])
 define_function("user32.dll", "DestroyWindow", "int32", ["pointer"])
 define_function("user32.dll", "SetWindowTextA", "int32", ["pointer", "pointer"])
-define_function("user32.dll", "GetWindowTextA", "int32", ["pointer", "pointer", "int32"])
-define_function("user32.dll", "EnableWindow", "int32", ["pointer", "int32"])
-define_function("user32.dll", "SetFocus", "pointer", ["pointer"])
-define_function("user32.dll", "SendMessageA", "int64", ["pointer", "uint32", "uint64", "int64"])
-
-# GDI32 - Graphics
-define_function("gdi32.dll", "CreateFontA", "pointer", ["int32", "int32", "int32", "int32", "int32", "uint32", "uint32", "uint32", "uint32", "uint32", "uint32", "uint32", "uint32", "pointer"])
-define_function("gdi32.dll", "DeleteObject", "int32", ["pointer"])
-define_function("gdi32.dll", "CreateSolidBrush", "pointer", ["uint32"])
-
-# ComCtl32 - Common controls
-define_function("comctl32.dll", "InitCommonControlsEx", "int32", ["pointer"])
-
-# UxTheme - Visual styles
-define_function("uxtheme.dll", "SetWindowTheme", "int32", ["pointer", "pointer", "pointer"])
+define_function("user32.dll", "MoveWindow", "int32", ["pointer", "int32", "int32", "int32", "int32", "bool"])
+define_function("user32.dll", "IsWindow", "int32", ["pointer"])
+define_function("kernel32.dll", "Sleep", "void", ["uint32"])
+define_function("user32.dll", "MessageBoxA", "int32", ["pointer", "pointer", "pointer", "uint32"])
+define_function("user32.dll", "PostQuitMessage", "void", ["int32"])
+define_function("user32.dll", "PeekMessageA", "int32", ["pointer", "pointer", "uint32", "uint32", "uint32"])
+define_function("user32.dll", "TranslateMessage", "int32", ["pointer"])
+define_function("user32.dll", "DispatchMessageA", "int32", ["pointer"])
+define_function("user32.dll", "GetSystemMetrics", "int32", ["int32"])
 
 # Version information
 __version__ = "2.0.0"
 __name__ = "DUITK"
 __description__ = "Desktop UI Toolkit for Tauraro - Native Win32 GUI Framework"
 
-# Simple function
-def test_function():
-    return "DUITK is working"
+# Helper function to create strings for Win32 APIs
+def to_string_ptr(text):
+    # Convert Python string to pointer for Win32 APIs
+    # In Tauraro, strings are automatically converted when passed to FFI
+    return text
 
-# Window class
-class Window:
-    def __init__(self, title, width, height, app, hinstance):
-        self.title = title
-        self.width = width
-        self.height = height
-        self.hwnd = 0
+# Window class management
+_window_classes_registered = {}
 
-        # Create the window using Win32 API with full window features
-        # Use Dialog class "#32770" which properly handles child controls
-        # WS_OVERLAPPEDWINDOW = 13565952
-        # WS_VISIBLE = 268435456
-        # WS_CLIPCHILDREN = 33554432 (prevents parent from painting over children)
-        # Combined = 13565952 | 268435456 | 33554432 = 315555840
-        style = 315555840
+def register_window_class(class_name="TauraroWindow"):
+    # Register a window class for creating windows
+    if class_name in _window_classes_registered:
+        return _window_classes_registered[class_name]
 
-        # Extended style with client edge for modern look
-        ex_style = 256  # WS_EX_WINDOWEDGE
-
-        # CreateWindowExA parameters: dwExStyle, lpClassName, lpWindowName, dwStyle,
-        # x, y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam
-        # Using Dialog class "#32770" which is designed for hosting child controls
-        hwnd = call_function("user32.dll", "CreateWindowExA", [
-            ex_style, "#32770", title, style, 100, 100, width, height, 0, 0, hinstance, 0
-        ])
-
-        if hwnd != 0:
-            self.hwnd = hwnd
-            # SW_SHOW = 5
-            call_function("user32.dll", "ShowWindow", [hwnd, 5])
-            call_function("user32.dll", "UpdateWindow", [hwnd])
-            print(f"  Window created: {title} (hwnd={hwnd})")
-        else:
-            print(f"  Failed to create window: {title}")
-
-# Constants for window styles
-WS_OVERLAPPED = 0
-WS_CAPTION = 12582912
-WS_SYSMENU = 524288
-WS_THICKFRAME = 262144
-WS_MINIMIZEBOX = 131072
-WS_MAXIMIZEBOX = 65536
-WS_OVERLAPPEDWINDOW = 13565952
-WS_VISIBLE = 268435456
-WS_CHILD = 1073741824
-WS_TABSTOP = 65536
-WS_GROUP = 131072
-WS_BORDER = 8388608
-
-# Button styles
-BS_PUSHBUTTON = 0
-BS_DEFPUSHBUTTON = 1
-BS_CHECKBOX = 2
-BS_AUTOCHECKBOX = 3
-BS_RADIOBUTTON = 4
-BS_AUTORADIOBUTTON = 9
-BS_GROUPBOX = 7
-
-# Edit control styles
-ES_LEFT = 0
-ES_CENTER = 1
-ES_RIGHT = 2
-ES_MULTILINE = 4
-ES_PASSWORD = 32
-ES_AUTOHSCROLL = 128
-ES_AUTOVSCROLL = 64
-ES_NUMBER = 8192
-
-# Listbox styles
-LBS_NOTIFY = 1
-LBS_SORT = 2
-LBS_MULTIPLESEL = 8
-
-# Combobox styles
-CBS_SIMPLE = 1
-CBS_DROPDOWN = 2
-CBS_DROPDOWNLIST = 3
-CBS_AUTOHSCROLL = 64
-CBS_SORT = 256
-
-# Static control styles
-SS_LEFT = 0
-SS_CENTER = 1
-SS_RIGHT = 2
-
-# Extended window styles
-WS_EX_CLIENTEDGE = 512
-WS_EX_WINDOWEDGE = 256
-WS_EX_STATICEDGE = 131072
-
-# Colors (RGB format: 0x00BBGGRR)
-COLOR_WINDOW = 5
-COLOR_BTNFACE = 15
-COLOR_BTNTEXT = 18
-
-# Window messages
-WM_SETFONT = 48
-WM_SETTEXT = 12
-WM_GETTEXT = 13
-
-# Font weights
-FW_NORMAL = 400
-FW_BOLD = 700
-
-# Font quality
-DEFAULT_QUALITY = 0
-ANTIALIASED_QUALITY = 4
-CLEARTYPE_QUALITY = 5
-
-# Initialize modern visual styles
-def init_visual_styles():
-    print("Initializing modern visual styles...")
-
-    # INITCOMMONCONTROLSEX structure:
-    # typedef struct {
-    #   DWORD dwSize;      // Size of structure (8 bytes)
-    #   DWORD dwICC;       // Control classes to initialize
-    # } INITCOMMONCONTROLSEX;
-
-    # ICC flags for all modern controls
-    # ICC_WIN95_CLASSES = 0xFF (all basic controls)
-    # ICC_PROGRESS_CLASS = 0x20 (progress bar)
-    # ICC_STANDARD_CLASSES = 0x4000 (button, edit, static, listbox, combobox, scrollbar)
-    # Combined: 0xFF | 0x20 | 0x4000 = 0x40FF
-
-    icc_buffer = allocate_buffer(8)
-
-    # Try to initialize common controls for modern look
-    try:
-        result = call_function("comctl32.dll", "InitCommonControlsEx", [icc_buffer])
-        if result != 0:
-            print("  ✓ Modern visual styles enabled")
-            print("  ✓ All common controls initialized")
-        else:
-            print("  ⚠ Using classic theme")
-    except:
-        print("  ⚠ Using classic theme (ComCtl32 not available)")
-
-    free_buffer(icc_buffer)
-
-# Global modern font handle
-MODERN_FONT = 0
-
-# Helper to create modern font
-def create_modern_font(size=9, bold=False, font_name="Segoe UI"):
-    weight = FW_NORMAL
-    if bold:
-        weight = FW_BOLD
-
-    # Use negative size for height in pixels (modern approach)
-    height = -size
-
-    try:
-        font = call_function("gdi32.dll", "CreateFontA", [
-            height, 0, 0, 0, weight, 0, 0, 0, 0, 0, 0, CLEARTYPE_QUALITY, 0, font_name
-        ])
-        return font
-    except:
-        return 0
-
-# Helper to apply modern styling to a widget
-def apply_modern_style(hwnd, use_font=True, theme_name=""):
-    global MODERN_FONT
-
-    if hwnd == 0:
-        return
-
-    # Apply modern font (Segoe UI)
-    if use_font:
-        if MODERN_FONT == 0:
-            MODERN_FONT = create_modern_font(9, False, "Segoe UI")
-
-        if MODERN_FONT != 0:
-            # WM_SETFONT = 0x0030, wParam = font, lParam = TRUE (redraw)
-            try:
-                call_function("user32.dll", "SendMessageA", [hwnd, 48, MODERN_FONT, 1])
-            except:
-                pass
-
-    # Apply visual theme if specified
-    if theme_name != "":
-        try:
-            call_function("uxtheme.dll", "SetWindowTheme", [hwnd, theme_name, 0])
-        except:
-            pass
+    # For simplicity, we'll use the standard "STATIC" class
+    # In a full implementation, we would register a custom class with RegisterClassEx
+    _window_classes_registered[class_name] = "STATIC"
+    return "STATIC"
 
 # Application class
 class Application:
+    # Main application class that manages windows and message loop
+
     def __init__(self, name="DUITK Application"):
         self.name = name
         self.windows = []
         self.window_handles = []
         self.running = False
-
-        # Get module handle for creating windows
+        print("Calling GetModuleHandleA from Application constructor...")
         self.hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
-
-        # Initialize modern visual styles
-        init_visual_styles()
-
         print("Application initialized: " + name)
-        print(f"  Module handle: {self.hinstance}")
-        print("  Modern UI with native Win32 controls")
+        print("  Module handle (HINSTANCE): " + str(self.hinstance))
+        if self.hinstance == None:
+            print("ERROR: Application hinstance is None!")
+            # Try to get last error
+            try:
+                error = call_function("kernel32.dll", "GetLastError", [])
+                print("Last error: " + str(error))
+            except Exception as e:
+                print("Error getting last error: " + str(e))
+        else:
+            print("Application hinstance set correctly: " + str(self.hinstance))
+
+    def add_window(self, window):
+        # Add a window to the application
+        self.windows.append(window)
+        return window
 
     def create_window(self, title, width, height):
-        # Extract self attributes BEFORE creating Window (workaround for self corruption bug)
+        # Create a new window and add it to the application
+        print("Creating window: " + title + " (" + str(width) + "x" + str(height) + ")")
+
+        # CRITICAL: Extract self attributes BEFORE creating Window
+        # After accessing window.hwnd, self gets corrupted!
         app_windows = self.windows
         app_handles = self.window_handles
         app_hinstance = self.hinstance
 
-        # Create window
+        # StoreFast bug is fixed, we can now directly instantiate!
         window = Window(title, width, height, self, app_hinstance)
 
-        # Get hwnd - this may corrupt self, so we use extracted references
-        hwnd = window.hwnd
+        if window != None:
+            # Extract hwnd - this will corrupt self!
+            try:
+                hwnd = window.hwnd
 
-        if hwnd != 0:
-            # Use extracted references (not self.windows or self.window_handles)
-            app_windows.append(window)
-            app_handles.append(hwnd)
-            return window
+                if hwnd and hwnd != 0:
+                    app_windows.append(window)
+                    app_handles.append(hwnd)
+                    print("[OK] Window added to application (HWND: " + str(hwnd) + ")")
+                else:
+                    print("[X] ERROR: Window creation failed - invalid HWND")
+            except Exception as e:
+                print("[X] ERROR: Failed to extract window handle: " + str(e))
         else:
-            return None
+            print("[X] ERROR: Window creation failed!")
+        return window
 
     def run(self):
+        # Run the message loop until all windows are closed
         self.running = True
-        print("\nStarting Windows message loop...")
-        print("Windows will stay responsive until you close them.\n")
+        print("Starting message loop...")
+        print("Windows will stay open until you close them.")
+        print("Close any window to exit the application.")
 
-        # Allocate MSG structure (48 bytes on x64 Windows)
-        # typedef struct tagMSG {
-        #   HWND   hwnd;       // 8 bytes
-        #   UINT   message;    // 4 bytes
-        #   WPARAM wParam;     // 8 bytes
-        #   LPARAM lParam;     // 8 bytes
-        #   DWORD  time;       // 4 bytes
-        #   POINT  pt;         // 8 bytes (2 * 4)
-        #   DWORD  lPrivate;   // 4 bytes
-        # } MSG;
-        msg_buffer = allocate_buffer(48)
-
+        # Use proper Windows message loop
+        msg = [0, 0, 0, 0, 0, 0]  # MSG structure: hwnd, message, wParam, lParam, time, pt
+        
         try:
-            while self.running:
-                # GetMessageA returns:
-                # - nonzero if not WM_QUIT
-                # - 0 if WM_QUIT
-                # - -1 on error
-                result = call_function("user32.dll", "GetMessageA", [msg_buffer, 0, 0, 0])
-
-                if result <= 0:
-                    # WM_QUIT received or error
-                    print("WM_QUIT received or error, exiting message loop...")
-                    break
-
-                # Translate virtual-key messages into character messages
-                call_function("user32.dll", "TranslateMessage", [msg_buffer])
-
-                # Dispatch message to window procedure
-                call_function("user32.dll", "DispatchMessageA", [msg_buffer])
+            # Main message loop - runs until WM_QUIT message
+            while True:
+                # PeekMessage to check for messages without blocking
+                has_message = call_function("user32.dll", "PeekMessageA", [msg, 0, 0, 0, 1])  # PM_REMOVE = 1
+                
+                if has_message:
+                    # Check for WM_QUIT message
+                    if msg[1] == 18:  # WM_QUIT = 18
+                        print("WM_QUIT received. Exiting...")
+                        break
+                    
+                    # Translate and dispatch the message
+                    call_function("user32.dll", "TranslateMessage", [msg])
+                    call_function("user32.dll", "DispatchMessageA", [msg])
+                else:
+                    # Small sleep to prevent 100% CPU usage when no messages
+                    call_function("kernel32.dll", "Sleep", [1])
+                    
+                    # Check if any windows are still open
+                    window_handles = self.window_handles
+                    if len(window_handles) == 0:
+                        print("All windows closed. Exiting...")
+                        break
+                        
+        except Exception as e:
+            print("Error in message loop: " + str(e))
+            import traceback
+            traceback.print_exc()
         finally:
-            free_buffer(msg_buffer)
             self.running = False
 
         print("Message loop ended.")
+        return 0
 
-# Modern Widget Classes
+    def run_simple(self, timeout_seconds=5):
+        # Run a simple message loop with timeout (for demos)
+        print("Running application for " + str(timeout_seconds) + " seconds...")
+        print("Windows are now visible on your screen!")
+        print("You can close them manually, or they will auto-close after " + str(timeout_seconds) + " seconds...")
 
-# Button widget
-class Button:
-    def __init__(self, parent, text, x, y, width=100, height=30):
-        self.parent = parent
-        self.text = text
-        self.hwnd = 0
+        # Use stored window handles list
+        window_handles = self.window_handles
 
-        # Button style: WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON
-        # WS_CHILD = 0x40000000 (1073741824)
-        # WS_VISIBLE = 0x10000000 (268435456)
-        # WS_TABSTOP = 0x00010000 (65536)
-        # BS_PUSHBUTTON = 0x00000000 (0)
-        style = 1073741824 | 268435456 | 65536 | 0
+        # Message loop with timeout
+        loop_count = 0
+        max_iterations = timeout_seconds * 100
 
-        # Extended style for modern appearance
-        # WS_EX_LEFT = 0x00000000 (0)
-        ex_style = 0
+        try:
+            while loop_count < max_iterations:
+                # Check if any windows are still open
+                remaining_handles = []
+                for hwnd in window_handles:
+                    # Check if window still exists
+                    try:
+                        if call_function("user32.dll", "IsWindow", [hwnd]):
+                            remaining_handles.append(hwnd)
+                            # Keep window updated and responsive
+                            call_function("user32.dll", "UpdateWindow", [hwnd])
+                    except:
+                        pass
 
-        self.hwnd = call_function("user32.dll", "CreateWindowExA", [
-            ex_style, "Button", text, style, x, y, width, height, parent, 0, 0, 0
+                if len(remaining_handles) == 0:
+                    print("")
+                    print("All windows closed by user. Exiting early...")
+                    break
+
+                window_handles = remaining_handles
+
+                # Small sleep to prevent 100% CPU usage (10ms sleep = 100 iterations per second)
+                call_function("kernel32.dll", "Sleep", [10])
+                loop_count += 1
+
+        except:
+            pass
+
+        print("Application ended.")
+
+    def quit(self):
+        # Quit the application
+        self.running = False
+        # Post quit message
+        try:
+            call_function("user32.dll", "PostQuitMessage", [0])
+        except:
+            pass
+        print("Application quit")
+
+# Workaround for Tauraro bug: Factory function for creating Windows
+def _create_window_instance(title, width, height, app, hinstance):
+    # This is a workaround for Tauraro bug where class instantiation from within
+    # another class method returns None
+    window = Window()
+    window.title = title
+    window.width = width
+    window.height = height
+    window.app = app
+    window.controls = []
+    window.hwnd = 0
+    window.visible = False
+
+    # Initialize the window
+    try:
+        if hinstance == None:
+            print("Getting hinstance using direct FFI...")
+            hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+            print("hinstance from FFI: " + str(hinstance))
+        else:
+            print("Using provided hinstance: " + str(hinstance))
+
+        print("Creating window: " + title + " (" + str(width) + "x" + str(height) + ")")
+        print("  title type: " + str(type(title)) + ", value: " + str(title))
+        print("  width type: " + str(type(width)) + ", value: " + str(width))
+        print("  height type: " + str(type(height)) + ", value: " + str(height))
+        print("  hinstance type: " + str(type(hinstance)) + ", value: " + str(hinstance))
+
+        # Call CreateWindowExA with proper bitwise OR (now works - StoreFast bug fixed!)
+        # WS_OVERLAPPEDWINDOW (0x00CF0000) | WS_VISIBLE (0x10000000) = 0x10CF0000 = 282001408
+        style = 0x00CF0000 | 0x10000000
+        window.hwnd = call_function("user32.dll", "CreateWindowExA", [
+            0,
+            "BUTTON",
+            title,
+            style,
+            200,
+            200,
+            width,
+            height,
+            0,
+            0,
+            hinstance,
+            0
         ])
 
-        if self.hwnd != 0:
-            # Apply modern Segoe UI font and visual styling
-            apply_modern_style(self.hwnd, True, "")
-            print(f"  ✓ Button created: '{text}' (modern style)")
+        print("CreateWindowExA returned: " + str(window.hwnd))
 
-# Label widget
-class Label:
-    def __init__(self, parent, text, x, y, width=100, height=20):
-        self.parent = parent
-        self.text = text
+        if window.hwnd and window.hwnd != 0:
+            print("  [OK] Window created successfully! HWND: " + str(window.hwnd))
+            # Show the window immediately
+            call_function("user32.dll", "ShowWindow", [window.hwnd, 5])
+            call_function("user32.dll", "UpdateWindow", [window.hwnd])
+            call_function("user32.dll", "SetForegroundWindow", [window.hwnd])
+            window.visible = True
+            print("  [OK] Window is now visible on screen!")
+        else:
+            print("  [X] Failed to create window. HWND: " + str(window.hwnd))
+
+    except Exception as e:
+        print("Error creating window: " + str(e))
+        import traceback
+        traceback.print_exc()
+        window.hwnd = 0
+
+    print("Returning window object, hwnd = " + str(window.hwnd))
+    return window
+
+# Window class
+class Window:
+    # Represents a native Windows window
+
+    def __init__(self, title, width, height, app, hinstance):
+        self.title = title
+        self.width = width
+        self.height = height
+        self.app = app
+        self.controls = []
         self.hwnd = 0
+        self.visible = False
 
-        # Static style: WS_CHILD | WS_VISIBLE | SS_LEFT
-        # WS_CHILD = 0x40000000 (1073741824)
-        # WS_VISIBLE = 0x10000000 (268435456)
-        # SS_LEFT = 0x00000000 (0)
-        style = 1073741824 | 268435456 | 0
+        # Use direct FFI approach which we know works
+        try:
+            # Get module instance if not provided
+            if hinstance == None:
+                print("Getting hinstance using direct FFI...")
+                hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+                print("hinstance from FFI: " + str(hinstance))
+            else:
+                print("Using provided hinstance: " + str(hinstance))
+                
+            # Create the window using direct FFI
+            print("Creating window: " + title + " (" + str(width) + "x" + str(height) + ")")
+            print("  title type: " + str(type(title)) + ", value: " + str(title))
+            print("  width type: " + str(type(width)) + ", value: " + str(width))
+            print("  height type: " + str(type(height)) + ", value: " + str(height))
+            print("  hinstance type: " + str(type(hinstance)) + ", value: " + str(hinstance))
 
-        # Extended style for transparent background
-        ex_style = 0
+            # Call CreateWindowExA with proper bitwise OR (now works - StoreFast bug fixed!)
+            # WS_OVERLAPPEDWINDOW (0x00CF0000) | WS_VISIBLE (0x10000000) = 0x10CF0000 = 282001408
+            style = 0x00CF0000 | 0x10000000
+            self.hwnd = call_function("user32.dll", "CreateWindowExA", [
+                0,
+                "BUTTON",
+                title,
+                style,
+                200,
+                200,
+                width,
+                height,
+                0,
+                0,
+                hinstance,
+                0
+            ])
+            
+            print("CreateWindowExA returned: " + str(self.hwnd))
+            
+            if self.hwnd and self.hwnd != 0:
+                print("  [OK] Window created successfully! HWND: " + str(self.hwnd))
+                # Show the window immediately
+                call_function("user32.dll", "ShowWindow", [self.hwnd, 5])
+                call_function("user32.dll", "UpdateWindow", [self.hwnd])
+                call_function("user32.dll", "SetForegroundWindow", [self.hwnd])
+                self.visible = True
+                print("  [OK] Window is now visible on screen!")
+            else:
+                print("  [X] Failed to create window. HWND: " + str(self.hwnd))
+                
+        except Exception as e:
+            print("Error creating window: " + str(e))
+            import traceback
+            traceback.print_exc()
+            self.hwnd = 0
 
-        self.hwnd = call_function("user32.dll", "CreateWindowExA", [
-            ex_style, "Static", text, style, x, y, width, height, parent, 0, 0, 0
-        ])
+        print("Exiting Window.__init__, self.hwnd = " + str(self.hwnd))
 
-        if self.hwnd != 0:
-            # Apply modern Segoe UI font
-            apply_modern_style(self.hwnd, True, "")
-            print(f"  ✓ Label created: '{text}' (modern style)")
+    def show(self, cmd=5):
+        # Show the window
+        if self.hwnd:
+            try:
+                result = call_function("user32.dll", "ShowWindow", [self.hwnd, cmd])
+                call_function("user32.dll", "UpdateWindow", [self.hwnd])
+                self.visible = True
+                print("  Window shown: " + self.title)
+                return result
+            except Exception as e:
+                print("  Error showing window: " + str(e))
+        return False
 
-# TextBox widget
-class TextBox:
-    def __init__(self, parent, x, y, width=200, height=25, multiline=False, password=False):
+    def hide(self):
+        # Hide the window
+        if self.hwnd:
+            try:
+                result = call_function("user32.dll", "ShowWindow", [self.hwnd, 0])
+                self.visible = False
+                print("  Window hidden: " + self.title)
+                return result
+            except Exception as e:
+                print("  Error hiding window: " + str(e))
+        return False
+
+    def set_title(self, new_title):
+        # Set the window title
+        if self.hwnd:
+            try:
+                call_function("user32.dll", "SetWindowTextA", [self.hwnd, new_title])
+                self.title = new_title
+                print("  Window title changed to: " + new_title)
+            except Exception as e:
+                print("  Error setting title: " + str(e))
+        return self
+
+    def move(self, x, y, w=None, h=None):
+        # Move and/or resize the window
+        if self.hwnd:
+            if w != None:
+                width = w
+            else:
+                width = self.width
+            if h != None:
+                height = h
+            else:
+                height = self.height
+            try:
+                call_function("user32.dll", "MoveWindow", [
+                    self.hwnd, x, y, width, height, True
+                ])
+                self.width = width
+                self.height = height
+                print("  Window moved to (" + str(x) + ", " + str(y) + "), size: " + str(width) + "x" + str(height))
+            except Exception as e:
+                print("  Error moving window: " + str(e))
+        return self
+
+    def destroy(self):
+        # Destroy the window
+        if self.hwnd:
+            try:
+                call_function("user32.dll", "DestroyWindow", [self.hwnd])
+                print("  Window destroyed: " + self.title)
+                self.hwnd = 0
+            except Exception as e:
+                print("  Error destroying window: " + str(e))
+
+    def create_button(self, text, x, y, width, height):
+        # Create a button control
+        button = Button(self, text, x, y, width, height)
+        self.controls.append(button)
+        return button
+
+    def create_label(self, text, x, y, width, height):
+        # Create a static label control
+        label = Label(self, text, x, y, width, height)
+        self.controls.append(label)
+        return label
+
+    def create_edit(self, text, x, y, width, height):
+        # Create an edit control
+        edit = Edit(self, text, x, y, width, height)
+        self.controls.append(edit)
+        return edit
+
+# Control base class
+class Control:
+    # Base class for all controls
+
+    def __init__(self, parent, hwnd):
         self.parent = parent
-        self.hwnd = 0
+        self.hwnd = hwnd
+        self.visible = True
 
-        # Edit style: WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL
-        # WS_CHILD = 0x40000000 (1073741824)
-        # WS_VISIBLE = 0x10000000 (268435456)
-        # WS_TABSTOP = 0x00010000 (65536)
-        # WS_BORDER = 0x00800000 (8388608)
-        # ES_AUTOHSCROLL = 0x00000080 (128)
-        # ES_MULTILINE = 0x00000004 (4)
-        # ES_AUTOVSCROLL = 0x00000040 (64)
-        # ES_PASSWORD = 0x00000020 (32)
-        style = 1073741824 | 268435456 | 65536 | 8388608 | 128
+    def show(self):
+        # Show the control
+        if self.hwnd:
+            try:
+                call_function("user32.dll", "ShowWindow", [self.hwnd, 5])
+                self.visible = True
+            except:
+                pass
+        return self
 
-        if multiline:
-            style = style | 4 | 64
-            height = max(height, 60)
-
-        if password:
-            style = style | 32
-
-        # Extended style for modern sunken border (3D appearance)
-        # WS_EX_CLIENTEDGE = 0x00000200 (512)
-        ex_style = 512
-
-        self.hwnd = call_function("user32.dll", "CreateWindowExA", [
-            ex_style, "Edit", "", style, x, y, width, height, parent, 0, 0, 0
-        ])
-
-        if self.hwnd != 0:
-            # Apply modern Segoe UI font
-            apply_modern_style(self.hwnd, True, "")
-
-            mode = ""
-            if multiline:
-                mode = "multiline "
-            if password:
-                mode = mode + "password "
-            print(f"  ✓ TextBox created ({mode}textbox, modern style)")
+    def hide(self):
+        # Hide the control
+        if self.hwnd:
+            try:
+                call_function("user32.dll", "ShowWindow", [self.hwnd, 0])
+                self.visible = False
+            except:
+                pass
+        return self
 
     def set_text(self, text):
-        if self.hwnd != 0:
-            call_function("user32.dll", "SetWindowTextA", [self.hwnd, text])
+        # Set the control text
+        if self.hwnd:
+            try:
+                call_function("user32.dll", "SetWindowTextA", [self.hwnd, text])
+            except:
+                pass
+        return self
 
-# CheckBox widget
-class CheckBox:
-    def __init__(self, parent, text, x, y, width=150, height=25):
-        self.parent = parent
+# Button control
+class Button(Control):
+    # Button control
+
+    def __init__(self, parent, text, x, y, width, height):
+        style = 1342177280
+        if parent.app != None:
+            hinstance = parent.app.hinstance
+        else:
+            hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+
+        hwnd = 0
+        try:
+            hwnd = call_function("user32.dll", "CreateWindowExA", [
+                0,
+                "BUTTON",
+                text,
+                style,
+                x, y, width, height,
+                parent.hwnd,
+                0,
+                hinstance,
+                0
+            ])
+
+            if hwnd and hwnd != 0:
+                print("  [OK] Button created: " + text)
+            else:
+                print("  [X] Failed to create button: " + text)
+        except Exception as e:
+            print("  [X] Exception creating button: " + str(e))
+
+        super().__init__(parent, hwnd)
         self.text = text
-        self.hwnd = 0
 
-        # CheckBox style: WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX
-        # WS_CHILD = 0x40000000 (1073741824)
-        # WS_VISIBLE = 0x10000000 (268435456)
-        # WS_TABSTOP = 0x00010000 (65536)
-        # BS_AUTOCHECKBOX = 0x00000003 (3)
-        style = 1073741824 | 268435456 | 65536 | 3
+# Label control (Static text)
+class Label(Control):
+    # Static label control
 
-        ex_style = 0
+    def __init__(self, parent, text, x, y, width, height):
+        style = 1342177280
+        if parent.app != None:
+            hinstance = parent.app.hinstance
+        else:
+            hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
 
-        self.hwnd = call_function("user32.dll", "CreateWindowExA", [
-            ex_style, "Button", text, style, x, y, width, height, parent, 0, 0, 0
-        ])
+        hwnd = 0
+        try:
+            hwnd = call_function("user32.dll", "CreateWindowExA", [
+                0,
+                "STATIC",
+                text,
+                style,
+                x, y, width, height,
+                parent.hwnd,
+                0,
+                hinstance,
+                0
+            ])
 
-        if self.hwnd != 0:
-            # Apply modern Segoe UI font and visual theme
-            apply_modern_style(self.hwnd, True, "")
-            print(f"  ✓ CheckBox created: '{text}' (modern style)")
+            if hwnd and hwnd != 0:
+                print("  [OK] Label created: " + text)
+            else:
+                print("  [X] Failed to create label: " + text)
+        except Exception as e:
+            print("  [X] Exception creating label: " + str(e))
 
-# RadioButton widget
-class RadioButton:
-    def __init__(self, parent, text, x, y, width=150, height=25):
-        self.parent = parent
+        super().__init__(parent, hwnd)
         self.text = text
-        self.hwnd = 0
 
-        # RadioButton style: WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON
-        # WS_CHILD = 0x40000000 (1073741824)
-        # WS_VISIBLE = 0x10000000 (268435456)
-        # WS_TABSTOP = 0x00010000 (65536)
-        # BS_AUTORADIOBUTTON = 0x00000009 (9)
-        style = 1073741824 | 268435456 | 65536 | 9
+# Edit control (Text input)
+class Edit(Control):
+    # Edit control for text input
 
-        ex_style = 0
+    def __init__(self, parent, text, x, y, width, height):
+        style = 1350565888
+        if parent.app != None:
+            hinstance = parent.app.hinstance
+        else:
+            hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
 
-        self.hwnd = call_function("user32.dll", "CreateWindowExA", [
-            ex_style, "Button", text, style, x, y, width, height, parent, 0, 0, 0
-        ])
+        hwnd = 0
+        try:
+            hwnd = call_function("user32.dll", "CreateWindowExA", [
+                0x00000200,
+                "EDIT",
+                text,
+                style,
+                x, y, width, height,
+                parent.hwnd,
+                0,
+                hinstance,
+                0
+            ])
 
-        if self.hwnd != 0:
-            # Apply modern Segoe UI font and visual theme
-            apply_modern_style(self.hwnd, True, "")
-            print(f"  ✓ RadioButton created: '{text}' (modern style)")
+            if hwnd and hwnd != 0:
+                print("  [OK] Edit control created: " + text)
+            else:
+                print("  [X] Failed to create edit control: " + text)
+        except Exception as e:
+            print("  [X] Exception creating edit control: " + str(e))
 
-# ComboBox widget
-class ComboBox:
-    def __init__(self, parent, x, y, width=200, height=200):
-        self.parent = parent
-        self.hwnd = 0
-
-        # ComboBox style: WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWN | CBS_AUTOHSCROLL
-        # WS_CHILD = 0x40000000 (1073741824)
-        # WS_VISIBLE = 0x10000000 (268435456)
-        # WS_TABSTOP = 0x00010000 (65536)
-        # CBS_DROPDOWN = 0x00000002 (2)
-        # CBS_AUTOHSCROLL = 0x00000040 (64)
-        style = 1073741824 | 268435456 | 65536 | 2 | 64
-
-        # Extended style for modern border
-        ex_style = 0
-
-        self.hwnd = call_function("user32.dll", "CreateWindowExA", [
-            ex_style, "ComboBox", "", style, x, y, width, height, parent, 0, 0, 0
-        ])
-
-        if self.hwnd != 0:
-            # Apply modern Segoe UI font
-            apply_modern_style(self.hwnd, True, "Explorer")
-            print(f"  ✓ ComboBox created (modern style)")
-
-# ListBox widget
-class ListBox:
-    def __init__(self, parent, x, y, width=200, height=150):
-        self.parent = parent
-        self.hwnd = 0
-
-        # ListBox style: WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | LBS_NOTIFY
-        # WS_CHILD = 0x40000000 (1073741824)
-        # WS_VISIBLE = 0x10000000 (268435456)
-        # WS_TABSTOP = 0x00010000 (65536)
-        # WS_BORDER = 0x00800000 (8388608)
-        # LBS_NOTIFY = 0x00000001 (1)
-        style = 1073741824 | 268435456 | 65536 | 8388608 | 1
-
-        # Extended style for modern sunken border
-        # WS_EX_CLIENTEDGE = 0x00000200 (512)
-        ex_style = 512
-
-        self.hwnd = call_function("user32.dll", "CreateWindowExA", [
-            ex_style, "ListBox", "", style, x, y, width, height, parent, 0, 0, 0
-        ])
-
-        if self.hwnd != 0:
-            # Apply modern Segoe UI font
-            apply_modern_style(self.hwnd, True, "Explorer")
-            print(f"  ✓ ListBox created (modern style)")
-
-# GroupBox widget
-class GroupBox:
-    def __init__(self, parent, text, x, y, width=250, height=150):
-        self.parent = parent
+        super().__init__(parent, hwnd)
         self.text = text
-        self.hwnd = 0
 
-        # GroupBox style: WS_CHILD | WS_VISIBLE | BS_GROUPBOX
-        # WS_CHILD = 0x40000000 (1073741824)
-        # WS_VISIBLE = 0x10000000 (268435456)
-        # BS_GROUPBOX = 0x00000007 (7)
-        style = 1073741824 | 268435456 | 7
+# Utility functions
+def message_box(text, title="Message", type=0):
+    # Show a message box
+    return call_function("user32.dll", "MessageBoxA", [0, text, title, type])
 
-        ex_style = 0
+def get_screen_width():
+    # Get the screen width in pixels
+    try:
+        return call_function("user32.dll", "GetSystemMetrics", [0])
+    except:
+        return 1920
 
-        self.hwnd = call_function("user32.dll", "CreateWindowExA", [
-            ex_style, "Button", text, style, x, y, width, height, parent, 0, 0, 0
-        ])
+def get_screen_height():
+    # Get the screen height in pixels
+    try:
+        return call_function("user32.dll", "GetSystemMetrics", [1])
+    except:
+        return 1080
 
-        if self.hwnd != 0:
-            # Apply modern Segoe UI font
-            apply_modern_style(self.hwnd, True, "")
-            print(f"  ✓ GroupBox created: '{text}' (modern style)")
+def create_window(title="Window", width=640, height=480):
+    # Quick function to create a standalone window
+    return Window(title, width, height)
 
-# ProgressBar widget
-class ProgressBar:
-    def __init__(self, parent, x, y, width=200, height=25):
-        self.parent = parent
-        self.hwnd = 0
-
-        # ProgressBar style: WS_CHILD | WS_VISIBLE
-        # WS_CHILD = 0x40000000 (1073741824)
-        # WS_VISIBLE = 0x10000000 (268435456)
-        # PBS_SMOOTH = 0x01 (modern smooth progress bar)
-        style = 1073741824 | 268435456 | 1
-
-        # Extended style for modern border
-        ex_style = 0
-
-        self.hwnd = call_function("user32.dll", "CreateWindowExA", [
-            ex_style, "msctls_progress32", "", style, x, y, width, height, parent, 0, 0, 0
-        ])
-
-        if self.hwnd != 0:
-            # Apply modern visual theme (Explorer theme for smooth modern look)
-            apply_modern_style(self.hwnd, False, "Explorer")
-            print(f"  ✓ ProgressBar created (modern style)")
-
-print("DUITK v3.0 - Modern Desktop UI Toolkit loaded successfully!")
-print("Available widgets: Button, Label, TextBox, CheckBox, RadioButton,")
-print("                   ComboBox, ListBox, GroupBox, ProgressBar")
+print("DUITK v2.0 - Desktop UI Toolkit loaded successfully!")
+print("  [OK] Native Win32 API integration")
+print("  [OK] Full window and control support")
+print("  [OK] Message loop handling")
