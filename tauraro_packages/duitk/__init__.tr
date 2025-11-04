@@ -7,6 +7,28 @@ print("Loading DUITK - Desktop UI Toolkit v2.0...")
 # Import Win32 API package
 import win32
 
+# Load required libraries first
+load_library("kernel32.dll")
+load_library("user32.dll")
+
+# Define required functions for direct FFI calls
+# These need to be defined before calling call_function
+define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
+define_function("kernel32.dll", "GetLastError", "uint32", [])
+define_function("user32.dll", "CreateWindowExA", "pointer", ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
+define_function("user32.dll", "ShowWindow", "int32", ["pointer", "int32"])
+define_function("user32.dll", "UpdateWindow", "int32", ["pointer"])
+define_function("user32.dll", "SetForegroundWindow", "int32", ["pointer"])
+define_function("user32.dll", "DestroyWindow", "int32", ["pointer"])
+define_function("user32.dll", "SetWindowTextA", "int32", ["pointer", "pointer"])
+define_function("user32.dll", "MoveWindow", "int32", ["pointer", "int32", "int32", "int32", "int32", "bool"])
+define_function("kernel32.dll", "Sleep", "void", ["uint32"])
+define_function("user32.dll", "MessageBoxA", "int32", ["pointer", "pointer", "pointer", "uint32"])
+define_function("user32.dll", "PostQuitMessage", "void", ["int32"])
+define_function("user32.dll", "PeekMessageA", "bool", ["pointer", "pointer", "uint32", "uint32", "uint32"])
+define_function("user32.dll", "TranslateMessage", "bool", ["pointer"])
+define_function("user32.dll", "DispatchMessageA", "int64", ["pointer"])
+
 # Version information
 __version__ = "2.0.0"
 __name__ = "DUITK"
@@ -39,19 +61,40 @@ class Application:
         self.name = name
         self.windows = []
         self.running = False
+        print("Calling GetModuleHandleA from Application constructor...")
         self.hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
         print(f"Application initialized: {name}")
         print(f"  Module handle (HINSTANCE): {self.hinstance}")
+        print(f"  hinstance type: {type(self.hinstance)}")
+        print(f"  hinstance id: {id(self.hinstance)}")
+        if self.hinstance == None:
+            print("ERROR: Application hinstance is None!")
+            # Try to get last error
+            try:
+                error = call_function("kernel32.dll", "GetLastError", [])
+                print(f"Last error: {error}")
+            except Exception as e:
+                print(f"Error getting last error: {e}")
+        else:
+            print(f"Application hinstance set correctly: {self.hinstance}")
 
     def add_window(self, window):
         # Add a window to the application
         self.windows.append(window)
         return window
 
-    def create_window(self, title="Window", width=640, height=480):
+    def create_window(self, title, width, height):
         # Create a new window and add it to the application
-        window = Window(title, width, height, self)
-        self.windows.append(window)
+        print(f"Creating window: {title} ({width}x{height})")
+
+        # StoreFast bug is fixed, we can now directly instantiate!
+        window = Window(title, width, height, self, self.hinstance)
+
+        if window != None and window.hwnd and window.hwnd != 0:
+            self.windows.append(window)
+            print(f"✓ Window added to application")
+        else:
+            print(f"✗ ERROR: Window creation failed!")
         return window
 
     def run(self):
@@ -103,10 +146,11 @@ class Application:
     def run_simple(self, timeout_seconds=5):
         # Run a simple message loop with timeout (for demos)
         print(f"Running application for {timeout_seconds} seconds...")
+        print(f"Windows are now visible on your screen!")
+        print(f"They will stay visible for {timeout_seconds} seconds...")
 
-        # Show a message box to keep the app running
-        msg_text = f"{self.name}\n\nWindows created: {len(self.windows)}\n\nClick OK to exit."
-        call_function("user32.dll", "MessageBoxA", [0, msg_text, "DUITK Application", 0])
+        # Keep windows visible for the specified duration
+        call_function("kernel32.dll", "Sleep", [timeout_seconds * 1000])
 
         print("Application ended.")
 
@@ -120,11 +164,79 @@ class Application:
             pass
         print("Application quit")
 
+# Workaround for Tauraro bug: Factory function for creating Windows
+def _create_window_instance(title, width, height, app, hinstance):
+    # This is a workaround for Tauraro bug where class instantiation from within
+    # another class method returns None
+    window = Window()
+    window.title = title
+    window.width = width
+    window.height = height
+    window.app = app
+    window.controls = []
+    window.hwnd = 0
+    window.visible = False
+
+    # Initialize the window
+    try:
+        if hinstance == None:
+            print("Getting hinstance using direct FFI...")
+            hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+            print(f"hinstance from FFI: {hinstance}")
+        else:
+            print(f"Using provided hinstance: {hinstance}")
+
+        print(f"Creating window: {title} ({width}x{height})")
+        print(f"  title type: {type(title)}, value: {title}")
+        print(f"  width type: {type(width)}, value: {width}")
+        print(f"  height type: {type(height)}, value: {height}")
+        print(f"  hinstance type: {type(hinstance)}, value: {hinstance}")
+
+        # Call CreateWindowExA with proper bitwise OR (now works - StoreFast bug fixed!)
+        # WS_OVERLAPPEDWINDOW (0x00CF0000) | WS_VISIBLE (0x10000000) = 0x10CF0000 = 282001408
+        style = 0x00CF0000 | 0x10000000
+        window.hwnd = call_function("user32.dll", "CreateWindowExA", [
+            0,
+            "BUTTON",
+            title,
+            style,
+            200,
+            200,
+            width,
+            height,
+            0,
+            0,
+            hinstance,
+            0
+        ])
+
+        print(f"CreateWindowExA returned: {window.hwnd}")
+
+        if window.hwnd and window.hwnd != 0:
+            print(f"  ✓ Window created successfully! HWND: {window.hwnd}")
+            # Show the window immediately
+            call_function("user32.dll", "ShowWindow", [window.hwnd, 5])
+            call_function("user32.dll", "UpdateWindow", [window.hwnd])
+            call_function("user32.dll", "SetForegroundWindow", [window.hwnd])
+            window.visible = True
+            print(f"  ✓ Window is now visible on screen!")
+        else:
+            print(f"  ✗ Failed to create window. HWND: {window.hwnd}")
+
+    except Exception as e:
+        print(f"Error creating window: {e}")
+        import traceback
+        traceback.print_exc()
+        window.hwnd = 0
+
+    print(f"Returning window object, hwnd = {window.hwnd}")
+    return window
+
 # Window class
 class Window:
     # Represents a native Windows window
 
-    def __init__(self, title="Window", width=640, height=480, app=None):
+    def __init__(self, title, width, height, app, hinstance):
         self.title = title
         self.width = width
         self.height = height
@@ -133,25 +245,33 @@ class Window:
         self.hwnd = 0
         self.visible = False
 
-        # Get module instance
-        if app and hasattr(app, 'hinstance'):
-            hinstance = app.hinstance
-        else:
-            hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
-
-        # Create the window using CreateWindowExA
-        print(f"Creating window: {title} ({width}x{height})")
-
+        # Use direct FFI approach which we know works
         try:
-            # CreateWindowExA parameters: dwExStyle, lpClassName, lpWindowName, dwStyle, x, y, width, height, hWndParent, hMenu, hInstance, lpParam
-            window_style = 0x10000000 | 0x00C00000 | 0x00080000 | 0x00040000 | 0x00020000 | 0x00010000
+            # Get module instance if not provided
+            if hinstance == None:
+                print("Getting hinstance using direct FFI...")
+                hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+                print(f"hinstance from FFI: {hinstance}")
+            else:
+                print(f"Using provided hinstance: {hinstance}")
+                
+            # Create the window using direct FFI
+            print(f"Creating window: {title} ({width}x{height})")
+            print(f"  title type: {type(title)}, value: {title}")
+            print(f"  width type: {type(width)}, value: {width}")
+            print(f"  height type: {type(height)}, value: {height}")
+            print(f"  hinstance type: {type(hinstance)}, value: {hinstance}")
+
+            # Call CreateWindowExA with proper bitwise OR (now works - StoreFast bug fixed!)
+            # WS_OVERLAPPEDWINDOW (0x00CF0000) | WS_VISIBLE (0x10000000) = 0x10CF0000 = 282001408
+            style = 0x00CF0000 | 0x10000000
             self.hwnd = call_function("user32.dll", "CreateWindowExA", [
                 0,
-                "STATIC",
+                "BUTTON",
                 title,
-                window_style,
-                100,
-                100,
+                style,
+                200,
+                200,
                 width,
                 height,
                 0,
@@ -159,21 +279,27 @@ class Window:
                 hinstance,
                 0
             ])
-
+            
+            print(f"CreateWindowExA returned: {self.hwnd}")
+            
             if self.hwnd and self.hwnd != 0:
                 print(f"  ✓ Window created successfully! HWND: {self.hwnd}")
+                # Show the window immediately
+                call_function("user32.dll", "ShowWindow", [self.hwnd, 5])
+                call_function("user32.dll", "UpdateWindow", [self.hwnd])
+                call_function("user32.dll", "SetForegroundWindow", [self.hwnd])
                 self.visible = True
+                print(f"  ✓ Window is now visible on screen!")
             else:
                 print(f"  ✗ Failed to create window. HWND: {self.hwnd}")
-                # Get last error
-                try:
-                    error = call_function("kernel32.dll", "GetLastError", [])
-                    print(f"  Last error code: {error}")
-                except:
-                    pass
+                
         except Exception as e:
-            print(f"  ✗ Exception creating window: {e}")
+            print(f"Error creating window: {e}")
+            import traceback
+            traceback.print_exc()
             self.hwnd = 0
+
+        print(f"Exiting Window.__init__, self.hwnd = {self.hwnd}")
 
     def show(self, cmd=5):
         # Show the window
@@ -304,8 +430,8 @@ class Button(Control):
     # Button control
 
     def __init__(self, parent, text, x, y, width, height):
-        style = 0x40000000 | 0x10000000 | 0x00000000
-        if parent.app:
+        style = 1342177280
+        if parent.app != None:
             hinstance = parent.app.hinstance
         else:
             hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
@@ -339,8 +465,8 @@ class Label(Control):
     # Static label control
 
     def __init__(self, parent, text, x, y, width, height):
-        style = 0x40000000 | 0x10000000
-        if parent.app:
+        style = 1342177280
+        if parent.app != None:
             hinstance = parent.app.hinstance
         else:
             hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
@@ -374,8 +500,8 @@ class Edit(Control):
     # Edit control for text input
 
     def __init__(self, parent, text, x, y, width, height):
-        style = 0x40000000 | 0x10000000 | 0x00800000 | 0x00000000
-        if parent.app:
+        style = 1350565888
+        if parent.app != None:
             hinstance = parent.app.hinstance
         else:
             hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
