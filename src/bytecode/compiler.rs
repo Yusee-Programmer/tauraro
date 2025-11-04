@@ -1490,29 +1490,94 @@ impl SuperCompiler {
                 Ok(result_reg)
             }
             Expr::Compare { left, ops, comparators } => {
-                // For now, we'll just handle the first comparison operation
-                // A full implementation would handle chained comparisons
-                if ops.len() != 1 || comparators.len() != 1 {
-                    return Err(anyhow!("Chained comparisons not yet supported"));
+                // Implement chained comparisons: a < b < c becomes (a < b) and (b < c)
+                // with short-circuit evaluation and single evaluation of intermediate values
+
+                if ops.is_empty() || comparators.is_empty() {
+                    return Err(anyhow!("Invalid comparison expression"));
                 }
-                
-                let left_reg = self.compile_expression(*left)?;
-                let right_reg = self.compile_expression(comparators[0].clone())?;
+
+                // Simple case: single comparison
+                if ops.len() == 1 && comparators.len() == 1 {
+                    let left_reg = self.compile_expression(*left)?;
+                    let right_reg = self.compile_expression(comparators[0].clone())?;
+                    let result_reg = self.allocate_register();
+
+                    let opcode = match ops[0] {
+                        CompareOp::Eq => OpCode::CompareEqualRR,
+                        CompareOp::NotEq => OpCode::CompareNotEqualRR,
+                        CompareOp::Lt => OpCode::CompareLessRR,
+                        CompareOp::LtE => OpCode::CompareLessEqualRR,
+                        CompareOp::Gt => OpCode::CompareGreaterRR,
+                        CompareOp::GtE => OpCode::CompareGreaterEqualRR,
+                        CompareOp::In => OpCode::CompareInRR,
+                        CompareOp::NotIn => OpCode::CompareNotInRR,
+                        CompareOp::Is | CompareOp::IsNot => {
+                            // is/is not comparisons not supported in simple case yet
+                            return Err(anyhow!("'is' and 'is not' comparisons not yet fully supported"));
+                        }
+                    };
+
+                    self.emit(opcode, left_reg, right_reg, result_reg, self.current_line);
+                    return Ok(result_reg);
+                }
+
+                // Chained comparison: a < b < c < d ...
+                // Compile as: (a < b) and (b < c) and (c < d) ... with short-circuit
+
                 let result_reg = self.allocate_register();
-                
-                let opcode = match ops[0] {
-                    CompareOp::Eq => OpCode::CompareEqualRR,
-                    CompareOp::NotEq => OpCode::CompareNotEqualRR,
-                    CompareOp::Lt => OpCode::CompareLessRR,
-                    CompareOp::LtE => OpCode::CompareLessEqualRR,
-                    CompareOp::Gt => OpCode::CompareGreaterRR,
-                    CompareOp::GtE => OpCode::CompareGreaterEqualRR,
-                    CompareOp::In => OpCode::CompareInRR,
-                    CompareOp::NotIn => OpCode::CompareNotInRR,
-                    _ => return Err(anyhow!("Unsupported comparison operation: {:?}", ops[0])),
-                };
-                
-                self.emit(opcode, left_reg, right_reg, result_reg, self.current_line);
+                let mut current_left_reg = self.compile_expression(*left)?;
+
+                // We need to track where to jump if any comparison fails
+                let mut short_circuit_jumps = Vec::new();
+
+                for (i, op) in ops.iter().enumerate() {
+                    let right_reg = self.compile_expression(comparators[i].clone())?;
+                    let temp_result = self.allocate_register();
+
+                    let opcode = match op {
+                        CompareOp::Eq => OpCode::CompareEqualRR,
+                        CompareOp::NotEq => OpCode::CompareNotEqualRR,
+                        CompareOp::Lt => OpCode::CompareLessRR,
+                        CompareOp::LtE => OpCode::CompareLessEqualRR,
+                        CompareOp::Gt => OpCode::CompareGreaterRR,
+                        CompareOp::GtE => OpCode::CompareGreaterEqualRR,
+                        CompareOp::In => OpCode::CompareInRR,
+                        CompareOp::NotIn => OpCode::CompareNotInRR,
+                        CompareOp::Is | CompareOp::IsNot => {
+                            // is/is not comparisons not supported in chained comparisons yet
+                            return Err(anyhow!("'is' and 'is not' not supported in chained comparisons yet"));
+                        }
+                    };
+
+                    self.emit(opcode, current_left_reg, right_reg, temp_result, self.current_line);
+
+                    // If this is not the last comparison, we need short-circuit logic
+                    if i < ops.len() - 1 {
+                        // Move current result to final result register
+                        self.emit(OpCode::MoveReg, temp_result, result_reg, 0, self.current_line);
+
+                        // If temp_result is false, jump to the end (skip remaining comparisons)
+                        let jump_instr_idx = self.code.instructions.len();
+                        self.emit(OpCode::JumpIfFalse, temp_result, 0, 0, self.current_line);
+                        short_circuit_jumps.push(jump_instr_idx);
+
+                        // The right value becomes the left value for the next comparison
+                        current_left_reg = right_reg;
+                    } else {
+                        // Last comparison - move result to final register
+                        self.emit(OpCode::MoveReg, temp_result, result_reg, 0, self.current_line);
+                    }
+                }
+
+                // Patch all short-circuit jumps to point here (after all comparisons)
+                let end_offset = self.code.instructions.len() as u32;
+                for jump_idx in short_circuit_jumps {
+                    if let Some(instr) = self.code.instructions.get_mut(jump_idx) {
+                        instr.arg2 = end_offset;
+                    }
+                }
+
                 Ok(result_reg)
             }
             Expr::List(items) => {
@@ -1651,9 +1716,8 @@ impl SuperCompiler {
                         self.emit(OpCode::UnaryNot, operand_reg, result_reg, 0, self.current_line);
                     }
                     UnaryOp::Invert | UnaryOp::BitNot => {
-                        // Bitwise NOT - for now, just negate the number (simplified)
-                        // TODO: Implement proper bitwise NOT
-                        self.emit(OpCode::UnaryNegate, operand_reg, result_reg, 0, self.current_line);
+                        // Bitwise NOT operation (~)
+                        self.emit(OpCode::UnaryInvert, operand_reg, result_reg, 0, self.current_line);
                     }
                 }
                 

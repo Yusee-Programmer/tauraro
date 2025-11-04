@@ -2983,6 +2983,26 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(result));
                 Ok(None)
             }
+            OpCode::UnaryInvert => {
+                // Bitwise NOT operation (~)
+                // In Python: ~x == -(x + 1)
+                let operand_reg = arg1 as usize;
+                let result_reg = arg2 as usize;
+
+                if operand_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("UnaryInvert: operand register index {} out of bounds (len: {})", operand_reg, self.frames[frame_idx].registers.len()));
+                }
+
+                let operand_value = &self.frames[frame_idx].registers[operand_reg].value;
+                let result = match operand_value {
+                    Value::Int(n) => Value::Int(!n),  // Bitwise NOT
+                    Value::Bool(b) => Value::Int(if *b { -2 } else { -1 }),  // ~True == -2, ~False == -1
+                    _ => return Err(anyhow!("UnaryInvert: unsupported operand type for bitwise NOT (expected int or bool, got {:?})", operand_value)),
+                };
+
+                self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(result));
+                Ok(None)
+            }
             OpCode::RegisterType => {
                 // Register a variable's declared type in the type checker
                 // arg1 = variable name index, arg2 = type constant index
@@ -3788,8 +3808,105 @@ impl SuperBytecodeVM {
                             "strip" => Value::Str(s_clone.trim().to_string()),
                             "lstrip" => Value::Str(s_clone.trim_start().to_string()),
                             "rstrip" => Value::Str(s_clone.trim_end().to_string()),
+                            "encode" => {
+                                // encode() returns bytes - for simplicity, use UTF-8 encoding
+                                let encoding = if args.is_empty() {
+                                    "utf-8"
+                                } else if let Value::Str(enc) = &args[0] {
+                                    enc.as_str()
+                                } else {
+                                    "utf-8"
+                                };
+                                if encoding != "utf-8" && encoding != "utf8" {
+                                    return Err(anyhow!("Encoding '{}' not supported, only UTF-8 is supported", encoding));
+                                }
+                                Value::Bytes(s_clone.as_bytes().to_vec())
+                            }
+                            "isidentifier" => {
+                                // Check if string is a valid Python identifier
+                                let is_valid = !s_clone.is_empty()
+                                    && (s_clone.chars().next().unwrap().is_alphabetic() || s_clone.starts_with('_'))
+                                    && s_clone.chars().all(|c| c.is_alphanumeric() || c == '_');
+                                Value::Bool(is_valid)
+                            }
+                            "isascii" => {
+                                // Check if all characters are ASCII
+                                Value::Bool(s_clone.is_ascii())
+                            }
+                            "partition" => {
+                                // Partition string into (before, sep, after)
+                                if args.is_empty() {
+                                    return Err(anyhow!("partition() missing required argument: 'sep'"));
+                                }
+                                if let Value::Str(sep) = &args[0] {
+                                    if let Some(pos) = s_clone.find(sep.as_str()) {
+                                        let before = s_clone[..pos].to_string();
+                                        let after = s_clone[pos + sep.len()..].to_string();
+                                        Value::Tuple(vec![Value::Str(before), Value::Str(sep.clone()), Value::Str(after)])
+                                    } else {
+                                        Value::Tuple(vec![Value::Str(s_clone), Value::Str(String::new()), Value::Str(String::new())])
+                                    }
+                                } else {
+                                    return Err(anyhow!("partition() argument must be a string"));
+                                }
+                            }
+                            "rpartition" => {
+                                // Reverse partition string into (before, sep, after)
+                                if args.is_empty() {
+                                    return Err(anyhow!("rpartition() missing required argument: 'sep'"));
+                                }
+                                if let Value::Str(sep) = &args[0] {
+                                    if let Some(pos) = s_clone.rfind(sep.as_str()) {
+                                        let before = s_clone[..pos].to_string();
+                                        let after = s_clone[pos + sep.len()..].to_string();
+                                        Value::Tuple(vec![Value::Str(before), Value::Str(sep.clone()), Value::Str(after)])
+                                    } else {
+                                        Value::Tuple(vec![Value::Str(String::new()), Value::Str(String::new()), Value::Str(s_clone)])
+                                    }
+                                } else {
+                                    return Err(anyhow!("rpartition() argument must be a string"));
+                                }
+                            }
+                            "expandtabs" => {
+                                // Expand tabs to spaces (default tabsize=8)
+                                let tabsize = if args.is_empty() {
+                                    8
+                                } else if let Value::Int(size) = args[0] {
+                                    size as usize
+                                } else {
+                                    return Err(anyhow!("expandtabs() argument must be an integer"));
+                                };
+                                let expanded = s_clone.replace('\t', &" ".repeat(tabsize));
+                                Value::Str(expanded)
+                            }
                             _ => {
                                 return Err(anyhow!("String has no method '{}'", method_name));
+                            }
+                        }
+                    }
+                    Value::Bytes(b) => {
+                        // Bytes methods
+                        let b_clone = b.clone();
+                        match method_name.as_str() {
+                            "decode" => {
+                                // decode() converts bytes to string - for simplicity, use UTF-8 encoding
+                                let encoding = if args.is_empty() {
+                                    "utf-8"
+                                } else if let Value::Str(enc) = &args[0] {
+                                    enc.as_str()
+                                } else {
+                                    "utf-8"
+                                };
+                                if encoding != "utf-8" && encoding != "utf8" {
+                                    return Err(anyhow!("Encoding '{}' not supported, only UTF-8 is supported", encoding));
+                                }
+                                match String::from_utf8(b_clone) {
+                                    Ok(s) => Value::Str(s),
+                                    Err(e) => return Err(anyhow!("Failed to decode bytes: {}", e)),
+                                }
+                            }
+                            _ => {
+                                return Err(anyhow!("Bytes has no method '{}'", method_name));
                             }
                         }
                     }
