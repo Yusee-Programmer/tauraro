@@ -87,11 +87,14 @@ class Application:
         # Create a new window and add it to the application
         print(f"Creating window: {title} ({width}x{height})")
 
+        # Store self before creating window (workaround for potential self corruption)
+        app_windows = self.windows
+
         # StoreFast bug is fixed, we can now directly instantiate!
         window = Window(title, width, height, self, self.hinstance)
 
         if window != None and window.hwnd and window.hwnd != 0:
-            self.windows.append(window)
+            app_windows.append(window)
             print(f"✓ Window added to application")
         else:
             print(f"✗ ERROR: Window creation failed!")
