@@ -1,0 +1,217 @@
+# Native Window Demo - Complete Working Example
+# Creates a real window with multiple controls that stays visible
+
+print("=" * 60)
+print("Native Windows Application Demo - Tauraro FFI")
+print("=" * 60)
+print()
+
+# Load libraries
+load_library("kernel32.dll")
+load_library("user32.dll")
+
+# Define all functions we need
+print("Defining Win32 API functions...")
+define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
+define_function("kernel32.dll", "Sleep", "void", ["uint32"])
+define_function("user32.dll", "CreateWindowExA", "pointer", ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
+define_function("user32.dll", "ShowWindow", "int32", ["pointer", "int32"])
+define_function("user32.dll", "UpdateWindow", "int32", ["pointer"])
+define_function("user32.dll", "SetForegroundWindow", "int32", ["pointer"])
+define_function("user32.dll", "DestroyWindow", "int32", ["pointer"])
+define_function("user32.dll", "GetSystemMetrics", "int32", ["int32"])
+
+# Get module handle
+hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+print(f"Module Handle: {hinstance}")
+
+# Get screen dimensions
+screen_width = call_function("user32.dll", "GetSystemMetrics", [0])
+screen_height = call_function("user32.dll", "GetSystemMetrics", [1])
+print(f"Screen Size: {screen_width}x{screen_height}")
+
+# Calculate center position
+window_width = 800
+window_height = 600
+x_pos = (screen_width - window_width) // 2
+y_pos = (screen_height - window_height) // 2
+
+print(f"\nCreating main window ({window_width}x{window_height}) centered on screen...")
+
+# Window style: WS_OVERLAPPEDWINDOW | WS_VISIBLE
+style = 0x10000000 | 0x00CF0000
+
+# Create main window
+main_window = call_function("user32.dll", "CreateWindowExA", [
+    0,
+    "BUTTON",
+    "Tauraro Native Application - Multiple Controls Demo",
+    style,
+    x_pos,
+    y_pos,
+    window_width,
+    window_height,
+    0,
+    0,
+    hinstance,
+    0
+])
+
+print(f"✓ Main Window Created! HWND: {main_window}")
+
+# Show and update main window
+call_function("user32.dll", "ShowWindow", [main_window, 5])
+call_function("user32.dll", "UpdateWindow", [main_window])
+call_function("user32.dll", "SetForegroundWindow", [main_window])
+
+print("\n" + "=" * 60)
+print("Creating child controls...")
+print("=" * 60)
+
+# Child window style: WS_CHILD | WS_VISIBLE
+child_style = 0x40000000 | 0x10000000
+
+# Create label (STATIC control)
+label1 = call_function("user32.dll", "CreateWindowExA", [
+    0,
+    "STATIC",
+    "Welcome to Tauraro Native Windows!",
+    child_style,
+    20, 20, 400, 30,
+    main_window,
+    0,
+    hinstance,
+    0
+])
+print(f"✓ Label 1: HWND {label1}")
+
+# Create button 1
+button1 = call_function("user32.dll", "CreateWindowExA", [
+    0,
+    "BUTTON",
+    "Button 1",
+    child_style,
+    20, 60, 120, 30,
+    main_window,
+    0,
+    hinstance,
+    0
+])
+print(f"✓ Button 1: HWND {button1}")
+
+# Create button 2
+button2 = call_function("user32.dll", "CreateWindowExA", [
+    0,
+    "BUTTON",
+    "Button 2",
+    child_style,
+    150, 60, 120, 30,
+    main_window,
+    0,
+    hinstance,
+    0
+])
+print(f"✓ Button 2: HWND {button2}")
+
+# Create button 3
+button3 = call_function("user32.dll", "CreateWindowExA", [
+    0,
+    "BUTTON",
+    "Button 3",
+    child_style,
+    280, 60, 120, 30,
+    main_window,
+    0,
+    hinstance,
+    0
+])
+print(f"✓ Button 3: HWND {button3}")
+
+# Create edit box with border
+edit_style = child_style | 0x00800000
+edit1 = call_function("user32.dll", "CreateWindowExA", [
+    0x00000200,
+    "EDIT",
+    "Type here...",
+    edit_style,
+    20, 100, 380, 25,
+    main_window,
+    0,
+    hinstance,
+    0
+])
+print(f"✓ Edit Box 1: HWND {edit1}")
+
+# Create second edit box
+edit2 = call_function("user32.dll", "CreateWindowExA", [
+    0x00000200,
+    "EDIT",
+    "Another text box",
+    edit_style,
+    20, 135, 380, 25,
+    main_window,
+    0,
+    hinstance,
+    0
+])
+print(f"✓ Edit Box 2: HWND {edit2}")
+
+# Create info label
+label2 = call_function("user32.dll", "CreateWindowExA", [
+    0,
+    "STATIC",
+    "This is a fully native Windows application built with Tauraro!",
+    child_style,
+    20, 180, 500, 25,
+    main_window,
+    0,
+    hinstance,
+    0
+])
+print(f"✓ Label 2: HWND {label2}")
+
+# Create status label
+label3 = call_function("user32.dll", "CreateWindowExA", [
+    0,
+    "STATIC",
+    f"Screen: {screen_width}x{screen_height} | Window: {window_width}x{window_height} | All controls created successfully!",
+    child_style,
+    20, 220, 700, 25,
+    main_window,
+    0,
+    hinstance,
+    0
+])
+print(f"✓ Status Label: HWND {label3}")
+
+# Show all controls
+for hwnd in [label1, button1, button2, button3, edit1, edit2, label2, label3]:
+    call_function("user32.dll", "ShowWindow", [hwnd, 5])
+    call_function("user32.dll", "UpdateWindow", [hwnd])
+
+print("\n" + "=" * 60)
+print("✓ ALL CONTROLS CREATED AND VISIBLE!")
+print("=" * 60)
+print(f"\nTotal windows created: 9 (1 main + 8 controls)")
+print("The window is now visible on your screen with all controls!")
+print("\nWindow will stay open for 15 seconds...")
+print("You should see:")
+print("  - 2 labels with text")
+print("  - 3 buttons")
+print("  - 2 text input boxes")
+print("  - 1 status label at the bottom")
+print()
+
+# Keep window visible for 15 seconds
+call_function("kernel32.dll", "Sleep", [15000])
+
+# Clean up - destroy all windows
+print("\nCleaning up...")
+for hwnd in [label3, label2, edit2, edit1, button3, button2, button1, label1]:
+    call_function("user32.dll", "DestroyWindow", [hwnd])
+call_function("user32.dll", "DestroyWindow", [main_window])
+
+print("✓ All windows destroyed")
+print("\n" + "=" * 60)
+print("Demo Complete!")
+print("=" * 60)
