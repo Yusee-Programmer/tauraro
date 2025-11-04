@@ -9,6 +9,17 @@ print("Loading libraries...")
 load_library("kernel32.dll")
 load_library("user32.dll")
 
+# Define functions we'll use
+print("Defining functions...")
+define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
+define_function("kernel32.dll", "GetLastError", "uint32", [])
+define_function("user32.dll", "CreateWindowExA", "pointer", ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
+define_function("user32.dll", "ShowWindow", "int32", ["pointer", "int32"])
+define_function("user32.dll", "UpdateWindow", "int32", ["pointer"])
+define_function("user32.dll", "SetForegroundWindow", "int32", ["pointer"])
+define_function("kernel32.dll", "Sleep", "void", ["uint32"])
+define_function("user32.dll", "DestroyWindow", "int32", ["pointer"])
+
 # Get module handle
 print("Getting module handle...")
 hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
@@ -24,19 +35,20 @@ print("\nCreating window...")
 # WS_VISIBLE=0x10000000
 style = 0x10000000 | 0x00C00000 | 0x00080000 | 0x00040000 | 0x00020000 | 0x00010000
 
+# CreateWindowExA parameters: dwExStyle, lpClassName, lpWindowName, dwStyle, x, y, width, height, hWndParent, hMenu, hInstance, lpParam
 hwnd = call_function("user32.dll", "CreateWindowExA", [
-    0,                    # dwExStyle
-    "BUTTON",             # lpClassName - using standard BUTTON class
-    "Tauraro Test Window - Click to Close",  # window title
-    style,                # dwStyle
-    100,                  # x position
-    100,                  # y position
-    600,                  # width
-    400,                  # height
-    0,                    # hWndParent
-    0,                    # hMenu
-    hinstance,            # hInstance
-    0                     # lpParam
+    0,
+    "BUTTON",
+    "Tauraro Test Window - Click to Close",
+    style,
+    100,
+    100,
+    600,
+    400,
+    0,
+    0,
+    hinstance,
+    0
 ])
 
 if hwnd == 0:
@@ -61,16 +73,15 @@ call_function("user32.dll", "SetForegroundWindow", [hwnd])
 
 print("\n✓ Window should now be visible on your screen!")
 print("  Look for a button-style window titled 'Tauraro Test Window'")
+print("  The window will stay visible for 10 seconds...")
 
-# Keep the window alive by showing a message box
-# The window will stay visible until you close the message box
-print("\nShowing message box (window will remain visible)...")
-call_function("user32.dll", "MessageBoxA", [
-    0,
-    "The Tauraro window is now visible on your screen!\n\nClick OK to close the window.",
-    "Window Visible!",
-    0
-])
+# Keep the window alive by sleeping
+# The window will stay visible during this time
+print("\nWindow is now displaying on your screen!")
+print("Keeping window visible for 10 seconds...")
+
+# Sleep for 10 seconds (10000 milliseconds)
+call_function("kernel32.dll", "Sleep", [10000])
 
 # Destroy the window
 print("\nDestroying window...")

@@ -1,11 +1,34 @@
 # DUITK - Desktop UI Toolkit
+print("Loading DUITK - Desktop UI Toolkit v2.0...")
 # A high-level GUI framework for Tauraro built on native Win32 APIs
 # Version: 2.0.0 - Fully native Win32 implementation using FFI
 
-print("Loading DUITK - Desktop UI Toolkit v2.0...")
-
 # Import Win32 API package
 import win32
+
+# Load required libraries first
+load_library("kernel32.dll")
+load_library("user32.dll")
+
+# Define required functions for direct FFI calls
+# These need to be defined before calling call_function
+define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
+define_function("kernel32.dll", "GetLastError", "uint32", [])
+define_function("user32.dll", "CreateWindowExA", "pointer", ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
+define_function("user32.dll", "ShowWindow", "int32", ["pointer", "int32"])
+define_function("user32.dll", "UpdateWindow", "int32", ["pointer"])
+define_function("user32.dll", "SetForegroundWindow", "int32", ["pointer"])
+define_function("user32.dll", "DestroyWindow", "int32", ["pointer"])
+define_function("user32.dll", "SetWindowTextA", "int32", ["pointer", "pointer"])
+define_function("user32.dll", "MoveWindow", "int32", ["pointer", "int32", "int32", "int32", "int32", "bool"])
+define_function("user32.dll", "IsWindow", "int32", ["pointer"])
+define_function("kernel32.dll", "Sleep", "void", ["uint32"])
+define_function("user32.dll", "MessageBoxA", "int32", ["pointer", "pointer", "pointer", "uint32"])
+define_function("user32.dll", "PostQuitMessage", "void", ["int32"])
+define_function("user32.dll", "PeekMessageA", "int32", ["pointer", "pointer", "uint32", "uint32", "uint32"])
+define_function("user32.dll", "TranslateMessage", "int32", ["pointer"])
+define_function("user32.dll", "DispatchMessageA", "int32", ["pointer"])
+define_function("user32.dll", "GetSystemMetrics", "int32", ["int32"])
 
 # Version information
 __version__ = "2.0.0"
@@ -38,75 +61,143 @@ class Application:
     def __init__(self, name="DUITK Application"):
         self.name = name
         self.windows = []
+        self.window_handles = []
         self.running = False
+        print("Calling GetModuleHandleA from Application constructor...")
         self.hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
-        print(f"Application initialized: {name}")
-        print(f"  Module handle (HINSTANCE): {self.hinstance}")
+        print("Application initialized: " + name)
+        print("  Module handle (HINSTANCE): " + str(self.hinstance))
+        if self.hinstance == None:
+            print("ERROR: Application hinstance is None!")
+            # Try to get last error
+            try:
+                error = call_function("kernel32.dll", "GetLastError", [])
+                print("Last error: " + str(error))
+            except Exception as e:
+                print("Error getting last error: " + str(e))
+        else:
+            print("Application hinstance set correctly: " + str(self.hinstance))
 
     def add_window(self, window):
         # Add a window to the application
         self.windows.append(window)
         return window
 
-    def create_window(self, title="Window", width=640, height=480):
+    def create_window(self, title, width, height):
         # Create a new window and add it to the application
-        window = Window(title, width, height, self)
-        self.windows.append(window)
+        print("Creating window: " + title + " (" + str(width) + "x" + str(height) + ")")
+
+        # CRITICAL: Extract self attributes BEFORE creating Window
+        # After accessing window.hwnd, self gets corrupted!
+        app_windows = self.windows
+        app_handles = self.window_handles
+        app_hinstance = self.hinstance
+
+        # StoreFast bug is fixed, we can now directly instantiate!
+        window = Window(title, width, height, self, app_hinstance)
+
+        if window != None:
+            # Extract hwnd - this will corrupt self!
+            try:
+                hwnd = window.hwnd
+
+                if hwnd and hwnd != 0:
+                    app_windows.append(window)
+                    app_handles.append(hwnd)
+                    print("[OK] Window added to application (HWND: " + str(hwnd) + ")")
+                else:
+                    print("[X] ERROR: Window creation failed - invalid HWND")
+            except Exception as e:
+                print("[X] ERROR: Failed to extract window handle: " + str(e))
+        else:
+            print("[X] ERROR: Window creation failed!")
         return window
 
     def run(self):
-        # Run the message loop
+        # Run the message loop until all windows are closed
         self.running = True
         print("Starting message loop...")
+        print("Windows will stay open until you close them.")
+        print("Close any window to exit the application.")
 
-        # Allocate MSG structure (48 bytes on x64)
-        msg_buffer = allocate_buffer(48)
-
-        # Main message loop
-        message_count = 0
+        # Use proper Windows message loop
+        msg = [0, 0, 0, 0, 0, 0]  # MSG structure: hwnd, message, wParam, lParam, time, pt
+        
         try:
-            while self.running:
-                # Peek at messages without removing them
-                # PeekMessageA(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg)
-                has_message = call_function("user32.dll", "PeekMessageA", [
-                    msg_buffer,
-                    0,
-                    0,
-                    0,
-                    1
-                ])
-
+            # Main message loop - runs until WM_QUIT message
+            while True:
+                # PeekMessage to check for messages without blocking
+                has_message = call_function("user32.dll", "PeekMessageA", [msg, 0, 0, 0, 1])  # PM_REMOVE = 1
+                
                 if has_message:
-                    message_count += 1
-                    # Translate and dispatch message
-                    call_function("user32.dll", "TranslateMessage", [msg_buffer])
-                    call_function("user32.dll", "DispatchMessageA", [msg_buffer])
-
-                    # Check for WM_QUIT (we'd need to read the MSG structure)
-                    # For now, we'll just let it run
+                    # Check for WM_QUIT message
+                    if msg[1] == 18:  # WM_QUIT = 18
+                        print("WM_QUIT received. Exiting...")
+                        break
+                    
+                    # Translate and dispatch the message
+                    call_function("user32.dll", "TranslateMessage", [msg])
+                    call_function("user32.dll", "DispatchMessageA", [msg])
                 else:
-                    # No messages, take a small break
-                    call_function("kernel32.dll", "Sleep", [10])
-
-                # Exit after 5 seconds or 1000 messages for demo purposes
-                if message_count > 1000:
-                    print(f"  Processed {message_count} messages, exiting...")
-                    break
+                    # Small sleep to prevent 100% CPU usage when no messages
+                    call_function("kernel32.dll", "Sleep", [1])
+                    
+                    # Check if any windows are still open
+                    window_handles = self.window_handles
+                    if len(window_handles) == 0:
+                        print("All windows closed. Exiting...")
+                        break
+                        
+        except Exception as e:
+            print("Error in message loop: " + str(e))
+            import traceback
+            traceback.print_exc()
         finally:
-            # Clean up
-            free_buffer(msg_buffer)
             self.running = False
 
-        print(f"Message loop ended. Processed {message_count} messages.")
-        return message_count
+        print("Message loop ended.")
+        return 0
 
     def run_simple(self, timeout_seconds=5):
         # Run a simple message loop with timeout (for demos)
-        print(f"Running application for {timeout_seconds} seconds...")
+        print("Running application for " + str(timeout_seconds) + " seconds...")
+        print("Windows are now visible on your screen!")
+        print("You can close them manually, or they will auto-close after " + str(timeout_seconds) + " seconds...")
 
-        # Show a message box to keep the app running
-        msg_text = f"{self.name}\n\nWindows created: {len(self.windows)}\n\nClick OK to exit."
-        call_function("user32.dll", "MessageBoxA", [0, msg_text, "DUITK Application", 0])
+        # Use stored window handles list
+        window_handles = self.window_handles
+
+        # Message loop with timeout
+        loop_count = 0
+        max_iterations = timeout_seconds * 100
+
+        try:
+            while loop_count < max_iterations:
+                # Check if any windows are still open
+                remaining_handles = []
+                for hwnd in window_handles:
+                    # Check if window still exists
+                    try:
+                        if call_function("user32.dll", "IsWindow", [hwnd]):
+                            remaining_handles.append(hwnd)
+                            # Keep window updated and responsive
+                            call_function("user32.dll", "UpdateWindow", [hwnd])
+                    except:
+                        pass
+
+                if len(remaining_handles) == 0:
+                    print("")
+                    print("All windows closed by user. Exiting early...")
+                    break
+
+                window_handles = remaining_handles
+
+                # Small sleep to prevent 100% CPU usage (10ms sleep = 100 iterations per second)
+                call_function("kernel32.dll", "Sleep", [10])
+                loop_count += 1
+
+        except:
+            pass
 
         print("Application ended.")
 
@@ -120,11 +211,79 @@ class Application:
             pass
         print("Application quit")
 
+# Workaround for Tauraro bug: Factory function for creating Windows
+def _create_window_instance(title, width, height, app, hinstance):
+    # This is a workaround for Tauraro bug where class instantiation from within
+    # another class method returns None
+    window = Window()
+    window.title = title
+    window.width = width
+    window.height = height
+    window.app = app
+    window.controls = []
+    window.hwnd = 0
+    window.visible = False
+
+    # Initialize the window
+    try:
+        if hinstance == None:
+            print("Getting hinstance using direct FFI...")
+            hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+            print("hinstance from FFI: " + str(hinstance))
+        else:
+            print("Using provided hinstance: " + str(hinstance))
+
+        print("Creating window: " + title + " (" + str(width) + "x" + str(height) + ")")
+        print("  title type: " + str(type(title)) + ", value: " + str(title))
+        print("  width type: " + str(type(width)) + ", value: " + str(width))
+        print("  height type: " + str(type(height)) + ", value: " + str(height))
+        print("  hinstance type: " + str(type(hinstance)) + ", value: " + str(hinstance))
+
+        # Call CreateWindowExA with proper bitwise OR (now works - StoreFast bug fixed!)
+        # WS_OVERLAPPEDWINDOW (0x00CF0000) | WS_VISIBLE (0x10000000) = 0x10CF0000 = 282001408
+        style = 0x00CF0000 | 0x10000000
+        window.hwnd = call_function("user32.dll", "CreateWindowExA", [
+            0,
+            "BUTTON",
+            title,
+            style,
+            200,
+            200,
+            width,
+            height,
+            0,
+            0,
+            hinstance,
+            0
+        ])
+
+        print("CreateWindowExA returned: " + str(window.hwnd))
+
+        if window.hwnd and window.hwnd != 0:
+            print("  [OK] Window created successfully! HWND: " + str(window.hwnd))
+            # Show the window immediately
+            call_function("user32.dll", "ShowWindow", [window.hwnd, 5])
+            call_function("user32.dll", "UpdateWindow", [window.hwnd])
+            call_function("user32.dll", "SetForegroundWindow", [window.hwnd])
+            window.visible = True
+            print("  [OK] Window is now visible on screen!")
+        else:
+            print("  [X] Failed to create window. HWND: " + str(window.hwnd))
+
+    except Exception as e:
+        print("Error creating window: " + str(e))
+        import traceback
+        traceback.print_exc()
+        window.hwnd = 0
+
+    print("Returning window object, hwnd = " + str(window.hwnd))
+    return window
+
 # Window class
 class Window:
     # Represents a native Windows window
 
-    def __init__(self, title="Window", width=640, height=480, app=None):
+    def __init__(self, title, width, height, app, hinstance):
         self.title = title
         self.width = width
         self.height = height
@@ -133,25 +292,33 @@ class Window:
         self.hwnd = 0
         self.visible = False
 
-        # Get module instance
-        if app and hasattr(app, 'hinstance'):
-            hinstance = app.hinstance
-        else:
-            hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
-
-        # Create the window using CreateWindowExA
-        print(f"Creating window: {title} ({width}x{height})")
-
+        # Use direct FFI approach which we know works
         try:
-            # CreateWindowExA parameters: dwExStyle, lpClassName, lpWindowName, dwStyle, x, y, width, height, hWndParent, hMenu, hInstance, lpParam
-            window_style = 0x10000000 | 0x00C00000 | 0x00080000 | 0x00040000 | 0x00020000 | 0x00010000
+            # Get module instance if not provided
+            if hinstance == None:
+                print("Getting hinstance using direct FFI...")
+                hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+                print("hinstance from FFI: " + str(hinstance))
+            else:
+                print("Using provided hinstance: " + str(hinstance))
+                
+            # Create the window using direct FFI
+            print("Creating window: " + title + " (" + str(width) + "x" + str(height) + ")")
+            print("  title type: " + str(type(title)) + ", value: " + str(title))
+            print("  width type: " + str(type(width)) + ", value: " + str(width))
+            print("  height type: " + str(type(height)) + ", value: " + str(height))
+            print("  hinstance type: " + str(type(hinstance)) + ", value: " + str(hinstance))
+
+            # Call CreateWindowExA with proper bitwise OR (now works - StoreFast bug fixed!)
+            # WS_OVERLAPPEDWINDOW (0x00CF0000) | WS_VISIBLE (0x10000000) = 0x10CF0000 = 282001408
+            style = 0x00CF0000 | 0x10000000
             self.hwnd = call_function("user32.dll", "CreateWindowExA", [
                 0,
-                "STATIC",
+                "BUTTON",
                 title,
-                window_style,
-                100,
-                100,
+                style,
+                200,
+                200,
                 width,
                 height,
                 0,
@@ -159,21 +326,27 @@ class Window:
                 hinstance,
                 0
             ])
-
+            
+            print("CreateWindowExA returned: " + str(self.hwnd))
+            
             if self.hwnd and self.hwnd != 0:
-                print(f"  ✓ Window created successfully! HWND: {self.hwnd}")
+                print("  [OK] Window created successfully! HWND: " + str(self.hwnd))
+                # Show the window immediately
+                call_function("user32.dll", "ShowWindow", [self.hwnd, 5])
+                call_function("user32.dll", "UpdateWindow", [self.hwnd])
+                call_function("user32.dll", "SetForegroundWindow", [self.hwnd])
                 self.visible = True
+                print("  [OK] Window is now visible on screen!")
             else:
-                print(f"  ✗ Failed to create window. HWND: {self.hwnd}")
-                # Get last error
-                try:
-                    error = call_function("kernel32.dll", "GetLastError", [])
-                    print(f"  Last error code: {error}")
-                except:
-                    pass
+                print("  [X] Failed to create window. HWND: " + str(self.hwnd))
+                
         except Exception as e:
-            print(f"  ✗ Exception creating window: {e}")
+            print("Error creating window: " + str(e))
+            import traceback
+            traceback.print_exc()
             self.hwnd = 0
+
+        print("Exiting Window.__init__, self.hwnd = " + str(self.hwnd))
 
     def show(self, cmd=5):
         # Show the window
@@ -182,10 +355,10 @@ class Window:
                 result = call_function("user32.dll", "ShowWindow", [self.hwnd, cmd])
                 call_function("user32.dll", "UpdateWindow", [self.hwnd])
                 self.visible = True
-                print(f"  Window shown: {self.title}")
+                print("  Window shown: " + self.title)
                 return result
             except Exception as e:
-                print(f"  Error showing window: {e}")
+                print("  Error showing window: " + str(e))
         return False
 
     def hide(self):
@@ -194,10 +367,10 @@ class Window:
             try:
                 result = call_function("user32.dll", "ShowWindow", [self.hwnd, 0])
                 self.visible = False
-                print(f"  Window hidden: {self.title}")
+                print("  Window hidden: " + self.title)
                 return result
             except Exception as e:
-                print(f"  Error hiding window: {e}")
+                print("  Error hiding window: " + str(e))
         return False
 
     def set_title(self, new_title):
@@ -206,9 +379,9 @@ class Window:
             try:
                 call_function("user32.dll", "SetWindowTextA", [self.hwnd, new_title])
                 self.title = new_title
-                print(f"  Window title changed to: {new_title}")
+                print("  Window title changed to: " + new_title)
             except Exception as e:
-                print(f"  Error setting title: {e}")
+                print("  Error setting title: " + str(e))
         return self
 
     def move(self, x, y, w=None, h=None):
@@ -228,9 +401,9 @@ class Window:
                 ])
                 self.width = width
                 self.height = height
-                print(f"  Window moved to ({x}, {y}), size: {width}x{height}")
+                print("  Window moved to (" + str(x) + ", " + str(y) + "), size: " + str(width) + "x" + str(height))
             except Exception as e:
-                print(f"  Error moving window: {e}")
+                print("  Error moving window: " + str(e))
         return self
 
     def destroy(self):
@@ -238,10 +411,10 @@ class Window:
         if self.hwnd:
             try:
                 call_function("user32.dll", "DestroyWindow", [self.hwnd])
-                print(f"  Window destroyed: {self.title}")
+                print("  Window destroyed: " + self.title)
                 self.hwnd = 0
             except Exception as e:
-                print(f"  Error destroying window: {e}")
+                print("  Error destroying window: " + str(e))
 
     def create_button(self, text, x, y, width, height):
         # Create a button control
@@ -304,8 +477,8 @@ class Button(Control):
     # Button control
 
     def __init__(self, parent, text, x, y, width, height):
-        style = 0x40000000 | 0x10000000 | 0x00000000
-        if parent.app:
+        style = 1342177280
+        if parent.app != None:
             hinstance = parent.app.hinstance
         else:
             hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
@@ -325,11 +498,11 @@ class Button(Control):
             ])
 
             if hwnd and hwnd != 0:
-                print(f"  ✓ Button created: {text}")
+                print("  [OK] Button created: " + text)
             else:
-                print(f"  ✗ Failed to create button: {text}")
+                print("  [X] Failed to create button: " + text)
         except Exception as e:
-            print(f"  ✗ Exception creating button: {e}")
+            print("  [X] Exception creating button: " + str(e))
 
         super().__init__(parent, hwnd)
         self.text = text
@@ -339,8 +512,8 @@ class Label(Control):
     # Static label control
 
     def __init__(self, parent, text, x, y, width, height):
-        style = 0x40000000 | 0x10000000
-        if parent.app:
+        style = 1342177280
+        if parent.app != None:
             hinstance = parent.app.hinstance
         else:
             hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
@@ -360,11 +533,11 @@ class Label(Control):
             ])
 
             if hwnd and hwnd != 0:
-                print(f"  ✓ Label created: {text}")
+                print("  [OK] Label created: " + text)
             else:
-                print(f"  ✗ Failed to create label: {text}")
+                print("  [X] Failed to create label: " + text)
         except Exception as e:
-            print(f"  ✗ Exception creating label: {e}")
+            print("  [X] Exception creating label: " + str(e))
 
         super().__init__(parent, hwnd)
         self.text = text
@@ -374,8 +547,8 @@ class Edit(Control):
     # Edit control for text input
 
     def __init__(self, parent, text, x, y, width, height):
-        style = 0x40000000 | 0x10000000 | 0x00800000 | 0x00000000
-        if parent.app:
+        style = 1350565888
+        if parent.app != None:
             hinstance = parent.app.hinstance
         else:
             hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
@@ -395,11 +568,11 @@ class Edit(Control):
             ])
 
             if hwnd and hwnd != 0:
-                print(f"  ✓ Edit control created: {text}")
+                print("  [OK] Edit control created: " + text)
             else:
-                print(f"  ✗ Failed to create edit control: {text}")
+                print("  [X] Failed to create edit control: " + text)
         except Exception as e:
-            print(f"  ✗ Exception creating edit control: {e}")
+            print("  [X] Exception creating edit control: " + str(e))
 
         super().__init__(parent, hwnd)
         self.text = text
@@ -428,6 +601,6 @@ def create_window(title="Window", width=640, height=480):
     return Window(title, width, height)
 
 print("DUITK v2.0 - Desktop UI Toolkit loaded successfully!")
-print("  ✓ Native Win32 API integration")
-print("  ✓ Full window and control support")
-print("  ✓ Message loop handling")
+print("  [OK] Native Win32 API integration")
+print("  [OK] Full window and control support")
+print("  [OK] Message loop handling")

@@ -1,0 +1,20 @@
+# Test DUITK Import - Fixed Version
+print("Testing DUITK import (fixed version)...")
+
+try:
+    import duitk
+    print("✓ DUITK imported successfully!")
+    print("DUITK package is working correctly.")
+    
+    # Test if key components are available
+    if hasattr(duitk, 'Application'):
+        print("✓ Application class is available")
+    if hasattr(duitk, 'Window'):
+        print("✓ Window class is available")
+    if hasattr(duitk, 'Button'):
+        print("✓ Button class is available")
+        
+except Exception as e:
+    print(f"✗ Failed to import DUITK: {e}")
+    import traceback
+    traceback.print_exc()
