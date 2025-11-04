@@ -180,6 +180,7 @@ pub enum OpCode {
     // Unary operations
     UnaryNot,       // Logical NOT operation
     UnaryNegate,    // Unary negation (-)
+    UnaryInvert,    // Bitwise NOT (~)
 
     // Type checking operations
     RegisterType,       // Register a variable's declared type
