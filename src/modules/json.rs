@@ -71,9 +71,19 @@ fn json_load(args: Vec<Value>) -> Result<Value> {
     if args.is_empty() || args.len() > 4 {
         return Err(anyhow::anyhow!("load() takes 1 to 4 arguments"));
     }
-    
-    // Placeholder implementation - would need file I/O integration
-    Err(anyhow::anyhow!("json.load() not yet implemented - requires file I/O integration"))
+
+    // Get the file path (first argument should be a file object or string path)
+    let filepath = match &args[0] {
+        Value::Str(path) => path.clone(),
+        _ => return Err(anyhow::anyhow!("json.load() requires a string file path")),
+    };
+
+    // Read the file
+    let contents = std::fs::read_to_string(&filepath)
+        .map_err(|e| anyhow::anyhow!("Failed to read file '{}': {}", filepath, e))?;
+
+    // Parse and return
+    parse_json_value(contents.trim())
 }
 
 /// Dump JSON to file
@@ -81,9 +91,41 @@ fn json_dump(args: Vec<Value>) -> Result<Value> {
     if args.len() < 2 || args.len() > 10 {
         return Err(anyhow::anyhow!("dump() takes 2 to 10 arguments"));
     }
-    
-    // Placeholder implementation - would need file I/O integration
-    Err(anyhow::anyhow!("json.dump() not yet implemented - requires file I/O integration"))
+
+    let obj = &args[0];
+
+    // Get the file path (second argument should be a file object or string path)
+    let filepath = match &args[1] {
+        Value::Str(path) => path.clone(),
+        _ => return Err(anyhow::anyhow!("json.dump() requires a string file path as second argument")),
+    };
+
+    // Extract optional indent parameter (from 3rd argument if present)
+    let indent = if args.len() > 2 {
+        match &args[2] {
+            Value::Int(n) => Some(*n as usize),
+            Value::None => None,
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    // Serialize to JSON
+    let json_str = serialize_to_json(obj, indent, 0)?;
+
+    // Extract the string content
+    let content = if let Value::Str(s) = json_str {
+        s
+    } else {
+        return Err(anyhow::anyhow!("Internal error: serialize_to_json did not return a string"));
+    };
+
+    // Write to file
+    std::fs::write(&filepath, content)
+        .map_err(|e| anyhow::anyhow!("Failed to write file '{}': {}", filepath, e))?;
+
+    Ok(Value::None)
 }
 
 /// Create JSON encoder object
