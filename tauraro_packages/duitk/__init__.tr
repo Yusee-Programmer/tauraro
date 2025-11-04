@@ -22,12 +22,10 @@ define_function("user32.dll", "SetForegroundWindow", "int32", ["pointer"])
 define_function("user32.dll", "DestroyWindow", "int32", ["pointer"])
 define_function("user32.dll", "SetWindowTextA", "int32", ["pointer", "pointer"])
 define_function("user32.dll", "MoveWindow", "int32", ["pointer", "int32", "int32", "int32", "int32", "bool"])
+define_function("user32.dll", "IsWindow", "int32", ["pointer"])
 define_function("kernel32.dll", "Sleep", "void", ["uint32"])
 define_function("user32.dll", "MessageBoxA", "int32", ["pointer", "pointer", "pointer", "uint32"])
 define_function("user32.dll", "PostQuitMessage", "void", ["int32"])
-define_function("user32.dll", "PeekMessageA", "bool", ["pointer", "pointer", "uint32", "uint32", "uint32"])
-define_function("user32.dll", "TranslateMessage", "bool", ["pointer"])
-define_function("user32.dll", "DispatchMessageA", "int64", ["pointer"])
 
 # Version information
 __version__ = "2.0.0"
@@ -60,6 +58,7 @@ class Application:
     def __init__(self, name="DUITK Application"):
         self.name = name
         self.windows = []
+        self.window_handles = []
         self.running = False
         print("Calling GetModuleHandleA from Application constructor...")
         self.hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
@@ -87,73 +86,119 @@ class Application:
         # Create a new window and add it to the application
         print(f"Creating window: {title} ({width}x{height})")
 
-        # Store self before creating window (workaround for potential self corruption)
+        # CRITICAL: Extract self attributes BEFORE creating Window
+        # After accessing window.hwnd, self gets corrupted!
         app_windows = self.windows
+        app_handles = self.window_handles
+        app_hinstance = self.hinstance
 
         # StoreFast bug is fixed, we can now directly instantiate!
-        window = Window(title, width, height, self, self.hinstance)
+        window = Window(title, width, height, self, app_hinstance)
 
-        if window != None and window.hwnd and window.hwnd != 0:
-            app_windows.append(window)
-            print(f"✓ Window added to application")
+        if window != None:
+            # Extract hwnd - this will corrupt self!
+            try:
+                hwnd = window.hwnd
+
+                if hwnd and hwnd != 0:
+                    app_windows.append(window)
+                    app_handles.append(hwnd)
+                    print(f"✓ Window added to application (HWND: {hwnd})")
+                else:
+                    print(f"✗ ERROR: Window creation failed - invalid HWND")
+            except Exception as e:
+                print(f"✗ ERROR: Failed to extract window handle: {e}")
         else:
             print(f"✗ ERROR: Window creation failed!")
         return window
 
     def run(self):
-        # Run the message loop
+        # Run the message loop until all windows are closed
         self.running = True
         print("Starting message loop...")
+        print("Windows will stay open until you close them.")
+        print("Close any window to exit the application.\n")
 
-        # Allocate MSG structure (48 bytes on x64)
-        msg_buffer = allocate_buffer(48)
+        # Use stored window handles list
+        window_handles = self.window_handles
 
-        # Main message loop
-        message_count = 0
+        # Main message loop - runs until all windows are closed
+        loop_count = 0
         try:
             while self.running:
-                # Peek at messages without removing them
-                # PeekMessageA(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg)
-                has_message = call_function("user32.dll", "PeekMessageA", [
-                    msg_buffer,
-                    0,
-                    0,
-                    0,
-                    1
-                ])
+                # Check if any windows are still open
+                remaining_handles = []
+                for hwnd in window_handles:
+                    # Check if window still exists
+                    try:
+                        if call_function("user32.dll", "IsWindow", [hwnd]):
+                            remaining_handles.append(hwnd)
+                            # Keep window updated and responsive
+                            call_function("user32.dll", "UpdateWindow", [hwnd])
+                    except:
+                        pass
 
-                if has_message:
-                    message_count += 1
-                    # Translate and dispatch message
-                    call_function("user32.dll", "TranslateMessage", [msg_buffer])
-                    call_function("user32.dll", "DispatchMessageA", [msg_buffer])
-
-                    # Check for WM_QUIT (we'd need to read the MSG structure)
-                    # For now, we'll just let it run
-                else:
-                    # No messages, take a small break
-                    call_function("kernel32.dll", "Sleep", [10])
-
-                # Exit after 5 seconds or 1000 messages for demo purposes
-                if message_count > 1000:
-                    print(f"  Processed {message_count} messages, exiting...")
+                if len(remaining_handles) == 0:
+                    print("\nAll windows closed. Exiting...")
                     break
+
+                window_handles = remaining_handles
+
+                # Small sleep to prevent 100% CPU usage
+                # This allows Windows to process messages
+                call_function("kernel32.dll", "Sleep", [10])
+
+                loop_count += 1
+
+                # Print status every 500 iterations (approximately every 5 seconds)
+                if loop_count % 500 == 0:
+                    print(f"Message loop running... ({loop_count} iterations, {len(window_handles)} windows)")
+
         finally:
-            # Clean up
-            free_buffer(msg_buffer)
             self.running = False
 
-        print(f"Message loop ended. Processed {message_count} messages.")
-        return message_count
+        print(f"Message loop ended after {loop_count} iterations.")
+        return loop_count
 
     def run_simple(self, timeout_seconds=5):
         # Run a simple message loop with timeout (for demos)
         print(f"Running application for {timeout_seconds} seconds...")
         print(f"Windows are now visible on your screen!")
-        print(f"They will stay visible for {timeout_seconds} seconds...")
+        print(f"You can close them manually, or they will auto-close after {timeout_seconds} seconds...\n")
 
-        # Keep windows visible for the specified duration
-        call_function("kernel32.dll", "Sleep", [timeout_seconds * 1000])
+        # Use stored window handles list
+        window_handles = self.window_handles
+
+        # Message loop with timeout
+        loop_count = 0
+        max_iterations = timeout_seconds * 100
+
+        try:
+            while loop_count < max_iterations:
+                # Check if any windows are still open
+                remaining_handles = []
+                for hwnd in window_handles:
+                    # Check if window still exists
+                    try:
+                        if call_function("user32.dll", "IsWindow", [hwnd]):
+                            remaining_handles.append(hwnd)
+                            # Keep window updated and responsive
+                            call_function("user32.dll", "UpdateWindow", [hwnd])
+                    except:
+                        pass
+
+                if len(remaining_handles) == 0:
+                    print("\nAll windows closed by user. Exiting early...")
+                    break
+
+                window_handles = remaining_handles
+
+                # Small sleep to prevent 100% CPU usage (10ms sleep = 100 iterations per second)
+                call_function("kernel32.dll", "Sleep", [10])
+                loop_count += 1
+
+        except:
+            pass
 
         print("Application ended.")
 
