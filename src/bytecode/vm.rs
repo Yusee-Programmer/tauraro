@@ -327,6 +327,12 @@ impl SuperBytecodeVM {
         // All modifications are already visible in self.globals
         self.frames.pop();
 
+        // Check if there's a __last_expr__ global (for REPL expression evaluation)
+        // If so, return it and remove it from globals
+        if let Some(last_expr) = self.globals.borrow_mut().remove("__last_expr__") {
+            return Ok(last_expr.value);
+        }
+
         Ok(result)
     }
     
@@ -6091,6 +6097,221 @@ impl SuperBytecodeVM {
                             result_reg
                         );
                     }
+                }
+
+                // Special handling for globals() - return actual globals from VM
+                if name == "globals" {
+                    if !args.is_empty() {
+                        return Err(anyhow!("globals() takes no arguments ({} given)", args.len()));
+                    }
+
+                    // Convert globals to a regular dict that can be used in Python code
+                    let globals_dict = Rc::new(RefCell::new(
+                        self.globals.borrow().iter()
+                            .map(|(k, v)| (k.clone(), v.value.clone()))
+                            .collect::<HashMap<String, Value>>()
+                    ));
+                    return Ok(Value::Dict(globals_dict));
+                }
+
+                // Special handling for locals() - return actual locals from current frame
+                if name == "locals" {
+                    if !args.is_empty() {
+                        return Err(anyhow!("locals() takes no arguments ({} given)", args.len()));
+                    }
+
+                    // Get the current frame's locals
+                    if let Some(frame) = self.frames.last() {
+                        let locals_dict = Rc::new(RefCell::new(
+                            frame.locals_map.iter()
+                                .filter_map(|(name, &idx)| {
+                                    frame.locals.get(idx).map(|v| (name.clone(), v.value.clone()))
+                                })
+                                .collect::<HashMap<String, Value>>()
+                        ));
+                        return Ok(Value::Dict(locals_dict));
+                    } else {
+                        // No frame, return globals (like Python does at module level)
+                        let globals_dict = Rc::new(RefCell::new(
+                            self.globals.borrow().iter()
+                                .map(|(k, v)| (k.clone(), v.value.clone()))
+                                .collect::<HashMap<String, Value>>()
+                        ));
+                        return Ok(Value::Dict(globals_dict));
+                    }
+                }
+
+                // Special handling for dir() - list names in current scope
+                if name == "dir" {
+                    if args.len() > 1 {
+                        return Err(anyhow!("dir() takes at most 1 argument ({} given)", args.len()));
+                    }
+
+                    if args.is_empty() {
+                        // dir() without arguments - return names in current scope
+                        let mut names = Vec::new();
+
+                        // Get names from current frame's locals
+                        if let Some(frame) = self.frames.last() {
+                            for name in frame.locals_map.keys() {
+                                names.push(Value::Str(name.clone()));
+                            }
+                        }
+
+                        // Add names from globals
+                        for name in self.globals.borrow().keys() {
+                            names.push(Value::Str(name.clone()));
+                        }
+
+                        // Sort and remove duplicates
+                        names.sort_by(|a, b| {
+                            if let (Value::Str(a_str), Value::Str(b_str)) = (a, b) {
+                                a_str.cmp(b_str)
+                            } else {
+                                std::cmp::Ordering::Equal
+                            }
+                        });
+                        names.dedup();
+
+                        return Ok(Value::List(HPList::from_values(names)));
+                    } else {
+                        // dir(obj) - use the regular builtin implementation for objects
+                        return func(args.clone());
+                    }
+                }
+
+                // Special handling for help() - show docstrings and help info
+                if name == "help" {
+                    if args.len() > 1 {
+                        return Err(anyhow!("help() takes at most 1 argument ({} given)", args.len()));
+                    }
+
+                    if args.is_empty() {
+                        // help() without arguments - show general help
+                        println!("\nWelcome to Tauraro!");
+                        println!();
+                        println!("Tauraro is a Python-compatible programming language with Rust-like performance.");
+                        println!();
+                        println!("Type help() for interactive help, or help(object) for help about object.");
+                        println!();
+                        println!("Quick Reference:");
+                        println!("  Variables:    x = 10");
+                        println!("  Functions:    def greet(name): return f'Hello, {{name}}'");
+                        println!("  Classes:      class MyClass: pass");
+                        println!("  Loops:        for i in range(10): print(i)");
+                        println!("  Conditions:   if x > 5: print('big')");
+                        println!("  Import:       import math");
+                        println!();
+                        return Ok(Value::None);
+                    }
+
+                    let obj = &args[0];
+
+                    // Handle string arguments - lookup the name
+                    let target = if let Value::Str(name_str) = obj {
+                        // Try to lookup the name in current scope
+                        if let Some(frame) = self.frames.last() {
+                            if let Some(&idx) = frame.locals_map.get(name_str) {
+                                frame.locals.get(idx).map(|v| v.value.clone())
+                            } else {
+                                self.globals.borrow().get(name_str).map(|v| v.value.clone())
+                            }
+                        } else {
+                            self.globals.borrow().get(name_str).map(|v| v.value.clone())
+                        }
+                    } else {
+                        Some(obj.clone())
+                    };
+
+                    if let Some(target_val) = target {
+                        // Show help for the object
+                        match &target_val {
+                            Value::Closure { name: func_name, params, docstring, .. } => {
+                                println!("\nHelp on function {}:", func_name);
+                                println!();
+
+                                // Show function signature
+                                let param_names: Vec<String> = params.iter()
+                                    .map(|p| {
+                                        if let Some(ref default) = p.default {
+                                            format!("{}={:?}", p.name, default)
+                                        } else {
+                                            p.name.clone()
+                                        }
+                                    })
+                                    .collect();
+                                println!("{}({})", func_name, param_names.join(", "));
+                                println!();
+
+                                // Show docstring if available
+                                if let Some(doc) = docstring {
+                                    println!("{}", doc);
+                                } else {
+                                    println!("No documentation available.");
+                                }
+                                println!();
+                            }
+                            Value::Class { name: class_name, methods, .. } => {
+                                println!("\nHelp on class {}:", class_name);
+                                println!();
+                                println!("class {}", class_name);
+                                println!();
+
+                                // List methods
+                                if !methods.is_empty() {
+                                    println!("Methods:");
+                                    let mut method_names: Vec<_> = methods.keys().collect();
+                                    method_names.sort();
+                                    for method_name in method_names {
+                                        println!("  {}", method_name);
+                                    }
+                                    println!();
+                                }
+                            }
+                            Value::BuiltinFunction(builtin_name, _) => {
+                                println!("\nHelp on built-in function {}:", builtin_name);
+                                println!();
+                                println!("{}(...)", builtin_name);
+                                println!("    Built-in function");
+                                println!();
+                            }
+                            Value::Module(module_name, namespace) => {
+                                println!("\nHelp on module {}:", module_name);
+                                println!();
+                                println!("NAME");
+                                println!("    {}", module_name);
+                                println!();
+
+                                // List module contents
+                                if !namespace.is_empty() {
+                                    println!("CONTENTS:");
+                                    let mut names: Vec<_> = namespace.keys().collect();
+                                    names.sort();
+                                    for name in names {
+                                        println!("    {}", name);
+                                    }
+                                    println!();
+                                }
+                            }
+                            Value::Object { class_name, .. } => {
+                                println!("\nHelp on {} object:", class_name);
+                                println!();
+                                println!("Instance of class {}", class_name);
+                                println!();
+                            }
+                            _ => {
+                                println!("\nHelp on {}:", target_val.type_name());
+                                println!();
+                                println!("Type: {}", target_val.type_name());
+                                println!();
+                            }
+                        }
+                    } else if let Value::Str(name_str) = obj {
+                        println!("\nNo Python documentation found for '{}'", name_str);
+                        println!();
+                    }
+
+                    return Ok(Value::None);
                 }
 
                 // For builtin functions, we should not pass kwargs as they don't expect them
