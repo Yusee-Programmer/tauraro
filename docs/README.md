@@ -76,6 +76,7 @@ cargo build --release
 
 ### Advanced Topics
 - [Performance Tuning](advanced/performance.md)
+- [Foreign Function Interface (FFI)](advanced/ffi.md)
 - [Memory Management](advanced/memory.md)
 - [Concurrency](advanced/concurrency.md)
 - [Interoperability](advanced/interop.md)
