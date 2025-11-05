@@ -7,6 +7,30 @@
 pub fn generate_runtime_support() -> String {
     r#"// Runtime support functions (operators only)
 
+// Helper function to check if a value is truthy (for control flow)
+int tauraro_is_truthy(tauraro_value_t* value) {
+    if (value == NULL) return 0;
+
+    switch (value->type) {
+        case TAURARO_BOOL:
+            return value->data.bool_val ? 1 : 0;
+        case TAURARO_INT:
+            return value->data.int_val != 0 ? 1 : 0;
+        case TAURARO_FLOAT:
+            return value->data.float_val != 0.0 ? 1 : 0;
+        case TAURARO_STRING:
+            return (value->data.str_val != NULL && value->data.str_val[0] != '\0') ? 1 : 0;
+        case TAURARO_NONE:
+            return 0;
+        case TAURARO_LIST:
+            return (value->data.list_val != NULL && value->data.list_val[0] != NULL) ? 1 : 0;
+        case TAURARO_DICT:
+            return (value->data.dict_val != NULL) ? 1 : 0;
+        default:
+            return 1; // Most objects are truthy
+    }
+}
+
 // Arithmetic operators
 tauraro_value_t* tauraro_add(tauraro_value_t* left, tauraro_value_t* right) {
     tauraro_value_t* result = tauraro_value_new();
