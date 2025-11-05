@@ -60,7 +60,36 @@ pub enum IRInstruction {
     Jump { target: usize },
     JumpIf { condition: String, target: usize },
     JumpIfNot { condition: String, target: usize },
-    
+
+    // High-level control flow (for easier transpilation)
+    If {
+        condition: String,
+        then_body: Vec<IRInstruction>,
+        elif_branches: Vec<(String, Vec<IRInstruction>)>,
+        else_body: Option<Vec<IRInstruction>>,
+    },
+    While {
+        condition: String,
+        condition_instructions: Vec<IRInstruction>,  // Instructions to re-evaluate condition
+        body: Vec<IRInstruction>,
+    },
+    For {
+        variable: String,
+        iterable: String,
+        body: Vec<IRInstruction>,
+    },
+    Break,
+    Continue,
+    Try {
+        body: Vec<IRInstruction>,
+        handlers: Vec<(Option<String>, Option<String>, Vec<IRInstruction>)>, // (exception_type, var_name, handler_body)
+        else_body: Option<Vec<IRInstruction>>,
+        finally_body: Option<Vec<IRInstruction>>,
+    },
+    Raise {
+        exception: Option<String>,
+    },
+
     // Data structures
     ListCreate { elements: Vec<String>, result: String },
     DictCreate { pairs: Vec<(String, String)>, result: String },
@@ -404,11 +433,89 @@ impl Generator {
             Statement::FromImport { module: module_name, names } => {
                 // Extract just the names for the instruction
                 let imported_names: Vec<String> = names.iter().map(|(name, _)| name.clone()).collect();
-                
+
                 // Add import from instruction to globals
                 module.globals.push(IRInstruction::ImportFrom {
                     module: module_name.clone(),
                     names: imported_names,
+                });
+            },
+            Statement::If { condition, then_branch, elif_branches, else_branch } => {
+                // Process control flow at global scope
+                self.process_expression(module, &condition)?;
+                let condition_var = "temp".to_string();
+
+                let mut then_instructions = Vec::new();
+                for stmt in then_branch {
+                    self.process_statement_in_function(&mut then_instructions, stmt)?;
+                }
+
+                let mut elif_ir_branches = Vec::new();
+                for (elif_cond, elif_body) in elif_branches {
+                    let mut elif_cond_instrs = Vec::new();
+                    self.process_expression_for_instructions(&mut elif_cond_instrs, &elif_cond)?;
+                    let elif_cond_var = "temp_elif_cond".to_string();
+
+                    let mut elif_body_instrs = Vec::new();
+                    for stmt in elif_body {
+                        self.process_statement_in_function(&mut elif_body_instrs, stmt)?;
+                    }
+
+                    elif_cond_instrs.extend(elif_body_instrs);
+                    elif_ir_branches.push((elif_cond_var, elif_cond_instrs));
+                }
+
+                let else_instructions = if let Some(else_stmts) = else_branch {
+                    let mut else_instrs = Vec::new();
+                    for stmt in else_stmts {
+                        self.process_statement_in_function(&mut else_instrs, stmt)?;
+                    }
+                    Some(else_instrs)
+                } else {
+                    None
+                };
+
+                module.globals.push(IRInstruction::If {
+                    condition: condition_var,
+                    then_body: then_instructions,
+                    elif_branches: elif_ir_branches,
+                    else_body: else_instructions,
+                });
+            },
+            Statement::While { condition, body, else_branch: _ } => {
+                // Store the current length to capture condition instructions
+                let start_len = module.globals.len();
+                self.process_expression(module, &condition)?;
+                let end_len = module.globals.len();
+
+                // Extract the condition evaluation instructions (clone them, don't remove)
+                let condition_instructions: Vec<IRInstruction> = module.globals[start_len..end_len].to_vec();
+                let condition_var = "temp".to_string();
+
+                let mut body_instructions = Vec::new();
+                for stmt in body {
+                    self.process_statement_in_function(&mut body_instructions, stmt)?;
+                }
+
+                module.globals.push(IRInstruction::While {
+                    condition: condition_var,
+                    condition_instructions,
+                    body: body_instructions,
+                });
+            },
+            Statement::For { variable, iterable, body, else_branch: _, .. } => {
+                self.process_expression(module, &iterable)?;
+                let iterable_var = "temp_iterable".to_string();
+
+                let mut body_instructions = Vec::new();
+                for stmt in body {
+                    self.process_statement_in_function(&mut body_instructions, stmt)?;
+                }
+
+                module.globals.push(IRInstruction::For {
+                    variable,
+                    iterable: iterable_var,
+                    body: body_instructions,
                 });
             },
             _ => {
@@ -418,6 +525,137 @@ impl Generator {
         Ok(())
     }
     
+    /// Process a single statement within a function (helper for recursion)
+    fn process_statement_in_function(&mut self, instructions: &mut Vec<IRInstruction>, statement: Statement) -> Result<()> {
+        match statement {
+            Statement::Comment(text) => {
+                instructions.push(IRInstruction::Comment(text));
+            },
+            Statement::Return(Some(expr)) => {
+                self.process_expression_for_instructions(instructions, &expr)?;
+                instructions.push(IRInstruction::Return {
+                    value: Some("temp_result".to_string())
+                });
+            },
+            Statement::Return(None) => {
+                instructions.push(IRInstruction::Return { value: None });
+            },
+            Statement::AttributeAssignment { object, name: attr_name, value } => {
+                self.process_expression_for_instructions(instructions, &value)?;
+                instructions.push(IRInstruction::ObjectSetAttr {
+                    object: self.expression_to_string(&object),
+                    attr: attr_name,
+                    value: "temp_result".to_string()
+                });
+            },
+            Statement::Expression(expr) => {
+                self.process_expression_for_instructions(instructions, &expr)?;
+            },
+            Statement::VariableDef { name, value: Some(value), .. } => {
+                self.process_expression_for_instructions(instructions, &value)?;
+                instructions.push(IRInstruction::StoreLocal {
+                    name: name.clone(),
+                    value: "temp_result".to_string()
+                });
+            },
+            Statement::If { condition, then_branch, elif_branches, else_branch } => {
+                self.process_expression_for_instructions(instructions, &condition)?;
+                let condition_var = "temp_result".to_string();
+
+                let mut then_instructions = Vec::new();
+                for stmt in then_branch {
+                    self.process_statement_in_function(&mut then_instructions, stmt)?;
+                }
+
+                let mut elif_ir_branches = Vec::new();
+                for (elif_cond, elif_body) in elif_branches {
+                    let mut elif_cond_instrs = Vec::new();
+                    self.process_expression_for_instructions(&mut elif_cond_instrs, &elif_cond)?;
+                    let elif_cond_var = "temp_elif_cond".to_string();
+
+                    let mut elif_body_instrs = Vec::new();
+                    for stmt in elif_body {
+                        self.process_statement_in_function(&mut elif_body_instrs, stmt)?;
+                    }
+
+                    elif_cond_instrs.extend(elif_body_instrs);
+                    elif_ir_branches.push((elif_cond_var, elif_cond_instrs));
+                }
+
+                let else_instructions = if let Some(else_stmts) = else_branch {
+                    let mut else_instrs = Vec::new();
+                    for stmt in else_stmts {
+                        self.process_statement_in_function(&mut else_instrs, stmt)?;
+                    }
+                    Some(else_instrs)
+                } else {
+                    None
+                };
+
+                instructions.push(IRInstruction::If {
+                    condition: condition_var,
+                    then_body: then_instructions,
+                    elif_branches: elif_ir_branches,
+                    else_body: else_instructions,
+                });
+            },
+            Statement::While { condition, body, else_branch: _ } => {
+                // Capture condition evaluation instructions
+                let start_len = instructions.len();
+                self.process_expression_for_instructions(instructions, &condition)?;
+                let end_len = instructions.len();
+
+                // Extract condition instructions (will be re-executed)
+                let condition_instructions: Vec<IRInstruction> = instructions.drain(start_len..end_len).collect();
+                let condition_var = "temp_result".to_string();
+
+                let mut body_instructions = Vec::new();
+                for stmt in body {
+                    self.process_statement_in_function(&mut body_instructions, stmt)?;
+                }
+
+                // Re-add condition instructions before the While (for initial evaluation)
+                for instr in &condition_instructions {
+                    instructions.push(instr.clone());
+                }
+
+                instructions.push(IRInstruction::While {
+                    condition: condition_var,
+                    condition_instructions,
+                    body: body_instructions,
+                });
+            },
+            Statement::For { variable, iterable, body, else_branch: _, .. } => {
+                self.process_expression_for_instructions(instructions, &iterable)?;
+                let iterable_var = "temp_iterable".to_string();
+
+                let mut body_instructions = Vec::new();
+                for stmt in body {
+                    self.process_statement_in_function(&mut body_instructions, stmt)?;
+                }
+
+                instructions.push(IRInstruction::For {
+                    variable,
+                    iterable: iterable_var,
+                    body: body_instructions,
+                });
+            },
+            Statement::Break => {
+                instructions.push(IRInstruction::Break);
+            },
+            Statement::Continue => {
+                instructions.push(IRInstruction::Continue);
+            },
+            _ => {
+                instructions.push(IRInstruction::LoadConst {
+                    value: Value::None,
+                    result: "_".to_string()
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn process_function(&mut self, name: String, params: Vec<Param>, body: Vec<Statement>) -> Result<IRFunction> {
         let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
         
@@ -433,53 +671,10 @@ impl Generator {
         
         let mut blocks = Vec::new();
         let mut instructions = Vec::new();
-        
-        // Process function body
+
+        // Process function body using helper method
         for statement in body {
-            match statement {
-                Statement::Comment(text) => {
-                    // Add comment to function body
-                    instructions.push(IRInstruction::Comment(text));
-                },
-                Statement::Return(Some(expr)) => {
-                    // Process return expression
-                    self.process_expression_for_instructions(&mut instructions, &expr)?;
-                    instructions.push(IRInstruction::Return {
-                        value: Some("temp_result".to_string())
-                    });
-                },
-                Statement::Return(None) => {
-                    instructions.push(IRInstruction::Return { value: None });
-                },
-                Statement::AttributeAssignment { object, name: attr_name, value } => {
-                    // Process attribute assignment
-                    self.process_expression_for_instructions(&mut instructions, &value)?;
-                    instructions.push(IRInstruction::ObjectSetAttr { 
-                        object: self.expression_to_string(&object), 
-                        attr: attr_name, 
-                        value: "temp_result".to_string() 
-                    });
-                },
-                Statement::Expression(expr) => {
-                    // Process general expressions
-                    self.process_expression_for_instructions(&mut instructions, &expr)?;
-                },
-                Statement::VariableDef { name, value: Some(value), .. } => {
-                    // Handle local variable assignments
-                    self.process_expression_for_instructions(&mut instructions, &value)?;
-                    instructions.push(IRInstruction::StoreLocal {
-                        name: name.clone(),
-                        value: "temp_result".to_string()
-                    });
-                },
-                _ => {
-                    // For other statements, add placeholder
-                    instructions.push(IRInstruction::LoadConst {
-                        value: Value::None,
-                        result: "_".to_string()
-                    });
-                }
-            }
+            self.process_statement_in_function(&mut instructions, statement)?;
         }
         
         blocks.push(IRBlock { instructions });
@@ -925,13 +1120,67 @@ impl Generator {
                 });
             },
             Expr::Identifier(name) => {
-                module.globals.push(IRInstruction::LoadGlobal { 
-                    name: name.clone(), 
-                    result: "temp".to_string() 
+                module.globals.push(IRInstruction::LoadGlobal {
+                    name: name.clone(),
+                    result: "temp".to_string()
                 });
                 // Copy object type if this is an object
                 if let Some(class_name) = self.object_types.get(name) {
                     self.object_types.insert("temp".to_string(), class_name.clone());
+                }
+            },
+            Expr::BinaryOp { op, left, right } => {
+                // Handle binary operations (arithmetic, etc.)
+                let left_temp = "temp_left".to_string();
+                let right_temp = "temp_right".to_string();
+
+                // Evaluate left and right
+                self.process_expression_to_result(module, left, &left_temp)?;
+                self.process_expression_to_result(module, right, &right_temp)?;
+
+                // Generate the binary operation
+                module.globals.push(IRInstruction::BinaryOp {
+                    op: op.clone(),
+                    left: left_temp,
+                    right: right_temp,
+                    result: "temp".to_string()
+                });
+            },
+            Expr::Compare { left, ops, comparators } => {
+                // Handle comparison operations (e.g., i < 3, x == y)
+                // For now, handle simple single comparisons
+                if ops.len() == 1 && comparators.len() == 1 {
+                    let left_temp = "temp_left".to_string();
+                    let right_temp = "temp_right".to_string();
+
+                    // Evaluate left and right
+                    self.process_expression_to_result(module, left, &left_temp)?;
+                    self.process_expression_to_result(module, &comparators[0], &right_temp)?;
+
+                    // Convert CompareOp to BinaryOp
+                    let binary_op = match &ops[0] {
+                        CompareOp::Eq => BinaryOp::Eq,
+                        CompareOp::NotEq => BinaryOp::Ne,
+                        CompareOp::Lt => BinaryOp::Lt,
+                        CompareOp::LtE => BinaryOp::Le,
+                        CompareOp::Gt => BinaryOp::Gt,
+                        CompareOp::GtE => BinaryOp::Ge,
+                        _ => BinaryOp::Eq, // Fallback
+                    };
+
+                    // Generate the comparison operation
+                    module.globals.push(IRInstruction::BinaryOp {
+                        op: binary_op,
+                        left: left_temp,
+                        right: right_temp,
+                        result: "temp".to_string()
+                    });
+                } else {
+                    // Complex chained comparisons - generate None for now
+                    module.globals.push(IRInstruction::LoadConst {
+                        value: Value::None,
+                        result: "temp".to_string()
+                    });
                 }
             },
             Expr::Attribute { object, name } => {
