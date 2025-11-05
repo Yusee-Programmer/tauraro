@@ -54,7 +54,47 @@ impl VM {
     
     /// Execute TauraroLang source code in REPL mode
     pub fn execute_repl(&mut self, source: &str, args: Vec<String>) -> Result<Value> {
-        self.execute_source(source, args, true)
+        // Parse first to check if it's a single expression
+        use crate::lexer::Lexer;
+        use crate::parser::Parser;
+        use crate::semantic::Analyzer;
+        use crate::bytecode::SuperCompiler;
+        use anyhow::anyhow;
+
+        let tokens = Lexer::new(source).collect::<Result<Vec<_>, String>>()
+            .map_err(|e| anyhow!("Lexer error: {}", e))?;
+        let mut parser = Parser::new(tokens);
+
+        let program = parser.parse()
+            .map_err(|e| {
+                let (line, column) = parser.current_token_location();
+                let error_with_location = e.with_location(line, column, "<stdin>");
+                anyhow!("{}", error_with_location)
+            })?;
+
+        // Check if this is a single expression statement (for REPL auto-print)
+        let is_single_expr = program.statements.len() == 1 &&
+            matches!(&program.statements[0], crate::ast::Statement::Expression(_));
+
+        // Analyze
+        let program = Analyzer::new(false).analyze(program)
+            .map_err(|e| anyhow!("Semantic errors: {:?}", e))?;
+
+        // Compile to bytecode
+        let mut compiler = SuperCompiler::new("<stdin>".to_string());
+        let code_object = compiler.compile(program)?;
+
+        // Execute the program
+        self.bytecode_vm.enable_type_checking = false;
+        let result = self.bytecode_vm.execute(code_object)?;
+
+        // In REPL mode, if it was a single expression, return the result
+        // Otherwise return None (like Python REPL)
+        if is_single_expr {
+            Ok(result)
+        } else {
+            Ok(Value::None)
+        }
     }
     
     /// Get a variable from the VM
