@@ -645,9 +645,39 @@ impl CTranspiler {
             main_code.push_str(&self.generate_class_initialization(module)?);
         }
 
-        // Execute global instructions
-        for instruction in &module.globals {
-            main_code.push_str(&format!("    {}\n", self.generate_global_instruction(instruction, &module.type_info)?));
+        // Build a map of ObjectCreate indices to their preceding LoadConst arguments
+        let mut constructor_args: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+        let mut pending_args: Vec<String> = Vec::new();
+
+        for (idx, instruction) in module.globals.iter().enumerate() {
+            match instruction {
+                IRInstruction::LoadConst { result, .. } => {
+                    // Track potential constructor argument
+                    if result.starts_with("arg_") {
+                        pending_args.push(result.clone());
+                    }
+                }
+                IRInstruction::ObjectCreate { .. } => {
+                    // Save pending args for this ObjectCreate
+                    if !pending_args.is_empty() {
+                        constructor_args.insert(idx, pending_args.clone());
+                        pending_args.clear();
+                    }
+                }
+                IRInstruction::Call { .. } | IRInstruction::StoreGlobal { .. } => {
+                    // These instructions consume arguments, so clear pending
+                    if !pending_args.is_empty() {
+                        pending_args.clear();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Execute global instructions (pass module and constructor args for context)
+        for (idx, instruction) in module.globals.iter().enumerate() {
+            let args = constructor_args.get(&idx).cloned().unwrap_or_default();
+            main_code.push_str(&format!("    {}\n", self.generate_global_instruction_with_context(instruction, module, &args)?));
         }
 
         // Call main_function if it exists
@@ -659,6 +689,48 @@ impl CTranspiler {
         main_code.push_str("}\n");
 
         Ok(main_code)
+    }
+
+    /// Generate code for a global instruction with full module context and constructor arguments
+    fn generate_global_instruction_with_context(&self, instruction: &IRInstruction, module: &IRModule, constructor_args: &[String]) -> Result<String> {
+        // Special handling for ObjectCreate to inject __init__ calls
+        if let IRInstruction::ObjectCreate { class_name, result } = instruction {
+            let mut code = format!("{} = tauraro_object_create(\"{}\");", result, class_name);
+
+            // Link object to its class
+            code.push_str(&format!("\n    if (class_{}) {{\n", class_name));
+            code.push_str(&format!("        ((tauraro_object_t*){}->data.obj_val)->class_ptr = class_{};\n", result, class_name));
+
+            // Check if class has __init__ method and auto-call it
+            let init_method_name = format!("{}____init__", class_name);
+            if module.functions.contains_key(&init_method_name) {
+                code.push_str("        // Auto-call __init__ with constructor arguments\n");
+                code.push_str(&format!("        tauraro_value_t* init_method = tauraro_class_get_method(class_{}, \"__init__\");\n", class_name));
+                code.push_str("        if (init_method && init_method->type == TAURARO_FUNCTION) {\n");
+                code.push_str("            typedef tauraro_value_t* (*method_func_t)(int, tauraro_value_t**);\n");
+                code.push_str("            method_func_t init_func = (method_func_t)init_method->data.ptr_val;\n");
+
+                // Build argument list: self + constructor args
+                if constructor_args.is_empty() {
+                    code.push_str(&format!("            init_func(1, (tauraro_value_t*[]){{{}}});\n", result));
+                } else {
+                    let all_args = std::iter::once(result.as_str())
+                        .chain(constructor_args.iter().map(|s| s.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let argc = constructor_args.len() + 1;
+                    code.push_str(&format!("            init_func({}, (tauraro_value_t*[]){{{}}});\n", argc, all_args));
+                }
+
+                code.push_str("        }\n");
+            }
+
+            code.push_str("    }");
+            return Ok(code);
+        }
+
+        // For all other instructions, use the standard handler
+        self.generate_global_instruction(instruction, &module.type_info)
     }
 
     /// Generate code for a global instruction with variable tracking
