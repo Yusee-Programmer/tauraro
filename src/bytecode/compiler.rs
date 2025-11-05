@@ -1135,6 +1135,13 @@ impl SuperCompiler {
                         // Create a slice from before_count to -(after_count)
                         // We'll use list slicing: value[before_count:-after_count] if after_count > 0
                         // Otherwise: value[before_count:]
+
+                        // First, we need to preserve the original value_reg for later access
+                        // Allocate a temp register to hold the slice
+                        let slice_reg = self.allocate_register();
+                        // Copy value_reg to slice_reg (we'll slice slice_reg)
+                        self.emit(OpCode::MoveReg, value_reg, slice_reg, 0, self.current_line);
+
                         let start_const = self.code.add_constant(Value::Int(before_count as i64));
                         let start_reg = self.allocate_register();
                         self.emit(OpCode::LoadConst, start_const, start_reg, 0, self.current_line);
@@ -1149,12 +1156,11 @@ impl SuperCompiler {
                             None
                         };
 
-                        // Create the slice
-                        let slice_reg = self.allocate_register();
+                        // Create the slice (this modifies slice_reg in place)
                         let stop_arg = stop_reg.unwrap_or(0);
-                        self.emit(OpCode::Slice, value_reg, start_reg, stop_arg, self.current_line);
+                        self.emit(OpCode::Slice, slice_reg, start_reg, stop_arg, self.current_line);
 
-                        // Store the slice result
+                        // Store the slice result to the starred variable
                         if self.is_in_function_scope() {
                             let local_idx = self.get_local_index(starred_name);
                             self.emit(OpCode::StoreFast, slice_reg, local_idx, 0, self.current_line);

@@ -5,6 +5,7 @@ use crate::modules::hplist::HPList;
 use crate::bytecode::instructions::OpCode;
 use crate::bytecode::objects::RcValue;
 use crate::bytecode::memory::{CodeObject, Frame, Block, BlockType, MemoryOps};
+use crate::ast::Statement;
 // Import the arithmetic module
 // use crate::bytecode::arithmetic;
 // Import necessary types for Closure handling
@@ -5772,8 +5773,18 @@ impl SuperBytecodeVM {
                     let source = match &args[0] {
                         Value::Str(s) => s.clone(),
                         Value::Code(code) => {
-                            // If it's already a code object, execute it directly
-                            return self.execute(*code.clone());
+                            // If it's already a code object, execute it and retrieve __eval_result__
+                            self.execute(*code.clone())?;
+
+                            // Get the result from globals (set by compile in eval mode)
+                            let result = self.globals.borrow().get("__eval_result__")
+                                .map(|v| v.value.clone())
+                                .unwrap_or(Value::None);
+
+                            // Clean up the temporary variable
+                            self.globals.borrow_mut().remove("__eval_result__");
+
+                            return Ok(result);
                         }
                         _ => return Err(anyhow!("eval() arg 1 must be a string or code object")),
                     };
@@ -6219,16 +6230,17 @@ impl SuperBytecodeVM {
     }
 
     /// Implement eval() - evaluate a Python expression
-    pub fn eval_impl(&mut self, source: &str, globals: Option<HashMap<String, Value>>, locals: Option<HashMap<String, Value>>) -> Result<Value> {
-        // Parse the source as an expression
-        let tokens = crate::lexer::Lexer::new(source)
+    pub fn eval_impl(&mut self, source: &str, globals: Option<HashMap<String, Value>>, _locals: Option<HashMap<String, Value>>) -> Result<Value> {
+        // Wrap the source in a return statement to capture the expression value
+        let wrapped_source = format!("__eval_result__ = ({})", source);
+
+        // Parse the wrapped expression
+        let tokens = crate::lexer::Lexer::new(&wrapped_source)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow!("Lexer error in eval(): {}", e))?;
 
         let mut parser = crate::parser::Parser::new(tokens);
-
-        // Try to parse as a single expression for REPL-style evaluation
-        let (program, is_expr) = parser.parse_repl_line()
+        let program = parser.parse()
             .map_err(|e| anyhow!("Parser error in eval(): {}", e))?;
 
         // Set up the evaluation context
@@ -6242,19 +6254,39 @@ impl SuperBytecodeVM {
             let code_object = compiler.compile(program)
                 .map_err(|e| anyhow!("Compiler error in eval(): {}", e))?;
 
-            let result = self.execute(code_object);
+            // Execute
+            self.execute(code_object)?;
+
+            // Get the result from globals
+            let result = self.globals.borrow().get("__eval_result__")
+                .map(|v| v.value.clone())
+                .unwrap_or(Value::None);
+
+            // Clean up the temporary variable
+            self.globals.borrow_mut().remove("__eval_result__");
 
             // Restore old globals
             *self.globals.borrow_mut() = old_globals.borrow().clone();
 
-            result
+            Ok(result)
         } else {
             // Use current globals
             let mut compiler = crate::bytecode::compiler::SuperCompiler::new("<eval>".to_string());
             let code_object = compiler.compile(program)
                 .map_err(|e| anyhow!("Compiler error in eval(): {}", e))?;
 
-            self.execute(code_object)
+            // Execute
+            self.execute(code_object)?;
+
+            // Get the result from globals
+            let result = self.globals.borrow().get("__eval_result__")
+                .map(|v| v.value.clone())
+                .unwrap_or(Value::None);
+
+            // Clean up the temporary variable
+            self.globals.borrow_mut().remove("__eval_result__");
+
+            Ok(result)
         }
     }
 
@@ -6298,8 +6330,17 @@ impl SuperBytecodeVM {
 
     /// Implement compile() - compile source to a code object
     pub fn compile_impl(&mut self, source: &str, filename: &str, mode: &str) -> Result<Value> {
+        // For eval mode, wrap the source to capture the result
+        let wrapped_source;
+        let source_to_parse = if mode == "eval" {
+            wrapped_source = format!("__eval_result__ = ({})", source);
+            &wrapped_source
+        } else {
+            source
+        };
+
         // Parse the source based on mode
-        let tokens = crate::lexer::Lexer::new(source)
+        let tokens = crate::lexer::Lexer::new(source_to_parse)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow!("Lexer error in compile(): {}", e))?;
 
@@ -6307,10 +6348,9 @@ impl SuperBytecodeVM {
 
         let program = match mode {
             "eval" => {
-                // Parse as expression
-                let (prog, _) = parser.parse_repl_line()
-                    .map_err(|e| anyhow!("Parser error in compile(): {}", e))?;
-                prog
+                // Parse the wrapped assignment
+                parser.parse()
+                    .map_err(|e| anyhow!("Parser error in compile(): {}", e))?
             }
             "exec" | "single" => {
                 // Parse as statements
