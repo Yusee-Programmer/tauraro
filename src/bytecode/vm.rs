@@ -3784,6 +3784,132 @@ impl SuperBytecodeVM {
                                     Value::None
                                 }
                             }
+                            "copy" => {
+                                if !args.is_empty() {
+                                    return Err(anyhow!("copy() takes no arguments ({} given)", args.len()));
+                                }
+                                // Return a new list with the same elements
+                                if let Value::List(list) = &self.frames[frame_idx].registers[object_reg].value {
+                                    Value::List(list.clone())
+                                } else {
+                                    Value::None
+                                }
+                            }
+                            "clear" => {
+                                if !args.is_empty() {
+                                    return Err(anyhow!("clear() takes no arguments ({} given)", args.len()));
+                                }
+                                // Clear the list (replace with empty list)
+                                if let Value::List(_) = &self.frames[frame_idx].registers[object_reg].value {
+                                    self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::List(HPList::new()));
+                                }
+                                Value::None
+                            }
+                            "reverse" => {
+                                if !args.is_empty() {
+                                    return Err(anyhow!("reverse() takes no arguments ({} given)", args.len()));
+                                }
+                                // Reverse the list in place
+                                if let Value::List(list) = &self.frames[frame_idx].registers[object_reg].value {
+                                    let mut new_list = list.clone();
+                                    new_list.reverse();
+                                    self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::List(new_list));
+                                }
+                                Value::None
+                            }
+                            "sort" => {
+                                // sort() with optional key parameter and reverse parameter
+                                // Usage: list.sort(key=None, reverse=False)
+                                let mut key_func: Option<Value> = None;
+                                let mut reverse = false;
+
+                                // Parse arguments - for now, only support positional for key, named for reverse
+                                // In full Python: list.sort(*, key=None, reverse=False)
+                                if args.len() > 0 {
+                                    if let Value::Str(arg_name) = &args[0] {
+                                        if arg_name == "key" && args.len() > 1 {
+                                            key_func = Some(args[1].clone());
+                                        } else if arg_name == "reverse" && args.len() > 1 {
+                                            if let Value::Bool(b) = args[1] {
+                                                reverse = b;
+                                            }
+                                        }
+                                    } else {
+                                        // Positional argument assumed to be key function
+                                        key_func = Some(args[0].clone());
+                                    }
+                                }
+
+                                // Sort the list in place
+                                if let Value::List(list) = &self.frames[frame_idx].registers[object_reg].value {
+                                    let mut items: Vec<Value> = list.as_vec().clone();
+
+                                    if let Some(key_fn) = key_func {
+                                        // Sort with key function
+                                        // We need to call the key function for each element
+                                        // This requires VM access to call Python functions
+                                        let mut keyed_items: Vec<(Value, Value)> = Vec::new();
+
+                                        for item in items.iter() {
+                                            // Call key_fn(item) to get the sort key
+                                            let key_result = self.call_function_fast(
+                                                key_fn.clone(),
+                                                vec![item.clone()],
+                                                HashMap::new(),
+                                                Some(frame_idx),
+                                                None,
+                                            )?;
+                                            keyed_items.push((key_result, item.clone()));
+                                        }
+
+                                        // Sort by the keys
+                                        keyed_items.sort_by(|a, b| {
+                                            match (&a.0, &b.0) {
+                                                (Value::Int(x), Value::Int(y)) => x.cmp(y),
+                                                (Value::Float(x), Value::Float(y)) => {
+                                                    if x < y { std::cmp::Ordering::Less }
+                                                    else if x > y { std::cmp::Ordering::Greater }
+                                                    else { std::cmp::Ordering::Equal }
+                                                }
+                                                (Value::Str(x), Value::Str(y)) => x.cmp(y),
+                                                (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+                                                _ => std::cmp::Ordering::Equal,
+                                            }
+                                        });
+
+                                        // Extract the original items in sorted order
+                                        items = keyed_items.into_iter().map(|(_, item)| item).collect();
+                                    } else {
+                                        // Sort without key function (natural ordering)
+                                        items.sort_by(|a, b| {
+                                            match (a, b) {
+                                                (Value::Int(x), Value::Int(y)) => x.cmp(y),
+                                                (Value::Float(x), Value::Float(y)) => {
+                                                    if x < y { std::cmp::Ordering::Less }
+                                                    else if x > y { std::cmp::Ordering::Greater }
+                                                    else { std::cmp::Ordering::Equal }
+                                                }
+                                                (Value::Str(x), Value::Str(y)) => x.cmp(y),
+                                                (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+                                                _ => std::cmp::Ordering::Equal,
+                                            }
+                                        });
+                                    }
+
+                                    // Reverse if requested
+                                    if reverse {
+                                        items.reverse();
+                                    }
+
+                                    // Replace the list with sorted items
+                                    let mut new_list = HPList::new();
+                                    for item in items {
+                                        new_list.push(item);
+                                    }
+                                    self.frames[frame_idx].registers[object_reg] = RcValue::new(Value::List(new_list));
+                                }
+                                Value::None
+                            }
                             _ => {
                                 return Err(anyhow!("List has no method '{}'", method_name));
                             }
@@ -4928,8 +5054,25 @@ impl SuperBytecodeVM {
                         }
                         // Then check class methods - return as BoundMethod so self is bound
                         else if let Some(method) = class_methods.get(&attr_name) {
+                            // Check if this is a descriptor (has __get__ method)
+                            // Descriptors take precedence over everything
+                            if let Some(getter) = method.get_method("__get__") {
+                                // Call the descriptor's __get__ method
+                                // __get__(self, obj, owner)
+                                let args = vec![method.clone(), object_value.clone(), Value::None];
+                                match getter {
+                                    Value::BuiltinFunction(_, func) => func(args)?,
+                                    Value::NativeFunction(func) => func(args)?,
+                                    Value::Closure { .. } => {
+                                        // For closure, we need to call it through the VM
+                                        self.call_function_fast(getter.clone(), args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?;
+                                        return Ok(None);
+                                    },
+                                    _ => method.clone(), // Fallback
+                                }
+                            }
                             // Check if this is a property object that needs to be called
-                            if let Value::Object { class_name, fields, .. } = method {
+                            else if let Value::Object { class_name, fields, .. } = method {
                                 if class_name == "property" {
                                     // This is a property, call its getter function if it exists
                                     if let Some(getter) = fields.as_ref().get("fget") {
@@ -5153,12 +5296,27 @@ impl SuperBytecodeVM {
                 let is_object_with_fields = matches!(object_value, Value::Object { .. });
 
                 if is_object_with_fields {
-                    // First, check if this attribute is a property in class_methods
-                    let property_setter_result = match &object_value {
+                    // First, check if this attribute is a descriptor in class_methods
+                    let descriptor_setter_result = match &object_value {
                         Value::Object { class_methods, .. } => {
-                            if let Some(property_obj) = class_methods.get(&attr_name) {
-                                // Check if it's a property object
-                                if let Value::Object { class_name, fields, .. } = property_obj {
+                            if let Some(descriptor_obj) = class_methods.get(&attr_name) {
+                                // Check if it's a descriptor (has __set__ method)
+                                if let Some(setter) = descriptor_obj.get_method("__set__") {
+                                    // Call the descriptor's __set__ method
+                                    // __set__(self, obj, value)
+                                    let args = vec![descriptor_obj.clone(), object_value.clone(), value_to_store.clone()];
+                                    match setter {
+                                        Value::BuiltinFunction(_, func) => Some(func(args)),
+                                        Value::NativeFunction(func) => Some(func(args)),
+                                        Value::Closure { .. } => {
+                                            // For closure, we need to call it through the VM
+                                            self.call_function_fast(setter.clone(), args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+                                            return Ok(None);
+                                        },
+                                        _ => None
+                                    }
+                                } else if let Value::Object { class_name, fields, .. } = descriptor_obj {
+                                    // Check if it's a property object
                                     if class_name == "property" {
                                         // This is a property, check if it has a setter
                                         if let Some(setter) = fields.as_ref().get("fset") {
@@ -5213,8 +5371,8 @@ impl SuperBytecodeVM {
                         _ => None
                     };
 
-                    // If we called a property setter, return early
-                    if let Some(result) = property_setter_result {
+                    // If we called a descriptor setter, return early
+                    if let Some(result) = descriptor_setter_result {
                         result?;
                         return Ok(None);
                     }
@@ -5343,12 +5501,44 @@ impl SuperBytecodeVM {
                 let is_object_with_fields = matches!(object_value, Value::Object { .. });
                 
                 if is_object_with_fields {
-                    // Get the current value of the field to check if it's a descriptor
+                    // First check class methods for descriptors
+                    let class_descriptor = match &object_value {
+                        Value::Object { class_methods, .. } => class_methods.get(&attr_name).cloned(),
+                        _ => None
+                    };
+
+                    if let Some(descriptor) = class_descriptor {
+                        if let Some(deleter) = descriptor.get_method("__delete__") {
+                            // Call the descriptor's __delete__ method
+                            // __delete__(self, obj)
+                            let args = vec![descriptor.clone(), object_value.clone()];
+                            match deleter {
+                                Value::BuiltinFunction(_, func) => {
+                                    func(args)?;
+                                    return Ok(None); // Successfully called descriptor deleter
+                                },
+                                Value::NativeFunction(func) => {
+                                    func(args)?;
+                                    return Ok(None); // Successfully called descriptor deleter
+                                },
+                                Value::Closure { .. } => {
+                                    // For closure, we need to call it through the VM
+                                    self.call_function_fast(deleter.clone(), args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+                                    return Ok(None);
+                                },
+                                _ => {
+                                    // Continue with normal deletion below
+                                }
+                            }
+                        }
+                    }
+
+                    // Then check instance fields for descriptors
                     let current_field_value = match &object_value {
                         Value::Object { fields, .. } => fields.as_ref().get(&attr_name).cloned(),
                         _ => None
                     };
-                    
+
                     // If the field exists and is a descriptor, call its __delete__ method
                     if let Some(descriptor) = current_field_value {
                         if let Some(deleter) = descriptor.get_method("__delete__") {

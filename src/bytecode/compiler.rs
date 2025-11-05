@@ -774,6 +774,8 @@ impl SuperCompiler {
                                     }
                                 }
                             }
+                            // TODO: Support general class attributes (descriptors, etc.)
+                            // This requires executing the class body as code, not compiling it statically
                         }
                         _ => {
                             // Ignore other statements in class body for now
@@ -1151,14 +1153,17 @@ impl SuperCompiler {
                             let stop_const = self.code.add_constant(Value::Int(-(after_count as i64)));
                             let reg = self.allocate_register();
                             self.emit(OpCode::LoadConst, stop_const, reg, 0, self.current_line);
-                            Some(reg)
+                            reg
                         } else {
-                            None
+                            // No stop index means slice to end - use None
+                            let none_const = self.code.add_constant(Value::None);
+                            let reg = self.allocate_register();
+                            self.emit(OpCode::LoadConst, none_const, reg, 0, self.current_line);
+                            reg
                         };
 
                         // Create the slice (this modifies slice_reg in place)
-                        let stop_arg = stop_reg.unwrap_or(0);
-                        self.emit(OpCode::Slice, slice_reg, start_reg, stop_arg, self.current_line);
+                        self.emit(OpCode::Slice, slice_reg, start_reg, stop_reg, self.current_line);
 
                         // Store the slice result to the starred variable
                         if self.is_in_function_scope() {
@@ -2182,6 +2187,15 @@ impl SuperCompiler {
                 self.emit(OpCode::MoveReg, object_reg, result_reg, 0, self.current_line);
 
                 Ok(result_reg)
+            }
+            Expr::DocString(s) => {
+                // Handle docstrings - treat them as string constants
+                // In Python, docstrings are just string literals that are typically ignored
+                // We'll load it as a constant but it's usually discarded
+                let str_const = self.code.add_constant(Value::Str(s));
+                let reg = self.allocate_register();
+                self.emit(OpCode::LoadConst, str_const, reg, 0, self.current_line);
+                Ok(reg)
             }
             _ => Err(anyhow!("Unsupported expression type: {:?}", expr)),
         }
