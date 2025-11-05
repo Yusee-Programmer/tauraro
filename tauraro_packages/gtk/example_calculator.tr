@@ -1,0 +1,66 @@
+# GTK Calculator Example
+# Demonstrates a simple calculator UI with grid layout
+
+print("GTK Calculator Example")
+print("======================")
+
+# Import the GTK package
+import gtk
+
+# Initialize GTK and create application
+gtk.init_gtk()
+app = gtk.Application("Calculator")
+
+# Create main window
+window = app.create_window("Tauraro Calculator", 300, 400)
+window.set_border_width(10)
+window.set_resizable(False)
+
+# Create main vertical box
+vbox = gtk.VBox(spacing=10)
+window.add(vbox)
+
+# Display (read-only entry)
+display = gtk.Entry()
+display.set_text("0")
+display.set_size(280, 50)
+vbox.pack_start(display, False, False, 0)
+
+# Create grid for buttons
+grid = gtk.Grid(row_spacing=5, column_spacing=5)
+vbox.pack_start(grid, True, True, 0)
+
+# Button labels in calculator layout
+buttons = [
+    ["7", "8", "9", "/"],
+    ["4", "5", "6", "*"],
+    ["1", "2", "3", "-"],
+    ["0", ".", "=", "+"],
+    ["C", "CE", "←", ""]
+]
+
+# Create and add buttons to grid
+row = 0
+for button_row in buttons:
+    col = 0
+    for label in button_row:
+        if label:
+            btn = gtk.Button(label)
+            btn.set_size(65, 50)
+            grid.attach(btn, col, row, 1, 1)
+        col = col + 1
+    row = row + 1
+
+# Show everything
+window.show_all()
+
+print("\nCalculator UI is now visible!")
+print("This demonstrates:")
+print("  - Grid layout for button arrangement")
+print("  - Custom widget sizing")
+print("  - Fixed window size (non-resizable)")
+print("\nNote: Button event handlers will be implemented in the next version.")
+print("Close the window to exit.")
+
+# Run the application
+app.run()

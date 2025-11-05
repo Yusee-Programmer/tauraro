@@ -1,0 +1,59 @@
+# GTK Dialogs Module
+# Provides dialog boxes for user interaction
+
+# Message dialog
+def message_dialog(parent, message, dialog_type=GTK_MESSAGE_INFO, buttons=GTK_BUTTONS_OK):
+    # Show a message dialog
+    # dialog_type: GTK_MESSAGE_INFO, GTK_MESSAGE_WARNING, GTK_MESSAGE_QUESTION, GTK_MESSAGE_ERROR
+    # buttons: GTK_BUTTONS_OK, GTK_BUTTONS_CLOSE, GTK_BUTTONS_YES_NO, etc.
+
+    parent_ptr = 0
+    if parent:
+        parent_ptr = parent.widget
+
+    dialog_ptr = call_function(_gtk_lib, "gtk_message_dialog_new", [
+        parent_ptr,
+        0,  # flags
+        dialog_type,
+        buttons,
+        message
+    ])
+
+    # Run dialog and get response
+    response = call_function(_gtk_lib, "gtk_dialog_run", [dialog_ptr])
+
+    # Destroy dialog
+    call_function(_gtk_lib, "gtk_widget_destroy", [dialog_ptr])
+
+    return response
+
+
+# Convenience functions for common dialog types
+def info_dialog(parent, message):
+    # Show an information dialog
+    return message_dialog(parent, message, GTK_MESSAGE_INFO, GTK_BUTTONS_OK)
+
+
+def warning_dialog(parent, message):
+    # Show a warning dialog
+    return message_dialog(parent, message, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK)
+
+
+def error_dialog(parent, message):
+    # Show an error dialog
+    return message_dialog(parent, message, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK)
+
+
+def question_dialog(parent, message):
+    # Show a question dialog with Yes/No buttons
+    response = message_dialog(parent, message, GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO)
+    return response == GTK_RESPONSE_YES
+
+
+def confirm_dialog(parent, message):
+    # Show a confirmation dialog with OK/Cancel buttons
+    response = message_dialog(parent, message, GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL)
+    return response == GTK_RESPONSE_OK
+
+
+print("  [OK] Dialogs module loaded")

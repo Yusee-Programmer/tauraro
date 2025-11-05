@@ -1,0 +1,68 @@
+# GTK Dialogs Example
+# Demonstrates various dialog types
+
+print("GTK Dialogs Example")
+print("===================")
+
+# Import the GTK package
+import gtk
+
+# Initialize GTK and create application
+gtk.init_gtk()
+app = gtk.Application("Dialogs Example")
+
+# Create main window
+window = app.create_window("Dialog Examples", 400, 400)
+window.set_border_width(20)
+
+# Create vertical layout
+vbox = gtk.VBox(spacing=10)
+window.add(vbox)
+
+# Add title
+title = gtk.Label("<big><b>Click buttons to show dialogs</b></big>")
+title.set_markup("<big><b>Click buttons to show dialogs</b></big>")
+vbox.pack_start(title, False, False, 10)
+
+# Info dialog button
+# Note: Event handlers are not yet implemented in this version
+# The buttons are shown as demonstration
+info_btn = gtk.Button("Show Info Dialog")
+vbox.pack_start(info_btn, False, False, 5)
+
+# Warning dialog button
+warning_btn = gtk.Button("Show Warning Dialog")
+vbox.pack_start(warning_btn, False, False, 5)
+
+# Error dialog button
+error_btn = gtk.Button("Show Error Dialog")
+vbox.pack_start(error_btn, False, False, 5)
+
+# Question dialog button
+question_btn = gtk.Button("Show Question Dialog")
+vbox.pack_start(question_btn, False, False, 5)
+
+# Confirm dialog button
+confirm_btn = gtk.Button("Show Confirm Dialog")
+vbox.pack_start(confirm_btn, False, False, 5)
+
+# Instructions
+instructions = gtk.Label("\nNote: Event handlers will be implemented in the next version.\nFor now, you can test dialogs programmatically:")
+vbox.pack_start(instructions, False, False, 10)
+
+# Show everything
+window.show_all()
+
+print("\nDialog demo window is now visible!")
+print("\nYou can test dialogs programmatically:")
+print("  gtk.info_dialog(window, 'This is an info message')")
+print("  gtk.warning_dialog(window, 'This is a warning')")
+print("  gtk.error_dialog(window, 'An error occurred!')")
+print("  gtk.question_dialog(window, 'Do you agree?')")
+print("\nClose the window to exit.")
+
+# Example: Show an info dialog on startup
+# gtk.info_dialog(window, "Welcome to GTK Dialogs Demo!")
+
+# Run the application
+app.run()

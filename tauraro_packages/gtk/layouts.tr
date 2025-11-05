@@ -1,0 +1,136 @@
+# GTK Layouts Module
+# Provides layout managers for organizing widgets
+
+# Box layout (horizontal or vertical)
+class Box(Container):
+    # Box layout container for linear widget arrangement
+
+    def __init__(self, orientation=GTK_ORIENTATION_VERTICAL, spacing=0):
+        # Create a new box layout
+        # orientation: GTK_ORIENTATION_HORIZONTAL or GTK_ORIENTATION_VERTICAL
+        box_ptr = call_function(_gtk_lib, "gtk_box_new", [orientation, spacing])
+        super().__init__(box_ptr)
+        self.orientation = orientation
+        self.spacing = spacing
+        self.children = []
+
+    def pack_start(self, widget, expand=True, fill=True, padding=0):
+        # Pack widget at the start of the box
+        self.children.append(widget)
+        if self.widget and widget.widget:
+            call_function(_gtk_lib, "gtk_box_pack_start", [
+                self.widget,
+                widget.widget,
+                expand,
+                fill,
+                padding
+            ])
+        return self
+
+    def pack_end(self, widget, expand=True, fill=True, padding=0):
+        # Pack widget at the end of the box
+        self.children.append(widget)
+        if self.widget and widget.widget:
+            call_function(_gtk_lib, "gtk_box_pack_end", [
+                self.widget,
+                widget.widget,
+                expand,
+                fill,
+                padding
+            ])
+        return self
+
+    def set_spacing(self, spacing):
+        # Set spacing between children
+        self.spacing = spacing
+        if self.widget:
+            call_function(_gtk_lib, "gtk_box_set_spacing", [self.widget, spacing])
+        return self
+
+    # Convenience alias
+    def add_child(self, widget, expand=True, fill=True, padding=0):
+        # Alias for pack_start
+        return self.pack_start(widget, expand, fill, padding)
+
+
+# HBox - Horizontal box layout
+class HBox(Box):
+    # Horizontal box layout container
+
+    def __init__(self, spacing=0):
+        # Create a horizontal box
+        super().__init__(GTK_ORIENTATION_HORIZONTAL, spacing)
+
+
+# VBox - Vertical box layout
+class VBox(Box):
+    # Vertical box layout container
+
+    def __init__(self, spacing=0):
+        # Create a vertical box
+        super().__init__(GTK_ORIENTATION_VERTICAL, spacing)
+
+
+# Grid layout
+class Grid(Container):
+    # Grid layout container for table-like widget arrangement
+
+    def __init__(self, row_spacing=0, column_spacing=0):
+        # Create a new grid layout
+        grid_ptr = call_function(_gtk_lib, "gtk_grid_new", [])
+        super().__init__(grid_ptr)
+        self.row_spacing = row_spacing
+        self.column_spacing = column_spacing
+        self.children = []
+
+        # Set spacing
+        if self.widget:
+            call_function(_gtk_lib, "gtk_grid_set_row_spacing", [self.widget, row_spacing])
+            call_function(_gtk_lib, "gtk_grid_set_column_spacing", [self.widget, column_spacing])
+
+    def attach(self, widget, column, row, width=1, height=1):
+        # Attach widget to grid at specific position
+        # column: column position (0-based)
+        # row: row position (0-based)
+        # width: number of columns to span
+        # height: number of rows to span
+        self.children.append(widget)
+        if self.widget and widget.widget:
+            call_function(_gtk_lib, "gtk_grid_attach", [
+                self.widget,
+                widget.widget,
+                column,
+                row,
+                width,
+                height
+            ])
+        return self
+
+    def set_row_spacing(self, spacing):
+        # Set spacing between rows
+        self.row_spacing = spacing
+        if self.widget:
+            call_function(_gtk_lib, "gtk_grid_set_row_spacing", [self.widget, spacing])
+        return self
+
+    def set_column_spacing(self, spacing):
+        # Set spacing between columns
+        self.column_spacing = spacing
+        if self.widget:
+            call_function(_gtk_lib, "gtk_grid_set_column_spacing", [self.widget, spacing])
+        return self
+
+
+# Frame container (decorative border around widgets)
+class Frame(Container):
+    # Frame container with optional label
+
+    def __init__(self, label=None):
+        # Note: GTK3 doesn't have a simple frame creation function
+        # This would require additional FFI bindings
+        # For now, we'll use a simple container approach
+        super().__init__(None)
+        self.label = label
+
+
+print("  [OK] Layouts module loaded")

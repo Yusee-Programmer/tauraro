@@ -1,0 +1,57 @@
+# GTK Buttons Example
+# Demonstrates buttons and layout in GTK
+
+print("GTK Buttons and Layout Example")
+print("===============================")
+
+# Import the GTK package
+import gtk
+
+# Initialize GTK and create application
+gtk.init_gtk()
+app = gtk.Application("Buttons Example")
+
+# Create main window
+window = app.create_window("Button Demo", 400, 300)
+window.set_border_width(20)
+
+# Create a vertical layout
+vbox = gtk.VBox(spacing=10)
+window.add(vbox)
+
+# Add a title label
+title = gtk.Label("<big><b>GTK Button Demo</b></big>")
+title.set_markup("<big><b>GTK Button Demo</b></big>")
+vbox.pack_start(title, False, False, 10)
+
+# Add some buttons
+button1 = gtk.Button("Click Me!")
+vbox.pack_start(button1, False, False, 0)
+
+button2 = gtk.Button("Button 2")
+vbox.pack_start(button2, False, False, 0)
+
+button3 = gtk.Button("Disabled Button")
+button3.set_sensitive(False)
+vbox.pack_start(button3, False, False, 0)
+
+# Add a horizontal button row
+hbox = gtk.HBox(spacing=10)
+vbox.pack_start(hbox, False, False, 10)
+
+small_btn1 = gtk.Button("Yes")
+small_btn2 = gtk.Button("No")
+small_btn3 = gtk.Button("Maybe")
+
+hbox.pack_start(small_btn1, True, True, 0)
+hbox.pack_start(small_btn2, True, True, 0)
+hbox.pack_start(small_btn3, True, True, 0)
+
+# Show everything
+window.show_all()
+
+print("\nWindow with buttons is now visible!")
+print("Close the window to exit.")
+
+# Run the application
+app.run()
