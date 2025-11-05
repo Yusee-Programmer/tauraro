@@ -115,11 +115,11 @@ pub fn generate_instruction(
                 Ok(format!("{} = {};", sanitized_name, value))
             }
         }
-        IRInstruction::LoadTypedLocal { name, result, type_info: _ } => {
-            generate_load_local(name, result, local_vars)
+        IRInstruction::LoadTypedLocal { name, result, type_info } => {
+            generate_load_typed_local(name, result, type_info, local_vars)
         }
-        IRInstruction::StoreTypedLocal { name, value, type_info: _ } => {
-            Ok(format!("{} = {};", name, value))
+        IRInstruction::StoreTypedLocal { name, value, type_info } => {
+            generate_store_typed_local(name, value, type_info, local_vars)
         }
         IRInstruction::LoadGlobal { name, result } => {
             generate_load_global(name, result, local_vars)
@@ -127,11 +127,11 @@ pub fn generate_instruction(
         IRInstruction::StoreGlobal { name, value } => {
             Ok(format!("{} = {};", name, value))
         }
-        IRInstruction::LoadTypedGlobal { name, result, type_info: _ } => {
-            generate_load_global(name, result, local_vars)
+        IRInstruction::LoadTypedGlobal { name, result, type_info } => {
+            generate_load_typed_global(name, result, type_info, local_vars)
         }
-        IRInstruction::StoreTypedGlobal { name, value, type_info: _ } => {
-            Ok(format!("{} = {};", name, value))
+        IRInstruction::StoreTypedGlobal { name, value, type_info } => {
+            generate_store_typed_global(name, value, type_info, local_vars)
         }
         IRInstruction::BinaryOp { op, left, right, result } => {
             generate_binary_op(op, left, right, result, local_vars)
@@ -655,4 +655,148 @@ fn generate_for(
     code.push_str("    }");
 
     Ok(code)
+}
+
+/// Generate optimized code for loading a typed local variable
+fn generate_load_typed_local(
+    name: &str,
+    result: &str,
+    type_info: &Type,
+    local_vars: &mut HashMap<String, String>
+) -> Result<String> {
+    let sanitized_name = sanitize_c_identifier(name);
+
+    match type_info {
+        Type::Simple(type_name) if type_name == "int" => {
+            // For typed int variables, we can use primitive int64_t directly
+            local_vars.insert(result.to_string(), "int64_t".to_string());
+            Ok(format!("int64_t {} = {}; // Optimized: typed int", result, sanitized_name))
+        }
+        Type::Simple(type_name) if type_name == "float" => {
+            // For typed float variables, we can use primitive double directly
+            local_vars.insert(result.to_string(), "double".to_string());
+            Ok(format!("double {} = {}; // Optimized: typed float", result, sanitized_name))
+        }
+        Type::Simple(type_name) if type_name == "bool" => {
+            // For typed bool variables, we can use primitive bool directly
+            local_vars.insert(result.to_string(), "bool".to_string());
+            Ok(format!("bool {} = {}; // Optimized: typed bool", result, sanitized_name))
+        }
+        Type::Simple(type_name) if type_name == "str" => {
+            // For typed str variables, use char* for efficiency
+            local_vars.insert(result.to_string(), "char*".to_string());
+            Ok(format!("char* {} = {}; // Optimized: typed str", result, sanitized_name))
+        }
+        _ => {
+            // For complex types, fall back to generic handling
+            generate_load_local(name, result, local_vars)
+        }
+    }
+}
+
+/// Generate optimized code for storing a typed local variable
+fn generate_store_typed_local(
+    name: &str,
+    value: &str,
+    type_info: &Type,
+    local_vars: &mut HashMap<String, String>
+) -> Result<String> {
+    let sanitized_name = sanitize_c_identifier(name);
+
+    match type_info {
+        Type::Simple(type_name) if type_name == "int" => {
+            // For typed int variables, declare and use primitive int64_t
+            if !local_vars.contains_key(&sanitized_name) {
+                local_vars.insert(sanitized_name.clone(), "int64_t".to_string());
+                Ok(format!("int64_t {} = {}; // Optimized: typed int", sanitized_name, value))
+            } else {
+                Ok(format!("{} = {}; // Optimized: typed int assignment", sanitized_name, value))
+            }
+        }
+        Type::Simple(type_name) if type_name == "float" => {
+            // For typed float variables, declare and use primitive double
+            if !local_vars.contains_key(&sanitized_name) {
+                local_vars.insert(sanitized_name.clone(), "double".to_string());
+                Ok(format!("double {} = {}; // Optimized: typed float", sanitized_name, value))
+            } else {
+                Ok(format!("{} = {}; // Optimized: typed float assignment", sanitized_name, value))
+            }
+        }
+        Type::Simple(type_name) if type_name == "bool" => {
+            // For typed bool variables, declare and use primitive bool
+            if !local_vars.contains_key(&sanitized_name) {
+                local_vars.insert(sanitized_name.clone(), "bool".to_string());
+                Ok(format!("bool {} = {}; // Optimized: typed bool", sanitized_name, value))
+            } else {
+                Ok(format!("{} = {}; // Optimized: typed bool assignment", sanitized_name, value))
+            }
+        }
+        Type::Simple(type_name) if type_name == "str" => {
+            // For typed str variables, use char* for efficiency
+            if !local_vars.contains_key(&sanitized_name) {
+                local_vars.insert(sanitized_name.clone(), "char*".to_string());
+                Ok(format!("char* {} = {}; // Optimized: typed str", sanitized_name, value))
+            } else {
+                Ok(format!("{} = {}; // Optimized: typed str assignment", sanitized_name, value))
+            }
+        }
+        _ => {
+            // For complex types or unannotated, fall back to generic handling
+            if !local_vars.contains_key(&sanitized_name) {
+                local_vars.insert(sanitized_name.clone(), "tauraro_value_t*".to_string());
+                Ok(format!("tauraro_value_t* {} = {};", sanitized_name, value))
+            } else {
+                Ok(format!("{} = {};", sanitized_name, value))
+            }
+        }
+    }
+}
+
+/// Generate optimized code for loading a typed global variable
+fn generate_load_typed_global(
+    name: &str,
+    result: &str,
+    type_info: &Type,
+    local_vars: &mut HashMap<String, String>
+) -> Result<String> {
+    match type_info {
+        Type::Simple(type_name) if type_name == "int" => {
+            local_vars.insert(result.to_string(), "int64_t".to_string());
+            Ok(format!("int64_t {} = {}; // Optimized: typed int global", result, name))
+        }
+        Type::Simple(type_name) if type_name == "float" => {
+            local_vars.insert(result.to_string(), "double".to_string());
+            Ok(format!("double {} = {}; // Optimized: typed float global", result, name))
+        }
+        Type::Simple(type_name) if type_name == "bool" => {
+            local_vars.insert(result.to_string(), "bool".to_string());
+            Ok(format!("bool {} = {}; // Optimized: typed bool global", result, name))
+        }
+        _ => {
+            generate_load_global(name, result, local_vars)
+        }
+    }
+}
+
+/// Generate optimized code for storing a typed global variable
+fn generate_store_typed_global(
+    name: &str,
+    value: &str,
+    type_info: &Type,
+    _local_vars: &mut HashMap<String, String>
+) -> Result<String> {
+    match type_info {
+        Type::Simple(type_name) if type_name == "int" => {
+            Ok(format!("{} = {}; // Optimized: typed int global assignment", name, value))
+        }
+        Type::Simple(type_name) if type_name == "float" => {
+            Ok(format!("{} = {}; // Optimized: typed float global assignment", name, value))
+        }
+        Type::Simple(type_name) if type_name == "bool" => {
+            Ok(format!("{} = {}; // Optimized: typed bool global assignment", name, value))
+        }
+        _ => {
+            Ok(format!("{} = {};", name, value))
+        }
+    }
 }
