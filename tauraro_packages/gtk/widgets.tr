@@ -1,0 +1,274 @@
+# GTK Widgets Module
+# Provides common GUI widgets (buttons, labels, text inputs, etc.)
+
+# Button widget
+class Button(Widget):
+    # Button widget for user interaction
+
+    def __init__(self, label="Button"):
+        # Create a new button with label
+        button_ptr = call_function(_gtk_lib, "gtk_button_new_with_label", [label])
+        super().__init__(button_ptr)
+        self.label = label
+
+    def set_label(self, label):
+        # Set button label
+        self.label = label
+        if self.widget:
+            call_function(_gtk_lib, "gtk_button_set_label", [self.widget, label])
+        return self
+
+    def get_label(self):
+        # Get button label
+        if self.widget:
+            return call_function(_gtk_lib, "gtk_button_get_label", [self.widget])
+        return ""
+
+    def on_click(self, callback):
+        # Set click event handler
+        # TODO: Implement signal connection
+        return self
+
+
+# Label widget
+class Label(Widget):
+    # Static text label widget
+
+    def __init__(self, text=""):
+        # Create a new label with text
+        label_ptr = call_function(_gtk_lib, "gtk_label_new", [text])
+        super().__init__(label_ptr)
+        self.text = text
+
+    def set_text(self, text):
+        # Set label text
+        self.text = text
+        if self.widget:
+            call_function(_gtk_lib, "gtk_label_set_text", [self.widget, text])
+        return self
+
+    def get_text(self):
+        # Get label text
+        if self.widget:
+            return call_function(_gtk_lib, "gtk_label_get_text", [self.widget])
+        return ""
+
+    def set_markup(self, markup):
+        # Set label text with Pango markup
+        if self.widget:
+            call_function(_gtk_lib, "gtk_label_set_markup", [self.widget, markup])
+        return self
+
+
+# Entry (text input) widget
+class Entry(Widget):
+    # Single-line text input widget
+
+    def __init__(self, text=""):
+        # Create a new entry widget
+        entry_ptr = call_function(_gtk_lib, "gtk_entry_new", [])
+        super().__init__(entry_ptr)
+
+        if text:
+            self.set_text(text)
+
+    def set_text(self, text):
+        # Set entry text
+        if self.widget:
+            call_function(_gtk_lib, "gtk_entry_set_text", [self.widget, text])
+        return self
+
+    def get_text(self):
+        # Get entry text
+        if self.widget:
+            return call_function(_gtk_lib, "gtk_entry_get_text", [self.widget])
+        return ""
+
+    def set_placeholder(self, text):
+        # Set placeholder text (shown when empty)
+        if self.widget:
+            call_function(_gtk_lib, "gtk_entry_set_placeholder_text", [self.widget, text])
+        return self
+
+    def set_visibility(self, visible):
+        # Set text visibility (False for password fields)
+        if self.widget:
+            call_function(_gtk_lib, "gtk_entry_set_visibility", [self.widget, visible])
+        return self
+
+
+# TextView widget (multi-line text)
+class TextView(Widget):
+    # Multi-line text editor widget
+
+    def __init__(self):
+        # Create a new text view widget
+        textview_ptr = call_function(_gtk_lib, "gtk_text_view_new", [])
+        super().__init__(textview_ptr)
+        self.buffer = None
+
+        # Get text buffer
+        if self.widget:
+            self.buffer = call_function(_gtk_lib, "gtk_text_view_get_buffer", [self.widget])
+
+    def set_text(self, text):
+        # Set text content
+        if self.buffer:
+            text_len = len(text)
+            call_function(_gtk_lib, "gtk_text_buffer_set_text", [self.buffer, text, text_len])
+        return self
+
+    def get_text(self):
+        # Get text content
+        if self.buffer:
+            # TODO: Implement getting start/end iterators
+            # For now, return empty string
+            pass
+        return ""
+
+
+# CheckButton widget
+class CheckButton(Widget):
+    # Checkbox widget
+
+    def __init__(self, label=""):
+        # Create a new check button with label
+        check_ptr = call_function(_gtk_lib, "gtk_check_button_new_with_label", [label])
+        super().__init__(check_ptr)
+        self.label = label
+
+    def get_active(self):
+        # Get checked state
+        if self.widget:
+            return call_function(_gtk_lib, "gtk_toggle_button_get_active", [self.widget])
+        return False
+
+    def set_active(self, active):
+        # Set checked state
+        if self.widget:
+            call_function(_gtk_lib, "gtk_toggle_button_set_active", [self.widget, active])
+        return self
+
+    def is_checked(self):
+        # Alias for get_active
+        return self.get_active()
+
+
+# RadioButton widget
+class RadioButton(Widget):
+    # Radio button widget (for mutually exclusive choices)
+
+    def __init__(self, label="", group=None):
+        # Create a new radio button with label
+        group_ptr = 0
+        if group:
+            group_ptr = group.widget
+
+        radio_ptr = call_function(_gtk_lib, "gtk_radio_button_new_with_label", [group_ptr, label])
+        super().__init__(radio_ptr)
+        self.label = label
+
+    def get_active(self):
+        # Get selected state
+        if self.widget:
+            return call_function(_gtk_lib, "gtk_toggle_button_get_active", [self.widget])
+        return False
+
+    def set_active(self, active):
+        # Set selected state
+        if self.widget:
+            call_function(_gtk_lib, "gtk_toggle_button_set_active", [self.widget, active])
+        return self
+
+
+# ComboBoxText widget
+class ComboBox(Widget):
+    # Dropdown selection widget
+
+    def __init__(self):
+        # Create a new combo box text widget
+        combo_ptr = call_function(_gtk_lib, "gtk_combo_box_text_new", [])
+        super().__init__(combo_ptr)
+        self.items = []
+
+    def add_item(self, text):
+        # Add an item to the combo box
+        self.items.append(text)
+        if self.widget:
+            call_function(_gtk_lib, "gtk_combo_box_text_append_text", [self.widget, text])
+        return self
+
+    def set_active(self, index):
+        # Set active item by index
+        if self.widget:
+            call_function(_gtk_lib, "gtk_combo_box_set_active", [self.widget, index])
+        return self
+
+    def get_active(self):
+        # Get active item index
+        if self.widget:
+            return call_function(_gtk_lib, "gtk_combo_box_get_active", [self.widget])
+        return -1
+
+    def get_active_text(self):
+        # Get active item text
+        if self.widget:
+            return call_function(_gtk_lib, "gtk_combo_box_text_get_active_text", [self.widget])
+        return ""
+
+
+# MenuItem widget
+class MenuItem(Widget):
+    # Menu item widget
+
+    def __init__(self, label=""):
+        # Create a new menu item with label
+        menuitem_ptr = call_function(_gtk_lib, "gtk_menu_item_new_with_label", [label])
+        super().__init__(menuitem_ptr)
+        self.label = label
+        self.submenu = None
+
+    def set_submenu(self, menu):
+        # Set submenu for this item
+        self.submenu = menu
+        if self.widget and menu.widget:
+            call_function(_gtk_lib, "gtk_menu_item_set_submenu", [self.widget, menu.widget])
+        return self
+
+
+# Menu widget
+class Menu(Widget):
+    # Menu container widget
+
+    def __init__(self):
+        # Create a new menu
+        menu_ptr = call_function(_gtk_lib, "gtk_menu_new", [])
+        super().__init__(menu_ptr)
+        self.items = []
+
+    def add_item(self, item):
+        # Add a menu item
+        self.items.append(item)
+        if self.widget and item.widget:
+            call_function(_gtk_lib, "gtk_menu_shell_append", [self.widget, item.widget])
+        return self
+
+
+# MenuBar widget
+class MenuBar(Widget):
+    # Menu bar widget (typically at top of window)
+
+    def __init__(self):
+        # Create a new menu bar
+        menubar_ptr = call_function(_gtk_lib, "gtk_menu_bar_new", [])
+        super().__init__(menubar_ptr)
+        self.menus = []
+
+    def add_menu(self, menuitem):
+        # Add a menu to the menu bar
+        self.menus.append(menuitem)
+        if self.widget and menuitem.widget:
+            call_function(_gtk_lib, "gtk_menu_shell_append", [self.widget, menuitem.widget])
+        return self
+
+print("  [OK] Widgets module loaded")

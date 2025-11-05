@@ -1,0 +1,27 @@
+# Basic GTK Window Example
+# Demonstrates creating a simple window with GTK
+
+print("GTK Basic Window Example")
+print("========================")
+
+# Import the GTK package
+import gtk
+
+# Initialize GTK
+gtk.init_gtk()
+
+# Create a window
+window = gtk.Window("My First GTK Window", 400, 300)
+
+# Add a label to the window
+label = gtk.Label("Hello, GTK from Tauraro!")
+window.add(label)
+
+# Show the window and all its contents
+window.show_all()
+
+# Run the GTK main loop
+print("\nWindow is now visible!")
+print("Close the window to exit the program.")
+
+gtk.Application("Basic Example").run()

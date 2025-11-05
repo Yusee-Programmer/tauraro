@@ -1,0 +1,50 @@
+# Simple GTK Test
+# Quick test to verify GTK package loading
+
+print("=" * 50)
+print("GTK Package Test")
+print("=" * 50)
+
+# Test 1: Import the package
+print("\nTest 1: Importing GTK package...")
+try:
+    import gtk
+    print("  [OK] GTK package imported successfully")
+except Exception as e:
+    print("  [FAIL] Failed to import GTK: " + str(e))
+    exit(1)
+
+# Test 2: Check version info
+print("\nTest 2: Checking version information...")
+print("  Package name: " + str(gtk.__name__))
+print("  Version: " + str(gtk.__version__))
+print("  Description: " + str(gtk.__description__))
+
+# Test 3: Check constants
+print("\nTest 3: Checking GTK constants...")
+print("  GTK_WINDOW_TOPLEVEL: " + str(gtk.GTK_WINDOW_TOPLEVEL))
+print("  GTK_ORIENTATION_VERTICAL: " + str(gtk.GTK_ORIENTATION_VERTICAL))
+print("  GTK_ORIENTATION_HORIZONTAL: " + str(gtk.GTK_ORIENTATION_HORIZONTAL))
+
+# Test 4: Platform detection
+print("\nTest 4: Platform detection...")
+print("  Platform: " + str(sys.platform))
+if gtk._is_windows:
+    print("  Running on Windows")
+    print("  GTK library: " + gtk._gtk_lib)
+elif gtk._is_linux:
+    print("  Running on Linux")
+    print("  GTK library: " + gtk._gtk_lib)
+elif gtk._is_macos:
+    print("  Running on macOS")
+    print("  GTK library: " + gtk._gtk_lib)
+
+print("\n" + "=" * 50)
+print("All basic tests passed!")
+print("=" * 50)
+
+# Note: We don't initialize GTK or create windows in this test
+# to keep it simple and avoid requiring GTK3 installation for the test
+print("\nNote: This test only checks package structure.")
+print("To test actual GTK functionality, GTK3 must be installed.")
+print("Run example programs to test GUI features.")
