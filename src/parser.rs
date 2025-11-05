@@ -1,5 +1,6 @@
 use crate::lexer::{Token, TokenInfo};
 use crate::ast::*;
+use crate::ast::UnpackTarget;
 use thiserror::Error;
 use std::fmt;
 
@@ -320,18 +321,80 @@ impl Parser {
                 }
                 
                 // Try expression statement or variable definition
-                // Check for tuple unpacking pattern: a, b = value
+                // Check for tuple unpacking pattern: a, b = value or a, *b, c = value
                 let checkpoint = self.current;
+
+                // Check if we have a starred expression at the start
+                if self.match_token(&[Token::Star]) {
+                    // Starred expression at the start: *a, b = value
+                    let starred_name = self.consume_identifier()?;
+                    let mut unpack_targets = vec![UnpackTarget::Starred(starred_name)];
+
+                    // Must have a comma after the starred expression
+                    if self.match_token(&[Token::Comma]) {
+                        // Parse remaining targets
+                        loop {
+                            if self.check(&Token::Assign) {
+                                break;
+                            }
+                            if self.match_token(&[Token::Star]) {
+                                let name = self.consume_identifier()?;
+                                unpack_targets.push(UnpackTarget::Starred(name));
+                            } else if matches!(self.peek().token, Token::Identifier(_)) {
+                                let name = self.consume_identifier()?;
+                                unpack_targets.push(UnpackTarget::Identifier(name));
+                            } else {
+                                break;
+                            }
+                            if !self.match_token(&[Token::Comma]) {
+                                break;
+                            }
+                        }
+
+                        if self.match_token(&[Token::Assign]) {
+                            let value = self.expression()?;
+                            self.match_token(&[Token::Semicolon, Token::Newline]);
+                            return Ok(Statement::ExtendedUnpack { targets: unpack_targets, value });
+                        }
+                    }
+
+                    // If we get here, it's an error
+                    return Err(ParseError::InvalidSyntax {
+                        message: "Invalid starred expression in assignment".to_string(),
+                    });
+                }
+
                 let first_expr = self.expression()?;
 
                 // Check if this is a tuple (comma after first expression) before =
                 if self.match_token(&[Token::Comma]) {
                     // This is potentially a tuple unpacking
+                    let mut has_starred = false;
+                    let mut unpack_targets = Vec::new();
+
+                    // Add the first item to unpack targets if it's an identifier (before moving)
+                    if let Expr::Identifier(name) = &first_expr {
+                        unpack_targets.push(UnpackTarget::Identifier(name.clone()));
+                    }
+
+                    // Now we can move first_expr into tuple_items
                     let mut tuple_items = vec![first_expr];
 
                     // Parse remaining tuple elements
                     while !self.check(&Token::Assign) && !self.is_at_end() {
-                        tuple_items.push(self.expression()?);
+                        // Check for starred expression
+                        if self.match_token(&[Token::Star]) {
+                            has_starred = true;
+                            let starred_name = self.consume_identifier()?;
+                            tuple_items.push(Expr::Starred(Box::new(Expr::Identifier(starred_name.clone()))));
+                            unpack_targets.push(UnpackTarget::Starred(starred_name));
+                        } else {
+                            let expr = self.expression()?;
+                            if let Expr::Identifier(name) = &expr {
+                                unpack_targets.push(UnpackTarget::Identifier(name.clone()));
+                            }
+                            tuple_items.push(expr);
+                        }
                         if !self.match_token(&[Token::Comma]) {
                             break;
                         }
@@ -339,7 +402,15 @@ impl Parser {
 
                     // Now expect an assignment
                     if self.match_token(&[Token::Assign]) {
-                        return self.variable_def(Expr::Tuple(tuple_items));
+                        let value = self.expression()?;
+                        self.match_token(&[Token::Semicolon, Token::Newline]);
+
+                        // If we have starred expressions, use ExtendedUnpack
+                        if has_starred && !unpack_targets.is_empty() {
+                            return Ok(Statement::ExtendedUnpack { targets: unpack_targets, value });
+                        } else {
+                            return self.variable_def(Expr::Tuple(tuple_items));
+                        }
                     } else {
                         // Not an assignment, treat as expression statement
                         // This is an error case - tuples without parentheses in expression context

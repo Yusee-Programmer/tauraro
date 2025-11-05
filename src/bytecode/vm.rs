@@ -5763,6 +5763,108 @@ impl SuperBytecodeVM {
     fn call_function_fast(&mut self, func_value: Value, args: Vec<Value>, kwargs: HashMap<String, Value>, frame_idx: Option<usize>, result_reg: Option<u32>) -> Result<Value> {
         match func_value {
             Value::BuiltinFunction(name, func) => {
+                // Special handling for eval/exec/compile - they need VM access
+                if name == "eval" {
+                    if args.is_empty() || args.len() > 3 {
+                        return Err(anyhow!("eval() takes at most 3 arguments ({} given)", args.len()));
+                    }
+
+                    let source = match &args[0] {
+                        Value::Str(s) => s.clone(),
+                        Value::Code(code) => {
+                            // If it's already a code object, execute it directly
+                            return self.execute(*code.clone());
+                        }
+                        _ => return Err(anyhow!("eval() arg 1 must be a string or code object")),
+                    };
+
+                    // Extract globals and locals if provided
+                    let globals = if args.len() > 1 {
+                        match &args[1] {
+                            Value::Dict(d) => Some(d.borrow().clone()),
+                            Value::None => None,
+                            _ => return Err(anyhow!("eval() arg 2 must be a dict or None")),
+                        }
+                    } else {
+                        None
+                    };
+
+                    let locals = if args.len() > 2 {
+                        match &args[2] {
+                            Value::Dict(d) => Some(d.borrow().clone()),
+                            Value::None => None,
+                            _ => return Err(anyhow!("eval() arg 3 must be a dict or None")),
+                        }
+                    } else {
+                        None
+                    };
+
+                    return self.eval_impl(&source, globals, locals);
+                }
+
+                if name == "exec" {
+                    if args.is_empty() || args.len() > 3 {
+                        return Err(anyhow!("exec() takes at most 3 arguments ({} given)", args.len()));
+                    }
+
+                    let source = match &args[0] {
+                        Value::Str(s) => s.clone(),
+                        Value::Code(code) => {
+                            // If it's already a code object, execute it directly
+                            self.execute(*code.clone())?;
+                            return Ok(Value::None);
+                        }
+                        _ => return Err(anyhow!("exec() arg 1 must be a string or code object")),
+                    };
+
+                    // Extract globals and locals if provided
+                    let globals = if args.len() > 1 {
+                        match &args[1] {
+                            Value::Dict(d) => Some(d.borrow().clone()),
+                            Value::None => None,
+                            _ => return Err(anyhow!("exec() arg 2 must be a dict or None")),
+                        }
+                    } else {
+                        None
+                    };
+
+                    let locals = if args.len() > 2 {
+                        match &args[2] {
+                            Value::Dict(d) => Some(d.borrow().clone()),
+                            Value::None => None,
+                            _ => return Err(anyhow!("exec() arg 3 must be a dict or None")),
+                        }
+                    } else {
+                        None
+                    };
+
+                    self.exec_impl(&source, globals, locals)?;
+                    return Ok(Value::None);
+                }
+
+                if name == "compile" {
+                    if args.len() < 3 || args.len() > 5 {
+                        return Err(anyhow!("compile() takes 3-5 arguments ({} given)", args.len()));
+                    }
+
+                    let source = match &args[0] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(anyhow!("compile() arg 1 must be a string")),
+                    };
+
+                    let filename = match &args[1] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(anyhow!("compile() arg 2 must be a string")),
+                    };
+
+                    let mode = match &args[2] {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(anyhow!("compile() arg 3 must be a string")),
+                    };
+
+                    return self.compile_impl(&source, &filename, &mode);
+                }
+
                 // Special handling for str() and repr() to support __str__ and __repr__ dunder methods
                 if name == "str" && args.len() == 1 {
                     if let Some(str_method) = args[0].get_method("__str__") {
@@ -6083,7 +6185,7 @@ impl SuperBytecodeVM {
     /// Process starred arguments (*args, **kwargs) in function calls
     fn process_starred_arguments(&self, args: Vec<Value>) -> Result<Vec<Value>> {
         let mut processed_args = Vec::new();
-        
+
         for arg in args {
             match arg {
                 Value::Starred(value) => {
@@ -6112,7 +6214,120 @@ impl SuperBytecodeVM {
                 }
             }
         }
-        
+
         Ok(processed_args)
+    }
+
+    /// Implement eval() - evaluate a Python expression
+    pub fn eval_impl(&mut self, source: &str, globals: Option<HashMap<String, Value>>, locals: Option<HashMap<String, Value>>) -> Result<Value> {
+        // Parse the source as an expression
+        let tokens = crate::lexer::Lexer::new(source)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow!("Lexer error in eval(): {}", e))?;
+
+        let mut parser = crate::parser::Parser::new(tokens);
+
+        // Try to parse as a single expression for REPL-style evaluation
+        let (program, is_expr) = parser.parse_repl_line()
+            .map_err(|e| anyhow!("Parser error in eval(): {}", e))?;
+
+        // Set up the evaluation context
+        if let Some(g) = globals {
+            // Temporarily replace globals
+            let old_globals = self.globals.clone();
+            *self.globals.borrow_mut() = g.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect();
+
+            // Compile and execute
+            let mut compiler = crate::bytecode::compiler::SuperCompiler::new("<eval>".to_string());
+            let code_object = compiler.compile(program)
+                .map_err(|e| anyhow!("Compiler error in eval(): {}", e))?;
+
+            let result = self.execute(code_object);
+
+            // Restore old globals
+            *self.globals.borrow_mut() = old_globals.borrow().clone();
+
+            result
+        } else {
+            // Use current globals
+            let mut compiler = crate::bytecode::compiler::SuperCompiler::new("<eval>".to_string());
+            let code_object = compiler.compile(program)
+                .map_err(|e| anyhow!("Compiler error in eval(): {}", e))?;
+
+            self.execute(code_object)
+        }
+    }
+
+    /// Implement exec() - execute Python statements
+    pub fn exec_impl(&mut self, source: &str, globals: Option<HashMap<String, Value>>, locals: Option<HashMap<String, Value>>) -> Result<Value> {
+        // Parse the source as statements
+        let tokens = crate::lexer::Lexer::new(source)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow!("Lexer error in exec(): {}", e))?;
+
+        let mut parser = crate::parser::Parser::new(tokens);
+        let program = parser.parse()
+            .map_err(|e| anyhow!("Parser error in exec(): {}", e))?;
+
+        // Set up the execution context
+        if let Some(g) = globals {
+            // Temporarily replace globals
+            let old_globals = self.globals.clone();
+            *self.globals.borrow_mut() = g.into_iter().map(|(k, v)| (k, RcValue::new(v))).collect();
+
+            // Compile and execute
+            let mut compiler = crate::bytecode::compiler::SuperCompiler::new("<exec>".to_string());
+            let code_object = compiler.compile(program)
+                .map_err(|e| anyhow!("Compiler error in exec(): {}", e))?;
+
+            let result = self.execute(code_object);
+
+            // Restore old globals
+            *self.globals.borrow_mut() = old_globals.borrow().clone();
+
+            result
+        } else {
+            // Use current globals
+            let mut compiler = crate::bytecode::compiler::SuperCompiler::new("<exec>".to_string());
+            let code_object = compiler.compile(program)
+                .map_err(|e| anyhow!("Compiler error in exec(): {}", e))?;
+
+            self.execute(code_object)
+        }
+    }
+
+    /// Implement compile() - compile source to a code object
+    pub fn compile_impl(&mut self, source: &str, filename: &str, mode: &str) -> Result<Value> {
+        // Parse the source based on mode
+        let tokens = crate::lexer::Lexer::new(source)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow!("Lexer error in compile(): {}", e))?;
+
+        let mut parser = crate::parser::Parser::new(tokens);
+
+        let program = match mode {
+            "eval" => {
+                // Parse as expression
+                let (prog, _) = parser.parse_repl_line()
+                    .map_err(|e| anyhow!("Parser error in compile(): {}", e))?;
+                prog
+            }
+            "exec" | "single" => {
+                // Parse as statements
+                parser.parse()
+                    .map_err(|e| anyhow!("Parser error in compile(): {}", e))?
+            }
+            _ => {
+                return Err(anyhow!("compile() mode must be 'eval', 'exec', or 'single'"));
+            }
+        };
+
+        // Compile to bytecode
+        let mut compiler = crate::bytecode::compiler::SuperCompiler::new(filename.to_string());
+        let code_object = compiler.compile(program)
+            .map_err(|e| anyhow!("Compiler error in compile(): {}", e))?;
+
+        // Return the code object as a Value
+        Ok(Value::Code(Box::new(code_object)))
     }
 }
