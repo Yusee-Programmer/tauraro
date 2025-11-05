@@ -424,6 +424,12 @@ impl CTranspiler {
             c_code.push_str("#endif // TAURARO_OOP_DEFINED\n\n");
         }
 
+        // Add FFI header if FFI is used
+        if self.uses_ffi(&module) {
+            c_code.push_str("// FFI Support\n");
+            c_code.push_str("#include \"tauraro_ffi.h\"\n\n");
+        }
+
         // Add user module headers (after types so they can use tauraro_value_t)
         for header_path in &user_module_headers {
             if let Some(header_name) = header_path.file_name() {
@@ -797,6 +803,122 @@ impl CTranspiler {
                 }
             }
             IRInstruction::Call { func, args, result } => {
+                // First check if this is an FFI function call
+                match func.as_str() {
+                    "load_library" => {
+                        // Generate C code for loading a native library
+                        // Tauraro: load_library("libm.so")
+                        // C: tauraro_ffi_load_library("libm.so");
+                        if args.is_empty() {
+                            return Err(anyhow::anyhow!("load_library requires at least 1 argument"));
+                        }
+                        let library_arg = &args[0];
+                        return match result {
+                            Some(res) => Ok(format!("{} = tauraro_ffi_load_library({}->data.str_val);", res, library_arg)),
+                            None => Ok(format!("tauraro_ffi_load_library({}->data.str_val);", library_arg))
+                        };
+                    }
+                    "define_function" => {
+                        // Generate C code for defining a foreign function
+                        // Tauraro: define_function(lib_name, func_name, return_type, [param_types...])
+                        // C: tauraro_ffi_define_function(lib_name, func_name, return_type, param_types, count);
+                        if args.len() < 4 {
+                            return Err(anyhow::anyhow!("define_function requires at least 4 arguments"));
+                        }
+
+                        let lib_name = &args[0];
+                        let func_name = &args[1];
+                        let return_type = &args[2];
+                        let param_types_list = &args[3];
+
+                        // Generate code to extract parameter types from list
+                        let mut code = String::new();
+                        code.push_str("{\n    ");
+                        code.push_str(&format!("    // Define foreign function from {}\n    ", lib_name));
+                        code.push_str(&format!("    int param_count = {}->data.list_val->count;\n    ", param_types_list));
+                        code.push_str("    const char** param_types = (const char**)malloc(sizeof(char*) * param_count);\n    ");
+                        code.push_str(&format!("    for (int i = 0; i < param_count; i++) {{\n    "));
+                        code.push_str(&format!("        tauraro_value_t* param_type = {}->data.list_val->items[i];\n    ", param_types_list));
+                        code.push_str("        if (param_type->type == TAURARO_STRING) {\n    ");
+                        code.push_str("            param_types[i] = param_type->data.str_val;\n    ");
+                        code.push_str("        }\n    ");
+                        code.push_str("    }\n    ");
+
+                        match result {
+                            Some(res) => {
+                                code.push_str(&format!("    {} = tauraro_ffi_define_function(\n    ", res));
+                                code.push_str(&format!("        {}->data.str_val,\n    ", lib_name));
+                                code.push_str(&format!("        {}->data.str_val,\n    ", func_name));
+                                code.push_str(&format!("        {}->data.str_val,\n    ", return_type));
+                                code.push_str("        param_types,\n    ");
+                                code.push_str("        param_count\n    ");
+                                code.push_str("    );\n    ");
+                            }
+                            None => {
+                                code.push_str("    tauraro_ffi_define_function(\n    ");
+                                code.push_str(&format!("        {}->data.str_val,\n    ", lib_name));
+                                code.push_str(&format!("        {}->data.str_val,\n    ", func_name));
+                                code.push_str(&format!("        {}->data.str_val,\n    ", return_type));
+                                code.push_str("        param_types,\n    ");
+                                code.push_str("        param_count\n    ");
+                                code.push_str("    );\n    ");
+                            }
+                        }
+
+                        code.push_str("    free(param_types);\n    ");
+                        code.push_str("}");
+
+                        return Ok(code);
+                    }
+                    "call_function" => {
+                        // Generate C code for calling a foreign function
+                        // Tauraro: call_function(lib_name, func_name, [args...])
+                        // C: tauraro_ffi_call_function(func_name, args, arg_count);
+                        if args.len() < 2 {
+                            return Err(anyhow::anyhow!("call_function requires at least 2 arguments"));
+                        }
+
+                        let lib_name = &args[0];
+                        let func_name_arg = &args[1];
+                        let ffi_args = if args.len() > 2 { &args[2] } else { "" };
+
+                        let mut code = String::new();
+                        code.push_str("{\n    ");
+                        code.push_str(&format!("    // Call foreign function {} from {}\n    ", func_name_arg, lib_name));
+
+                        if args.len() > 2 {
+                            code.push_str(&format!("    int arg_count = {}->data.list_val->count;\n    ", ffi_args));
+                            code.push_str(&format!("    tauraro_value_t** ffi_args = {}->data.list_val->items;\n    ", ffi_args));
+                        } else {
+                            code.push_str("    int arg_count = 0;\n    ");
+                            code.push_str("    tauraro_value_t** ffi_args = NULL;\n    ");
+                        }
+
+                        match result {
+                            Some(res) => {
+                                code.push_str(&format!("    {} = tauraro_ffi_call_function(\n    ", res));
+                                code.push_str(&format!("        {}->data.str_val,\n    ", func_name_arg));
+                                code.push_str("        ffi_args,\n    ");
+                                code.push_str("        arg_count\n    ");
+                                code.push_str("    );\n    ");
+                            }
+                            None => {
+                                code.push_str("    tauraro_ffi_call_function(\n    ");
+                                code.push_str(&format!("        {}->data.str_val,\n    ", func_name_arg));
+                                code.push_str("        ffi_args,\n    ");
+                                code.push_str("        arg_count\n    ");
+                                code.push_str("    );\n    ");
+                            }
+                        }
+
+                        code.push_str("}");
+                        return Ok(code);
+                    }
+                    _ => {
+                        // Not an FFI function, continue with regular function call handling
+                    }
+                }
+
                 // First check if this looks like an object method call: object__method
                 // Pattern: lowercase_variable__methodname with double underscore and one arg (self)
                 if func.contains("__") && args.len() == 1 {
@@ -1288,6 +1410,39 @@ impl CTranspiler {
         }
 
         used
+    }
+
+    /// Check if the module uses FFI features
+    fn uses_ffi(&self, module: &IRModule) -> bool {
+        // Check for FFI function calls
+        let ffi_functions = [
+            "load_library", "define_function", "call_function",
+            "unload_library", "get_library_function"
+        ];
+
+        // Check global instructions
+        for instruction in &module.globals {
+            if let IRInstruction::Call { func, .. } = instruction {
+                if ffi_functions.contains(&func.as_str()) {
+                    return true;
+                }
+            }
+        }
+
+        // Check function instructions
+        for (_name, function) in &module.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let IRInstruction::Call { func, .. } = instruction {
+                        if ffi_functions.contains(&func.as_str()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     /// Check if the module uses OOP features
