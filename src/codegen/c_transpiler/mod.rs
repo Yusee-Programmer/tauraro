@@ -537,6 +537,53 @@ impl CTranspiler {
         Ok(c_code)
     }
 
+    /// Generate class initialization code
+    fn generate_class_initialization(&self, module: &IRModule) -> Result<String> {
+        use std::collections::{HashMap, HashSet};
+
+        let mut init_code = String::new();
+        let mut classes: HashMap<String, Vec<String>> = HashMap::new();
+
+        // Extract classes and their methods from function names
+        // Functions like Animal__init__, Animal__speak, Dog__speak indicate classes
+        for (func_name, _) in &module.functions {
+            if let Some(pos) = func_name.find("__") {
+                let class_name = &func_name[0..pos];
+                let method_name = &func_name[pos+2..]; // Skip the "__"
+
+                classes.entry(class_name.to_string())
+                    .or_insert_with(Vec::new)
+                    .push(method_name.to_string());
+            }
+        }
+
+        if classes.is_empty() {
+            return Ok(String::new());
+        }
+
+        init_code.push_str("\n    // === Class Initialization ===\n");
+
+        // Create global class pointer variables and initialize classes
+        for (class_name, methods) in &classes {
+            init_code.push_str(&format!("    // Initialize class: {}\n", class_name));
+            init_code.push_str(&format!("    tauraro_class_t* class_{} = tauraro_class_create(\"{}\", NULL);\n",
+                class_name, class_name));
+
+            // Register all methods with the class
+            for method_name in methods {
+                let full_func_name = format!("{}__{}",  class_name, method_name);
+                init_code.push_str(&format!("    tauraro_class_add_method(class_{}, \"{}\", (void*)&{});\n",
+                    class_name, method_name, full_func_name));
+            }
+
+            init_code.push_str("\n");
+        }
+
+        init_code.push_str("    // === End Class Initialization ===\n\n");
+
+        Ok(init_code)
+    }
+
     /// Generate main function
     fn generate_main_function(&self, module: &IRModule) -> Result<String> {
         let mut main_code = String::new();
@@ -593,6 +640,11 @@ impl CTranspiler {
             main_code.push_str(&format!("    tauraro_value_t* {} = NULL;\n", var_name));
         }
 
+        // Generate class initialization code (if OOP is used)
+        if self.uses_oop(module) {
+            main_code.push_str(&self.generate_class_initialization(module)?);
+        }
+
         // Execute global instructions
         for instruction in &module.globals {
             main_code.push_str(&format!("    {}\n", self.generate_global_instruction(instruction, &module.type_info)?));
@@ -609,7 +661,7 @@ impl CTranspiler {
         Ok(main_code)
     }
 
-    /// Generate code for a global instruction
+    /// Generate code for a global instruction with variable tracking
     fn generate_global_instruction(&self, instruction: &IRInstruction, type_info: &IRTypeInfo) -> Result<String> {
         use crate::value::Value;
 
@@ -673,6 +725,48 @@ impl CTranspiler {
                 }
             }
             IRInstruction::Call { func, args, result } => {
+                // First check if this looks like an object method call: object__method
+                // Pattern: lowercase_variable__methodname with double underscore and one arg (self)
+                if func.contains("__") && args.len() == 1 {
+                    // Check if first part is lowercase (likely a variable instance)
+                    if let Some(double_under_pos) = func.find("__") {
+                        let var_name = &func[0..double_under_pos];
+                        let method_name = &func[double_under_pos+2..]; // Skip "__"
+
+                        // Check if var_name looks like an instance variable (starts with lowercase)
+                        // Exclude builtin modules
+                        let is_instance_call = !matches!(var_name, "math" | "sys" | "os" | "time" | "random" | "json" | "re" | "io" | "csv" | "datetime" | "collections" | "itertools" | "functools" | "threading" | "socket" | "asyncio");
+
+                        if is_instance_call {
+                            // This is an object method call like dog__bark(dog)
+                            // Transform to proper method invocation
+                            // Get self from args[0]
+                            let self_var = &args[0];
+
+                            // Generate dynamic method call
+                            let mut code = String::new();
+                            code.push_str(&format!("// Object method call: {}.{}()\n    ", self_var, method_name));
+                            code.push_str(&format!("if ({} && {}->type == TAURARO_OBJECT) {{\n    ", self_var, self_var));
+                            code.push_str(&format!("    tauraro_object_t* obj_{} = (tauraro_object_t*){}->data.obj_val;\n    ", self_var, self_var));
+                            code.push_str(&format!("    if (obj_{}->class_ptr) {{\n    ", self_var));
+                            code.push_str(&format!("        tauraro_value_t* method = tauraro_class_get_method(obj_{}->class_ptr, \"{}\");\n    ", self_var, method_name));
+                            code.push_str("        if (method && method->type == TAURARO_FUNCTION) {\n    ");
+                            code.push_str("            // Call method function pointer with self\n    ");
+                            code.push_str("            typedef tauraro_value_t* (*method_func_t)(int, tauraro_value_t**);\n    ");
+                            code.push_str("            method_func_t func_ptr = (method_func_t)method->data.ptr_val;\n    ");
+                            if let Some(res) = result {
+                                code.push_str(&format!("            {} = func_ptr(1, (tauraro_value_t*[]){{{}}});\n    ", res, self_var));
+                            } else {
+                                code.push_str(&format!("            func_ptr(1, (tauraro_value_t*[]){{{}}});\n    ", self_var));
+                            }
+                            code.push_str("        }\n    ");
+                            code.push_str("    }\n    ");
+                            code.push_str("}");
+                            return Ok(code);
+                        }
+                    }
+                }
+
                 // Check what kind of function this is
                 if func.contains("__") {
                     // Could be a method call (class__method) or module function (module__function)
@@ -791,7 +885,15 @@ impl CTranspiler {
                 }
             }
             IRInstruction::ObjectCreate { class_name, result } => {
-                Ok(format!("{} = tauraro_object_create(\"{}\");", result, class_name))
+                // Create object and link it with its class
+                let mut code = format!("{} = tauraro_object_create(\"{}\");", result, class_name);
+                // Link object to its class (if class was initialized)
+                code.push_str(&format!("\n    if (class_{}) {{\n", class_name));
+                code.push_str(&format!("        ((tauraro_object_t*){}->data.obj_val)->class_ptr = class_{};\n", result, class_name));
+                code.push_str("    }");
+                // Note: __init__ should be called by a subsequent Call instruction in the IR
+                // If not present in IR, user code didn't have __init__ or passed no args
+                Ok(code)
             }
             IRInstruction::ObjectSetAttr { object, attr, value } => {
                 Ok(format!("tauraro_object_set_attr({}, \"{}\", {});", object, attr, value))
