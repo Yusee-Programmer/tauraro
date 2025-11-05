@@ -862,6 +862,15 @@ impl Generator {
                                 result: arg_result.clone()
                             });
                         },
+                        Expr::Attribute { object, name } => {
+                            // Handle attribute access: object.attribute
+                            let object_name = self.expression_to_string(&object);
+                            instructions.push(IRInstruction::ObjectGetAttr {
+                                object: object_name,
+                                attr: name.clone(),
+                                result: arg_result.clone()
+                            });
+                        },
                         _ => {
                             // For other complex expressions, use a temp value
                             instructions.push(IRInstruction::LoadConst {
@@ -1294,6 +1303,15 @@ impl Generator {
                         });
                     }
                 }
+            },
+            Expr::Attribute { object, name } => {
+                // Handle attribute access: object.attribute
+                let object_name = self.expression_to_string(&object);
+                module.globals.push(IRInstruction::ObjectGetAttr {
+                    object: object_name,
+                    attr: name.clone(),
+                    result: result_var.to_string()
+                });
             },
             _ => {
                 module.globals.push(IRInstruction::LoadConst {
