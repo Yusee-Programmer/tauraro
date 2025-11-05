@@ -13,15 +13,9 @@ use std::collections::HashMap;
 pub fn generate_function(function: &IRFunction) -> Result<String> {
     let mut func_code = String::new();
 
-    // Check if function should return a value
-    let returns_value = function_returns_value(function);
-
-    // Function signature - use argc/argv convention for compatibility
-    if returns_value {
-        func_code.push_str(&format!("tauraro_value_t* {}(int argc, tauraro_value_t** argv) {{\n", function.name));
-    } else {
-        func_code.push_str(&format!("void {}(int argc, tauraro_value_t** argv) {{\n", function.name));
-    }
+    // All Python functions return a value (None if no explicit return)
+    // So all C functions should return tauraro_value_t*
+    func_code.push_str(&format!("tauraro_value_t* {}(int argc, tauraro_value_t** argv) {{\n", function.name));
 
     // Extract parameters from argv array
     if !function.params.is_empty() {
@@ -61,12 +55,14 @@ pub fn generate_function(function: &IRFunction) -> Result<String> {
         }
     }
 
-    // Add default return for functions that should return values
-    if returns_value {
-        let has_return = has_return_statement(function);
-        if !has_return {
-            func_code.push_str("    return NULL;\n");
-        }
+    // Add default return for functions without explicit return
+    // Python functions always return None if no explicit return
+    let has_return = has_return_statement(function);
+    if !has_return {
+        func_code.push_str("    // Implicit return None\n");
+        func_code.push_str("    tauraro_value_t* none_val = tauraro_value_new();\n");
+        func_code.push_str("    none_val->type = TAURARO_NONE;\n");
+        func_code.push_str("    return none_val;\n");
     }
 
     func_code.push_str("}\n");

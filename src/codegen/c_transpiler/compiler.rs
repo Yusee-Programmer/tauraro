@@ -74,9 +74,10 @@ fn compile_rust_ffi_to_object(module_name: &str, output_dir: &str) -> Result<Str
 
 /// Compile C code to executable using available compilers
 pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> Result<()> {
-    // Write C code to temporary file
+    // Write C code to temporary file (keep it for inspection)
     let temp_file = format!("{}.c", output_path);
     std::fs::write(&temp_file, c_code)?;
+    println!("C source code written to: {}", temp_file);
 
     // Check for builtin module dependencies and compile Rust FFI modules to object files
     let mut builtin_files = Vec::new();
@@ -182,9 +183,10 @@ pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> 
         match output {
             Ok(output) => {
                 if output.status.success() {
-                    // Clean up temporary file
-                    let _ = std::fs::remove_file(temp_file);
+                    // DON'T delete temporary file - keep it for inspection
+                    // let _ = std::fs::remove_file(&temp_file);
                     println!("Successfully compiled with {} {}", compiler, opt_flag);
+                    println!("Executable created: {}", output_path);
                     return Ok(());
                 } else {
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -199,8 +201,8 @@ pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> 
         }
     }
 
-    // Clean up temporary file
-    let _ = std::fs::remove_file(temp_file);
+    // DON'T delete temporary file even on failure - keep for debugging
+    // let _ = std::fs::remove_file(&temp_file);
     Err(anyhow::anyhow!(
         "Compilation failed with all available compilers. Last error: {}",
         last_error

@@ -766,7 +766,10 @@ impl CTranspiler {
                         None => Ok(format!("{}({});", func, args_str))
                     }
                 } else {
-                    // Regular builtin function - uses argc/argv convention, add tauraro_ prefix
+                    // Could be user-defined function or builtin function
+                    // Check if it's a builtin function using builtins module
+                    let is_builtin = builtins::is_builtin_function(func);
+
                     let args_str = if args.is_empty() {
                         "0, NULL".to_string()
                     } else {
@@ -774,9 +777,16 @@ impl CTranspiler {
                         format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
                     };
 
+                    // Add tauraro_ prefix only for builtin functions
+                    let func_name = if is_builtin {
+                        format!("tauraro_{}", func)
+                    } else {
+                        func.to_string()
+                    };
+
                     match result {
-                        Some(res) => Ok(format!("{} = tauraro_{}({});", res, func, args_str)),
-                        None => Ok(format!("tauraro_{}({});", func, args_str))
+                        Some(res) => Ok(format!("{} = {}({});", res, func_name, args_str)),
+                        None => Ok(format!("{}({});", func_name, args_str))
                     }
                 }
             }
@@ -1116,10 +1126,23 @@ impl CodeGenerator for CTranspiler {
 
         // If output path is specified and we want to compile to executable
         if let Some(output_path) = &options.output_path {
+            // Check if output path explicitly requests C source code (.c extension)
+            let path = Path::new(output_path);
+            let is_c_source = path.extension().and_then(|s| s.to_str()) == Some("c");
+
             // Check if we should compile to executable
-            let should_compile = output_path.ends_with(std::env::consts::EXE_EXTENSION)
-                || !output_path.contains(".")
-                || Path::new(output_path).extension().is_none();
+            // Compile to executable if:
+            // - Has executable extension (.exe on Windows, or explicit binary name)
+            // - Has no extension at all (treat as binary name)
+            // - Doesn't end with .c
+            let exe_ext = std::env::consts::EXE_EXTENSION;
+            let should_compile = if is_c_source {
+                false  // Never compile if user explicitly wants .c file
+            } else if !exe_ext.is_empty() && output_path.ends_with(exe_ext) {
+                true  // Explicitly requested executable (Windows)
+            } else {
+                path.extension().is_none()  // No extension means binary
+            };
 
             if should_compile {
                 // Compile to executable
