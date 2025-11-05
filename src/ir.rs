@@ -1066,6 +1066,80 @@ impl Generator {
                                 result: arg_result.clone()
                             });
                         },
+                        Expr::List(elements) => {
+                            // Handle list literal: [item1, item2, ...]
+                            let mut element_names = Vec::new();
+                            for (j, elem) in elements.iter().enumerate() {
+                                let elem_result = format!("{}_elem_{}", arg_result, j);
+                                match elem {
+                                    Expr::Literal(lit) => {
+                                        instructions.push(IRInstruction::LoadConst {
+                                            value: self.literal_to_value(&lit),
+                                            result: elem_result.clone()
+                                        });
+                                    },
+                                    Expr::Identifier(name) => {
+                                        instructions.push(IRInstruction::LoadGlobal {
+                                            name: name.clone(),
+                                            result: elem_result.clone()
+                                        });
+                                    },
+                                    _ => {
+                                        // For complex expressions, recursively process
+                                        self.process_expression_for_instructions(instructions, elem)?;
+                                        instructions.push(IRInstruction::LoadGlobal {
+                                            name: "temp_result".to_string(),
+                                            result: elem_result.clone()
+                                        });
+                                    }
+                                }
+                                element_names.push(elem_result);
+                            }
+
+                            // Create list from elements
+                            instructions.push(IRInstruction::Call {
+                                func: "list".to_string(),
+                                args: element_names,
+                                result: Some(arg_result.clone())
+                            });
+                        },
+                        Expr::Tuple(elements) => {
+                            // Handle tuple literal: (item1, item2, ...)
+                            let mut element_names = Vec::new();
+                            for (j, elem) in elements.iter().enumerate() {
+                                let elem_result = format!("{}_elem_{}", arg_result, j);
+                                match elem {
+                                    Expr::Literal(lit) => {
+                                        instructions.push(IRInstruction::LoadConst {
+                                            value: self.literal_to_value(&lit),
+                                            result: elem_result.clone()
+                                        });
+                                    },
+                                    Expr::Identifier(name) => {
+                                        instructions.push(IRInstruction::LoadGlobal {
+                                            name: name.clone(),
+                                            result: elem_result.clone()
+                                        });
+                                    },
+                                    _ => {
+                                        // For complex expressions, recursively process
+                                        self.process_expression_for_instructions(instructions, elem)?;
+                                        instructions.push(IRInstruction::LoadGlobal {
+                                            name: "temp_result".to_string(),
+                                            result: elem_result.clone()
+                                        });
+                                    }
+                                }
+                                element_names.push(elem_result);
+                            }
+
+                            // Create tuple from elements
+                            instructions.push(IRInstruction::Call {
+                                func: "tuple".to_string(),
+                                args: element_names,
+                                result: Some(arg_result.clone())
+                            });
+                        },
                         _ => {
                             // For other complex expressions, use a temp value
                             instructions.push(IRInstruction::LoadConst {
@@ -1560,6 +1634,38 @@ impl Generator {
                     object: object_name,
                     attr: name.clone(),
                     result: result_var.to_string()
+                });
+            },
+            Expr::List(elements) => {
+                // Handle list literal: [item1, item2, ...]
+                let mut element_names = Vec::new();
+                for (i, elem) in elements.iter().enumerate() {
+                    let elem_result = format!("{}_elem_{}", result_var, i);
+                    self.process_expression_to_result(module, elem, &elem_result)?;
+                    element_names.push(elem_result);
+                }
+
+                // Create list from elements
+                module.globals.push(IRInstruction::Call {
+                    func: "list".to_string(),
+                    args: element_names,
+                    result: Some(result_var.to_string())
+                });
+            },
+            Expr::Tuple(elements) => {
+                // Handle tuple literal: (item1, item2, ...)
+                let mut element_names = Vec::new();
+                for (i, elem) in elements.iter().enumerate() {
+                    let elem_result = format!("{}_elem_{}", result_var, i);
+                    self.process_expression_to_result(module, elem, &elem_result)?;
+                    element_names.push(elem_result);
+                }
+
+                // Create tuple from elements
+                module.globals.push(IRInstruction::Call {
+                    func: "tuple".to_string(),
+                    args: element_names,
+                    result: Some(result_var.to_string())
                 });
             },
             _ => {
