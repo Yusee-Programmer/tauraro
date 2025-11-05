@@ -1491,15 +1491,15 @@ impl SuperCompiler {
                 Ok(reg)
             }
             Expr::BinaryOp { left, op, right } => {
-                eprintln!("DEBUG COMPILER BinaryOp: op={:?}, in_function={}, code_name={}",
-                    op, self.is_in_function_scope(), self.code.name);
+                // eprintln!("DEBUG COMPILER BinaryOp: op={:?}, in_function={}, code_name={}",
+                //     op, self.is_in_function_scope(), self.code.name);
 
                 let left_reg = self.compile_expression(*left)?;
                 let right_reg = self.compile_expression(*right)?;
                 let result_reg = self.allocate_register();
 
-                eprintln!("DEBUG COMPILER BinaryOp: left_reg={}, right_reg={}, result_reg={}, registers_count={}",
-                    left_reg, right_reg, result_reg, self.code.registers);
+                // eprintln!("DEBUG COMPILER BinaryOp: left_reg={}, right_reg={}, result_reg={}, registers_count={}",
+                //     left_reg, right_reg, result_reg, self.code.registers);
 
                 // Check if both operands are likely to be integers for fast path
                 let use_fast_int = match op {
@@ -1521,7 +1521,7 @@ impl SuperCompiler {
                         BinaryOp::BitOr => OpCode::BinaryBitOrRR,   // No fast int version for BitOr
                         _ => OpCode::BinaryAddRR, // fallback
                     };
-                    eprintln!("DEBUG COMPILER BinaryOp: Emitting FAST opcode {:?}", opcode);
+                    // eprintln!("DEBUG COMPILER BinaryOp: Emitting FAST opcode {:?}", opcode);
                     self.emit(opcode, left_reg, right_reg, result_reg, self.current_line);
                 } else {
                     let opcode = match op {
@@ -1543,24 +1543,24 @@ impl SuperCompiler {
                         BinaryOp::And => {
                             // Short-circuit AND: if left is false, return left, otherwise return right
                             // This is a simplified implementation
-                            eprintln!("DEBUG COMPILER BinaryOp: Emitting BinaryMulRR for And");
+                            // eprintln!("DEBUG COMPILER BinaryOp: Emitting BinaryMulRR for And");
                             self.emit(OpCode::BinaryMulRR, left_reg, right_reg, result_reg, self.current_line);
                             return Ok(result_reg);
                         },
                         BinaryOp::Or => {
                             // Short-circuit OR: if left is true, return left, otherwise return right
                             // This is a simplified implementation
-                            eprintln!("DEBUG COMPILER BinaryOp: Emitting BinaryAddRR for Or");
+                            // eprintln!("DEBUG COMPILER BinaryOp: Emitting BinaryAddRR for Or");
                             self.emit(OpCode::BinaryAddRR, left_reg, right_reg, result_reg, self.current_line);
                             return Ok(result_reg);
                         },
                         _ => return Err(anyhow!("Unsupported binary operation: {:?}", op)),
                     };
 
-                    eprintln!("DEBUG COMPILER BinaryOp: Emitting NORMAL opcode {:?}", opcode);
+                    // eprintln!("DEBUG COMPILER BinaryOp: Emitting NORMAL opcode {:?}", opcode);
                     self.emit(opcode, left_reg, right_reg, result_reg, self.current_line);
                 }
-                eprintln!("DEBUG COMPILER BinaryOp: Returning result_reg={}", result_reg);
+                // eprintln!("DEBUG COMPILER BinaryOp: Returning result_reg={}", result_reg);
                 Ok(result_reg)
             }
             Expr::Call { func, args, kwargs } => {
