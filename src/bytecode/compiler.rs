@@ -1,6 +1,6 @@
 //! SuperCompiler - Register-based bytecode compiler with advanced optimizations
 
-use crate::ast::{Program, Statement, Expr, Literal, BinaryOp, UnaryOp, Param, ParamKind, Type, Pattern, MatchCase, ExceptHandler, CompareOp};
+use crate::ast::{Program, Statement, Expr, Literal, BinaryOp, UnaryOp, Param, ParamKind, Type, Pattern, MatchCase, ExceptHandler, CompareOp, UnpackTarget};
 use crate::bytecode::instructions::{OpCode, Instruction};
 use crate::bytecode::memory::CodeObject;
 use crate::value::Value;
@@ -53,6 +53,9 @@ fn contains_yield(stmt: &Statement) -> bool {
             contains_yield_in_expr(object) || contains_yield_in_expr(value)
         },
         Statement::TupleUnpack { value, .. } => {
+            contains_yield_in_expr(value)
+        },
+        Statement::ExtendedUnpack { value, .. } => {
             contains_yield_in_expr(value)
         },
         _ => false,
@@ -1083,6 +1086,125 @@ impl SuperCompiler {
                         // Global scope - use StoreGlobal
                         let name_idx = self.code.add_name(target.clone());
                         self.emit(OpCode::StoreGlobal, item_reg, name_idx, 0, self.current_line);
+                    }
+                }
+                Ok(())
+            }
+            Statement::ExtendedUnpack { targets, value } => {
+                // Compile extended unpacking with starred expressions: a, *b, c = [1, 2, 3, 4, 5]
+                let value_reg = self.compile_expression(value)?;
+
+                // Count regular and starred targets
+                let mut starred_index = None;
+                for (i, target) in targets.iter().enumerate() {
+                    if matches!(target, UnpackTarget::Starred(_)) {
+                        starred_index = Some(i);
+                        break;
+                    }
+                }
+
+                // If we have a starred target, we need to handle it specially
+                if let Some(star_idx) = starred_index {
+                    // Count targets before and after the starred target
+                    let before_count = star_idx;
+                    let after_count = targets.len() - star_idx - 1;
+
+                    // First, extract the regular items before the starred target
+                    for (i, target) in targets[..star_idx].iter().enumerate() {
+                        if let UnpackTarget::Identifier(name) = target {
+                            let index_const = self.code.add_constant(Value::Int(i as i64));
+                            let index_reg = self.allocate_register();
+                            self.emit(OpCode::LoadConst, index_const, index_reg, 0, self.current_line);
+
+                            let item_reg = self.allocate_register();
+                            self.emit(OpCode::SubscrLoad, value_reg, index_reg, item_reg, self.current_line);
+
+                            // Store the value in the target variable
+                            if self.is_in_function_scope() {
+                                let local_idx = self.get_local_index(name);
+                                self.emit(OpCode::StoreFast, item_reg, local_idx, 0, self.current_line);
+                            } else {
+                                let name_idx = self.code.add_name(name.clone());
+                                self.emit(OpCode::StoreGlobal, item_reg, name_idx, 0, self.current_line);
+                            }
+                        }
+                    }
+
+                    // Extract the starred portion (middle section)
+                    if let UnpackTarget::Starred(starred_name) = &targets[star_idx] {
+                        // Create a slice from before_count to -(after_count)
+                        // We'll use list slicing: value[before_count:-after_count] if after_count > 0
+                        // Otherwise: value[before_count:]
+                        let start_const = self.code.add_constant(Value::Int(before_count as i64));
+                        let start_reg = self.allocate_register();
+                        self.emit(OpCode::LoadConst, start_const, start_reg, 0, self.current_line);
+
+                        let stop_reg = if after_count > 0 {
+                            // Negative index: -after_count
+                            let stop_const = self.code.add_constant(Value::Int(-(after_count as i64)));
+                            let reg = self.allocate_register();
+                            self.emit(OpCode::LoadConst, stop_const, reg, 0, self.current_line);
+                            Some(reg)
+                        } else {
+                            None
+                        };
+
+                        // Create the slice
+                        let slice_reg = self.allocate_register();
+                        let stop_arg = stop_reg.unwrap_or(0);
+                        self.emit(OpCode::Slice, value_reg, start_reg, stop_arg, self.current_line);
+
+                        // Store the slice result
+                        if self.is_in_function_scope() {
+                            let local_idx = self.get_local_index(starred_name);
+                            self.emit(OpCode::StoreFast, slice_reg, local_idx, 0, self.current_line);
+                        } else {
+                            let name_idx = self.code.add_name(starred_name.clone());
+                            self.emit(OpCode::StoreGlobal, slice_reg, name_idx, 0, self.current_line);
+                        }
+                    }
+
+                    // Extract the regular items after the starred target
+                    for (i, target) in targets[(star_idx + 1)..].iter().enumerate() {
+                        if let UnpackTarget::Identifier(name) = target {
+                            // Negative indexing from the end
+                            let index_const = self.code.add_constant(Value::Int(-((after_count - i) as i64)));
+                            let index_reg = self.allocate_register();
+                            self.emit(OpCode::LoadConst, index_const, index_reg, 0, self.current_line);
+
+                            let item_reg = self.allocate_register();
+                            self.emit(OpCode::SubscrLoad, value_reg, index_reg, item_reg, self.current_line);
+
+                            // Store the value in the target variable
+                            if self.is_in_function_scope() {
+                                let local_idx = self.get_local_index(name);
+                                self.emit(OpCode::StoreFast, item_reg, local_idx, 0, self.current_line);
+                            } else {
+                                let name_idx = self.code.add_name(name.clone());
+                                self.emit(OpCode::StoreGlobal, item_reg, name_idx, 0, self.current_line);
+                            }
+                        }
+                    }
+                } else {
+                    // No starred targets, treat as regular unpacking
+                    for (i, target) in targets.iter().enumerate() {
+                        if let UnpackTarget::Identifier(name) = target {
+                            let index_const = self.code.add_constant(Value::Int(i as i64));
+                            let index_reg = self.allocate_register();
+                            self.emit(OpCode::LoadConst, index_const, index_reg, 0, self.current_line);
+
+                            let item_reg = self.allocate_register();
+                            self.emit(OpCode::SubscrLoad, value_reg, index_reg, item_reg, self.current_line);
+
+                            // Store the value in the target variable
+                            if self.is_in_function_scope() {
+                                let local_idx = self.get_local_index(name);
+                                self.emit(OpCode::StoreFast, item_reg, local_idx, 0, self.current_line);
+                            } else {
+                                let name_idx = self.code.add_name(name.clone());
+                                self.emit(OpCode::StoreGlobal, item_reg, name_idx, 0, self.current_line);
+                            }
+                        }
                     }
                 }
                 Ok(())

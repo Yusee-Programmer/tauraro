@@ -114,6 +114,10 @@ pub enum Statement {
         targets: Vec<String>,
         value: Expr,
     },
+    ExtendedUnpack {
+        targets: Vec<UnpackTarget>,
+        value: Expr,
+    },
     TypeAlias {
         name: String,
         type_def: Type,
@@ -168,6 +172,12 @@ pub struct ExceptHandler {
     pub exception_type: Option<Expr>,
     pub name: Option<String>,
     pub body: Vec<Statement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum UnpackTarget {
+    Identifier(String),
+    Starred(String),  // For *rest syntax
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
