@@ -5,11 +5,6 @@ use crate::modules::hplist::HPList;
 use super::vm::SuperBytecodeVM;
 use anyhow::{Result, anyhow};
 
-// Helper function to get the type name of a Value for error messages
-fn get_value_type_name(value: &Value) -> &str {
-    value.type_name()
-}
-
 // Arithmetic operations implementation for SuperBytecodeVM
 impl SuperBytecodeVM {
     pub fn add_values(&self, left: Value, right: Value) -> Result<Value> {
@@ -91,8 +86,8 @@ impl SuperBytecodeVM {
         // Clone values for error reporting in the None and fallback cases
         let left_clone = left.clone();
         let right_clone = right.clone();
-        let left_type = get_value_type_name(&left_clone);
-        let right_type = get_value_type_name(&right_clone);
+        let left_type = left_clone.type_name();
+        let right_type = right_clone.type_name();
         
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
