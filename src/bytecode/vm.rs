@@ -49,6 +49,10 @@ pub struct SuperBytecodeVM {
     loaded_modules: HashMap<String, Value>,
     /// Stack of modules currently being loaded to detect circular imports
     pub loading_modules: std::collections::HashSet<String>,
+
+    // Strong static typing: track variables with type annotations for enforcement
+    // Maps variable name to its declared type string (e.g., "int", "str", "List[int]")
+    typed_variables: HashMap<String, String>,
 }
 
 // Type alias for builtin functions
@@ -129,6 +133,9 @@ impl SuperBytecodeVM {
             // Initialize module cache
             loaded_modules: HashMap::new(),
             loading_modules: std::collections::HashSet::new(),
+
+            // Initialize typed variables map for strong static typing
+            typed_variables: HashMap::new(),
         }
     }
 
@@ -559,6 +566,27 @@ impl SuperBytecodeVM {
                     }
                 }
             }
+        }
+    }
+
+    /// Check if a value matches a declared type string (for strong static typing)
+    fn check_type_match(&self, value: &Value, type_str: &str) -> bool {
+        match type_str {
+            "int" => matches!(value, Value::Int(_)),
+            "float" => matches!(value, Value::Float(_)),
+            "str" => matches!(value, Value::Str(_)),
+            "bool" => matches!(value, Value::Bool(_)),
+            "list" | "List" => matches!(value, Value::List(_)),
+            "dict" | "Dict" => matches!(value, Value::Dict(_)),
+            "tuple" | "Tuple" => matches!(value, Value::Tuple(_)),
+            "set" | "Set" => matches!(value, Value::Set(_)),
+            "None" | "NoneType" => matches!(value, Value::None),
+            // For complex types like List[int], just check the base type for now
+            s if s.starts_with("List[") || s.starts_with("list[") => matches!(value, Value::List(_)),
+            s if s.starts_with("Dict[") || s.starts_with("dict[") => matches!(value, Value::Dict(_)),
+            s if s.starts_with("Tuple[") || s.starts_with("tuple[") => matches!(value, Value::Tuple(_)),
+            s if s.starts_with("Set[") || s.starts_with("set[") => matches!(value, Value::Set(_)),
+            _ => true, // Unknown types are allowed (for custom classes, etc.)
         }
     }
 
@@ -2684,9 +2712,21 @@ impl SuperBytecodeVM {
                 
                 let value = self.frames[frame_idx].registers[value_reg].clone();
                 let name = self.frames[frame_idx].code.names[name_idx].clone();
-                
+
                 // Debug output
                 // eprintln!("DEBUG StoreGlobal: storing '{}' = {:?}", name, value.value);
+
+                // Strong static typing: check if variable has a declared type
+                if let Some(declared_type) = self.typed_variables.get(&name) {
+                    if !self.check_type_match(&value.value, declared_type) {
+                        return Err(anyhow!(
+                            "TypeError: Cannot assign value of type '{}' to variable '{}' of type '{}'",
+                            value.value.type_name(),
+                            name,
+                            declared_type
+                        ));
+                    }
+                }
 
                 // Store in frame globals (which is shared with self.globals via Rc<RefCell>)
                 self.frames[frame_idx].globals.borrow_mut().insert(name.clone(), value.clone());
@@ -3011,12 +3051,8 @@ impl SuperBytecodeVM {
                 Ok(None)
             }
             OpCode::RegisterType => {
-                // Register a variable's declared type in the type checker
+                // Register a variable's declared type for strong static typing enforcement
                 // arg1 = variable name index, arg2 = type constant index
-                if !self.enable_type_checking {
-                    return Ok(None);
-                }
-
                 let name_idx = arg1 as usize;
                 let type_const_idx = arg2 as usize;
 
@@ -3024,15 +3060,21 @@ impl SuperBytecodeVM {
                     .ok_or_else(|| anyhow!("RegisterType: name index {} out of bounds", name_idx))?;
 
                 let type_str = match self.frames[frame_idx].code.constants.get(type_const_idx) {
-                    Some(Value::Str(s)) => s,
+                    Some(Value::Str(s)) => s.clone(),
                     _ => return Err(anyhow!("RegisterType: type constant is not a string")),
                 };
 
-                // Parse the type string and register it
-                let parsed_type = crate::bytecode::type_checking::parse_type_string(type_str)
-                    .map_err(|e| anyhow!("RegisterType: failed to parse type '{}': {}", type_str, e))?;
+                // Store the type in our typed_variables map for strong static typing
+                self.typed_variables.insert(var_name.clone(), type_str.clone());
 
-                self.type_checker.type_env.register_variable(var_name.clone(), parsed_type);
+                // Also register with the type checker if type checking is enabled
+                if self.enable_type_checking {
+                    // Parse the type string and register it
+                    let parsed_type = crate::bytecode::type_checking::parse_type_string(&type_str)
+                        .map_err(|e| anyhow!("RegisterType: failed to parse type '{}': {}", type_str, e))?;
+
+                    self.type_checker.type_env.register_variable(var_name.clone(), parsed_type);
+                }
                 Ok(None)
             }
             OpCode::CheckType => {
