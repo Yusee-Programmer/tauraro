@@ -154,6 +154,34 @@ pub fn generate_instruction(
         IRInstruction::JumpIfNot { condition, target: _ } => {
             Ok(format!("if (!{}->data.bool_val) {{ /* jump */ }}", condition))
         }
+        IRInstruction::If { condition, then_body, elif_branches, else_body } => {
+            generate_if(condition, then_body, elif_branches, else_body, local_vars, param_types)
+        }
+        IRInstruction::While { condition, condition_instructions, body } => {
+            generate_while(condition, condition_instructions, body, local_vars, param_types)
+        }
+        IRInstruction::For { variable, iterable, body } => {
+            generate_for(variable, iterable, body, local_vars, param_types)
+        }
+        IRInstruction::Break => {
+            Ok("break;".to_string())
+        }
+        IRInstruction::Continue => {
+            Ok("continue;".to_string())
+        }
+        IRInstruction::Try { body, handlers: _, else_body: _, finally_body: _ } => {
+            // Simple try block - just execute the body for now
+            let mut code = String::new();
+            code.push_str("// Try block (exception handling not fully implemented)\n");
+            for instruction in body {
+                let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+                code.push_str(&format!("    {}\n", instr_code));
+            }
+            Ok(code)
+        }
+        IRInstruction::Raise { exception: _ } => {
+            Ok("// Raise exception (not fully implemented)".to_string())
+        }
         IRInstruction::ListCreate { elements: _, result } => {
             generate_list_create(result, local_vars)
         }
@@ -492,4 +520,139 @@ fn sanitize_c_identifier(name: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// Generate C code for an if statement
+fn generate_if(
+    condition: &str,
+    then_body: &[IRInstruction],
+    elif_branches: &[(String, Vec<IRInstruction>)],
+    else_body: &Option<Vec<IRInstruction>>,
+    local_vars: &mut HashMap<String, String>,
+    param_types: &HashMap<String, Type>,
+) -> Result<String> {
+    let mut code = String::new();
+
+    // Generate condition check - handle both tauraro_value_t* and direct bool values
+    code.push_str(&format!("if (tauraro_is_truthy({})) {{\n", condition));
+
+    // Generate then body
+    for instruction in then_body {
+        let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+        code.push_str(&format!("        {}\n", instr_code));
+    }
+    code.push_str("    }");
+
+    // Generate elif branches
+    for (elif_cond, elif_body) in elif_branches {
+        code.push_str(&format!(" else if (tauraro_is_truthy({})) {{\n", elif_cond));
+        for instruction in elif_body {
+            let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+            code.push_str(&format!("        {}\n", instr_code));
+        }
+        code.push_str("    }");
+    }
+
+    // Generate else body
+    if let Some(else_instructions) = else_body {
+        code.push_str(" else {\n");
+        for instruction in else_instructions {
+            let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+            code.push_str(&format!("        {}\n", instr_code));
+        }
+        code.push_str("    }");
+    }
+
+    Ok(code)
+}
+
+/// Generate C code for a while loop
+fn generate_while(
+    condition: &str,
+    condition_instructions: &[IRInstruction],
+    body: &[IRInstruction],
+    local_vars: &mut HashMap<String, String>,
+    param_types: &HashMap<String, Type>,
+) -> Result<String> {
+    let mut code = String::new();
+
+    // Generate while header
+    code.push_str(&format!("while (tauraro_is_truthy({})) {{\n", condition));
+
+    // Generate body
+    for instruction in body {
+        let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+        code.push_str(&format!("        {}\n", instr_code));
+    }
+
+    // Re-evaluate condition at end of loop
+    code.push_str("        // Re-evaluate condition\n");
+    for instr in condition_instructions {
+        let instr_code = generate_instruction(instr, local_vars, param_types)?;
+        code.push_str(&format!("        {}\n", instr_code));
+    }
+    code.push_str("    }");
+
+    Ok(code)
+}
+
+/// Generate C code for a for loop
+fn generate_for(
+    variable: &str,
+    iterable: &str,
+    body: &[IRInstruction],
+    local_vars: &mut HashMap<String, String>,
+    param_types: &HashMap<String, Type>,
+) -> Result<String> {
+    let mut code = String::new();
+
+    // Generate iterator setup
+    let iterator_var = format!("{}_iter", variable);
+    let index_var = format!("{}_index", variable);
+
+    code.push_str(&format!("// For loop: {} in {}\n", variable, iterable));
+    code.push_str(&format!("    tauraro_value_t* {} = {};\n", iterator_var, iterable));
+    code.push_str(&format!("    int {} = 0;\n", index_var));
+
+    // Handle different iterable types
+    code.push_str(&format!("    if ({}->type == TAURARO_LIST) {{\n", iterator_var));
+    code.push_str(&format!("        int iter_len = tauraro_len(1, (tauraro_value_t*[]){{{}}})-> data.int_val;\n", iterator_var));
+    code.push_str(&format!("        for ({} = 0; {} < iter_len; {}++) {{\n", index_var, index_var, index_var));
+
+    // Get current element
+    local_vars.insert(variable.to_string(), "tauraro_value_t*".to_string());
+    code.push_str(&format!("            tauraro_value_t* {} = {}->data.list_val[{}];\n", variable, iterator_var, index_var));
+
+    // Generate body
+    for instruction in body {
+        let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+        code.push_str(&format!("            {}\n", instr_code));
+    }
+
+    code.push_str("        }\n");
+    code.push_str("    } else if (");
+    code.push_str(&format!("{}->type == TAURARO_RANGE) {{\n", iterator_var));
+    code.push_str(&format!("        int start = {}->data.range_val.start;\n", iterator_var));
+    code.push_str(&format!("        int stop = {}->data.range_val.stop;\n", iterator_var));
+    code.push_str(&format!("        int step = {}->data.range_val.step;\n", iterator_var));
+    code.push_str(&format!("        for (int i = start; (step > 0) ? (i < stop) : (i > stop); i += step) {{\n"));
+
+    // Create tauraro_value_t for the loop variable
+    local_vars.insert(variable.to_string(), "tauraro_value_t*".to_string());
+    code.push_str(&format!("            tauraro_value_t* {} = tauraro_value_new();\n", variable));
+    code.push_str(&format!("            {}->type = TAURARO_INT;\n", variable));
+    code.push_str(&format!("            {}->data.int_val = i;\n", variable));
+
+    // Generate body
+    for instruction in body {
+        let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+        code.push_str(&format!("            {}\n", instr_code));
+    }
+
+    code.push_str("        }\n");
+    code.push_str("    } else {\n");
+    code.push_str("        // TODO: Handle other iterable types (dict, tuple, set, string)\n");
+    code.push_str("    }");
+
+    Ok(code)
 }

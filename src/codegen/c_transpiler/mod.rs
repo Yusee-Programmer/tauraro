@@ -831,36 +831,78 @@ impl CTranspiler {
                     Type::Simple(type_name) if type_name == "int" => {
                         match op {
                             crate::ast::BinaryOp::Add => {
-                                Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_INT; {}->data.int_val = tauraro_add_int({}->data.int_val, {}->data.int_val);", 
+                                Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_INT; {}->data.int_val = tauraro_add_int({}->data.int_val, {}->data.int_val);",
                                     result, result, result, left, right))
                             }
                             _ => {
                                 // Fall back to generic operation for other operators
-                                Ok(format!("{} = tauraro_add({}, {}); // Typed operation", result, left, right))
+                                let op_func = match op {
+                                    crate::ast::BinaryOp::Add => "tauraro_add",
+                                    crate::ast::BinaryOp::Sub => "tauraro_sub",
+                                    crate::ast::BinaryOp::Mul => "tauraro_mul",
+                                    crate::ast::BinaryOp::Div => "tauraro_div",
+                                    crate::ast::BinaryOp::Mod => "tauraro_mod",
+                                    crate::ast::BinaryOp::Eq => "tauraro_eq",
+                                    crate::ast::BinaryOp::Ne => "tauraro_ne",
+                                    crate::ast::BinaryOp::Lt => "tauraro_lt",
+                                    crate::ast::BinaryOp::Le => "tauraro_le",
+                                    crate::ast::BinaryOp::Gt => "tauraro_gt",
+                                    crate::ast::BinaryOp::Ge => "tauraro_ge",
+                                    _ => "tauraro_add"
+                                };
+                                Ok(format!("{} = {}({}, {}); // Typed operation", result, op_func, left, right))
                             }
                         }
                     }
                     Type::Simple(type_name) if type_name == "float" => {
                         match op {
                             crate::ast::BinaryOp::Add => {
-                                Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_FLOAT; {}->data.float_val = tauraro_add_float({}->data.float_val, {}->data.float_val);", 
+                                Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_FLOAT; {}->data.float_val = tauraro_add_float({}->data.float_val, {}->data.float_val);",
                                     result, result, result, left, right))
                             }
                             _ => {
                                 // Fall back to generic operation for other operators
-                                Ok(format!("{} = tauraro_add({}, {}); // Typed operation", result, left, right))
+                                let op_func = match op {
+                                    crate::ast::BinaryOp::Add => "tauraro_add",
+                                    crate::ast::BinaryOp::Sub => "tauraro_sub",
+                                    crate::ast::BinaryOp::Mul => "tauraro_mul",
+                                    crate::ast::BinaryOp::Div => "tauraro_div",
+                                    crate::ast::BinaryOp::Mod => "tauraro_mod",
+                                    crate::ast::BinaryOp::Eq => "tauraro_eq",
+                                    crate::ast::BinaryOp::Ne => "tauraro_ne",
+                                    crate::ast::BinaryOp::Lt => "tauraro_lt",
+                                    crate::ast::BinaryOp::Le => "tauraro_le",
+                                    crate::ast::BinaryOp::Gt => "tauraro_gt",
+                                    crate::ast::BinaryOp::Ge => "tauraro_ge",
+                                    _ => "tauraro_add"
+                                };
+                                Ok(format!("{} = {}({}, {}); // Typed operation", result, op_func, left, right))
                             }
                         }
                     }
                     Type::Simple(type_name) if type_name == "str" => {
                         match op {
                             crate::ast::BinaryOp::Add => {
-                                Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_STRING; {}->data.str_val = tauraro_add_string({}->data.str_val, {}->data.str_val);", 
+                                Ok(format!("{} = tauraro_value_new(); {}->type = TAURARO_STRING; {}->data.str_val = tauraro_add_string({}->data.str_val, {}->data.str_val);",
                                     result, result, result, left, right))
                             }
                             _ => {
                                 // Fall back to generic operation for other operators
-                                Ok(format!("{} = tauraro_add({}, {}); // Typed operation", result, left, right))
+                                let op_func = match op {
+                                    crate::ast::BinaryOp::Add => "tauraro_add",
+                                    crate::ast::BinaryOp::Sub => "tauraro_sub",
+                                    crate::ast::BinaryOp::Mul => "tauraro_mul",
+                                    crate::ast::BinaryOp::Div => "tauraro_div",
+                                    crate::ast::BinaryOp::Mod => "tauraro_mod",
+                                    crate::ast::BinaryOp::Eq => "tauraro_eq",
+                                    crate::ast::BinaryOp::Ne => "tauraro_ne",
+                                    crate::ast::BinaryOp::Lt => "tauraro_lt",
+                                    crate::ast::BinaryOp::Le => "tauraro_le",
+                                    crate::ast::BinaryOp::Gt => "tauraro_gt",
+                                    crate::ast::BinaryOp::Ge => "tauraro_ge",
+                                    _ => "tauraro_add"
+                                };
+                                Ok(format!("{} = {}({}, {}); // Typed operation", result, op_func, left, right))
                             }
                         }
                     }
@@ -894,11 +936,146 @@ impl CTranspiler {
                 // For typed globals, we can potentially optimize based on the type
                 Ok(format!("{} = {}; // Typed load", result, name))
             }
+            IRInstruction::LoadLocal { name, result } => {
+                // In global scope, treat local loads as global loads
+                Ok(format!("{} = {};", result, name))
+            }
+            IRInstruction::StoreLocal { name, value } => {
+                // In global scope, treat local stores as global stores
+                Ok(format!("{} = {};", name, value))
+            }
             IRInstruction::Import { module } => {
                 Ok(format!("// Import module: {}", module))
             }
             IRInstruction::ImportFrom { module, names: _ } => {
                 Ok(format!("// Import from module: {}", module))
+            }
+            IRInstruction::If { condition, then_body, elif_branches, else_body } => {
+                let mut code = String::new();
+
+                // Generate condition check
+                code.push_str(&format!("if (tauraro_is_truthy({})) {{\n", condition));
+
+                // Generate then body
+                for instruction in then_body {
+                    let instr_code = self.generate_global_instruction(instruction, type_info)?;
+                    code.push_str(&format!("        {}\n", instr_code));
+                }
+                code.push_str("    }");
+
+                // Generate elif branches
+                for (elif_cond, elif_body) in elif_branches {
+                    code.push_str(&format!(" else if (tauraro_is_truthy({})) {{\n", elif_cond));
+                    for instruction in elif_body {
+                        let instr_code = self.generate_global_instruction(instruction, type_info)?;
+                        code.push_str(&format!("        {}\n", instr_code));
+                    }
+                    code.push_str("    }");
+                }
+
+                // Generate else body
+                if let Some(else_instructions) = else_body {
+                    code.push_str(" else {\n");
+                    for instruction in else_instructions {
+                        let instr_code = self.generate_global_instruction(instruction, type_info)?;
+                        code.push_str(&format!("        {}\n", instr_code));
+                    }
+                    code.push_str("    }");
+                }
+
+                Ok(code)
+            }
+            IRInstruction::While { condition, condition_instructions, body } => {
+                let mut code = String::new();
+
+                // Generate while header
+                code.push_str(&format!("while (tauraro_is_truthy({})) {{\n", condition));
+
+                // Generate body
+                for instruction in body {
+                    let instr_code = self.generate_global_instruction(instruction, type_info)?;
+                    code.push_str(&format!("        {}\n", instr_code));
+                }
+
+                // Re-evaluate condition at end of loop
+                code.push_str("        // Re-evaluate condition\n");
+                for instr in condition_instructions {
+                    let instr_code = self.generate_global_instruction(instr, type_info)?;
+                    code.push_str(&format!("        {}\n", instr_code));
+                }
+                code.push_str("    }");
+
+                Ok(code)
+            }
+            IRInstruction::For { variable, iterable, body } => {
+                let mut code = String::new();
+
+                // Generate iterator setup
+                let iterator_var = format!("{}_iter", variable);
+                let index_var = format!("{}_index", variable);
+
+                code.push_str(&format!("// For loop: {} in {}\n", variable, iterable));
+                code.push_str(&format!("    tauraro_value_t* {} = {};\n", iterator_var, iterable));
+                code.push_str(&format!("    int {} = 0;\n", index_var));
+
+                // Handle different iterable types
+                code.push_str(&format!("    if ({}->type == TAURARO_LIST) {{\n", iterator_var));
+                code.push_str(&format!("        int iter_len = tauraro_len(1, (tauraro_value_t*[]){{{}}})-> data.int_val;\n", iterator_var));
+                code.push_str(&format!("        for ({} = 0; {} < iter_len; {}++) {{\n", index_var, index_var, index_var));
+
+                // Get current element
+                code.push_str(&format!("            tauraro_value_t* {} = {}->data.list_val[{}];\n", variable, iterator_var, index_var));
+
+                // Generate body
+                for instruction in body {
+                    let instr_code = self.generate_global_instruction(instruction, type_info)?;
+                    code.push_str(&format!("            {}\n", instr_code));
+                }
+
+                code.push_str("        }\n");
+                code.push_str("    } else if (");
+                code.push_str(&format!("{}->type == TAURARO_RANGE) {{\n", iterator_var));
+                code.push_str(&format!("        int start = {}->data.range_val.start;\n", iterator_var));
+                code.push_str(&format!("        int stop = {}->data.range_val.stop;\n", iterator_var));
+                code.push_str(&format!("        int step = {}->data.range_val.step;\n", iterator_var));
+                code.push_str(&format!("        for (int i = start; (step > 0) ? (i < stop) : (i > stop); i += step) {{\n"));
+
+                // Create tauraro_value_t for the loop variable
+                code.push_str(&format!("            tauraro_value_t* {} = tauraro_value_new();\n", variable));
+                code.push_str(&format!("            {}->type = TAURARO_INT;\n", variable));
+                code.push_str(&format!("            {}->data.int_val = i;\n", variable));
+
+                // Generate body
+                for instruction in body {
+                    let instr_code = self.generate_global_instruction(instruction, type_info)?;
+                    code.push_str(&format!("            {}\n", instr_code));
+                }
+
+                code.push_str("        }\n");
+                code.push_str("    } else {\n");
+                code.push_str("        // TODO: Handle other iterable types (dict, tuple, set, string)\n");
+                code.push_str("    }");
+
+                Ok(code)
+            }
+            IRInstruction::Break => {
+                Ok("break;".to_string())
+            }
+            IRInstruction::Continue => {
+                Ok("continue;".to_string())
+            }
+            IRInstruction::Try { body, handlers: _, else_body: _, finally_body: _ } => {
+                // Simple try block - just execute the body for now
+                let mut code = String::new();
+                code.push_str("// Try block (exception handling not fully implemented)\n");
+                for instruction in body {
+                    let instr_code = self.generate_global_instruction(instruction, type_info)?;
+                    code.push_str(&format!("    {}\n", instr_code));
+                }
+                Ok(code)
+            }
+            IRInstruction::Raise { exception: _ } => {
+                Ok("// Raise exception (not fully implemented)".to_string())
             }
             _ => {
                 Ok(format!("// Global instruction: {:?}", instruction))
