@@ -102,7 +102,11 @@ opt-level = 0
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "fat"  # Full LTO for maximum optimization
+codegen-units = 1  # Better optimization at cost of compile time
+panic = "abort"  # Smaller binaries, faster code
+strip = false  # Keep symbols for profiling
+overflow-checks = false  # Disable overflow checks in release mode
 
 [[bin]]
 name = "tauraro"

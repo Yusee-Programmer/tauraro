@@ -7,6 +7,7 @@ use anyhow::{Result, anyhow};
 
 // Arithmetic operations implementation for SuperBytecodeVM
 impl SuperBytecodeVM {
+    #[inline]
     pub fn add_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
@@ -71,7 +72,8 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for addition")),
         }
     }
-    
+
+    #[inline]
     pub fn sub_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
@@ -81,7 +83,8 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for subtraction")),
         }
     }
-    
+
+    #[inline]
     pub fn mul_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
@@ -149,7 +152,8 @@ impl SuperBytecodeVM {
             }
         }
     }
-    
+
+    #[inline]
     pub fn div_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => {
@@ -183,7 +187,8 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for division")),
         }
     }
-    
+
+    #[inline]
     pub fn mod_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => {
@@ -217,7 +222,8 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for modulo")),
         }
     }
-    
+
+    #[inline]
     pub fn pow_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => {
@@ -233,7 +239,8 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for power")),
         }
     }
-    
+
+    #[inline]
     pub fn lt_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
@@ -244,7 +251,8 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for less than comparison")),
         }
     }
-    
+
+    #[inline]
     pub fn gt_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
@@ -255,7 +263,8 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for greater than comparison")),
         }
     }
-    
+
+    #[inline]
     pub fn le_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
@@ -266,7 +275,8 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for less than or equal comparison")),
         }
     }
-    
+
+    #[inline]
     pub fn ge_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
@@ -277,7 +287,8 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for greater than or equal comparison")),
         }
     }
-    
+
+    #[inline]
     pub fn eq_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a == b)),
@@ -289,7 +300,8 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for equality comparison")),
         }
     }
-    
+
+    #[inline]
     pub fn ne_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a != b)),
@@ -301,8 +313,9 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for not equal comparison")),
         }
     }
-    
+
     /// Bitwise AND operation
+    #[inline]
     pub fn bitand_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a & b)),
@@ -312,8 +325,9 @@ impl SuperBytecodeVM {
             _ => Err(anyhow!("Unsupported types for bitwise AND operation")),
         }
     }
-    
+
     /// Bitwise OR operation
+    #[inline]
     pub fn bitor_values(&self, left: Value, right: Value) -> Result<Value> {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a | b)),
