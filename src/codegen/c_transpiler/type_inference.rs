@@ -180,6 +180,52 @@ impl TypeInferenceContext {
                         .push(value_type.clone());
                 }
             }
+            // Track Call instructions that assign to a result variable
+            IRInstruction::Call { func, result: Some(result), .. } => {
+                // Determine type based on the function, same logic as analyze_instruction
+                let result_type = match func.as_str() {
+                    "range" => InferredType::Dynamic,
+                    "len" => InferredType::Int,
+                    "str" => InferredType::String,
+                    "int" => InferredType::Int,
+                    "float" => InferredType::Float,
+                    "bool" => InferredType::Bool,
+                    _ => InferredType::Dynamic,
+                };
+                changes.entry(result.clone())
+                    .or_insert_with(Vec::new)
+                    .push(result_type);
+            }
+            // Track LoadConst that assigns to a result variable
+            IRInstruction::LoadConst { value, result } => {
+                // Determine type from the value
+                let inferred_type = match value {
+                    crate::value::Value::Int(_) => InferredType::Int,
+                    crate::value::Value::Float(_) => InferredType::Float,
+                    crate::value::Value::Bool(_) => InferredType::Bool,
+                    crate::value::Value::Str(_) => InferredType::String,
+                    _ => InferredType::Dynamic,
+                };
+                changes.entry(result.clone())
+                    .or_insert_with(Vec::new)
+                    .push(inferred_type);
+            }
+            // Track BinaryOp that assigns to a result variable
+            IRInstruction::BinaryOp { left, right, result, .. } => {
+                // Infer result type based on operands
+                let left_type = self.get_var_type(left);
+                let right_type = self.get_var_type(right);
+
+                let result_type = match (left_type, right_type) {
+                    (InferredType::Int, InferredType::Int) => InferredType::Int,
+                    (InferredType::Float, _) | (_, InferredType::Float) => InferredType::Float,
+                    (InferredType::String, InferredType::String) => InferredType::String,
+                    _ => InferredType::Dynamic,
+                };
+                changes.entry(result.clone())
+                    .or_insert_with(Vec::new)
+                    .push(result_type);
+            }
             IRInstruction::For { body, .. } |
             IRInstruction::While { body, .. } => {
                 for body_instr in body {
