@@ -167,6 +167,7 @@ class Size:
 def init():
     # Initialize the GuiDesktop framework
     global _framework_initialized, _cairo_loaded, _platform_loaded
+    global _cairo_lib, _platform_lib, _is_windows, _is_linux, _is_macos
 
     if _framework_initialized:
         print("\n[Framework] Already initialized")
