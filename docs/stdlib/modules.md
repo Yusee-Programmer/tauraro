@@ -42,6 +42,7 @@ Tauraro includes a comprehensive standard library with modules for common progra
 
 | Module | Description |
 |--------|-------------|
+| `serveit` | High-performance ASGI web server (like uvicorn) |
 | `httpx` | Modern HTTP client with sync/async support |
 | `httptools` | HTTP parsing and URL utilities |
 | `websockets` | WebSocket client and server |
@@ -690,6 +691,182 @@ print(parsed_response['reason'])   # "OK"
 - HTTP request parsing
 - HTTP response parsing
 - Built on httparse for performance
+
+### serveit - ASGI Web Server
+
+High-performance ASGI web server built on Tokio and Hyper, similar to Python's uvicorn.
+
+```python
+import serveit
+
+# Simple application
+def app(scope):
+    method = scope.get("method", "GET")
+    path = scope.get("path", "/")
+
+    if path == "/":
+        return serveit.HTMLResponse("<h1>Hello from ServEit!</h1>")
+    elif path == "/json":
+        return serveit.JSONResponse({"message": "Hello", "status": "ok"})
+    elif path == "/redirect":
+        return serveit.RedirectResponse("/")
+    else:
+        return serveit.Response(404, "Not Found")
+
+# Run server
+serveit.run(app, host="127.0.0.1", port=8000)
+
+# Run with options
+serveit.run(app, "0.0.0.0", 8080, {
+    "log_level": "info",    # Log level: debug, info, warn, error
+    "reload": False,        # Hot reload on code changes
+    "workers": 1            # Number of worker processes
+})
+```
+
+**Response Types:**
+
+```python
+# HTML Response
+response = serveit.HTMLResponse(
+    "<h1>Hello World</h1>",
+    status=200
+)
+
+# JSON Response
+response = serveit.JSONResponse(
+    {"key": "value", "data": [1, 2, 3]},
+    status=200
+)
+
+# Plain Response
+response = serveit.Response(
+    status=200,
+    body="Plain text response"
+)
+
+# Redirect Response
+response = serveit.RedirectResponse(
+    "/new-location",
+    status=307  # 307 Temporary Redirect, 301 Permanent
+)
+
+# File Response
+response = serveit.FileResponse(
+    "static/index.html"
+)
+```
+
+**ASGI Scope:**
+
+The `scope` dict passed to your app contains:
+
+```python
+{
+    "type": "http",
+    "asgi": {"version": "3.0", "spec_version": "2.3"},
+    "http_version": "1.1",  # or "2", "3"
+    "method": "GET",  # HTTP method
+    "path": "/api/users",  # URL path
+    "query_string": "page=1&limit=10",  # Query parameters
+    "headers": [  # List of (name, value) tuples
+        ("host", "localhost:8000"),
+        ("user-agent", "Mozilla/5.0"),
+        ("accept", "application/json")
+    ],
+    "server": ("127.0.0.1", 8000)  # (host, port)
+}
+```
+
+**Routing Example:**
+
+```python
+import serveit
+
+def app(scope):
+    path = scope.get("path", "/")
+    method = scope.get("method", "GET")
+
+    # Simple routing
+    routes = {
+        "/": handle_home,
+        "/api/users": handle_users,
+        "/api/posts": handle_posts,
+    }
+
+    handler = routes.get(path)
+    if handler:
+        return handler(scope)
+
+    return serveit.Response(404, "Not Found")
+
+def handle_home(scope):
+    return serveit.HTMLResponse("<h1>Home Page</h1>")
+
+def handle_users(scope):
+    users = [
+        {"id": 1, "name": "Alice"},
+        {"id": 2, "name": "Bob"}
+    ]
+    return serveit.JSONResponse(users)
+
+def handle_posts(scope):
+    return serveit.JSONResponse({"posts": []})
+
+serveit.run(app, port=8000)
+```
+
+**Status Codes:**
+
+```python
+import serveit
+
+# Access HTTP status codes
+serveit.status.OK                      # 200
+serveit.status.CREATED                 # 201
+serveit.status.NO_CONTENT              # 204
+serveit.status.MOVED_PERMANENTLY       # 301
+serveit.status.FOUND                   # 302
+serveit.status.TEMPORARY_REDIRECT      # 307
+serveit.status.BAD_REQUEST             # 400
+serveit.status.UNAUTHORIZED            # 401
+serveit.status.FORBIDDEN               # 403
+serveit.status.NOT_FOUND               # 404
+serveit.status.METHOD_NOT_ALLOWED      # 405
+serveit.status.INTERNAL_SERVER_ERROR   # 500
+serveit.status.SERVICE_UNAVAILABLE     # 503
+```
+
+**Features:**
+- ASGI 3.0 protocol support
+- HTTP/1.1 and HTTP/2 ready
+- Built on Tokio async runtime
+- Powered by Hyper for HTTP
+- Request/response helpers
+- JSON/HTML response types
+- Static file serving
+- File responses with auto content-type
+- Access logging
+- Hot reload (development mode)
+- Multiple workers support
+- Low latency and high throughput
+- Similar API to uvicorn
+
+**Performance:**
+ServEit is built on Rust's Tokio and Hyper, providing:
+- Native performance (no Python interpreter overhead)
+- Async/await for high concurrency
+- Low memory footprint
+- Production-ready stability
+
+**Common Use Cases:**
+- REST API servers
+- Web applications
+- Microservices
+- API gateways
+- WebSocket servers (via ASGI)
+- Static file serving
+- SSR (Server-Side Rendering)
 
 ### websockets - WebSocket Support
 

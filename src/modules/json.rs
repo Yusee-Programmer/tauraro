@@ -45,7 +45,7 @@ fn json_loads(args: Vec<Value>) -> Result<Value> {
 }
 
 /// Serialize Python object to JSON string
-fn json_dumps(args: Vec<Value>) -> Result<Value> {
+pub fn json_dumps(args: Vec<Value>) -> Result<Value> {
     if args.is_empty() || args.len() > 10 {
         return Err(anyhow::anyhow!("dumps() takes 1 to 10 arguments"));
     }
