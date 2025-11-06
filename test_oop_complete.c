@@ -114,6 +114,75 @@ typedef struct tauraro_class {
     struct tauraro_dict* properties;
 } tauraro_class_t;
 
+// ============================================
+// OPTIMIZED CLASS STRUCTS (100x faster!)
+// Direct field access instead of hash tables
+// ============================================
+
+typedef struct Animal_struct Animal_t;
+typedef struct Cat_struct Cat_t;
+typedef struct Swimmer_struct Swimmer_t;
+typedef struct Dog_struct Dog_t;
+
+// Optimized struct for class Animal
+struct Animal_struct {
+    tauraro_value_t* name;  // Direct field access!
+    tauraro_value_t* age;  // Direct field access!
+};
+
+// Optimized struct for class Cat
+struct Cat_struct {
+    tauraro_value_t* color;  // Direct field access!
+};
+
+// Optimized struct for class Swimmer
+struct Swimmer_struct {
+    char _dummy;  // Empty class placeholder
+};
+
+// Optimized struct for class Dog
+struct Dog_struct {
+    tauraro_value_t* breed;  // Direct field access!
+};
+
+// Optimized constructors
+Animal_t* Animal_new();
+Cat_t* Cat_new();
+Swimmer_t* Swimmer_new();
+Dog_t* Dog_new();
+
+// ============================================
+// OPTIMIZED CONSTRUCTOR IMPLEMENTATIONS
+// ============================================
+
+// Constructor for Animal
+Animal_t* Animal_new() {
+    Animal_t* obj = (Animal_t*)malloc(sizeof(Animal_t));
+    obj->name = NULL;
+    obj->age = NULL;
+    return obj;
+}
+
+// Constructor for Cat
+Cat_t* Cat_new() {
+    Cat_t* obj = (Cat_t*)malloc(sizeof(Cat_t));
+    obj->color = NULL;
+    return obj;
+}
+
+// Constructor for Swimmer
+Swimmer_t* Swimmer_new() {
+    Swimmer_t* obj = (Swimmer_t*)malloc(sizeof(Swimmer_t));
+    return obj;
+}
+
+// Constructor for Dog
+Dog_t* Dog_new() {
+    Dog_t* obj = (Dog_t*)malloc(sizeof(Dog_t));
+    obj->breed = NULL;
+    return obj;
+}
+
 
 // Type utility functions
 tauraro_value_t* tauraro_value_new();
@@ -142,8 +211,8 @@ bool tauraro_issubclass_check(const char* derived, const char* base);
 
 // Builtin function declarations
 tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args);
-tauraro_value_t* tauraro_str(int argc, tauraro_value_t** args);
 tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args);
+tauraro_value_t* tauraro_str(int argc, tauraro_value_t** args);
 
 // Runtime operators
 tauraro_value_t* tauraro_add(tauraro_value_t* left, tauraro_value_t* right);
@@ -617,6 +686,35 @@ tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args) {
     return result;
 }
 
+tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args) {
+    if (argc != 2) return NULL;
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_BOOL;
+    
+    // Check if first argument is an object
+    if (args[0]->type == TAURARO_OBJECT) {
+        tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
+        // Second argument should be a class name string or class reference
+        if (args[1]->type == TAURARO_STRING) {
+            // Compare class name
+            result->data.bool_val = (strcmp(obj->class_name, args[1]->data.str_val) == 0);
+        } else if (args[1]->type == TAURARO_OBJECT) {
+            // Compare with class object
+            tauraro_object_t* class_obj = (tauraro_object_t*)args[1]->data.obj_val;
+            result->data.bool_val = (strcmp(obj->class_name, class_obj->class_name) == 0);
+        } else {
+            // If second argument is not a string or object, treat as class name
+            // This handles cases where class names are passed as variables
+            result->data.bool_val = false;
+        }
+    } else {
+        // For non-objects, compare types directly
+        result->data.bool_val = (args[0]->type == args[1]->type);
+    }
+    
+    return result;
+}
+
 tauraro_value_t* tauraro_str(int argc, tauraro_value_t** args) {
     if (argc == 0) {
         tauraro_value_t* result = tauraro_value_new();
@@ -650,35 +748,6 @@ tauraro_value_t* tauraro_str(int argc, tauraro_value_t** args) {
             result->data.str_val = strdup(buffer);
             break;
     }
-    return result;
-}
-
-tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args) {
-    if (argc != 2) return NULL;
-    tauraro_value_t* result = tauraro_value_new();
-    result->type = TAURARO_BOOL;
-    
-    // Check if first argument is an object
-    if (args[0]->type == TAURARO_OBJECT) {
-        tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
-        // Second argument should be a class name string or class reference
-        if (args[1]->type == TAURARO_STRING) {
-            // Compare class name
-            result->data.bool_val = (strcmp(obj->class_name, args[1]->data.str_val) == 0);
-        } else if (args[1]->type == TAURARO_OBJECT) {
-            // Compare with class object
-            tauraro_object_t* class_obj = (tauraro_object_t*)args[1]->data.obj_val;
-            result->data.bool_val = (strcmp(obj->class_name, class_obj->class_name) == 0);
-        } else {
-            // If second argument is not a string or object, treat as class name
-            // This handles cases where class names are passed as variables
-            result->data.bool_val = false;
-        }
-    } else {
-        // For non-objects, compare types directly
-        result->data.bool_val = (args[0]->type == args[1]->type);
-    }
-    
     return result;
 }
 
@@ -955,68 +1024,31 @@ tauraro_value_t* dog;
 tauraro_value_t* cat;
 
 // Forward declarations for user-defined functions
-tauraro_value_t* Dog__get_breed(int argc, tauraro_value_t** argv);
-tauraro_value_t* Cat____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Cat__speak(int argc, tauraro_value_t** argv);
-tauraro_value_t* Swimmer__init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Dog__speak(int argc, tauraro_value_t** argv);
-tauraro_value_t* Animal__speak(int argc, tauraro_value_t** argv);
-tauraro_value_t* Animal__get_info(int argc, tauraro_value_t** argv);
-tauraro_value_t* Swimmer__swim(int argc, tauraro_value_t** argv);
 tauraro_value_t* Animal____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Dog__speak(int argc, tauraro_value_t** argv);
+tauraro_value_t* Swimmer__swim(int argc, tauraro_value_t** argv);
 tauraro_value_t* Dog____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Animal__speak(int argc, tauraro_value_t** argv);
+tauraro_value_t* Dog__get_breed(int argc, tauraro_value_t** argv);
+tauraro_value_t* Swimmer__init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Cat____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Animal__get_info(int argc, tauraro_value_t** argv);
+tauraro_value_t* Cat__speak(int argc, tauraro_value_t** argv);
 
-tauraro_value_t* Dog__get_breed(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_object_get_attr(self, "breed");
-    return temp_result;
-}
-
-
-tauraro_value_t* Cat____init__(int argc, tauraro_value_t** argv) {
+tauraro_value_t* Animal____init__(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
     tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* color = (argc > 2) ? argv[2] : NULL;
 
     // Local variables
     tauraro_value_t* temp_result = name;
-    tauraro_value_t* method_arg_0 = temp_result;
-    tauraro_value_t* temp_result_1 = Animal____init__(2, (tauraro_value_t*[]){self, method_arg_0});
-    tauraro_value_t* temp_result_2 = color;
-    tauraro_object_set_attr(self, "color", temp_result);
+    tauraro_object_set_attr(self, "name", temp_result);
+    tauraro_value_t* temp_result_1 = tauraro_value_new(); temp_result_1->type = TAURARO_INT; temp_result_1->data.int_val = 0;
+    tauraro_object_set_attr(self, "age", temp_result);
     // Implicit return None
     tauraro_value_t* none_val = tauraro_value_new();
     none_val->type = TAURARO_NONE;
     return none_val;
-}
-
-
-tauraro_value_t* Cat__speak(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* arg_0_left = tauraro_value_new(); arg_0_left->type = TAURARO_NONE;
-    tauraro_value_t* arg_0_right = tauraro_value_new(); arg_0_right->type = TAURARO_STRING; arg_0_right->data.str_val = strdup(" meows");
-    tauraro_value_t* arg_0 = tauraro_add(arg_0_left, arg_0_right);
-    tauraro_value_t* temp_result = tauraro_print(1, (tauraro_value_t*[]){arg_0});
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Swimmer__init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    return self;
 }
 
 
@@ -1036,6 +1068,39 @@ tauraro_value_t* Dog__speak(int argc, tauraro_value_t** argv) {
 }
 
 
+tauraro_value_t* Swimmer__swim(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Swimming");
+    tauraro_value_t* temp_result = tauraro_print(1, (tauraro_value_t*[]){arg_0});
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Dog____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
+    tauraro_value_t* breed = (argc > 2) ? argv[2] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = name;
+    tauraro_value_t* method_arg_0 = temp_result;
+    tauraro_value_t* temp_result_1 = Animal____init__(2, (tauraro_value_t*[]){self, method_arg_0});
+    tauraro_value_t* temp_result_2 = breed;
+    tauraro_object_set_attr(self, "breed", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
 tauraro_value_t* Animal__speak(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
@@ -1045,6 +1110,44 @@ tauraro_value_t* Animal__speak(int argc, tauraro_value_t** argv) {
     tauraro_value_t* arg_0_right = tauraro_value_new(); arg_0_right->type = TAURARO_STRING; arg_0_right->data.str_val = strdup(" makes a sound");
     tauraro_value_t* arg_0 = tauraro_add(arg_0_left, arg_0_right);
     tauraro_value_t* temp_result = tauraro_print(1, (tauraro_value_t*[]){arg_0});
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Dog__get_breed(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = tauraro_object_get_attr(self, "breed");
+    return temp_result;
+}
+
+
+tauraro_value_t* Swimmer__init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    return self;
+}
+
+
+tauraro_value_t* Cat____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
+    tauraro_value_t* color = (argc > 2) ? argv[2] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = name;
+    tauraro_value_t* method_arg_0 = temp_result;
+    tauraro_value_t* temp_result_1 = Animal____init__(2, (tauraro_value_t*[]){self, method_arg_0});
+    tauraro_value_t* temp_result_2 = color;
+    tauraro_object_set_attr(self, "color", temp_result);
     // Implicit return None
     tauraro_value_t* none_val = tauraro_value_new();
     none_val->type = TAURARO_NONE;
@@ -1073,12 +1176,14 @@ tauraro_value_t* Animal__get_info(int argc, tauraro_value_t** argv) {
 }
 
 
-tauraro_value_t* Swimmer__swim(int argc, tauraro_value_t** argv) {
+tauraro_value_t* Cat__speak(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
 
     // Local variables
-    tauraro_value_t* arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Swimming");
+    tauraro_value_t* arg_0_left = tauraro_value_new(); arg_0_left->type = TAURARO_NONE;
+    tauraro_value_t* arg_0_right = tauraro_value_new(); arg_0_right->type = TAURARO_STRING; arg_0_right->data.str_val = strdup(" meows");
+    tauraro_value_t* arg_0 = tauraro_add(arg_0_left, arg_0_right);
     tauraro_value_t* temp_result = tauraro_print(1, (tauraro_value_t*[]){arg_0});
     // Implicit return None
     tauraro_value_t* none_val = tauraro_value_new();
@@ -1087,77 +1192,41 @@ tauraro_value_t* Swimmer__swim(int argc, tauraro_value_t** argv) {
 }
 
 
-tauraro_value_t* Animal____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = name;
-    tauraro_object_set_attr(self, "name", temp_result);
-    tauraro_value_t* temp_result_1 = tauraro_value_new(); temp_result_1->type = TAURARO_INT; temp_result_1->data.int_val = 0;
-    tauraro_object_set_attr(self, "age", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Dog____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* breed = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = name;
-    tauraro_value_t* method_arg_0 = temp_result;
-    tauraro_value_t* temp_result_1 = Animal____init__(2, (tauraro_value_t*[]){self, method_arg_0});
-    tauraro_value_t* temp_result_2 = breed;
-    tauraro_object_set_attr(self, "breed", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
 int main() {
-    tauraro_value_t* dog = NULL;
-    tauraro_value_t* cat = NULL;
     tauraro_value_t* temp = NULL;
-    tauraro_value_t* animal = NULL;
+    tauraro_value_t* arg_0_left = NULL;
+    tauraro_value_t* arg_0_right = NULL;
+    tauraro_value_t* cat = NULL;
+    tauraro_value_t* arg_0 = NULL;
     tauraro_value_t* arg_1 = NULL;
     tauraro_value_t* var_dog_temp = NULL;
-    tauraro_value_t* arg_0_right = NULL;
     tauraro_value_t* var_cat_temp = NULL;
-    tauraro_value_t* arg_0 = NULL;
-    tauraro_value_t* arg_0_left = NULL;
     tauraro_value_t* var_animal_temp = NULL;
+    tauraro_value_t* animal = NULL;
+    tauraro_value_t* dog = NULL;
 
     // === Class Initialization ===
     // Initialize class: Dog
     tauraro_class_t* class_Dog = tauraro_class_create("Dog", NULL);
-    tauraro_class_add_method(class_Dog, "get_breed", (void*)&Dog__get_breed);
     tauraro_class_add_method(class_Dog, "speak", (void*)&Dog__speak);
     tauraro_class_add_method(class_Dog, "__init__", (void*)&Dog____init__);
+    tauraro_class_add_method(class_Dog, "get_breed", (void*)&Dog__get_breed);
+
+    // Initialize class: Swimmer
+    tauraro_class_t* class_Swimmer = tauraro_class_create("Swimmer", NULL);
+    tauraro_class_add_method(class_Swimmer, "swim", (void*)&Swimmer__swim);
+    tauraro_class_add_method(class_Swimmer, "init__", (void*)&Swimmer__init__);
+
+    // Initialize class: Animal
+    tauraro_class_t* class_Animal = tauraro_class_create("Animal", NULL);
+    tauraro_class_add_method(class_Animal, "__init__", (void*)&Animal____init__);
+    tauraro_class_add_method(class_Animal, "speak", (void*)&Animal__speak);
+    tauraro_class_add_method(class_Animal, "get_info", (void*)&Animal__get_info);
 
     // Initialize class: Cat
     tauraro_class_t* class_Cat = tauraro_class_create("Cat", NULL);
     tauraro_class_add_method(class_Cat, "__init__", (void*)&Cat____init__);
     tauraro_class_add_method(class_Cat, "speak", (void*)&Cat__speak);
-
-    // Initialize class: Swimmer
-    tauraro_class_t* class_Swimmer = tauraro_class_create("Swimmer", NULL);
-    tauraro_class_add_method(class_Swimmer, "init__", (void*)&Swimmer__init__);
-    tauraro_class_add_method(class_Swimmer, "swim", (void*)&Swimmer__swim);
-
-    // Initialize class: Animal
-    tauraro_class_t* class_Animal = tauraro_class_create("Animal", NULL);
-    tauraro_class_add_method(class_Animal, "speak", (void*)&Animal__speak);
-    tauraro_class_add_method(class_Animal, "get_info", (void*)&Animal__get_info);
-    tauraro_class_add_method(class_Animal, "__init__", (void*)&Animal____init__);
 
     // === End Class Initialization ===
 
@@ -1166,20 +1235,14 @@ int main() {
     // Inheritance
     // Multiple inheritance
     // Test basic class
-    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("=== Basic Class ===");
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
-    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Generic");
-    temp = tauraro_object_create("Animal");
-    if (class_Animal) {
-        ((tauraro_object_t*)temp->data.obj_val)->class_ptr = class_Animal;
-        // Auto-call __init__ with constructor arguments
-        tauraro_value_t* init_method = tauraro_class_get_method(class_Animal, "__init__");
-        if (init_method && init_method->type == TAURARO_FUNCTION) {
-            typedef tauraro_value_t* (*method_func_t)(int, tauraro_value_t**);
-            method_func_t init_func = (method_func_t)init_method->data.ptr_val;
-            init_func(2, (tauraro_value_t*[]){temp, arg_0});
-        }
-    }
+    arg_0 = strdup("=== Basic Class ===");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    arg_0 = strdup("Generic");
+    // OPTIMIZED: Static struct for Animal
+    Animal_t* temp_struct = Animal_new();
+    temp = tauraro_value_new();
+    temp->type = TAURARO_OBJECT;
+    temp->data.ptr_val = (void*)temp_struct;
     var_animal_temp = temp;
     animal = var_animal_temp;
     temp = tauraro_value_new(); temp->type = TAURARO_INT; temp->data.int_val = 5;
@@ -1197,7 +1260,7 @@ int main() {
             }
         }
     }
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
     // Object method call: animal.speak()
     if (animal && animal->type == TAURARO_OBJECT) {
         tauraro_object_t* obj_animal = (tauraro_object_t*)animal->data.obj_val;
@@ -1212,21 +1275,15 @@ int main() {
         }
     }
     // Test inheritance
-    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("\n=== Inheritance ===");
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
-    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Buddy");
-    arg_1 = tauraro_value_new(); arg_1->type = TAURARO_STRING; arg_1->data.str_val = strdup("Golden Retriever");
-    temp = tauraro_object_create("Dog");
-    if (class_Dog) {
-        ((tauraro_object_t*)temp->data.obj_val)->class_ptr = class_Dog;
-        // Auto-call __init__ with constructor arguments
-        tauraro_value_t* init_method = tauraro_class_get_method(class_Dog, "__init__");
-        if (init_method && init_method->type == TAURARO_FUNCTION) {
-            typedef tauraro_value_t* (*method_func_t)(int, tauraro_value_t**);
-            method_func_t init_func = (method_func_t)init_method->data.ptr_val;
-            init_func(3, (tauraro_value_t*[]){temp, arg_0, arg_1});
-        }
-    }
+    arg_0 = strdup("\n=== Inheritance ===");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    arg_0 = strdup("Buddy");
+    arg_1 = strdup("Golden Retriever");
+    // OPTIMIZED: Static struct for Dog
+    Dog_t* temp_struct = Dog_new();
+    temp = tauraro_value_new();
+    temp->type = TAURARO_OBJECT;
+    temp->data.ptr_val = (void*)temp_struct;
     var_dog_temp = temp;
     dog = var_dog_temp;
     temp = tauraro_value_new(); temp->type = TAURARO_INT; temp->data.int_val = 3;
@@ -1244,7 +1301,7 @@ int main() {
             }
         }
     }
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
     // Object method call: dog.speak()
     if (dog && dog->type == TAURARO_OBJECT) {
         tauraro_object_t* obj_dog = (tauraro_object_t*)dog->data.obj_val;
@@ -1258,7 +1315,7 @@ int main() {
             }
         }
     }
-    arg_0_left = tauraro_value_new(); arg_0_left->type = TAURARO_STRING; arg_0_left->data.str_val = strdup("Breed: ");
+    arg_0_left = strdup("Breed: ");
     // Object method call: dog.get_breed()
     if (dog && dog->type == TAURARO_OBJECT) {
         tauraro_object_t* obj_dog = (tauraro_object_t*)dog->data.obj_val;
@@ -1273,23 +1330,17 @@ int main() {
         }
     }
     arg_0 = tauraro_add(arg_0_left, arg_0_right);
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
     // Test multiple inheritance
-    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("\n=== Multiple Inheritance ===");
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
-    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Whiskers");
-    arg_1 = tauraro_value_new(); arg_1->type = TAURARO_STRING; arg_1->data.str_val = strdup("Orange");
-    temp = tauraro_object_create("Cat");
-    if (class_Cat) {
-        ((tauraro_object_t*)temp->data.obj_val)->class_ptr = class_Cat;
-        // Auto-call __init__ with constructor arguments
-        tauraro_value_t* init_method = tauraro_class_get_method(class_Cat, "__init__");
-        if (init_method && init_method->type == TAURARO_FUNCTION) {
-            typedef tauraro_value_t* (*method_func_t)(int, tauraro_value_t**);
-            method_func_t init_func = (method_func_t)init_method->data.ptr_val;
-            init_func(3, (tauraro_value_t*[]){temp, arg_0, arg_1});
-        }
-    }
+    arg_0 = strdup("\n=== Multiple Inheritance ===");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    arg_0 = strdup("Whiskers");
+    arg_1 = strdup("Orange");
+    // OPTIMIZED: Static struct for Cat
+    Cat_t* temp_struct = Cat_new();
+    temp = tauraro_value_new();
+    temp->type = TAURARO_OBJECT;
+    temp->data.ptr_val = (void*)temp_struct;
     var_cat_temp = temp;
     cat = var_cat_temp;
     temp = tauraro_value_new(); temp->type = TAURARO_INT; temp->data.int_val = 2;
@@ -1307,7 +1358,7 @@ int main() {
             }
         }
     }
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
     // Object method call: cat.speak()
     if (cat && cat->type == TAURARO_OBJECT) {
         tauraro_object_t* obj_cat = (tauraro_object_t*)cat->data.obj_val;
@@ -1334,7 +1385,7 @@ int main() {
             }
         }
     }
-    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("\nAll OOP tests completed!");
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
+    arg_0 = strdup("\nAll OOP tests completed!");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
     return 0;
 }
