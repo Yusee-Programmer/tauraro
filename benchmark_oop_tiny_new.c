@@ -119,56 +119,24 @@ typedef struct tauraro_class {
 // Direct field access instead of hash tables
 // ============================================
 
-typedef struct Point_struct Point_t;
 typedef struct Counter_struct Counter_t;
-typedef struct Rectangle_struct Rectangle_t;
-
-// Optimized struct for class Point
-struct Point_struct {
-    int64_t x;  // Direct field access!
-    int64_t y;  // Direct field access!
-};
 
 // Optimized struct for class Counter
 struct Counter_struct {
     int64_t count;  // Direct field access!
 };
 
-// Optimized struct for class Rectangle
-struct Rectangle_struct {
-    int64_t width;  // Direct field access!
-    int64_t height;  // Direct field access!
-};
-
 // Optimized constructors
-Point_t* Point_new();
 Counter_t* Counter_new();
-Rectangle_t* Rectangle_new();
 
 // ============================================
 // OPTIMIZED CONSTRUCTOR IMPLEMENTATIONS
 // ============================================
 
-// Constructor for Point
-Point_t* Point_new() {
-    Point_t* obj = (Point_t*)malloc(sizeof(Point_t));
-    obj->x = 0;
-    obj->y = 0;
-    return obj;
-}
-
 // Constructor for Counter
 Counter_t* Counter_new() {
     Counter_t* obj = (Counter_t*)malloc(sizeof(Counter_t));
     obj->count = 0;
-    return obj;
-}
-
-// Constructor for Rectangle
-Rectangle_t* Rectangle_new() {
-    Rectangle_t* obj = (Rectangle_t*)malloc(sizeof(Rectangle_t));
-    obj->width = 0;
-    obj->height = 0;
     return obj;
 }
 
@@ -973,13 +941,20 @@ char* tauraro_add_string(char* left, char* right) {
 // Global variables
 tauraro_value_t* counter;
 tauraro_value_t* i;
-tauraro_value_t* points;
-tauraro_value_t* i;
-tauraro_value_t* i;
-tauraro_value_t* first_point;
-tauraro_value_t* rect;
-tauraro_value_t* total;
-tauraro_value_t* i;
+
+tauraro_value_t* Counter____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = tauraro_value_new(); temp_result->type = TAURARO_INT; temp_result->data.int_val = 0;
+    tauraro_object_set_attr(self, "count", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
 
 tauraro_value_t* Counter__increment(int argc, tauraro_value_t** argv) {
     // Extract parameters
@@ -998,141 +973,37 @@ tauraro_value_t* Counter__increment(int argc, tauraro_value_t** argv) {
 }
 
 
-tauraro_value_t* Counter____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_value_new(); temp_result->type = TAURARO_INT; temp_result->data.int_val = 0;
-    tauraro_object_set_attr(self, "count", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Rectangle__area(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_object_get_attr(self, "width");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(self, "height");
-    tauraro_value_t* binop_right = temp_result;
-    tauraro_value_t* temp_result_2 = tauraro_mul(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* Point__move(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* dx = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* dy = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_object_get_attr(self, "x");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = dx;
-    tauraro_value_t* temp_result_1 = tauraro_add(binop_left, binop_right);
-    tauraro_object_set_attr(self, "x", temp_result);
-    tauraro_value_t* temp_result_2 = tauraro_object_get_attr(self, "y");
-    tauraro_value_t* binop_left_1 = temp_result;
-    tauraro_value_t* binop_right_1 = dy;
-    tauraro_value_t* temp_result_3 = tauraro_add(binop_left, binop_right);
-    tauraro_object_set_attr(self, "y", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Point____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* x = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* y = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = x;
-    tauraro_object_set_attr(self, "x", temp_result);
-    tauraro_value_t* temp_result_1 = y;
-    tauraro_object_set_attr(self, "y", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Rectangle____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* w = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* h = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = w;
-    tauraro_object_set_attr(self, "width", temp_result);
-    tauraro_value_t* temp_result_1 = h;
-    tauraro_object_set_attr(self, "height", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
 int main() {
-    tauraro_value_t* var_points_temp = NULL;
-    int64_t var_i_temp = 0;
     tauraro_value_t* arg_0 = NULL;
-    int64_t i = 0;
-    int64_t var_total_temp = 0;
-    tauraro_value_t* temp = NULL;
-    int64_t arg_1 = 0;
-    tauraro_value_t* var_first_point_temp = NULL;
-    tauraro_value_t* var_rect_temp = NULL;
-    tauraro_value_t* rect = NULL;
+    Counter_t* temp = NULL;
     tauraro_value_t* counter = NULL;
-    int64_t temp_left = 0;
-    tauraro_value_t* total = NULL;
-    tauraro_value_t* first_point = NULL;
-    tauraro_value_t* points = NULL;
+    int64_t temp_result = 0;
     tauraro_value_t* var_counter_temp = NULL;
+    int64_t binop_right = 0;
     int64_t temp_right = 0;
+    int64_t var_i_temp = 0;
+    int64_t i = 0;
+    int64_t temp_left = 0;
+    int64_t binop_left = 0;
 
     // === Class Initialization ===
     // Initialize class: Counter
     tauraro_class_t* class_Counter = tauraro_class_create("Counter", NULL);
-    tauraro_class_add_method(class_Counter, "increment", (void*)&Counter__increment);
     tauraro_class_add_method(class_Counter, "__init__", (void*)&Counter____init__);
-
-    // Initialize class: Point
-    tauraro_class_t* class_Point = tauraro_class_create("Point", NULL);
-    tauraro_class_add_method(class_Point, "move", (void*)&Point__move);
-    tauraro_class_add_method(class_Point, "__init__", (void*)&Point____init__);
-
-    // Initialize class: Rectangle
-    tauraro_class_t* class_Rectangle = tauraro_class_create("Rectangle", NULL);
-    tauraro_class_add_method(class_Rectangle, "area", (void*)&Rectangle__area);
-    tauraro_class_add_method(class_Rectangle, "__init__", (void*)&Rectangle____init__);
+    tauraro_class_add_method(class_Counter, "increment", (void*)&Counter__increment);
 
     // === End Class Initialization ===
 
     temp = tauraro_value_new(); temp->type = TAURARO_NONE;
-    // Test 1: Counter with method calls
+    // Test: Counter increment (10k iterations)
     // OPTIMIZED: Static struct for Counter
-    Counter_t* temp = Counter_new();
+    temp = Counter_new();
     var_counter_temp = temp;
     counter = var_counter_temp;
     var_i_temp = 0;
     i = var_i_temp;
     temp_left = i;
-    temp_right = 100000;
+    temp_right = 10000;
     temp = tauraro_lt(temp_left, temp_right);
     while (tauraro_is_truthy(temp)) {
         // Object method call: counter.increment()
@@ -1154,122 +1025,10 @@ int main() {
         i = temp_result;
         // Re-evaluate condition
         temp_left = i;
-        temp_right = tauraro_value_new(); temp_right->type = TAURARO_INT; temp_right->data.int_val = 100000;
-        temp = tauraro_lt(temp_left, temp_right);
-    }
-    arg_0 = tauraro_object_get_attr(counter, "count");
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
-    // Test 2: Point with field access
-    temp = tauraro_value_new(); temp->type = TAURARO_NONE;
-    var_points_temp = temp;
-    points = var_points_temp;
-    var_i_temp = 0;
-    i = var_i_temp;
-    temp_left = i;
-    temp_right = 1000;
-    temp = tauraro_lt(temp_left, temp_right);
-    while (tauraro_is_truthy(temp)) {
-        arg_0 = i;
-        arg_1 = i;
-        temp_result = tauraro_object_create("Point");
-    if (class_Point) {
-        ((tauraro_object_t*)temp_result->data.obj_val)->class_ptr = class_Point;
-    }
-        p = temp_result;
-        temp_result = p;
-        method_arg_0 = temp_result;
-        temp_result = points_append(1, (tauraro_value_t*[]){method_arg_0});
-        binop_left = i;
-        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
-        temp_result = tauraro_add(binop_left, binop_right);
-        i = temp_result;
-        // Re-evaluate condition
-        temp_left = i;
-        temp_right = tauraro_value_new(); temp_right->type = TAURARO_INT; temp_right->data.int_val = 1000;
-        temp = tauraro_lt(temp_left, temp_right);
-    }
-    var_i_temp = 0;
-    i = var_i_temp;
-    temp_left = i;
-    temp_right = 100;
-    temp = tauraro_lt(temp_left, temp_right);
-    while (tauraro_is_truthy(temp)) {
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_INT; temp_result->data.int_val = 0;
-        j = temp_result;
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
-        while (tauraro_is_truthy(temp_result)) {
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
-        point = temp_result;
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_INT; temp_result->data.int_val = 1;
-        method_arg_0 = temp_result;
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_INT; temp_result->data.int_val = 1;
-        method_arg_1 = temp_result;
-        temp_result = point_move(2, (tauraro_value_t*[]){method_arg_0, method_arg_1});
-        binop_left = j;
-        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
-        temp_result = tauraro_add(binop_left, binop_right);
-        j = temp_result;
-        // Re-evaluate condition
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
-    }
-        binop_left = i;
-        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
-        temp_result = tauraro_add(binop_left, binop_right);
-        i = temp_result;
-        // Re-evaluate condition
-        temp_left = i;
-        temp_right = tauraro_value_new(); temp_right->type = TAURARO_INT; temp_right->data.int_val = 100;
-        temp = tauraro_lt(temp_left, temp_right);
-    }
-    temp = tauraro_value_new(); temp->type = TAURARO_NONE;
-    var_first_point_temp = temp;
-    first_point = var_first_point_temp;
-    arg_0 = tauraro_object_get_attr(first_point, "x");
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
-    arg_0 = tauraro_object_get_attr(first_point, "y");
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
-    // Test 3: Rectangle with computation
-    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_INT; arg_0->data.int_val = 10;
-    arg_1 = 20;
-    // OPTIMIZED: Static struct for Rectangle
-    Rectangle_t* temp = Rectangle_new();
-    var_rect_temp = temp;
-    rect = var_rect_temp;
-    var_total_temp = 0;
-    total = var_total_temp;
-    var_i_temp = 0;
-    i = var_i_temp;
-    temp_left = i;
-    temp_right = 10000;
-    temp = tauraro_lt(temp_left, temp_right);
-    while (tauraro_is_truthy(temp)) {
-        binop_left = total;
-        // Object method call: rect.area()
-    if (rect && rect->type == TAURARO_OBJECT) {
-        tauraro_object_t* obj_rect = (tauraro_object_t*)rect->data.obj_val;
-        if (obj_rect->class_ptr) {
-            tauraro_value_t* method = tauraro_class_get_method(obj_rect->class_ptr, "area");
-            if (method && method->type == TAURARO_FUNCTION) {
-                // Call method function pointer with self
-                typedef tauraro_value_t* (*method_func_t)(int, tauraro_value_t**);
-                method_func_t func_ptr = (method_func_t)method->data.ptr_val;
-                temp_result = func_ptr(1, (tauraro_value_t*[]){rect});
-            }
-        }
-    }
-        binop_right = temp_result;
-        temp_result = tauraro_add(binop_left, binop_right);
-        total = temp_result;
-        binop_left = i;
-        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
-        temp_result = tauraro_add(binop_left, binop_right);
-        i = temp_result;
-        // Re-evaluate condition
-        temp_left = i;
         temp_right = tauraro_value_new(); temp_right->type = TAURARO_INT; temp_right->data.int_val = 10000;
         temp = tauraro_lt(temp_left, temp_right);
     }
-    arg_0 = total;
+    arg_0 = tauraro_object_get_attr(counter, "count");
     temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
     return 0;
 }

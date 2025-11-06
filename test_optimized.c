@@ -114,64 +114,6 @@ typedef struct tauraro_class {
     struct tauraro_dict* properties;
 } tauraro_class_t;
 
-// ============================================
-// OPTIMIZED CLASS STRUCTS (100x faster!)
-// Direct field access instead of hash tables
-// ============================================
-
-typedef struct Point_struct Point_t;
-typedef struct Counter_struct Counter_t;
-typedef struct Rectangle_struct Rectangle_t;
-
-// Optimized struct for class Point
-struct Point_struct {
-    int64_t x;  // Direct field access!
-    int64_t y;  // Direct field access!
-};
-
-// Optimized struct for class Counter
-struct Counter_struct {
-    int64_t count;  // Direct field access!
-};
-
-// Optimized struct for class Rectangle
-struct Rectangle_struct {
-    int64_t width;  // Direct field access!
-    int64_t height;  // Direct field access!
-};
-
-// Optimized constructors
-Point_t* Point_new();
-Counter_t* Counter_new();
-Rectangle_t* Rectangle_new();
-
-// ============================================
-// OPTIMIZED CONSTRUCTOR IMPLEMENTATIONS
-// ============================================
-
-// Constructor for Point
-Point_t* Point_new() {
-    Point_t* obj = (Point_t*)malloc(sizeof(Point_t));
-    obj->x = 0;
-    obj->y = 0;
-    return obj;
-}
-
-// Constructor for Counter
-Counter_t* Counter_new() {
-    Counter_t* obj = (Counter_t*)malloc(sizeof(Counter_t));
-    obj->count = 0;
-    return obj;
-}
-
-// Constructor for Rectangle
-Rectangle_t* Rectangle_new() {
-    Rectangle_t* obj = (Rectangle_t*)malloc(sizeof(Rectangle_t));
-    obj->width = 0;
-    obj->height = 0;
-    return obj;
-}
-
 
 // Type utility functions
 tauraro_value_t* tauraro_value_new();
@@ -199,8 +141,9 @@ bool tauraro_isinstance_check(tauraro_value_t* object, const char* class_name);
 bool tauraro_issubclass_check(const char* derived, const char* base);
 
 // Builtin function declarations
-tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args);
+tauraro_value_t* tauraro_range(int argc, tauraro_value_t** args);
 tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args);
+tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args);
 
 // Runtime operators
 tauraro_value_t* tauraro_add(tauraro_value_t* left, tauraro_value_t* right);
@@ -626,6 +569,58 @@ bool tauraro_issubclass_check(const char* derived, const char* base) {
 }
 
 // Builtin function implementations
+tauraro_value_t* tauraro_range(int argc, tauraro_value_t** args) {
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_RANGE;
+    tauraro_range_t* range = malloc(sizeof(tauraro_range_t));
+
+    if (argc == 1) {
+        range->start = 0;
+        range->stop = args[0]->data.int_val;
+        range->step = 1;
+    } else if (argc == 2) {
+        range->start = args[0]->data.int_val;
+        range->stop = args[1]->data.int_val;
+        range->step = 1;
+    } else if (argc >= 3) {
+        range->start = args[0]->data.int_val;
+        range->stop = args[1]->data.int_val;
+        range->step = args[2]->data.int_val;
+    }
+
+    result->data.range_val = range;
+    return result;
+}
+
+tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args) {
+    if (argc != 2) return NULL;
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_BOOL;
+    
+    // Check if first argument is an object
+    if (args[0]->type == TAURARO_OBJECT) {
+        tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
+        // Second argument should be a class name string or class reference
+        if (args[1]->type == TAURARO_STRING) {
+            // Compare class name
+            result->data.bool_val = (strcmp(obj->class_name, args[1]->data.str_val) == 0);
+        } else if (args[1]->type == TAURARO_OBJECT) {
+            // Compare with class object
+            tauraro_object_t* class_obj = (tauraro_object_t*)args[1]->data.obj_val;
+            result->data.bool_val = (strcmp(obj->class_name, class_obj->class_name) == 0);
+        } else {
+            // If second argument is not a string or object, treat as class name
+            // This handles cases where class names are passed as variables
+            result->data.bool_val = false;
+        }
+    } else {
+        // For non-objects, compare types directly
+        result->data.bool_val = (args[0]->type == args[1]->type);
+    }
+    
+    return result;
+}
+
 tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args) {
     for (int i = 0; i < argc; i++) {
         if (i > 0) printf(" ");
@@ -671,35 +666,6 @@ tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args) {
     fflush(stdout);
     tauraro_value_t* result = tauraro_value_new();
     result->type = TAURARO_NONE;
-    return result;
-}
-
-tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args) {
-    if (argc != 2) return NULL;
-    tauraro_value_t* result = tauraro_value_new();
-    result->type = TAURARO_BOOL;
-    
-    // Check if first argument is an object
-    if (args[0]->type == TAURARO_OBJECT) {
-        tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
-        // Second argument should be a class name string or class reference
-        if (args[1]->type == TAURARO_STRING) {
-            // Compare class name
-            result->data.bool_val = (strcmp(obj->class_name, args[1]->data.str_val) == 0);
-        } else if (args[1]->type == TAURARO_OBJECT) {
-            // Compare with class object
-            tauraro_object_t* class_obj = (tauraro_object_t*)args[1]->data.obj_val;
-            result->data.bool_val = (strcmp(obj->class_name, class_obj->class_name) == 0);
-        } else {
-            // If second argument is not a string or object, treat as class name
-            // This handles cases where class names are passed as variables
-            result->data.bool_val = false;
-        }
-    } else {
-        // For non-objects, compare types directly
-        result->data.bool_val = (args[0]->type == args[1]->type);
-    }
-    
     return result;
 }
 
@@ -971,247 +937,129 @@ char* tauraro_add_string(char* left, char* right) {
 }
 
 // Global variables
+tauraro_value_t* int_result;
+tauraro_value_t* float_result;
 tauraro_value_t* counter;
 tauraro_value_t* i;
-tauraro_value_t* points;
-tauraro_value_t* i;
-tauraro_value_t* i;
-tauraro_value_t* first_point;
-tauraro_value_t* rect;
-tauraro_value_t* total;
-tauraro_value_t* i;
-
-tauraro_value_t* Counter__increment(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_object_get_attr(self, "count");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
-    tauraro_value_t* temp_result_1 = tauraro_add(binop_left, binop_right);
-    tauraro_object_set_attr(self, "count", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Counter____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_value_new(); temp_result->type = TAURARO_INT; temp_result->data.int_val = 0;
-    tauraro_object_set_attr(self, "count", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Rectangle__area(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_object_get_attr(self, "width");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(self, "height");
-    tauraro_value_t* binop_right = temp_result;
-    tauraro_value_t* temp_result_2 = tauraro_mul(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* Point__move(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* dx = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* dy = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_object_get_attr(self, "x");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = dx;
-    tauraro_value_t* temp_result_1 = tauraro_add(binop_left, binop_right);
-    tauraro_object_set_attr(self, "x", temp_result);
-    tauraro_value_t* temp_result_2 = tauraro_object_get_attr(self, "y");
-    tauraro_value_t* binop_left_1 = temp_result;
-    tauraro_value_t* binop_right_1 = dy;
-    tauraro_value_t* temp_result_3 = tauraro_add(binop_left, binop_right);
-    tauraro_object_set_attr(self, "y", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Point____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* x = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* y = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = x;
-    tauraro_object_set_attr(self, "x", temp_result);
-    tauraro_value_t* temp_result_1 = y;
-    tauraro_object_set_attr(self, "y", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Rectangle____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* w = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* h = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = w;
-    tauraro_object_set_attr(self, "width", temp_result);
-    tauraro_value_t* temp_result_1 = h;
-    tauraro_object_set_attr(self, "height", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
+tauraro_value_t* positive;
+tauraro_value_t* negative;
+tauraro_value_t* zero;
+tauraro_value_t* nested_sum;
+tauraro_value_t* int_sum;
+tauraro_value_t* float_sum;
+tauraro_value_t* compare_count;
 
 int main() {
-    tauraro_value_t* var_points_temp = NULL;
-    int64_t var_i_temp = 0;
-    tauraro_value_t* arg_0 = NULL;
-    int64_t i = 0;
-    int64_t var_total_temp = 0;
+    int64_t var_positive_temp = 0;
+    tauraro_value_t* float_result = NULL;
+    int64_t var_negative_temp = 0;
+    double arg_3 = 0.0;
+    int64_t var_compare_count_temp = 0;
+    int64_t int_result = 0;
     tauraro_value_t* temp = NULL;
-    int64_t arg_1 = 0;
-    tauraro_value_t* var_first_point_temp = NULL;
-    tauraro_value_t* var_rect_temp = NULL;
-    tauraro_value_t* rect = NULL;
-    tauraro_value_t* counter = NULL;
+    int64_t zero = 0;
+    int64_t nested_sum = 0;
+    int64_t positive = 0;
+    int64_t i = 0;
+    char* arg_4 = NULL;
+    int64_t var_nested_sum_temp = 0;
+    int64_t binop_right = 0;
+    int64_t var_zero_temp = 0;
+    int64_t negative = 0;
+    char* arg_2 = NULL;
+    int64_t j = 0;
     int64_t temp_left = 0;
-    tauraro_value_t* total = NULL;
-    tauraro_value_t* first_point = NULL;
-    tauraro_value_t* points = NULL;
-    tauraro_value_t* var_counter_temp = NULL;
+    int64_t arg_1 = 0;
+    int64_t var_counter_temp = 0;
+    int64_t var_int_sum_temp = 0;
+    int64_t var_int_result_temp = 0;
+    double var_float_sum_temp = 0.0;
+    int64_t temp_result = 0;
+    double var_float_result_temp = 0.0;
+    int64_t var_i_temp = 0;
+    int64_t arg_5 = 0;
+    tauraro_value_t* float_sum = NULL;
     int64_t temp_right = 0;
-
-    // === Class Initialization ===
-    // Initialize class: Counter
-    tauraro_class_t* class_Counter = tauraro_class_create("Counter", NULL);
-    tauraro_class_add_method(class_Counter, "increment", (void*)&Counter__increment);
-    tauraro_class_add_method(class_Counter, "__init__", (void*)&Counter____init__);
-
-    // Initialize class: Point
-    tauraro_class_t* class_Point = tauraro_class_create("Point", NULL);
-    tauraro_class_add_method(class_Point, "move", (void*)&Point__move);
-    tauraro_class_add_method(class_Point, "__init__", (void*)&Point____init__);
-
-    // Initialize class: Rectangle
-    tauraro_class_t* class_Rectangle = tauraro_class_create("Rectangle", NULL);
-    tauraro_class_add_method(class_Rectangle, "area", (void*)&Rectangle__area);
-    tauraro_class_add_method(class_Rectangle, "__init__", (void*)&Rectangle____init__);
-
-    // === End Class Initialization ===
-
+    int64_t compare_count = 0;
+    int64_t counter = 0;
+    int64_t binop_left = 0;
+    int64_t int_sum = 0;
+    char* arg_0 = NULL;
     temp = tauraro_value_new(); temp->type = TAURARO_NONE;
-    // Test 1: Counter with method calls
-    // OPTIMIZED: Static struct for Counter
-    Counter_t* temp = Counter_new();
-    var_counter_temp = temp;
-    counter = var_counter_temp;
-    var_i_temp = 0;
-    i = var_i_temp;
-    temp_left = i;
-    temp_right = 100000;
-    temp = tauraro_lt(temp_left, temp_right);
-    while (tauraro_is_truthy(temp)) {
-        // Object method call: counter.increment()
-    if (counter && counter->type == TAURARO_OBJECT) {
-        tauraro_object_t* obj_counter = (tauraro_object_t*)counter->data.obj_val;
-        if (obj_counter->class_ptr) {
-            tauraro_value_t* method = tauraro_class_get_method(obj_counter->class_ptr, "increment");
-            if (method && method->type == TAURARO_FUNCTION) {
-                // Call method function pointer with self
-                typedef tauraro_value_t* (*method_func_t)(int, tauraro_value_t**);
-                method_func_t func_ptr = (method_func_t)method->data.ptr_val;
-                temp_result = func_ptr(1, (tauraro_value_t*[]){counter});
-            }
+    arg_0 = strdup("=== CORE OPTIMIZATIONS TEST ===");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    temp = tauraro_print(0, NULL);
+    // Test 1: Integer operations
+    arg_0 = strdup("Test 1: Integer Operations");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    var_int_result_temp = 0;
+    int_result = var_int_result_temp;
+    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_INT; arg_0->data.int_val = 1000;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_range(1, (tauraro_value_t*[]){arg_0_as_value});
+    // For loop: i in temp (optimized)
+    tauraro_value_t* i_iter = temp;
+    int i_index = 0;
+    if (i_iter->type == TAURARO_RANGE) {
+        int start = i_iter->data.range_val->start;
+        int stop = i_iter->data.range_val->stop;
+        int step = i_iter->data.range_val->step;
+        for (i = start; (step > 0) ? (i < stop) : (i > stop); i += step) {
+            binop_left = int_result;
+            binop_right = 1;
+            temp_result = binop_left + binop_right;
+            int_result = temp_result;
         }
+    } else {
+        // Fallback for non-range iterables
+        // TODO: Handle list/tuple/etc
     }
-        binop_left = i;
-        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
-        temp_result = tauraro_add(binop_left, binop_right);
-        i = temp_result;
-        // Re-evaluate condition
-        temp_left = i;
-        temp_right = tauraro_value_new(); temp_right->type = TAURARO_INT; temp_right->data.int_val = 100000;
-        temp = tauraro_lt(temp_left, temp_right);
+    arg_0 = strdup("Integer sum:");
+    arg_1 = int_result;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; tauraro_value_t* arg_1_as_value = tauraro_value_new(); arg_1_as_value->type = TAURARO_INT; arg_1_as_value->data.int_val = arg_1; temp = tauraro_print(2, (tauraro_value_t*[]){arg_0_as_value, arg_1_as_value});
+    temp = tauraro_print(0, NULL);
+    // Test 2: Float operations
+    arg_0 = strdup("Test 2: Float Operations");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    var_float_result_temp = 0;
+    float_result = var_float_result_temp;
+    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_INT; arg_0->data.int_val = 1000;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_range(1, (tauraro_value_t*[]){arg_0_as_value});
+    // For loop: i in temp (optimized)
+    tauraro_value_t* i_iter = temp;
+    int i_index = 0;
+    if (i_iter->type == TAURARO_RANGE) {
+        int start = i_iter->data.range_val->start;
+        int stop = i_iter->data.range_val->stop;
+        int step = i_iter->data.range_val->step;
+        for (i = start; (step > 0) ? (i < stop) : (i > stop); i += step) {
+            binop_left = float_result;
+            binop_right = tauraro_value_new(); binop_right->type = TAURARO_FLOAT; binop_right->data.float_val = 1.5;
+            temp_result = binop_left + binop_right;
+            float_result = temp_result;
+        }
+    } else {
+        // Fallback for non-range iterables
+        // TODO: Handle list/tuple/etc
     }
-    arg_0 = tauraro_object_get_attr(counter, "count");
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
-    // Test 2: Point with field access
-    temp = tauraro_value_new(); temp->type = TAURARO_NONE;
-    var_points_temp = temp;
-    points = var_points_temp;
-    var_i_temp = 0;
-    i = var_i_temp;
-    temp_left = i;
-    temp_right = 1000;
-    temp = tauraro_lt(temp_left, temp_right);
-    while (tauraro_is_truthy(temp)) {
-        arg_0 = i;
-        arg_1 = i;
-        temp_result = tauraro_object_create("Point");
-    if (class_Point) {
-        ((tauraro_object_t*)temp_result->data.obj_val)->class_ptr = class_Point;
-    }
-        p = temp_result;
-        temp_result = p;
-        method_arg_0 = temp_result;
-        temp_result = points_append(1, (tauraro_value_t*[]){method_arg_0});
-        binop_left = i;
-        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
-        temp_result = tauraro_add(binop_left, binop_right);
-        i = temp_result;
-        // Re-evaluate condition
-        temp_left = i;
-        temp_right = tauraro_value_new(); temp_right->type = TAURARO_INT; temp_right->data.int_val = 1000;
-        temp = tauraro_lt(temp_left, temp_right);
-    }
+    arg_0 = strdup("Float sum:");
+    arg_1 = float_result;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; tauraro_value_t* arg_1_as_value = tauraro_value_new(); arg_1_as_value->type = TAURARO_INT; arg_1_as_value->data.int_val = arg_1; temp = tauraro_print(2, (tauraro_value_t*[]){arg_0_as_value, arg_1_as_value});
+    temp = tauraro_print(0, NULL);
+    // Test 3: While loop
+    arg_0 = strdup("Test 3: While Loop");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    var_counter_temp = 0;
+    counter = var_counter_temp;
     var_i_temp = 0;
     i = var_i_temp;
     temp_left = i;
     temp_right = 100;
     temp = tauraro_lt(temp_left, temp_right);
     while (tauraro_is_truthy(temp)) {
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_INT; temp_result->data.int_val = 0;
-        j = temp_result;
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
-        while (tauraro_is_truthy(temp_result)) {
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
-        point = temp_result;
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_INT; temp_result->data.int_val = 1;
-        method_arg_0 = temp_result;
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_INT; temp_result->data.int_val = 1;
-        method_arg_1 = temp_result;
-        temp_result = point_move(2, (tauraro_value_t*[]){method_arg_0, method_arg_1});
-        binop_left = j;
+        binop_left = counter;
         binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
         temp_result = tauraro_add(binop_left, binop_right);
-        j = temp_result;
-        // Re-evaluate condition
-        temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
-    }
+        counter = temp_result;
         binop_left = i;
         binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
         temp_result = tauraro_add(binop_left, binop_right);
@@ -1221,55 +1069,189 @@ int main() {
         temp_right = tauraro_value_new(); temp_right->type = TAURARO_INT; temp_right->data.int_val = 100;
         temp = tauraro_lt(temp_left, temp_right);
     }
-    temp = tauraro_value_new(); temp->type = TAURARO_NONE;
-    var_first_point_temp = temp;
-    first_point = var_first_point_temp;
-    arg_0 = tauraro_object_get_attr(first_point, "x");
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
-    arg_0 = tauraro_object_get_attr(first_point, "y");
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
-    // Test 3: Rectangle with computation
-    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_INT; arg_0->data.int_val = 10;
-    arg_1 = 20;
-    // OPTIMIZED: Static struct for Rectangle
-    Rectangle_t* temp = Rectangle_new();
-    var_rect_temp = temp;
-    rect = var_rect_temp;
-    var_total_temp = 0;
-    total = var_total_temp;
-    var_i_temp = 0;
-    i = var_i_temp;
-    temp_left = i;
-    temp_right = 10000;
-    temp = tauraro_lt(temp_left, temp_right);
-    while (tauraro_is_truthy(temp)) {
-        binop_left = total;
-        // Object method call: rect.area()
-    if (rect && rect->type == TAURARO_OBJECT) {
-        tauraro_object_t* obj_rect = (tauraro_object_t*)rect->data.obj_val;
-        if (obj_rect->class_ptr) {
-            tauraro_value_t* method = tauraro_class_get_method(obj_rect->class_ptr, "area");
-            if (method && method->type == TAURARO_FUNCTION) {
-                // Call method function pointer with self
-                typedef tauraro_value_t* (*method_func_t)(int, tauraro_value_t**);
-                method_func_t func_ptr = (method_func_t)method->data.ptr_val;
-                temp_result = func_ptr(1, (tauraro_value_t*[]){rect});
-            }
-        }
-    }
-        binop_right = temp_result;
-        temp_result = tauraro_add(binop_left, binop_right);
-        total = temp_result;
-        binop_left = i;
+    arg_0 = strdup("While counter:");
+    arg_1 = counter;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; tauraro_value_t* arg_1_as_value = tauraro_value_new(); arg_1_as_value->type = TAURARO_INT; arg_1_as_value->data.int_val = arg_1; temp = tauraro_print(2, (tauraro_value_t*[]){arg_0_as_value, arg_1_as_value});
+    temp = tauraro_print(0, NULL);
+    // Test 4: If/elif/else
+    arg_0 = strdup("Test 4: Conditionals");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    var_positive_temp = 0;
+    positive = var_positive_temp;
+    var_negative_temp = 0;
+    negative = var_negative_temp;
+    var_zero_temp = 0;
+    zero = var_zero_temp;
+    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_INT; arg_0->data.int_val = 100;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_range(1, (tauraro_value_t*[]){arg_0_as_value});
+    // For loop: i in temp (optimized)
+    tauraro_value_t* i_iter = temp;
+    int i_index = 0;
+    if (i_iter->type == TAURARO_RANGE) {
+        int start = i_iter->data.range_val->start;
+        int stop = i_iter->data.range_val->stop;
+        int step = i_iter->data.range_val->step;
+        for (i = start; (step > 0) ? (i < stop) : (i > stop); i += step) {
+            binop_left = i;
+            binop_right = 50;
+            temp_result = binop_left - binop_right;
+            x = temp_result;
+            temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
+            if (tauraro_is_truthy(temp_result)) {
+        binop_left = positive;
         binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
         temp_result = tauraro_add(binop_left, binop_right);
-        i = temp_result;
-        // Re-evaluate condition
-        temp_left = i;
-        temp_right = tauraro_value_new(); temp_right->type = TAURARO_INT; temp_right->data.int_val = 10000;
-        temp = tauraro_lt(temp_left, temp_right);
+        positive = temp_result;
+    } else if (tauraro_is_truthy(temp_elif_cond)) {
+        temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
+        binop_left = negative;
+        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
+        temp_result = tauraro_add(binop_left, binop_right);
+        negative = temp_result;
+    } else {
+        binop_left = zero;
+        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
+        temp_result = tauraro_add(binop_left, binop_right);
+        zero = temp_result;
     }
-    arg_0 = total;
-    temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
+        }
+    } else {
+        // Fallback for non-range iterables
+        // TODO: Handle list/tuple/etc
+    }
+    arg_0 = strdup("Positive:");
+    arg_1 = positive;
+    arg_2 = strdup("Negative:");
+    arg_3 = negative;
+    arg_4 = strdup("Zero:");
+    arg_5 = zero;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; tauraro_value_t* arg_1_as_value = tauraro_value_new(); arg_1_as_value->type = TAURARO_INT; arg_1_as_value->data.int_val = arg_1; tauraro_value_t* arg_2_as_value = tauraro_value_new(); arg_2_as_value->type = TAURARO_STRING; arg_2_as_value->data.str_val = arg_2; tauraro_value_t* arg_3_as_value = tauraro_value_new(); arg_3_as_value->type = TAURARO_FLOAT; arg_3_as_value->data.float_val = arg_3; tauraro_value_t* arg_4_as_value = tauraro_value_new(); arg_4_as_value->type = TAURARO_STRING; arg_4_as_value->data.str_val = arg_4; tauraro_value_t* arg_5_as_value = tauraro_value_new(); arg_5_as_value->type = TAURARO_INT; arg_5_as_value->data.int_val = arg_5; temp = tauraro_print(6, (tauraro_value_t*[]){arg_0_as_value, arg_1_as_value, arg_2_as_value, arg_3_as_value, arg_4_as_value, arg_5_as_value});
+    temp = tauraro_print(0, NULL);
+    // Test 5: Nested loops
+    arg_0 = strdup("Test 5: Nested Loops");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    var_nested_sum_temp = 0;
+    nested_sum = var_nested_sum_temp;
+    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_INT; arg_0->data.int_val = 50;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_range(1, (tauraro_value_t*[]){arg_0_as_value});
+    // For loop: i in temp (optimized)
+    tauraro_value_t* i_iter = temp;
+    int i_index = 0;
+    if (i_iter->type == TAURARO_RANGE) {
+        int start = i_iter->data.range_val->start;
+        int stop = i_iter->data.range_val->stop;
+        int step = i_iter->data.range_val->step;
+        for (i = start; (step > 0) ? (i < stop) : (i > stop); i += step) {
+            arg_0 = tauraro_value_new(); arg_0->type = TAURARO_INT; arg_0->data.int_val = 50;
+            tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp_result = tauraro_range(1, (tauraro_value_t*[]){arg_0_as_value});
+            // For loop: j in temp_result (optimized)
+    tauraro_value_t* j_iter = temp_result;
+    int j_index = 0;
+    if (j_iter->type == TAURARO_RANGE) {
+        int start = j_iter->data.range_val->start;
+        int stop = j_iter->data.range_val->stop;
+        int step = j_iter->data.range_val->step;
+        for (j = start; (step > 0) ? (j < stop) : (j > stop); j += step) {
+            binop_left = nested_sum;
+            binop_right = 1;
+            temp_result = binop_left + binop_right;
+            nested_sum = temp_result;
+        }
+    } else {
+        // Fallback for non-range iterables
+        // TODO: Handle list/tuple/etc
+    }
+        }
+    } else {
+        // Fallback for non-range iterables
+        // TODO: Handle list/tuple/etc
+    }
+    arg_0 = strdup("Nested sum:");
+    arg_1 = nested_sum;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; tauraro_value_t* arg_1_as_value = tauraro_value_new(); arg_1_as_value->type = TAURARO_INT; arg_1_as_value->data.int_val = arg_1; temp = tauraro_print(2, (tauraro_value_t*[]){arg_0_as_value, arg_1_as_value});
+    temp = tauraro_print(0, NULL);
+    // Test 6: Mixed operations
+    arg_0 = strdup("Test 6: Mixed Int/Float");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    var_int_sum_temp = 0;
+    int_sum = var_int_sum_temp;
+    var_float_sum_temp = 0;
+    float_sum = var_float_sum_temp;
+    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_INT; arg_0->data.int_val = 100;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_range(1, (tauraro_value_t*[]){arg_0_as_value});
+    // For loop: i in temp (optimized)
+    tauraro_value_t* i_iter = temp;
+    int i_index = 0;
+    if (i_iter->type == TAURARO_RANGE) {
+        int start = i_iter->data.range_val->start;
+        int stop = i_iter->data.range_val->stop;
+        int step = i_iter->data.range_val->step;
+        for (i = start; (step > 0) ? (i < stop) : (i > stop); i += step) {
+            binop_left = int_sum;
+            binop_right = 1;
+            temp_result = binop_left + binop_right;
+            int_sum = temp_result;
+            binop_left = float_sum;
+            binop_right = tauraro_value_new(); binop_right->type = TAURARO_FLOAT; binop_right->data.float_val = 1.5;
+            temp_result = binop_left + binop_right;
+            float_sum = temp_result;
+        }
+    } else {
+        // Fallback for non-range iterables
+        // TODO: Handle list/tuple/etc
+    }
+    arg_0 = strdup("Int:");
+    arg_1 = int_sum;
+    arg_2 = strdup("Float:");
+    arg_3 = float_sum;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; tauraro_value_t* arg_1_as_value = tauraro_value_new(); arg_1_as_value->type = TAURARO_INT; arg_1_as_value->data.int_val = arg_1; tauraro_value_t* arg_2_as_value = tauraro_value_new(); arg_2_as_value->type = TAURARO_STRING; arg_2_as_value->data.str_val = arg_2; tauraro_value_t* arg_3_as_value = tauraro_value_new(); arg_3_as_value->type = TAURARO_FLOAT; arg_3_as_value->data.float_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0_as_value, arg_1_as_value, arg_2_as_value, arg_3_as_value});
+    temp = tauraro_print(0, NULL);
+    // Test 7: Comparisons
+    arg_0 = strdup("Test 7: Comparisons");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
+    var_compare_count_temp = 0;
+    compare_count = var_compare_count_temp;
+    arg_0 = tauraro_value_new(); arg_0->type = TAURARO_INT; arg_0->data.int_val = 100;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_range(1, (tauraro_value_t*[]){arg_0_as_value});
+    // For loop: i in temp (optimized)
+    tauraro_value_t* i_iter = temp;
+    int i_index = 0;
+    if (i_iter->type == TAURARO_RANGE) {
+        int start = i_iter->data.range_val->start;
+        int stop = i_iter->data.range_val->stop;
+        int step = i_iter->data.range_val->step;
+        for (i = start; (step > 0) ? (i < stop) : (i > stop); i += step) {
+            temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
+            if (tauraro_is_truthy(temp_result)) {
+        binop_left = compare_count;
+        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
+        temp_result = tauraro_add(binop_left, binop_right);
+        compare_count = temp_result;
+    }
+            temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
+            if (tauraro_is_truthy(temp_result)) {
+        binop_left = compare_count;
+        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
+        temp_result = tauraro_add(binop_left, binop_right);
+        compare_count = temp_result;
+    }
+            temp_result = tauraro_value_new(); temp_result->type = TAURARO_NONE;
+            if (tauraro_is_truthy(temp_result)) {
+        binop_left = compare_count;
+        binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
+        temp_result = tauraro_add(binop_left, binop_right);
+        compare_count = temp_result;
+    }
+        }
+    } else {
+        // Fallback for non-range iterables
+        // TODO: Handle list/tuple/etc
+    }
+    arg_0 = strdup("Comparison count:");
+    arg_1 = compare_count;
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; tauraro_value_t* arg_1_as_value = tauraro_value_new(); arg_1_as_value->type = TAURARO_INT; arg_1_as_value->data.int_val = arg_1; temp = tauraro_print(2, (tauraro_value_t*[]){arg_0_as_value, arg_1_as_value});
+    temp = tauraro_print(0, NULL);
+    arg_0 = strdup("=== ALL TESTS COMPLETE ===");
+    tauraro_value_t* arg_0_as_value = tauraro_value_new(); arg_0_as_value->type = TAURARO_STRING; arg_0_as_value->data.str_val = arg_0; temp = tauraro_print(1, (tauraro_value_t*[]){arg_0_as_value});
     return 0;
 }

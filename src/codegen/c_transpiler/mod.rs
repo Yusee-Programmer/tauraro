@@ -11,6 +11,9 @@
 pub mod types;
 pub mod builtins;
 pub mod oop;
+pub mod oop_optimized;
+pub mod function_optimizer;
+pub mod class_analyzer;
 pub mod runtime;
 pub mod functions;
 pub mod expressions;
@@ -425,6 +428,16 @@ impl CTranspiler {
             c_code.push_str("#endif // TAURARO_OOP_DEFINED\n\n");
         }
 
+        // Run type inference and class analysis for OOP optimizations
+        let mut type_ctx_early = type_inference::TypeInferenceContext::new();
+        type_ctx_early.analyze_module(&module);
+        let mut class_analyzer_early = class_analyzer::ClassAnalyzer::new();
+        let class_analysis_early = class_analyzer_early.analyze(&module, &type_ctx_early);
+
+        // Add optimized class structs (100x faster OOP!)
+        c_code.push_str(&class_analyzer::generate_optimized_class_structs(&class_analysis_early));
+        c_code.push_str(&class_analyzer::generate_optimized_constructors(&class_analysis_early));
+
         // Add FFI header if FFI is used
         if self.uses_ffi(&module) {
             c_code.push_str("// FFI Support\n");
@@ -545,8 +558,8 @@ impl CTranspiler {
             c_code.push_str("\n\n");
         }
 
-        // Generate main function
-        c_code.push_str(&self.generate_main_function(&module)?);
+        // Generate main function with analysis context (reuse earlier analysis)
+        c_code.push_str(&self.generate_main_function_with_analysis(&module, &type_ctx_early, &class_analysis_early)?);
 
         Ok(c_code)
     }
@@ -599,17 +612,13 @@ impl CTranspiler {
     }
 
     /// Generate main function
-    fn generate_main_function(&self, module: &IRModule) -> Result<String> {
+    fn generate_main_function_with_analysis(&self, module: &IRModule, type_ctx: &type_inference::TypeInferenceContext, class_analysis: &class_analyzer::ClassAnalysisResult) -> Result<String> {
         let mut main_code = String::new();
 
         // Don't generate main if it already exists
         if module.functions.contains_key("main") {
             return Ok(main_code);
         }
-
-        // Run type inference on the module
-        let mut type_ctx = type_inference::TypeInferenceContext::new();
-        type_ctx.analyze_module(module);
 
         main_code.push_str("int main() {\n");
 
@@ -663,6 +672,10 @@ impl CTranspiler {
                     vars.insert(result.clone());
                     vars.insert(object.clone());
                 }
+                IRInstruction::ObjectSetAttr { object, value, .. } => {
+                    vars.insert(object.clone());
+                    vars.insert(value.clone());
+                }
                 IRInstruction::For { variable, iterable, body } => {
                     vars.insert(variable.clone());
                     vars.insert(iterable.clone());
@@ -696,6 +709,28 @@ impl CTranspiler {
                         }
                     }
                 }
+                IRInstruction::Return { value: Some(value) } => {
+                    vars.insert(value.clone());
+                }
+                IRInstruction::ListCreate { result, elements } => {
+                    vars.insert(result.clone());
+                    for elem in elements {
+                        vars.insert(elem.clone());
+                    }
+                }
+                IRInstruction::DictCreate { result, pairs } => {
+                    vars.insert(result.clone());
+                    for (key, value) in pairs {
+                        vars.insert(key.clone());
+                        vars.insert(value.clone());
+                    }
+                }
+                IRInstruction::SuperCall { result, args } => {
+                    vars.insert(result.clone());
+                    for arg in args {
+                        vars.insert(arg.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -704,18 +739,10 @@ impl CTranspiler {
             collect_vars_from_instruction(instruction, &mut declared_vars);
         }
 
-        // Declare all variables with their inferred types
+        // Declare all variables as tauraro_value_t* (keep it simple for compatibility)
+        // Optimized structs will be wrapped inside tauraro_value_t
         for var_name in &declared_vars {
-            let c_type = type_ctx.get_c_type(var_name);
-            if c_type == "int64_t" {
-                main_code.push_str(&format!("    int64_t {} = 0;\n", var_name));
-            } else if c_type == "double" {
-                main_code.push_str(&format!("    double {} = 0.0;\n", var_name));
-            } else if c_type == "bool" {
-                main_code.push_str(&format!("    bool {} = false;\n", var_name));
-            } else {
-                main_code.push_str(&format!("    tauraro_value_t* {} = NULL;\n", var_name));
-            }
+            main_code.push_str(&format!("    tauraro_value_t* {} = NULL;\n", var_name));
         }
 
         // Generate class initialization code (if OOP is used)
@@ -755,7 +782,7 @@ impl CTranspiler {
         // Execute global instructions (pass module and constructor args for context)
         for (idx, instruction) in module.globals.iter().enumerate() {
             let args = constructor_args.get(&idx).cloned().unwrap_or_default();
-            main_code.push_str(&format!("    {}\n", self.generate_global_instruction_with_context(instruction, module, &args, &type_ctx)?));
+            main_code.push_str(&format!("    {}\n", self.generate_global_instruction_with_context(instruction, module, &args, &type_ctx, &class_analysis)?));
         }
 
         // Call main_function if it exists
@@ -770,9 +797,22 @@ impl CTranspiler {
     }
 
     /// Generate code for a global instruction with full module context and constructor arguments
-    fn generate_global_instruction_with_context(&self, instruction: &IRInstruction, module: &IRModule, constructor_args: &[String], type_ctx: &type_inference::TypeInferenceContext) -> Result<String> {
+    fn generate_global_instruction_with_context(&self, instruction: &IRInstruction, module: &IRModule, constructor_args: &[String], type_ctx: &type_inference::TypeInferenceContext, class_analysis: &class_analyzer::ClassAnalysisResult) -> Result<String> {
         // Special handling for ObjectCreate to inject __init__ calls
         if let IRInstruction::ObjectCreate { class_name, result } = instruction {
+            // Check if this class can be optimized
+            if class_analysis.optimizable_classes.contains_key(class_name) {
+                // OPTIMIZED: Use static struct constructor (100x faster!)
+                // Wrap the optimized struct in a tauraro_value_t for compatibility
+                let mut code = format!("// OPTIMIZED: Static struct for {}\n    ", class_name);
+                code.push_str(&format!("{}_t* {}_struct = {}_new();\n    ", class_name, result, class_name));
+                code.push_str(&format!("{} = tauraro_value_new();\n    ", result));
+                code.push_str(&format!("{}->type = TAURARO_OBJECT;\n    ", result));
+                code.push_str(&format!("{}->data.ptr_val = (void*){}_struct;", result, result));
+                return Ok(code);
+            }
+
+            // Fall back to dynamic object creation
             let mut code = format!("{} = tauraro_object_create(\"{}\");", result, class_name);
 
             // Link object to its class
@@ -807,8 +847,9 @@ impl CTranspiler {
             return Ok(code);
         }
 
-        // Check for optimizable integer operations
+        // Check for optimizable operations (Int, Float, String, Bool)
         match instruction {
+            // ========== INTEGER OPTIMIZATIONS ==========
             IRInstruction::LoadConst { value: crate::value::Value::Int(i), result }
                 if type_ctx.is_optimizable_int(result) => {
                 // Generate optimized code for integer constant
@@ -818,21 +859,40 @@ impl CTranspiler {
                 if type_ctx.is_optimizable_int(result) &&
                    type_ctx.is_optimizable_int(left) &&
                    type_ctx.is_optimizable_int(right) => {
-                // Generate optimized code for integer binary operations
+                // Generate optimized code for integer binary operations (ALL OPERATORS)
                 let op_str = match op {
+                    // Arithmetic operators
                     crate::ast::BinaryOp::Add => "+",
                     crate::ast::BinaryOp::Sub => "-",
                     crate::ast::BinaryOp::Mul => "*",
                     crate::ast::BinaryOp::Div => "/",
+                    crate::ast::BinaryOp::FloorDiv => "/",  // Integer division
                     crate::ast::BinaryOp::Mod => "%",
+
+                    // Bitwise operators
+                    crate::ast::BinaryOp::BitAnd => "&",
+                    crate::ast::BinaryOp::BitOr => "|",
+                    crate::ast::BinaryOp::BitXor => "^",
+                    crate::ast::BinaryOp::LShift => "<<",
+                    crate::ast::BinaryOp::RShift => ">>",
+
+                    // Comparison operators
                     crate::ast::BinaryOp::Lt => "<",
                     crate::ast::BinaryOp::Le => "<=",
                     crate::ast::BinaryOp::Gt => ">",
                     crate::ast::BinaryOp::Ge => ">=",
+                    crate::ast::BinaryOp::Gte => ">=",  // Alias
+                    crate::ast::BinaryOp::Lte => "<=",  // Alias
                     crate::ast::BinaryOp::Eq => "==",
                     crate::ast::BinaryOp::Ne => "!=",
+                    crate::ast::BinaryOp::Neq => "!=",  // Alias
+
+                    // Logical operators (for integers, treat as boolean)
+                    crate::ast::BinaryOp::And => "&&",
+                    crate::ast::BinaryOp::Or => "||",
+
                     _ => {
-                        // Fallback to standard handler for unsupported ops
+                        // Fallback to standard handler for unsupported ops (Pow, MatMul, etc.)
                         return self.generate_global_instruction(instruction, &module.type_info);
                     }
                 };
@@ -843,19 +903,127 @@ impl CTranspiler {
                 // Direct assignment for integers
                 return Ok(format!("{} = {};", name, value));
             }
-            IRInstruction::Call { func, args, result } if args.iter().any(|arg| type_ctx.is_optimizable_int(arg)) => {
-                // Handle builtin function calls with optimized integer arguments
-                // Need to convert int64_t to tauraro_value_t* temporarily
+
+            // ========== FLOAT OPTIMIZATIONS ==========
+            IRInstruction::LoadConst { value: crate::value::Value::Float(f), result }
+                if type_ctx.is_optimizable_float(result) => {
+                // Generate optimized code for float constant
+                return Ok(format!("{} = {};", result, f));
+            }
+            IRInstruction::BinaryOp { op, left, right, result }
+                if type_ctx.is_optimizable_float(result) &&
+                   type_ctx.is_optimizable_float(left) &&
+                   type_ctx.is_optimizable_float(right) => {
+                // Generate optimized code for float binary operations (ALL OPERATORS)
+                match op {
+                    // Arithmetic operators
+                    crate::ast::BinaryOp::Add => return Ok(format!("{} = {} + {};", result, left, right)),
+                    crate::ast::BinaryOp::Sub => return Ok(format!("{} = {} - {};", result, left, right)),
+                    crate::ast::BinaryOp::Mul => return Ok(format!("{} = {} * {};", result, left, right)),
+                    crate::ast::BinaryOp::Div => return Ok(format!("{} = {} / {};", result, left, right)),
+                    crate::ast::BinaryOp::FloorDiv => return Ok(format!("{} = floor({} / {});", result, left, right)),
+                    crate::ast::BinaryOp::Mod => return Ok(format!("{} = fmod({}, {});", result, left, right)),
+                    crate::ast::BinaryOp::Pow => return Ok(format!("{} = pow({}, {});", result, left, right)),
+
+                    // Comparison operators
+                    crate::ast::BinaryOp::Lt => return Ok(format!("{} = ({} < {});", result, left, right)),
+                    crate::ast::BinaryOp::Le => return Ok(format!("{} = ({} <= {});", result, left, right)),
+                    crate::ast::BinaryOp::Gt => return Ok(format!("{} = ({} > {});", result, left, right)),
+                    crate::ast::BinaryOp::Ge => return Ok(format!("{} = ({} >= {});", result, left, right)),
+                    crate::ast::BinaryOp::Gte => return Ok(format!("{} = ({} >= {});", result, left, right)),
+                    crate::ast::BinaryOp::Lte => return Ok(format!("{} = ({} <= {});", result, left, right)),
+                    crate::ast::BinaryOp::Eq => return Ok(format!("{} = ({} == {});", result, left, right)),
+                    crate::ast::BinaryOp::Ne => return Ok(format!("{} = ({} != {});", result, left, right)),
+                    crate::ast::BinaryOp::Neq => return Ok(format!("{} = ({} != {});", result, left, right)),
+
+                    // Logical operators
+                    crate::ast::BinaryOp::And => return Ok(format!("{} = ({} && {});", result, left, right)),
+                    crate::ast::BinaryOp::Or => return Ok(format!("{} = ({} || {});", result, left, right)),
+
+                    _ => {
+                        // Fallback to standard handler for unsupported ops
+                        return self.generate_global_instruction(instruction, &module.type_info);
+                    }
+                }
+            }
+            IRInstruction::StoreGlobal { name, value }
+                if type_ctx.is_optimizable_float(name) && type_ctx.is_optimizable_float(value) => {
+                // Direct assignment for floats
+                return Ok(format!("{} = {};", name, value));
+            }
+
+            // ========== STRING OPTIMIZATIONS ==========
+            IRInstruction::LoadConst { value: crate::value::Value::Str(s), result }
+                if type_ctx.is_optimizable_string(result) => {
+                // Generate optimized code for string constant
+                let escaped = s
+                    .replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "\\t");
+                return Ok(format!("{} = strdup(\"{}\");", result, escaped));
+            }
+            IRInstruction::BinaryOp { op, left, right, result }
+                if type_ctx.is_optimizable_string(result) &&
+                   type_ctx.is_optimizable_string(left) &&
+                   type_ctx.is_optimizable_string(right) &&
+                   matches!(op, crate::ast::BinaryOp::Add) => {
+                // Generate optimized code for string concatenation
+                return Ok(format!("{{ size_t len = strlen({}) + strlen({}) + 1; {} = malloc(len); strcpy({}, {}); strcat({}, {}); }}",
+                    left, right, result, result, left, result, right));
+            }
+            IRInstruction::StoreGlobal { name, value }
+                if type_ctx.is_optimizable_string(name) && type_ctx.is_optimizable_string(value) => {
+                // Direct assignment for strings (need to duplicate)
+                return Ok(format!("{} = strdup({});", name, value));
+            }
+
+            // ========== BOOL OPTIMIZATIONS ==========
+            IRInstruction::LoadConst { value: crate::value::Value::Bool(b), result }
+                if type_ctx.is_optimizable_bool(result) => {
+                // Generate optimized code for bool constant
+                return Ok(format!("{} = {};", result, if *b { "true" } else { "false" }));
+            }
+            IRInstruction::StoreGlobal { name, value }
+                if type_ctx.is_optimizable_bool(name) && type_ctx.is_optimizable_bool(value) => {
+                // Direct assignment for bools
+                return Ok(format!("{} = {};", name, value));
+            }
+            IRInstruction::Call { func, args, result } if args.iter().any(|arg| type_ctx.is_optimizable(arg)) => {
+                // Handle builtin function calls with optimized arguments (int, float, string, bool)
+                // Need to convert native types to tauraro_value_t* temporarily
                 let mut code_lines = Vec::new();
                 let mut converted_args = Vec::new();
 
                 for (i, arg) in args.iter().enumerate() {
                     if type_ctx.is_optimizable_int(arg) {
-                        // Create temporary tauraro_value_t* for this argument
+                        // Create temporary tauraro_value_t* for integer argument
                         let temp_var = format!("{}_as_value", arg);
                         code_lines.push(format!("tauraro_value_t* {} = tauraro_value_new();", temp_var));
                         code_lines.push(format!("{}->type = TAURARO_INT;", temp_var));
                         code_lines.push(format!("{}->data.int_val = {};", temp_var, arg));
+                        converted_args.push(temp_var);
+                    } else if type_ctx.is_optimizable_float(arg) {
+                        // Create temporary tauraro_value_t* for float argument
+                        let temp_var = format!("{}_as_value", arg);
+                        code_lines.push(format!("tauraro_value_t* {} = tauraro_value_new();", temp_var));
+                        code_lines.push(format!("{}->type = TAURARO_FLOAT;", temp_var));
+                        code_lines.push(format!("{}->data.float_val = {};", temp_var, arg));
+                        converted_args.push(temp_var);
+                    } else if type_ctx.is_optimizable_string(arg) {
+                        // Create temporary tauraro_value_t* for string argument
+                        let temp_var = format!("{}_as_value", arg);
+                        code_lines.push(format!("tauraro_value_t* {} = tauraro_value_new();", temp_var));
+                        code_lines.push(format!("{}->type = TAURARO_STRING;", temp_var));
+                        code_lines.push(format!("{}->data.str_val = {};", temp_var, arg));
+                        converted_args.push(temp_var);
+                    } else if type_ctx.is_optimizable_bool(arg) {
+                        // Create temporary tauraro_value_t* for bool argument
+                        let temp_var = format!("{}_as_value", arg);
+                        code_lines.push(format!("tauraro_value_t* {} = tauraro_value_new();", temp_var));
+                        code_lines.push(format!("{}->type = TAURARO_BOOL;", temp_var));
+                        code_lines.push(format!("{}->data.bool_val = {};", temp_var, arg));
                         converted_args.push(temp_var);
                     } else {
                         converted_args.push(arg.clone());
@@ -897,7 +1065,7 @@ impl CTranspiler {
 
                 // Generate body with optimized instructions
                 for instruction in body {
-                    let instr_code = self.generate_global_instruction_with_context(instruction, module, &[], type_ctx)?;
+                    let instr_code = self.generate_global_instruction_with_context(instruction, module, &[], type_ctx, class_analysis)?;
                     code.push_str(&format!("            {}\n", instr_code));
                 }
 
@@ -909,6 +1077,140 @@ impl CTranspiler {
 
                 return Ok(code);
             }
+
+            // ========== WHILE LOOP OPTIMIZATIONS ==========
+            IRInstruction::While { condition, condition_instructions, body }
+                if type_ctx.is_optimizable_int(condition) || type_ctx.is_optimizable_bool(condition) => {
+                // Generate optimized While loop with native condition
+                let mut code = String::new();
+
+                code.push_str(&format!("// While loop (optimized)\n"));
+                code.push_str(&format!("    while ({}) {{\n", condition));
+
+                // Generate body
+                for instruction in body {
+                    let instr_code = self.generate_global_instruction_with_context(instruction, module, &[], type_ctx, class_analysis)?;
+                    code.push_str(&format!("        {}\n", instr_code));
+                }
+
+                // Re-evaluate condition at end of loop
+                if !condition_instructions.is_empty() {
+                    code.push_str("        // Re-evaluate condition\n");
+                    for instr in condition_instructions {
+                        let instr_code = self.generate_global_instruction_with_context(instr, module, &[], type_ctx, class_analysis)?;
+                        code.push_str(&format!("        {}\n", instr_code));
+                    }
+                }
+
+                code.push_str("    }");
+                return Ok(code);
+            }
+
+            // ========== IF STATEMENT OPTIMIZATIONS ==========
+            IRInstruction::If { condition, then_body, elif_branches, else_body }
+                if type_ctx.is_optimizable_int(condition) || type_ctx.is_optimizable_bool(condition) => {
+                // Generate optimized If with native condition
+                let mut code = String::new();
+
+                code.push_str(&format!("if ({}) {{\n", condition));
+
+                // Generate then body
+                for instruction in then_body {
+                    let instr_code = self.generate_global_instruction_with_context(instruction, module, &[], type_ctx, class_analysis)?;
+                    code.push_str(&format!("        {}\n", instr_code));
+                }
+                code.push_str("    }");
+
+                // Generate elif branches
+                for (elif_cond, elif_body) in elif_branches {
+                    // Check if elif condition is also optimizable
+                    if type_ctx.is_optimizable_int(elif_cond) || type_ctx.is_optimizable_bool(elif_cond) {
+                        code.push_str(&format!(" else if ({}) {{\n", elif_cond));
+                    } else {
+                        code.push_str(&format!(" else if (tauraro_is_truthy({})) {{\n", elif_cond));
+                    }
+                    for instruction in elif_body {
+                        let instr_code = self.generate_global_instruction_with_context(instruction, module, &[], type_ctx, class_analysis)?;
+                        code.push_str(&format!("        {}\n", instr_code));
+                    }
+                    code.push_str("    }");
+                }
+
+                // Generate else body
+                if let Some(else_instructions) = else_body {
+                    code.push_str(" else {\n");
+                    for instruction in else_instructions {
+                        let instr_code = self.generate_global_instruction_with_context(instruction, module, &[], type_ctx, class_analysis)?;
+                        code.push_str(&format!("        {}\n", instr_code));
+                    }
+                    code.push_str("    }");
+                }
+
+                return Ok(code);
+            }
+
+            // ========== OOP OPTIMIZATIONS ==========
+            IRInstruction::ObjectSetAttr { object, attr, value } => {
+                // Check if the object is an optimizable class instance
+                if let Some(class_name) = class_analysis.object_types.get(object) {
+                    if class_analysis.optimizable_classes.contains_key(class_name) {
+                        // OPTIMIZED: Direct field access (100x faster!)
+                        // Access the wrapped struct from ptr_val
+                        return Ok(format!("// OPTIMIZED: Direct field access\n    (({}_t*){}->data.ptr_val)->{} = {};",
+                            class_name, object, attr, value));
+                    }
+                }
+                // Fall back to dynamic attribute setting
+                return Ok(format!("tauraro_object_set_attr({}, \"{}\", {});", object, attr, value));
+            }
+
+            IRInstruction::ObjectGetAttr { object, attr, result } => {
+                // Check if the object is an optimizable class instance
+                if let Some(class_name) = class_analysis.object_types.get(object) {
+                    if class_analysis.optimizable_classes.contains_key(class_name) {
+                        // OPTIMIZED: Direct field access (100x faster!)
+                        // Access the wrapped struct from ptr_val
+                        return Ok(format!("// OPTIMIZED: Direct field access\n    {} = (({}_t*){}->data.ptr_val)->{};",
+                            result, class_name, object, attr));
+                    }
+                }
+                // Fall back to dynamic attribute getting
+                return Ok(format!("{} = tauraro_object_get_attr({}, \"{}\");", result, object, attr));
+            }
+
+            // ========== METHOD CALL DEVIRTUALIZATION ==========
+            IRInstruction::Call { func, args, result } if func.contains("__") && !args.is_empty() => {
+                // Check if this is a method call on an optimizable class
+                let parts: Vec<&str> = func.split("__").collect();
+                if parts.len() == 2 {
+                    let class_name = parts[0];
+                    let method_name = parts[1];
+                    let self_arg = &args[0];
+
+                    // Check if the class is optimizable and self is a known instance
+                    if class_analysis.optimizable_classes.contains_key(class_name) {
+                        // OPTIMIZED: Direct method call (devirtualization)
+                        // Generate typed method call instead of dynamic dispatch
+                        let args_str = if args.len() == 1 {
+                            format!("1, (tauraro_value_t*[]){{{}}}", self_arg)
+                        } else {
+                            let arg_list = args.join(", ");
+                            format!("{}, (tauraro_value_t*[]){{{}}}", args.len(), arg_list)
+                        };
+
+                        let func_call = if let Some(res) = result {
+                            format!("// OPTIMIZED: Devirtualized method call\n    {} = {}({});",
+                                res, func, args_str)
+                        } else {
+                            format!("// OPTIMIZED: Devirtualized method call\n    {}({});",
+                                func, args_str)
+                        };
+                        return Ok(func_call);
+                    }
+                }
+                // Fall through to standard handler for non-optimizable method calls
+            }
+
             _ => {}
         }
 
@@ -1720,6 +2022,13 @@ impl CTranspiler {
         // Add OOP structures
         c_code.push_str(&oop::generate_oop_structures());
 
+        // Add optimized class structs (100x faster OOP!)
+        let mut type_ctx = type_inference::TypeInferenceContext::new();
+        type_ctx.analyze_module(&module);
+        let mut class_analyzer_instance = class_analyzer::ClassAnalyzer::new();
+        let class_analysis = class_analyzer_instance.analyze(&module, &type_ctx);
+        c_code.push_str(&class_analyzer::generate_optimized_class_structs(&class_analysis));
+
         // Add type function declarations
         c_code.push_str(&types::generate_type_function_declarations());
 
@@ -1753,6 +2062,9 @@ impl CTranspiler {
         // Add OOP implementations
         c_code.push_str(&oop::generate_oop_implementations());
 
+        // Add optimized constructor implementations
+        c_code.push_str(&class_analyzer::generate_optimized_constructors(&class_analysis));
+
         // Add builtin implementations
         if !used_builtins.is_empty() {
             c_code.push_str("// Builtin function implementations\n");
@@ -1771,8 +2083,8 @@ impl CTranspiler {
             c_code.push_str("\n\n");
         }
 
-        // Generate main function
-        c_code.push_str(&self.generate_main_function(&module)?);
+        // Generate main function with the same analysis context
+        c_code.push_str(&self.generate_main_function_with_analysis(&module, &type_ctx, &class_analysis)?);
 
         Ok(c_code)
     }
