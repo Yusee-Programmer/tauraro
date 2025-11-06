@@ -78,6 +78,38 @@ C Code → Native Binary
 
 The C compiler (GCC/Clang) produces the final executable.
 
+## Recent Improvements
+
+### Enhanced Type Inference (Latest Update)
+
+The C code generator now features improved type inference for variables with mixed-type usage:
+
+**Problem Before:**
+Variables used for different types (e.g., string literals and function results) were incorrectly optimized to a single native type, causing compilation errors:
+
+```c
+// Incorrect - variable used for both string and dynamic values
+char* arg_0 = strdup("Hello");  // String literal
+// ...later...
+arg_0 = some_function();  // ERROR: function returns tauraro_value_t*
+```
+
+**Solution Now:**
+Variables with mixed-type usage are correctly identified and declared as `tauraro_value_t*`:
+
+```c
+// Correct - handles both string and dynamic values
+tauraro_value_t* arg_0 = tauraro_make_string("Hello");  // String literal
+// ...later...
+arg_0 = some_function();  // OK: both are tauraro_value_t*
+```
+
+**What This Means:**
+- More reliable C code generation
+- Fewer compilation errors with complex code
+- Better handling of polymorphic variables
+- Improved type tracking through IR instructions
+
 ## Type-Based Optimizations
 
 Type annotations enable significant optimizations:
