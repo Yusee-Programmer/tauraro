@@ -864,7 +864,7 @@ impl SuperCompiler {
                     // Load the class from globals (get fresh index to ensure it's valid)
                     let class_reg = self.allocate_register();
                     let class_name_idx = self.code.add_name(name.clone());
-                    self.emit(OpCode::LoadGlobal, class_reg, class_name_idx, 0, self.current_line);
+                    self.emit(OpCode::LoadGlobal, class_name_idx, class_reg, 0, self.current_line);
 
                     // Evaluate the attribute expression
                     let value_reg = self.compile_expression(attr_expr.clone())?;
