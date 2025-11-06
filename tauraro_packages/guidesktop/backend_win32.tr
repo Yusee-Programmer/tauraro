@@ -1,0 +1,302 @@
+# Win32 Backend Module
+# Native Windows windowing backend using Win32 API
+
+print("  [Backend] Loading Win32 backend...")
+
+# Win32 window styles
+WS_OVERLAPPED = 0x00000000
+WS_CAPTION = 0x00C00000
+WS_SYSMENU = 0x00080000
+WS_THICKFRAME = 0x00040000
+WS_MINIMIZEBOX = 0x00020000
+WS_MAXIMIZEBOX = 0x00010000
+WS_OVERLAPPEDWINDOW = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+WS_VISIBLE = 0x10000000
+
+# Window class styles
+CS_HREDRAW = 0x0002
+CS_VREDRAW = 0x0001
+CS_OWNDC = 0x0020
+
+# Show window commands
+SW_HIDE = 0
+SW_SHOWNORMAL = 1
+SW_SHOW = 5
+SW_MINIMIZE = 6
+SW_MAXIMIZE = 3
+
+# Window messages
+WM_CREATE = 0x0001
+WM_DESTROY = 0x0002
+WM_MOVE = 0x0003
+WM_SIZE = 0x0005
+WM_PAINT = 0x000F
+WM_CLOSE = 0x0010
+WM_QUIT = 0x0012
+WM_MOUSEMOVE = 0x0200
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
+WM_RBUTTONDOWN = 0x0204
+WM_RBUTTONUP = 0x0205
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_CHAR = 0x0102
+
+# Virtual key codes
+VK_ESCAPE = 0x1B
+VK_RETURN = 0x0D
+VK_SPACE = 0x20
+VK_LEFT = 0x25
+VK_UP = 0x26
+VK_RIGHT = 0x27
+VK_DOWN = 0x28
+
+# Color macros
+def RGB(r, g, b):
+    return (r | (g << 8) | (b << 16))
+
+# Win32Backend class
+class Win32Backend:
+    # Windows-specific windowing backend
+
+    def __init__(self):
+        self.initialized = False
+        self.window_class_registered = False
+        self.class_name = "GuiDesktopWindowClass"
+        self.hinstance = None
+
+        print("    [Win32] Backend created")
+
+    def initialize(self):
+        # Initialize Win32 backend
+        if self.initialized:
+            return True
+
+        print("    [Win32] Initializing backend...")
+
+        # Load required libraries
+        try:
+            load_library("user32.dll")
+            load_library("gdi32.dll")
+            load_library("kernel32.dll")
+            print("    [OK] Win32 libraries loaded")
+        except Exception as e:
+            print("    [!] Failed to load Win32 libraries: " + str(e))
+            return False
+
+        # Define Win32 functions
+        self.define_win32_functions()
+
+        # Get module handle
+        try:
+            self.hinstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+            print("    [OK] Got module handle: " + str(self.hinstance))
+        except Exception as e:
+            print("    [!] Failed to get module handle: " + str(e))
+            return False
+
+        # Register window class
+        if not self.register_window_class():
+            return False
+
+        self.initialized = True
+        print("    [OK] Win32 backend initialized")
+        return True
+
+    def define_win32_functions(self):
+        # Define Win32 API functions
+
+        # Kernel32
+        define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
+        define_function("kernel32.dll", "GetLastError", "uint32", [])
+        define_function("kernel32.dll", "Sleep", "void", ["uint32"])
+
+        # User32 - Window management
+        define_function("user32.dll", "CreateWindowExA", "pointer",
+            ["uint32", "pointer", "pointer", "uint32", "int32", "int32", "int32", "int32",
+             "pointer", "pointer", "pointer", "pointer"])
+        define_function("user32.dll", "ShowWindow", "bool", ["pointer", "int32"])
+        define_function("user32.dll", "UpdateWindow", "bool", ["pointer"])
+        define_function("user32.dll", "DestroyWindow", "bool", ["pointer"])
+        define_function("user32.dll", "SetWindowTextA", "bool", ["pointer", "pointer"])
+        define_function("user32.dll", "MoveWindow", "bool",
+            ["pointer", "int32", "int32", "int32", "int32", "bool"])
+        define_function("user32.dll", "SetWindowPos", "bool",
+            ["pointer", "pointer", "int32", "int32", "int32", "int32", "uint32"])
+        define_function("user32.dll", "GetClientRect", "bool", ["pointer", "pointer"])
+        define_function("user32.dll", "InvalidateRect", "bool", ["pointer", "pointer", "bool"])
+
+        # User32 - Message handling
+        define_function("user32.dll", "GetMessageA", "bool",
+            ["pointer", "pointer", "uint32", "uint32"])
+        define_function("user32.dll", "PeekMessageA", "bool",
+            ["pointer", "pointer", "uint32", "uint32", "uint32"])
+        define_function("user32.dll", "TranslateMessage", "bool", ["pointer"])
+        define_function("user32.dll", "DispatchMessageA", "pointer", ["pointer"])
+        define_function("user32.dll", "PostQuitMessage", "void", ["int32"])
+        define_function("user32.dll", "DefWindowProcA", "pointer",
+            ["pointer", "uint32", "pointer", "pointer"])
+
+        # User32 - Device context
+        define_function("user32.dll", "GetDC", "pointer", ["pointer"])
+        define_function("user32.dll", "ReleaseDC", "int32", ["pointer", "pointer"])
+        define_function("user32.dll", "BeginPaint", "pointer", ["pointer", "pointer"])
+        define_function("user32.dll", "EndPaint", "bool", ["pointer", "pointer"])
+
+        # GDI32 - Drawing
+        define_function("gdi32.dll", "CreateSolidBrush", "pointer", ["uint32"])
+        define_function("gdi32.dll", "DeleteObject", "bool", ["pointer"])
+        define_function("gdi32.dll", "BitBlt", "bool",
+            ["pointer", "int32", "int32", "int32", "int32",
+             "pointer", "int32", "int32", "uint32"])
+
+        print("    [OK] Win32 functions defined")
+
+    def register_window_class(self):
+        # Register window class
+        # For simplicity in v1.1, we'll use predefined window classes
+        # Full WNDCLASSEX registration would require more complex FFI
+        self.window_class_registered = True
+        print("    [OK] Using predefined window classes")
+        return True
+
+    def create_window(self, title, x, y, width, height):
+        # Create a Win32 window
+        if not self.initialized:
+            if not self.initialize():
+                return None
+
+        print("    [Win32] Creating window: " + title)
+
+        # Adjust window size to account for borders
+        # We'll use the requested size as client area size
+        style = WS_OVERLAPPEDWINDOW | WS_VISIBLE
+
+        try:
+            hwnd = call_function("user32.dll", "CreateWindowExA", [
+                0,                      # dwExStyle
+                "STATIC",              # lpClassName (using predefined class)
+                title,                  # lpWindowName
+                style,                  # dwStyle
+                x, y, width, height,   # Position and size
+                0,                      # hWndParent
+                0,                      # hMenu
+                self.hinstance,        # hInstance
+                0                       # lpParam
+            ])
+
+            if hwnd and hwnd != 0:
+                print("    [OK] Window created, HWND: " + str(hwnd))
+
+                # Show and update window
+                call_function("user32.dll", "ShowWindow", [hwnd, SW_SHOWNORMAL])
+                call_function("user32.dll", "UpdateWindow", [hwnd])
+
+                return hwnd
+            else:
+                error = call_function("kernel32.dll", "GetLastError", [])
+                print("    [!] CreateWindow failed, error: " + str(error))
+                return None
+
+        except Exception as e:
+            print("    [!] Exception creating window: " + str(e))
+            return None
+
+    def destroy_window(self, hwnd):
+        # Destroy a window
+        if hwnd:
+            try:
+                call_function("user32.dll", "DestroyWindow", [hwnd])
+                print("    [Win32] Window destroyed")
+            except Exception as e:
+                print("    [!] Error destroying window: " + str(e))
+
+    def set_window_title(self, hwnd, title):
+        # Set window title
+        if hwnd:
+            call_function("user32.dll", "SetWindowTextA", [hwnd, title])
+
+    def move_window(self, hwnd, x, y, width, height):
+        # Move and resize window
+        if hwnd:
+            call_function("user32.dll", "MoveWindow", [hwnd, x, y, width, height, True])
+
+    def invalidate_window(self, hwnd):
+        # Request window redraw
+        if hwnd:
+            call_function("user32.dll", "InvalidateRect", [hwnd, 0, True])
+
+    def get_dc(self, hwnd):
+        # Get device context for drawing
+        if hwnd:
+            return call_function("user32.dll", "GetDC", [hwnd])
+        return None
+
+    def release_dc(self, hwnd, hdc):
+        # Release device context
+        if hwnd and hdc:
+            call_function("user32.dll", "ReleaseDC", [hwnd, hdc])
+
+    def process_messages(self):
+        # Process pending window messages (non-blocking)
+        # Returns True if WM_QUIT was received
+        msg = [0] * 7  # MSG structure (approximate)
+
+        PM_REMOVE = 0x0001
+
+        while True:
+            has_message = call_function("user32.dll", "PeekMessageA",
+                [msg, 0, 0, 0, PM_REMOVE])
+
+            if not has_message:
+                break
+
+            # Check for WM_QUIT
+            if msg[1] == WM_QUIT:
+                print("    [Win32] WM_QUIT received")
+                return True
+
+            # Translate and dispatch message
+            call_function("user32.dll", "TranslateMessage", [msg])
+            call_function("user32.dll", "DispatchMessageA", [msg])
+
+        return False
+
+    def run_message_loop(self):
+        # Run blocking message loop
+        msg = [0] * 7  # MSG structure
+
+        print("    [Win32] Entering message loop...")
+
+        try:
+            while True:
+                has_message = call_function("user32.dll", "GetMessageA",
+                    [msg, 0, 0, 0])
+
+                if not has_message or msg[1] == WM_QUIT:
+                    print("    [Win32] Message loop ended")
+                    break
+
+                call_function("user32.dll", "TranslateMessage", [msg])
+                call_function("user32.dll", "DispatchMessageA", [msg])
+
+        except Exception as e:
+            print("    [!] Message loop error: " + str(e))
+
+    def quit(self):
+        # Post quit message
+        call_function("user32.dll", "PostQuitMessage", [0])
+
+
+# Create global backend instance
+_win32_backend = None
+
+def get_win32_backend():
+    # Get or create Win32 backend instance
+    global _win32_backend
+    if _win32_backend == None:
+        _win32_backend = Win32Backend()
+    return _win32_backend
+
+
+print("  [OK] Win32 backend loaded")

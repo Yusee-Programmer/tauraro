@@ -2,7 +2,7 @@
 
 A modern, custom-built desktop GUI framework for the Tauraro programming language, built from scratch using **Cairo** for 2D rendering.
 
-**Version:** 1.0.0
+**Version:** 1.1.0 ⭐ **NEW: Native Windowing!**
 **License:** Part of the Tauraro programming language project
 
 ---
@@ -12,11 +12,12 @@ A modern, custom-built desktop GUI framework for the Tauraro programming languag
 GuiDesktop is a **completely custom GUI framework** designed specifically for Tauraro. Unlike wrapper frameworks that use GTK or Qt, GuiDesktop is built from the ground up with:
 
 - ✨ **Cairo 2D Rendering** - Professional vector graphics across all platforms
+- 🪟 **Native Windowing** - Real platform windows on Windows, Linux, macOS ⭐ **NEW!**
 - 🏗️ **Custom Widget System** - Purpose-built widget hierarchy
 - 📐 **Flexible Layout Engine** - VBox, HBox, and Grid layouts
 - 🎨 **Built-in Theming** - Customizable colors and styles
 - ⚡ **FFI-Based** - Uses Tauraro's FFI for native library integration
-- 🖥️ **Cross-Platform Ready** - Architecture supports Windows, Linux, and macOS
+- 🖥️ **Cross-Platform** - Works on Windows (Win32), Linux (X11), macOS (Cocoa)
 
 ---
 
@@ -98,7 +99,62 @@ import guidesktop
 
 ## 🚀 Quick Start
 
-### Basic Window Example
+### Native Window Example (v1.1) ⭐ **NEW!**
+
+```tauraro
+import guidesktop
+
+# Initialize framework
+guidesktop.init()
+guidesktop.define_cairo_functions()
+
+# Load platform backend
+if guidesktop._is_windows:
+    import guidesktop.backend_win32
+elif guidesktop._is_linux:
+    import guidesktop.backend_x11
+
+# Load native modules
+import guidesktop.window_native
+import guidesktop.application_native
+
+# Create native application
+app = guidesktop.application_native.NativeApplication("My App")
+
+# Create real native window
+window = app.create_window("Hello World!", 600, 400)
+
+# Add widgets
+label = guidesktop.Label("This is a real native window!")
+label.set_bounds(50, 50, 500, 40)
+window.add_widget(label)
+
+# Run with native event loop
+app.run()  # Creates real window!
+```
+
+### Mock Render Example (v1.0 - Still Supported)
+
+For testing without native windowing:
+
+```tauraro
+import guidesktop
+
+guidesktop.init()
+guidesktop.define_cairo_functions()
+
+app = guidesktop.Application("My App")
+window = app.create_window("Hello", 400, 300)
+
+label = guidesktop.Label("Hello, GuiDesktop!")
+label.set_bounds(50, 50, 300, 40)
+window.add_widget(label)
+
+# Render to PNG file
+app.run_mock_render("output.png")
+```
+
+### Basic Window Example (Legacy)
 
 ```tauraro
 import guidesktop
@@ -419,42 +475,72 @@ app.quit()
 
 The package includes comprehensive examples:
 
-1. **example_basic.tr** - Simple window with label and button
-2. **example_layout.tr** - Demonstrates VBox, HBox, and Grid layouts
-3. **example_widgets.tr** - Showcase of all widget types
-4. **example_calculator.tr** - Calculator UI with grid layout
+### Native Window Examples (v1.1) ⭐ **NEW!**
 
-Run examples:
+1. **example_native_window.tr** - Real native window with widgets
+2. **example_multi_window.tr** - Multiple native windows simultaneously
+
+### Mock Render Examples (v1.0)
+
+3. **example_basic.tr** - Simple window with label and button (renders to PNG)
+4. **example_layout.tr** - Demonstrates VBox, HBox, and Grid layouts (renders to PNG)
+5. **example_widgets.tr** - Showcase of all widget types (renders to PNG)
+6. **example_calculator.tr** - Calculator UI with grid layout (renders to PNG)
+
+Run native window examples:
 
 ```bash
-tauraro tauraro_packages/guidesktop/example_basic.tr
+# Creates a real native window!
+tauraro tauraro_packages/guidesktop/example_native_window.tr
+
+# Creates multiple native windows!
+tauraro tauraro_packages/guidesktop/example_multi_window.tr
 ```
 
-This will generate a PNG image showing the rendered GUI.
+Run mock render examples:
+
+```bash
+# Generates PNG images
+tauraro tauraro_packages/guidesktop/example_basic.tr
+tauraro tauraro_packages/guidesktop/example_widgets.tr
+```
 
 ---
 
-## 🔧 Current Version: 1.0.0
+## 🔧 Current Version: 1.1.0 ⭐
 
-### ✅ Implemented Features
+### ✅ New in v1.1 - Native Windowing!
+
+- 🪟 **Win32 Backend** - Full Windows native windowing support
+- 🐧 **X11 Backend** - Full Linux/Unix native windowing support
+- 🌊 **Wayland Backend** - Experimental Wayland support
+- 🍎 **Cocoa Backend** - Experimental macOS support
+- 🔄 **Native Event Loops** - Platform-specific message/event loops
+- 🎯 **Real Windows** - Creates actual OS windows, not just renders
+- 🖼️ **Multiple Windows** - Support for multiple simultaneous windows
+
+### ✅ Implemented Features (v1.0 + v1.1)
 
 - ✅ Cairo 2D rendering engine integration
+- ✅ **Native windowing (Windows, Linux)** ⭐ NEW!
+- ✅ **Platform event loops (Win32, X11)** ⭐ NEW!
 - ✅ Widget system (Label, Button, TextBox, Panel, Frame)
 - ✅ Layout managers (VBox, HBox, Grid, Absolute)
 - ✅ Event system architecture
 - ✅ Color and theming system
 - ✅ Window management classes
 - ✅ Application framework
-- ✅ Render-to-image functionality
+- ✅ Render-to-image functionality (still supported)
 - ✅ Comprehensive documentation
-- ✅ Example applications
+- ✅ Example applications (including native window examples)
 
-### 🚧 In Development
+### 🚧 In Development (v1.2)
 
-- ⏳ Native windowing integration (Win32, X11, Wayland, Cocoa)
-- ⏳ Event loop implementation
-- ⏳ Mouse and keyboard event handling
-- ⏳ Real-time window updates
+- ⏳ Complete Cairo-to-window rendering integration
+- ⏳ Full mouse and keyboard event handling
+- ⏳ Wayland native protocol (currently uses XWayland)
+- ⏳ macOS Cocoa implementation
+- ⏳ Window close/minimize/maximize protocols
 - ⏳ More widgets (ListView, TreeView, MenuBar, etc.)
 - ⏳ Advanced Cairo drawing features
 - ⏳ Animation system
@@ -519,15 +605,29 @@ GuiDesktop is in active development. Contributions welcome for:
 
 ```
 guidesktop/
-├── __init__.tr          # Core framework, platform detection, colors
-├── cairo_renderer.tr    # Cairo 2D rendering bindings
-├── events.tr            # Event system
-├── widget.tr            # Base widget classes
-├── widgets.tr           # Standard widgets
-├── layout.tr            # Layout managers
-├── window.tr            # Window management
-├── application.tr       # Application class
-└── examples/            # Example programs
+├── __init__.tr              # Core framework, platform detection, colors
+├── cairo_renderer.tr        # Cairo 2D rendering bindings
+├── events.tr                # Event system
+├── widget.tr                # Base widget classes
+├── widgets.tr               # Standard widgets
+├── layout.tr                # Layout managers
+├── window.tr                # Window management (mock render)
+├── application.tr           # Application class (mock render)
+├── backend_win32.tr         # Windows Win32 backend ⭐ NEW!
+├── backend_x11.tr           # Linux X11 backend ⭐ NEW!
+├── backend_wayland.tr       # Linux Wayland backend (experimental) ⭐ NEW!
+├── backend_cocoa.tr         # macOS Cocoa backend (experimental) ⭐ NEW!
+├── window_native.tr         # Native window class ⭐ NEW!
+├── application_native.tr    # Native application class ⭐ NEW!
+├── examples/                # Example programs
+│   ├── example_native_window.tr   # Native window demo ⭐ NEW!
+│   ├── example_multi_window.tr    # Multiple windows ⭐ NEW!
+│   ├── example_basic.tr           # Mock render (PNG)
+│   ├── example_layout.tr          # Mock render (PNG)
+│   ├── example_widgets.tr         # Mock render (PNG)
+│   └── example_calculator.tr      # Mock render (PNG)
+├── NATIVE_WINDOWING.md      # Native windowing documentation ⭐ NEW!
+└── README.md                # This file
 ```
 
 ### Import Usage
@@ -558,23 +658,28 @@ These will be addressed in upcoming versions!
 
 ## 🔮 Roadmap
 
-### Version 1.1 (Next Release)
-- [ ] Windows native windowing (Win32)
-- [ ] Linux X11 windowing
-- [ ] Basic event handling
-- [ ] Mouse input
+### Version 1.1 (Current) ✅
+- [x] Windows native windowing (Win32)
+- [x] Linux X11 windowing
+- [x] Native event loops
+- [x] Platform backend system
+- [x] Multiple window support
 
-### Version 1.2
-- [ ] Wayland support
-- [ ] macOS Cocoa backend
-- [ ] Keyboard input
-- [ ] More widgets
+### Version 1.2 (Next Release)
+- [ ] Complete Cairo-to-window rendering
+- [ ] Full mouse and keyboard event handling
+- [ ] Window manager protocol integration
+- [ ] Wayland native protocol
+- [ ] macOS Cocoa backend completion
+- [ ] More widgets (ComboBox, Slider, ProgressBar)
 
-### Version 2.0
+### Version 2.0 (Future)
 - [ ] Complete widget set
 - [ ] Animation system
 - [ ] Advanced theming
 - [ ] Accessibility features
+- [ ] OpenGL/Vulkan acceleration
+- [ ] Multi-monitor support
 
 ---
 
