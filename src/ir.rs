@@ -505,7 +505,15 @@ impl Generator {
             },
             Statement::For { variable, iterable, body, else_branch: _, .. } => {
                 self.process_expression(module, &iterable)?;
-                let iterable_var = "temp_iterable".to_string();
+                // Get the result variable from the last instruction
+                let iterable_var = module.globals.last()
+                    .and_then(|instr| match instr {
+                        IRInstruction::LoadConst { result, .. } => Some(result.clone()),
+                        IRInstruction::Call { result, .. } => result.clone(),
+                        IRInstruction::LoadGlobal { result, .. } => Some(result.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "temp_iterable".to_string());
 
                 let mut body_instructions = Vec::new();
                 for stmt in body {
@@ -627,7 +635,15 @@ impl Generator {
             },
             Statement::For { variable, iterable, body, else_branch: _, .. } => {
                 self.process_expression_for_instructions(instructions, &iterable)?;
-                let iterable_var = "temp_iterable".to_string();
+                // Get the result variable from the last instruction
+                let iterable_var = instructions.last()
+                    .and_then(|instr| match instr {
+                        IRInstruction::LoadConst { result, .. } => Some(result.clone()),
+                        IRInstruction::Call { result, .. } => result.clone(),
+                        IRInstruction::LoadGlobal { result, .. } => Some(result.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "temp_iterable".to_string());
 
                 let mut body_instructions = Vec::new();
                 for stmt in body {

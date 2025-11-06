@@ -17,6 +17,7 @@ pub mod expressions;
 pub mod statements;
 pub mod compiler;
 pub mod imports;
+pub mod type_inference;
 
 use crate::codegen::{CodeGenerator, CodegenOptions, Target};
 use crate::ir::{IRModule, IRFunction, IRInstruction, IRTypeInfo};
@@ -599,51 +600,89 @@ impl CTranspiler {
             return Ok(main_code);
         }
 
+        // Run type inference on the module
+        let mut type_ctx = type_inference::TypeInferenceContext::new();
+        type_ctx.analyze_module(module);
+
         main_code.push_str("int main() {\n");
 
         // Track declared variables
         let mut declared_vars = HashSet::new();
 
-        // Collect all variable names
-        for instruction in &module.globals {
-            match instruction {
-                IRInstruction::LoadConst { result, .. } => {
-                    declared_vars.insert(result.clone());
+        // Collect ALL variable names used in the module (comprehensive)
+        fn collect_vars_from_instruction(instr: &IRInstruction, vars: &mut HashSet<String>) {
+            match instr {
+                IRInstruction::LoadConst { result, .. } => { vars.insert(result.clone()); }
+                IRInstruction::LoadGlobal { result, name } => {
+                    vars.insert(result.clone());
+                    vars.insert(name.clone());
                 }
-                IRInstruction::LoadGlobal { result, .. } => {
-                    declared_vars.insert(result.clone());
+                IRInstruction::LoadTypedGlobal { result, name, .. } => {
+                    vars.insert(result.clone());
+                    vars.insert(name.clone());
                 }
-                IRInstruction::LoadTypedGlobal { result, .. } => {
-                    declared_vars.insert(result.clone());
+                IRInstruction::StoreGlobal { name, value } => {
+                    vars.insert(name.clone());
+                    vars.insert(value.clone());
                 }
-                IRInstruction::Call { result: Some(result), .. } => {
-                    declared_vars.insert(result.clone());
-                }
-                IRInstruction::Call { func, args, result: None } => {
-                    // For method calls with no result, we still need to track them
-                    if func.contains("__") && !args.is_empty() {
-                        declared_vars.insert(args[0].clone()); // First arg is self
+                IRInstruction::Call { result: Some(result), args, .. } => {
+                    vars.insert(result.clone());
+                    for arg in args {
+                        vars.insert(arg.clone());
                     }
                 }
-                IRInstruction::BinaryOp { result, .. } => {
-                    declared_vars.insert(result.clone());
+                IRInstruction::Call { func, args, .. } => {
+                    for arg in args {
+                        vars.insert(arg.clone());
+                    }
+                    if func.contains("__") && !args.is_empty() {
+                        vars.insert(args[0].clone());
+                    }
                 }
-                IRInstruction::TypedBinaryOp { result, .. } => {
-                    declared_vars.insert(result.clone());
+                IRInstruction::BinaryOp { result, left, right, .. } => {
+                    vars.insert(result.clone());
+                    vars.insert(left.clone());
+                    vars.insert(right.clone());
+                }
+                IRInstruction::TypedBinaryOp { result, left, right, .. } => {
+                    vars.insert(result.clone());
+                    vars.insert(left.clone());
+                    vars.insert(right.clone());
                 }
                 IRInstruction::ObjectCreate { result, .. } => {
-                    declared_vars.insert(result.clone());
+                    vars.insert(result.clone());
                 }
-                IRInstruction::ObjectGetAttr { result, .. } => {
-                    declared_vars.insert(result.clone());
+                IRInstruction::ObjectGetAttr { result, object, .. } => {
+                    vars.insert(result.clone());
+                    vars.insert(object.clone());
+                }
+                IRInstruction::For { variable, iterable, body } => {
+                    vars.insert(variable.clone());
+                    vars.insert(iterable.clone());
+                    for body_instr in body {
+                        collect_vars_from_instruction(body_instr, vars);
+                    }
                 }
                 _ => {}
             }
         }
 
-        // Declare all variables
+        for instruction in &module.globals {
+            collect_vars_from_instruction(instruction, &mut declared_vars);
+        }
+
+        // Declare all variables with their inferred types
         for var_name in &declared_vars {
-            main_code.push_str(&format!("    tauraro_value_t* {} = NULL;\n", var_name));
+            let c_type = type_ctx.get_c_type(var_name);
+            if c_type == "int64_t" {
+                main_code.push_str(&format!("    int64_t {} = 0;\n", var_name));
+            } else if c_type == "double" {
+                main_code.push_str(&format!("    double {} = 0.0;\n", var_name));
+            } else if c_type == "bool" {
+                main_code.push_str(&format!("    bool {} = false;\n", var_name));
+            } else {
+                main_code.push_str(&format!("    tauraro_value_t* {} = NULL;\n", var_name));
+            }
         }
 
         // Generate class initialization code (if OOP is used)
@@ -683,7 +722,7 @@ impl CTranspiler {
         // Execute global instructions (pass module and constructor args for context)
         for (idx, instruction) in module.globals.iter().enumerate() {
             let args = constructor_args.get(&idx).cloned().unwrap_or_default();
-            main_code.push_str(&format!("    {}\n", self.generate_global_instruction_with_context(instruction, module, &args)?));
+            main_code.push_str(&format!("    {}\n", self.generate_global_instruction_with_context(instruction, module, &args, &type_ctx)?));
         }
 
         // Call main_function if it exists
@@ -698,7 +737,7 @@ impl CTranspiler {
     }
 
     /// Generate code for a global instruction with full module context and constructor arguments
-    fn generate_global_instruction_with_context(&self, instruction: &IRInstruction, module: &IRModule, constructor_args: &[String]) -> Result<String> {
+    fn generate_global_instruction_with_context(&self, instruction: &IRInstruction, module: &IRModule, constructor_args: &[String], type_ctx: &type_inference::TypeInferenceContext) -> Result<String> {
         // Special handling for ObjectCreate to inject __init__ calls
         if let IRInstruction::ObjectCreate { class_name, result } = instruction {
             let mut code = format!("{} = tauraro_object_create(\"{}\");", result, class_name);
@@ -733,6 +772,111 @@ impl CTranspiler {
 
             code.push_str("    }");
             return Ok(code);
+        }
+
+        // Check for optimizable integer operations
+        match instruction {
+            IRInstruction::LoadConst { value: crate::value::Value::Int(i), result }
+                if type_ctx.is_optimizable_int(result) => {
+                // Generate optimized code for integer constant
+                return Ok(format!("{} = {};", result, i));
+            }
+            IRInstruction::BinaryOp { op, left, right, result }
+                if type_ctx.is_optimizable_int(result) &&
+                   type_ctx.is_optimizable_int(left) &&
+                   type_ctx.is_optimizable_int(right) => {
+                // Generate optimized code for integer binary operations
+                let op_str = match op {
+                    crate::ast::BinaryOp::Add => "+",
+                    crate::ast::BinaryOp::Sub => "-",
+                    crate::ast::BinaryOp::Mul => "*",
+                    crate::ast::BinaryOp::Div => "/",
+                    crate::ast::BinaryOp::Mod => "%",
+                    crate::ast::BinaryOp::Lt => "<",
+                    crate::ast::BinaryOp::Le => "<=",
+                    crate::ast::BinaryOp::Gt => ">",
+                    crate::ast::BinaryOp::Ge => ">=",
+                    crate::ast::BinaryOp::Eq => "==",
+                    crate::ast::BinaryOp::Ne => "!=",
+                    _ => {
+                        // Fallback to standard handler for unsupported ops
+                        return self.generate_global_instruction(instruction, &module.type_info);
+                    }
+                };
+                return Ok(format!("{} = {} {} {};", result, left, op_str, right));
+            }
+            IRInstruction::StoreGlobal { name, value }
+                if type_ctx.is_optimizable_int(name) && type_ctx.is_optimizable_int(value) => {
+                // Direct assignment for integers
+                return Ok(format!("{} = {};", name, value));
+            }
+            IRInstruction::Call { func, args, result } if args.iter().any(|arg| type_ctx.is_optimizable_int(arg)) => {
+                // Handle builtin function calls with optimized integer arguments
+                // Need to convert int64_t to tauraro_value_t* temporarily
+                let mut code_lines = Vec::new();
+                let mut converted_args = Vec::new();
+
+                for (i, arg) in args.iter().enumerate() {
+                    if type_ctx.is_optimizable_int(arg) {
+                        // Create temporary tauraro_value_t* for this argument
+                        let temp_var = format!("{}_as_value", arg);
+                        code_lines.push(format!("tauraro_value_t* {} = tauraro_value_new();", temp_var));
+                        code_lines.push(format!("{}->type = TAURARO_INT;", temp_var));
+                        code_lines.push(format!("{}->data.int_val = {};", temp_var, arg));
+                        converted_args.push(temp_var);
+                    } else {
+                        converted_args.push(arg.clone());
+                    }
+                }
+
+                // Generate the function call (add tauraro_ prefix if needed)
+                let func_name = if func.starts_with("tauraro_") {
+                    func.clone()
+                } else {
+                    format!("tauraro_{}", func)
+                };
+                let args_str = converted_args.join(", ");
+                if let Some(res) = result {
+                    code_lines.push(format!("{} = {}({}, (tauraro_value_t*[]){{{}}});", res, func_name, args.len(), args_str));
+                } else {
+                    code_lines.push(format!("{}({}, (tauraro_value_t*[]){{{}}});", func_name, args.len(), args_str));
+                }
+
+                return Ok(code_lines.join(" "));
+            }
+            IRInstruction::For { variable, iterable, body } if type_ctx.is_optimizable_int(variable) => {
+                // Generate optimized For loop for integer variables
+                let mut code = String::new();
+                let iterator_var = format!("{}_iter", variable);
+                let index_var = format!("{}_index", variable);
+
+                code.push_str(&format!("// For loop: {} in {} (optimized)\n", variable, iterable));
+                code.push_str(&format!("    tauraro_value_t* {} = {};\n", iterator_var, iterable));
+                code.push_str(&format!("    int {} = 0;\n", index_var));
+
+                // Only handle RANGE for now (most common case)
+                code.push_str(&format!("    if ({}->type == TAURARO_RANGE) {{\n", iterator_var));
+                code.push_str(&format!("        int start = {}->data.range_val->start;\n", iterator_var));
+                code.push_str(&format!("        int stop = {}->data.range_val->stop;\n", iterator_var));
+                code.push_str(&format!("        int step = {}->data.range_val->step;\n", iterator_var));
+                code.push_str(&format!("        for ({} = start; (step > 0) ? ({} < stop) : ({} > stop); {} += step) {{\n",
+                    variable, variable, variable, variable));
+
+                // Generate body with optimized instructions
+                for instruction in body {
+                    let instr_code = self.generate_global_instruction_with_context(instruction, module, &[], type_ctx)?;
+                    code.push_str(&format!("            {}\n", instr_code));
+                }
+
+                code.push_str("        }\n");
+                code.push_str("    } else {\n");
+                code.push_str("        // Fallback for non-range iterables\n");
+                code.push_str("        // TODO: Handle list/tuple/etc\n");
+                code.push_str("    }");
+
+                return Ok(code);
+            }
+            _ => {}
         }
 
         // For all other instructions, use the standard handler
@@ -1330,11 +1474,11 @@ impl CTranspiler {
 
                 // Handle different iterable types
                 code.push_str(&format!("    if ({}->type == TAURARO_LIST) {{\n", iterator_var));
-                code.push_str(&format!("        int iter_len = tauraro_len(1, (tauraro_value_t*[]){{{}}})-> data.int_val;\n", iterator_var));
+                code.push_str(&format!("        int iter_len = {}->data.list_val->size;\n", iterator_var));
                 code.push_str(&format!("        for ({} = 0; {} < iter_len; {}++) {{\n", index_var, index_var, index_var));
 
                 // Get current element
-                code.push_str(&format!("            tauraro_value_t* {} = {}->data.list_val[{}];\n", variable, iterator_var, index_var));
+                code.push_str(&format!("            tauraro_value_t* {} = {}->data.list_val->items[{}];\n", variable, iterator_var, index_var));
 
                 // Generate body
                 for instruction in body {
@@ -1345,15 +1489,17 @@ impl CTranspiler {
                 code.push_str("        }\n");
                 code.push_str("    } else if (");
                 code.push_str(&format!("{}->type == TAURARO_RANGE) {{\n", iterator_var));
-                code.push_str(&format!("        int start = {}->data.range_val.start;\n", iterator_var));
-                code.push_str(&format!("        int stop = {}->data.range_val.stop;\n", iterator_var));
-                code.push_str(&format!("        int step = {}->data.range_val.step;\n", iterator_var));
-                code.push_str(&format!("        for (int i = start; (step > 0) ? (i < stop) : (i > stop); i += step) {{\n"));
+                code.push_str(&format!("        int start = {}->data.range_val->start;\n", iterator_var));
+                code.push_str(&format!("        int stop = {}->data.range_val->stop;\n", iterator_var));
+                code.push_str(&format!("        int step = {}->data.range_val->step;\n", iterator_var));
+                let c_loop_var = format!("{}_c_loop_idx", variable);
+                code.push_str(&format!("        for (int {} = start; (step > 0) ? ({} < stop) : ({} > stop); {} += step) {{\n",
+                    c_loop_var, c_loop_var, c_loop_var, c_loop_var));
 
                 // Create tauraro_value_t for the loop variable
                 code.push_str(&format!("            tauraro_value_t* {} = tauraro_value_new();\n", variable));
                 code.push_str(&format!("            {}->type = TAURARO_INT;\n", variable));
-                code.push_str(&format!("            {}->data.int_val = i;\n", variable));
+                code.push_str(&format!("            {}->data.int_val = {};\n", variable, c_loop_var));
 
                 // Generate body
                 for instruction in body {
