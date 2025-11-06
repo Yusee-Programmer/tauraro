@@ -43,6 +43,7 @@ Tauraro includes a comprehensive standard library with modules for common progra
 | Module | Description |
 |--------|-------------|
 | `serveit` | High-performance ASGI web server (like uvicorn) |
+| `templa` | High-performance template engine (like Jinja2) |
 | `httpx` | Modern HTTP client with sync/async support |
 | `httptools` | HTTP parsing and URL utilities |
 | `websockets` | WebSocket client and server |
@@ -867,6 +868,187 @@ ServEit is built on Rust's Tokio and Hyper, providing:
 - WebSocket servers (via ASGI)
 - Static file serving
 - SSR (Server-Side Rendering)
+
+### templa - Template Engine
+
+High-performance template engine similar to Jinja2, built for speed and security.
+
+```python
+import templa
+
+# Simple template rendering
+result = templa.render_string("Hello, {{ name }}!", {"name": "World"})
+# Output: "Hello, World!"
+
+# With filters
+result = templa.render_string(
+    "{{ title|upper }} by {{ author|capitalize }}",
+    {"title": "tauraro guide", "author": "team"}
+)
+# Output: "TAURARO GUIDE by Team"
+
+# Conditional rendering
+template = """
+{% if user %}
+    Welcome, {{ user.name }}!
+{% endif %}
+"""
+result = templa.render_string(template, {"user": {"name": "Alice"}})
+
+# Loop rendering
+template = """
+<ul>
+{% for item in items %}
+    <li>{{ item }}</li>
+{% endfor %}
+</ul>
+"""
+result = templa.render_string(template, {"items": ["Apple", "Banana", "Cherry"]})
+
+# Create reusable templates
+template = templa.Template("{{ greeting }}, {{ name }}!")
+result1 = template.render({"greeting": "Hello", "name": "Alice"})
+result2 = template.render({"greeting": "Hi", "name": "Bob"})
+```
+
+**Built-in Filters:**
+
+```python
+# String filters
+{{ text|upper }}        # Convert to uppercase
+{{ text|lower }}        # Convert to lowercase
+{{ text|capitalize }}   # Capitalize first letter
+{{ text|title }}        # Title case (capitalize each word)
+{{ text|trim }}         # Remove whitespace
+{{ text|reverse }}      # Reverse string
+
+# Utility filters
+{{ items|length }}      # Get length
+{{ html|escape }}       # HTML escape (automatic by default)
+{{ html|safe }}         # Mark as safe (no escaping)
+
+# Chained filters
+{{ text|lower|capitalize }}  # Apply multiple filters
+```
+
+**Template Syntax:**
+
+```python
+# Variables
+{{ variable }}
+{{ object.property }}
+
+# Filters
+{{ variable|filter }}
+{{ variable|filter1|filter2 }}
+
+# Conditionals
+{% if condition %}
+    ...
+{% endif %}
+
+# Loops
+{% for item in list %}
+    {{ item }}
+{% endfor %}
+
+{% for key, value in dict %}
+    {{ key }}: {{ value }}
+{% endfor %}
+
+# Comments
+{# This is a comment #}
+```
+
+**Security Features:**
+
+```python
+# Auto-escaping enabled by default
+result = templa.render_string(
+    "{{ html }}",
+    {"html": "<script>alert('xss')</script>"}
+)
+# Output: "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+
+# Disable auto-escaping if needed
+template = templa.Template("{{ html }}", autoescape=False)
+
+# Or use the safe filter
+result = templa.render_string("{{ html|safe }}", {"html": "<b>Bold</b>"})
+```
+
+**Environment and Loader:**
+
+```python
+# Create environment
+env = templa.Environment()
+
+# File system loader
+loader = templa.FileSystemLoader("templates/")
+template = loader.load(loader, "index.html")
+result = template.render({"title": "Home"})
+
+# Escape HTML manually
+safe_html = templa.escape("<script>alert('xss')</script>")
+```
+
+**Features:**
+- Jinja2-like syntax
+- Variable interpolation with `{{ }}`
+- Control structures: `{% if %}`, `{% for %}`
+- Built-in filters for common operations
+- Auto-escaping for XSS protection
+- Template caching for performance
+- Dot notation for nested objects
+- Filter chaining
+- Comments with `{# #}`
+- Fast rendering (compiled templates)
+- Memory-safe (built in Rust)
+
+**Performance:**
+Templa is built in Rust and optimized for:
+- Fast template parsing
+- Efficient rendering
+- Low memory usage
+- Thread-safe operations
+- Production-ready performance
+
+**Common Use Cases:**
+- HTML generation for web apps
+- Email templates
+- Report generation
+- Dynamic configuration files
+- SSR (Server-Side Rendering)
+- Static site generation
+
+**Integration with ServEit:**
+
+```python
+import serveit
+import templa
+
+def app(scope):
+    path = scope.get("path", "/")
+
+    if path == "/":
+        html = templa.render_string("""
+        <!DOCTYPE html>
+        <html>
+        <head><title>{{ title }}</title></head>
+        <body>
+            <h1>{{ heading }}</h1>
+            <p>{{ message }}</p>
+        </body>
+        </html>
+        """, {
+            "title": "Welcome",
+            "heading": "Hello from Tauraro!",
+            "message": "Powered by ServEit + Templa"
+        })
+        return serveit.HTMLResponse(html)
+
+serveit.run(app, port=8000)
+```
 
 ### websockets - WebSocket Support
 
