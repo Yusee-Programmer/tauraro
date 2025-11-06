@@ -112,9 +112,23 @@ class Color:
         return (self.r, self.g, self.b, self.a)
     def to_hex(self):
         # Convert to hex string
-        r_hex = hex(int(self.r * 255))[2:].zfill(2)
-        g_hex = hex(int(self.g * 255))[2:].zfill(2)
-        b_hex = hex(int(self.b * 255))[2:].zfill(2)
+        r_val = int(self.r * 255)
+        g_val = int(self.g * 255)
+        b_val = int(self.b * 255)
+
+        # Convert to hex and pad with zeros if needed
+        r_hex = hex(r_val)[2:]
+        if len(r_hex) < 2:
+            r_hex = "0" + r_hex
+
+        g_hex = hex(g_val)[2:]
+        if len(g_hex) < 2:
+            g_hex = "0" + g_hex
+
+        b_hex = hex(b_val)[2:]
+        if len(b_hex) < 2:
+            b_hex = "0" + b_hex
+
         return "#" + r_hex + g_hex + b_hex
 # Pre-defined colors
 class Colors:
@@ -170,6 +184,141 @@ class Size:
     def __init__(self, width, height):
         self.width = width
         self.height = height
+
+# Button class
+class Button:
+    # Represents a clickable button widget
+    def __init__(self, x, y, width, height, text, callback=None):
+        self.rect = Rect(x, y, width, height)
+        self.text = text
+        self.callback = callback
+        self.bg_color = Colors.BUTTON_BG
+        self.text_color = Colors.FOREGROUND
+        self.border_color = Colors.BORDER
+        self.is_hovered = False
+        self.is_pressed = False
+
+    def contains(self, px, py):
+        # Check if point is inside button
+        return self.rect.contains(px, py)
+
+    def on_mouse_move(self, x, y):
+        # Handle mouse movement
+        self.is_hovered = self.contains(x, y)
+
+    def on_mouse_down(self, x, y):
+        # Handle mouse down
+        if self.contains(x, y):
+            self.is_pressed = True
+            return True
+        return False
+
+    def on_mouse_up(self, x, y):
+        # Handle mouse up
+        was_pressed = self.is_pressed
+        self.is_pressed = False
+        if was_pressed and self.contains(x, y):
+            if self.callback:
+                self.callback()
+            return True
+        return False
+
+    def draw(self, ctx):
+        # Draw the button (simplified - would use Cairo in real implementation)
+        # Determine button color based on state
+        if self.is_pressed:
+            bg = Colors.BUTTON_ACTIVE
+        elif self.is_hovered:
+            bg = Colors.BUTTON_HOVER
+        else:
+            bg = self.bg_color
+
+        # In a real implementation, this would call Cairo functions
+        # For now, just print what we'd draw
+        print("  Drawing button at (" + str(self.rect.x) + ", " + str(self.rect.y) + ")")
+        print("    Size: " + str(self.rect.width) + "x" + str(self.rect.height))
+        print("    Text: " + self.text)
+
+# Window class
+class Window:
+    # Represents a GUI window
+    def __init__(self, title, width, height):
+        self.title = title
+        self.width = width
+        self.height = height
+        self.bg_color = Colors.BACKGROUND
+        self.widgets = []
+        self.is_running = False
+
+    def add_widget(self, widget):
+        # Add a widget (button, etc.) to the window
+        # Workaround: Create new list with appended widget
+        new_widgets = []
+        for w in self.widgets:
+            new_widgets.append(w)
+        new_widgets.append(widget)
+        self.widgets = new_widgets
+
+    def handle_mouse_move(self, x, y):
+        # Handle mouse movement events
+        for widget in self.widgets:
+            if hasattr(widget, "on_mouse_move"):
+                widget.on_mouse_move(x, y)
+
+    def handle_mouse_down(self, x, y):
+        # Handle mouse down events
+        for widget in self.widgets:
+            if hasattr(widget, "on_mouse_down"):
+                if widget.on_mouse_down(x, y):
+                    return True
+        return False
+
+    def handle_mouse_up(self, x, y):
+        # Handle mouse up events
+        for widget in self.widgets:
+            if hasattr(widget, "on_mouse_up"):
+                if widget.on_mouse_up(x, y):
+                    return True
+        return False
+
+    def draw(self):
+        # Draw the window and all widgets
+        print("\n[Drawing Window: " + self.title + "]")
+        print("  Size: " + str(self.width) + "x" + str(self.height))
+        print("  Background: " + self.bg_color.to_hex())
+        print("  Widgets: " + str(len(self.widgets)))
+
+        for widget in self.widgets:
+            if hasattr(widget, "draw"):
+                widget.draw(None)
+
+    def show(self):
+        # Display the window (simplified)
+        print("\n[Showing Window: " + self.title + "]")
+        self.is_running = True
+        self.draw()
+        print("\n[Window displayed - In a full implementation, this would create an actual OS window]")
+        print("[Note: For actual window creation, X11/Win32/Cocoa integration needed]")
+        return True
+
+    def run(self):
+        # Run the event loop (simplified)
+        print("\n[Starting event loop for: " + self.title + "]")
+        self.show()
+
+        # Simulate some events
+        print("\n[Simulating mouse events...]")
+
+        # Simulate mouse hover over first button
+        if len(self.widgets) > 0:
+            btn = self.widgets[0]
+            if hasattr(btn, "rect"):
+                print("  Mouse move to button at (" + str(btn.rect.x + 10) + ", " + str(btn.rect.y + 10) + ")")
+                self.handle_mouse_move(btn.rect.x + 10, btn.rect.y + 10)
+
+        print("\n[Event loop complete]")
+        print("[In a full implementation, this would run until window is closed]")
+
 # Initialize framework
 def init():
     # Initialize the GuiDesktop framework

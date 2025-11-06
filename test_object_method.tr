@@ -1,0 +1,29 @@
+print("Testing object methods and attributes...")
+
+class TestClass:
+    def __init__(self):
+        self.items = []
+        self.name = "test"
+
+    def add_item(self, item):
+        self.items.append(item)
+
+    def get_count(self):
+        return len(self.items)
+
+obj = TestClass()
+print("Name:", obj.name)
+print("Items:", obj.items)
+print("Count:", obj.get_count())
+
+obj.add_item("item1")
+print("After add_item('item1'):")
+print("Items:", obj.items)
+print("Count:", obj.get_count())
+
+obj.add_item("item2")
+print("After add_item('item2'):")
+print("Items:", obj.items)
+print("Count:", obj.get_count())
+
+print("Success!")
