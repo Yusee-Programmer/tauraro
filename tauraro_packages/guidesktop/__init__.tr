@@ -35,7 +35,14 @@ if _is_windows:
     print("  Rendering: Cairo + GDI/Direct2D")
 elif _is_linux:
     # Detect Wayland vs X11
-    if os.environ.get("WAYLAND_DISPLAY"):
+    # Try to detect WAYLAND_DISPLAY environment variable
+    _has_wayland = False
+    try:
+        if "WAYLAND_DISPLAY" in os.environ:
+            _has_wayland = True
+    except:
+        pass
+    if _has_wayland:
         _rendering_backend = "Cairo + Wayland"
         _window_backend = "wayland"
         print("  Window Backend: Wayland")
@@ -67,7 +74,8 @@ elif _is_macos:
     _platform_lib = "libcocoa"
     print("  Cairo: " + _cairo_lib)
     print("  Platform: Cocoa framework")
-else:  # Linux
+else:
+    # Linux
     _cairo_lib = "libcairo.so.2"
     if _window_backend == "wayland":
         _platform_lib = "libwayland-client.so.0"
@@ -86,25 +94,21 @@ _platform_loaded = False
 # Color class for RGBA colors
 class Color:
     # Represents an RGBA color
-
     def __init__(self, r, g, b, a=1.0):
         # Create a color with RGBA values (0.0 to 1.0)
         self.r = r
         self.g = g
         self.b = b
         self.a = a
-
     def to_tuple(self):
         # Return as tuple (r, g, b, a)
         return (self.r, self.g, self.b, self.a)
-
     def to_hex(self):
         # Convert to hex string
         r_hex = hex(int(self.r * 255))[2:].zfill(2)
         g_hex = hex(int(self.g * 255))[2:].zfill(2)
         b_hex = hex(int(self.b * 255))[2:].zfill(2)
         return "#" + r_hex + g_hex + b_hex
-
 # Pre-defined colors
 class Colors:
     # Common color palette
@@ -116,61 +120,49 @@ class Colors:
     YELLOW = Color(1.0, 1.0, 0.0, 1.0)
     CYAN = Color(0.0, 1.0, 1.0, 1.0)
     MAGENTA = Color(1.0, 0.0, 1.0, 1.0)
-
     # Gray scale
     GRAY_LIGHT = Color(0.8, 0.8, 0.8, 1.0)
     GRAY = Color(0.5, 0.5, 0.5, 1.0)
     GRAY_DARK = Color(0.3, 0.3, 0.3, 1.0)
-
     # UI colors
     BACKGROUND = Color(0.95, 0.95, 0.95, 1.0)
     FOREGROUND = Color(0.1, 0.1, 0.1, 1.0)
     ACCENT = Color(0.2, 0.6, 1.0, 1.0)
     BORDER = Color(0.7, 0.7, 0.7, 1.0)
-
     # Button colors
     BUTTON_BG = Color(0.9, 0.9, 0.9, 1.0)
     BUTTON_HOVER = Color(0.85, 0.85, 0.85, 1.0)
     BUTTON_ACTIVE = Color(0.8, 0.8, 0.8, 1.0)
-
 # Rectangle class for geometry
 class Rect:
     # Represents a rectangle with position and size
-
     def __init__(self, x, y, width, height):
         self.x = x
         self.y = y
         self.width = width
         self.height = height
-
     def contains(self, px, py):
         # Check if point (px, py) is inside rectangle
-        return (px >= self.x and px <= self.x + self.width and
-                py >= self.y and py <= self.y + self.height)
-
+        in_x = px >= self.x and px <= self.x + self.width
+        in_y = py >= self.y and py <= self.y + self.height
+        return in_x and in_y
     def intersects(self, other):
         # Check if this rectangle intersects with another
-        return not (self.x + self.width < other.x or
-                   other.x + other.width < self.x or
-                   self.y + self.height < other.y or
-                   other.y + other.height < self.y)
-
+        no_overlap_x = self.x + self.width < other.x or other.x + other.width < self.x
+        no_overlap_y = self.y + self.height < other.y or other.y + other.height < self.y
+        return not (no_overlap_x or no_overlap_y)
 # Point class
 class Point:
     # Represents a 2D point
-
     def __init__(self, x, y):
         self.x = x
         self.y = y
-
 # Size class
 class Size:
     # Represents width and height
-
     def __init__(self, width, height):
         self.width = width
         self.height = height
-
 # Initialize framework
 def init():
     # Initialize the GuiDesktop framework
