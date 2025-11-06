@@ -1,0 +1,8 @@
+# Test global keyword
+_module_var = "I am a module variable"
+
+def test_func():
+    global _module_var
+    print("With global keyword:", _module_var)
+
+test_func()

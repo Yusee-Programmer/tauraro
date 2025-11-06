@@ -1,0 +1,5 @@
+import guidesktop
+
+print("\n=== Testing GuiDesktop init() ===")
+result = guidesktop.init()
+print("Result:", result)

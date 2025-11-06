@@ -1,0 +1,4 @@
+import test_conditional_module
+
+print("From main: _conditional_var =", test_conditional_module._conditional_var)
+test_conditional_module.test_func()

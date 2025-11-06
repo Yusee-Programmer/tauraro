@@ -1,0 +1,4 @@
+import test_module_globals
+
+print("Testing imported module function:")
+test_module_globals.test_func()

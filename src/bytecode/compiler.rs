@@ -440,6 +440,7 @@ impl SuperCompiler {
                     captured_scope: HashMap::new(),
                     docstring: None,
                     compiled_code: Some(Box::new(func_code)),
+                    module_globals: None, // Will be set when function is defined in a module
                 };
                 
                 // Add the function to constants and create a LoadConst instruction
@@ -682,6 +683,7 @@ impl SuperCompiler {
                                 captured_scope: HashMap::new(),
                                 docstring: docstring.clone(),
                                 compiled_code: Some(Box::new(method_code)), // Store the compiled code directly in the Closure
+                                module_globals: None, // Methods don't need module_globals
                             };
 
                             // Apply decorators if any

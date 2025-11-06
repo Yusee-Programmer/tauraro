@@ -1,0 +1,11 @@
+# Test conditional assignment in module
+_flag = True
+
+if _flag:
+    _conditional_var = "inside if block"
+else:
+    _conditional_var = "inside else block"
+
+def test_func():
+    global _conditional_var
+    print("_conditional_var =", _conditional_var)
