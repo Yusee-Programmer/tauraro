@@ -41,8 +41,8 @@ cc = "1.0"
 # Python interop
 pyo3 = { version = "0.20", features = ["auto-initialize", "macros"], optional = true }
 
-# Async runtime
-tokio = { version = "1.0", features = ["full"], optional = true }
+# Async runtime (always compiled for modules)
+tokio = { version = "1.0", features = ["full"] }
 chrono = { version = "0.4.42", features = ["serde"] }
 rustyline = "10.0.0"
 rustyline-derive = "0.7.0"
@@ -61,14 +61,14 @@ libc = "0.2"
 # Hostname for socket module
 hostname = "0.3"
 
-# HTTP and WebSocket libraries
-hyper = { version = "1.0", features = ["full"], optional = true }
-reqwest = { version = "0.11", features = ["json", "stream"], optional = true }
-tungstenite = { version = "0.21", optional = true }
-tokio-tungstenite = { version = "0.21", optional = true }
+# HTTP and WebSocket libraries (always compiled)
+hyper = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json", "stream", "blocking"] }
+tungstenite = "0.21"
+tokio-tungstenite = "0.21"
 http = "1.0"
 httparse = "1.8"
-futures = { version = "0.3", optional = true }
+futures = "0.3"
 
 # Cryptographic hashing
 sha1 = "0.10"
@@ -77,7 +77,7 @@ sha3 = "0.10"
 md5 = { package = "md-5", version = "0.10" }
 
 [features]
-default = ["interpreter", "async", "clang", "http", "ffi"]
+default = ["interpreter", "clang", "ffi", "async", "http"]
 interpreter = []  # VM-based execution
 llvm = ["dep:llvm-sys", "dep:inkwell"]  # LLVM backend
 wasm = ["dep:wasmer", "dep:object"]  # WebAssembly backend
@@ -86,8 +86,8 @@ clang = []  # Clang backend for native compilation
 gcc = []  # GCC backend for native compilation
 ffi = ["dep:libffi", "dep:libloading", "dep:winapi"]  # Foreign Function Interface
 python-interop = ["dep:pyo3"]  # Python interoperability
-async = ["dep:tokio", "dep:futures"]  # Async/await support
-http = ["dep:hyper", "dep:reqwest", "dep:tungstenite", "dep:tokio-tungstenite"]  # HTTP and WebSocket support
+async = []  # Async/await support (now always available)
+http = []  # HTTP and WebSocket support (now always available)
 jit = ["dep:cranelift", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit"]  # JIT compilation with Cranelift
 test-llvm = []  # Feature for testing LLVM backend
 type_checking = []  # Runtime type checking support
