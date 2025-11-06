@@ -28,6 +28,23 @@ use crate::ast::Type;
 use anyhow::Result;
 use std::collections::{HashSet, HashMap};
 use std::path::Path;
+use std::cell::Cell;
+
+thread_local! {
+    static UNIQUE_COUNTER: Cell<usize> = Cell::new(0);
+}
+
+fn get_unique_id() -> usize {
+    UNIQUE_COUNTER.with(|counter| {
+        let id = counter.get();
+        counter.set(id + 1);
+        id
+    })
+}
+
+fn reset_unique_counter() {
+    UNIQUE_COUNTER.with(|counter| counter.set(0));
+}
 
 /// C Transpiler that converts Tauraro IR to C code
 pub struct CTranspiler {
@@ -656,6 +673,9 @@ impl CTranspiler {
             return Ok(main_code);
         }
 
+        // Reset unique counter for deterministic and unique variable names
+        reset_unique_counter();
+
         main_code.push_str("int main() {\n");
 
         // Track declared variables
@@ -840,11 +860,14 @@ impl CTranspiler {
             if class_analysis.optimizable_classes.contains_key(class_name) {
                 // OPTIMIZED: Use static struct constructor (100x faster!)
                 // Wrap the optimized struct in a tauraro_value_t for compatibility
+                // Use class name and unique counter to avoid collisions
+                let unique_id = get_unique_id();
+                let struct_var = format!("{}_{}_{}_struct", class_name.to_lowercase(), result, unique_id);
                 let mut code = format!("// OPTIMIZED: Static struct for {}\n    ", class_name);
-                code.push_str(&format!("{}_t* {}_struct = {}_new();\n    ", class_name, result, class_name));
+                code.push_str(&format!("{}_t* {} = {}_new();\n    ", class_name, struct_var, class_name));
                 code.push_str(&format!("{} = tauraro_value_new();\n    ", result));
                 code.push_str(&format!("{}->type = TAURARO_OBJECT;\n    ", result));
-                code.push_str(&format!("{}->data.ptr_val = (void*){}_struct;", result, result));
+                code.push_str(&format!("{}->data.ptr_val = (void*){};", result, struct_var));
                 return Ok(code);
             }
 
@@ -1032,31 +1055,35 @@ impl CTranspiler {
                 let mut code_lines = Vec::new();
                 let mut converted_args = Vec::new();
 
+                // Use unique counter to prevent variable name collisions
+                let unique_id = get_unique_id();
+                let unique_prefix = format!("{}_{}", result.as_ref().map(|r| r.as_str()).unwrap_or(func.as_str()), unique_id);
+
                 for (i, arg) in args.iter().enumerate() {
                     if type_ctx.is_optimizable_int(arg) {
-                        // Create temporary tauraro_value_t* for integer argument
-                        let temp_var = format!("{}_as_value", arg);
+                        // Create temporary tauraro_value_t* for integer argument with unique name
+                        let temp_var = format!("{}_{}_as_value", unique_prefix, arg);
                         code_lines.push(format!("tauraro_value_t* {} = tauraro_value_new();", temp_var));
                         code_lines.push(format!("{}->type = TAURARO_INT;", temp_var));
                         code_lines.push(format!("{}->data.int_val = {};", temp_var, arg));
                         converted_args.push(temp_var);
                     } else if type_ctx.is_optimizable_float(arg) {
-                        // Create temporary tauraro_value_t* for float argument
-                        let temp_var = format!("{}_as_value", arg);
+                        // Create temporary tauraro_value_t* for float argument with unique name
+                        let temp_var = format!("{}_{}_as_value", unique_prefix, arg);
                         code_lines.push(format!("tauraro_value_t* {} = tauraro_value_new();", temp_var));
                         code_lines.push(format!("{}->type = TAURARO_FLOAT;", temp_var));
                         code_lines.push(format!("{}->data.float_val = {};", temp_var, arg));
                         converted_args.push(temp_var);
                     } else if type_ctx.is_optimizable_string(arg) {
-                        // Create temporary tauraro_value_t* for string argument
-                        let temp_var = format!("{}_as_value", arg);
+                        // Create temporary tauraro_value_t* for string argument with unique name
+                        let temp_var = format!("{}_{}_as_value", unique_prefix, arg);
                         code_lines.push(format!("tauraro_value_t* {} = tauraro_value_new();", temp_var));
                         code_lines.push(format!("{}->type = TAURARO_STRING;", temp_var));
                         code_lines.push(format!("{}->data.str_val = {};", temp_var, arg));
                         converted_args.push(temp_var);
                     } else if type_ctx.is_optimizable_bool(arg) {
-                        // Create temporary tauraro_value_t* for bool argument
-                        let temp_var = format!("{}_as_value", arg);
+                        // Create temporary tauraro_value_t* for bool argument with unique name
+                        let temp_var = format!("{}_{}_as_value", unique_prefix, arg);
                         code_lines.push(format!("tauraro_value_t* {} = tauraro_value_new();", temp_var));
                         code_lines.push(format!("{}->type = TAURARO_BOOL;", temp_var));
                         code_lines.push(format!("{}->data.bool_val = {};", temp_var, arg));
@@ -1066,10 +1093,12 @@ impl CTranspiler {
                     }
                 }
 
-                // Generate the function call (add tauraro_ prefix if needed)
-                let func_name = if func.starts_with("tauraro_") {
+                // Generate the function call (add tauraro_ prefix only for builtins, not methods)
+                let func_name = if func.starts_with("tauraro_") || func.contains("__") {
+                    // Already prefixed or it's a method (Class__method), use as-is
                     func.clone()
                 } else {
+                    // It's a builtin function, add tauraro_ prefix
                     format!("tauraro_{}", func)
                 };
                 let args_str = converted_args.join(", ");

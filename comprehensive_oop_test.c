@@ -119,38 +119,68 @@ typedef struct tauraro_class {
 // Direct field access instead of hash tables
 // ============================================
 
+typedef struct Square_struct Square_t;
+typedef struct Person_struct Person_t;
+typedef struct Shape_struct Shape_t;
+typedef struct Animal_struct Animal_t;
+typedef struct Employee_struct Employee_t;
+typedef struct Eagle_struct Eagle_t;
 typedef struct Counter_struct Counter_t;
-typedef struct Car_struct Car_t;
-typedef struct Swimmable_struct Swimmable_t;
+typedef struct BankAccount_struct BankAccount_t;
+typedef struct Duck_struct Duck_t;
 typedef struct Flyable_struct Flyable_t;
 typedef struct Parrot_struct Parrot_t;
-typedef struct Builder_struct Builder_t;
-typedef struct Employee_struct Employee_t;
 typedef struct Bird_struct Bird_t;
-typedef struct Shape_struct Shape_t;
-typedef struct Vehicle_struct Vehicle_t;
-typedef struct Dog_struct Dog_t;
-typedef struct Person_struct Person_t;
-typedef struct Rectangle_struct Rectangle_t;
-typedef struct BankAccount_struct BankAccount_t;
 typedef struct Manager_struct Manager_t;
-typedef struct Duck_struct Duck_t;
-typedef struct Animal_struct Animal_t;
-typedef struct Eagle_struct Eagle_t;
-typedef struct Square_struct Square_t;
+typedef struct Builder_struct Builder_t;
+typedef struct Dog_struct Dog_t;
+typedef struct Vehicle_struct Vehicle_t;
+typedef struct Rectangle_struct Rectangle_t;
+typedef struct Swimmable_struct Swimmable_t;
+typedef struct Car_struct Car_t;
+
+// Optimized struct for class Square
+struct Square_struct {
+    char _dummy;  // Empty class placeholder
+};
+
+// Optimized struct for class Person
+struct Person_struct {
+    char _dummy;  // Empty class placeholder
+};
+
+// Optimized struct for class Shape
+struct Shape_struct {
+    char _dummy;  // Empty class placeholder
+};
+
+// Optimized struct for class Animal
+struct Animal_struct {
+    char _dummy;  // Empty class placeholder
+};
+
+// Optimized struct for class Employee
+struct Employee_struct {
+    char _dummy;  // Empty class placeholder
+};
+
+// Optimized struct for class Eagle
+struct Eagle_struct {
+    char _dummy;  // Empty class placeholder
+};
 
 // Optimized struct for class Counter
 struct Counter_struct {
     char _dummy;  // Empty class placeholder
 };
 
-// Optimized struct for class Car
-struct Car_struct {
+// Optimized struct for class BankAccount
+struct BankAccount_struct {
     char _dummy;  // Empty class placeholder
 };
 
-// Optimized struct for class Swimmable
-struct Swimmable_struct {
+// Optimized struct for class Duck
+struct Duck_struct {
     char _dummy;  // Empty class placeholder
 };
 
@@ -164,48 +194,8 @@ struct Parrot_struct {
     char _dummy;  // Empty class placeholder
 };
 
-// Optimized struct for class Builder
-struct Builder_struct {
-    char _dummy;  // Empty class placeholder
-};
-
-// Optimized struct for class Employee
-struct Employee_struct {
-    char _dummy;  // Empty class placeholder
-};
-
 // Optimized struct for class Bird
 struct Bird_struct {
-    char _dummy;  // Empty class placeholder
-};
-
-// Optimized struct for class Shape
-struct Shape_struct {
-    char _dummy;  // Empty class placeholder
-};
-
-// Optimized struct for class Vehicle
-struct Vehicle_struct {
-    char _dummy;  // Empty class placeholder
-};
-
-// Optimized struct for class Dog
-struct Dog_struct {
-    char _dummy;  // Empty class placeholder
-};
-
-// Optimized struct for class Person
-struct Person_struct {
-    char _dummy;  // Empty class placeholder
-};
-
-// Optimized struct for class Rectangle
-struct Rectangle_struct {
-    char _dummy;  // Empty class placeholder
-};
-
-// Optimized struct for class BankAccount
-struct BankAccount_struct {
     char _dummy;  // Empty class placeholder
 };
 
@@ -214,50 +204,96 @@ struct Manager_struct {
     char _dummy;  // Empty class placeholder
 };
 
-// Optimized struct for class Duck
-struct Duck_struct {
+// Optimized struct for class Builder
+struct Builder_struct {
     char _dummy;  // Empty class placeholder
 };
 
-// Optimized struct for class Animal
-struct Animal_struct {
+// Optimized struct for class Dog
+struct Dog_struct {
     char _dummy;  // Empty class placeholder
 };
 
-// Optimized struct for class Eagle
-struct Eagle_struct {
+// Optimized struct for class Vehicle
+struct Vehicle_struct {
     char _dummy;  // Empty class placeholder
 };
 
-// Optimized struct for class Square
-struct Square_struct {
+// Optimized struct for class Rectangle
+struct Rectangle_struct {
+    char _dummy;  // Empty class placeholder
+};
+
+// Optimized struct for class Swimmable
+struct Swimmable_struct {
+    char _dummy;  // Empty class placeholder
+};
+
+// Optimized struct for class Car
+struct Car_struct {
     char _dummy;  // Empty class placeholder
 };
 
 // Optimized constructors
+Square_t* Square_new();
+Person_t* Person_new();
+Shape_t* Shape_new();
+Animal_t* Animal_new();
+Employee_t* Employee_new();
+Eagle_t* Eagle_new();
 Counter_t* Counter_new();
-Car_t* Car_new();
-Swimmable_t* Swimmable_new();
+BankAccount_t* BankAccount_new();
+Duck_t* Duck_new();
 Flyable_t* Flyable_new();
 Parrot_t* Parrot_new();
-Builder_t* Builder_new();
-Employee_t* Employee_new();
 Bird_t* Bird_new();
-Shape_t* Shape_new();
-Vehicle_t* Vehicle_new();
-Dog_t* Dog_new();
-Person_t* Person_new();
-Rectangle_t* Rectangle_new();
-BankAccount_t* BankAccount_new();
 Manager_t* Manager_new();
-Duck_t* Duck_new();
-Animal_t* Animal_new();
-Eagle_t* Eagle_new();
-Square_t* Square_new();
+Builder_t* Builder_new();
+Dog_t* Dog_new();
+Vehicle_t* Vehicle_new();
+Rectangle_t* Rectangle_new();
+Swimmable_t* Swimmable_new();
+Car_t* Car_new();
 
 // ============================================
 // OPTIMIZED CONSTRUCTOR IMPLEMENTATIONS
 // ============================================
+
+// Constructor for Square
+Square_t* Square_new() {
+    Square_t* obj = (Square_t*)malloc(sizeof(Square_t));
+    return obj;
+}
+
+// Constructor for Person
+Person_t* Person_new() {
+    Person_t* obj = (Person_t*)malloc(sizeof(Person_t));
+    return obj;
+}
+
+// Constructor for Shape
+Shape_t* Shape_new() {
+    Shape_t* obj = (Shape_t*)malloc(sizeof(Shape_t));
+    return obj;
+}
+
+// Constructor for Animal
+Animal_t* Animal_new() {
+    Animal_t* obj = (Animal_t*)malloc(sizeof(Animal_t));
+    return obj;
+}
+
+// Constructor for Employee
+Employee_t* Employee_new() {
+    Employee_t* obj = (Employee_t*)malloc(sizeof(Employee_t));
+    return obj;
+}
+
+// Constructor for Eagle
+Eagle_t* Eagle_new() {
+    Eagle_t* obj = (Eagle_t*)malloc(sizeof(Eagle_t));
+    return obj;
+}
 
 // Constructor for Counter
 Counter_t* Counter_new() {
@@ -265,15 +301,15 @@ Counter_t* Counter_new() {
     return obj;
 }
 
-// Constructor for Car
-Car_t* Car_new() {
-    Car_t* obj = (Car_t*)malloc(sizeof(Car_t));
+// Constructor for BankAccount
+BankAccount_t* BankAccount_new() {
+    BankAccount_t* obj = (BankAccount_t*)malloc(sizeof(BankAccount_t));
     return obj;
 }
 
-// Constructor for Swimmable
-Swimmable_t* Swimmable_new() {
-    Swimmable_t* obj = (Swimmable_t*)malloc(sizeof(Swimmable_t));
+// Constructor for Duck
+Duck_t* Duck_new() {
+    Duck_t* obj = (Duck_t*)malloc(sizeof(Duck_t));
     return obj;
 }
 
@@ -289,57 +325,9 @@ Parrot_t* Parrot_new() {
     return obj;
 }
 
-// Constructor for Builder
-Builder_t* Builder_new() {
-    Builder_t* obj = (Builder_t*)malloc(sizeof(Builder_t));
-    return obj;
-}
-
-// Constructor for Employee
-Employee_t* Employee_new() {
-    Employee_t* obj = (Employee_t*)malloc(sizeof(Employee_t));
-    return obj;
-}
-
 // Constructor for Bird
 Bird_t* Bird_new() {
     Bird_t* obj = (Bird_t*)malloc(sizeof(Bird_t));
-    return obj;
-}
-
-// Constructor for Shape
-Shape_t* Shape_new() {
-    Shape_t* obj = (Shape_t*)malloc(sizeof(Shape_t));
-    return obj;
-}
-
-// Constructor for Vehicle
-Vehicle_t* Vehicle_new() {
-    Vehicle_t* obj = (Vehicle_t*)malloc(sizeof(Vehicle_t));
-    return obj;
-}
-
-// Constructor for Dog
-Dog_t* Dog_new() {
-    Dog_t* obj = (Dog_t*)malloc(sizeof(Dog_t));
-    return obj;
-}
-
-// Constructor for Person
-Person_t* Person_new() {
-    Person_t* obj = (Person_t*)malloc(sizeof(Person_t));
-    return obj;
-}
-
-// Constructor for Rectangle
-Rectangle_t* Rectangle_new() {
-    Rectangle_t* obj = (Rectangle_t*)malloc(sizeof(Rectangle_t));
-    return obj;
-}
-
-// Constructor for BankAccount
-BankAccount_t* BankAccount_new() {
-    BankAccount_t* obj = (BankAccount_t*)malloc(sizeof(BankAccount_t));
     return obj;
 }
 
@@ -349,27 +337,39 @@ Manager_t* Manager_new() {
     return obj;
 }
 
-// Constructor for Duck
-Duck_t* Duck_new() {
-    Duck_t* obj = (Duck_t*)malloc(sizeof(Duck_t));
+// Constructor for Builder
+Builder_t* Builder_new() {
+    Builder_t* obj = (Builder_t*)malloc(sizeof(Builder_t));
     return obj;
 }
 
-// Constructor for Animal
-Animal_t* Animal_new() {
-    Animal_t* obj = (Animal_t*)malloc(sizeof(Animal_t));
+// Constructor for Dog
+Dog_t* Dog_new() {
+    Dog_t* obj = (Dog_t*)malloc(sizeof(Dog_t));
     return obj;
 }
 
-// Constructor for Eagle
-Eagle_t* Eagle_new() {
-    Eagle_t* obj = (Eagle_t*)malloc(sizeof(Eagle_t));
+// Constructor for Vehicle
+Vehicle_t* Vehicle_new() {
+    Vehicle_t* obj = (Vehicle_t*)malloc(sizeof(Vehicle_t));
     return obj;
 }
 
-// Constructor for Square
-Square_t* Square_new() {
-    Square_t* obj = (Square_t*)malloc(sizeof(Square_t));
+// Constructor for Rectangle
+Rectangle_t* Rectangle_new() {
+    Rectangle_t* obj = (Rectangle_t*)malloc(sizeof(Rectangle_t));
+    return obj;
+}
+
+// Constructor for Swimmable
+Swimmable_t* Swimmable_new() {
+    Swimmable_t* obj = (Swimmable_t*)malloc(sizeof(Swimmable_t));
+    return obj;
+}
+
+// Constructor for Car
+Car_t* Car_new() {
+    Car_t* obj = (Car_t*)malloc(sizeof(Car_t));
     return obj;
 }
 
@@ -400,10 +400,10 @@ bool tauraro_isinstance_check(tauraro_value_t* object, const char* class_name);
 bool tauraro_issubclass_check(const char* derived, const char* base);
 
 // Builtin function declarations
-tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args);
-tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args);
 tauraro_value_t* tauraro_int(int argc, tauraro_value_t** args);
 tauraro_value_t* tauraro_str(int argc, tauraro_value_t** args);
+tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args);
+tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args);
 
 // Runtime operators
 tauraro_value_t* tauraro_add(tauraro_value_t* left, tauraro_value_t* right);
@@ -829,6 +829,69 @@ bool tauraro_issubclass_check(const char* derived, const char* base) {
 }
 
 // Builtin function implementations
+tauraro_value_t* tauraro_int(int argc, tauraro_value_t** args) {
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    if (argc == 0) {
+        result->data.int_val = 0;
+    } else {
+        switch (args[0]->type) {
+            case TAURARO_INT:
+                result->data.int_val = args[0]->data.int_val;
+                break;
+            case TAURARO_FLOAT:
+                result->data.int_val = (int64_t)args[0]->data.float_val;
+                break;
+            case TAURARO_BOOL:
+                result->data.int_val = args[0]->data.bool_val ? 1 : 0;
+                break;
+            case TAURARO_STRING:
+                result->data.int_val = strtoll(args[0]->data.str_val, NULL, 10);
+                break;
+            default:
+                result->data.int_val = 0;
+                break;
+        }
+    }
+    return result;
+}
+
+tauraro_value_t* tauraro_str(int argc, tauraro_value_t** args) {
+    if (argc == 0) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_STRING;
+        result->data.str_val = strdup("");
+        return result;
+    }
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    char buffer[512];
+    switch (args[0]->type) {
+        case TAURARO_INT:
+            snprintf(buffer, sizeof(buffer), "%ld", args[0]->data.int_val);
+            result->data.str_val = strdup(buffer);
+            break;
+        case TAURARO_FLOAT:
+            snprintf(buffer, sizeof(buffer), "%g", args[0]->data.float_val);
+            result->data.str_val = strdup(buffer);
+            break;
+        case TAURARO_BOOL:
+            result->data.str_val = strdup(args[0]->data.bool_val ? "True" : "False");
+            break;
+        case TAURARO_STRING:
+            result->data.str_val = strdup(args[0]->data.str_val);
+            break;
+        case TAURARO_NONE:
+            result->data.str_val = strdup("None");
+            break;
+        default:
+            snprintf(buffer, sizeof(buffer), "<object at %p>", (void*)args[0]);
+            result->data.str_val = strdup(buffer);
+            break;
+    }
+    return result;
+}
+
 tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args) {
     for (int i = 0; i < argc; i++) {
         if (i > 0) printf(" ");
@@ -903,69 +966,6 @@ tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args) {
         result->data.bool_val = (args[0]->type == args[1]->type);
     }
     
-    return result;
-}
-
-tauraro_value_t* tauraro_int(int argc, tauraro_value_t** args) {
-    tauraro_value_t* result = tauraro_value_new();
-    result->type = TAURARO_INT;
-    if (argc == 0) {
-        result->data.int_val = 0;
-    } else {
-        switch (args[0]->type) {
-            case TAURARO_INT:
-                result->data.int_val = args[0]->data.int_val;
-                break;
-            case TAURARO_FLOAT:
-                result->data.int_val = (int64_t)args[0]->data.float_val;
-                break;
-            case TAURARO_BOOL:
-                result->data.int_val = args[0]->data.bool_val ? 1 : 0;
-                break;
-            case TAURARO_STRING:
-                result->data.int_val = strtoll(args[0]->data.str_val, NULL, 10);
-                break;
-            default:
-                result->data.int_val = 0;
-                break;
-        }
-    }
-    return result;
-}
-
-tauraro_value_t* tauraro_str(int argc, tauraro_value_t** args) {
-    if (argc == 0) {
-        tauraro_value_t* result = tauraro_value_new();
-        result->type = TAURARO_STRING;
-        result->data.str_val = strdup("");
-        return result;
-    }
-    tauraro_value_t* result = tauraro_value_new();
-    result->type = TAURARO_STRING;
-    char buffer[512];
-    switch (args[0]->type) {
-        case TAURARO_INT:
-            snprintf(buffer, sizeof(buffer), "%ld", args[0]->data.int_val);
-            result->data.str_val = strdup(buffer);
-            break;
-        case TAURARO_FLOAT:
-            snprintf(buffer, sizeof(buffer), "%g", args[0]->data.float_val);
-            result->data.str_val = strdup(buffer);
-            break;
-        case TAURARO_BOOL:
-            result->data.str_val = strdup(args[0]->data.bool_val ? "True" : "False");
-            break;
-        case TAURARO_STRING:
-            result->data.str_val = strdup(args[0]->data.str_val);
-            break;
-        case TAURARO_NONE:
-            result->data.str_val = strdup("None");
-            break;
-        default:
-            snprintf(buffer, sizeof(buffer), "<object at %p>", (void*)args[0]);
-            result->data.str_val = strdup(buffer);
-            break;
-    }
     return result;
 }
 
@@ -1261,73 +1261,73 @@ tauraro_value_t* bird3;
 tauraro_value_t* manager;
 
 // Forward declarations for user-defined functions
-tauraro_value_t* Builder__multiply(int argc, tauraro_value_t** argv);
-tauraro_value_t* Builder____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* BankAccount__deposit(int argc, tauraro_value_t** argv);
-tauraro_value_t* Dog__get_breed(int argc, tauraro_value_t** argv);
-tauraro_value_t* Car__start(int argc, tauraro_value_t** argv);
-tauraro_value_t* Rectangle____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Flyable____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Square____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Bird____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Parrot__make_sound(int argc, tauraro_value_t** argv);
-tauraro_value_t* Rectangle__area(int argc, tauraro_value_t** argv);
-tauraro_value_t* Counter__get_count(int argc, tauraro_value_t** argv);
-tauraro_value_t* Swimmable__swim(int argc, tauraro_value_t** argv);
-tauraro_value_t* Manager____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Car__honk(int argc, tauraro_value_t** argv);
-tauraro_value_t* Animal____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Dog__speak(int argc, tauraro_value_t** argv);
-tauraro_value_t* BankAccount____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Eagle__make_sound(int argc, tauraro_value_t** argv);
-tauraro_value_t* Square__diagonal(int argc, tauraro_value_t** argv);
-tauraro_value_t* Rectangle__perimeter(int argc, tauraro_value_t** argv);
-tauraro_value_t* Animal__speak(int argc, tauraro_value_t** argv);
-tauraro_value_t* Vehicle____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Employee____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Person____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Duck____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Parrot__init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Duck__speak(int argc, tauraro_value_t** argv);
-tauraro_value_t* Vehicle__start(int argc, tauraro_value_t** argv);
 tauraro_value_t* Builder__add(int argc, tauraro_value_t** argv);
-tauraro_value_t* Bird__make_sound(int argc, tauraro_value_t** argv);
-tauraro_value_t* Manager__get_info(int argc, tauraro_value_t** argv);
+tauraro_value_t* Swimmable__swim(int argc, tauraro_value_t** argv);
+tauraro_value_t* Dog__get_breed(int argc, tauraro_value_t** argv);
+tauraro_value_t* BankAccount__deposit(int argc, tauraro_value_t** argv);
+tauraro_value_t* Dog__speak(int argc, tauraro_value_t** argv);
+tauraro_value_t* Animal____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Duck____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Counter__get_count(int argc, tauraro_value_t** argv);
+tauraro_value_t* Car__honk(int argc, tauraro_value_t** argv);
+tauraro_value_t* Rectangle____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Shape____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Parrot__make_sound(int argc, tauraro_value_t** argv);
+tauraro_value_t* BankAccount____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Shape__get_color(int argc, tauraro_value_t** argv);
+tauraro_value_t* Animal__speak(int argc, tauraro_value_t** argv);
 tauraro_value_t* Builder__get_value(int argc, tauraro_value_t** argv);
 tauraro_value_t* Eagle__init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Shape__get_color(int argc, tauraro_value_t** argv);
-tauraro_value_t* Swimmable____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Shape____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Dog____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Flyable__fly(int argc, tauraro_value_t** argv);
+tauraro_value_t* Person____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Employee____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Manager____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Parrot__init__(int argc, tauraro_value_t** argv);
 tauraro_value_t* BankAccount__get_interest(int argc, tauraro_value_t** argv);
+tauraro_value_t* Car__start(int argc, tauraro_value_t** argv);
+tauraro_value_t* Eagle__make_sound(int argc, tauraro_value_t** argv);
+tauraro_value_t* Swimmable____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Flyable__fly(int argc, tauraro_value_t** argv);
 tauraro_value_t* Animal__get_info(int argc, tauraro_value_t** argv);
-tauraro_value_t* Counter____init__(int argc, tauraro_value_t** argv);
-tauraro_value_t* Vehicle__stop(int argc, tauraro_value_t** argv);
+tauraro_value_t* Rectangle__area(int argc, tauraro_value_t** argv);
+tauraro_value_t* Square__diagonal(int argc, tauraro_value_t** argv);
 tauraro_value_t* Car____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Flyable____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Vehicle__start(int argc, tauraro_value_t** argv);
+tauraro_value_t* Rectangle__perimeter(int argc, tauraro_value_t** argv);
+tauraro_value_t* Square____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Builder__multiply(int argc, tauraro_value_t** argv);
+tauraro_value_t* Dog____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Bird__make_sound(int argc, tauraro_value_t** argv);
+tauraro_value_t* Manager__get_info(int argc, tauraro_value_t** argv);
+tauraro_value_t* Vehicle____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Counter____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Duck__speak(int argc, tauraro_value_t** argv);
+tauraro_value_t* Vehicle__stop(int argc, tauraro_value_t** argv);
+tauraro_value_t* Bird____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Builder____init__(int argc, tauraro_value_t** argv);
 
 // Global class variables
-tauraro_class_t* class_Builder;
-tauraro_class_t* class_Flyable;
-tauraro_class_t* class_Parrot;
-tauraro_class_t* class_Manager;
-tauraro_class_t* class_Duck;
-tauraro_class_t* class_Eagle;
-tauraro_class_t* class_Shape;
-tauraro_class_t* class_Rectangle;
-tauraro_class_t* class_Bird;
-tauraro_class_t* class_Square;
-tauraro_class_t* class_Dog;
-tauraro_class_t* class_BankAccount;
-tauraro_class_t* class_Person;
-tauraro_class_t* class_Animal;
 tauraro_class_t* class_Vehicle;
-tauraro_class_t* class_Counter;
-tauraro_class_t* class_Car;
+tauraro_class_t* class_Bird;
 tauraro_class_t* class_Employee;
+tauraro_class_t* class_Eagle;
+tauraro_class_t* class_Dog;
+tauraro_class_t* class_Builder;
+tauraro_class_t* class_Rectangle;
+tauraro_class_t* class_Shape;
+tauraro_class_t* class_Manager;
+tauraro_class_t* class_Person;
 tauraro_class_t* class_Swimmable;
+tauraro_class_t* class_Car;
+tauraro_class_t* class_Square;
+tauraro_class_t* class_BankAccount;
+tauraro_class_t* class_Animal;
+tauraro_class_t* class_Parrot;
+tauraro_class_t* class_Flyable;
+tauraro_class_t* class_Counter;
+tauraro_class_t* class_Duck;
 
-tauraro_value_t* Builder__multiply(int argc, tauraro_value_t** argv) {
+tauraro_value_t* Builder__add(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
     tauraro_value_t* n = (argc > 1) ? argv[1] : NULL;
@@ -1340,30 +1340,35 @@ tauraro_value_t* Builder__multiply(int argc, tauraro_value_t** argv) {
     tauraro_value_t* temp_result_2 = tauraro_object_get_attr(temp_attr_object, "value");
     tauraro_value_t* binop_left = temp_result;
     tauraro_value_t* binop_right = n;
-    tauraro_value_t* temp_result_3 = tauraro_mul(binop_left, binop_right);
+    tauraro_value_t* temp_result_3 = tauraro_add(binop_left, binop_right);
     tauraro_object_set_attr(temp_setattr_object, "value", temp_result);
     tauraro_value_t* temp_result_4 = self;
     return temp_result;
 }
 
 
-tauraro_value_t* Builder____init__(int argc, tauraro_value_t** argv) {
+tauraro_value_t* Swimmable__swim(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
 
     // Local variables
+    tauraro_value_t* temp_result = tauraro_value_new(); temp_result->type = TAURARO_STRING; temp_result->data.str_val = strdup("Swimming in water!");
+    return temp_result;
+}
+
+
+tauraro_value_t* Dog__get_breed(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* binop_left = tauraro_value_new(); binop_left->type = TAURARO_STRING; binop_left->data.str_val = strdup("Breed: ");
     tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_value_new(); temp_result_1->type = TAURARO_INT; temp_result_1->data.int_val = 0;
-    tauraro_object_set_attr(temp_setattr_object, "value", temp_result);
-    tauraro_value_t* temp_result_2 = self;
-    tauraro_value_t* temp_setattr_object_1 = temp_result;
-    tauraro_value_t* temp_result_3 = tauraro_value_new(); temp_result_3->type = TAURARO_NONE;
-    tauraro_object_set_attr(temp_setattr_object, "operations", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "breed");
+    tauraro_value_t* binop_right = temp_result;
+    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
+    return temp_result;
 }
 
 
@@ -1389,138 +1394,7 @@ tauraro_value_t* BankAccount__deposit(int argc, tauraro_value_t** argv) {
 }
 
 
-tauraro_value_t* Dog__get_breed(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* binop_left = tauraro_value_new(); binop_left->type = TAURARO_STRING; binop_left->data.str_val = strdup("Breed: ");
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "breed");
-    tauraro_value_t* binop_right = temp_result;
-    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* Car__start(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "brand");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" ");
-    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
-    tauraro_value_t* binop_left_1 = temp_result;
-    tauraro_value_t* temp_result_3 = self;
-    tauraro_value_t* temp_attr_object_1 = temp_result;
-    tauraro_value_t* temp_result_4 = tauraro_object_get_attr(temp_attr_object, "model");
-    tauraro_value_t* binop_right_1 = temp_result;
-    tauraro_value_t* temp_result_5 = tauraro_add(binop_left, binop_right);
-    tauraro_value_t* binop_left_2 = temp_result;
-    tauraro_value_t* binop_right_2 = tauraro_value_new(); binop_right_2->type = TAURARO_STRING; binop_right_2->data.str_val = strdup(" engine roaring!");
-    tauraro_value_t* temp_result_6 = tauraro_add(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* Rectangle____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* color = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* width = (argc > 2) ? argv[2] : NULL;
-    tauraro_value_t* height = (argc > 3) ? argv[3] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = class_Shape;
-    tauraro_value_t* temp_object = temp_result;
-    tauraro_value_t* temp_result_1 = self;
-    tauraro_value_t* method_arg_0 = temp_result;
-    tauraro_value_t* temp_result_2 = color;
-    tauraro_value_t* method_arg_1 = temp_result;
-    tauraro_value_t* temp_result_3 = Shape____init__(3, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1});
-    tauraro_value_t* temp_result_4 = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_5 = width;
-    tauraro_object_set_attr(temp_setattr_object, "width", temp_result);
-    tauraro_value_t* temp_result_6 = self;
-    tauraro_value_t* temp_setattr_object_1 = temp_result;
-    tauraro_value_t* temp_result_7 = height;
-    tauraro_object_set_attr(temp_setattr_object, "height", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Flyable____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_value_new(); temp_result_1->type = TAURARO_BOOL; temp_result_1->data.bool_val = true;
-    tauraro_object_set_attr(temp_setattr_object, "can_fly", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Square____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* color = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* side = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = class_Rectangle;
-    tauraro_value_t* temp_object = temp_result;
-    tauraro_value_t* temp_result_1 = self;
-    tauraro_value_t* method_arg_0 = temp_result;
-    tauraro_value_t* temp_result_2 = color;
-    tauraro_value_t* method_arg_1 = temp_result;
-    tauraro_value_t* temp_result_3 = side;
-    tauraro_value_t* method_arg_2 = temp_result;
-    tauraro_value_t* temp_result_4 = side;
-    tauraro_value_t* method_arg_3 = temp_result;
-    tauraro_value_t* temp_result_5 = Rectangle____init__(5, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1, method_arg_2, method_arg_3});
-    tauraro_value_t* temp_result_6 = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_7 = side;
-    tauraro_object_set_attr(temp_setattr_object, "side", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Bird____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_1 = name;
-    tauraro_object_set_attr(temp_setattr_object, "name", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Parrot__make_sound(int argc, tauraro_value_t** argv) {
+tauraro_value_t* Dog__speak(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
 
@@ -1529,89 +1403,8 @@ tauraro_value_t* Parrot__make_sound(int argc, tauraro_value_t** argv) {
     tauraro_value_t* temp_attr_object = temp_result;
     tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "name");
     tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" talks: Hello!");
+    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" says Woof!");
     tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* Rectangle__area(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "width");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* temp_result_2 = self;
-    tauraro_value_t* temp_attr_object_1 = temp_result;
-    tauraro_value_t* temp_result_3 = tauraro_object_get_attr(temp_attr_object, "height");
-    tauraro_value_t* binop_right = temp_result;
-    tauraro_value_t* temp_result_4 = tauraro_mul(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* Counter__get_count(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = class_Counter;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "count");
-    return temp_result;
-}
-
-
-tauraro_value_t* Swimmable__swim(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_value_new(); temp_result->type = TAURARO_STRING; temp_result->data.str_val = strdup("Swimming in water!");
-    return temp_result;
-}
-
-
-tauraro_value_t* Manager____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* age = (argc > 2) ? argv[2] : NULL;
-    tauraro_value_t* employee_id = (argc > 3) ? argv[3] : NULL;
-    tauraro_value_t* department = (argc > 4) ? argv[4] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = class_Employee;
-    tauraro_value_t* temp_object = temp_result;
-    tauraro_value_t* temp_result_1 = self;
-    tauraro_value_t* method_arg_0 = temp_result;
-    tauraro_value_t* temp_result_2 = name;
-    tauraro_value_t* method_arg_1 = temp_result;
-    tauraro_value_t* temp_result_3 = age;
-    tauraro_value_t* method_arg_2 = temp_result;
-    tauraro_value_t* temp_result_4 = employee_id;
-    tauraro_value_t* method_arg_3 = temp_result;
-    tauraro_value_t* temp_result_5 = Employee____init__(5, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1, method_arg_2, method_arg_3});
-    tauraro_value_t* temp_result_6 = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_7 = department;
-    tauraro_object_set_attr(temp_setattr_object, "department", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Car__honk(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_value_new(); temp_result->type = TAURARO_STRING; temp_result->data.str_val = strdup("Beep beep!");
     return temp_result;
 }
 
@@ -1634,184 +1427,6 @@ tauraro_value_t* Animal____init__(int argc, tauraro_value_t** argv) {
     tauraro_value_t* temp_result_4 = self;
     tauraro_value_t* temp_setattr_object_2 = temp_result;
     tauraro_value_t* temp_result_5 = tauraro_value_new(); temp_result_5->type = TAURARO_INT; temp_result_5->data.int_val = 0;
-    tauraro_object_set_attr(temp_setattr_object, "age", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Dog__speak(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "name");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" says Woof!");
-    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* BankAccount____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* owner = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* balance = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_1 = owner;
-    tauraro_object_set_attr(temp_setattr_object, "owner", temp_result);
-    tauraro_value_t* temp_result_2 = self;
-    tauraro_value_t* temp_setattr_object_1 = temp_result;
-    tauraro_value_t* temp_result_3 = balance;
-    tauraro_object_set_attr(temp_setattr_object, "balance", temp_result);
-    tauraro_value_t* temp_result_4 = class_BankAccount;
-    tauraro_value_t* temp_setattr_object_2 = temp_result;
-    tauraro_value_t* temp_result_5 = class_BankAccount;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_6 = tauraro_object_get_attr(temp_attr_object, "total_accounts");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
-    tauraro_value_t* temp_result_7 = tauraro_add(binop_left, binop_right);
-    tauraro_object_set_attr(temp_setattr_object, "total_accounts", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Eagle__make_sound(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "name");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" screeches loudly");
-    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* Square__diagonal(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    // Simplified: sqrt(2) * side ≈ 1.414 * side
-    tauraro_value_t* arg_0_left = tauraro_value_new(); arg_0_left->type = TAURARO_FLOAT; arg_0_left->data.float_val = 1.414;
-    tauraro_value_t* arg_0_right = tauraro_value_new(); arg_0_right->type = TAURARO_NONE;
-    tauraro_value_t* arg_0 = tauraro_mul(arg_0_left, arg_0_right);
-    tauraro_value_t* temp_result = tauraro_int(1, (tauraro_value_t*[]){arg_0});
-    return temp_result;
-}
-
-
-tauraro_value_t* Rectangle__perimeter(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* binop_left = tauraro_value_new(); binop_left->type = TAURARO_INT; binop_left->data.int_val = 2;
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "width");
-    tauraro_value_t* binop_left_1 = temp_result;
-    tauraro_value_t* temp_result_2 = self;
-    tauraro_value_t* temp_attr_object_1 = temp_result;
-    tauraro_value_t* temp_result_3 = tauraro_object_get_attr(temp_attr_object, "height");
-    tauraro_value_t* binop_right = temp_result;
-    tauraro_value_t* temp_result_4 = tauraro_add(binop_left, binop_right);
-    tauraro_value_t* binop_right_1 = temp_result;
-    tauraro_value_t* temp_result_5 = tauraro_mul(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* Animal__speak(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "name");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" makes a sound");
-    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
-    return temp_result;
-}
-
-
-tauraro_value_t* Vehicle____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* brand = (argc > 1) ? argv[1] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_1 = brand;
-    tauraro_object_set_attr(temp_setattr_object, "brand", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Employee____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* age = (argc > 2) ? argv[2] : NULL;
-    tauraro_value_t* employee_id = (argc > 3) ? argv[3] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = class_Person;
-    tauraro_value_t* temp_object = temp_result;
-    tauraro_value_t* temp_result_1 = self;
-    tauraro_value_t* method_arg_0 = temp_result;
-    tauraro_value_t* temp_result_2 = name;
-    tauraro_value_t* method_arg_1 = temp_result;
-    tauraro_value_t* temp_result_3 = age;
-    tauraro_value_t* method_arg_2 = temp_result;
-    tauraro_value_t* temp_result_4 = Person____init__(4, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1, method_arg_2});
-    tauraro_value_t* temp_result_5 = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_6 = employee_id;
-    tauraro_object_set_attr(temp_setattr_object, "employee_id", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Person____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* age = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_1 = name;
-    tauraro_object_set_attr(temp_setattr_object, "name", temp_result);
-    tauraro_value_t* temp_result_2 = self;
-    tauraro_value_t* temp_setattr_object_1 = temp_result;
-    tauraro_value_t* temp_result_3 = age;
     tauraro_object_set_attr(temp_setattr_object, "age", temp_result);
     // Implicit return None
     tauraro_value_t* none_val = tauraro_value_new();
@@ -1852,6 +1467,250 @@ tauraro_value_t* Duck____init__(int argc, tauraro_value_t** argv) {
 }
 
 
+tauraro_value_t* Counter__get_count(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = class_Counter;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "count");
+    return temp_result;
+}
+
+
+tauraro_value_t* Car__honk(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = tauraro_value_new(); temp_result->type = TAURARO_STRING; temp_result->data.str_val = strdup("Beep beep!");
+    return temp_result;
+}
+
+
+tauraro_value_t* Rectangle____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* color = (argc > 1) ? argv[1] : NULL;
+    tauraro_value_t* width = (argc > 2) ? argv[2] : NULL;
+    tauraro_value_t* height = (argc > 3) ? argv[3] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = class_Shape;
+    tauraro_value_t* temp_object = temp_result;
+    tauraro_value_t* temp_result_1 = self;
+    tauraro_value_t* method_arg_0 = temp_result;
+    tauraro_value_t* temp_result_2 = color;
+    tauraro_value_t* method_arg_1 = temp_result;
+    tauraro_value_t* temp_result_3 = Shape____init__(3, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1});
+    tauraro_value_t* temp_result_4 = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_5 = width;
+    tauraro_object_set_attr(temp_setattr_object, "width", temp_result);
+    tauraro_value_t* temp_result_6 = self;
+    tauraro_value_t* temp_setattr_object_1 = temp_result;
+    tauraro_value_t* temp_result_7 = height;
+    tauraro_object_set_attr(temp_setattr_object, "height", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Shape____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* color = (argc > 1) ? argv[1] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_1 = color;
+    tauraro_object_set_attr(temp_setattr_object, "color", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Parrot__make_sound(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "name");
+    tauraro_value_t* binop_left = temp_result;
+    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" talks: Hello!");
+    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
+    return temp_result;
+}
+
+
+tauraro_value_t* BankAccount____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* owner = (argc > 1) ? argv[1] : NULL;
+    tauraro_value_t* balance = (argc > 2) ? argv[2] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_1 = owner;
+    tauraro_object_set_attr(temp_setattr_object, "owner", temp_result);
+    tauraro_value_t* temp_result_2 = self;
+    tauraro_value_t* temp_setattr_object_1 = temp_result;
+    tauraro_value_t* temp_result_3 = balance;
+    tauraro_object_set_attr(temp_setattr_object, "balance", temp_result);
+    tauraro_value_t* temp_result_4 = class_BankAccount;
+    tauraro_value_t* temp_setattr_object_2 = temp_result;
+    tauraro_value_t* temp_result_5 = class_BankAccount;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_6 = tauraro_object_get_attr(temp_attr_object, "total_accounts");
+    tauraro_value_t* binop_left = temp_result;
+    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_INT; binop_right->data.int_val = 1;
+    tauraro_value_t* temp_result_7 = tauraro_add(binop_left, binop_right);
+    tauraro_object_set_attr(temp_setattr_object, "total_accounts", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Shape__get_color(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "color");
+    return temp_result;
+}
+
+
+tauraro_value_t* Animal__speak(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "name");
+    tauraro_value_t* binop_left = temp_result;
+    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" makes a sound");
+    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
+    return temp_result;
+}
+
+
+tauraro_value_t* Builder__get_value(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "value");
+    return temp_result;
+}
+
+
+tauraro_value_t* Eagle__init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    return self;
+}
+
+
+tauraro_value_t* Person____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
+    tauraro_value_t* age = (argc > 2) ? argv[2] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_1 = name;
+    tauraro_object_set_attr(temp_setattr_object, "name", temp_result);
+    tauraro_value_t* temp_result_2 = self;
+    tauraro_value_t* temp_setattr_object_1 = temp_result;
+    tauraro_value_t* temp_result_3 = age;
+    tauraro_object_set_attr(temp_setattr_object, "age", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Employee____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
+    tauraro_value_t* age = (argc > 2) ? argv[2] : NULL;
+    tauraro_value_t* employee_id = (argc > 3) ? argv[3] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = class_Person;
+    tauraro_value_t* temp_object = temp_result;
+    tauraro_value_t* temp_result_1 = self;
+    tauraro_value_t* method_arg_0 = temp_result;
+    tauraro_value_t* temp_result_2 = name;
+    tauraro_value_t* method_arg_1 = temp_result;
+    tauraro_value_t* temp_result_3 = age;
+    tauraro_value_t* method_arg_2 = temp_result;
+    tauraro_value_t* temp_result_4 = Person____init__(4, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1, method_arg_2});
+    tauraro_value_t* temp_result_5 = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_6 = employee_id;
+    tauraro_object_set_attr(temp_setattr_object, "employee_id", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Manager____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
+    tauraro_value_t* age = (argc > 2) ? argv[2] : NULL;
+    tauraro_value_t* employee_id = (argc > 3) ? argv[3] : NULL;
+    tauraro_value_t* department = (argc > 4) ? argv[4] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = class_Employee;
+    tauraro_value_t* temp_object = temp_result;
+    tauraro_value_t* temp_result_1 = self;
+    tauraro_value_t* method_arg_0 = temp_result;
+    tauraro_value_t* temp_result_2 = name;
+    tauraro_value_t* method_arg_1 = temp_result;
+    tauraro_value_t* temp_result_3 = age;
+    tauraro_value_t* method_arg_2 = temp_result;
+    tauraro_value_t* temp_result_4 = employee_id;
+    tauraro_value_t* method_arg_3 = temp_result;
+    tauraro_value_t* temp_result_5 = Employee____init__(5, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1, method_arg_2, method_arg_3});
+    tauraro_value_t* temp_result_6 = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_7 = department;
+    tauraro_object_set_attr(temp_setattr_object, "department", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
 tauraro_value_t* Parrot__init__(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
@@ -1861,7 +1720,44 @@ tauraro_value_t* Parrot__init__(int argc, tauraro_value_t** argv) {
 }
 
 
-tauraro_value_t* Duck__speak(int argc, tauraro_value_t** argv) {
+tauraro_value_t* BankAccount__get_interest(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* arg_0_left = tauraro_value_new(); arg_0_left->type = TAURARO_NONE;
+    tauraro_value_t* arg_0_right = tauraro_value_new(); arg_0_right->type = TAURARO_NONE;
+    tauraro_value_t* arg_0 = tauraro_mul(arg_0_left, arg_0_right);
+    tauraro_value_t* temp_result = tauraro_int(1, (tauraro_value_t*[]){arg_0});
+    return temp_result;
+}
+
+
+tauraro_value_t* Car__start(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "brand");
+    tauraro_value_t* binop_left = temp_result;
+    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" ");
+    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
+    tauraro_value_t* binop_left_1 = temp_result;
+    tauraro_value_t* temp_result_3 = self;
+    tauraro_value_t* temp_attr_object_1 = temp_result;
+    tauraro_value_t* temp_result_4 = tauraro_object_get_attr(temp_attr_object, "model");
+    tauraro_value_t* binop_right_1 = temp_result;
+    tauraro_value_t* temp_result_5 = tauraro_add(binop_left, binop_right);
+    tauraro_value_t* binop_left_2 = temp_result;
+    tauraro_value_t* binop_right_2 = tauraro_value_new(); binop_right_2->type = TAURARO_STRING; binop_right_2->data.str_val = strdup(" engine roaring!");
+    tauraro_value_t* temp_result_6 = tauraro_add(binop_left, binop_right);
+    return temp_result;
+}
+
+
+tauraro_value_t* Eagle__make_sound(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
 
@@ -1870,9 +1766,129 @@ tauraro_value_t* Duck__speak(int argc, tauraro_value_t** argv) {
     tauraro_value_t* temp_attr_object = temp_result;
     tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "name");
     tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" says Quack!");
+    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" screeches loudly");
     tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
     return temp_result;
+}
+
+
+tauraro_value_t* Swimmable____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_value_new(); temp_result_1->type = TAURARO_BOOL; temp_result_1->data.bool_val = true;
+    tauraro_object_set_attr(temp_setattr_object, "can_swim", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Flyable__fly(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = tauraro_value_new(); temp_result->type = TAURARO_STRING; temp_result->data.str_val = strdup("Flying through the air!");
+    return temp_result;
+}
+
+
+tauraro_value_t* Animal__get_info(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "species");
+    tauraro_value_t* binop_left = temp_result;
+    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" named ");
+    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
+    tauraro_value_t* binop_left_1 = temp_result;
+    tauraro_value_t* temp_result_3 = self;
+    tauraro_value_t* temp_attr_object_1 = temp_result;
+    tauraro_value_t* temp_result_4 = tauraro_object_get_attr(temp_attr_object, "name");
+    tauraro_value_t* binop_right_1 = temp_result;
+    tauraro_value_t* temp_result_5 = tauraro_add(binop_left, binop_right);
+    return temp_result;
+}
+
+
+tauraro_value_t* Rectangle__area(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "width");
+    tauraro_value_t* binop_left = temp_result;
+    tauraro_value_t* temp_result_2 = self;
+    tauraro_value_t* temp_attr_object_1 = temp_result;
+    tauraro_value_t* temp_result_3 = tauraro_object_get_attr(temp_attr_object, "height");
+    tauraro_value_t* binop_right = temp_result;
+    tauraro_value_t* temp_result_4 = tauraro_mul(binop_left, binop_right);
+    return temp_result;
+}
+
+
+tauraro_value_t* Square__diagonal(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    // Simplified: sqrt(2) * side ≈ 1.414 * side
+    tauraro_value_t* arg_0_left = tauraro_value_new(); arg_0_left->type = TAURARO_FLOAT; arg_0_left->data.float_val = 1.414;
+    tauraro_value_t* arg_0_right = tauraro_value_new(); arg_0_right->type = TAURARO_NONE;
+    tauraro_value_t* arg_0 = tauraro_mul(arg_0_left, arg_0_right);
+    tauraro_value_t* temp_result = tauraro_int(1, (tauraro_value_t*[]){arg_0});
+    return temp_result;
+}
+
+
+tauraro_value_t* Car____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* brand = (argc > 1) ? argv[1] : NULL;
+    tauraro_value_t* model = (argc > 2) ? argv[2] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = class_Vehicle;
+    tauraro_value_t* temp_object = temp_result;
+    tauraro_value_t* temp_result_1 = self;
+    tauraro_value_t* method_arg_0 = temp_result;
+    tauraro_value_t* temp_result_2 = brand;
+    tauraro_value_t* method_arg_1 = temp_result;
+    tauraro_value_t* temp_result_3 = Vehicle____init__(3, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1});
+    tauraro_value_t* temp_result_4 = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_5 = model;
+    tauraro_object_set_attr(temp_setattr_object, "model", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Flyable____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_value_new(); temp_result_1->type = TAURARO_BOOL; temp_result_1->data.bool_val = true;
+    tauraro_object_set_attr(temp_setattr_object, "can_fly", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
 }
 
 
@@ -1891,7 +1907,57 @@ tauraro_value_t* Vehicle__start(int argc, tauraro_value_t** argv) {
 }
 
 
-tauraro_value_t* Builder__add(int argc, tauraro_value_t** argv) {
+tauraro_value_t* Rectangle__perimeter(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* binop_left = tauraro_value_new(); binop_left->type = TAURARO_INT; binop_left->data.int_val = 2;
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "width");
+    tauraro_value_t* binop_left_1 = temp_result;
+    tauraro_value_t* temp_result_2 = self;
+    tauraro_value_t* temp_attr_object_1 = temp_result;
+    tauraro_value_t* temp_result_3 = tauraro_object_get_attr(temp_attr_object, "height");
+    tauraro_value_t* binop_right = temp_result;
+    tauraro_value_t* temp_result_4 = tauraro_add(binop_left, binop_right);
+    tauraro_value_t* binop_right_1 = temp_result;
+    tauraro_value_t* temp_result_5 = tauraro_mul(binop_left, binop_right);
+    return temp_result;
+}
+
+
+tauraro_value_t* Square____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* color = (argc > 1) ? argv[1] : NULL;
+    tauraro_value_t* side = (argc > 2) ? argv[2] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = class_Rectangle;
+    tauraro_value_t* temp_object = temp_result;
+    tauraro_value_t* temp_result_1 = self;
+    tauraro_value_t* method_arg_0 = temp_result;
+    tauraro_value_t* temp_result_2 = color;
+    tauraro_value_t* method_arg_1 = temp_result;
+    tauraro_value_t* temp_result_3 = side;
+    tauraro_value_t* method_arg_2 = temp_result;
+    tauraro_value_t* temp_result_4 = side;
+    tauraro_value_t* method_arg_3 = temp_result;
+    tauraro_value_t* temp_result_5 = Rectangle____init__(5, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1, method_arg_2, method_arg_3});
+    tauraro_value_t* temp_result_6 = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_7 = side;
+    tauraro_object_set_attr(temp_setattr_object, "side", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Builder__multiply(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
     tauraro_value_t* n = (argc > 1) ? argv[1] : NULL;
@@ -1904,10 +1970,37 @@ tauraro_value_t* Builder__add(int argc, tauraro_value_t** argv) {
     tauraro_value_t* temp_result_2 = tauraro_object_get_attr(temp_attr_object, "value");
     tauraro_value_t* binop_left = temp_result;
     tauraro_value_t* binop_right = n;
-    tauraro_value_t* temp_result_3 = tauraro_add(binop_left, binop_right);
+    tauraro_value_t* temp_result_3 = tauraro_mul(binop_left, binop_right);
     tauraro_object_set_attr(temp_setattr_object, "value", temp_result);
     tauraro_value_t* temp_result_4 = self;
     return temp_result;
+}
+
+
+tauraro_value_t* Dog____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
+    tauraro_value_t* breed = (argc > 2) ? argv[2] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = class_Animal;
+    tauraro_value_t* temp_object = temp_result;
+    tauraro_value_t* temp_result_1 = self;
+    tauraro_value_t* method_arg_0 = temp_result;
+    tauraro_value_t* temp_result_2 = name;
+    tauraro_value_t* method_arg_1 = temp_result;
+    tauraro_value_t* temp_result_3 = tauraro_value_new(); temp_result_3->type = TAURARO_STRING; temp_result_3->data.str_val = strdup("Dog");
+    tauraro_value_t* method_arg_2 = temp_result;
+    tauraro_value_t* temp_result_4 = Animal____init__(4, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1, method_arg_2});
+    tauraro_value_t* temp_result_5 = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_6 = breed;
+    tauraro_object_set_attr(temp_setattr_object, "breed", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
 }
 
 
@@ -1958,140 +2051,20 @@ tauraro_value_t* Manager__get_info(int argc, tauraro_value_t** argv) {
 }
 
 
-tauraro_value_t* Builder__get_value(int argc, tauraro_value_t** argv) {
+tauraro_value_t* Vehicle____init__(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "value");
-    return temp_result;
-}
-
-
-tauraro_value_t* Eagle__init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    return self;
-}
-
-
-tauraro_value_t* Shape__get_color(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "color");
-    return temp_result;
-}
-
-
-tauraro_value_t* Swimmable____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* brand = (argc > 1) ? argv[1] : NULL;
 
     // Local variables
     tauraro_value_t* temp_result = self;
     tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_value_new(); temp_result_1->type = TAURARO_BOOL; temp_result_1->data.bool_val = true;
-    tauraro_object_set_attr(temp_setattr_object, "can_swim", temp_result);
+    tauraro_value_t* temp_result_1 = brand;
+    tauraro_object_set_attr(temp_setattr_object, "brand", temp_result);
     // Implicit return None
     tauraro_value_t* none_val = tauraro_value_new();
     none_val->type = TAURARO_NONE;
     return none_val;
-}
-
-
-tauraro_value_t* Shape____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* color = (argc > 1) ? argv[1] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_1 = color;
-    tauraro_object_set_attr(temp_setattr_object, "color", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Dog____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* breed = (argc > 2) ? argv[2] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = class_Animal;
-    tauraro_value_t* temp_object = temp_result;
-    tauraro_value_t* temp_result_1 = self;
-    tauraro_value_t* method_arg_0 = temp_result;
-    tauraro_value_t* temp_result_2 = name;
-    tauraro_value_t* method_arg_1 = temp_result;
-    tauraro_value_t* temp_result_3 = tauraro_value_new(); temp_result_3->type = TAURARO_STRING; temp_result_3->data.str_val = strdup("Dog");
-    tauraro_value_t* method_arg_2 = temp_result;
-    tauraro_value_t* temp_result_4 = Animal____init__(4, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1, method_arg_2});
-    tauraro_value_t* temp_result_5 = self;
-    tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_6 = breed;
-    tauraro_object_set_attr(temp_setattr_object, "breed", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
-
-tauraro_value_t* Flyable__fly(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = tauraro_value_new(); temp_result->type = TAURARO_STRING; temp_result->data.str_val = strdup("Flying through the air!");
-    return temp_result;
-}
-
-
-tauraro_value_t* BankAccount__get_interest(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* arg_0_left = tauraro_value_new(); arg_0_left->type = TAURARO_NONE;
-    tauraro_value_t* arg_0_right = tauraro_value_new(); arg_0_right->type = TAURARO_NONE;
-    tauraro_value_t* arg_0 = tauraro_mul(arg_0_left, arg_0_right);
-    tauraro_value_t* temp_result = tauraro_int(1, (tauraro_value_t*[]){arg_0});
-    return temp_result;
-}
-
-
-tauraro_value_t* Animal__get_info(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = self;
-    tauraro_value_t* temp_attr_object = temp_result;
-    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "species");
-    tauraro_value_t* binop_left = temp_result;
-    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" named ");
-    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
-    tauraro_value_t* binop_left_1 = temp_result;
-    tauraro_value_t* temp_result_3 = self;
-    tauraro_value_t* temp_attr_object_1 = temp_result;
-    tauraro_value_t* temp_result_4 = tauraro_object_get_attr(temp_attr_object, "name");
-    tauraro_value_t* binop_right_1 = temp_result;
-    tauraro_value_t* temp_result_5 = tauraro_add(binop_left, binop_right);
-    return temp_result;
 }
 
 
@@ -2121,6 +2094,21 @@ tauraro_value_t* Counter____init__(int argc, tauraro_value_t** argv) {
 }
 
 
+tauraro_value_t* Duck__speak(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_attr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_object_get_attr(temp_attr_object, "name");
+    tauraro_value_t* binop_left = temp_result;
+    tauraro_value_t* binop_right = tauraro_value_new(); binop_right->type = TAURARO_STRING; binop_right->data.str_val = strdup(" says Quack!");
+    tauraro_value_t* temp_result_2 = tauraro_add(binop_left, binop_right);
+    return temp_result;
+}
+
+
 tauraro_value_t* Vehicle__stop(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
@@ -2136,24 +2124,36 @@ tauraro_value_t* Vehicle__stop(int argc, tauraro_value_t** argv) {
 }
 
 
-tauraro_value_t* Car____init__(int argc, tauraro_value_t** argv) {
+tauraro_value_t* Bird____init__(int argc, tauraro_value_t** argv) {
     // Extract parameters
     tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* brand = (argc > 1) ? argv[1] : NULL;
-    tauraro_value_t* model = (argc > 2) ? argv[2] : NULL;
+    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
 
     // Local variables
-    tauraro_value_t* temp_result = class_Vehicle;
-    tauraro_value_t* temp_object = temp_result;
-    tauraro_value_t* temp_result_1 = self;
-    tauraro_value_t* method_arg_0 = temp_result;
-    tauraro_value_t* temp_result_2 = brand;
-    tauraro_value_t* method_arg_1 = temp_result;
-    tauraro_value_t* temp_result_3 = Vehicle____init__(3, (tauraro_value_t*[]){temp_object, method_arg_0, method_arg_1});
-    tauraro_value_t* temp_result_4 = self;
+    tauraro_value_t* temp_result = self;
     tauraro_value_t* temp_setattr_object = temp_result;
-    tauraro_value_t* temp_result_5 = model;
-    tauraro_object_set_attr(temp_setattr_object, "model", temp_result);
+    tauraro_value_t* temp_result_1 = name;
+    tauraro_object_set_attr(temp_setattr_object, "name", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
+tauraro_value_t* Builder____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = self;
+    tauraro_value_t* temp_setattr_object = temp_result;
+    tauraro_value_t* temp_result_1 = tauraro_value_new(); temp_result_1->type = TAURARO_INT; temp_result_1->data.int_val = 0;
+    tauraro_object_set_attr(temp_setattr_object, "value", temp_result);
+    tauraro_value_t* temp_result_2 = self;
+    tauraro_value_t* temp_setattr_object_1 = temp_result;
+    tauraro_value_t* temp_result_3 = tauraro_value_new(); temp_result_3->type = TAURARO_NONE;
+    tauraro_object_set_attr(temp_setattr_object, "operations", temp_result);
     // Implicit return None
     tauraro_value_t* none_val = tauraro_value_new();
     none_val->type = TAURARO_NONE;
@@ -2162,140 +2162,77 @@ tauraro_value_t* Car____init__(int argc, tauraro_value_t** argv) {
 
 
 int main() {
-    tauraro_value_t* arg_3 = NULL;
-    tauraro_value_t* golden = NULL;
-    tauraro_value_t* c3 = NULL;
-    tauraro_value_t* var_dog_temp = NULL;
-    tauraro_value_t* temp_object_object_method_arg_0 = NULL;
-    tauraro_value_t* var_bird3_temp = NULL;
-    tauraro_value_t* bird1 = NULL;
-    tauraro_value_t* dog = NULL;
     tauraro_value_t* var_bird1_temp = NULL;
-    tauraro_value_t* temp = NULL;
-    tauraro_value_t* Counter__instances = NULL;
-    tauraro_value_t* arg_0_left_left = NULL;
-    tauraro_value_t* arg_0_right_right = NULL;
-    tauraro_value_t* arg_0_left = NULL;
-    tauraro_value_t* arg_1_attr_object = NULL;
-    tauraro_value_t* var_c1_temp = NULL;
-    tauraro_value_t* var_acc1_temp = NULL;
+    tauraro_value_t* arg_2_attr_object = NULL;
+    tauraro_value_t* acc2 = NULL;
     tauraro_value_t* temp_object = NULL;
-    tauraro_value_t* cat = NULL;
-    tauraro_value_t* bird2 = NULL;
-    tauraro_value_t* temp_object_object_object = NULL;
-    tauraro_value_t* c1 = NULL;
-    tauraro_value_t* method_arg_0 = NULL;
-    tauraro_value_t* builder = NULL;
-    tauraro_value_t* var_bird2_temp = NULL;
-    tauraro_value_t* BankAccount__interest_rate = NULL;
+    tauraro_value_t* arg_1_object = NULL;
+    tauraro_value_t* temp_object_object = NULL;
+    tauraro_value_t* var_result_temp = NULL;
+    tauraro_value_t* var_c1_temp = NULL;
     tauraro_value_t* Counter__count = NULL;
-    tauraro_value_t* square = NULL;
-    tauraro_value_t* BankAccount = NULL;
+    tauraro_value_t* Counter__instances = NULL;
+    tauraro_value_t* arg_0 = NULL;
+    tauraro_value_t* arg_0_left = NULL;
+    tauraro_value_t* var_golden_temp = NULL;
+    tauraro_value_t* c2 = NULL;
+    tauraro_value_t* birds = NULL;
+    tauraro_value_t* bird3 = NULL;
+    tauraro_value_t* BankAccount__interest_rate = NULL;
+    tauraro_value_t* var_bird3_temp = NULL;
+    tauraro_value_t* builder = NULL;
+    tauraro_value_t* var_manager_temp = NULL;
+    tauraro_value_t* arg_3_attr_object = NULL;
+    tauraro_value_t* arg_0_left_right = NULL;
+    tauraro_value_t* method_arg_0 = NULL;
+    tauraro_value_t* bird2 = NULL;
     tauraro_value_t* var_duck_temp = NULL;
     tauraro_value_t* manager = NULL;
-    tauraro_value_t* c2 = NULL;
-    tauraro_value_t* BankAccount__total_accounts = NULL;
-    tauraro_value_t* temp_object_method_arg_0 = NULL;
-    tauraro_value_t* var_c2_temp = NULL;
-    tauraro_value_t* arg_0 = NULL;
-    tauraro_value_t* arg_0_left_right = NULL;
-    tauraro_value_t* var_builder_temp = NULL;
-    tauraro_value_t* var_car_temp = NULL;
-    tauraro_value_t* acc2 = NULL;
-    tauraro_value_t* temp_object_object_object_object = NULL;
-    tauraro_value_t* var_manager_temp = NULL;
-    tauraro_value_t* acc1 = NULL;
-    tauraro_value_t* arg_0_right_object = NULL;
-    tauraro_value_t* var_cat_temp = NULL;
-    tauraro_value_t* arg_1_object = NULL;
-    tauraro_value_t* car = NULL;
-    tauraro_value_t* var_square_temp = NULL;
-    tauraro_value_t* var_birds_temp = NULL;
-    tauraro_value_t* var_c3_temp = NULL;
-    tauraro_value_t* var_acc2_temp = NULL;
-    tauraro_value_t* arg_3_object = NULL;
-    tauraro_value_t* result = NULL;
-    tauraro_value_t* birds = NULL;
-    tauraro_value_t* arg_0_right_left = NULL;
-    tauraro_value_t* arg_2_attr_object = NULL;
-    tauraro_value_t* arg_0_right = NULL;
-    tauraro_value_t* duck = NULL;
-    tauraro_value_t* var_result_temp = NULL;
-    tauraro_value_t* arg_3_attr_object = NULL;
-    tauraro_value_t* bird3 = NULL;
+    tauraro_value_t* c1 = NULL;
     tauraro_value_t* arg_2 = NULL;
     tauraro_value_t* arg_1 = NULL;
-    tauraro_value_t* var_golden_temp = NULL;
+    tauraro_value_t* c3 = NULL;
+    tauraro_value_t* temp_object_object_method_arg_0 = NULL;
+    tauraro_value_t* dog = NULL;
+    tauraro_value_t* golden = NULL;
+    tauraro_value_t* var_cat_temp = NULL;
+    tauraro_value_t* car = NULL;
+    tauraro_value_t* var_acc1_temp = NULL;
+    tauraro_value_t* temp_object_method_arg_0 = NULL;
+    tauraro_value_t* var_c2_temp = NULL;
+    tauraro_value_t* temp_object_object_object = NULL;
+    tauraro_value_t* var_dog_temp = NULL;
+    tauraro_value_t* duck = NULL;
+    tauraro_value_t* arg_0_right_left = NULL;
+    tauraro_value_t* arg_1_attr_object = NULL;
+    tauraro_value_t* temp = NULL;
+    tauraro_value_t* result = NULL;
+    tauraro_value_t* BankAccount__total_accounts = NULL;
+    tauraro_value_t* var_c3_temp = NULL;
+    tauraro_value_t* var_acc2_temp = NULL;
+    tauraro_value_t* temp_object_object_object_object = NULL;
+    tauraro_value_t* arg_3_object = NULL;
+    tauraro_value_t* bird1 = NULL;
+    tauraro_value_t* arg_0_right_right = NULL;
+    tauraro_value_t* square = NULL;
+    tauraro_value_t* arg_0_left_left = NULL;
+    tauraro_value_t* var_square_temp = NULL;
+    tauraro_value_t* acc1 = NULL;
+    tauraro_value_t* var_car_temp = NULL;
+    tauraro_value_t* BankAccount = NULL;
+    tauraro_value_t* arg_3 = NULL;
+    tauraro_value_t* cat = NULL;
+    tauraro_value_t* arg_0_right_object = NULL;
+    tauraro_value_t* var_bird2_temp = NULL;
+    tauraro_value_t* arg_0_right = NULL;
+    tauraro_value_t* var_builder_temp = NULL;
     tauraro_value_t* temp_object_object_object_method_arg_0 = NULL;
-    tauraro_value_t* temp_object_object = NULL;
+    tauraro_value_t* var_birds_temp = NULL;
 
     // === Class Initialization ===
-    // Initialize class: Swimmable
-    class_Swimmable = tauraro_class_create("Swimmable", NULL);
-    tauraro_class_add_method(class_Swimmable, "swim", (void*)&Swimmable__swim);
-    tauraro_class_add_method(class_Swimmable, "__init__", (void*)&Swimmable____init__);
-
-    // Initialize class: Eagle
-    class_Eagle = tauraro_class_create("Eagle", NULL);
-    tauraro_class_add_method(class_Eagle, "make_sound", (void*)&Eagle__make_sound);
-    tauraro_class_add_method(class_Eagle, "init__", (void*)&Eagle__init__);
-
-    // Initialize class: Flyable
-    class_Flyable = tauraro_class_create("Flyable", NULL);
-    tauraro_class_add_method(class_Flyable, "__init__", (void*)&Flyable____init__);
-    tauraro_class_add_method(class_Flyable, "fly", (void*)&Flyable__fly);
-
-    // Initialize class: Square
-    class_Square = tauraro_class_create("Square", NULL);
-    tauraro_class_add_method(class_Square, "__init__", (void*)&Square____init__);
-    tauraro_class_add_method(class_Square, "diagonal", (void*)&Square__diagonal);
-
-    // Initialize class: Builder
-    class_Builder = tauraro_class_create("Builder", NULL);
-    tauraro_class_add_method(class_Builder, "multiply", (void*)&Builder__multiply);
-    tauraro_class_add_method(class_Builder, "__init__", (void*)&Builder____init__);
-    tauraro_class_add_method(class_Builder, "add", (void*)&Builder__add);
-    tauraro_class_add_method(class_Builder, "get_value", (void*)&Builder__get_value);
-
-    // Initialize class: Parrot
-    class_Parrot = tauraro_class_create("Parrot", NULL);
-    tauraro_class_add_method(class_Parrot, "make_sound", (void*)&Parrot__make_sound);
-    tauraro_class_add_method(class_Parrot, "init__", (void*)&Parrot__init__);
-
-    // Initialize class: Manager
-    class_Manager = tauraro_class_create("Manager", NULL);
-    tauraro_class_add_method(class_Manager, "__init__", (void*)&Manager____init__);
-    tauraro_class_add_method(class_Manager, "get_info", (void*)&Manager__get_info);
-
     // Initialize class: Employee
     class_Employee = tauraro_class_create("Employee", NULL);
     tauraro_class_add_method(class_Employee, "__init__", (void*)&Employee____init__);
-
-    // Initialize class: Person
-    class_Person = tauraro_class_create("Person", NULL);
-    tauraro_class_add_method(class_Person, "__init__", (void*)&Person____init__);
-
-    // Initialize class: Bird
-    class_Bird = tauraro_class_create("Bird", NULL);
-    tauraro_class_add_method(class_Bird, "__init__", (void*)&Bird____init__);
-    tauraro_class_add_method(class_Bird, "make_sound", (void*)&Bird__make_sound);
-
-    // Initialize class: BankAccount
-    class_BankAccount = tauraro_class_create("BankAccount", NULL);
-    tauraro_class_add_method(class_BankAccount, "deposit", (void*)&BankAccount__deposit);
-    tauraro_class_add_method(class_BankAccount, "__init__", (void*)&BankAccount____init__);
-    tauraro_class_add_method(class_BankAccount, "get_interest", (void*)&BankAccount__get_interest);
-
-    // Initialize class: Duck
-    class_Duck = tauraro_class_create("Duck", NULL);
-    tauraro_class_add_method(class_Duck, "__init__", (void*)&Duck____init__);
-    tauraro_class_add_method(class_Duck, "speak", (void*)&Duck__speak);
-
-    // Initialize class: Vehicle
-    class_Vehicle = tauraro_class_create("Vehicle", NULL);
-    tauraro_class_add_method(class_Vehicle, "__init__", (void*)&Vehicle____init__);
-    tauraro_class_add_method(class_Vehicle, "start", (void*)&Vehicle__start);
-    tauraro_class_add_method(class_Vehicle, "stop", (void*)&Vehicle__stop);
 
     // Initialize class: Animal
     class_Animal = tauraro_class_create("Animal", NULL);
@@ -2303,16 +2240,34 @@ int main() {
     tauraro_class_add_method(class_Animal, "speak", (void*)&Animal__speak);
     tauraro_class_add_method(class_Animal, "get_info", (void*)&Animal__get_info);
 
-    // Initialize class: Shape
-    class_Shape = tauraro_class_create("Shape", NULL);
-    tauraro_class_add_method(class_Shape, "get_color", (void*)&Shape__get_color);
-    tauraro_class_add_method(class_Shape, "__init__", (void*)&Shape____init__);
+    // Initialize class: Vehicle
+    class_Vehicle = tauraro_class_create("Vehicle", NULL);
+    tauraro_class_add_method(class_Vehicle, "start", (void*)&Vehicle__start);
+    tauraro_class_add_method(class_Vehicle, "__init__", (void*)&Vehicle____init__);
+    tauraro_class_add_method(class_Vehicle, "stop", (void*)&Vehicle__stop);
 
-    // Initialize class: Rectangle
-    class_Rectangle = tauraro_class_create("Rectangle", NULL);
-    tauraro_class_add_method(class_Rectangle, "__init__", (void*)&Rectangle____init__);
-    tauraro_class_add_method(class_Rectangle, "area", (void*)&Rectangle__area);
-    tauraro_class_add_method(class_Rectangle, "perimeter", (void*)&Rectangle__perimeter);
+    // Initialize class: Bird
+    class_Bird = tauraro_class_create("Bird", NULL);
+    tauraro_class_add_method(class_Bird, "make_sound", (void*)&Bird__make_sound);
+    tauraro_class_add_method(class_Bird, "__init__", (void*)&Bird____init__);
+
+    // Initialize class: Counter
+    class_Counter = tauraro_class_create("Counter", NULL);
+    tauraro_class_add_method(class_Counter, "get_count", (void*)&Counter__get_count);
+    tauraro_class_add_method(class_Counter, "__init__", (void*)&Counter____init__);
+
+    // Initialize class: Builder
+    class_Builder = tauraro_class_create("Builder", NULL);
+    tauraro_class_add_method(class_Builder, "add", (void*)&Builder__add);
+    tauraro_class_add_method(class_Builder, "get_value", (void*)&Builder__get_value);
+    tauraro_class_add_method(class_Builder, "multiply", (void*)&Builder__multiply);
+    tauraro_class_add_method(class_Builder, "__init__", (void*)&Builder____init__);
+
+    // Initialize class: Car
+    class_Car = tauraro_class_create("Car", NULL);
+    tauraro_class_add_method(class_Car, "honk", (void*)&Car__honk);
+    tauraro_class_add_method(class_Car, "start", (void*)&Car__start);
+    tauraro_class_add_method(class_Car, "__init__", (void*)&Car____init__);
 
     // Initialize class: Dog
     class_Dog = tauraro_class_create("Dog", NULL);
@@ -2320,16 +2275,61 @@ int main() {
     tauraro_class_add_method(class_Dog, "speak", (void*)&Dog__speak);
     tauraro_class_add_method(class_Dog, "__init__", (void*)&Dog____init__);
 
-    // Initialize class: Car
-    class_Car = tauraro_class_create("Car", NULL);
-    tauraro_class_add_method(class_Car, "start", (void*)&Car__start);
-    tauraro_class_add_method(class_Car, "honk", (void*)&Car__honk);
-    tauraro_class_add_method(class_Car, "__init__", (void*)&Car____init__);
+    // Initialize class: Duck
+    class_Duck = tauraro_class_create("Duck", NULL);
+    tauraro_class_add_method(class_Duck, "__init__", (void*)&Duck____init__);
+    tauraro_class_add_method(class_Duck, "speak", (void*)&Duck__speak);
 
-    // Initialize class: Counter
-    class_Counter = tauraro_class_create("Counter", NULL);
-    tauraro_class_add_method(class_Counter, "get_count", (void*)&Counter__get_count);
-    tauraro_class_add_method(class_Counter, "__init__", (void*)&Counter____init__);
+    // Initialize class: Manager
+    class_Manager = tauraro_class_create("Manager", NULL);
+    tauraro_class_add_method(class_Manager, "__init__", (void*)&Manager____init__);
+    tauraro_class_add_method(class_Manager, "get_info", (void*)&Manager__get_info);
+
+    // Initialize class: Square
+    class_Square = tauraro_class_create("Square", NULL);
+    tauraro_class_add_method(class_Square, "diagonal", (void*)&Square__diagonal);
+    tauraro_class_add_method(class_Square, "__init__", (void*)&Square____init__);
+
+    // Initialize class: BankAccount
+    class_BankAccount = tauraro_class_create("BankAccount", NULL);
+    tauraro_class_add_method(class_BankAccount, "deposit", (void*)&BankAccount__deposit);
+    tauraro_class_add_method(class_BankAccount, "__init__", (void*)&BankAccount____init__);
+    tauraro_class_add_method(class_BankAccount, "get_interest", (void*)&BankAccount__get_interest);
+
+    // Initialize class: Rectangle
+    class_Rectangle = tauraro_class_create("Rectangle", NULL);
+    tauraro_class_add_method(class_Rectangle, "__init__", (void*)&Rectangle____init__);
+    tauraro_class_add_method(class_Rectangle, "area", (void*)&Rectangle__area);
+    tauraro_class_add_method(class_Rectangle, "perimeter", (void*)&Rectangle__perimeter);
+
+    // Initialize class: Swimmable
+    class_Swimmable = tauraro_class_create("Swimmable", NULL);
+    tauraro_class_add_method(class_Swimmable, "swim", (void*)&Swimmable__swim);
+    tauraro_class_add_method(class_Swimmable, "__init__", (void*)&Swimmable____init__);
+
+    // Initialize class: Eagle
+    class_Eagle = tauraro_class_create("Eagle", NULL);
+    tauraro_class_add_method(class_Eagle, "init__", (void*)&Eagle__init__);
+    tauraro_class_add_method(class_Eagle, "make_sound", (void*)&Eagle__make_sound);
+
+    // Initialize class: Shape
+    class_Shape = tauraro_class_create("Shape", NULL);
+    tauraro_class_add_method(class_Shape, "__init__", (void*)&Shape____init__);
+    tauraro_class_add_method(class_Shape, "get_color", (void*)&Shape__get_color);
+
+    // Initialize class: Parrot
+    class_Parrot = tauraro_class_create("Parrot", NULL);
+    tauraro_class_add_method(class_Parrot, "make_sound", (void*)&Parrot__make_sound);
+    tauraro_class_add_method(class_Parrot, "init__", (void*)&Parrot__init__);
+
+    // Initialize class: Person
+    class_Person = tauraro_class_create("Person", NULL);
+    tauraro_class_add_method(class_Person, "__init__", (void*)&Person____init__);
+
+    // Initialize class: Flyable
+    class_Flyable = tauraro_class_create("Flyable", NULL);
+    tauraro_class_add_method(class_Flyable, "fly", (void*)&Flyable__fly);
+    tauraro_class_add_method(class_Flyable, "__init__", (void*)&Flyable____init__);
 
     // === End Class Initialization ===
 
@@ -2359,19 +2359,19 @@ int main() {
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Buddy");
     arg_1 = tauraro_value_new(); arg_1->type = TAURARO_STRING; arg_1->data.str_val = strdup("Dog");
     // OPTIMIZED: Static struct for Animal
-    Animal_t* temp_struct = Animal_new();
+    Animal_t* animal_temp_0_struct = Animal_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)animal_temp_0_struct;
     var_dog_temp = temp;
     dog = var_dog_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Whiskers");
     arg_1 = tauraro_value_new(); arg_1->type = TAURARO_STRING; arg_1->data.str_val = strdup("Cat");
     // OPTIMIZED: Static struct for Animal
-    Animal_t* temp_struct = Animal_new();
+    Animal_t* animal_temp_1_struct = Animal_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)animal_temp_1_struct;
     var_cat_temp = temp;
     cat = var_cat_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Created:");
@@ -2450,10 +2450,10 @@ int main() {
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Max");
     arg_1 = tauraro_value_new(); arg_1->type = TAURARO_STRING; arg_1->data.str_val = strdup("Golden Retriever");
     // OPTIMIZED: Static struct for Dog
-    Dog_t* temp_struct = Dog_new();
+    Dog_t* dog_temp_2_struct = Dog_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)dog_temp_2_struct;
     var_golden_temp = temp;
     golden = var_golden_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Created:");
@@ -2515,10 +2515,10 @@ int main() {
     temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Donald");
     // OPTIMIZED: Static struct for Duck
-    Duck_t* temp_struct = Duck_new();
+    Duck_t* duck_temp_3_struct = Duck_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)duck_temp_3_struct;
     var_duck_temp = temp;
     duck = var_duck_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Created:");
@@ -2608,26 +2608,26 @@ int main() {
     Counter__instances = temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("First");
     // OPTIMIZED: Static struct for Counter
-    Counter_t* temp_struct = Counter_new();
+    Counter_t* counter_temp_4_struct = Counter_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)counter_temp_4_struct;
     var_c1_temp = temp;
     c1 = var_c1_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Second");
     // OPTIMIZED: Static struct for Counter
-    Counter_t* temp_struct = Counter_new();
+    Counter_t* counter_temp_5_struct = Counter_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)counter_temp_5_struct;
     var_c2_temp = temp;
     c2 = var_c2_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Third");
     // OPTIMIZED: Static struct for Counter
-    Counter_t* temp_struct = Counter_new();
+    Counter_t* counter_temp_6_struct = Counter_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)counter_temp_6_struct;
     var_c3_temp = temp;
     c3 = var_c3_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Instance 1:");
@@ -2648,7 +2648,7 @@ int main() {
             }
         }
     }
-    tauraro_value_t* arg_2_as_value = tauraro_value_new(); arg_2_as_value->type = TAURARO_INT; arg_2_as_value->data.int_val = arg_2; tauraro_value_t* arg_3_as_value = tauraro_value_new(); arg_3_as_value->type = TAURARO_STRING; arg_3_as_value->data.str_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0, arg_1, arg_2_as_value, arg_3_as_value});
+    tauraro_value_t* temp_7_arg_2_as_value = tauraro_value_new(); temp_7_arg_2_as_value->type = TAURARO_INT; temp_7_arg_2_as_value->data.int_val = arg_2; tauraro_value_t* temp_7_arg_3_as_value = tauraro_value_new(); temp_7_arg_3_as_value->type = TAURARO_STRING; temp_7_arg_3_as_value->data.str_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0, arg_1, temp_7_arg_2_as_value, temp_7_arg_3_as_value});
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Instance 2:");
     arg_1_attr_object = c2;
     arg_1 = tauraro_object_get_attr(arg_1_attr_object, "name");
@@ -2667,7 +2667,7 @@ int main() {
             }
         }
     }
-    tauraro_value_t* arg_2_as_value = tauraro_value_new(); arg_2_as_value->type = TAURARO_INT; arg_2_as_value->data.int_val = arg_2; tauraro_value_t* arg_3_as_value = tauraro_value_new(); arg_3_as_value->type = TAURARO_STRING; arg_3_as_value->data.str_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0, arg_1, arg_2_as_value, arg_3_as_value});
+    tauraro_value_t* temp_8_arg_2_as_value = tauraro_value_new(); temp_8_arg_2_as_value->type = TAURARO_INT; temp_8_arg_2_as_value->data.int_val = arg_2; tauraro_value_t* temp_8_arg_3_as_value = tauraro_value_new(); temp_8_arg_3_as_value->type = TAURARO_STRING; temp_8_arg_3_as_value->data.str_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0, arg_1, temp_8_arg_2_as_value, temp_8_arg_3_as_value});
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Instance 3:");
     arg_1_attr_object = c3;
     arg_1 = tauraro_object_get_attr(arg_1_attr_object, "name");
@@ -2686,7 +2686,7 @@ int main() {
             }
         }
     }
-    tauraro_value_t* arg_2_as_value = tauraro_value_new(); arg_2_as_value->type = TAURARO_INT; arg_2_as_value->data.int_val = arg_2; tauraro_value_t* arg_3_as_value = tauraro_value_new(); arg_3_as_value->type = TAURARO_STRING; arg_3_as_value->data.str_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0, arg_1, arg_2_as_value, arg_3_as_value});
+    tauraro_value_t* temp_9_arg_2_as_value = tauraro_value_new(); temp_9_arg_2_as_value->type = TAURARO_INT; temp_9_arg_2_as_value->data.int_val = arg_2; tauraro_value_t* temp_9_arg_3_as_value = tauraro_value_new(); temp_9_arg_3_as_value->type = TAURARO_STRING; temp_9_arg_3_as_value->data.str_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0, arg_1, temp_9_arg_2_as_value, temp_9_arg_3_as_value});
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  ✓ PASS");
     temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
     // Test 5: Method Overriding
@@ -2699,10 +2699,10 @@ int main() {
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Tesla");
     arg_1 = tauraro_value_new(); arg_1->type = TAURARO_STRING; arg_1->data.str_val = strdup("Model S");
     // OPTIMIZED: Static struct for Car
-    Car_t* temp_struct = Car_new();
+    Car_t* car_temp_10_struct = Car_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)car_temp_10_struct;
     var_car_temp = temp;
     car = var_car_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Vehicle:");
@@ -2710,7 +2710,7 @@ int main() {
     arg_1 = tauraro_object_get_attr(arg_1_attr_object, "brand");
     arg_2_attr_object = car;
     arg_2 = tauraro_object_get_attr(arg_2_attr_object, "model");
-    tauraro_value_t* arg_2_as_value = tauraro_value_new(); arg_2_as_value->type = TAURARO_INT; arg_2_as_value->data.int_val = arg_2; temp = tauraro_print(3, (tauraro_value_t*[]){arg_0, arg_1, arg_2_as_value});
+    tauraro_value_t* temp_11_arg_2_as_value = tauraro_value_new(); temp_11_arg_2_as_value->type = TAURARO_INT; temp_11_arg_2_as_value->data.int_val = arg_2; temp = tauraro_print(3, (tauraro_value_t*[]){arg_0, arg_1, temp_11_arg_2_as_value});
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Start:");
     arg_1_object = car;
     // Object method call: arg_1_object.start()
@@ -2771,10 +2771,10 @@ int main() {
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("red");
     arg_1 = tauraro_value_new(); arg_1->type = TAURARO_INT; arg_1->data.int_val = 10;
     // OPTIMIZED: Static struct for Square
-    Square_t* temp_struct = Square_new();
+    Square_t* square_temp_12_struct = Square_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)square_temp_12_struct;
     var_square_temp = temp;
     square = var_square_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Shape: Square");
@@ -2863,19 +2863,19 @@ int main() {
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Alice");
     arg_1 = tauraro_value_new(); arg_1->type = TAURARO_INT; arg_1->data.int_val = 1000;
     // OPTIMIZED: Static struct for BankAccount
-    BankAccount_t* temp_struct = BankAccount_new();
+    BankAccount_t* bankaccount_temp_13_struct = BankAccount_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)bankaccount_temp_13_struct;
     var_acc1_temp = temp;
     acc1 = var_acc1_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Bob");
     arg_1 = tauraro_value_new(); arg_1->type = TAURARO_INT; arg_1->data.int_val = 2000;
     // OPTIMIZED: Static struct for BankAccount
-    BankAccount_t* temp_struct = BankAccount_new();
+    BankAccount_t* bankaccount_temp_14_struct = BankAccount_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)bankaccount_temp_14_struct;
     var_acc2_temp = temp;
     acc2 = var_acc2_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Account 1:");
@@ -2884,21 +2884,21 @@ int main() {
     arg_2 = tauraro_value_new(); arg_2->type = TAURARO_STRING; arg_2->data.str_val = strdup("- Balance:");
     arg_3_attr_object = acc1;
     arg_3 = tauraro_object_get_attr(arg_3_attr_object, "balance");
-    tauraro_value_t* arg_2_as_value = tauraro_value_new(); arg_2_as_value->type = TAURARO_INT; arg_2_as_value->data.int_val = arg_2; tauraro_value_t* arg_3_as_value = tauraro_value_new(); arg_3_as_value->type = TAURARO_STRING; arg_3_as_value->data.str_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0, arg_1, arg_2_as_value, arg_3_as_value});
+    tauraro_value_t* temp_15_arg_2_as_value = tauraro_value_new(); temp_15_arg_2_as_value->type = TAURARO_INT; temp_15_arg_2_as_value->data.int_val = arg_2; tauraro_value_t* temp_15_arg_3_as_value = tauraro_value_new(); temp_15_arg_3_as_value->type = TAURARO_STRING; temp_15_arg_3_as_value->data.str_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0, arg_1, temp_15_arg_2_as_value, temp_15_arg_3_as_value});
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Account 2:");
     arg_1_attr_object = acc2;
     arg_1 = tauraro_object_get_attr(arg_1_attr_object, "owner");
     arg_2 = tauraro_value_new(); arg_2->type = TAURARO_STRING; arg_2->data.str_val = strdup("- Balance:");
     arg_3_attr_object = acc2;
     arg_3 = tauraro_object_get_attr(arg_3_attr_object, "balance");
-    tauraro_value_t* arg_2_as_value = tauraro_value_new(); arg_2_as_value->type = TAURARO_INT; arg_2_as_value->data.int_val = arg_2; tauraro_value_t* arg_3_as_value = tauraro_value_new(); arg_3_as_value->type = TAURARO_STRING; arg_3_as_value->data.str_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0, arg_1, arg_2_as_value, arg_3_as_value});
+    tauraro_value_t* temp_16_arg_2_as_value = tauraro_value_new(); temp_16_arg_2_as_value->type = TAURARO_INT; temp_16_arg_2_as_value->data.int_val = arg_2; tauraro_value_t* temp_16_arg_3_as_value = tauraro_value_new(); temp_16_arg_3_as_value->type = TAURARO_STRING; temp_16_arg_3_as_value->data.str_val = arg_3; temp = tauraro_print(4, (tauraro_value_t*[]){arg_0, arg_1, temp_16_arg_2_as_value, temp_16_arg_3_as_value});
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Total accounts:");
     arg_1_attr_object = BankAccount;
     arg_1 = tauraro_object_get_attr(arg_1_attr_object, "total_accounts");
     temp = tauraro_print(2, (tauraro_value_t*[]){arg_0, arg_1});
     temp_object = acc1;
     method_arg_0 = 500;
-    tauraro_value_t* method_arg_0_as_value = tauraro_value_new(); method_arg_0_as_value->type = TAURARO_INT; method_arg_0_as_value->data.int_val = method_arg_0; temp = tauraro_acc1__deposit(2, (tauraro_value_t*[]){temp_object, method_arg_0_as_value});
+    tauraro_value_t* temp_17_method_arg_0_as_value = tauraro_value_new(); temp_17_method_arg_0_as_value->type = TAURARO_INT; temp_17_method_arg_0_as_value->data.int_val = method_arg_0; temp = acc1__deposit(2, (tauraro_value_t*[]){temp_object, temp_17_method_arg_0_as_value});
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  After deposit - Account 1 balance:");
     arg_1_attr_object = acc1;
     arg_1 = tauraro_object_get_attr(arg_1_attr_object, "balance");
@@ -2945,19 +2945,19 @@ int main() {
     arg_0 = tauraro_mul(arg_0_left, arg_0_right);
     temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
     // OPTIMIZED: Static struct for Builder
-    Builder_t* temp_struct = Builder_new();
+    Builder_t* builder_temp_18_struct = Builder_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)builder_temp_18_struct;
     var_builder_temp = temp;
     builder = var_builder_temp;
     temp_object_object_object_object = builder;
     temp_object_object_object_method_arg_0 = 5;
-    tauraro_value_t* temp_object_object_object_method_arg_0_as_value = tauraro_value_new(); temp_object_object_object_method_arg_0_as_value->type = TAURARO_INT; temp_object_object_object_method_arg_0_as_value->data.int_val = temp_object_object_object_method_arg_0; temp_object_object_object = tauraro_builder__add(2, (tauraro_value_t*[]){temp_object_object_object_object, temp_object_object_object_method_arg_0_as_value});
+    tauraro_value_t* temp_object_object_object_19_temp_object_object_object_method_arg_0_as_value = tauraro_value_new(); temp_object_object_object_19_temp_object_object_object_method_arg_0_as_value->type = TAURARO_INT; temp_object_object_object_19_temp_object_object_object_method_arg_0_as_value->data.int_val = temp_object_object_object_method_arg_0; temp_object_object_object = builder__add(2, (tauraro_value_t*[]){temp_object_object_object_object, temp_object_object_object_19_temp_object_object_object_method_arg_0_as_value});
     temp_object_object_method_arg_0 = 10;
-    tauraro_value_t* temp_object_object_method_arg_0_as_value = tauraro_value_new(); temp_object_object_method_arg_0_as_value->type = TAURARO_INT; temp_object_object_method_arg_0_as_value->data.int_val = temp_object_object_method_arg_0; temp_object_object = tauraro_temp_expr__add(2, (tauraro_value_t*[]){temp_object_object_object, temp_object_object_method_arg_0_as_value});
+    tauraro_value_t* temp_object_object_20_temp_object_object_method_arg_0_as_value = tauraro_value_new(); temp_object_object_20_temp_object_object_method_arg_0_as_value->type = TAURARO_INT; temp_object_object_20_temp_object_object_method_arg_0_as_value->data.int_val = temp_object_object_method_arg_0; temp_object_object = temp_expr__add(2, (tauraro_value_t*[]){temp_object_object_object, temp_object_object_20_temp_object_object_method_arg_0_as_value});
     temp_object_method_arg_0 = 2;
-    tauraro_value_t* temp_object_method_arg_0_as_value = tauraro_value_new(); temp_object_method_arg_0_as_value->type = TAURARO_INT; temp_object_method_arg_0_as_value->data.int_val = temp_object_method_arg_0; temp_object = tauraro_temp_expr__multiply(2, (tauraro_value_t*[]){temp_object_object, temp_object_method_arg_0_as_value});
+    tauraro_value_t* temp_object_21_temp_object_method_arg_0_as_value = tauraro_value_new(); temp_object_21_temp_object_method_arg_0_as_value->type = TAURARO_INT; temp_object_21_temp_object_method_arg_0_as_value->data.int_val = temp_object_method_arg_0; temp_object = temp_expr__multiply(2, (tauraro_value_t*[]){temp_object_object, temp_object_21_temp_object_method_arg_0_as_value});
     // Object method call: temp_object.get_value()
     if (temp_object && temp_object->type == TAURARO_OBJECT) {
         tauraro_object_t* obj_temp_object = (tauraro_object_t*)temp_object->data.obj_val;
@@ -2978,7 +2978,7 @@ int main() {
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Result:");
     arg_1 = result;
     arg_2 = tauraro_value_new(); arg_2->type = TAURARO_STRING; arg_2->data.str_val = strdup("| Expected: 30");
-    tauraro_value_t* arg_2_as_value = tauraro_value_new(); arg_2_as_value->type = TAURARO_INT; arg_2_as_value->data.int_val = arg_2; temp = tauraro_print(3, (tauraro_value_t*[]){arg_0, arg_1, arg_2_as_value});
+    tauraro_value_t* temp_22_arg_2_as_value = tauraro_value_new(); temp_22_arg_2_as_value->type = TAURARO_INT; temp_22_arg_2_as_value->data.int_val = arg_2; temp = tauraro_print(3, (tauraro_value_t*[]){arg_0, arg_1, temp_22_arg_2_as_value});
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  ✓ PASS");
     temp = tauraro_print(1, (tauraro_value_t*[]){arg_0});
     // Test 9: Polymorphism
@@ -2994,26 +2994,26 @@ int main() {
     // Manually construct list since we have issues with append
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Sparrow");
     // OPTIMIZED: Static struct for Bird
-    Bird_t* temp_struct = Bird_new();
+    Bird_t* bird_temp_23_struct = Bird_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)bird_temp_23_struct;
     var_bird1_temp = temp;
     bird1 = var_bird1_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Polly");
     // OPTIMIZED: Static struct for Parrot
-    Parrot_t* temp_struct = Parrot_new();
+    Parrot_t* parrot_temp_24_struct = Parrot_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)parrot_temp_24_struct;
     var_bird2_temp = temp;
     bird2 = var_bird2_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("Thunder");
     // OPTIMIZED: Static struct for Eagle
-    Eagle_t* temp_struct = Eagle_new();
+    Eagle_t* eagle_temp_25_struct = Eagle_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)eagle_temp_25_struct;
     var_bird3_temp = temp;
     bird3 = var_bird3_temp;
     arg_0_left = strdup("  ");
@@ -3081,10 +3081,10 @@ int main() {
     arg_2 = 12345;
     arg_3 = strdup("Engineering");
     // OPTIMIZED: Static struct for Manager
-    Manager_t* temp_struct = Manager_new();
+    Manager_t* manager_temp_26_struct = Manager_new();
     temp = tauraro_value_new();
     temp->type = TAURARO_OBJECT;
-    temp->data.ptr_val = (void*)temp_struct;
+    temp->data.ptr_val = (void*)manager_temp_26_struct;
     var_manager_temp = temp;
     manager = var_manager_temp;
     arg_0 = tauraro_value_new(); arg_0->type = TAURARO_STRING; arg_0->data.str_val = strdup("  Created:");
