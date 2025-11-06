@@ -1903,8 +1903,7 @@ impl SuperCompiler {
                 Ok(result_reg)
             }
             Expr::Dict(pairs) => {
-                // Compile each key-value pair and store in consecutive registers
-                // Keys and values are interleaved: key1, value1, key2, value2, ...
+                // Compile each key-value pair
                 let mut pair_regs = Vec::new();
                 for (key, value) in pairs {
                     let key_reg = self.compile_expression(key)?;
@@ -1913,11 +1912,26 @@ impl SuperCompiler {
                     pair_regs.push(value_reg);
                 }
 
+                // Ensure key-value pairs are in consecutive registers for BuildDict
+                // BuildDict expects keys and values in consecutive registers: key1, value1, key2, value2, ...
+                let first_consecutive_reg = self.allocate_register();
+                for (i, &reg) in pair_regs.iter().enumerate() {
+                    let target_reg = first_consecutive_reg + i as u32;
+                    if reg != target_reg {
+                        // Allocate the target register if needed
+                        while self.next_register <= target_reg {
+                            self.allocate_register();
+                        }
+                        // Copy to consecutive position
+                        self.emit(OpCode::MoveReg, reg, target_reg, 0, self.current_line);
+                    }
+                }
+
                 let result_reg = self.allocate_register();
 
                 // Use the BuildDict opcode to create a dict with the key-value pairs
                 // arg1 = number of pairs, arg2 = first key register, arg3 = result register
-                let first_reg = if pair_regs.is_empty() { 0 } else { pair_regs[0] };
+                let first_reg = if pair_regs.is_empty() { result_reg } else { first_consecutive_reg };
                 self.emit(OpCode::BuildDict, (pair_regs.len() / 2) as u32, first_reg, result_reg, self.current_line);
 
                 Ok(result_reg)

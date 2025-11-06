@@ -1633,11 +1633,47 @@ impl Generator {
                     });
                 }
             },
+            Expr::List(elements) => {
+                // Handle list literal: [item1, item2, ...]
+                let mut element_names = Vec::new();
+                for (i, elem) in elements.iter().enumerate() {
+                    let elem_result = format!("temp_elem_{}", i);
+                    self.process_expression_to_result(module, elem, &elem_result)?;
+                    element_names.push(elem_result);
+                }
+
+                // Create list from elements
+                module.globals.push(IRInstruction::Call {
+                    func: "list".to_string(),
+                    args: element_names,
+                    result: Some("temp".to_string())
+                });
+            },
+            Expr::Dict(pairs) => {
+                // Handle dict literal: {key1: value1, key2: value2, ...}
+                let mut pair_names = Vec::new();
+                for (i, (key, value)) in pairs.iter().enumerate() {
+                    let key_result = format!("temp_key_{}", i);
+                    let value_result = format!("temp_value_{}", i);
+
+                    // Recursively process key and value to handle nested structures
+                    self.process_expression_to_result(module, key, &key_result)?;
+                    self.process_expression_to_result(module, value, &value_result)?;
+
+                    pair_names.push((key_result, value_result));
+                }
+
+                // Create dict from key-value pairs
+                module.globals.push(IRInstruction::DictCreate {
+                    pairs: pair_names,
+                    result: "temp".to_string()
+                });
+            },
             _ => {
                 // For other expressions, add placeholder
-                module.globals.push(IRInstruction::LoadConst { 
-                    value: Value::None, 
-                    result: "temp".to_string() 
+                module.globals.push(IRInstruction::LoadConst {
+                    value: Value::None,
+                    result: "temp".to_string()
                 });
             }
         }
@@ -1927,6 +1963,26 @@ impl Generator {
                     func: "tuple".to_string(),
                     args: element_names,
                     result: Some(result_var.to_string())
+                });
+            },
+            Expr::Dict(pairs) => {
+                // Handle dict literal: {key1: value1, key2: value2, ...}
+                let mut pair_names = Vec::new();
+                for (i, (key, value)) in pairs.iter().enumerate() {
+                    let key_result = format!("{}_key_{}", result_var, i);
+                    let value_result = format!("{}_value_{}", result_var, i);
+
+                    // Recursively process key and value to handle nested structures
+                    self.process_expression_to_result(module, key, &key_result)?;
+                    self.process_expression_to_result(module, value, &value_result)?;
+
+                    pair_names.push((key_result, value_result));
+                }
+
+                // Create dict from key-value pairs
+                module.globals.push(IRInstruction::DictCreate {
+                    pairs: pair_names,
+                    result: result_var.to_string()
                 });
             },
             _ => {
