@@ -545,6 +545,15 @@ impl CTranspiler {
         }
         c_code.push_str("\n");
 
+        // Collect class names from function names
+        let mut class_names = HashSet::new();
+        for (func_name, _) in &module.functions {
+            if let Some(pos) = func_name.find("__") {
+                let class_name = &func_name[0..pos];
+                class_names.insert(class_name.to_string());
+            }
+        }
+
         // Add forward declarations for all user-defined functions
         c_code.push_str("// Forward declarations for user-defined functions\n");
         for (_name, function) in &module.functions {
@@ -554,7 +563,7 @@ impl CTranspiler {
 
         // Generate functions
         for (_name, function) in &module.functions {
-            c_code.push_str(&functions::generate_function(function)?);
+            c_code.push_str(&functions::generate_function(function, &class_names)?);
             c_code.push_str("\n\n");
         }
 
@@ -2077,9 +2086,18 @@ impl CTranspiler {
         // Add runtime operator implementations
         c_code.push_str(&runtime::generate_runtime_support());
 
+        // Collect class names from function names
+        let mut class_names = HashSet::new();
+        for (func_name, _) in &module.functions {
+            if let Some(pos) = func_name.find("__") {
+                let class_name = &func_name[0..pos];
+                class_names.insert(class_name.to_string());
+            }
+        }
+
         // Generate functions
         for (name, function) in &module.functions {
-            c_code.push_str(&functions::generate_function(function)?);
+            c_code.push_str(&functions::generate_function(function, &class_names)?);
             c_code.push_str("\n\n");
         }
 
@@ -2113,9 +2131,18 @@ impl CTranspiler {
             c_code.push_str(&oop::generate_oop_implementations());
         }
 
+        // Collect class names from function names
+        let mut class_names = HashSet::new();
+        for (func_name, _) in &module.functions {
+            if let Some(pos) = func_name.find("__") {
+                let class_name = &func_name[0..pos];
+                class_names.insert(class_name.to_string());
+            }
+        }
+
         // Generate module functions
         for (_name, function) in &module.functions {
-            c_code.push_str(&functions::generate_function(function)?);
+            c_code.push_str(&functions::generate_function(function, &class_names)?);
             c_code.push_str("\n\n");
         }
 

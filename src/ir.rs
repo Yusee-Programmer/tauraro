@@ -930,6 +930,14 @@ impl Generator {
                     });
                 } else {
                     // Object method call: obj.method() -> ClassName__method(obj, ...)
+                    // First process the object expression to get a proper variable
+                    self.process_expression_for_instructions(instructions, &object)?;
+                    let object_var = "temp_object".to_string();
+                    instructions.push(IRInstruction::LoadGlobal {
+                        name: "temp_result".to_string(),
+                        result: object_var.clone()
+                    });
+
                     let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
 
                     // Process each argument and collect their result names
@@ -948,8 +956,8 @@ impl Generator {
                     // Create the method name (class__method)
                     let method_name = format!("{}__{}", class_name, method);
 
-                    // Call the method with object as first argument
-                    let mut method_args = vec![object_name.clone()];
+                    // Call the method with object variable as first argument
+                    let mut method_args = vec![object_var];
                     method_args.extend(arg_names);
 
                     instructions.push(IRInstruction::Call {
@@ -1359,6 +1367,10 @@ impl Generator {
                     });
                 } else {
                     // Object method call: obj.method() -> ClassName__method(obj, ...)
+                    // First process the object expression to get a proper variable
+                    let object_var = "temp_object".to_string();
+                    self.process_expression_to_result(module, &object, &object_var)?;
+
                     let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
 
                     // Process each argument and collect their result names
@@ -1372,8 +1384,8 @@ impl Generator {
                     // Create the method name (class__method)
                     let method_name = format!("{}__{}", class_name, method);
 
-                    // Call the method with object as first argument
-                    let mut method_args = vec![object_name.clone()];
+                    // Call the method with object variable as first argument
+                    let mut method_args = vec![object_var];
                     method_args.extend(arg_names);
 
                     module.globals.push(IRInstruction::Call {
@@ -1632,6 +1644,10 @@ impl Generator {
                     }
                 } else {
                     // Normal method call
+                    // First process the object expression to get a proper variable
+                    let object_var = format!("{}_object", result_var);
+                    self.process_expression_to_result(module, &object, &object_var)?;
+
                     let object_name = self.expression_to_string(&object);
 
                     // Get the class name for this object
@@ -1648,8 +1664,8 @@ impl Generator {
                     // Create the method name (class__method)
                     let method_name = format!("{}__{}", class_name, method);
 
-                    // Call the method with object as first argument
-                    let mut method_args = vec![object_name.clone()];
+                    // Call the method with object variable as first argument
+                    let mut method_args = vec![object_var];
                     method_args.extend(arg_names);
 
                     module.globals.push(IRInstruction::Call {
