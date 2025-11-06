@@ -149,16 +149,21 @@ impl TypeInferenceContext {
             self.track_type_changes(instr, &mut var_type_changes);
         }
 
-        // Mark variables that maintain consistent type (especially Int)
+        // Mark variables that maintain consistent type (Int, Float, String, Bool)
         for (var, types) in &var_type_changes {
-            if types.iter().all(|t| matches!(t, InferredType::Int)) {
-                self.optimizable_vars.insert(var.clone());
+            // Check if all types are the same and it's a simple type
+            if let Some(first_type) = types.first() {
+                let all_same = types.iter().all(|t| t == first_type);
+                if all_same && matches!(first_type, InferredType::Int | InferredType::Float | InferredType::String | InferredType::Bool) {
+                    self.optimizable_vars.insert(var.clone());
+                }
             }
         }
 
-        // Also mark variables that only have Int type and no type changes (constants, temporaries)
+        // Also mark variables that only have a simple type and no type changes (constants, temporaries)
         for (var, typ) in &self.var_types {
-            if matches!(typ, InferredType::Int) && !var_type_changes.contains_key(var) {
+            if matches!(typ, InferredType::Int | InferredType::Float | InferredType::String | InferredType::Bool)
+                && !var_type_changes.contains_key(var) {
                 self.optimizable_vars.insert(var.clone());
             }
         }
@@ -214,17 +219,41 @@ impl TypeInferenceContext {
         matches!(self.get_var_type(var), InferredType::Int)
     }
 
+    /// Check if a variable should use optimized C code (native double)
+    pub fn is_optimizable_float(&self, var: &str) -> bool {
+        self.optimizable_vars.contains(var) &&
+        matches!(self.get_var_type(var), InferredType::Float)
+    }
+
+    /// Check if a variable should use optimized C code (native char*)
+    pub fn is_optimizable_string(&self, var: &str) -> bool {
+        self.optimizable_vars.contains(var) &&
+        matches!(self.get_var_type(var), InferredType::String)
+    }
+
+    /// Check if a variable should use optimized C code (native bool)
+    pub fn is_optimizable_bool(&self, var: &str) -> bool {
+        self.optimizable_vars.contains(var) &&
+        matches!(self.get_var_type(var), InferredType::Bool)
+    }
+
+    /// Check if a variable is optimizable (any type)
+    pub fn is_optimizable(&self, var: &str) -> bool {
+        self.optimizable_vars.contains(var)
+    }
+
     /// Get the C type declaration for a variable
     pub fn get_c_type(&self, var: &str) -> &str {
-        if self.is_optimizable_int(var) {
-            "int64_t"
-        } else {
+        if self.is_optimizable(var) {
             match self.get_var_type(var) {
                 InferredType::Int => "int64_t",
                 InferredType::Float => "double",
                 InferredType::Bool => "bool",
+                InferredType::String => "char*",
                 _ => "tauraro_value_t*",
             }
+        } else {
+            "tauraro_value_t*"
         }
     }
 }

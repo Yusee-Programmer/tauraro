@@ -116,7 +116,11 @@
       "Bash(timeout 60 cargo build:*)",
       "Bash(timeout 5 tail:*)",
       "Bash(timeout 30 ./target/release/tauraro.exe:*)",
-      "Bash(timeout 45 ./target/release/tauraro.exe run:*)"
+      "Bash(timeout 45 ./target/release/tauraro.exe run:*)",
+      "Bash(timeout 20 ./target/release/tauraro.exe run:*)",
+      "Bash(timeout 120 cargo build:*)",
+      "Bash(timeout 90 cargo build:*)",
+      "Bash(./benchmark_manual_optimized.exe)"
     ],
     "deny": [],
     "ask": []
