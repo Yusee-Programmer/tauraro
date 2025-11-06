@@ -1,0 +1,20 @@
+print("Testing inheritance attribute access...")
+
+class Base:
+    def __init__(self, value):
+        self.value = value
+
+class Middle(Base):
+    def __init__(self, value, extra):
+        super().__init__(value)
+        self.extra = extra
+
+class Child(Middle):
+    def __init__(self, value, extra, more):
+        super().__init__(value, extra)
+        self.more = more
+
+obj = Child("base_val", "middle_val", "child_val")
+print("Value:", obj.value)
+print("Extra:", obj.extra)
+print("More:", obj.more)
