@@ -124,6 +124,7 @@ pub struct Generator {
     object_types: HashMap<String, String>, // Maps variable names to class names
     type_info: IRTypeInfo, // Added to store type information during IR generation
     class_inheritance: HashMap<String, Vec<String>>, // Maps class names to their base classes
+    class_methods: HashMap<String, HashSet<String>>, // Maps class names to their methods
     imported_modules: HashSet<String>, // Track imported module names
     current_class: Option<String>, // Track current class being processed
     temp_var_counter: usize, // Counter for generating unique temporary variables
@@ -138,10 +139,42 @@ impl Generator {
                 function_types: HashMap::new(),
             },
             class_inheritance: HashMap::new(),
+            class_methods: HashMap::new(),
             imported_modules: HashSet::new(),
             current_class: None,
             temp_var_counter: 0,
         }
+    }
+
+    /// Find which class defines a method by searching up the inheritance chain
+    fn find_method_class(&self, class_name: &str, method_name: &str) -> String {
+        // Check if the method is defined in this class
+        if let Some(methods) = self.class_methods.get(class_name) {
+            if methods.contains(method_name) {
+                return class_name.to_string();
+            }
+        }
+
+        // Search in parent classes
+        if let Some(parents) = self.class_inheritance.get(class_name) {
+            for parent in parents {
+                // Recursively search in parent
+                let result = self.find_method_class(parent, method_name);
+                if result != *parent {
+                    // Found in a parent's parent
+                    return result;
+                }
+                // Check if parent has the method
+                if let Some(parent_methods) = self.class_methods.get(parent) {
+                    if parent_methods.contains(method_name) {
+                        return parent.to_string();
+                    }
+                }
+            }
+        }
+
+        // Method not found, return the original class name
+        class_name.to_string()
     }
 
     pub fn generate(&mut self, ast: Program) -> Result<IRModule> {
@@ -200,6 +233,11 @@ impl Generator {
                         Statement::FunctionDef { name: method_name, params, body: method_body, return_type, .. } => {
                             let function_name = format!("{}__{}", name, method_name);
 
+                            // Record that this method belongs to this class
+                            self.class_methods.entry(name.clone())
+                                .or_insert_with(HashSet::new)
+                                .insert(method_name.clone());
+
                             // Store function type information
                             let mut param_types = HashMap::new();
                             for param in &params {
@@ -242,6 +280,11 @@ impl Generator {
                 
                 // Add a default constructor if none exists
                 if !has_init {
+                    // Record the default __init__ method
+                    self.class_methods.entry(name.clone())
+                        .or_insert_with(HashSet::new)
+                        .insert("__init__".to_string());
+
                     // Create a simple constructor that just returns self
                     let constructor = IRFunction {
                         name: format!("{}__init__", name),
@@ -372,6 +415,10 @@ impl Generator {
                                 result: temp_var.clone()
                             });
                         }
+                        // Copy object type from "temp" to temp_var
+                        if let Some(class_name) = self.object_types.get("temp") {
+                            self.object_types.insert(temp_var.clone(), class_name.clone());
+                        }
                     }
                 }
 
@@ -388,7 +435,7 @@ impl Generator {
                         value: temp_var.clone()
                     });
                 }
-                
+
                 // Copy object type if this is an object
                 if let Some(class_name) = self.object_types.get(&temp_var) {
                     self.object_types.insert(name.clone(), class_name.clone());
@@ -965,7 +1012,20 @@ impl Generator {
                         result: object_var.clone()
                     });
 
-                    let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
+                    // Copy object type tracking
+                    if let Some(class) = self.object_types.get("temp_result") {
+                        self.object_types.insert(object_var.clone(), class.clone());
+                    }
+
+                    // Get the class name for this object
+                    // First try object_var (the processed variable), then fall back to object_name
+                    let class_name = self.object_types.get(&object_var)
+                        .or_else(|| self.object_types.get(&object_name))
+                        .cloned()
+                        .unwrap_or_else(|| object_name.clone());
+
+                    // Find which class actually defines this method (may be in a parent class)
+                    let defining_class = self.find_method_class(&class_name, method);
 
                     // Process each argument and collect their result names
                     let mut arg_names: Vec<String> = Vec::new();
@@ -980,8 +1040,8 @@ impl Generator {
                         arg_names.push(arg_result);
                     }
 
-                    // Create the method name (class__method)
-                    let method_name = format!("{}__{}", class_name, method);
+                    // Create the method name using the class that actually defines it
+                    let method_name = format!("{}__{}", defining_class, method);
 
                     // Call the method with object variable as first argument
                     let mut method_args = vec![object_var];
@@ -992,6 +1052,13 @@ impl Generator {
                         args: method_args,
                         result: Some("temp_result".to_string())
                     });
+
+                    // If this returns an object of a known type, track it
+                    // For method chaining: builder.add(5) returns Builder
+                    if class_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        // If the class name looks like a class, assume method returns same type
+                        self.object_types.insert("temp_result".to_string(), class_name.clone());
+                    }
                 }
                 }
             },
@@ -1405,7 +1472,15 @@ impl Generator {
                     let object_var = "temp_object".to_string();
                     self.process_expression_to_result(module, &object, &object_var)?;
 
-                    let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
+                    // Get the class name for this object
+                    // First try object_var (the processed variable), then fall back to object_name
+                    let class_name = self.object_types.get(&object_var)
+                        .or_else(|| self.object_types.get(&object_name))
+                        .cloned()
+                        .unwrap_or_else(|| object_name.clone());
+
+                    // Find which class actually defines this method (may be in a parent class)
+                    let defining_class = self.find_method_class(&class_name, method);
 
                     // Process each argument and collect their result names
                     let mut arg_names: Vec<String> = Vec::new();
@@ -1415,8 +1490,8 @@ impl Generator {
                         arg_names.push(arg_result);
                     }
 
-                    // Create the method name (class__method)
-                    let method_name = format!("{}__{}", class_name, method);
+                    // Create the method name using the class that actually defines it
+                    let method_name = format!("{}__{}", defining_class, method);
 
                     // Call the method with object variable as first argument
                     let mut method_args = vec![object_var];
@@ -1427,6 +1502,13 @@ impl Generator {
                         args: method_args,
                         result: Some("temp".to_string())
                     });
+
+                    // If this returns an object of a known type, track it
+                    // For method chaining: builder.add(5) returns Builder
+                    if class_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        // If the class name looks like a class, assume method returns same type
+                        self.object_types.insert("temp".to_string(), class_name.clone());
+                    }
                 }
             },
             Expr::FormatString { parts } => {
@@ -1685,7 +1767,14 @@ impl Generator {
                     let object_name = self.expression_to_string(&object);
 
                     // Get the class name for this object
-                    let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
+                    // First try object_var (the processed variable), then fall back to object_name
+                    let class_name = self.object_types.get(&object_var)
+                        .or_else(|| self.object_types.get(&object_name))
+                        .cloned()
+                        .unwrap_or_else(|| object_name.clone());
+
+                    // Find which class actually defines this method (may be in a parent class)
+                    let defining_class = self.find_method_class(&class_name, method);
 
                     // Process each argument and collect their result names
                     let mut arg_names: Vec<String> = Vec::new();
@@ -1695,8 +1784,8 @@ impl Generator {
                         arg_names.push(arg_result);
                     }
 
-                    // Create the method name (class__method)
-                    let method_name = format!("{}__{}", class_name, method);
+                    // Create the method name using the class that actually defines it
+                    let method_name = format!("{}__{}", defining_class, method);
 
                     // Call the method with object variable as first argument
                     let mut method_args = vec![object_var];
@@ -1707,6 +1796,15 @@ impl Generator {
                         args: method_args,
                         result: Some(result_var.to_string())
                     });
+
+                    // If this returns an object of a known type, track it
+                    // For method chaining: builder.add(5) returns Builder
+                    if let Some(obj_class) = self.object_types.get(&class_name) {
+                        self.object_types.insert(result_var.to_string(), obj_class.clone());
+                    } else if class_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        // If the class name looks like a class, assume method returns same type
+                        self.object_types.insert(result_var.to_string(), class_name.clone());
+                    }
                 }
             },
             Expr::FormatString { parts } => {
