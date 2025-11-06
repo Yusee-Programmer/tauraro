@@ -119,38 +119,38 @@ typedef struct tauraro_class {
 // Direct field access instead of hash tables
 // ============================================
 
-typedef struct Animal_struct Animal_t;
 typedef struct Dog_struct Dog_t;
-
-// Optimized struct for class Animal
-struct Animal_struct {
-    tauraro_value_t* name;  // Direct field access!
-};
+typedef struct Animal_struct Animal_t;
 
 // Optimized struct for class Dog
 struct Dog_struct {
     tauraro_value_t* breed;  // Direct field access!
 };
 
+// Optimized struct for class Animal
+struct Animal_struct {
+    tauraro_value_t* name;  // Direct field access!
+};
+
 // Optimized constructors
-Animal_t* Animal_new();
 Dog_t* Dog_new();
+Animal_t* Animal_new();
 
 // ============================================
 // OPTIMIZED CONSTRUCTOR IMPLEMENTATIONS
 // ============================================
 
-// Constructor for Animal
-Animal_t* Animal_new() {
-    Animal_t* obj = (Animal_t*)malloc(sizeof(Animal_t));
-    obj->name = NULL;
-    return obj;
-}
-
 // Constructor for Dog
 Dog_t* Dog_new() {
     Dog_t* obj = (Dog_t*)malloc(sizeof(Dog_t));
     obj->breed = NULL;
+    return obj;
+}
+
+// Constructor for Animal
+Animal_t* Animal_new() {
+    Animal_t* obj = (Animal_t*)malloc(sizeof(Animal_t));
+    obj->name = NULL;
     return obj;
 }
 
@@ -181,8 +181,8 @@ bool tauraro_isinstance_check(tauraro_value_t* object, const char* class_name);
 bool tauraro_issubclass_check(const char* derived, const char* base);
 
 // Builtin function declarations
-tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args);
 tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args);
+tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args);
 
 // Runtime operators
 tauraro_value_t* tauraro_add(tauraro_value_t* left, tauraro_value_t* right);
@@ -608,35 +608,6 @@ bool tauraro_issubclass_check(const char* derived, const char* base) {
 }
 
 // Builtin function implementations
-tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args) {
-    if (argc != 2) return NULL;
-    tauraro_value_t* result = tauraro_value_new();
-    result->type = TAURARO_BOOL;
-    
-    // Check if first argument is an object
-    if (args[0]->type == TAURARO_OBJECT) {
-        tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
-        // Second argument should be a class name string or class reference
-        if (args[1]->type == TAURARO_STRING) {
-            // Compare class name
-            result->data.bool_val = (strcmp(obj->class_name, args[1]->data.str_val) == 0);
-        } else if (args[1]->type == TAURARO_OBJECT) {
-            // Compare with class object
-            tauraro_object_t* class_obj = (tauraro_object_t*)args[1]->data.obj_val;
-            result->data.bool_val = (strcmp(obj->class_name, class_obj->class_name) == 0);
-        } else {
-            // If second argument is not a string or object, treat as class name
-            // This handles cases where class names are passed as variables
-            result->data.bool_val = false;
-        }
-    } else {
-        // For non-objects, compare types directly
-        result->data.bool_val = (args[0]->type == args[1]->type);
-    }
-    
-    return result;
-}
-
 tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args) {
     for (int i = 0; i < argc; i++) {
         if (i > 0) printf(" ");
@@ -682,6 +653,35 @@ tauraro_value_t* tauraro_print(int argc, tauraro_value_t** args) {
     fflush(stdout);
     tauraro_value_t* result = tauraro_value_new();
     result->type = TAURARO_NONE;
+    return result;
+}
+
+tauraro_value_t* tauraro_isinstance(int argc, tauraro_value_t** args) {
+    if (argc != 2) return NULL;
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_BOOL;
+    
+    // Check if first argument is an object
+    if (args[0]->type == TAURARO_OBJECT) {
+        tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
+        // Second argument should be a class name string or class reference
+        if (args[1]->type == TAURARO_STRING) {
+            // Compare class name
+            result->data.bool_val = (strcmp(obj->class_name, args[1]->data.str_val) == 0);
+        } else if (args[1]->type == TAURARO_OBJECT) {
+            // Compare with class object
+            tauraro_object_t* class_obj = (tauraro_object_t*)args[1]->data.obj_val;
+            result->data.bool_val = (strcmp(obj->class_name, class_obj->class_name) == 0);
+        } else {
+            // If second argument is not a string or object, treat as class name
+            // This handles cases where class names are passed as variables
+            result->data.bool_val = false;
+        }
+    } else {
+        // For non-objects, compare types directly
+        result->data.bool_val = (args[0]->type == args[1]->type);
+    }
+    
     return result;
 }
 
@@ -956,23 +956,12 @@ char* tauraro_add_string(char* left, char* right) {
 tauraro_value_t* dog;
 
 // Forward declarations for user-defined functions
-tauraro_value_t* Animal____init__(int argc, tauraro_value_t** argv);
 tauraro_value_t* Dog____init__(int argc, tauraro_value_t** argv);
+tauraro_value_t* Animal____init__(int argc, tauraro_value_t** argv);
 
-tauraro_value_t* Animal____init__(int argc, tauraro_value_t** argv) {
-    // Extract parameters
-    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
-    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
-
-    // Local variables
-    tauraro_value_t* temp_result = name;
-    tauraro_object_set_attr(self, "name", temp_result);
-    // Implicit return None
-    tauraro_value_t* none_val = tauraro_value_new();
-    none_val->type = TAURARO_NONE;
-    return none_val;
-}
-
+// Global class variables
+tauraro_class_t* class_Dog;
+tauraro_class_t* class_Animal;
 
 tauraro_value_t* Dog____init__(int argc, tauraro_value_t** argv) {
     // Extract parameters
@@ -997,21 +986,36 @@ tauraro_value_t* Dog____init__(int argc, tauraro_value_t** argv) {
 }
 
 
+tauraro_value_t* Animal____init__(int argc, tauraro_value_t** argv) {
+    // Extract parameters
+    tauraro_value_t* self = (argc > 0) ? argv[0] : NULL;
+    tauraro_value_t* name = (argc > 1) ? argv[1] : NULL;
+
+    // Local variables
+    tauraro_value_t* temp_result = name;
+    tauraro_object_set_attr(self, "name", temp_result);
+    // Implicit return None
+    tauraro_value_t* none_val = tauraro_value_new();
+    none_val->type = TAURARO_NONE;
+    return none_val;
+}
+
+
 int main() {
-    tauraro_value_t* var_dog_temp = NULL;
     tauraro_value_t* arg_1 = NULL;
-    tauraro_value_t* dog = NULL;
-    tauraro_value_t* temp = NULL;
     tauraro_value_t* arg_0 = NULL;
+    tauraro_value_t* temp = NULL;
+    tauraro_value_t* var_dog_temp = NULL;
+    tauraro_value_t* dog = NULL;
 
     // === Class Initialization ===
-    // Initialize class: Dog
-    tauraro_class_t* class_Dog = tauraro_class_create("Dog", NULL);
-    tauraro_class_add_method(class_Dog, "__init__", (void*)&Dog____init__);
-
     // Initialize class: Animal
-    tauraro_class_t* class_Animal = tauraro_class_create("Animal", NULL);
+    class_Animal = tauraro_class_create("Animal", NULL);
     tauraro_class_add_method(class_Animal, "__init__", (void*)&Animal____init__);
+
+    // Initialize class: Dog
+    class_Dog = tauraro_class_create("Dog", NULL);
+    tauraro_class_add_method(class_Dog, "__init__", (void*)&Dog____init__);
 
     // === End Class Initialization ===
 

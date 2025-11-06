@@ -399,11 +399,21 @@ impl Generator {
             },
             Statement::AttributeAssignment { object, name: attr_name, value } => {
                 // Process attribute assignment
+                // First process the object expression to get a proper variable
+                self.process_expression(module, &object)?;
+                let object_var = "temp_setattr_object".to_string();
+                module.globals.push(IRInstruction::LoadGlobal {
+                    name: "temp".to_string(),
+                    result: object_var.clone()
+                });
+
+                // Then process the value
                 self.process_expression(module, &value)?;
-                module.globals.push(IRInstruction::ObjectSetAttr { 
-                    object: self.expression_to_string(&object), 
-                    attr: attr_name, 
-                    value: "temp".to_string() 
+
+                module.globals.push(IRInstruction::ObjectSetAttr {
+                    object: object_var,
+                    attr: attr_name,
+                    value: "temp".to_string()
                 });
             },
             Statement::FunctionDef { name, params, body, return_type, .. } => {
@@ -559,9 +569,19 @@ impl Generator {
                 instructions.push(IRInstruction::Return { value: None });
             },
             Statement::AttributeAssignment { object, name: attr_name, value } => {
+                // First process the object expression to get a proper variable
+                self.process_expression_for_instructions(instructions, &object)?;
+                let object_var = "temp_setattr_object".to_string();
+                instructions.push(IRInstruction::LoadGlobal {
+                    name: "temp_result".to_string(),
+                    result: object_var.clone()
+                });
+
+                // Then process the value
                 self.process_expression_for_instructions(instructions, &value)?;
+
                 instructions.push(IRInstruction::ObjectSetAttr {
-                    object: self.expression_to_string(&object),
+                    object: object_var,
                     attr: attr_name,
                     value: "temp_result".to_string()
                 });
@@ -853,11 +873,18 @@ impl Generator {
             },
             Expr::Attribute { object, name } => {
                 // Process attribute access
-                let object_name = self.expression_to_string(&object);
-                instructions.push(IRInstruction::ObjectGetAttr { 
-                    object: object_name,
+                // First process the object expression to get a proper variable
+                self.process_expression_for_instructions(instructions, &object)?;
+                let object_var = "temp_attr_object".to_string();
+                instructions.push(IRInstruction::LoadGlobal {
+                    name: "temp_result".to_string(),
+                    result: object_var.clone()
+                });
+
+                instructions.push(IRInstruction::ObjectGetAttr {
+                    object: object_var,
                     attr: name.clone(),
-                    result: "temp_result".to_string() 
+                    result: "temp_result".to_string()
                 });
             },
             Expr::MethodCall { object, method, args, .. } => {
@@ -1337,11 +1364,18 @@ impl Generator {
             },
             Expr::Attribute { object, name } => {
                 // Process attribute access
-                let object_name = self.expression_to_string(&object);
-                module.globals.push(IRInstruction::ObjectGetAttr { 
-                    object: object_name,
+                // First process the object expression to get a proper variable
+                self.process_expression(module, &object)?;
+                let object_var = "temp_attr_object".to_string();
+                module.globals.push(IRInstruction::LoadGlobal {
+                    name: "temp".to_string(),
+                    result: object_var.clone()
+                });
+
+                module.globals.push(IRInstruction::ObjectGetAttr {
+                    object: object_var,
                     attr: name.clone(),
-                    result: "temp".to_string() 
+                    result: "temp".to_string()
                 });
             },
             Expr::MethodCall { object, method, args, .. } => {
@@ -1755,9 +1789,12 @@ impl Generator {
             },
             Expr::Attribute { object, name } => {
                 // Handle attribute access: object.attribute
-                let object_name = self.expression_to_string(&object);
+                // First process the object expression to get a proper variable
+                let object_var = format!("{}_attr_object", result_var);
+                self.process_expression_to_result(module, &object, &object_var)?;
+
                 module.globals.push(IRInstruction::ObjectGetAttr {
-                    object: object_name,
+                    object: object_var,
                     attr: name.clone(),
                     result: result_var.to_string()
                 });

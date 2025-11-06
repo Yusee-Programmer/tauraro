@@ -26,7 +26,7 @@ use crate::codegen::{CodeGenerator, CodegenOptions, Target};
 use crate::ir::{IRModule, IRFunction, IRInstruction, IRTypeInfo};
 use crate::ast::Type;
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::path::Path;
 
 /// C Transpiler that converts Tauraro IR to C code
@@ -561,6 +561,9 @@ impl CTranspiler {
         }
         c_code.push_str("\n");
 
+        // Add global class variable declarations
+        c_code.push_str(&self.generate_class_declarations(&module)?);
+
         // Generate functions
         for (_name, function) in &module.functions {
             c_code.push_str(&functions::generate_function(function, &class_names)?);
@@ -573,11 +576,8 @@ impl CTranspiler {
         Ok(c_code)
     }
 
-    /// Generate class initialization code
-    fn generate_class_initialization(&self, module: &IRModule) -> Result<String> {
-        use std::collections::{HashMap, HashSet};
-
-        let mut init_code = String::new();
+    /// Extract classes and their methods from module
+    fn extract_classes(&self, module: &IRModule) -> HashMap<String, Vec<String>> {
         let mut classes: HashMap<String, Vec<String>> = HashMap::new();
 
         // Extract classes and their methods from function names
@@ -593,16 +593,43 @@ impl CTranspiler {
             }
         }
 
+        classes
+    }
+
+    /// Generate global class variable declarations
+    fn generate_class_declarations(&self, module: &IRModule) -> Result<String> {
+        let classes = self.extract_classes(module);
+
         if classes.is_empty() {
             return Ok(String::new());
         }
 
+        let mut decl_code = String::new();
+        decl_code.push_str("// Global class variables\n");
+
+        for class_name in classes.keys() {
+            decl_code.push_str(&format!("tauraro_class_t* class_{};\n", class_name));
+        }
+
+        decl_code.push_str("\n");
+        Ok(decl_code)
+    }
+
+    /// Generate class initialization code
+    fn generate_class_initialization(&self, module: &IRModule) -> Result<String> {
+        let classes = self.extract_classes(module);
+
+        if classes.is_empty() {
+            return Ok(String::new());
+        }
+
+        let mut init_code = String::new();
         init_code.push_str("\n    // === Class Initialization ===\n");
 
-        // Create global class pointer variables and initialize classes
+        // Initialize global class pointer variables
         for (class_name, methods) in &classes {
             init_code.push_str(&format!("    // Initialize class: {}\n", class_name));
-            init_code.push_str(&format!("    tauraro_class_t* class_{} = tauraro_class_create(\"{}\", NULL);\n",
+            init_code.push_str(&format!("    class_{} = tauraro_class_create(\"{}\", NULL);\n",
                 class_name, class_name));
 
             // Register all methods with the class
@@ -2094,6 +2121,9 @@ impl CTranspiler {
                 class_names.insert(class_name.to_string());
             }
         }
+
+        // Add global class variable declarations
+        c_code.push_str(&self.generate_class_declarations(&module)?);
 
         // Generate functions
         for (name, function) in &module.functions {
