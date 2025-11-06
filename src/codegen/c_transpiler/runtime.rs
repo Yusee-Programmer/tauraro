@@ -23,7 +23,7 @@ int tauraro_is_truthy(tauraro_value_t* value) {
         case TAURARO_NONE:
             return 0;
         case TAURARO_LIST:
-            return (value->data.list_val != NULL && value->data.list_val[0] != NULL) ? 1 : 0;
+            return (value->data.list_val != NULL && value->data.list_val->size > 0) ? 1 : 0;
         case TAURARO_DICT:
             return (value->data.dict_val != NULL) ? 1 : 0;
         default:

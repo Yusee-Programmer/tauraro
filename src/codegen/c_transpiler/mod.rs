@@ -604,41 +604,66 @@ impl CTranspiler {
         // Track declared variables
         let mut declared_vars = HashSet::new();
 
-        // Collect all variable names
-        for instruction in &module.globals {
-            match instruction {
-                IRInstruction::LoadConst { result, .. } => {
-                    declared_vars.insert(result.clone());
+        // Collect ALL variable names used in the module (comprehensive)
+        fn collect_vars_from_instruction(instr: &IRInstruction, vars: &mut HashSet<String>) {
+            match instr {
+                IRInstruction::LoadConst { result, .. } => { vars.insert(result.clone()); }
+                IRInstruction::LoadGlobal { result, name } => {
+                    vars.insert(result.clone());
+                    vars.insert(name.clone());
                 }
-                IRInstruction::LoadGlobal { result, .. } => {
-                    declared_vars.insert(result.clone());
+                IRInstruction::LoadTypedGlobal { result, name, .. } => {
+                    vars.insert(result.clone());
+                    vars.insert(name.clone());
                 }
-                IRInstruction::LoadTypedGlobal { result, .. } => {
-                    declared_vars.insert(result.clone());
+                IRInstruction::StoreGlobal { name, value } => {
+                    vars.insert(name.clone());
+                    vars.insert(value.clone());
                 }
-                IRInstruction::Call { result: Some(result), .. } => {
-                    declared_vars.insert(result.clone());
-                }
-                IRInstruction::Call { func, args, result: None } => {
-                    // For method calls with no result, we still need to track them
-                    if func.contains("__") && !args.is_empty() {
-                        declared_vars.insert(args[0].clone()); // First arg is self
+                IRInstruction::Call { result: Some(result), args, .. } => {
+                    vars.insert(result.clone());
+                    for arg in args {
+                        vars.insert(arg.clone());
                     }
                 }
-                IRInstruction::BinaryOp { result, .. } => {
-                    declared_vars.insert(result.clone());
+                IRInstruction::Call { func, args, .. } => {
+                    for arg in args {
+                        vars.insert(arg.clone());
+                    }
+                    if func.contains("__") && !args.is_empty() {
+                        vars.insert(args[0].clone());
+                    }
                 }
-                IRInstruction::TypedBinaryOp { result, .. } => {
-                    declared_vars.insert(result.clone());
+                IRInstruction::BinaryOp { result, left, right, .. } => {
+                    vars.insert(result.clone());
+                    vars.insert(left.clone());
+                    vars.insert(right.clone());
+                }
+                IRInstruction::TypedBinaryOp { result, left, right, .. } => {
+                    vars.insert(result.clone());
+                    vars.insert(left.clone());
+                    vars.insert(right.clone());
                 }
                 IRInstruction::ObjectCreate { result, .. } => {
-                    declared_vars.insert(result.clone());
+                    vars.insert(result.clone());
                 }
-                IRInstruction::ObjectGetAttr { result, .. } => {
-                    declared_vars.insert(result.clone());
+                IRInstruction::ObjectGetAttr { result, object, .. } => {
+                    vars.insert(result.clone());
+                    vars.insert(object.clone());
+                }
+                IRInstruction::For { variable, iterable, body } => {
+                    vars.insert(variable.clone());
+                    vars.insert(iterable.clone());
+                    for body_instr in body {
+                        collect_vars_from_instruction(body_instr, vars);
+                    }
                 }
                 _ => {}
             }
+        }
+
+        for instruction in &module.globals {
+            collect_vars_from_instruction(instruction, &mut declared_vars);
         }
 
         // Declare all variables
@@ -1330,11 +1355,11 @@ impl CTranspiler {
 
                 // Handle different iterable types
                 code.push_str(&format!("    if ({}->type == TAURARO_LIST) {{\n", iterator_var));
-                code.push_str(&format!("        int iter_len = tauraro_len(1, (tauraro_value_t*[]){{{}}})-> data.int_val;\n", iterator_var));
+                code.push_str(&format!("        int iter_len = {}->data.list_val->size;\n", iterator_var));
                 code.push_str(&format!("        for ({} = 0; {} < iter_len; {}++) {{\n", index_var, index_var, index_var));
 
                 // Get current element
-                code.push_str(&format!("            tauraro_value_t* {} = {}->data.list_val[{}];\n", variable, iterator_var, index_var));
+                code.push_str(&format!("            tauraro_value_t* {} = {}->data.list_val->items[{}];\n", variable, iterator_var, index_var));
 
                 // Generate body
                 for instruction in body {
@@ -1345,15 +1370,17 @@ impl CTranspiler {
                 code.push_str("        }\n");
                 code.push_str("    } else if (");
                 code.push_str(&format!("{}->type == TAURARO_RANGE) {{\n", iterator_var));
-                code.push_str(&format!("        int start = {}->data.range_val.start;\n", iterator_var));
-                code.push_str(&format!("        int stop = {}->data.range_val.stop;\n", iterator_var));
-                code.push_str(&format!("        int step = {}->data.range_val.step;\n", iterator_var));
-                code.push_str(&format!("        for (int i = start; (step > 0) ? (i < stop) : (i > stop); i += step) {{\n"));
+                code.push_str(&format!("        int start = {}->data.range_val->start;\n", iterator_var));
+                code.push_str(&format!("        int stop = {}->data.range_val->stop;\n", iterator_var));
+                code.push_str(&format!("        int step = {}->data.range_val->step;\n", iterator_var));
+                let c_loop_var = format!("{}_c_loop_idx", variable);
+                code.push_str(&format!("        for (int {} = start; (step > 0) ? ({} < stop) : ({} > stop); {} += step) {{\n",
+                    c_loop_var, c_loop_var, c_loop_var, c_loop_var));
 
                 // Create tauraro_value_t for the loop variable
                 code.push_str(&format!("            tauraro_value_t* {} = tauraro_value_new();\n", variable));
                 code.push_str(&format!("            {}->type = TAURARO_INT;\n", variable));
-                code.push_str(&format!("            {}->data.int_val = i;\n", variable));
+                code.push_str(&format!("            {}->data.int_val = {};\n", variable, c_loop_var));
 
                 // Generate body
                 for instruction in body {
