@@ -33,9 +33,19 @@ Tauraro includes a comprehensive standard library with modules for common progra
 | Module | Description |
 |--------|-------------|
 | `threading` | Thread-based parallelism |
-| `asyncio` | Asynchronous I/O |
-| `subprocess` | Subprocess management |
+| `multiprocessing` | Process-based parallelism |
+| `asyncio` | Asynchronous I/O and coroutines |
+| `subprocess` | Subprocess management and execution |
 | `socket` | Low-level networking |
+
+### HTTP and Web Modules
+
+| Module | Description |
+|--------|-------------|
+| `httpx` | Modern HTTP client with sync/async support |
+| `httptools` | HTTP parsing and URL utilities |
+| `websockets` | WebSocket client and server |
+| `urllib` | URL handling and HTTP request utilities |
 
 ### Utility Modules
 
@@ -393,6 +403,377 @@ def fibonacci(n):
 print(fibonacci(100))  # Fast due to caching
 ```
 
+### subprocess - Process Management
+
+Execute and manage external processes.
+
+```python
+import subprocess
+
+# Run a command and wait for completion
+result = subprocess.run("echo Hello World")
+print(result['returncode'])  # 0 for success
+print(result['stdout'])      # Command output
+print(result['stderr'])      # Error output
+
+# Run command with list of arguments
+result = subprocess.run(["ls", "-la"])
+
+# Call a command and get return code
+returncode = subprocess.call("echo Testing")
+print(returncode)  # 0 for success
+
+# Check call - raises error if command fails
+subprocess.check_call("ls /existing/path")
+
+# Get command output
+output = subprocess.check_output("pwd")
+print(output)  # Current directory
+
+# Get output and status
+status, output = subprocess.getstatusoutput("ls -la")
+print(status, output)
+
+# Get just output (ignore status)
+output = subprocess.getoutput("date")
+print(output)
+
+# Constants for stdio handling
+subprocess.PIPE      # Pipe for capturing output
+subprocess.STDOUT    # Redirect stderr to stdout
+subprocess.DEVNULL   # Null device for discarding output
+```
+
+**Common Use Cases:**
+- Execute shell commands
+- Run external programs
+- Capture command output
+- Check command exit status
+- Integrate with system utilities
+
+### multiprocessing - Process-Based Parallelism
+
+Thread-based parallel execution for CPU-bound tasks.
+
+```python
+import multiprocessing
+
+# Get CPU count
+cpu_count = multiprocessing.cpu_count()
+print(f"Available CPUs: {cpu_count}")
+
+# Create a worker pool
+pool = multiprocessing.Pool()
+# Note: Full Pool implementation is provided for compatibility
+# Currently uses thread-based execution
+
+# Create a process (thread-based)
+process = multiprocessing.Process()
+# Note: Full Process implementation is provided
+
+# Queue for inter-process communication
+queue = multiprocessing.Queue()
+# Note: Thread-safe queue implementation
+
+# Lock for synchronization
+lock = multiprocessing.Lock()
+# Note: Thread-safe lock implementation
+
+# Semaphore for resource management
+semaphore = multiprocessing.Semaphore(value=5)
+# Note: Limits concurrent access
+
+# Event for signaling
+event = multiprocessing.Event()
+# Note: Thread-safe event signaling
+```
+
+**Features:**
+- CPU core detection
+- Worker pool management
+- Process creation and control
+- Inter-process communication via queues
+- Synchronization primitives (Lock, Semaphore, Event)
+- Compatible with Python's multiprocessing API
+
+**Note:** Current implementation uses thread-based parallelism for compatibility and portability. Full process-based parallelism is planned for future releases.
+
+### asyncio - Asynchronous I/O
+
+Async/await support for concurrent programming.
+
+```python
+import asyncio
+
+# Define async function
+async def fetch_data():
+    await asyncio.sleep(1)
+    return "Data fetched"
+
+# Run async function
+result = asyncio.run(fetch_data())
+
+# Sleep asynchronously
+async def delayed_hello():
+    await asyncio.sleep(2)
+    print("Hello after 2 seconds")
+
+# Wait for multiple coroutines
+async def main():
+    result1 = await fetch_data()
+    result2 = await fetch_data()
+    return result1, result2
+
+# Create tasks
+async def concurrent_tasks():
+    task1 = asyncio.create_task(fetch_data())
+    task2 = asyncio.create_task(fetch_data())
+    await task1
+    await task2
+
+# Gather multiple coroutines
+async def gather_example():
+    results = await asyncio.gather(
+        fetch_data(),
+        fetch_data(),
+        fetch_data()
+    )
+    return results
+
+# Timeout support
+async def with_timeout():
+    try:
+        await asyncio.wait_for(fetch_data(), timeout=5.0)
+    except asyncio.TimeoutError:
+        print("Operation timed out")
+```
+
+**Features:**
+- Event loop management
+- Async/await syntax support
+- Task creation and scheduling
+- Sleep and delays
+- Timeout handling
+- Concurrent task execution
+- Coroutine management
+
+### httpx - Modern HTTP Client
+
+High-performance HTTP client with both sync and async support.
+
+```python
+import httpx
+
+# GET request
+response = httpx.get("https://api.example.com/data")
+print(response.status_code)
+print(response.text)
+print(response.json())
+
+# POST request with JSON data
+data = {"name": "Alice", "age": 30}
+response = httpx.post("https://api.example.com/users", json=data)
+
+# POST with form data
+form_data = {"username": "alice", "password": "secret"}
+response = httpx.post("https://example.com/login", data=form_data)
+
+# PUT request
+response = httpx.put("https://api.example.com/users/123", json=data)
+
+# DELETE request
+response = httpx.delete("https://api.example.com/users/123")
+
+# Custom headers
+headers = {"Authorization": "Bearer token123"}
+response = httpx.get("https://api.example.com/protected", headers=headers)
+
+# Query parameters
+params = {"page": 1, "limit": 10}
+response = httpx.get("https://api.example.com/items", params=params)
+
+# Create HTTP client with configuration
+client = httpx.Client()
+# Note: Client object for connection pooling and session management
+
+# Request with timeout
+response = httpx.get("https://example.com", timeout=10.0)
+```
+
+**Features:**
+- GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS methods
+- JSON request/response handling
+- Form data submission
+- Custom headers
+- Query parameters
+- Timeout support
+- Client configuration
+- Connection pooling
+- Built on high-performance Rust HTTP libraries (hyper, reqwest)
+
+### httptools - HTTP Utilities
+
+HTTP parsing and URL manipulation utilities.
+
+```python
+import httptools
+
+# Parse URL
+url = "https://example.com:8080/path/to/resource?key=value&foo=bar"
+parts = httptools.parse_url(url)
+print(parts['scheme'])    # "https"
+print(parts['host'])      # "example.com"
+print(parts['port'])      # 8080
+print(parts['path'])      # "/path/to/resource"
+print(parts['query'])     # "key=value&foo=bar"
+
+# URL encoding
+encoded = httptools.quote("hello world")
+print(encoded)  # "hello%20world"
+
+encoded = httptools.quote_plus("hello world")
+print(encoded)  # "hello+world"
+
+# URL decoding
+decoded = httptools.unquote("hello%20world")
+print(decoded)  # "hello world"
+
+decoded = httptools.unquote_plus("hello+world")
+print(decoded)  # "hello world"
+
+# Parse query string
+query = "name=Alice&age=30&city=NYC"
+params = httptools.parse_qs(query)
+print(params)  # {"name": "Alice", "age": "30", "city": "NYC"}
+
+# Build query string
+params = {"name": "Bob", "age": "25"}
+query = httptools.urlencode(params)
+print(query)  # "name=Bob&age=25"
+
+# Parse HTTP headers
+headers = """Content-Type: application/json
+Authorization: Bearer token123
+Content-Length: 42"""
+
+parsed_headers = httptools.parse_headers(headers)
+print(parsed_headers)
+
+# Parse HTTP request
+request = """GET /api/users HTTP/1.1
+Host: example.com
+User-Agent: MyClient/1.0
+
+"""
+parsed_request = httptools.parse_request(request)
+print(parsed_request['method'])    # "GET"
+print(parsed_request['path'])      # "/api/users"
+print(parsed_request['version'])   # "HTTP/1.1"
+
+# Parse HTTP response
+response = """HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 13
+
+{"ok": true}"""
+
+parsed_response = httptools.parse_response(response)
+print(parsed_response['status'])   # 200
+print(parsed_response['reason'])   # "OK"
+```
+
+**Features:**
+- URL parsing and decomposition
+- URL encoding/decoding
+- Query string parsing and building
+- HTTP header parsing
+- HTTP request parsing
+- HTTP response parsing
+- Built on httparse for performance
+
+### websockets - WebSocket Support
+
+WebSocket client and server implementation.
+
+```python
+import websockets
+import asyncio
+
+# WebSocket client connection
+async def websocket_client():
+    uri = "ws://localhost:8080"
+    async with websockets.connect(uri) as websocket:
+        # Send message
+        await websocket.send("Hello Server")
+
+        # Receive message
+        response = await websocket.recv()
+        print(f"Received: {response}")
+
+# Run WebSocket client
+asyncio.run(websocket_client())
+
+# WebSocket server
+async def echo_handler(websocket):
+    async for message in websocket:
+        # Echo received message back
+        await websocket.send(f"Echo: {message}")
+
+async def websocket_server():
+    async with websockets.serve(echo_handler, "localhost", 8080):
+        await asyncio.Future()  # Run forever
+
+# Run WebSocket server
+asyncio.run(websocket_server())
+
+# Send JSON data
+import json
+
+async def send_json():
+    async with websockets.connect("ws://localhost:8080") as ws:
+        data = {"type": "message", "content": "Hello"}
+        await ws.send(json.dumps(data))
+        response = await ws.recv()
+        print(json.loads(response))
+
+# Handle connection errors
+async def robust_client():
+    try:
+        async with websockets.connect("ws://localhost:8080") as ws:
+            await ws.send("Hello")
+            response = await ws.recv()
+            print(response)
+    except websockets.ConnectionClosed:
+        print("Connection closed")
+    except Exception as e:
+        print(f"Error: {e}")
+
+# Custom headers
+async def client_with_headers():
+    headers = {"Authorization": "Bearer token123"}
+    async with websockets.connect("ws://localhost:8080",
+                                  extra_headers=headers) as ws:
+        await ws.send("Authenticated message")
+```
+
+**Features:**
+- WebSocket client connections
+- WebSocket server implementation
+- Send/receive text messages
+- Send/receive binary data
+- Connection management
+- Error handling
+- Custom headers
+- Built on tungstenite WebSocket library
+
+**Common Use Cases:**
+- Real-time communication
+- Live data feeds
+- Chat applications
+- Game servers
+- IoT device communication
+- Live dashboards
+
 ## Module Import Patterns
 
 ### Basic Import
@@ -505,6 +886,20 @@ __all__ = ["function1", "function2"]
 5. **Check Module Availability**: Handle ImportError gracefully
 6. **Document Modules**: Include docstrings in custom modules
 7. **Use __all__**: Define public API in __init__.py
+8. **Use Async for I/O**: Use asyncio for network and file I/O operations
+9. **Use Multiprocessing for CPU**: Use multiprocessing for CPU-intensive tasks
+10. **HTTP Best Practices**: Use httpx for modern HTTP requests, httptools for parsing
+
+## Performance Notes
+
+All HTTP and async modules are **always available by default** in Tauraro - no feature flags needed!
+
+- **httpx**: Built on high-performance Rust libraries (hyper, reqwest)
+- **websockets**: Built on tungstenite for fast WebSocket handling
+- **asyncio**: Native async/await with tokio runtime
+- **httptools**: Fast HTTP parsing with httparse
+- **subprocess**: Efficient process execution and output capture
+- **multiprocessing**: Thread-based parallelism with plans for true process-based execution
 
 ## Next Steps
 
@@ -512,4 +907,7 @@ __all__ = ["function1", "function2"]
 - [File I/O](io.md)
 - [Regular Expressions](re.md)
 - [Date and Time](datetime.md)
+- [Async Programming](../advanced/async.md)
+- [HTTP Clients](../advanced/http.md)
+- [Process Management](../advanced/subprocess.md)
 - [Creating Packages](../advanced/packages.md)

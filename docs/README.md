@@ -9,7 +9,26 @@ Tauraro is a modern programming language that combines:
 - **Rust-like performance** - Execute at native speeds
 - **Hybrid typing** - Optional static types with dynamic fallback
 - **Multiple backends** - Run with VM or compile to native C
+- **Rich Standard Library** - HTTP, async, subprocess, and more - all built-in
 - **Easy to learn** - If you know Python, you know Tauraro
+
+## Recent Updates
+
+### New Built-in Modules (Always Available)
+All HTTP and async modules are now available by default - no feature flags needed!
+
+- **subprocess** - Process execution and management
+- **multiprocessing** - Process-based parallelism (thread-based for now)
+- **httpx** - Modern HTTP client built on Rust (hyper, reqwest)
+- **httptools** - Fast HTTP parsing and URL utilities
+- **websockets** - WebSocket client and server support
+- **asyncio** - Full async/await support with tokio runtime
+
+### C Code Generation Improvements
+- Fixed type inference for variables with mixed-type usage
+- Improved variable declaration with correct C types
+- Better handling of string literals vs. dynamic values
+- More reliable native compilation through clang/gcc
 
 ## Quick Start
 
@@ -63,11 +82,14 @@ cargo build --release
 - [Introspection](builtins/introspection.md)
 
 ### Standard Library
-- [Available Modules](stdlib/modules.md)
+- [Available Modules](stdlib/modules.md) - **Updated with new modules!**
 - [Math Module](stdlib/math.md)
 - [System Module](stdlib/sys.md)
 - [File I/O](stdlib/io.md)
 - [Collections](stdlib/collections.md)
+- [HTTP Modules](stdlib/http.md) - httpx, httptools, websockets
+- [Async Programming](stdlib/asyncio.md) - asyncio module
+- [Process Management](stdlib/subprocess.md) - subprocess, multiprocessing
 
 ### Compilation
 - [C Backend](compilation/c-backend.md)
