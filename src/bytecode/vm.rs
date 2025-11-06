@@ -1026,7 +1026,13 @@ impl SuperBytecodeVM {
                 let result = match (&left.value, &right.value) {
                     (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
                     (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
-                    (Value::Str(a), Value::Str(b)) => Value::Str(format!("{}{}", a, b)),
+                    (Value::Str(a), Value::Str(b)) => {
+                        // Optimized string concatenation without format! overhead
+                        let mut s = String::with_capacity(a.len() + b.len());
+                        s.push_str(a);
+                        s.push_str(b);
+                        Value::Str(s)
+                    },
                     _ => {
                         // For less common cases, use the general implementation
                         self.add_values(left.value.clone(), right.value.clone())

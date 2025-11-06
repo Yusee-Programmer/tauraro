@@ -83,12 +83,6 @@ impl SuperBytecodeVM {
     }
     
     pub fn mul_values(&self, left: Value, right: Value) -> Result<Value> {
-        // Clone values for error reporting in the None and fallback cases
-        let left_clone = left.clone();
-        let right_clone = right.clone();
-        let left_type = left_clone.type_name();
-        let right_type = right_clone.type_name();
-        
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
@@ -143,12 +137,15 @@ impl SuperBytecodeVM {
                 }
             },
             // Handle None values - multiplying None should raise a clear error
-            (Value::None, _) | (_, Value::None) => {
-                Err(anyhow!("unsupported operand type(s) for *: 'NoneType' and other type"))
+            (Value::None, ref r) => {
+                Err(anyhow!("unsupported operand type(s) for *: 'NoneType' and '{}'", r.type_name()))
             },
-            _ => {
-                // Provide more detailed error message for debugging
-                Err(anyhow!("unsupported operand type(s) for *: '{}' and '{}'", left_type, right_type))
+            (ref l, Value::None) => {
+                Err(anyhow!("unsupported operand type(s) for *: '{}' and 'NoneType'", l.type_name()))
+            },
+            (ref l, ref r) => {
+                // Provide more detailed error message for debugging - only compute type names in error path
+                Err(anyhow!("unsupported operand type(s) for *: '{}' and '{}'", l.type_name(), r.type_name()))
             }
         }
     }
