@@ -1,0 +1,206 @@
+# Window Module
+# Window management for GuiDesktop
+
+print("  [Module] Loading window system...")
+
+# Window class
+class Window(Container):
+    # Main application window
+
+    def __init__(self, title="Window", width=640, height=480):
+        super().__init__()
+
+        self.title = title
+        self.width = width
+        self.height = height
+        self.x = 100
+        self.y = 100
+
+        # Window state
+        self.resizable = True
+        self.maximized = False
+        self.minimized = False
+        self.fullscreen = False
+        self.decorated = True  # Has title bar and borders
+
+        # Rendering
+        self.surface = None
+        self.cairo_ctx = None
+        self.needs_redraw = True
+
+        # Platform-specific handle
+        self.native_handle = None
+
+        # Background
+        self.background_color = Colors.BACKGROUND
+
+        print("  [Window] Created: '" + title + "' (" + str(width) + "x" + str(height) + ")")
+
+    def initialize_surface(self):
+        # Initialize Cairo surface for rendering
+        if not _cairo_loaded:
+            print("  [!] Cannot initialize surface - Cairo not loaded")
+            return False
+
+        try:
+            self.surface = CairoSurface(self.width, self.height)
+            self.cairo_ctx = self.surface.create_context()
+            print("  [OK] Rendering surface initialized")
+            return True
+        except Exception as e:
+            print("  [!] Failed to initialize surface: " + str(e))
+            return False
+
+    def show(self):
+        # Show the window
+        self.visible = True
+
+        # Initialize surface if not done
+        if not self.surface:
+            self.initialize_surface()
+
+        # Platform-specific show
+        # This would call native window APIs
+        print("  [Window] Showing window: " + self.title)
+        return self
+
+    def hide(self):
+        # Hide the window
+        self.visible = False
+        print("  [Window] Hiding window: " + self.title)
+        return self
+
+    def close(self):
+        # Close the window
+        self.visible = False
+
+        # Clean up resources
+        if self.cairo_ctx:
+            self.cairo_ctx.destroy()
+            self.cairo_ctx = None
+
+        if self.surface:
+            self.surface.destroy()
+            self.surface = None
+
+        print("  [Window] Closed: " + self.title)
+
+    def set_title(self, title):
+        # Set window title
+        self.title = title
+        # Would update native window title here
+        return self
+
+    def set_size(self, width, height):
+        # Resize the window
+        old_width = self.width
+        old_height = self.height
+
+        super().set_size(width, height)
+
+        # Recreate surface if size changed
+        if (width != old_width or height != old_height) and self.surface:
+            self.surface.destroy()
+            self.cairo_ctx.destroy()
+            self.initialize_surface()
+            self.needs_redraw = True
+
+        return self
+
+    def center(self):
+        # Center window on screen
+        # Would use platform-specific screen size detection
+        screen_width = 1920
+        screen_height = 1080
+
+        self.x = (screen_width - self.width) / 2
+        self.y = (screen_height - self.height) / 2
+        return self
+
+    def maximize(self):
+        # Maximize the window
+        self.maximized = True
+        # Would call native maximize API
+        return self
+
+    def minimize(self):
+        # Minimize the window
+        self.minimized = True
+        # Would call native minimize API
+        return self
+
+    def set_fullscreen(self, fullscreen):
+        # Toggle fullscreen mode
+        self.fullscreen = fullscreen
+        # Would call native fullscreen API
+        return self
+
+    def request_redraw(self):
+        # Request window redraw
+        self.needs_redraw = True
+
+    def render_frame(self):
+        # Render a complete frame
+        if not self.cairo_ctx or not self.visible:
+            return
+
+        # Clear background
+        self.cairo_ctx.clear(self.background_color)
+
+        # Render all children
+        self.render(self.cairo_ctx)
+
+        # Flush to surface
+        self.surface.flush()
+
+        self.needs_redraw = False
+
+    def render(self, ctx):
+        # Render window contents
+        # Render all children
+        for child in self.children:
+            child.render(ctx)
+
+    def dispatch_event(self, event):
+        # Dispatch event to appropriate widget
+
+        # Mouse events - find widget under cursor
+        if event.type in [EVENT_MOUSE_MOVE, EVENT_MOUSE_DOWN, EVENT_MOUSE_UP]:
+            for child in reversed(self.children):
+                if child.visible and child.contains_point(event.x, event.y):
+                    child.on_event(event)
+                    if event.handled:
+                        return
+
+        # Other events - send to all widgets
+        for child in self.children:
+            child.on_event(event)
+            if event.handled:
+                return
+
+    def add_widget(self, widget):
+        # Add a widget to the window
+        self.add_child(widget)
+        self.needs_redraw = True
+        return self
+
+    def remove_widget(self, widget):
+        # Remove a widget from the window
+        self.remove_child(widget)
+        self.needs_redraw = True
+        return self
+
+    def save_screenshot(self, filename):
+        # Save window content to PNG
+        if self.surface:
+            result = self.surface.save_to_png(filename)
+            if result == 0:
+                print("  [OK] Screenshot saved: " + filename)
+                return True
+            else:
+                print("  [!] Failed to save screenshot")
+                return False
+        return False
+
+
+print("  [OK] Window system loaded")

@@ -1,0 +1,266 @@
+# Standard Widgets Module
+# Common UI widgets (Button, Label, etc.)
+
+print("  [Module] Loading standard widgets...")
+
+# Label widget
+class Label(Widget):
+    # Text label widget
+
+    def __init__(self, text=""):
+        super().__init__()
+        self.text = text
+        self.font_family = "Sans"
+        self.font_size = 14
+        self.text_color = Colors.FOREGROUND
+        self.align_x = 0.0  # 0.0 = left, 0.5 = center, 1.0 = right
+        self.align_y = 0.5  # 0.0 = top, 0.5 = center, 1.0 = bottom
+
+        # Default size
+        self.width = 100
+        self.height = 30
+
+    def set_text(self, text):
+        # Set label text
+        self.text = text
+        self.request_redraw()
+        return self
+
+    def set_font(self, family, size):
+        # Set font
+        self.font_family = family
+        self.font_size = size
+        self.request_redraw()
+        return self
+
+    def set_alignment(self, x, y):
+        # Set text alignment (0.0 to 1.0)
+        self.align_x = x
+        self.align_y = y
+        self.request_redraw()
+        return self
+
+    def render(self, ctx):
+        # Render the label
+        if not self.visible:
+            return
+
+        # Draw background
+        if self.background_color:
+            ctx.draw_rect(self.x, self.y, self.width, self.height,
+                         fill_color=self.background_color)
+
+        # Draw text
+        # Simple center alignment (proper text metrics would require more Cairo functions)
+        text_x = self.x + self.width * self.align_x + 5
+        text_y = self.y + self.height * self.align_y + self.font_size / 3
+
+        ctx.draw_text(text_x, text_y, self.text, self.text_color,
+                     self.font_family, self.font_size)
+
+        # Draw border
+        if self.border_width > 0:
+            ctx.draw_rect(self.x, self.y, self.width, self.height,
+                         stroke_color=self.border_color,
+                         line_width=self.border_width)
+
+
+# Button widget
+class Button(Widget):
+    # Clickable button widget
+
+    def __init__(self, text="Button"):
+        super().__init__()
+        self.text = text
+        self.font_family = "Sans"
+        self.font_size = 14
+
+        # Colors
+        self.normal_color = Colors.BUTTON_BG
+        self.hover_color = Colors.BUTTON_HOVER
+        self.active_color = Colors.BUTTON_ACTIVE
+        self.text_color = Colors.FOREGROUND
+
+        # State
+        self.pressed = False
+
+        # Default size
+        self.width = 100
+        self.height = 35
+        self.border_width = 1
+
+    def set_text(self, text):
+        # Set button text
+        self.text = text
+        self.request_redraw()
+        return self
+
+    def render(self, ctx):
+        # Render the button
+        if not self.visible:
+            return
+
+        # Determine button color based on state
+        if self.pressed:
+            bg_color = self.active_color
+        elif self.hovered and self.enabled:
+            bg_color = self.hover_color
+        else:
+            bg_color = self.normal_color
+
+        # Draw button with rounded corners
+        ctx.draw_rounded_rect(self.x, self.y, self.width, self.height, 5,
+                             fill_color=bg_color,
+                             stroke_color=self.border_color,
+                             line_width=self.border_width)
+
+        # Draw text (centered)
+        text_x = self.x + self.width / 2 - len(self.text) * self.font_size / 4
+        text_y = self.y + self.height / 2 + self.font_size / 3
+
+        ctx.draw_text(text_x, text_y, self.text, self.text_color,
+                     self.font_family, self.font_size)
+
+    def on_event(self, event):
+        # Handle button events
+        if not self.enabled:
+            return False
+
+        if event.type == EVENT_MOUSE_DOWN:
+            if self.contains_point(event.x, event.y):
+                self.pressed = True
+                self.request_redraw()
+                return True
+
+        elif event.type == EVENT_MOUSE_UP:
+            if self.pressed:
+                self.pressed = False
+                self.request_redraw()
+                # Trigger click if released over button
+                if self.contains_point(event.x, event.y):
+                    self.emit(MouseEvent(EVENT_MOUSE_DOWN, event.x, event.y))
+                return True
+
+        elif event.type == EVENT_MOUSE_ENTER:
+            self.hovered = True
+            self.request_redraw()
+
+        elif event.type == EVENT_MOUSE_LEAVE:
+            self.hovered = False
+            self.pressed = False
+            self.request_redraw()
+
+        return False
+
+
+# TextBox widget
+class TextBox(Widget):
+    # Single-line text input widget
+
+    def __init__(self, text=""):
+        super().__init__()
+        self.text = text
+        self.placeholder = ""
+        self.font_family = "Sans"
+        self.font_size = 14
+        self.text_color = Colors.FOREGROUND
+        self.placeholder_color = Colors.GRAY
+
+        # State
+        self.cursor_pos = len(text)
+        self.editable = True
+
+        # Default size
+        self.width = 200
+        self.height = 30
+        self.border_width = 1
+        self.padding = 5
+        self.background_color = Colors.WHITE
+
+    def set_text(self, text):
+        # Set text content
+        self.text = text
+        self.cursor_pos = len(text)
+        self.request_redraw()
+        return self
+
+    def set_placeholder(self, text):
+        # Set placeholder text
+        self.placeholder = text
+        self.request_redraw()
+        return self
+
+    def render(self, ctx):
+        # Render the text box
+        if not self.visible:
+            return
+
+        # Draw background
+        ctx.draw_rect(self.x, self.y, self.width, self.height,
+                     fill_color=self.background_color,
+                     stroke_color=self.border_color,
+                     line_width=self.border_width)
+
+        # Draw text or placeholder
+        text_x = self.x + self.padding
+        text_y = self.y + self.height / 2 + self.font_size / 3
+
+        if self.text:
+            ctx.draw_text(text_x, text_y, self.text, self.text_color,
+                         self.font_family, self.font_size)
+        elif self.placeholder:
+            ctx.draw_text(text_x, text_y, self.placeholder, self.placeholder_color,
+                         self.font_family, self.font_size)
+
+        # Draw cursor if focused
+        if self.focused:
+            cursor_x = text_x + len(self.text) * self.font_size * 0.6
+            ctx.set_color(self.text_color)
+            ctx.move_to(cursor_x, self.y + 5)
+            ctx.line_to(cursor_x, self.y + self.height - 5)
+            ctx.stroke()
+
+
+# Panel widget
+class Panel(Container):
+    # Simple container panel
+
+    def __init__(self):
+        super().__init__()
+        self.background_color = Colors.BACKGROUND
+        self.border_width = 0
+
+
+# Frame widget
+class Frame(Container):
+    # Container with border and optional title
+
+    def __init__(self, title=""):
+        super().__init__()
+        self.title = title
+        self.background_color = Colors.BACKGROUND
+        self.border_width = 1
+        self.border_color = Colors.BORDER
+
+    def render(self, ctx):
+        # Render frame
+        if not self.visible:
+            return
+
+        # Draw background and border
+        ctx.draw_rect(self.x, self.y, self.width, self.height,
+                     fill_color=self.background_color,
+                     stroke_color=self.border_color,
+                     line_width=self.border_width)
+
+        # Draw title if present
+        if self.title:
+            ctx.draw_text(self.x + 10, self.y - 5, self.title,
+                         Colors.FOREGROUND, "Sans", 12)
+
+        # Render children
+        for child in self.children:
+            child.render(ctx)
+
+
+print("  [OK] Standard widgets loaded")

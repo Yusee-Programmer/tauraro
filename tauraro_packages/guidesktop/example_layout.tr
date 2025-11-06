@@ -1,0 +1,98 @@
+# Layout Example
+# Demonstrates layout managers
+
+print("GuiDesktop Layout Example")
+print("=========================\n")
+
+import guidesktop
+
+# Initialize
+if not guidesktop.init():
+    exit(1)
+
+guidesktop.define_cairo_functions()
+
+# Create application
+app = guidesktop.Application("Layout Example")
+window = app.create_window("Layout Managers", 600, 400)
+window.background_color = guidesktop.Colors.BACKGROUND
+
+# Create a main container with VBox layout
+main_panel = guidesktop.Panel()
+main_panel.set_bounds(10, 10, 580, 380)
+main_panel.background_color = guidesktop.Colors.WHITE
+main_panel.border_width = 1
+main_panel.border_color = guidesktop.Colors.BORDER
+main_panel.padding = 10
+window.add_widget(main_panel)
+
+# Set VBox layout
+vbox = guidesktop.VBoxLayout(spacing=10, margin=5)
+main_panel.set_layout(vbox)
+
+# Title label
+title = guidesktop.Label("Vertical Box Layout")
+title.set_font("Sans", 16)
+title.text_color = guidesktop.Colors.ACCENT
+title.height = 30
+main_panel.add_child(title)
+
+# Button row container with HBox
+button_row = guidesktop.Panel()
+button_row.height = 40
+button_row.background_color = guidesktop.Colors.BACKGROUND
+main_panel.add_child(button_row)
+
+hbox = guidesktop.HBoxLayout(spacing=10, margin=0)
+button_row.set_layout(hbox)
+
+# Add buttons to horizontal layout
+btn1 = guidesktop.Button("Button 1")
+btn1.width = 100
+button_row.add_child(btn1)
+
+btn2 = guidesktop.Button("Button 2")
+btn2.width = 100
+button_row.add_child(btn2)
+
+btn3 = guidesktop.Button("Button 3")
+btn3.width = 100
+button_row.add_child(btn3)
+
+# Text box
+textbox = guidesktop.TextBox("Enter text here...")
+textbox.height = 35
+textbox.set_placeholder("Type something...")
+main_panel.add_child(textbox)
+
+# Grid panel
+grid_panel = guidesktop.Panel()
+grid_panel.height = 150
+grid_panel.background_color = guidesktop.Colors.GRAY_LIGHT
+grid_panel.border_width = 1
+main_panel.add_child(grid_panel)
+
+grid = guidesktop.GridLayout(2, 3, spacing=5, margin=5)
+grid_panel.set_layout(grid)
+
+# Add widgets to grid
+for i in range(6):
+    label = guidesktop.Label("Cell " + str(i + 1))
+    label.background_color = guidesktop.Colors.WHITE
+    label.border_width = 1
+    label.set_alignment(0.5, 0.5)
+    grid_panel.add_child(label)
+
+# Info label
+info = guidesktop.Label("Demonstrates VBox, HBox, and Grid layouts")
+info.set_font("Sans", 11)
+info.text_color = guidesktop.Colors.GRAY
+info.height = 25
+main_panel.add_child(info)
+
+# Render
+print("\nRendering layout example...")
+if app.run_mock_render("guidesktop_layout.png"):
+    print("\nSuccess! Check 'guidesktop_layout.png'")
+else:
+    print("\nFailed to render")

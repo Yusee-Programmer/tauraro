@@ -1,0 +1,157 @@
+# Widget System Module
+# Base widget classes and widget hierarchy
+
+print("  [Module] Loading widget system...")
+
+# Widget base class
+class Widget(EventHandler):
+    # Base class for all widgets
+
+    def __init__(self):
+        super().__init__()
+
+        # Geometry
+        self.x = 0
+        self.y = 0
+        self.width = 100
+        self.height = 100
+        self.min_width = 0
+        self.min_height = 0
+        self.max_width = 9999
+        self.max_height = 9999
+
+        # State
+        self.visible = True
+        self.enabled = True
+        self.focused = False
+        self.hovered = False
+
+        # Hierarchy
+        self.parent = None
+        self.children = []
+
+        # Appearance
+        self.background_color = Colors.BACKGROUND
+        self.foreground_color = Colors.FOREGROUND
+        self.border_color = Colors.BORDER
+        self.border_width = 0
+        self.padding = 0
+
+        # Layout
+        self.layout = None
+
+    def set_position(self, x, y):
+        # Set widget position
+        self.x = x
+        self.y = y
+        return self
+
+    def set_size(self, width, height):
+        # Set widget size
+        self.width = max(self.min_width, min(width, self.max_width))
+        self.height = max(self.min_height, min(height, self.max_height))
+        self.on_resize_internal()
+        return self
+
+    def set_bounds(self, x, y, width, height):
+        # Set position and size
+        self.set_position(x, y)
+        self.set_size(width, height)
+        return self
+
+    def get_bounds(self):
+        # Get widget bounds as Rect
+        return Rect(self.x, self.y, self.width, self.height)
+
+    def show(self):
+        # Show the widget
+        self.visible = True
+        return self
+
+    def hide(self):
+        # Hide the widget
+        self.visible = False
+        return self
+
+    def enable(self):
+        # Enable the widget
+        self.enabled = True
+        return self
+
+    def disable(self):
+        # Disable the widget
+        self.enabled = False
+        return self
+
+    def add_child(self, child):
+        # Add a child widget
+        if child not in self.children:
+            self.children.append(child)
+            child.parent = self
+        return self
+
+    def remove_child(self, child):
+        # Remove a child widget
+        if child in self.children:
+            self.children.remove(child)
+            child.parent = None
+        return self
+
+    def contains_point(self, px, py):
+        # Check if point is inside widget
+        return (px >= self.x and px < self.x + self.width and
+                py >= self.y and py < self.y + self.height)
+
+    def render(self, ctx):
+        # Render the widget (override in subclasses)
+        if not self.visible:
+            return
+
+        # Draw background
+        if self.background_color:
+            ctx.draw_rect(self.x, self.y, self.width, self.height,
+                         fill_color=self.background_color)
+
+        # Draw border
+        if self.border_width > 0 and self.border_color:
+            ctx.draw_rect(self.x, self.y, self.width, self.height,
+                         stroke_color=self.border_color,
+                         line_width=self.border_width)
+
+        # Render children
+        for child in self.children:
+            child.render(ctx)
+
+    def on_resize_internal(self):
+        # Internal resize handler
+        # Apply layout if present
+        if self.layout:
+            self.layout.apply(self)
+
+        # Emit resize event
+        event = ResizeEvent(self.width, self.height)
+        self.emit(event)
+
+    def request_redraw(self):
+        # Request a redraw
+        # This will propagate up to the window
+        if self.parent:
+            self.parent.request_redraw()
+
+
+# Container widget
+class Container(Widget):
+    # Widget that can contain other widgets
+
+    def __init__(self):
+        super().__init__()
+
+    def set_layout(self, layout):
+        # Set the layout manager
+        self.layout = layout
+        layout.container = self
+        self.on_resize_internal()
+        return self
+
+
+print("  [OK] Widget system loaded")

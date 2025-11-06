@@ -1,0 +1,224 @@
+# GuiDesktop - Custom Cross-Platform GUI Framework for Tauraro
+print("Loading GuiDesktop v1.0 - Custom GUI Framework...")
+# A modern, custom-built GUI framework using Cairo rendering
+# Built from scratch for Tauraro programming language
+# Version: 1.0.0
+
+import sys
+import os
+
+# Version information
+__version__ = "1.0.0"
+__name__ = "GuiDesktop"
+__description__ = "Custom cross-platform GUI framework with Cairo rendering"
+__author__ = "Tauraro Team"
+
+print("=" * 60)
+print("  GuiDesktop - Custom GUI Framework for Tauraro")
+print("  Version: " + __version__)
+print("=" * 60)
+
+# Platform detection
+_platform = sys.platform
+_is_windows = _platform == "win32"
+_is_linux = _platform == "linux"
+_is_macos = _platform == "darwin"
+
+print("\n[Platform Detection]")
+print("  Operating System: " + _platform)
+
+# Determine rendering backend based on platform
+if _is_windows:
+    _rendering_backend = "Cairo + Win32/GDI"
+    _window_backend = "win32"
+    print("  Window Backend: Win32")
+    print("  Rendering: Cairo + GDI/Direct2D")
+elif _is_linux:
+    # Detect Wayland vs X11
+    if os.environ.get("WAYLAND_DISPLAY"):
+        _rendering_backend = "Cairo + Wayland"
+        _window_backend = "wayland"
+        print("  Window Backend: Wayland")
+        print("  Rendering: Cairo + Wayland compositor")
+    else:
+        _rendering_backend = "Cairo + X11"
+        _window_backend = "x11"
+        print("  Window Backend: X11")
+        print("  Rendering: Cairo + Xlib/XCB")
+elif _is_macos:
+    _rendering_backend = "Cairo + Quartz"
+    _window_backend = "cocoa"
+    print("  Window Backend: Cocoa")
+    print("  Rendering: Cairo + Quartz")
+else:
+    print("  [!] Warning: Unsupported platform")
+    _rendering_backend = "unknown"
+    _window_backend = "unknown"
+
+# Library names by platform
+print("\n[Library Configuration]")
+if _is_windows:
+    _cairo_lib = "libcairo-2.dll"
+    _platform_lib = "user32.dll"
+    print("  Cairo: " + _cairo_lib)
+    print("  Platform: " + _platform_lib)
+elif _is_macos:
+    _cairo_lib = "libcairo.2.dylib"
+    _platform_lib = "libcocoa"
+    print("  Cairo: " + _cairo_lib)
+    print("  Platform: Cocoa framework")
+else:  # Linux
+    _cairo_lib = "libcairo.so.2"
+    if _window_backend == "wayland":
+        _platform_lib = "libwayland-client.so.0"
+        print("  Cairo: " + _cairo_lib)
+        print("  Platform: " + _platform_lib)
+    else:
+        _platform_lib = "libX11.so.6"
+        print("  Cairo: " + _cairo_lib)
+        print("  Platform: " + _platform_lib)
+
+# Global framework state
+_framework_initialized = False
+_cairo_loaded = False
+_platform_loaded = False
+
+# Color class for RGBA colors
+class Color:
+    # Represents an RGBA color
+
+    def __init__(self, r, g, b, a=1.0):
+        # Create a color with RGBA values (0.0 to 1.0)
+        self.r = r
+        self.g = g
+        self.b = b
+        self.a = a
+
+    def to_tuple(self):
+        # Return as tuple (r, g, b, a)
+        return (self.r, self.g, self.b, self.a)
+
+    def to_hex(self):
+        # Convert to hex string
+        r_hex = hex(int(self.r * 255))[2:].zfill(2)
+        g_hex = hex(int(self.g * 255))[2:].zfill(2)
+        b_hex = hex(int(self.b * 255))[2:].zfill(2)
+        return "#" + r_hex + g_hex + b_hex
+
+# Pre-defined colors
+class Colors:
+    # Common color palette
+    WHITE = Color(1.0, 1.0, 1.0, 1.0)
+    BLACK = Color(0.0, 0.0, 0.0, 1.0)
+    RED = Color(1.0, 0.0, 0.0, 1.0)
+    GREEN = Color(0.0, 1.0, 0.0, 1.0)
+    BLUE = Color(0.0, 0.0, 1.0, 1.0)
+    YELLOW = Color(1.0, 1.0, 0.0, 1.0)
+    CYAN = Color(0.0, 1.0, 1.0, 1.0)
+    MAGENTA = Color(1.0, 0.0, 1.0, 1.0)
+
+    # Gray scale
+    GRAY_LIGHT = Color(0.8, 0.8, 0.8, 1.0)
+    GRAY = Color(0.5, 0.5, 0.5, 1.0)
+    GRAY_DARK = Color(0.3, 0.3, 0.3, 1.0)
+
+    # UI colors
+    BACKGROUND = Color(0.95, 0.95, 0.95, 1.0)
+    FOREGROUND = Color(0.1, 0.1, 0.1, 1.0)
+    ACCENT = Color(0.2, 0.6, 1.0, 1.0)
+    BORDER = Color(0.7, 0.7, 0.7, 1.0)
+
+    # Button colors
+    BUTTON_BG = Color(0.9, 0.9, 0.9, 1.0)
+    BUTTON_HOVER = Color(0.85, 0.85, 0.85, 1.0)
+    BUTTON_ACTIVE = Color(0.8, 0.8, 0.8, 1.0)
+
+# Rectangle class for geometry
+class Rect:
+    # Represents a rectangle with position and size
+
+    def __init__(self, x, y, width, height):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+
+    def contains(self, px, py):
+        # Check if point (px, py) is inside rectangle
+        return (px >= self.x and px <= self.x + self.width and
+                py >= self.y and py <= self.y + self.height)
+
+    def intersects(self, other):
+        # Check if this rectangle intersects with another
+        return not (self.x + self.width < other.x or
+                   other.x + other.width < self.x or
+                   self.y + self.height < other.y or
+                   other.y + other.height < self.y)
+
+# Point class
+class Point:
+    # Represents a 2D point
+
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+# Size class
+class Size:
+    # Represents width and height
+
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+
+# Initialize framework
+def init():
+    # Initialize the GuiDesktop framework
+    global _framework_initialized, _cairo_loaded, _platform_loaded
+
+    if _framework_initialized:
+        print("\n[Framework] Already initialized")
+        return True
+
+    print("\n[Initialization]")
+    print("  Loading libraries...")
+
+    # Load Cairo library
+    try:
+        load_library(_cairo_lib)
+        _cairo_loaded = True
+        print("  [OK] Cairo library loaded: " + _cairo_lib)
+    except Exception as e:
+        print("  [!] Failed to load Cairo: " + str(e))
+        print("      Please install Cairo:")
+        if _is_windows:
+            print("      - Download from: https://www.cairographics.org/")
+            print("      - Or use MSYS2: pacman -S mingw-w64-x86_64-cairo")
+        elif _is_linux:
+            print("      - Ubuntu/Debian: sudo apt-get install libcairo2")
+            print("      - Fedora: sudo dnf install cairo")
+            print("      - Arch: sudo pacman -S cairo")
+        elif _is_macos:
+            print("      - Homebrew: brew install cairo")
+        return False
+
+    # Load platform-specific library
+    try:
+        if _is_windows:
+            load_library(_platform_lib)
+        # For Linux and macOS, libraries are typically pre-loaded
+        _platform_loaded = True
+        print("  [OK] Platform library loaded")
+    except Exception as e:
+        print("  [!] Warning: Platform library load failed: " + str(e))
+        # Continue anyway - might still work
+
+    _framework_initialized = True
+    print("  [OK] GuiDesktop initialized successfully!")
+    print("")
+    return True
+
+print("\n[Status] GuiDesktop core module loaded")
+print("         Call guidesktop.init() to initialize the framework")
+print("=" * 60)
+print("")

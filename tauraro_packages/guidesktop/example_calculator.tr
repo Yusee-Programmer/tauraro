@@ -1,0 +1,86 @@
+# Calculator Example
+# Demonstrates a calculator UI with grid layout
+
+print("GuiDesktop Calculator Example")
+print("=============================\n")
+
+import guidesktop
+
+# Initialize
+if not guidesktop.init():
+    exit(1)
+
+guidesktop.define_cairo_functions()
+
+# Create application
+app = guidesktop.Application("Calculator")
+window = app.create_window("GuiDesktop Calculator", 320, 420)
+window.background_color = guidesktop.Colors.GRAY_LIGHT
+
+# Display (read-only text box)
+display = guidesktop.TextBox("0")
+display.set_bounds(10, 10, 300, 50)
+display.editable = False
+display.set_font("Sans", 24)
+display.text_color = guidesktop.Colors.FOREGROUND
+display.set_alignment(1.0, 0.5)  # Right aligned
+window.add_widget(display)
+
+# Button panel with grid layout
+button_panel = guidesktop.Panel()
+button_panel.set_bounds(10, 70, 300, 340)
+button_panel.background_color = guidesktop.Colors.BACKGROUND
+window.add_widget(button_panel)
+
+# Set grid layout (5 rows x 4 columns)
+grid = guidesktop.GridLayout(5, 4, spacing=5, margin=5)
+button_panel.set_layout(grid)
+
+# Calculator buttons
+buttons = [
+    ["7", "8", "9", "/"],
+    ["4", "5", "6", "*"],
+    ["1", "2", "3", "-"],
+    ["0", ".", "=", "+"],
+    ["C", "CE", "←", ""]
+]
+
+# Create buttons
+for row in buttons:
+    for text in row:
+        if text:
+            btn = guidesktop.Button(text)
+
+            # Color scheme
+            if text in ["/", "*", "-", "+", "="]:
+                # Operator buttons
+                btn.normal_color = guidesktop.Colors.ACCENT
+                btn.text_color = guidesktop.Colors.WHITE
+            elif text in ["C", "CE", "←"]:
+                # Clear buttons
+                btn.normal_color = guidesktop.Color(1.0, 0.5, 0.5, 1.0)
+                btn.text_color = guidesktop.Colors.WHITE
+            else:
+                # Number buttons
+                btn.normal_color = guidesktop.Colors.BUTTON_BG
+
+            button_panel.add_child(btn)
+
+# Title bar
+title = guidesktop.Label("GuiDesktop Calculator")
+title.set_bounds(10, 395, 300, 20)
+title.set_font("Sans", 10)
+title.text_color = guidesktop.Colors.GRAY
+title.set_alignment(0.5, 0.5)
+window.add_widget(title)
+
+# Render
+print("\nRendering calculator UI...")
+if app.run_mock_render("guidesktop_calculator.png"):
+    print("\nSuccess! Check 'guidesktop_calculator.png'")
+    print("\nThis demonstrates:")
+    print("  - Grid layout for button arrangement")
+    print("  - Custom button colors")
+    print("  - Text alignment in display")
+else:
+    print("\nFailed to render")

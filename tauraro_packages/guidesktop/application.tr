@@ -1,0 +1,156 @@
+# Application Module
+# Main application class and event loop
+
+print("  [Module] Loading application system...")
+
+# Application class
+class Application:
+    # Main application controller
+
+    def __init__(self, name="GuiDesktop Application"):
+        self.name = name
+        self.windows = []
+        self.main_window = None
+        self.running = False
+        self.fps = 60  # Target frames per second
+        self.frame_time = 1000.0 / self.fps  # milliseconds
+
+        print("\n[Application] Created: " + name)
+        print("  Target FPS: " + str(self.fps))
+
+    def create_window(self, title="Window", width=640, height=480):
+        # Create a new window
+        window = Window(title, width, height)
+        self.add_window(window)
+        return window
+
+    def add_window(self, window):
+        # Add an existing window
+        self.windows.append(window)
+
+        # Set as main window if first one
+        if self.main_window == None:
+            self.main_window = window
+
+        return window
+
+    def remove_window(self, window):
+        # Remove a window
+        if window in self.windows:
+            window.close()
+            self.windows.remove(window)
+
+            # Clear main window if removed
+            if self.main_window == window:
+                if len(self.windows) > 0:
+                    self.main_window = self.windows[0]
+                else:
+                    self.main_window = None
+
+    def run(self):
+        # Run the main event loop
+        print("\n[Application] Starting main loop...")
+        print("  Windows: " + str(len(self.windows)))
+
+        if len(self.windows) == 0:
+            print("  [!] No windows to display")
+            return 0
+
+        # Show all windows
+        for window in self.windows:
+            window.show()
+
+        self.running = True
+        frame_count = 0
+
+        print("  [OK] Application is running")
+        print("  Note: This is a mock event loop (native event loop not implemented)")
+        print("")
+
+        try:
+            # Simplified event loop (in real implementation, would integrate with platform)
+            while self.running:
+                frame_count = frame_count + 1
+
+                # Process events (would get from platform)
+                # For now, just render
+
+                # Render all windows
+                for window in self.windows:
+                    if window.visible and window.needs_redraw:
+                        window.render_frame()
+
+                # Check if all windows are closed
+                visible_windows = 0
+                for window in self.windows:
+                    if window.visible:
+                        visible_windows = visible_windows + 1
+
+                if visible_windows == 0:
+                    print("  [Application] All windows closed")
+                    break
+
+                # In real implementation, would:
+                # 1. Wait for platform events
+                # 2. Process input events
+                # 3. Update window state
+                # 4. Render if needed
+                # 5. Swap buffers (platform-specific)
+
+                # For this mock, we'll just render a few frames then exit
+                if frame_count >= 10:
+                    print("  [Application] Mock render complete (10 frames)")
+                    print("  Note: Native windowing not implemented in this version")
+                    break
+
+        except KeyboardInterrupt:
+            print("\n  [Application] Interrupted by user")
+        except Exception as e:
+            print("  [!] Application error: " + str(e))
+            import traceback
+            traceback.print_exc()
+
+        # Cleanup
+        self.running = False
+        for window in self.windows:
+            window.close()
+
+        print("  [Application] Shutdown complete")
+        print("")
+        return 0
+
+    def quit(self):
+        # Quit the application
+        print("  [Application] Quit requested")
+        self.running = False
+
+    def run_mock_render(self, output_file="screenshot.png"):
+        # Run a mock render and save to file
+        # Useful for testing without native windowing
+        print("\n[Application] Running mock render...")
+
+        if self.main_window == None:
+            print("  [!] No main window")
+            return False
+
+        # Initialize and render
+        self.main_window.show()
+        self.main_window.render_frame()
+
+        # Save screenshot
+        result = self.main_window.save_screenshot(output_file)
+
+        # Cleanup
+        self.main_window.close()
+
+        print("  [OK] Mock render complete")
+        return result
+
+
+# Convenience function
+def create_application(name="GuiDesktop App"):
+    # Create a new application
+    return Application(name)
+
+
+print("  [OK] Application system loaded")

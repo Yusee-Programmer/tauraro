@@ -1,0 +1,55 @@
+# Basic GuiDesktop Example
+# Demonstrates creating a simple window with widgets
+
+print("GuiDesktop Basic Example")
+print("========================\n")
+
+# Import guidesktop
+import guidesktop
+
+# Initialize the framework
+if not guidesktop.init():
+    print("Failed to initialize GuiDesktop")
+    exit(1)
+
+# Define Cairo functions
+guidesktop.define_cairo_functions()
+
+# Create application
+app = guidesktop.Application("Basic Example")
+
+# Create main window
+window = app.create_window("Hello GuiDesktop", 400, 300)
+window.set_position(100, 100)
+window.background_color = guidesktop.Colors.BACKGROUND
+
+# Create a label
+label = guidesktop.Label("Hello from GuiDesktop!")
+label.set_bounds(50, 50, 300, 40)
+label.set_font("Sans", 18)
+label.text_color = guidesktop.Colors.ACCENT
+label.set_alignment(0.5, 0.5)  # Center aligned
+window.add_widget(label)
+
+# Create a button
+button = guidesktop.Button("Click Me!")
+button.set_bounds(150, 120, 100, 35)
+window.add_widget(button)
+
+# Create another label
+info_label = guidesktop.Label("GuiDesktop v1.0 - Custom GUI Framework")
+info_label.set_bounds(50, 200, 300, 30)
+info_label.set_font("Sans", 12)
+info_label.text_color = guidesktop.Colors.GRAY
+info_label.set_alignment(0.5, 0.5)
+window.add_widget(info_label)
+
+# Run mock render and save screenshot
+print("\nRendering GUI to image file...")
+if app.run_mock_render("guidesktop_basic.png"):
+    print("\nSuccess! Check 'guidesktop_basic.png' to see the rendered GUI")
+else:
+    print("\nFailed to render")
+
+print("\nNote: This version renders to an image file.")
+print("Native windowing will be implemented in the next version.")

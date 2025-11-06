@@ -1,0 +1,307 @@
+# Cairo Renderer Module
+# Provides Cairo 2D rendering bindings for GuiDesktop
+
+print("  [Module] Loading Cairo renderer...")
+
+# Cairo surface types
+CAIRO_FORMAT_INVALID = -1
+CAIRO_FORMAT_ARGB32 = 0
+CAIRO_FORMAT_RGB24 = 1
+CAIRO_FORMAT_A8 = 2
+CAIRO_FORMAT_A1 = 3
+
+# Cairo line cap styles
+CAIRO_LINE_CAP_BUTT = 0
+CAIRO_LINE_CAP_ROUND = 1
+CAIRO_LINE_CAP_SQUARE = 2
+
+# Cairo line join styles
+CAIRO_LINE_JOIN_MITER = 0
+CAIRO_LINE_JOIN_ROUND = 1
+CAIRO_LINE_JOIN_BEVEL = 2
+
+# Cairo operators
+CAIRO_OPERATOR_OVER = 2
+CAIRO_OPERATOR_SOURCE = 1
+CAIRO_OPERATOR_CLEAR = 0
+
+# Cairo font slant
+CAIRO_FONT_SLANT_NORMAL = 0
+CAIRO_FONT_SLANT_ITALIC = 1
+CAIRO_FONT_SLANT_OBLIQUE = 2
+
+# Cairo font weight
+CAIRO_FONT_WEIGHT_NORMAL = 0
+CAIRO_FONT_WEIGHT_BOLD = 1
+
+# Define Cairo functions
+def define_cairo_functions():
+    # Define all Cairo rendering functions
+
+    print("    Defining Cairo functions...")
+
+    # Surface creation and management
+    define_function(_cairo_lib, "cairo_image_surface_create", "pointer", ["int32", "int32", "int32"])
+    define_function(_cairo_lib, "cairo_surface_destroy", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_surface_flush", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_surface_finish", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_surface_write_to_png", "int32", ["pointer", "pointer"])
+
+    # Context creation and management
+    define_function(_cairo_lib, "cairo_create", "pointer", ["pointer"])
+    define_function(_cairo_lib, "cairo_destroy", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_save", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_restore", "void", ["pointer"])
+
+    # Drawing operations
+    define_function(_cairo_lib, "cairo_paint", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_stroke", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_fill", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_fill_preserve", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_stroke_preserve", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_clip", "void", ["pointer"])
+
+    # Path operations
+    define_function(_cairo_lib, "cairo_move_to", "void", ["pointer", "double", "double"])
+    define_function(_cairo_lib, "cairo_line_to", "void", ["pointer", "double", "double"])
+    define_function(_cairo_lib, "cairo_curve_to", "void", ["pointer", "double", "double", "double", "double", "double", "double"])
+    define_function(_cairo_lib, "cairo_arc", "void", ["pointer", "double", "double", "double", "double", "double"])
+    define_function(_cairo_lib, "cairo_rectangle", "void", ["pointer", "double", "double", "double", "double"])
+    define_function(_cairo_lib, "cairo_close_path", "void", ["pointer"])
+    define_function(_cairo_lib, "cairo_new_path", "void", ["pointer"])
+
+    # Color and style
+    define_function(_cairo_lib, "cairo_set_source_rgb", "void", ["pointer", "double", "double", "double"])
+    define_function(_cairo_lib, "cairo_set_source_rgba", "void", ["pointer", "double", "double", "double", "double"])
+    define_function(_cairo_lib, "cairo_set_line_width", "void", ["pointer", "double"])
+    define_function(_cairo_lib, "cairo_set_line_cap", "void", ["pointer", "int32"])
+    define_function(_cairo_lib, "cairo_set_line_join", "void", ["pointer", "int32"])
+    define_function(_cairo_lib, "cairo_set_operator", "void", ["pointer", "int32"])
+
+    # Text operations
+    define_function(_cairo_lib, "cairo_select_font_face", "void", ["pointer", "pointer", "int32", "int32"])
+    define_function(_cairo_lib, "cairo_set_font_size", "void", ["pointer", "double"])
+    define_function(_cairo_lib, "cairo_show_text", "void", ["pointer", "pointer"])
+    define_function(_cairo_lib, "cairo_text_extents", "void", ["pointer", "pointer", "pointer"])
+
+    # Transformations
+    define_function(_cairo_lib, "cairo_translate", "void", ["pointer", "double", "double"])
+    define_function(_cairo_lib, "cairo_scale", "void", ["pointer", "double", "double"])
+    define_function(_cairo_lib, "cairo_rotate", "void", ["pointer", "double"])
+
+    print("    [OK] Cairo functions defined")
+
+# CairoContext class - wrapper around cairo_t
+class CairoContext:
+    # Wrapper for Cairo drawing context
+
+    def __init__(self, surface_ptr):
+        # Create a Cairo context for the given surface
+        self.ctx = call_function(_cairo_lib, "cairo_create", [surface_ptr])
+        self.surface = surface_ptr
+
+    def destroy(self):
+        # Destroy the Cairo context
+        if self.ctx:
+            call_function(_cairo_lib, "cairo_destroy", [self.ctx])
+            self.ctx = None
+
+    def save(self):
+        # Save the current graphics state
+        call_function(_cairo_lib, "cairo_save", [self.ctx])
+        return self
+
+    def restore(self):
+        # Restore the previous graphics state
+        call_function(_cairo_lib, "cairo_restore", [self.ctx])
+        return self
+
+    def set_source_rgb(self, r, g, b):
+        # Set color source (RGB, 0.0 to 1.0)
+        call_function(_cairo_lib, "cairo_set_source_rgb", [self.ctx, r, g, b])
+        return self
+
+    def set_source_rgba(self, r, g, b, a):
+        # Set color source (RGBA, 0.0 to 1.0)
+        call_function(_cairo_lib, "cairo_set_source_rgba", [self.ctx, r, g, b, a])
+        return self
+
+    def set_color(self, color):
+        # Set color from Color object
+        call_function(_cairo_lib, "cairo_set_source_rgba", [self.ctx, color.r, color.g, color.b, color.a])
+        return self
+
+    def set_line_width(self, width):
+        # Set line width for strokes
+        call_function(_cairo_lib, "cairo_set_line_width", [self.ctx, width])
+        return self
+
+    def move_to(self, x, y):
+        # Move to position without drawing
+        call_function(_cairo_lib, "cairo_move_to", [self.ctx, x, y])
+        return self
+
+    def line_to(self, x, y):
+        # Draw line to position
+        call_function(_cairo_lib, "cairo_line_to", [self.ctx, x, y])
+        return self
+
+    def rectangle(self, x, y, width, height):
+        # Draw a rectangle path
+        call_function(_cairo_lib, "cairo_rectangle", [self.ctx, x, y, width, height])
+        return self
+
+    def arc(self, x, y, radius, angle1, angle2):
+        # Draw an arc (angles in radians)
+        call_function(_cairo_lib, "cairo_arc", [self.ctx, x, y, radius, angle1, angle2])
+        return self
+
+    def close_path(self):
+        # Close the current path
+        call_function(_cairo_lib, "cairo_close_path", [self.ctx])
+        return self
+
+    def new_path(self):
+        # Start a new path
+        call_function(_cairo_lib, "cairo_new_path", [self.ctx])
+        return self
+
+    def stroke(self):
+        # Stroke the current path
+        call_function(_cairo_lib, "cairo_stroke", [self.ctx])
+        return self
+
+    def fill(self):
+        # Fill the current path
+        call_function(_cairo_lib, "cairo_fill", [self.ctx])
+        return self
+
+    def paint(self):
+        # Paint the entire surface with current source
+        call_function(_cairo_lib, "cairo_paint", [self.ctx])
+        return self
+
+    def select_font_face(self, family, slant=CAIRO_FONT_SLANT_NORMAL, weight=CAIRO_FONT_WEIGHT_NORMAL):
+        # Select a font
+        call_function(_cairo_lib, "cairo_select_font_face", [self.ctx, family, slant, weight])
+        return self
+
+    def set_font_size(self, size):
+        # Set font size in pixels
+        call_function(_cairo_lib, "cairo_set_font_size", [self.ctx, size])
+        return self
+
+    def show_text(self, text):
+        # Draw text at current position
+        call_function(_cairo_lib, "cairo_show_text", [self.ctx, text])
+        return self
+
+    def translate(self, x, y):
+        # Translate coordinate system
+        call_function(_cairo_lib, "cairo_translate", [self.ctx, x, y])
+        return self
+
+    def scale(self, sx, sy):
+        # Scale coordinate system
+        call_function(_cairo_lib, "cairo_scale", [self.ctx, sx, sy])
+        return self
+
+    def rotate(self, angle):
+        # Rotate coordinate system (angle in radians)
+        call_function(_cairo_lib, "cairo_rotate", [self.ctx, angle])
+        return self
+
+    # High-level drawing methods
+
+    def draw_rect(self, x, y, width, height, fill_color=None, stroke_color=None, line_width=1.0):
+        # Draw a rectangle with optional fill and stroke
+        self.rectangle(x, y, width, height)
+
+        if fill_color:
+            self.set_color(fill_color)
+            if stroke_color:
+                call_function(_cairo_lib, "cairo_fill_preserve", [self.ctx])
+            else:
+                self.fill()
+
+        if stroke_color:
+            self.set_color(stroke_color)
+            self.set_line_width(line_width)
+            self.stroke()
+
+        return self
+
+    def draw_rounded_rect(self, x, y, width, height, radius, fill_color=None, stroke_color=None, line_width=1.0):
+        # Draw a rounded rectangle
+        # Using arc for corners
+        import math
+        pi = 3.14159265359
+
+        self.new_path()
+        self.arc(x + radius, y + radius, radius, pi, 1.5 * pi)
+        self.arc(x + width - radius, y + radius, radius, 1.5 * pi, 2 * pi)
+        self.arc(x + width - radius, y + height - radius, radius, 0, 0.5 * pi)
+        self.arc(x + radius, y + height - radius, radius, 0.5 * pi, pi)
+        self.close_path()
+
+        if fill_color:
+            self.set_color(fill_color)
+            if stroke_color:
+                call_function(_cairo_lib, "cairo_fill_preserve", [self.ctx])
+            else:
+                self.fill()
+
+        if stroke_color:
+            self.set_color(stroke_color)
+            self.set_line_width(line_width)
+            self.stroke()
+
+        return self
+
+    def draw_text(self, x, y, text, color, font_family="Sans", font_size=12):
+        # Draw text at position
+        self.select_font_face(font_family)
+        self.set_font_size(font_size)
+        self.move_to(x, y)
+        self.set_color(color)
+        self.show_text(text)
+        return self
+
+    def clear(self, color):
+        # Clear surface with color
+        self.set_color(color)
+        self.paint()
+        return self
+
+
+# CairoSurface class - wrapper around cairo_surface_t
+class CairoSurface:
+    # Wrapper for Cairo image surface
+
+    def __init__(self, width, height, format=CAIRO_FORMAT_ARGB32):
+        # Create a new image surface
+        self.width = width
+        self.height = height
+        self.format = format
+        self.surface = call_function(_cairo_lib, "cairo_image_surface_create", [format, width, height])
+
+    def destroy(self):
+        # Destroy the surface
+        if self.surface:
+            call_function(_cairo_lib, "cairo_surface_destroy", [self.surface])
+            self.surface = None
+
+    def flush(self):
+        # Flush any pending drawing
+        call_function(_cairo_lib, "cairo_surface_flush", [self.surface])
+
+    def save_to_png(self, filename):
+        # Save surface to PNG file
+        return call_function(_cairo_lib, "cairo_surface_write_to_png", [self.surface, filename])
+
+    def create_context(self):
+        # Create a Cairo context for drawing
+        return CairoContext(self.surface)
+
+
+print("  [OK] Cairo renderer module loaded")
