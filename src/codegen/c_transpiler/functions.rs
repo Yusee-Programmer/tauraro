@@ -409,21 +409,22 @@ fn generate_call(
 
     match result {
         Some(res) => {
-            local_vars.insert(res.clone(), "tauraro_value_t*".to_string());
+            let unique_res = get_unique_var_name(res, local_vars);
+            local_vars.insert(unique_res.clone(), "tauraro_value_t*".to_string());
             // Check what kind of function this is
             if func.contains("__") {
                 // Method call (class__method) - first argument is self
                 if !args.is_empty() {
-                    Ok(format!("tauraro_value_t* {} = {}({});", res, func, args_str))
+                    Ok(format!("tauraro_value_t* {} = {}({});", unique_res, func, args_str))
                 } else {
-                    Ok(format!("tauraro_value_t* {} = {}(0, NULL);", res, func))
+                    Ok(format!("tauraro_value_t* {} = {}(0, NULL);", unique_res, func))
                 }
             } else if func.contains("_") {
                 // Module function (module_function) - call directly
-                Ok(format!("tauraro_value_t* {} = {}({});", res, func, args_str))
+                Ok(format!("tauraro_value_t* {} = {}({});", unique_res, func, args_str))
             } else {
                 // Regular builtin function - add tauraro_ prefix
-                Ok(format!("tauraro_value_t* {} = tauraro_{}({});", res, func, args_str))
+                Ok(format!("tauraro_value_t* {} = tauraro_{}({});", unique_res, func, args_str))
             }
         }
         None => {

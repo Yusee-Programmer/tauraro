@@ -532,6 +532,13 @@ impl CTranspiler {
         }
         c_code.push_str("\n");
 
+        // Add forward declarations for all user-defined functions
+        c_code.push_str("// Forward declarations for user-defined functions\n");
+        for (_name, function) in &module.functions {
+            c_code.push_str(&format!("tauraro_value_t* {}(int argc, tauraro_value_t** argv);\n", function.name));
+        }
+        c_code.push_str("\n");
+
         // Generate functions
         for (_name, function) in &module.functions {
             c_code.push_str(&functions::generate_function(function)?);

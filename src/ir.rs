@@ -125,6 +125,8 @@ pub struct Generator {
     type_info: IRTypeInfo, // Added to store type information during IR generation
     class_inheritance: HashMap<String, Vec<String>>, // Maps class names to their base classes
     imported_modules: HashSet<String>, // Track imported module names
+    current_class: Option<String>, // Track current class being processed
+    temp_var_counter: usize, // Counter for generating unique temporary variables
 }
 
 impl Generator {
@@ -137,6 +139,8 @@ impl Generator {
             },
             class_inheritance: HashMap::new(),
             imported_modules: HashSet::new(),
+            current_class: None,
+            temp_var_counter: 0,
         }
     }
 
@@ -176,7 +180,10 @@ impl Generator {
                     }
                 }
                 self.class_inheritance.insert(name.clone(), base_classes);
-                
+
+                // Set current class context
+                self.current_class = Some(name.clone());
+
                 // Process class definition
                 // First, create a constructor method if __init__ doesn't exist
                 let has_init = body.iter().any(|stmt| {
@@ -186,13 +193,13 @@ impl Generator {
                         false
                     }
                 });
-                
+
                 // Process all methods and class attributes in the class
                 for item in body {
                     match item {
                         Statement::FunctionDef { name: method_name, params, body: method_body, return_type, .. } => {
                             let function_name = format!("{}__{}", name, method_name);
-                            
+
                             // Store function type information
                             let mut param_types = HashMap::new();
                             for param in &params {
@@ -200,7 +207,7 @@ impl Generator {
                                     param_types.insert(param.name.clone(), type_annotation.clone());
                                 }
                             }
-                            
+
                             self.type_info.function_types.insert(
                                 function_name.clone(),
                                 FunctionType {
@@ -208,7 +215,7 @@ impl Generator {
                                     return_type: return_type.clone(),
                                 },
                             );
-                            
+
                             let ir_function = self.process_function(function_name, params, method_body)?;
                             module.functions.insert(format!("{}__{}", name, method_name), ir_function);
                         }
@@ -249,6 +256,9 @@ impl Generator {
                     };
                     module.functions.insert(format!("{}__init__", name), constructor);
                 }
+
+                // Reset current class context
+                self.current_class = None;
             },
             Statement::VariableDef { name, type_annotation, value: Some(value), .. } => {
                 // Check if we have explicit type annotation
@@ -851,6 +861,49 @@ impl Generator {
                 });
             },
             Expr::MethodCall { object, method, args, .. } => {
+                // Check if this is a super() method call
+                let is_super_call = matches!(object.as_ref(), Expr::Call { func, .. }
+                    if matches!(func.as_ref(), Expr::Identifier(name) if name == "super"));
+
+                if is_super_call {
+                    // Handle super().method() call
+                    if let Some(current_class) = &self.current_class {
+                        // Get the base class name
+                        let base_classes = self.class_inheritance.get(current_class).cloned().unwrap_or_default();
+                        let parent_class = base_classes.first().cloned().unwrap_or_else(|| "object".to_string());
+
+                        // Process arguments
+                        let mut arg_names: Vec<String> = Vec::new();
+                        for (i, arg) in args.iter().enumerate() {
+                            let arg_result = format!("method_arg_{}", i);
+                            self.process_expression_for_instructions(instructions, arg)?;
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: "temp_result".to_string(),
+                                result: arg_result.clone()
+                            });
+                            arg_names.push(arg_result);
+                        }
+
+                        // Create the parent method name (ParentClass__method)
+                        let method_name = format!("{}__{}", parent_class, method);
+
+                        // Call the parent method with self as first argument
+                        let mut method_args = vec!["self".to_string()];
+                        method_args.extend(arg_names);
+
+                        instructions.push(IRInstruction::Call {
+                            func: method_name,
+                            args: method_args,
+                            result: Some("temp_result".to_string())
+                        });
+                    } else {
+                        // super() called outside of a class - error
+                        instructions.push(IRInstruction::LoadConst {
+                            value: Value::None,
+                            result: "temp_result".to_string()
+                        });
+                    }
+                } else {
                 // Process method call
                 let object_name = self.expression_to_string(&object);
 
@@ -904,6 +957,7 @@ impl Generator {
                         args: method_args,
                         result: Some("temp_result".to_string())
                     });
+                }
                 }
             },
             Expr::FormatString { parts } => {
@@ -1538,32 +1592,72 @@ impl Generator {
                 }
             },
             Expr::MethodCall { object, method, args, .. } => {
-                // Process method call
-                let object_name = self.expression_to_string(&object);
-                
-                // Get the class name for this object
-                let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
-                
-                // Process each argument and collect their result names
-                let mut arg_names: Vec<String> = Vec::new();
-                for (i, arg) in args.iter().enumerate() {
-                    let arg_result = format!("{}_method_arg_{}", result_var, i);
-                    self.process_expression_to_result(module, arg, &arg_result)?;
-                    arg_names.push(arg_result);
+                // Check if this is a super() method call
+                let is_super_call = matches!(object.as_ref(), Expr::Call { func, .. }
+                    if matches!(func.as_ref(), Expr::Identifier(name) if name == "super"));
+
+                if is_super_call {
+                    // Handle super().method() call
+                    if let Some(current_class) = &self.current_class {
+                        // Get the base class name
+                        let base_classes = self.class_inheritance.get(current_class).cloned().unwrap_or_default();
+                        let parent_class = base_classes.first().cloned().unwrap_or_else(|| "object".to_string());
+
+                        // Process arguments
+                        let mut arg_names: Vec<String> = Vec::new();
+                        for (i, arg) in args.iter().enumerate() {
+                            let arg_result = format!("{}_method_arg_{}", result_var, i);
+                            self.process_expression_to_result(module, arg, &arg_result)?;
+                            arg_names.push(arg_result);
+                        }
+
+                        // Create the parent method name (ParentClass__method)
+                        let method_name = format!("{}__{}", parent_class, method);
+
+                        // Call the parent method with self as first argument
+                        let mut method_args = vec!["self".to_string()];
+                        method_args.extend(arg_names);
+
+                        module.globals.push(IRInstruction::Call {
+                            func: method_name,
+                            args: method_args,
+                            result: Some(result_var.to_string())
+                        });
+                    } else {
+                        // super() called outside of a class - error
+                        module.globals.push(IRInstruction::LoadConst {
+                            value: Value::None,
+                            result: result_var.to_string()
+                        });
+                    }
+                } else {
+                    // Normal method call
+                    let object_name = self.expression_to_string(&object);
+
+                    // Get the class name for this object
+                    let class_name = self.object_types.get(&object_name).cloned().unwrap_or_else(|| object_name.clone());
+
+                    // Process each argument and collect their result names
+                    let mut arg_names: Vec<String> = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_result = format!("{}_method_arg_{}", result_var, i);
+                        self.process_expression_to_result(module, arg, &arg_result)?;
+                        arg_names.push(arg_result);
+                    }
+
+                    // Create the method name (class__method)
+                    let method_name = format!("{}__{}", class_name, method);
+
+                    // Call the method with object as first argument
+                    let mut method_args = vec![object_name.clone()];
+                    method_args.extend(arg_names);
+
+                    module.globals.push(IRInstruction::Call {
+                        func: method_name,
+                        args: method_args,
+                        result: Some(result_var.to_string())
+                    });
                 }
-                
-                // Create the method name (class__method)
-                let method_name = format!("{}__{}", class_name, method);
-                
-                // Call the method with object as first argument
-                let mut method_args = vec![object_name.clone()];
-                method_args.extend(arg_names);
-                
-                module.globals.push(IRInstruction::Call { 
-                    func: method_name,
-                    args: method_args,
-                    result: Some(result_var.to_string())
-                });
             },
             Expr::FormatString { parts } => {
                 // Handle f-string by concatenating all parts
