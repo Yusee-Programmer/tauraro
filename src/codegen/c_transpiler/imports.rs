@@ -363,8 +363,19 @@ impl ModuleCompiler {
 
         // Generate function implementations
         use crate::codegen::c_transpiler::functions;
+        use std::collections::HashSet;
         if !ir_module.functions.is_empty() {
             header.push_str(&format!("// Module: {} - Function implementations\n\n", module_name));
+
+            // Collect class names from function names
+            let mut class_names = HashSet::new();
+            for (func_name, _) in &ir_module.functions {
+                if let Some(pos) = func_name.find("__") {
+                    let class_name = &func_name[0..pos];
+                    class_names.insert(class_name.to_string());
+                }
+            }
+
             for (func_name, function) in &ir_module.functions {
                 // Generate function with module prefix
                 let prefixed_name = format!("{}_{}", module_name, func_name);
@@ -373,7 +384,7 @@ impl ModuleCompiler {
                 let mut prefixed_function = function.clone();
                 prefixed_function.name = prefixed_name.clone();
 
-                header.push_str(&functions::generate_function(&prefixed_function)?);
+                header.push_str(&functions::generate_function(&prefixed_function, &class_names)?);
                 header.push_str("\n\n");
             }
         }

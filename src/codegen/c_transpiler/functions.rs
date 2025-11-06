@@ -7,10 +7,10 @@ use crate::ir::{IRFunction, IRBlock, IRInstruction};
 use crate::value::Value;
 use crate::ast::Type;
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Generate C code for a function
-pub fn generate_function(function: &IRFunction) -> Result<String> {
+pub fn generate_function(function: &IRFunction, class_names: &HashSet<String>) -> Result<String> {
     let mut func_code = String::new();
 
     // All Python functions return a value (None if no explicit return)
@@ -51,7 +51,7 @@ pub fn generate_function(function: &IRFunction) -> Result<String> {
     // Process instructions
     for block in &function.blocks {
         for instruction in &block.instructions {
-            func_code.push_str(&format!("    {}\n", generate_instruction(instruction, &mut local_vars, &function.param_types)?));
+            func_code.push_str(&format!("    {}\n", generate_instruction(instruction, &mut local_vars, &function.param_types, class_names)?));
         }
     }
 
@@ -92,6 +92,7 @@ pub fn generate_instruction(
     instruction: &IRInstruction,
     local_vars: &mut HashMap<String, String>,
     param_types: &HashMap<String, Type>,
+    class_names: &HashSet<String>,
 ) -> Result<String> {
     match instruction {
         IRInstruction::Comment(text) => {
@@ -122,13 +123,13 @@ pub fn generate_instruction(
             generate_store_typed_local(name, value, type_info, local_vars)
         }
         IRInstruction::LoadGlobal { name, result } => {
-            generate_load_global(name, result, local_vars)
+            generate_load_global(name, result, local_vars, class_names)
         }
         IRInstruction::StoreGlobal { name, value } => {
             Ok(format!("{} = {};", name, value))
         }
         IRInstruction::LoadTypedGlobal { name, result, type_info } => {
-            generate_load_typed_global(name, result, type_info, local_vars)
+            generate_load_typed_global(name, result, type_info, local_vars, class_names)
         }
         IRInstruction::StoreTypedGlobal { name, value, type_info } => {
             generate_store_typed_global(name, value, type_info, local_vars)
@@ -155,13 +156,13 @@ pub fn generate_instruction(
             Ok(format!("if (!{}->data.bool_val) {{ /* jump */ }}", condition))
         }
         IRInstruction::If { condition, then_body, elif_branches, else_body } => {
-            generate_if(condition, then_body, elif_branches, else_body, local_vars, param_types)
+            generate_if(condition, then_body, elif_branches, else_body, local_vars, param_types, class_names)
         }
         IRInstruction::While { condition, condition_instructions, body } => {
-            generate_while(condition, condition_instructions, body, local_vars, param_types)
+            generate_while(condition, condition_instructions, body, local_vars, param_types, class_names)
         }
         IRInstruction::For { variable, iterable, body } => {
-            generate_for(variable, iterable, body, local_vars, param_types)
+            generate_for(variable, iterable, body, local_vars, param_types, class_names)
         }
         IRInstruction::Break => {
             Ok("break;".to_string())
@@ -174,7 +175,7 @@ pub fn generate_instruction(
             let mut code = String::new();
             code.push_str("// Try block (exception handling not fully implemented)\n");
             for instruction in body {
-                let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+                let instr_code = generate_instruction(instruction, local_vars, param_types, class_names)?;
                 code.push_str(&format!("    {}\n", instr_code));
             }
             Ok(code)
@@ -274,10 +275,18 @@ fn generate_load_local(name: &str, result: &str, local_vars: &mut HashMap<String
     Ok(format!("tauraro_value_t* {} = {};", unique_result, sanitized_name))
 }
 
-fn generate_load_global(name: &str, result: &str, local_vars: &mut HashMap<String, String>) -> Result<String> {
+fn generate_load_global(name: &str, result: &str, local_vars: &mut HashMap<String, String>, class_names: &HashSet<String>) -> Result<String> {
     let unique_result = get_unique_var_name(result, local_vars);
     local_vars.insert(unique_result.clone(), "tauraro_value_t*".to_string());
-    Ok(format!("tauraro_value_t* {} = {};", unique_result, name))
+
+    // If this is a class name, use the class instance variable (class_ClassName)
+    let actual_name = if class_names.contains(name) {
+        format!("class_{}", name)
+    } else {
+        name.to_string()
+    };
+
+    Ok(format!("tauraro_value_t* {} = {};", unique_result, actual_name))
 }
 
 fn generate_binary_op(
@@ -531,6 +540,7 @@ fn generate_if(
     else_body: &Option<Vec<IRInstruction>>,
     local_vars: &mut HashMap<String, String>,
     param_types: &HashMap<String, Type>,
+    class_names: &HashSet<String>,
 ) -> Result<String> {
     let mut code = String::new();
 
@@ -539,7 +549,7 @@ fn generate_if(
 
     // Generate then body
     for instruction in then_body {
-        let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+        let instr_code = generate_instruction(instruction, local_vars, param_types, class_names)?;
         code.push_str(&format!("        {}\n", instr_code));
     }
     code.push_str("    }");
@@ -548,7 +558,7 @@ fn generate_if(
     for (elif_cond, elif_body) in elif_branches {
         code.push_str(&format!(" else if (tauraro_is_truthy({})) {{\n", elif_cond));
         for instruction in elif_body {
-            let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+            let instr_code = generate_instruction(instruction, local_vars, param_types, class_names)?;
             code.push_str(&format!("        {}\n", instr_code));
         }
         code.push_str("    }");
@@ -558,7 +568,7 @@ fn generate_if(
     if let Some(else_instructions) = else_body {
         code.push_str(" else {\n");
         for instruction in else_instructions {
-            let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+            let instr_code = generate_instruction(instruction, local_vars, param_types, class_names)?;
             code.push_str(&format!("        {}\n", instr_code));
         }
         code.push_str("    }");
@@ -574,6 +584,7 @@ fn generate_while(
     body: &[IRInstruction],
     local_vars: &mut HashMap<String, String>,
     param_types: &HashMap<String, Type>,
+    class_names: &HashSet<String>,
 ) -> Result<String> {
     let mut code = String::new();
 
@@ -582,14 +593,14 @@ fn generate_while(
 
     // Generate body
     for instruction in body {
-        let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+        let instr_code = generate_instruction(instruction, local_vars, param_types, class_names)?;
         code.push_str(&format!("        {}\n", instr_code));
     }
 
     // Re-evaluate condition at end of loop
     code.push_str("        // Re-evaluate condition\n");
     for instr in condition_instructions {
-        let instr_code = generate_instruction(instr, local_vars, param_types)?;
+        let instr_code = generate_instruction(instr, local_vars, param_types, class_names)?;
         code.push_str(&format!("        {}\n", instr_code));
     }
     code.push_str("    }");
@@ -604,6 +615,7 @@ fn generate_for(
     body: &[IRInstruction],
     local_vars: &mut HashMap<String, String>,
     param_types: &HashMap<String, Type>,
+    class_names: &HashSet<String>,
 ) -> Result<String> {
     let mut code = String::new();
 
@@ -626,7 +638,7 @@ fn generate_for(
 
     // Generate body
     for instruction in body {
-        let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+        let instr_code = generate_instruction(instruction, local_vars, param_types, class_names)?;
         code.push_str(&format!("            {}\n", instr_code));
     }
 
@@ -646,7 +658,7 @@ fn generate_for(
 
     // Generate body
     for instruction in body {
-        let instr_code = generate_instruction(instruction, local_vars, param_types)?;
+        let instr_code = generate_instruction(instruction, local_vars, param_types, class_names)?;
         code.push_str(&format!("            {}\n", instr_code));
     }
 
@@ -758,7 +770,8 @@ fn generate_load_typed_global(
     name: &str,
     result: &str,
     type_info: &Type,
-    local_vars: &mut HashMap<String, String>
+    local_vars: &mut HashMap<String, String>,
+    class_names: &HashSet<String>,
 ) -> Result<String> {
     match type_info {
         Type::Simple(type_name) if type_name == "int" => {
@@ -774,7 +787,7 @@ fn generate_load_typed_global(
             Ok(format!("bool {} = {}; // Optimized: typed bool global", result, name))
         }
         _ => {
-            generate_load_global(name, result, local_vars)
+            generate_load_global(name, result, local_vars, class_names)
         }
     }
 }

@@ -26,7 +26,7 @@ use crate::codegen::{CodeGenerator, CodegenOptions, Target};
 use crate::ir::{IRModule, IRFunction, IRInstruction, IRTypeInfo};
 use crate::ast::Type;
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::path::Path;
 
 /// C Transpiler that converts Tauraro IR to C code
@@ -545,6 +545,15 @@ impl CTranspiler {
         }
         c_code.push_str("\n");
 
+        // Collect class names from function names
+        let mut class_names = HashSet::new();
+        for (func_name, _) in &module.functions {
+            if let Some(pos) = func_name.find("__") {
+                let class_name = &func_name[0..pos];
+                class_names.insert(class_name.to_string());
+            }
+        }
+
         // Add forward declarations for all user-defined functions
         c_code.push_str("// Forward declarations for user-defined functions\n");
         for (_name, function) in &module.functions {
@@ -552,9 +561,12 @@ impl CTranspiler {
         }
         c_code.push_str("\n");
 
+        // Add global class variable declarations
+        c_code.push_str(&self.generate_class_declarations(&module)?);
+
         // Generate functions
         for (_name, function) in &module.functions {
-            c_code.push_str(&functions::generate_function(function)?);
+            c_code.push_str(&functions::generate_function(function, &class_names)?);
             c_code.push_str("\n\n");
         }
 
@@ -564,11 +576,8 @@ impl CTranspiler {
         Ok(c_code)
     }
 
-    /// Generate class initialization code
-    fn generate_class_initialization(&self, module: &IRModule) -> Result<String> {
-        use std::collections::{HashMap, HashSet};
-
-        let mut init_code = String::new();
+    /// Extract classes and their methods from module
+    fn extract_classes(&self, module: &IRModule) -> HashMap<String, Vec<String>> {
         let mut classes: HashMap<String, Vec<String>> = HashMap::new();
 
         // Extract classes and their methods from function names
@@ -584,16 +593,43 @@ impl CTranspiler {
             }
         }
 
+        classes
+    }
+
+    /// Generate global class variable declarations
+    fn generate_class_declarations(&self, module: &IRModule) -> Result<String> {
+        let classes = self.extract_classes(module);
+
         if classes.is_empty() {
             return Ok(String::new());
         }
 
+        let mut decl_code = String::new();
+        decl_code.push_str("// Global class variables\n");
+
+        for class_name in classes.keys() {
+            decl_code.push_str(&format!("tauraro_class_t* class_{};\n", class_name));
+        }
+
+        decl_code.push_str("\n");
+        Ok(decl_code)
+    }
+
+    /// Generate class initialization code
+    fn generate_class_initialization(&self, module: &IRModule) -> Result<String> {
+        let classes = self.extract_classes(module);
+
+        if classes.is_empty() {
+            return Ok(String::new());
+        }
+
+        let mut init_code = String::new();
         init_code.push_str("\n    // === Class Initialization ===\n");
 
-        // Create global class pointer variables and initialize classes
+        // Initialize global class pointer variables
         for (class_name, methods) in &classes {
             init_code.push_str(&format!("    // Initialize class: {}\n", class_name));
-            init_code.push_str(&format!("    tauraro_class_t* class_{} = tauraro_class_create(\"{}\", NULL);\n",
+            init_code.push_str(&format!("    class_{} = tauraro_class_create(\"{}\", NULL);\n",
                 class_name, class_name));
 
             // Register all methods with the class
@@ -2077,9 +2113,21 @@ impl CTranspiler {
         // Add runtime operator implementations
         c_code.push_str(&runtime::generate_runtime_support());
 
+        // Collect class names from function names
+        let mut class_names = HashSet::new();
+        for (func_name, _) in &module.functions {
+            if let Some(pos) = func_name.find("__") {
+                let class_name = &func_name[0..pos];
+                class_names.insert(class_name.to_string());
+            }
+        }
+
+        // Add global class variable declarations
+        c_code.push_str(&self.generate_class_declarations(&module)?);
+
         // Generate functions
         for (name, function) in &module.functions {
-            c_code.push_str(&functions::generate_function(function)?);
+            c_code.push_str(&functions::generate_function(function, &class_names)?);
             c_code.push_str("\n\n");
         }
 
@@ -2113,9 +2161,18 @@ impl CTranspiler {
             c_code.push_str(&oop::generate_oop_implementations());
         }
 
+        // Collect class names from function names
+        let mut class_names = HashSet::new();
+        for (func_name, _) in &module.functions {
+            if let Some(pos) = func_name.find("__") {
+                let class_name = &func_name[0..pos];
+                class_names.insert(class_name.to_string());
+            }
+        }
+
         // Generate module functions
         for (_name, function) in &module.functions {
-            c_code.push_str(&functions::generate_function(function)?);
+            c_code.push_str(&functions::generate_function(function, &class_names)?);
             c_code.push_str("\n\n");
         }
 
