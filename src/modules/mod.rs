@@ -24,11 +24,13 @@ pub mod json;
 pub mod logging;
 pub mod math;
 pub mod memory;
+pub mod multiprocessing;
 pub mod os;
 pub mod pickle;
 pub mod random;
 pub mod re;
 pub mod socket;
+pub mod subprocess;
 pub mod sys;
 pub mod threading;
 pub mod time;
@@ -71,11 +73,15 @@ pub fn init_builtin_modules() -> HashMap<String, Value> {
     modules.insert("httptools".to_string(), httptools::create_httptools_module());
     modules.insert("websockets".to_string(), websockets::create_websockets_module());
     modules.insert("httpx".to_string(), httpx::create_httpx_module());
-    
+
+    // Add process management modules
+    modules.insert("subprocess".to_string(), subprocess::create_subprocess_module());
+    modules.insert("multiprocessing".to_string(), multiprocessing::create_multiprocessing_module());
+
     // Add memory management modules
     modules.insert("memory".to_string(), memory::create_memory_module());
     modules.insert("gc".to_string(), gc::create_gc_module());
-    
+
     // Add exceptions module
     modules.insert("exceptions".to_string(), exceptions::create_exceptions_module());
     
@@ -112,6 +118,8 @@ pub fn get_builtin_module(name: &str) -> Option<Value> {
         "httptools" => Some(httptools::create_httptools_module()),
         "websockets" => Some(websockets::create_websockets_module()),
         "httpx" => Some(httpx::create_httpx_module()),
+        "subprocess" => Some(subprocess::create_subprocess_module()),
+        "multiprocessing" => Some(multiprocessing::create_multiprocessing_module()),
         "memory" => Some(memory::create_memory_module()),
         "gc" => Some(gc::create_gc_module()),
         "exceptions" => Some(exceptions::create_exceptions_module()),
@@ -121,7 +129,7 @@ pub fn get_builtin_module(name: &str) -> Option<Value> {
 
 /// Check if a module name is a built-in module
 pub fn is_builtin_module(name: &str) -> bool {
-    matches!(name, "abc" | "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx" | "memory" | "gc" | "exceptions")
+    matches!(name, "abc" | "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx" | "subprocess" | "multiprocessing" | "memory" | "gc" | "exceptions")
 }
 
 /// Get list of all built-in module names
@@ -154,6 +162,8 @@ pub fn get_builtin_module_names() -> Vec<String> {
         "httptools".to_string(),
         "websockets".to_string(),
         "httpx".to_string(),
+        "subprocess".to_string(),
+        "multiprocessing".to_string(),
         "memory".to_string(),
         "gc".to_string(),
         "exceptions".to_string(),
