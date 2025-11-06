@@ -603,65 +603,68 @@ impl SuperCompiler {
             }
             Statement::If { condition, then_branch, elif_branches, else_branch } => {
                 // Compile if statement: if condition: then_branch elif ... else: else_branch
-                
+
                 // 1. Compile the condition
                 let cond_reg = self.compile_expression(condition)?;
-                
-                // 2. Emit conditional jump to else branch if condition is false
-                let else_jump_pos = self.emit(OpCode::JumpIfFalse, cond_reg, 0, 0, self.current_line); // arg2 will be updated later
-                
+
+                // 2. Emit conditional jump to next branch (elif or else) if condition is false
+                let if_false_jump = self.emit(OpCode::JumpIfFalse, cond_reg, 0, 0, self.current_line);
+
                 // 3. Compile the then branch
                 for stmt in then_branch {
                     self.compile_statement(stmt)?;
                 }
-                
-                // 4. Emit jump to end of if statement (after then branch)
-                let end_jump_pos = self.emit(OpCode::Jump, 0, 0, 0, self.current_line); // arg1 will be updated later
-                
-                // 5. Fix the else jump placeholder
-                let else_start_pos = self.code.instructions.len();
-                self.code.instructions[else_jump_pos].arg2 = else_start_pos as u32;
-                
-                // 6. Compile elif branches and else branch
-                let mut elif_jump_positions = Vec::new();
-                
-                // Compile elif branches
+
+                // 4. Emit jump to end after executing then branch
+                let mut end_jumps = vec![self.emit(OpCode::Jump, 0, 0, 0, self.current_line)];
+
+                // 5. Fix the if's false jump to point here (start of elif/else chain)
+                let next_branch_start = self.code.instructions.len();
+                self.code.instructions[if_false_jump].arg2 = next_branch_start as u32;
+
+                // 6. Compile elif branches
+                let mut prev_elif_false_jump: Option<usize> = None;
                 for (elif_cond, elif_body) in elif_branches {
+                    // Fix previous elif's false jump to point here
+                    if let Some(prev_jump) = prev_elif_false_jump {
+                        let current_pos = self.code.instructions.len();
+                        self.code.instructions[prev_jump].arg2 = current_pos as u32;
+                    }
+
                     // Compile elif condition
                     let elif_cond_reg = self.compile_expression(elif_cond)?;
-                    
-                    // Emit conditional jump to next elif/else branch if condition is false
-                    let elif_else_jump_pos = self.emit(OpCode::JumpIfFalse, elif_cond_reg, 0, 0, self.current_line);
-                    elif_jump_positions.push(elif_else_jump_pos);
-                    
+
+                    // Emit conditional jump to next branch if condition is false
+                    prev_elif_false_jump = Some(self.emit(OpCode::JumpIfFalse, elif_cond_reg, 0, 0, self.current_line));
+
                     // Compile elif body
                     for stmt in elif_body {
                         self.compile_statement(stmt)?;
                     }
-                    
-                    // Emit jump to end of if statement
-                    let elif_end_jump_pos = self.emit(OpCode::Jump, 0, 0, 0, self.current_line);
-                    elif_jump_positions.push(elif_end_jump_pos);
+
+                    // Emit jump to end after executing elif body
+                    end_jumps.push(self.emit(OpCode::Jump, 0, 0, 0, self.current_line));
                 }
-                
-                // Compile else branch if it exists
+
+                // 7. Fix last elif's false jump to point to else branch (or end if no else)
+                if let Some(last_elif_jump) = prev_elif_false_jump {
+                    let else_start = self.code.instructions.len();
+                    self.code.instructions[last_elif_jump].arg2 = else_start as u32;
+                }
+
+                // 8. Compile else branch if it exists
                 if let Some(else_body) = else_branch {
                     for stmt in else_body {
                         self.compile_statement(stmt)?;
                     }
                 }
-                
-                // 7. Fix all the jump placeholders
+
+                // 9. Fix all end jumps to point to the final position
                 let end_pos = self.code.instructions.len();
-                self.code.instructions[end_jump_pos].arg1 = end_pos as u32;
-                
-                for jump_pos in elif_jump_positions {
-                    if self.code.instructions[jump_pos].opcode == OpCode::JumpIfFalse {
-                        self.code.instructions[jump_pos].arg2 = end_pos as u32;
-                    } else {
-                        self.code.instructions[jump_pos].arg1 = end_pos as u32;
-                    }
+                for jump_pos in end_jumps {
+                    self.code.instructions[jump_pos].arg1 = end_pos as u32;
                 }
+
                 Ok(())
             }
             Statement::ClassDef { name, bases, body, decorators: _, metaclass, docstring: _ } => {

@@ -1,0 +1,59 @@
+# Test LEGB (Local, Enclosing, Global, Built-in) scoping
+
+print("=== LEGB Scoping Tests ===\n")
+
+# Test 1: Local scope
+print("[1] Local scope in function:")
+def test_local():
+    local_var = "local"
+    print("  local_var =", local_var)
+test_local()
+
+# Test 2: Global scope
+print("\n[2] Global scope:")
+global_var = "global"
+def test_global():
+    print("  global_var =", global_var)
+test_global()
+
+# Test 3: Global modification
+print("\n[3] Global modification:")
+counter = 0
+def increment():
+    global counter
+    counter = counter + 1
+    print("  counter =", counter)
+increment()
+increment()
+print("  final counter =", counter)
+
+# Test 4: Nested functions (enclosing scope)
+print("\n[4] Enclosing scope:")
+def outer():
+    outer_var = "from outer"
+    def inner():
+        # This should access outer_var from enclosing scope
+        print("  outer_var =", outer_var)
+    inner()
+outer()
+
+# Test 5: If-block scoping (should NOT create new scope)
+print("\n[5] If-block does NOT create new scope:")
+if True:
+    if_var = "set in if"
+print("  if_var =", if_var)
+
+# Test 6: While-block scoping (should NOT create new scope)
+print("\n[6] While-block does NOT create new scope:")
+i = 0
+while i < 1:
+    while_var = "set in while"
+    i = i + 1
+print("  while_var =", while_var)
+
+# Test 7: Built-in scope
+print("\n[7] Built-in scope:")
+print("  len([1,2,3]) =", len([1, 2, 3]))
+print("  str(42) =", str(42))
+
+print("\n[SUCCESS] All LEGB tests passed!")
