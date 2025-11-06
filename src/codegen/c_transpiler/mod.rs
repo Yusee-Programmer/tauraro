@@ -795,10 +795,17 @@ impl CTranspiler {
             collect_vars_from_instruction(instruction, &mut declared_vars);
         }
 
-        // Declare all variables as tauraro_value_t* (keep it simple for compatibility)
-        // Optimized structs will be wrapped inside tauraro_value_t
+        // Declare variables with appropriate types based on type inference
         for var_name in &declared_vars {
-            main_code.push_str(&format!("    tauraro_value_t* {} = NULL;\n", var_name));
+            let c_type = type_ctx.get_c_type(var_name);
+            let initial_value = match c_type {
+                "int64_t" => "0",
+                "double" => "0.0",
+                "bool" => "false",
+                "char*" => "NULL",
+                _ => "NULL", // tauraro_value_t*
+            };
+            main_code.push_str(&format!("    {} {} = {};\n", c_type, var_name, initial_value));
         }
 
         // Generate class initialization code (if OOP is used)
