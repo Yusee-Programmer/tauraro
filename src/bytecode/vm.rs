@@ -197,9 +197,36 @@ impl SuperBytecodeVM {
 
         // Get the module's globals (namespace) - only new names added by the module
         let mut module_namespace = HashMap::new();
+
+        // Clone the current globals as module_globals for functions
+        let module_globals_rc = Rc::clone(&self.globals);
+
         for (name, value) in self.globals.borrow().iter() {
-            if !globals_before.contains(name) && !name.starts_with("__") && name != "builtins" {
-                module_namespace.insert(name.clone(), value.value.clone());
+            // Include new names except for builtins and special internal names
+            // Allow: regular names, __version__ style names, _private names
+            // Special case: allow __name__ to override even if it existed before
+            // Exclude: builtins, __builtins__, __pycache__ etc
+            let is_new_or_override = !globals_before.contains(name) || name == "__name__";
+            if is_new_or_override &&
+               name != "builtins" &&
+               name != "__builtins__" &&
+               !name.starts_with("__py") {
+                // If this is a closure, attach the module's globals to it
+                let value_to_store = match &value.value {
+                    Value::Closure { name, params, body, captured_scope, docstring, compiled_code, .. } => {
+                        Value::Closure {
+                            name: name.clone(),
+                            params: params.clone(),
+                            body: body.clone(),
+                            captured_scope: captured_scope.clone(),
+                            docstring: docstring.clone(),
+                            compiled_code: compiled_code.clone(),
+                            module_globals: Some(Rc::clone(&module_globals_rc)),
+                        }
+                    },
+                    _ => value.value.clone(),
+                };
+                module_namespace.insert(name.clone(), value_to_store);
             }
         }
 
@@ -1267,7 +1294,7 @@ impl SuperBytecodeVM {
                                 processed_arg_count = args.len() - 1;
                                 // Debug info removed
                             }
-                            Value::Closure { name: _, params: _, body: _, captured_scope: _, docstring: _, compiled_code } => {
+                            Value::Closure { name: _, params: _, body: _, captured_scope: _, docstring: _, compiled_code, .. } => {
                                 // For user-defined functions, check if they have **kwargs parameter
                                 if let Some(code_obj) = compiled_code {
                                     // Check if any parameter is of kind VarKwargs
@@ -3426,6 +3453,7 @@ impl SuperBytecodeVM {
                             captured_scope: HashMap::new(), // No captured scope for now
                             docstring: None, // No docstring for now
                             compiled_code: Some(Box::new(*code_obj.clone())),
+                            module_globals: None,
                         };
                         
                         self.frames[frame_idx].set_register(result_reg, RcValue::new(closure));
@@ -4882,6 +4910,7 @@ impl SuperBytecodeVM {
                             captured_scope: HashMap::new(), // No captured scope for now
                             docstring: None, // No docstring for now
                             compiled_code: Some(Box::new(*code_obj.clone())),
+                            module_globals: None,
                         };
                         
                         self.frames[frame_idx].set_register(result_reg, RcValue::new(closure));
@@ -5531,6 +5560,24 @@ impl SuperBytecodeVM {
                 
                 // Normal assignment for all other cases
                 match &mut self.frames[frame_idx].registers[object_reg].value {
+                    Value::Class { methods, .. } => {
+                        // Store class attribute in methods HashMap
+                        methods.insert(attr_name.clone(), value_to_store.clone());
+
+                        // Update the class in globals to reflect the change
+                        // Find the class in globals and update it
+                        let updated_class = self.frames[frame_idx].registers[object_reg].clone();
+                        for (var_name, var_value) in self.globals.borrow_mut().iter_mut() {
+                            if let Value::Class { name: class_name, .. } = &var_value.value {
+                                if let Value::Class { name: updated_class_name, .. } = &updated_class.value {
+                                    if class_name == updated_class_name {
+                                        *var_value = updated_class.clone();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    },
                     Value::Object { fields, .. } => {
                         // Store in fields using Rc::make_mut to get a mutable reference
                         Rc::make_mut(fields).insert(attr_name.clone(), value_to_store.clone());
@@ -6440,7 +6487,7 @@ impl SuperBytecodeVM {
                 // Call native function directly
                 func(args.clone())
             }
-            Value::Closure { name, params, body: _, captured_scope: _, docstring: _, compiled_code } => {
+            Value::Closure { name, params, body: _, captured_scope: _, docstring: _, compiled_code, module_globals } => {
                 // Validate argument types if type checking is enabled
                 #[cfg(feature = "type_checking")]
                 {
@@ -6448,20 +6495,20 @@ impl SuperBytecodeVM {
                     for (i, (arg, param)) in args.iter().zip(params.iter()).enumerate() {
                         if let Some(ref type_annotation) = param.type_annotation {
                             if !arg.matches_type(type_annotation) {
-                                return Err(anyhow!("TypeError: Argument {} of function '{}' must be of type '{}', got '{}'", 
+                                return Err(anyhow!("TypeError: Argument {} of function '{}' must be of type '{}', got '{}'",
                                     i, name, type_annotation, arg.type_name()));
                             }
                         }
                     }
                 }
-                
+
                 // Call user-defined function
                 if let Some(code_obj) = compiled_code {
                     // Check if this is a generator function by looking at the instructions
                     let is_generator = code_obj.instructions.iter().any(|instr| {
                         matches!(instr.opcode, OpCode::YieldValue | OpCode::YieldFrom)
                     });
-                    
+
                     if is_generator {
                         // For generator functions, create a generator object instead of executing immediately
                         let mut generator_value = Value::Generator {
@@ -6469,16 +6516,22 @@ impl SuperBytecodeVM {
                             frame: None,
                             finished: false,
                         };
-                        
+
                         // If we have a return register, we need to set it up for the generator
                         if let (Some(caller_frame_idx), Some(result_reg)) = (frame_idx, result_reg) {
                             // We'll set up the generator frame when it's first called
                         }
-                        
+
                         Ok(generator_value)
                     } else {
                         // For regular functions, create a new frame for the function call
-                        let globals_rc = Rc::clone(&self.globals);
+                        // Use module_globals if available (for functions from imported modules),
+                        // otherwise use the current VM globals (for main script functions)
+                        let globals_rc = if let Some(ref mod_globals) = module_globals {
+                            Rc::clone(mod_globals)
+                        } else {
+                            Rc::clone(&self.globals)
+                        };
                         let builtins_rc = Rc::clone(&self.builtins);
 
                         let mut frame = Frame::new_function_frame(*code_obj, globals_rc, builtins_rc, args, kwargs);
@@ -6534,7 +6587,7 @@ impl SuperBytecodeVM {
                             // For native functions, we can return the instance directly
                             return Ok(instance);
                         },
-                        Value::Closure { name: method_name, params, body: _, captured_scope: _, docstring: _, compiled_code } => {
+                        Value::Closure { name: method_name, params, body: _, captured_scope: _, docstring: _, compiled_code, .. } => {
                             // For user-defined __init__ methods, we need to call them in a way that
                             // ensures modifications to the instance are visible
                             if let Some(code_obj) = compiled_code {
@@ -6602,7 +6655,7 @@ impl SuperBytecodeVM {
                             init_args.extend(args.clone());
                             func(init_args)?;
                         },
-                        Value::Closure { name: method_name, params, body: _, captured_scope: _, docstring: _, compiled_code } => {
+                        Value::Closure { name: method_name, params, body: _, captured_scope: _, docstring: _, compiled_code, .. } => {
                             // For user-defined __init__ methods, we need to call them in a way that
                             // ensures modifications to the instance are visible
                             if let Some(code_obj) = compiled_code {

@@ -1,0 +1,8 @@
+import guidesktop
+
+print("\n=== Testing GuiDesktop Color Attributes ===")
+print("Colors.WHITE =", guidesktop.Colors.WHITE)
+print("Colors.BLACK =", guidesktop.Colors.BLACK)
+print("Colors.RED =", guidesktop.Colors.RED)
+print("Colors.BLUE =", guidesktop.Colors.BLUE)
+print("\n[SUCCESS] All color attributes accessible!")

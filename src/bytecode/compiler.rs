@@ -440,6 +440,7 @@ impl SuperCompiler {
                     captured_scope: HashMap::new(),
                     docstring: None,
                     compiled_code: Some(Box::new(func_code)),
+                    module_globals: None, // Will be set when function is defined in a module
                 };
                 
                 // Add the function to constants and create a LoadConst instruction
@@ -666,6 +667,7 @@ impl SuperCompiler {
             Statement::ClassDef { name, bases, body, decorators: _, metaclass, docstring: _ } => {
                 // Create class object with methods
                 let mut class_methods = HashMap::new();
+                let mut class_attributes = Vec::new();  // Collect (name, expression) pairs for runtime init
 
                 // Process class body to extract methods and attributes
                 for stmt in body {
@@ -681,6 +683,7 @@ impl SuperCompiler {
                                 captured_scope: HashMap::new(),
                                 docstring: docstring.clone(),
                                 compiled_code: Some(Box::new(method_code)), // Store the compiled code directly in the Closure
+                                module_globals: None, // Methods don't need module_globals
                             };
 
                             // Apply decorators if any
@@ -751,7 +754,7 @@ impl SuperCompiler {
                         Statement::VariableDef { name: attr_name, type_annotation: _, value: Some(value_expr) } => {
                             // Handle class-level assignments like: celsius = property(get_celsius, set_celsius)
                             // Check if this is a property() call
-                            if let Expr::Call { func, args, kwargs: _ } = value_expr {
+                            if let Expr::Call { ref func, ref args, kwargs: _ } = value_expr {
                                 if let Expr::Identifier(func_name) = func.as_ref() {
                                     if func_name == "property" {
                                         // Evaluate the property() call at compile time
@@ -760,7 +763,7 @@ impl SuperCompiler {
                                         for arg_expr in args {
                                             if let Expr::Identifier(method_name) = arg_expr {
                                                 // Look up the method in class_methods
-                                                if let Some(method_value) = class_methods.get(&method_name) {
+                                                if let Some(method_value) = class_methods.get(method_name) {
                                                     property_args.push(method_value.clone());
                                                 }
                                             }
@@ -771,11 +774,13 @@ impl SuperCompiler {
                                             let property_obj = crate::builtins::property_builtin(property_args)?;
                                             class_methods.insert(attr_name.clone(), property_obj);
                                         }
+                                        continue; // Skip adding to class_attributes since it's already in class_methods
                                     }
                                 }
                             }
-                            // TODO: Support general class attributes (descriptors, etc.)
-                            // This requires executing the class body as code, not compiling it statically
+                            // Collect class attribute for runtime initialization
+                            // This supports general class attributes like: WHITE = Color(1.0, 1.0, 1.0)
+                            class_attributes.push((attr_name.clone(), value_expr.clone()));
                         }
                         _ => {
                             // Ignore other statements in class body for now
@@ -854,6 +859,22 @@ impl SuperCompiler {
 
                 let name_idx = self.code.add_name(name.clone());
                 self.emit(OpCode::StoreGlobal, reg, name_idx, 0, self.current_line);
+
+                // Initialize class attributes at runtime
+                // For each attribute, load the class, evaluate the expression, and set the attribute
+                for (attr_name, attr_expr) in &class_attributes {
+                    // Load the class from globals (get fresh index to ensure it's valid)
+                    let class_reg = self.allocate_register();
+                    let class_name_idx = self.code.add_name(name.clone());
+                    self.emit(OpCode::LoadGlobal, class_name_idx, class_reg, 0, self.current_line);
+
+                    // Evaluate the attribute expression
+                    let value_reg = self.compile_expression(attr_expr.clone())?;
+
+                    // Set the attribute on the class using StoreAttr
+                    let attr_name_idx = self.code.add_name(attr_name.clone());
+                    self.emit(OpCode::StoreAttr, class_reg, attr_name_idx, value_reg, self.current_line);
+                }
 
                 Ok(())
             }

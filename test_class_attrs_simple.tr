@@ -1,0 +1,7 @@
+# Test simple class attributes
+class Test:
+    x = 42
+    y = "hello"
+
+print("Test.x =", Test.x)
+print("Test.y =", Test.y)

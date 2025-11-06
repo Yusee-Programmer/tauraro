@@ -63,19 +63,26 @@ else:
     _window_backend = "unknown"
 
 # Library names by platform
+# Initialize variables before if-blocks (Tauraro scoping requirement)
+_cairo_lib = None
+_platform_lib = None
+
 print("\n[Library Configuration]")
 if _is_windows:
+    global _cairo_lib, _platform_lib
     _cairo_lib = "libcairo-2.dll"
     _platform_lib = "user32.dll"
     print("  Cairo: " + _cairo_lib)
     print("  Platform: " + _platform_lib)
 elif _is_macos:
+    global _cairo_lib, _platform_lib
     _cairo_lib = "libcairo.2.dylib"
     _platform_lib = "libcocoa"
     print("  Cairo: " + _cairo_lib)
     print("  Platform: Cocoa framework")
 else:
     # Linux
+    global _cairo_lib, _platform_lib
     _cairo_lib = "libcairo.so.2"
     if _window_backend == "wayland":
         _platform_lib = "libwayland-client.so.0"
@@ -167,6 +174,7 @@ class Size:
 def init():
     # Initialize the GuiDesktop framework
     global _framework_initialized, _cairo_loaded, _platform_loaded
+    global _cairo_lib, _platform_lib, _is_windows, _is_linux, _is_macos
 
     if _framework_initialized:
         print("\n[Framework] Already initialized")

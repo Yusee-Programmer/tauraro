@@ -1,0 +1,11 @@
+# Test module with attributes
+__version__ = "1.0.0"
+__name__ = "testmod"
+_private_var = "private"
+public_var = "public"
+
+class TestClass:
+    pass
+
+def test_func():
+    return "hello"

@@ -3,6 +3,7 @@ use crate::ffi::FFIType;
 use crate::base_object::{BaseObject, MRO, DunderMethod};
 use crate::ast::{Param, Statement, Type};
 use crate::bytecode::memory::CodeObject;
+use crate::bytecode::objects::RcValue;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -58,6 +59,8 @@ pub enum Value {
         docstring: Option<String>,
         // Add a field to store the compiled code directly in the Closure
         compiled_code: Option<Box<crate::bytecode::memory::CodeObject>>,
+        // Store the module's globals for functions defined in modules
+        module_globals: Option<std::rc::Rc<std::cell::RefCell<HashMap<String, RcValue>>>>,
     },
     Code(Box<crate::bytecode::memory::CodeObject>), // Compiled function code
     NativeFunction(fn(Vec<Value>) -> anyhow::Result<Value>),
@@ -234,7 +237,7 @@ impl fmt::Debug for Value {
                     .field(obj)
                     .finish()
             },
-            Value::Closure { name, params, body, captured_scope, docstring, compiled_code } => {
+            Value::Closure { name, params, body, captured_scope, docstring, compiled_code, .. } => {
                 f.debug_struct("Closure")
                     .field("name", name)
                     .field("params", params)
