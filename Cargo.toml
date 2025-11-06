@@ -77,6 +77,9 @@ sha2 = "0.10"
 sha3 = "0.10"
 md5 = { package = "md-5", version = "0.10" }
 
+# Database ORM
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 [features]
 default = ["interpreter", "clang", "ffi", "async", "http"]
 interpreter = []  # VM-based execution

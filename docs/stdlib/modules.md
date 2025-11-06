@@ -44,6 +44,7 @@ Tauraro includes a comprehensive standard library with modules for common progra
 |--------|-------------|
 | `serveit` | High-performance ASGI web server (like uvicorn) |
 | `templa` | High-performance template engine (like Jinja2) |
+| `orm` | High-performance ORM (like SQLAlchemy) |
 | `httpx` | Modern HTTP client with sync/async support |
 | `httptools` | HTTP parsing and URL utilities |
 | `websockets` | WebSocket client and server |
@@ -1049,6 +1050,133 @@ def app(scope):
 
 serveit.run(app, port=8000)
 ```
+
+### orm - Object-Relational Mapping
+
+High-performance ORM similar to SQLAlchemy, providing database abstraction and querying capabilities.
+
+**Features:**
+- Database engine with connection management
+- Table/Model definitions with schema
+- Query builder with fluent API
+- Session and transaction management
+- Multiple column types (Integer, String, Text, Boolean, Float, Blob, DateTime)
+- Constraints (NOT NULL, UNIQUE)
+- SQLite support (PostgreSQL and MySQL coming soon)
+
+**Basic Usage:**
+
+```python
+import orm
+
+# Create database engine
+engine = orm.Engine("sqlite:///myapp.db")
+
+# Define table schema
+columns = {}
+columns["name"] = orm.Column(orm.String, False)  # NOT NULL
+columns["email"] = orm.Column(orm.String, False, True)  # NOT NULL, UNIQUE
+columns["age"] = orm.Column(orm.Integer, True)  # NULLABLE
+
+users_table = orm.Table("users", columns)
+
+# Create table in database
+create_fn = users_table["create"]
+create_fn(users_table, engine)
+
+# Create session
+connect_fn = engine["connect"]
+session = connect_fn(engine)
+
+# Insert data
+user = {}
+user["__table__"] = users_table
+user["name"] = "Alice"
+user["email"] = "alice@example.com"
+user["age"] = 30
+
+add_fn = session["add"]
+add_fn(session, user)  # user["id"] is auto-populated
+
+# Query all records
+query_fn = session["query"]
+query = query_fn(session, users_table)
+all_fn = query["all"]
+users = all_fn(query)
+
+for user in users:
+    print(f"{user['name']}: {user['email']}")
+
+# Filter queries
+filter_dict = {}
+filter_dict["age"] = 30
+query2 = query_fn(session, users_table)
+filter_by_fn = query2["filter_by"]
+query2 = filter_by_fn(query2, filter_dict)
+all_fn2 = query2["all"]
+filtered = all_fn2(query2)
+
+# Order by
+query3 = query_fn(session, users_table)
+order_by_fn = query3["order_by"]
+query3 = order_by_fn(query3, "age")
+all_fn3 = query3["all"]
+ordered = all_fn3(query3)
+
+# Limit and offset (pagination)
+query4 = query_fn(session, users_table)
+limit_fn = query4["limit"]
+query4 = limit_fn(query4, 10)
+offset_fn = query4["offset"]
+query4 = offset_fn(query4, 20)
+all_fn4 = query4["all"]
+page = all_fn4(query4)
+
+# Get first record
+query5 = query_fn(session, users_table)
+first_fn = query5["first"]
+first_user = first_fn(query5)
+
+# Raw SQL execution (UPDATE/INSERT/DELETE only)
+execute_fn = engine["execute"]
+rows = execute_fn(engine, "UPDATE users SET age = age + 1 WHERE age < 30")
+
+# Close session
+close_fn = session["close"]
+close_fn(session)
+```
+
+**Column Types:**
+- `orm.Integer` - Integer numbers
+- `orm.String` - Variable-length strings
+- `orm.Text` - Long text fields
+- `orm.Float` - Floating-point numbers
+- `orm.Boolean` - Boolean values (stored as INTEGER in SQLite)
+- `orm.DateTime` - Date and time values
+- `orm.Blob` - Binary data
+
+**Available Methods:**
+
+**Engine:**
+- `connect(engine)` - Create a new session
+- `execute(engine, sql)` - Execute raw SQL (UPDATE/INSERT/DELETE)
+
+**Session:**
+- `query(session, table)` - Create a new query
+- `add(session, object)` - Insert a new record
+- `delete(session, object)` - Delete a record
+- `commit(session)` - Commit transaction
+- `rollback(session)` - Rollback transaction
+- `close(session)` - Close the session
+
+**Query:**
+- `all(query)` - Get all matching records
+- `first(query)` - Get first matching record
+- `count(query)` - Count matching records
+- `filter_by(query, dict)` - Filter by exact values
+- `order_by(query, column)` - Order results
+- `limit(query, n)` - Limit number of results
+- `offset(query, n)` - Skip first n results
 
 ### websockets - WebSocket Support
 
