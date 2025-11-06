@@ -1,0 +1,114 @@
+# Native Window Example
+# Demonstrates creating a real native window with GuiDesktop
+
+print("=" * 60)
+print("GuiDesktop Native Window Example")
+print("=" * 60)
+print("")
+
+# Import guidesktop
+import guidesktop
+
+# Initialize framework
+print("[1] Initializing GuiDesktop...")
+if not guidesktop.init():
+    print("    [!] Failed to initialize framework")
+    exit(1)
+
+# Define Cairo functions
+guidesktop.define_cairo_functions()
+
+# Load platform backends
+print("[2] Loading platform backend...")
+if guidesktop._is_windows:
+    import guidesktop.backend_win32
+    print("    Platform: Windows (Win32)")
+elif guidesktop._is_linux:
+    import guidesktop.backend_x11
+    print("    Platform: Linux (X11)")
+elif guidesktop._is_macos:
+    import guidesktop.backend_cocoa
+    print("    Platform: macOS (Cocoa)")
+else:
+    print("    [!] Unsupported platform")
+    exit(1)
+
+# Load native window and application modules
+import guidesktop.window_native
+import guidesktop.application_native
+
+print("")
+print("[3] Creating native application...")
+
+# Create native application
+app = guidesktop.application_native.NativeApplication("Native Window Demo")
+
+# Create main window
+window = app.create_window("GuiDesktop - Native Window", 600, 400)
+window.background_color = guidesktop.Colors.BACKGROUND
+
+print("")
+print("[4] Adding widgets...")
+
+# Add title label
+title = guidesktop.Label("Native Window Demo")
+title.set_bounds(50, 30, 500, 50)
+title.set_font("Sans", 24)
+title.text_color = guidesktop.Colors.ACCENT
+title.set_alignment(0.5, 0.5)
+window.add_widget(title)
+
+# Add info label
+info = guidesktop.Label("This is a real native window!")
+info.set_bounds(50, 100, 500, 30)
+info.set_font("Sans", 16)
+info.text_color = guidesktop.Colors.FOREGROUND
+info.set_alignment(0.5, 0.5)
+window.add_widget(info)
+
+# Add platform info
+platform_text = "Platform: " + str(guidesktop._platform)
+platform_label = guidesktop.Label(platform_text)
+platform_label.set_bounds(50, 150, 500, 25)
+platform_label.set_font("Sans", 12)
+platform_label.text_color = guidesktop.Colors.GRAY
+platform_label.set_alignment(0.5, 0.5)
+window.add_widget(platform_label)
+
+backend_text = "Backend: " + str(guidesktop._window_backend)
+backend_label = guidesktop.Label(backend_text)
+backend_label.set_bounds(50, 180, 500, 25)
+backend_label.set_font("Sans", 12)
+backend_label.text_color = guidesktop.Colors.GRAY
+backend_label.set_alignment(0.5, 0.5)
+window.add_widget(backend_label)
+
+# Add button
+button = guidesktop.Button("Hello, Native Window!")
+button.set_bounds(200, 250, 200, 40)
+window.add_widget(button)
+
+# Add footer
+footer = guidesktop.Label("GuiDesktop v1.1 with Native Windowing")
+footer.set_bounds(50, 350, 500, 25)
+footer.set_font("Sans", 10)
+footer.text_color = guidesktop.Colors.GRAY
+footer.set_alignment(0.5, 0.5)
+window.add_widget(footer)
+
+print("")
+print("=" * 60)
+print("Running Application")
+print("=" * 60)
+print("")
+print("A native window should appear on your screen.")
+print("Close the window to exit the program.")
+print("")
+
+# Run the application
+result = app.run()
+
+print("")
+print("=" * 60)
+print("Application exited with code:", result)
+print("=" * 60)

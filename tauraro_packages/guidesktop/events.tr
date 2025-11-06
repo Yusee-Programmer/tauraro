@@ -1,0 +1,137 @@
+# Event System Module
+# Handles events and callbacks for GuiDesktop
+
+print("  [Module] Loading event system...")
+
+# Event types
+EVENT_NONE = 0
+EVENT_MOUSE_MOVE = 1
+EVENT_MOUSE_DOWN = 2
+EVENT_MOUSE_UP = 3
+EVENT_MOUSE_ENTER = 4
+EVENT_MOUSE_LEAVE = 5
+EVENT_KEY_DOWN = 6
+EVENT_KEY_UP = 7
+EVENT_RESIZE = 8
+EVENT_CLOSE = 9
+EVENT_PAINT = 10
+EVENT_FOCUS_IN = 11
+EVENT_FOCUS_OUT = 12
+
+# Mouse buttons
+MOUSE_BUTTON_LEFT = 1
+MOUSE_BUTTON_MIDDLE = 2
+MOUSE_BUTTON_RIGHT = 3
+
+# Event class
+class Event:
+    # Base event class
+
+    def __init__(self, event_type):
+        self.type = event_type
+        self.handled = False
+
+    def mark_handled(self):
+        # Mark event as handled
+        self.handled = True
+
+
+# Mouse event
+class MouseEvent(Event):
+    # Mouse event with position and button info
+
+    def __init__(self, event_type, x, y, button=0):
+        super().__init__(event_type)
+        self.x = x
+        self.y = y
+        self.button = button
+
+
+# Keyboard event
+class KeyEvent(Event):
+    # Keyboard event with key info
+
+    def __init__(self, event_type, key, modifiers=0):
+        super().__init__(event_type)
+        self.key = key
+        self.modifiers = modifiers
+        self.char = ""
+
+
+# Resize event
+class ResizeEvent(Event):
+    # Window resize event
+
+    def __init__(self, width, height):
+        super().__init__(EVENT_RESIZE)
+        self.width = width
+        self.height = height
+
+
+# Paint event
+class PaintEvent(Event):
+    # Paint/redraw event
+
+    def __init__(self, rect=None):
+        super().__init__(EVENT_PAINT)
+        self.rect = rect
+
+
+# Event handler base class
+class EventHandler:
+    # Base class for objects that handle events
+
+    def __init__(self):
+        self.event_handlers = {}
+
+    def on_event(self, event):
+        # Handle an event
+        # Override this in subclasses
+        return False
+
+    def connect(self, event_type, callback):
+        # Connect a callback to an event type
+        if event_type not in self.event_handlers:
+            self.event_handlers[event_type] = []
+        self.event_handlers[event_type].append(callback)
+
+    def disconnect(self, event_type, callback):
+        # Disconnect a callback
+        if event_type in self.event_handlers:
+            if callback in self.event_handlers[event_type]:
+                self.event_handlers[event_type].remove(callback)
+
+    def emit(self, event):
+        # Emit an event to all connected handlers
+        if event.type in self.event_handlers:
+            for handler in self.event_handlers[event.type]:
+                try:
+                    handler(event)
+                    if event.handled:
+                        break
+                except Exception as e:
+                    print("  [!] Event handler error: " + str(e))
+
+    # Convenience methods for common events
+    def on_click(self, callback):
+        # Register click handler
+        self.connect(EVENT_MOUSE_DOWN, callback)
+
+    def on_mouse_move(self, callback):
+        # Register mouse move handler
+        self.connect(EVENT_MOUSE_MOVE, callback)
+
+    def on_key_press(self, callback):
+        # Register key press handler
+        self.connect(EVENT_KEY_DOWN, callback)
+
+    def on_resize(self, callback):
+        # Register resize handler
+        self.connect(EVENT_RESIZE, callback)
+
+    def on_paint(self, callback):
+        # Register paint handler
+        self.connect(EVENT_PAINT, callback)
+
+
+print("  [OK] Event system loaded")

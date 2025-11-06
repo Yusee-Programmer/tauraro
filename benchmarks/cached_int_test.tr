@@ -1,0 +1,14 @@
+# Test integer caching performance with values in cache range
+
+print("Testing integer caching with values in range -5 to 256")
+
+# Test 1: Repeated small integer operations (should be cached)
+total = 0
+for i in range(10000000):
+    # These additions use values that should be cached
+    total = total + 1  # 1 is cached
+    if total > 100:  # 100 is cached
+        total = 0  # 0 is cached
+
+print("Small integer test completed")
+print("Total: " + str(total))

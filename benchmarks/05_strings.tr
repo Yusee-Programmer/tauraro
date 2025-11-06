@@ -1,0 +1,36 @@
+# String Operations Benchmark
+
+import time
+
+def bench_string_concat():
+    # String concatenation
+    start = time.time()
+    s = ""
+    for i in range(10000):
+        s = s + "a"
+    end = time.time()
+    return end - start
+
+def bench_string_format():
+    # String formatting
+    start = time.time()
+    for i in range(100000):
+        s = "Number: " + str(i)
+    end = time.time()
+    return end - start
+
+def bench_string_operations():
+    # Various string operations
+    start = time.time()
+    for i in range(50000):
+        s = "hello world"
+        s = s.upper()
+        s = s.lower()
+        s = s.replace("world", "tauraro")
+    end = time.time()
+    return end - start
+
+print("=== String Benchmarks ===")
+print("String concat: " + str(bench_string_concat()) + "s")
+print("String format: " + str(bench_string_format()) + "s")
+print("String operations: " + str(bench_string_operations()) + "s")

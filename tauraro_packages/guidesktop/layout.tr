@@ -1,0 +1,138 @@
+# Layout Engine Module
+# Provides layout managers for organizing widgets
+
+print("  [Module] Loading layout engine...")
+
+# Layout base class
+class Layout:
+    # Base class for layout managers
+
+    def __init__(self):
+        self.container = None
+        self.spacing = 0
+        self.margin = 0
+
+    def apply(self, container):
+        # Apply layout to container
+        # Override in subclasses
+        pass
+
+    def set_spacing(self, spacing):
+        # Set spacing between widgets
+        self.spacing = spacing
+        return self
+
+    def set_margin(self, margin):
+        # Set margin around container edges
+        self.margin = margin
+        return self
+
+
+# Vertical Box Layout
+class VBoxLayout(Layout):
+    # Vertical box layout - stacks widgets vertically
+
+    def __init__(self, spacing=0, margin=0):
+        super().__init__()
+        self.spacing = spacing
+        self.margin = margin
+
+    def apply(self, container):
+        # Arrange children vertically
+        x = self.margin + container.padding
+        y = self.margin + container.padding
+        available_width = container.width - 2 * (self.margin + container.padding)
+
+        for child in container.children:
+            if not child.visible:
+                continue
+
+            # Set child position and width
+            child.set_position(x, y)
+            child.set_size(available_width, child.height)
+
+            # Move down for next child
+            y = y + child.height + self.spacing
+
+
+# Horizontal Box Layout
+class HBoxLayout(Layout):
+    # Horizontal box layout - arranges widgets horizontally
+
+    def __init__(self, spacing=0, margin=0):
+        super().__init__()
+        self.spacing = spacing
+        self.margin = margin
+
+    def apply(self, container):
+        # Arrange children horizontally
+        x = self.margin + container.padding
+        y = self.margin + container.padding
+        available_height = container.height - 2 * (self.margin + container.padding)
+
+        for child in container.children:
+            if not child.visible:
+                continue
+
+            # Set child position and height
+            child.set_position(x, y)
+            child.set_size(child.width, available_height)
+
+            # Move right for next child
+            x = x + child.width + self.spacing
+
+
+# Grid Layout
+class GridLayout(Layout):
+    # Grid layout - arranges widgets in a grid
+
+    def __init__(self, rows, columns, spacing=0, margin=0):
+        super().__init__()
+        self.rows = rows
+        self.columns = columns
+        self.spacing = spacing
+        self.margin = margin
+
+    def apply(self, container):
+        # Arrange children in a grid
+        if len(container.children) == 0:
+            return
+
+        x_start = self.margin + container.padding
+        y_start = self.margin + container.padding
+        available_width = container.width - 2 * (self.margin + container.padding)
+        available_height = container.height - 2 * (self.margin + container.padding)
+
+        # Calculate cell size
+        cell_width = (available_width - (self.columns - 1) * self.spacing) / self.columns
+        cell_height = (available_height - (self.rows - 1) * self.spacing) / self.rows
+
+        # Position each child
+        index = 0
+        for row in range(self.rows):
+            for col in range(self.columns):
+                if index >= len(container.children):
+                    return
+
+                child = container.children[index]
+                if child.visible:
+                    x = x_start + col * (cell_width + self.spacing)
+                    y = y_start + row * (cell_height + self.spacing)
+                    child.set_bounds(x, y, cell_width, cell_height)
+
+                index = index + 1
+
+
+# Absolute Layout (no layout - manual positioning)
+class AbsoluteLayout(Layout):
+    # No automatic layout - widgets positioned manually
+
+    def __init__(self):
+        super().__init__()
+
+    def apply(self, container):
+        # Do nothing - widgets keep their manual positions
+        pass
+
+
+print("  [OK] Layout engine loaded")

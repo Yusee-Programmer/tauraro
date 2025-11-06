@@ -1,0 +1,195 @@
+# Native Application Module
+# Application class with native event loop integration
+
+print("  [Module] Loading native application system...")
+
+# NativeApplication class - extends Application with native event loop
+class NativeApplication(Application):
+    # Application with native platform event loop
+
+    def __init__(self, name="GuiDesktop Application"):
+        super().__init__(name)
+
+        self.use_native_loop = True
+        self.backend = None
+
+    def create_window(self, title="Window", width=640, height=480):
+        # Create a native window
+        window = NativeWindow(title, width, height)
+        self.add_window(window)
+        return window
+
+    def run(self):
+        # Run the application with native event loop
+        print("\n[Application] Starting application...")
+        print("  Windows: " + str(len(self.windows)))
+
+        if len(self.windows) == 0:
+            print("  [!] No windows to display")
+            return 0
+
+        # Check if any window uses native windowing
+        has_native = False
+        for window in self.windows:
+            if hasattr(window, "use_native") and window.use_native:
+                has_native = True
+                break
+
+        if not has_native:
+            print("  [!] No native windows, using mock render")
+            return super().run()
+
+        # Show all windows
+        for window in self.windows:
+            window.show()
+
+        # Get backend from first window
+        for window in self.windows:
+            if hasattr(window, "backend") and window.backend:
+                self.backend = window.backend
+                break
+
+        if not self.backend:
+            print("  [!] No backend available")
+            return 1
+
+        # Run platform-specific event loop
+        print("  [OK] Application running with native event loop")
+        print("  Platform: " + _platform)
+        print("  Close windows to exit")
+        print("")
+
+        self.running = True
+
+        try:
+            if _is_windows:
+                self.run_win32_loop()
+            elif _is_linux:
+                self.run_x11_loop()
+            elif _is_macos:
+                self.run_cocoa_loop()
+            else:
+                print("  [!] Unsupported platform for native event loop")
+                return 1
+
+        except KeyboardInterrupt:
+            print("\n  [Application] Interrupted by user")
+        except Exception as e:
+            print("  [!] Application error: " + str(e))
+            import traceback
+            traceback.print_exc()
+        finally:
+            self.cleanup()
+
+        print("  [Application] Shutdown complete")
+        return 0
+
+    def run_win32_loop(self):
+        # Run Win32 message loop
+        print("  [Win32] Running message loop...")
+
+        frame_count = 0
+        max_frames = 1000  # Prevent infinite loop in case of issues
+
+        while self.running and frame_count < max_frames:
+            # Process Windows messages
+            quit_requested = self.backend.process_messages()
+
+            if quit_requested:
+                print("  [Win32] Quit requested")
+                break
+
+            # Render windows if needed
+            for window in self.windows:
+                if window.visible and window.needs_redraw:
+                    window.render_frame()
+
+            # Small sleep to prevent 100% CPU
+            try:
+                call_function("kernel32.dll", "Sleep", [10])
+            except:
+                pass
+
+            frame_count = frame_count + 1
+
+        print("  [Win32] Message loop ended (" + str(frame_count) + " frames)")
+
+    def run_x11_loop(self):
+        # Run X11 event loop
+        print("  [X11] Running event loop...")
+
+        frame_count = 0
+        max_frames = 1000  # Prevent infinite loop
+
+        while self.running and frame_count < max_frames:
+            # Process X11 events
+            quit_requested = self.backend.process_events()
+
+            if quit_requested:
+                print("  [X11] Quit requested")
+                break
+
+            # Render windows if needed
+            for window in self.windows:
+                if window.visible and window.needs_redraw:
+                    window.render_frame()
+
+            # Small sleep to prevent 100% CPU
+            import time
+            try:
+                time.sleep(0.01)
+            except:
+                pass
+
+            frame_count = frame_count + 1
+
+        print("  [X11] Event loop ended (" + str(frame_count) + " frames)")
+
+    def run_cocoa_loop(self):
+        # Run Cocoa event loop
+        print("  [Cocoa] Running event loop...")
+        print("  [!] Cocoa event loop not fully implemented")
+        print("      Using fallback loop")
+
+        # Fallback to simple loop
+        frame_count = 0
+        max_frames = 100
+
+        while self.running and frame_count < max_frames:
+            # Render windows
+            for window in self.windows:
+                if window.visible and window.needs_redraw:
+                    window.render_frame()
+
+            import time
+            time.sleep(0.05)
+            frame_count = frame_count + 1
+
+        print("  [Cocoa] Event loop ended")
+
+    def cleanup(self):
+        # Clean up resources
+        self.running = False
+
+        # Close all windows
+        for window in self.windows:
+            try:
+                window.close()
+            except Exception as e:
+                print("  [!] Error closing window: " + str(e))
+
+        # Clean up backend
+        if self.backend and hasattr(self.backend, "cleanup"):
+            try:
+                self.backend.cleanup()
+            except Exception as e:
+                print("  [!] Error cleaning up backend: " + str(e))
+
+
+# Convenience function for native applications
+def create_native_application(name="GuiDesktop App"):
+    # Create a native application
+    return NativeApplication(name)
+
+
+print("  [OK] Native application system loaded")

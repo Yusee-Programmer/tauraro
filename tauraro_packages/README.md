@@ -4,7 +4,48 @@ Official package repository for the Tauraro programming language.
 
 ## Available Packages
 
-### 1. GTK - Cross-Platform GUI Toolkit ⭐ NEW!
+### 1. GuiDesktop - Custom GUI Framework ⭐ NEW!
+
+A **completely custom-built** cross-platform desktop GUI framework using **Cairo** 2D rendering.
+
+**Features:**
+- ✨ **Built from scratch** - Not a wrapper, custom-designed for Tauraro
+- 🎨 **Cairo rendering** - Professional 2D vector graphics
+- 🏗️ **Custom widget system** - Purpose-built widgets and layouts
+- 📐 **Layout engine** - VBox, HBox, Grid layouts
+- 🖥️ **Cross-platform** - Windows, Linux, macOS support
+- ⚡ **FFI-powered** - Direct Cairo API integration
+
+**Quick Start:**
+```tauraro
+import guidesktop
+
+guidesktop.init()
+guidesktop.define_cairo_functions()
+
+app = guidesktop.Application("My App")
+window = app.create_window("Hello", 400, 300)
+
+label = guidesktop.Label("Hello, GuiDesktop!")
+label.set_bounds(50, 50, 300, 40)
+window.add_widget(label)
+
+app.run_mock_render("output.png")
+```
+
+**Documentation:** [guidesktop/README.md](guidesktop/README.md)
+
+**Examples:**
+- `guidesktop/example_basic.tr` - Simple window with widgets
+- `guidesktop/example_layout.tr` - Layout managers demo
+- `guidesktop/example_widgets.tr` - Widget gallery
+- `guidesktop/example_calculator.tr` - Calculator UI
+
+**Architecture:** Custom framework with Cairo rendering backend (similar to GTK internals)
+
+---
+
+### 2. GTK - Cross-Platform GUI Toolkit
 
 A modern, cross-platform desktop GUI framework built on GTK3.
 
@@ -40,7 +81,7 @@ app.run()
 
 ---
 
-### 2. DUITK - Desktop UI Toolkit (Windows)
+### 3. DUITK - Desktop UI Toolkit (Windows)
 
 A high-level GUI framework for Windows using native Win32 APIs.
 
@@ -64,7 +105,7 @@ app.run()
 
 ---
 
-### 3. Win32 - Windows API Bindings
+### 4. Win32 - Windows API Bindings
 
 Low-level Windows API bindings for advanced Windows programming.
 
@@ -134,13 +175,20 @@ To create a new package:
 
 ## Platform Support
 
-| Package | Windows | Linux | macOS |
-|---------|---------|-------|-------|
-| gtk     | ✅      | ✅    | ✅    |
-| duitk   | ✅      | ❌    | ❌    |
-| win32   | ✅      | ❌    | ❌    |
+| Package | Windows | Linux | macOS | Notes |
+|---------|---------|-------|-------|-------|
+| **guidesktop** | ✅ | ✅ | ✅ | Custom framework with Cairo rendering |
+| gtk | ✅ | ✅ | ✅ | GTK3 wrapper |
+| duitk | ✅ | ❌ | ❌ | Native Win32 |
+| win32 | ✅ | ❌ | ❌ | Windows API bindings |
 
 ## Requirements
+
+### GuiDesktop Package (Custom Framework)
+- **All platforms**: Cairo library
+  - Windows: `pacman -S mingw-w64-x86_64-cairo` (MSYS2) or download from cairographics.org
+  - Linux: `sudo apt-get install libcairo2` (Debian/Ubuntu)
+  - macOS: `brew install cairo`
 
 ### GTK Package
 - **Windows**: GTK3 runtime (from gtk.org or MSYS2)
@@ -155,7 +203,13 @@ To create a new package:
 Run examples with:
 
 ```bash
+# GuiDesktop (custom framework)
+tauraro tauraro_packages/guidesktop/example_basic.tr
+
+# GTK framework
 tauraro tauraro_packages/gtk/example_basic.tr
+
+# Windows DUITK
 tauraro tauraro_packages/duitk/test_minimal.tr
 ```
 

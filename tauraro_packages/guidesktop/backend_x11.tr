@@ -1,0 +1,317 @@
+# X11 Backend Module
+# Native Linux/Unix windowing backend using X11 (Xlib)
+
+print("  [Backend] Loading X11 backend...")
+
+# X11 event types
+KeyPress = 2
+KeyRelease = 3
+ButtonPress = 4
+ButtonRelease = 5
+MotionNotify = 6
+EnterNotify = 7
+LeaveNotify = 8
+FocusIn = 9
+FocusOut = 10
+Expose = 12
+ConfigureNotify = 22
+ClientMessage = 33
+
+# X11 event masks
+NoEventMask = 0
+KeyPressMask = 1
+KeyReleaseMask = 2
+ButtonPressMask = 4
+ButtonReleaseMask = 8
+PointerMotionMask = 64
+ExposureMask = 32768
+StructureNotifyMask = 131072
+
+# X11 mouse buttons
+Button1 = 1  # Left
+Button2 = 2  # Middle
+Button3 = 3  # Right
+
+# Window attributes
+CWBackPixel = 2
+CWEventMask = 2048
+
+# X11Backend class
+class X11Backend:
+    # X11-specific windowing backend
+
+    def __init__(self):
+        self.initialized = False
+        self.display = None
+        self.screen = 0
+        self.root_window = 0
+        self.wm_delete_window = None
+
+        print("    [X11] Backend created")
+
+    def initialize(self):
+        # Initialize X11 backend
+        if self.initialized:
+            return True
+
+        print("    [X11] Initializing backend...")
+
+        # Load X11 library
+        try:
+            load_library("libX11.so.6")
+            print("    [OK] X11 library loaded")
+        except Exception as e:
+            print("    [!] Failed to load X11 library: " + str(e))
+            print("        Try: sudo apt-get install libx11-6")
+            return False
+
+        # Define X11 functions
+        self.define_x11_functions()
+
+        # Open display connection
+        try:
+            self.display = call_function("libX11.so.6", "XOpenDisplay", [0])
+            if not self.display or self.display == 0:
+                print("    [!] Failed to open X11 display")
+                print("        Is X11/X.org running? Check DISPLAY environment variable")
+                return False
+
+            print("    [OK] X11 display opened: " + str(self.display))
+
+            # Get default screen and root window
+            self.screen = call_function("libX11.so.6", "XDefaultScreen", [self.display])
+            self.root_window = call_function("libX11.so.6", "XRootWindow",
+                [self.display, self.screen])
+
+            print("    [OK] Screen: " + str(self.screen) + ", Root: " + str(self.root_window))
+
+            # Get WM_DELETE_WINDOW atom for window close handling
+            self.wm_delete_window = call_function("libX11.so.6", "XInternAtom",
+                [self.display, "WM_DELETE_WINDOW", False])
+
+        except Exception as e:
+            print("    [!] Failed to initialize X11: " + str(e))
+            return False
+
+        self.initialized = True
+        print("    [OK] X11 backend initialized")
+        return True
+
+    def define_x11_functions(self):
+        # Define X11 (Xlib) API functions
+
+        # Display management
+        define_function("libX11.so.6", "XOpenDisplay", "pointer", ["pointer"])
+        define_function("libX11.so.6", "XCloseDisplay", "int32", ["pointer"])
+        define_function("libX11.so.6", "XDefaultScreen", "int32", ["pointer"])
+        define_function("libX11.so.6", "XRootWindow", "uint64", ["pointer", "int32"])
+        define_function("libX11.so.6", "XFlush", "int32", ["pointer"])
+        define_function("libX11.so.6", "XSync", "int32", ["pointer", "bool"])
+
+        # Window management
+        define_function("libX11.so.6", "XCreateSimpleWindow", "uint64",
+            ["pointer", "uint64", "int32", "int32", "uint32", "uint32",
+             "uint32", "uint64", "uint64"])
+        define_function("libX11.so.6", "XMapWindow", "int32", ["pointer", "uint64"])
+        define_function("libX11.so.6", "XUnmapWindow", "int32", ["pointer", "uint64"])
+        define_function("libX11.so.6", "XDestroyWindow", "int32", ["pointer", "uint64"])
+        define_function("libX11.so.6", "XMoveResizeWindow", "int32",
+            ["pointer", "uint64", "int32", "int32", "uint32", "uint32"])
+
+        # Window properties
+        define_function("libX11.so.6", "XStoreName", "int32", ["pointer", "uint64", "pointer"])
+        define_function("libX11.so.6", "XSelectInput", "int32", ["pointer", "uint64", "int64"])
+
+        # Event handling
+        define_function("libX11.so.6", "XNextEvent", "int32", ["pointer", "pointer"])
+        define_function("libX11.so.6", "XPending", "int32", ["pointer"])
+        define_function("libX11.so.6", "XCheckWindowEvent", "bool",
+            ["pointer", "uint64", "int64", "pointer"])
+
+        # Atoms (for window protocols)
+        define_function("libX11.so.6", "XInternAtom", "uint64",
+            ["pointer", "pointer", "bool"])
+        define_function("libX11.so.6", "XSetWMProtocols", "int32",
+            ["pointer", "uint64", "pointer", "int32"])
+
+        # Colors
+        define_function("libX11.so.6", "XBlackPixel", "uint64", ["pointer", "int32"])
+        define_function("libX11.so.6", "XWhitePixel", "uint64", ["pointer", "int32"])
+
+        print("    [OK] X11 functions defined")
+
+    def create_window(self, title, x, y, width, height):
+        # Create an X11 window
+        if not self.initialized:
+            if not self.initialize():
+                return None
+
+        print("    [X11] Creating window: " + title)
+
+        try:
+            # Get black and white pixels
+            black = call_function("libX11.so.6", "XBlackPixel", [self.display, self.screen])
+            white = call_function("libX11.so.6", "XWhitePixel", [self.display, self.screen])
+
+            # Create simple window
+            window = call_function("libX11.so.6", "XCreateSimpleWindow", [
+                self.display,
+                self.root_window,
+                x, y,
+                width, height,
+                2,              # border width
+                black,          # border color
+                white           # background color
+            ])
+
+            if not window or window == 0:
+                print("    [!] XCreateSimpleWindow failed")
+                return None
+
+            print("    [OK] Window created, ID: " + str(window))
+
+            # Set window title
+            call_function("libX11.so.6", "XStoreName", [self.display, window, title])
+
+            # Select input events
+            event_mask = (KeyPressMask | KeyReleaseMask | ButtonPressMask |
+                         ButtonReleaseMask | PointerMotionMask | ExposureMask |
+                         StructureNotifyMask)
+
+            call_function("libX11.so.6", "XSelectInput", [self.display, window, event_mask])
+
+            # Set WM protocols for window close button
+            if self.wm_delete_window:
+                # Would need proper structure passing for this
+                # For now, window close will work differently
+                pass
+
+            # Map (show) the window
+            call_function("libX11.so.6", "XMapWindow", [self.display, window])
+
+            # Flush to display
+            call_function("libX11.so.6", "XFlush", [self.display])
+
+            return window
+
+        except Exception as e:
+            print("    [!] Exception creating window: " + str(e))
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def destroy_window(self, window):
+        # Destroy an X11 window
+        if window and self.display:
+            try:
+                call_function("libX11.so.6", "XDestroyWindow", [self.display, window])
+                call_function("libX11.so.6", "XFlush", [self.display])
+                print("    [X11] Window destroyed")
+            except Exception as e:
+                print("    [!] Error destroying window: " + str(e))
+
+    def set_window_title(self, window, title):
+        # Set window title
+        if window and self.display:
+            call_function("libX11.so.6", "XStoreName", [self.display, window, title])
+            call_function("libX11.so.6", "XFlush", [self.display])
+
+    def move_window(self, window, x, y, width, height):
+        # Move and resize window
+        if window and self.display:
+            call_function("libX11.so.6", "XMoveResizeWindow",
+                [self.display, window, x, y, width, height])
+            call_function("libX11.so.6", "XFlush", [self.display])
+
+    def process_events(self):
+        # Process pending X11 events (non-blocking)
+        # Returns True if quit was requested
+        if not self.display:
+            return False
+
+        try:
+            # Check for pending events
+            pending = call_function("libX11.so.6", "XPending", [self.display])
+
+            if pending == 0:
+                return False
+
+            # Process events
+            event = [0] * 24  # XEvent structure (simplified)
+
+            while pending > 0:
+                call_function("libX11.so.6", "XNextEvent", [self.display, event])
+
+                event_type = event[0]
+
+                # Handle different event types
+                if event_type == Expose:
+                    # Window needs redrawing
+                    pass
+                elif event_type == ConfigureNotify:
+                    # Window resized
+                    pass
+                elif event_type == ClientMessage:
+                    # Could be WM_DELETE_WINDOW
+                    # For now, we'll handle quit differently
+                    pass
+
+                pending = call_function("libX11.so.6", "XPending", [self.display])
+
+            return False
+
+        except Exception as e:
+            print("    [!] Error processing events: " + str(e))
+            return False
+
+    def run_event_loop(self):
+        # Run blocking X11 event loop
+        if not self.display:
+            return
+
+        print("    [X11] Entering event loop...")
+
+        try:
+            event = [0] * 24  # XEvent structure
+
+            while True:
+                # Wait for next event
+                call_function("libX11.so.6", "XNextEvent", [self.display, event])
+
+                event_type = event[0]
+
+                # Handle events
+                # For now, just acknowledge them
+                # Full event handling will be implemented in the event system
+
+                # Simple quit mechanism: ESC key (would need proper implementation)
+                # For now, the loop runs until interrupted
+
+        except KeyboardInterrupt:
+            print("    [X11] Event loop interrupted")
+        except Exception as e:
+            print("    [!] Event loop error: " + str(e))
+
+    def cleanup(self):
+        # Clean up X11 resources
+        if self.display:
+            try:
+                call_function("libX11.so.6", "XCloseDisplay", [self.display])
+                self.display = None
+                print("    [X11] Display closed")
+            except Exception as e:
+                print("    [!] Error closing display: " + str(e))
+
+
+# Create global backend instance
+_x11_backend = None
+
+def get_x11_backend():
+    # Get or create X11 backend instance
+    global _x11_backend
+    if _x11_backend == None:
+        _x11_backend = X11Backend()
+    return _x11_backend
+
+
+print("  [OK] X11 backend loaded")

@@ -1,0 +1,183 @@
+# Native Window Module
+# Window class with native windowing backend integration
+
+print("  [Module] Loading native window system...")
+
+# Import platform backends based on OS
+if _is_windows:
+    import guidesktop.backend_win32 as backend_module
+    _native_backend = None
+elif _is_linux:
+    # Prefer X11 for now (Wayland support is experimental)
+    import guidesktop.backend_x11 as backend_module
+    _native_backend = None
+elif _is_macos:
+    import guidesktop.backend_cocoa as backend_module
+    _native_backend = None
+else:
+    backend_module = None
+    _native_backend = None
+
+def get_native_backend():
+    # Get the appropriate platform backend
+    global _native_backend
+
+    if _native_backend:
+        return _native_backend
+
+    if _is_windows:
+        _native_backend = backend_module.get_win32_backend()
+    elif _is_linux:
+        _native_backend = backend_module.get_x11_backend()
+    elif _is_macos:
+        _native_backend = backend_module.get_cocoa_backend()
+
+    return _native_backend
+
+
+# NativeWindow class - extends Window with native windowing
+class NativeWindow(Window):
+    # Window with native platform windowing support
+
+    def __init__(self, title="Window", width=640, height=480):
+        super().__init__(title, width, height)
+
+        self.backend = None
+        self.use_native = True
+        self.native_handle = None
+
+    def create_native_window(self):
+        # Create the native platform window
+        if not self.use_native:
+            return False
+
+        # Get platform backend
+        self.backend = get_native_backend()
+        if not self.backend:
+            print("  [!] No native backend available for this platform")
+            return False
+
+        # Initialize backend
+        if not self.backend.initialized:
+            if not self.backend.initialize():
+                print("  [!] Failed to initialize native backend")
+                return False
+
+        # Create native window
+        try:
+            self.native_handle = self.backend.create_window(
+                self.title, self.x, self.y, self.width, self.height
+            )
+
+            if not self.native_handle:
+                print("  [!] Failed to create native window")
+                return False
+
+            print("  [OK] Native window created")
+            return True
+
+        except Exception as e:
+            print("  [!] Error creating native window: " + str(e))
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def show(self):
+        # Show the window
+        self.visible = True
+
+        # Create native window if not already created
+        if self.use_native and not self.native_handle:
+            if not self.create_native_window():
+                print("  [!] Falling back to mock rendering")
+                self.use_native = False
+
+        # Initialize Cairo surface if not done
+        if not self.surface:
+            self.initialize_surface()
+
+        if self.use_native:
+            print("  [NativeWindow] Window is now visible")
+        else:
+            print("  [NativeWindow] Mock window (native windowing unavailable)")
+
+        return self
+
+    def close(self):
+        # Close the window
+        self.visible = False
+
+        # Destroy native window
+        if self.native_handle and self.backend:
+            try:
+                self.backend.destroy_window(self.native_handle)
+                self.native_handle = None
+            except Exception as e:
+                print("  [!] Error destroying native window: " + str(e))
+
+        # Clean up Cairo resources
+        if self.cairo_ctx:
+            self.cairo_ctx.destroy()
+            self.cairo_ctx = None
+
+        if self.surface:
+            self.surface.destroy()
+            self.surface = None
+
+        print("  [NativeWindow] Closed")
+
+    def set_title(self, title):
+        # Set window title
+        self.title = title
+
+        if self.native_handle and self.backend:
+            try:
+                self.backend.set_window_title(self.native_handle, title)
+            except Exception as e:
+                print("  [!] Error setting window title: " + str(e))
+
+        return self
+
+    def set_position(self, x, y):
+        # Set window position
+        self.x = x
+        self.y = y
+
+        if self.native_handle and self.backend:
+            try:
+                self.backend.move_window(self.native_handle, x, y, self.width, self.height)
+            except Exception as e:
+                print("  [!] Error moving window: " + str(e))
+
+        return self
+
+    def set_size(self, width, height):
+        # Resize the window
+        old_width = self.width
+        old_height = self.height
+
+        super().set_size(width, height)
+
+        # Update native window
+        if self.native_handle and self.backend:
+            try:
+                self.backend.move_window(self.native_handle, self.x, self.y, width, height)
+            except Exception as e:
+                print("  [!] Error resizing window: " + str(e))
+
+        return self
+
+    def invalidate(self):
+        # Request window redraw
+        self.needs_redraw = True
+
+        if self.native_handle and self.backend:
+            try:
+                # Platform-specific invalidation
+                if hasattr(self.backend, "invalidate_window"):
+                    self.backend.invalidate_window(self.native_handle)
+            except Exception as e:
+                print("  [!] Error invalidating window: " + str(e))
+
+
+print("  [OK] Native window system loaded")

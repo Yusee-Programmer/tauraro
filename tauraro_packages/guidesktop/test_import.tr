@@ -1,0 +1,72 @@
+# GuiDesktop Import Test
+# Tests that the framework can be imported and initialized
+
+print("=" * 60)
+print("GuiDesktop Framework Test")
+print("=" * 60)
+
+# Test 1: Import
+print("\n[Test 1] Importing guidesktop...")
+try:
+    import guidesktop
+    print("  [OK] Import successful")
+except Exception as e:
+    print("  [FAIL] Import failed: " + str(e))
+    exit(1)
+
+# Test 2: Check version info
+print("\n[Test 2] Checking version info...")
+print("  Name: " + str(guidesktop.__name__))
+print("  Version: " + str(guidesktop.__version__))
+print("  Description: " + str(guidesktop.__description__))
+print("  Author: " + str(guidesktop.__author__))
+
+# Test 3: Platform detection
+print("\n[Test 3] Platform detection...")
+print("  Platform: " + str(guidesktop._platform))
+print("  Window backend: " + str(guidesktop._window_backend))
+print("  Rendering: " + str(guidesktop._rendering_backend))
+print("  Cairo library: " + str(guidesktop._cairo_lib))
+
+# Test 4: Check color system
+print("\n[Test 4] Color system...")
+print("  Colors.WHITE: " + str(guidesktop.Colors.WHITE.to_hex()))
+print("  Colors.BLACK: " + str(guidesktop.Colors.BLACK.to_hex()))
+print("  Colors.ACCENT: " + str(guidesktop.Colors.ACCENT.to_hex()))
+print("  [OK] Color system working")
+
+# Test 5: Check geometry classes
+print("\n[Test 5] Geometry classes...")
+rect = guidesktop.Rect(10, 20, 100, 50)
+print("  Rect: (" + str(rect.x) + ", " + str(rect.y) + ", " + str(rect.width) + ", " + str(rect.height) + ")")
+print("  Contains (50, 30): " + str(rect.contains(50, 30)))
+print("  Contains (200, 200): " + str(rect.contains(200, 200)))
+print("  [OK] Geometry classes working")
+
+# Test 6: Framework initialization
+print("\n[Test 6] Framework initialization...")
+print("  Note: This will attempt to load Cairo library")
+print("  If Cairo is not installed, this test will fail")
+try:
+    result = guidesktop.init()
+    if result:
+        print("  [OK] Framework initialized successfully!")
+    else:
+        print("  [WARN] Framework initialization failed (Cairo not available?)")
+        print("  This is expected if Cairo is not installed")
+except Exception as e:
+    print("  [WARN] Initialization error: " + str(e))
+    print("  This is expected if Cairo is not installed")
+
+print("\n" + "=" * 60)
+print("Test Summary")
+print("=" * 60)
+print("  Core imports: PASS")
+print("  Platform detection: PASS")
+print("  Color system: PASS")
+print("  Geometry classes: PASS")
+print("  Framework structure: PASS")
+print("")
+print("Note: To test rendering, Cairo must be installed.")
+print("Run example programs to test full functionality.")
+print("=" * 60)

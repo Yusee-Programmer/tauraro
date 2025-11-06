@@ -1,0 +1,105 @@
+# Multiple Windows Example
+# Demonstrates creating multiple native windows
+
+print("=" * 60)
+print("GuiDesktop Multiple Windows Example")
+print("=" * 60)
+print("")
+
+import guidesktop
+
+# Initialize
+print("[1] Initializing...")
+if not guidesktop.init():
+    exit(1)
+
+guidesktop.define_cairo_functions()
+
+# Load backends
+print("[2] Loading backend...")
+if guidesktop._is_windows:
+    import guidesktop.backend_win32
+elif guidesktop._is_linux:
+    import guidesktop.backend_x11
+else:
+    print("    [!] Platform not fully supported yet")
+
+import guidesktop.window_native
+import guidesktop.application_native
+
+print("")
+print("[3] Creating application with multiple windows...")
+
+# Create application
+app = guidesktop.application_native.NativeApplication("Multi-Window Demo")
+
+# Window 1: Main window
+window1 = app.create_window("Window 1 - Main", 400, 300)
+window1.set_position(100, 100)
+window1.background_color = guidesktop.Color(0.95, 0.95, 1.0, 1.0)
+
+title1 = guidesktop.Label("Main Window")
+title1.set_bounds(50, 50, 300, 40)
+title1.set_font("Sans", 18)
+title1.text_color = guidesktop.Colors.BLUE
+title1.set_alignment(0.5, 0.5)
+window1.add_widget(title1)
+
+label1 = guidesktop.Label("This is the main window")
+label1.set_bounds(50, 120, 300, 30)
+label1.set_alignment(0.5, 0.5)
+window1.add_widget(label1)
+
+# Window 2: Secondary window
+window2 = app.create_window("Window 2 - Secondary", 400, 300)
+window2.set_position(520, 100)
+window2.background_color = guidesktop.Color(1.0, 0.95, 0.95, 1.0)
+
+title2 = guidesktop.Label("Secondary Window")
+title2.set_bounds(50, 50, 300, 40)
+title2.set_font("Sans", 18)
+title2.text_color = guidesktop.Colors.RED
+title2.set_alignment(0.5, 0.5)
+window2.add_widget(title2)
+
+label2 = guidesktop.Label("This is a secondary window")
+label2.set_bounds(50, 120, 300, 30)
+label2.set_alignment(0.5, 0.5)
+window2.add_widget(label2)
+
+# Window 3: Info window
+window3 = app.create_window("Window 3 - Info", 400, 200)
+window3.set_position(100, 420)
+window3.background_color = guidesktop.Color(0.95, 1.0, 0.95, 1.0)
+
+title3 = guidesktop.Label("Information")
+title3.set_bounds(50, 30, 300, 30)
+title3.set_font("Sans", 16)
+title3.text_color = guidesktop.Colors.GREEN
+title3.set_alignment(0.5, 0.5)
+window3.add_widget(title3)
+
+info = guidesktop.Label("Multiple windows are now running!")
+info.set_bounds(50, 80, 300, 25)
+info.set_font("Sans", 12)
+info.set_alignment(0.5, 0.5)
+window3.add_widget(info)
+
+print("")
+print("=" * 60)
+print("Running Application with 3 Windows")
+print("=" * 60)
+print("")
+print("Three native windows should appear:")
+print("  - Main window (blue tint)")
+print("  - Secondary window (red tint)")
+print("  - Info window (green tint)")
+print("")
+print("Close any window to exit.")
+print("")
+
+# Run
+result = app.run()
+
+print("")
+print("Application exited with code:", result)
