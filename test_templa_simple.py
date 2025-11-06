@@ -54,12 +54,23 @@ print(f"   Result: {result9}")
 
 # Test 10: For loop with list
 print("\n10. For Loop:")
-result10 = templa.render_string("{% for item in items %}{{ item }} {% endfor %}", {"items": ["a", "b", "c"]})
+items = []
+items.append("a")
+items.append("b")
+items.append("c")
+ctx10 = {}
+ctx10["items"] = items
+result10 = templa.render_string("{% for item in items %}{{ item }} {% endfor %}", ctx10)
 print(f"    Result: {result10}")
 
 # Test 11: For loop with dict
 print("\n11. For Loop (Dict):")
-result11 = templa.render_string("{% for k, v in data %}{{ k }}={{ v }} {% endfor %}", {"data": {"x": 1, "y": 2}})
+data = {}
+data["x"] = 1
+data["y"] = 2
+ctx11 = {}
+ctx11["data"] = data
+result11 = templa.render_string("{% for k, v in data %}{{ k }}={{ v }} {% endfor %}", ctx11)
 print(f"    Result: {result11}")
 
 # Test 12: Comments
@@ -79,7 +90,11 @@ print(f"    Result: {result14}")
 
 # Test 15: Dot notation
 print("\n15. Dot Notation:")
-result15 = templa.render_string("{{ user.name }}", {"user": {"name": "Bob"}})
+user = {}
+user["name"] = "Bob"
+ctx15 = {}
+ctx15["user"] = user
+result15 = templa.render_string("{{ user.name }}", ctx15)
 print(f"    Result: {result15}")
 
 print("\n=== All Tests Complete! ===")
