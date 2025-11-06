@@ -198,7 +198,15 @@ impl SuperBytecodeVM {
         // Get the module's globals (namespace) - only new names added by the module
         let mut module_namespace = HashMap::new();
         for (name, value) in self.globals.borrow().iter() {
-            if !globals_before.contains(name) && !name.starts_with("__") && name != "builtins" {
+            // Include new names except for builtins and special internal names
+            // Allow: regular names, __version__ style names, _private names
+            // Special case: allow __name__ to override even if it existed before
+            // Exclude: builtins, __builtins__, __pycache__ etc
+            let is_new_or_override = !globals_before.contains(name) || name == "__name__";
+            if is_new_or_override &&
+               name != "builtins" &&
+               name != "__builtins__" &&
+               !name.starts_with("__py") {
                 module_namespace.insert(name.clone(), value.value.clone());
             }
         }
@@ -5531,6 +5539,24 @@ impl SuperBytecodeVM {
                 
                 // Normal assignment for all other cases
                 match &mut self.frames[frame_idx].registers[object_reg].value {
+                    Value::Class { methods, .. } => {
+                        // Store class attribute in methods HashMap
+                        methods.insert(attr_name.clone(), value_to_store.clone());
+
+                        // Update the class in globals to reflect the change
+                        // Find the class in globals and update it
+                        let updated_class = self.frames[frame_idx].registers[object_reg].clone();
+                        for (var_name, var_value) in self.globals.borrow_mut().iter_mut() {
+                            if let Value::Class { name: class_name, .. } = &var_value.value {
+                                if let Value::Class { name: updated_class_name, .. } = &updated_class.value {
+                                    if class_name == updated_class_name {
+                                        *var_value = updated_class.clone();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    },
                     Value::Object { fields, .. } => {
                         // Store in fields using Rc::make_mut to get a mutable reference
                         Rc::make_mut(fields).insert(attr_name.clone(), value_to_store.clone());
