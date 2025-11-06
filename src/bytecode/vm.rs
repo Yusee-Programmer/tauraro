@@ -1058,7 +1058,7 @@ impl SuperBytecodeVM {
                 Ok(None)
             }
             OpCode::FastIntAdd => {
-                // Ultra-fast integer addition with unsafe register access
+                // ULTRA-FAST integer addition - completely bypasses error handling
                 let left_reg = arg1 as usize;
                 let right_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
@@ -1072,21 +1072,20 @@ impl SuperBytecodeVM {
                     }
                 }
 
-                // SAFETY: Bounds checked in debug mode, guaranteed by compiler in release
+                // SAFETY: Bounds checked in debug, guaranteed by compiler in release
+                // This path does ZERO error handling for maximum speed
                 unsafe {
                     let regs = &self.frames[frame_idx].registers;
                     if let Value::Int(left_val) = regs.get_unchecked(left_reg).value {
                         if let Value::Int(right_val) = regs.get_unchecked(right_reg).value {
-                            // Create result directly without intermediate allocations
-                            *self.frames[frame_idx].registers.get_unchecked_mut(result_reg) = RcValue {
-                                value: Value::Int(left_val + right_val),
-                                ref_count: 1,
-                            };
+                            // Direct integer arithmetic - NO allocation, NO error handling
+                            let result = left_val.wrapping_add(right_val);
+                            self.frames[frame_idx].registers.get_unchecked_mut(result_reg).value = Value::Int(result);
                             return Ok(None);
                         }
                     }
 
-                    // Fallback to regular addition
+                    // Fallback to regular addition (rare path)
                     let left_val = regs.get_unchecked(left_reg).value.clone();
                     let right_val = regs.get_unchecked(right_reg).value.clone();
                     let result = self.add_values(left_val, right_val)
@@ -1096,53 +1095,73 @@ impl SuperBytecodeVM {
                 Ok(None)
             }
             OpCode::FastIntSub => {
-                // Ultra-fast integer subtraction without cloning
+                // ULTRA-FAST integer subtraction - zero allocation
                 let left_reg = arg1 as usize;
                 let right_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
-                
-                // Direct access to integer values without cloning for maximum performance
-                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
-                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
-                        // Create result directly without intermediate allocations
-                        self.frames[frame_idx].registers[result_reg] = RcValue {
-                            value: Value::Int(left_val - right_val),
-                            ref_count: 1,
-                        };
-                        return Ok(None);
+
+                #[cfg(debug_assertions)]
+                {
+                    if left_reg >= self.frames[frame_idx].registers.len() ||
+                       right_reg >= self.frames[frame_idx].registers.len() ||
+                       result_reg >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("FastIntSub: register index out of bounds"));
                     }
                 }
-                // Fallback to regular subtraction using the arithmetic module
-                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
-                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
-                let result = self.sub_values(left_val, right_val)
-                    .map_err(|e| anyhow!("Error in FastIntSub: {}", e))?;
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+
+                unsafe {
+                    let regs = &self.frames[frame_idx].registers;
+                    if let Value::Int(left_val) = regs.get_unchecked(left_reg).value {
+                        if let Value::Int(right_val) = regs.get_unchecked(right_reg).value {
+                            // Direct integer arithmetic - NO allocation
+                            let result = left_val.wrapping_sub(right_val);
+                            self.frames[frame_idx].registers.get_unchecked_mut(result_reg).value = Value::Int(result);
+                            return Ok(None);
+                        }
+                    }
+
+                    // Fallback to regular subtraction
+                    let left_val = regs.get_unchecked(left_reg).value.clone();
+                    let right_val = regs.get_unchecked(right_reg).value.clone();
+                    let result = self.sub_values(left_val, right_val)
+                        .map_err(|e| anyhow!("Error in FastIntSub: {}", e))?;
+                    *self.frames[frame_idx].registers.get_unchecked_mut(result_reg) = RcValue::new(result);
+                }
                 Ok(None)
             }
             OpCode::FastIntMul => {
-                // Ultra-fast integer multiplication without cloning
+                // ULTRA-FAST integer multiplication - zero allocation
                 let left_reg = arg1 as usize;
                 let right_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
-                
-                // Direct access to integer values without cloning for maximum performance
-                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
-                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
-                        // Create result directly without intermediate allocations
-                        self.frames[frame_idx].registers[result_reg] = RcValue {
-                            value: Value::Int(left_val * right_val),
-                            ref_count: 1,
-                        };
-                        return Ok(None);
+
+                #[cfg(debug_assertions)]
+                {
+                    if left_reg >= self.frames[frame_idx].registers.len() ||
+                       right_reg >= self.frames[frame_idx].registers.len() ||
+                       result_reg >= self.frames[frame_idx].registers.len() {
+                        return Err(anyhow!("FastIntMul: register index out of bounds"));
                     }
                 }
-                // Fallback to regular multiplication using the arithmetic module
-                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
-                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
-                let result = self.mul_values(left_val, right_val)
-                    .map_err(|e| anyhow!("Error in FastIntMul: {}", e))?;
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+
+                unsafe {
+                    let regs = &self.frames[frame_idx].registers;
+                    if let Value::Int(left_val) = regs.get_unchecked(left_reg).value {
+                        if let Value::Int(right_val) = regs.get_unchecked(right_reg).value {
+                            // Direct integer arithmetic - NO allocation
+                            let result = left_val.wrapping_mul(right_val);
+                            self.frames[frame_idx].registers.get_unchecked_mut(result_reg).value = Value::Int(result);
+                            return Ok(None);
+                        }
+                    }
+
+                    // Fallback to regular multiplication
+                    let left_val = regs.get_unchecked(left_reg).value.clone();
+                    let right_val = regs.get_unchecked(right_reg).value.clone();
+                    let result = self.mul_values(left_val, right_val)
+                        .map_err(|e| anyhow!("Error in FastIntMul: {}", e))?;
+                    *self.frames[frame_idx].registers.get_unchecked_mut(result_reg) = RcValue::new(result);
+                }
                 Ok(None)
             }
             OpCode::FastIntDiv => {
