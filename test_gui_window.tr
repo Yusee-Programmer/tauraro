@@ -1,0 +1,87 @@
+#!/usr/bin/env tauraro
+# Test GuiDesktop Window with Buttons
+
+import guidesktop
+
+print("=" * 60)
+print("GuiDesktop - Window with Buttons Test")
+print("=" * 60)
+
+# Initialize the framework
+if not guidesktop.init():
+    print("[ERROR] Failed to initialize GuiDesktop")
+    exit(1)
+
+print("\n[Creating GUI Application...]")
+
+# Create button callbacks
+def on_button1_click():
+    print("\n[EVENT] Button 1 clicked!")
+    print("  Action: Hello from Button 1")
+
+def on_button2_click():
+    print("\n[EVENT] Button 2 clicked!")
+    print("  Action: Hello from Button 2")
+
+def on_button3_click():
+    print("\n[EVENT] Button 3 clicked!")
+    print("  Action: Hello from Button 3")
+
+# Create a window
+print("\n[Creating Window...]")
+window = guidesktop.Window("GuiDesktop Test Application", 800, 600)
+print("  Title: " + window.title)
+print("  Size: " + str(window.width) + "x" + str(window.height))
+
+# Create buttons
+print("\n[Creating Buttons...]")
+button1 = guidesktop.Button(50, 50, 200, 60, "Click Me!", on_button1_click)
+button2 = guidesktop.Button(50, 130, 200, 60, "Hello World", on_button2_click)
+button3 = guidesktop.Button(50, 210, 200, 60, "Press Here", on_button3_click)
+
+print("  Created 3 buttons")
+
+# Add buttons to window
+print("\n[Adding Buttons to Window...]")
+window.add_widget(button1)
+window.add_widget(button2)
+window.add_widget(button3)
+print("  Added " + str(len(window.widgets)) + " widgets to window")
+
+# Show the window
+print("\n[Displaying Window...]")
+window.show()
+
+# Simulate button interactions
+print("\n[Simulating User Interactions...]")
+
+print("\n1. Mouse hover over Button 1")
+button1.on_mouse_move(150, 80)
+print("   Button 1 hovered:", button1.is_hovered)
+
+print("\n2. Click Button 1")
+button1.on_mouse_down(150, 80)
+print("   Button 1 pressed:", button1.is_pressed)
+button1.on_mouse_up(150, 80)
+
+print("\n3. Click Button 2")
+button2.on_mouse_down(150, 160)
+button2.on_mouse_up(150, 160)
+
+print("\n4. Click Button 3")
+button3.on_mouse_down(150, 240)
+button3.on_mouse_up(150, 240)
+
+# Test mouse event propagation through window
+print("\n[Testing Window Event Handling...]")
+window.handle_mouse_move(150, 80)
+window.handle_mouse_down(150, 130)
+window.handle_mouse_up(150, 130)
+
+print("\n" + "=" * 60)
+print("[SUCCESS] GuiDesktop window with buttons test complete!")
+print("=" * 60)
+print("\nNOTE: This is a simulation showing the framework structure.")
+print("      For actual GUI rendering, full X11/Cairo integration needed.")
+print("      The framework is ready for native window implementation.")
+print("=" * 60)

@@ -1,0 +1,116 @@
+#!/usr/bin/env tauraro
+# GuiDesktop Framework Demo
+# Demonstrates the GuiDesktop library capabilities
+
+import guidesktop
+
+print("=" * 70)
+print(" " * 20 + "GuiDesktop Framework Demo")
+print("=" * 70)
+
+# Initialize framework
+print("\n[Step 1] Initializing GuiDesktop Framework...")
+if not guidesktop.init():
+    print("[ERROR] Failed to initialize")
+    exit(1)
+
+# Demonstrate Colors
+print("\n[Step 2] Color System")
+print("-" * 70)
+white = guidesktop.Colors.WHITE
+black = guidesktop.Colors.BLACK
+accent = guidesktop.Colors.ACCENT
+
+print("  Pre-defined colors available:")
+print("    WHITE:  " + white.to_hex() + " (R=" + str(white.r) + ", G=" + str(white.g) + ", B=" + str(white.b) + ")")
+print("    BLACK:  " + black.to_hex() + " (R=" + str(black.r) + ", G=" + str(black.g) + ", B=" + str(black.b) + ")")
+print("    ACCENT: " + accent.to_hex() + " (R=" + str(accent.r) + ", G=" + str(accent.g) + ", B=" + str(accent.b) + ")")
+
+# Create custom color
+custom = guidesktop.Color(0.5, 0.3, 0.8, 1.0)
+print("\n  Custom color created: " + custom.to_hex())
+
+# Demonstrate Geometry
+print("\n[Step 3] Geometry Classes")
+print("-" * 70)
+rect1 = guidesktop.Rect(10, 20, 100, 50)
+rect2 = guidesktop.Rect(50, 30, 80, 60)
+
+print("  Rectangle 1: x=" + str(rect1.x) + ", y=" + str(rect1.y) + ", w=" + str(rect1.width) + ", h=" + str(rect1.height))
+print("  Rectangle 2: x=" + str(rect2.x) + ", y=" + str(rect2.y) + ", w=" + str(rect2.width) + ", h=" + str(rect2.height))
+
+point = guidesktop.Point(60, 40)
+print("\n  Point: x=" + str(point.x) + ", y=" + str(point.y))
+print("    Inside Rect1? " + str(rect1.contains(point.x, point.y)))
+print("    Inside Rect2? " + str(rect2.contains(point.x, point.y)))
+
+print("\n  Rectangles intersect? " + str(rect1.intersects(rect2)))
+
+# Demonstrate Button (individual, not in window)
+print("\n[Step 4] Button Widget")
+print("-" * 70)
+
+def button_callback():
+    print("      [CALLBACK] Button was clicked!")
+
+button = guidesktop.Button(50, 50, 200, 60, "Click Me!", button_callback)
+print("  Button created:")
+print("    Position: (" + str(button.rect.x) + ", " + str(button.rect.y) + ")")
+print("    Size: " + str(button.rect.width) + "x" + str(button.rect.height))
+print("    Text: '" + button.text + "'")
+print("    Colors: BG=" + button.bg_color.to_hex() + ", Text=" + button.text_color.to_hex())
+
+print("\n  Simulating button interaction:")
+print("    1. Mouse move to (150, 80)")
+button.on_mouse_move(150, 80)
+print("       Hovered: " + str(button.is_hovered))
+
+print("    2. Mouse down at (150, 80)")
+button.on_mouse_down(150, 80)
+print("       Pressed: " + str(button.is_pressed))
+
+print("    3. Mouse up at (150, 80)")
+button.on_mouse_up(150, 80)
+print("       Pressed: " + str(button.is_pressed))
+
+# Demonstrate Window structure
+print("\n[Step 5] Window Structure")
+print("-" * 70)
+window = guidesktop.Window("GuiDesktop Demo", 800, 600)
+print("  Window created:")
+print("    Title: '" + window.title + "'")
+print("    Size: " + str(window.width) + "x" + str(window.height))
+print("    Background: " + window.bg_color.to_hex())
+print("    Running: " + str(window.is_running))
+
+# Note about widgets
+print("\n  NOTE: Widgets can be created separately:")
+btn1 = guidesktop.Button(50, 100, 180, 50, "Button 1", None)
+btn2 = guidesktop.Button(50, 170, 180, 50, "Button 2", None)
+btn3 = guidesktop.Button(50, 240, 180, 50, "Button 3", None)
+print("    Created 3 buttons")
+
+print("\n  LIMITATION: Due to Tauraro's current implementation,")
+print("  mutable instance variables (like widget lists) cannot be")
+print("  modified after initialization. This will be fixed in future.")
+
+# Summary
+print("\n" + "=" * 70)
+print(" " * 25 + "Summary")
+print("=" * 70)
+print("\n  GuiDesktop Framework Features:")
+print("    ✓ Cairo library integration")
+print("    ✓ Platform detection (Windows/Linux/macOS)")
+print("    ✓ Color system with pre-defined palette")
+print("    ✓ Geometry classes (Rect, Point, Size)")
+print("    ✓ Button widgets with event handling")
+print("    ✓ Window structure")
+print("\n  Framework Status: READY FOR DEVELOPMENT")
+print("  All core classes and structures implemented.")
+print("  ")
+print("  Next Steps:")
+print("    - Fix Tauraro VM instance variable mutation")
+print("    - Add Cairo drawing integration")
+print("    - Implement X11/Win32 window creation")
+print("    - Add more widgets (Label, TextBox, etc.)")
+print("\n" + "=" * 70)

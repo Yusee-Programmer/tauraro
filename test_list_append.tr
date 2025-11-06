@@ -1,0 +1,15 @@
+print("Testing list append...")
+
+my_list = []
+print("Empty list:", my_list)
+print("Length:", len(my_list))
+
+my_list.append("item1")
+print("After append 'item1':", my_list)
+print("Length:", len(my_list))
+
+my_list.append("item2")
+print("After append 'item2':", my_list)
+print("Length:", len(my_list))
+
+print("Success!")
