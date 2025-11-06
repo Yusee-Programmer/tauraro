@@ -670,6 +670,32 @@ impl CTranspiler {
                         collect_vars_from_instruction(body_instr, vars);
                     }
                 }
+                IRInstruction::While { condition, condition_instructions, body } => {
+                    vars.insert(condition.clone());
+                    for cond_instr in condition_instructions {
+                        collect_vars_from_instruction(cond_instr, vars);
+                    }
+                    for body_instr in body {
+                        collect_vars_from_instruction(body_instr, vars);
+                    }
+                }
+                IRInstruction::If { condition, then_body, elif_branches, else_body } => {
+                    vars.insert(condition.clone());
+                    for then_instr in then_body {
+                        collect_vars_from_instruction(then_instr, vars);
+                    }
+                    for (elif_cond, elif_body) in elif_branches {
+                        vars.insert(elif_cond.clone());
+                        for elif_instr in elif_body {
+                            collect_vars_from_instruction(elif_instr, vars);
+                        }
+                    }
+                    if let Some(else_instrs) = else_body {
+                        for else_instr in else_instrs {
+                            collect_vars_from_instruction(else_instr, vars);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
