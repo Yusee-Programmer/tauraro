@@ -1,6 +1,6 @@
 //! SuperCompiler - Register-based bytecode compiler with advanced optimizations
 
-use crate::ast::{Program, Statement, Expr, Literal, BinaryOp, UnaryOp, Param, ParamKind, Type, Pattern, MatchCase, ExceptHandler, CompareOp, UnpackTarget};
+use crate::ast::{Program, Statement, Expr, Literal, BinaryOp, UnaryOp, Param, ParamKind, Type, Pattern, MatchCase, ExceptHandler, CompareOp, UnpackTarget, Comprehension};
 use crate::bytecode::instructions::{OpCode, Instruction};
 use crate::bytecode::memory::CodeObject;
 use crate::value::Value;
@@ -2246,7 +2246,206 @@ impl SuperCompiler {
                 self.emit(OpCode::LoadConst, str_const, reg, 0, self.current_line);
                 Ok(reg)
             }
+            Expr::ListComp { element, generators } => {
+                self.compile_list_comprehension(*element, generators)
+            }
+            Expr::DictComp { key, value, generators } => {
+                self.compile_dict_comprehension(*key, *value, generators)
+            }
+            Expr::SetComp { element, generators } => {
+                self.compile_set_comprehension(*element, generators)
+            }
+            Expr::GeneratorExp { element, generators } => {
+                // Generator expressions are complex - they need to create a generator function
+                // For now, we'll convert them to list comprehensions
+                // TODO: Implement proper generator expressions
+                self.compile_list_comprehension(*element, generators)
+            }
             _ => Err(anyhow!("Unsupported expression type: {:?}", expr)),
         }
     }
+
+    fn compile_list_comprehension(&mut self, element: Expr, generators: Vec<Comprehension>) -> Result<u32> {
+        // Create empty list
+        let result_reg = self.allocate_register();
+        // BuildList: arg1=count, arg2=first_item_reg, arg3=result_reg
+        self.emit(OpCode::BuildList, 0, 0, result_reg, self.current_line);
+
+        // Compile nested loops for generators
+        self.compile_comprehension_loops(element, generators, result_reg, ComprehensionType::List)?;
+
+        Ok(result_reg)
+    }
+
+    fn compile_dict_comprehension(&mut self, key: Expr, value: Expr, generators: Vec<Comprehension>) -> Result<u32> {
+        // Create empty dict
+        let result_reg = self.allocate_register();
+        // BuildDict: arg1=count, arg2=first_key_reg, arg3=result_reg
+        self.emit(OpCode::BuildDict, 0, 0, result_reg, self.current_line);
+
+        // Compile nested loops for generators
+        self.compile_comprehension_loops_dict(key, value, generators, result_reg)?;
+
+        Ok(result_reg)
+    }
+
+    fn compile_set_comprehension(&mut self, element: Expr, generators: Vec<Comprehension>) -> Result<u32> {
+        // Create empty set
+        let result_reg = self.allocate_register();
+        // BuildSet: arg1=count, arg2=first_item_reg, arg3=result_reg
+        self.emit(OpCode::BuildSet, 0, 0, result_reg, self.current_line);
+
+        // Compile nested loops for generators
+        self.compile_comprehension_loops(element, generators, result_reg, ComprehensionType::Set)?;
+
+        Ok(result_reg)
+    }
+
+    fn compile_comprehension_loops(&mut self, element: Expr, generators: Vec<Comprehension>, result_reg: u32, comp_type: ComprehensionType) -> Result<()> {
+        if generators.is_empty() {
+            return Err(anyhow!("Comprehension must have at least one generator"));
+        }
+
+        // For simplicity, we'll only support single generator for now
+        // TODO: Support nested generators
+        let gen = &generators[0];
+
+        // Compile the iterable expression
+        let iterable_reg = self.compile_expression(gen.iter.clone())?;
+
+        // Get an iterator
+        let iter_reg = self.allocate_register();
+        self.emit(OpCode::GetIter, iterable_reg, iter_reg, 0, self.current_line);
+
+        // Set up loop
+        let loop_start = self.code.instructions.len();
+        self.emit(OpCode::SetupLoop, 0, loop_start as u32, 0, self.current_line);
+
+        // ForIter instruction
+        let value_reg = self.allocate_register();
+        let for_iter_pos = self.emit(OpCode::ForIter, iter_reg, value_reg, 0, self.current_line);
+
+        // Store loop variable
+        if self.is_in_function_scope() {
+            let var_idx = self.get_local_index(&gen.target);
+            self.emit(OpCode::StoreFast, value_reg, var_idx, 0, self.current_line);
+        } else {
+            let var_idx = self.code.add_name(gen.target.clone());
+            self.emit(OpCode::StoreGlobal, value_reg, var_idx, 0, self.current_line);
+        }
+
+        // Handle conditions (if any)
+        let mut end_if_jumps = Vec::new();
+        for if_expr in &gen.ifs {
+            let cond_reg = self.compile_expression(if_expr.clone())?;
+            // If condition is false, skip to next iteration
+            let jump_pos = self.emit(OpCode::JumpIfFalse, cond_reg, 0, 0, self.current_line);
+            end_if_jumps.push(jump_pos);
+        }
+
+        // Compile element expression and add to collection
+        match comp_type {
+            ComprehensionType::List => {
+                let elem_reg = self.compile_expression(element)?;
+                self.emit(OpCode::ListAppend, result_reg, elem_reg, 0, self.current_line);
+            }
+            ComprehensionType::Set => {
+                let elem_reg = self.compile_expression(element)?;
+                self.emit(OpCode::SetAdd, result_reg, elem_reg, 0, self.current_line);
+            }
+        }
+
+        // Patch condition jumps to continue loop
+        let continue_target = self.code.instructions.len();
+        for jump_pos in end_if_jumps {
+            self.code.instructions[jump_pos].arg2 = continue_target as u32;
+        }
+
+        // Jump back to loop start
+        self.emit(OpCode::Jump, loop_start as u32, 0, 0, self.current_line);
+
+        // End of loop
+        let loop_end = self.code.instructions.len();
+
+        // Patch ForIter jump target
+        self.code.instructions[for_iter_pos].arg3 = loop_end as u32;
+
+        // Pop loop block
+        self.emit(OpCode::PopBlock, 0, 0, 0, self.current_line);
+
+        Ok(())
+    }
+
+    fn compile_comprehension_loops_dict(&mut self, key: Expr, value: Expr, generators: Vec<Comprehension>, result_reg: u32) -> Result<()> {
+        if generators.is_empty() {
+            return Err(anyhow!("Comprehension must have at least one generator"));
+        }
+
+        // For simplicity, we'll only support single generator for now
+        let gen = &generators[0];
+
+        // Compile the iterable expression
+        let iterable_reg = self.compile_expression(gen.iter.clone())?;
+
+        // Get an iterator
+        let iter_reg = self.allocate_register();
+        self.emit(OpCode::GetIter, iterable_reg, iter_reg, 0, self.current_line);
+
+        // Set up loop
+        let loop_start = self.code.instructions.len();
+        self.emit(OpCode::SetupLoop, 0, loop_start as u32, 0, self.current_line);
+
+        // ForIter instruction
+        let value_reg = self.allocate_register();
+        let for_iter_pos = self.emit(OpCode::ForIter, iter_reg, value_reg, 0, self.current_line);
+
+        // Store loop variable
+        if self.is_in_function_scope() {
+            let var_idx = self.get_local_index(&gen.target);
+            self.emit(OpCode::StoreFast, value_reg, var_idx, 0, self.current_line);
+        } else {
+            let var_idx = self.code.add_name(gen.target.clone());
+            self.emit(OpCode::StoreGlobal, value_reg, var_idx, 0, self.current_line);
+        }
+
+        // Handle conditions (if any)
+        let mut end_if_jumps = Vec::new();
+        for if_expr in &gen.ifs {
+            let cond_reg = self.compile_expression(if_expr.clone())?;
+            let jump_pos = self.emit(OpCode::JumpIfFalse, cond_reg, 0, 0, self.current_line);
+            end_if_jumps.push(jump_pos);
+        }
+
+        // Compile key and value expressions
+        let key_reg = self.compile_expression(key)?;
+        let val_reg = self.compile_expression(value)?;
+
+        // Store in dict: result_reg[key_reg] = val_reg
+        self.emit(OpCode::SubscrStore, result_reg, key_reg, val_reg, self.current_line);
+
+        // Patch condition jumps
+        let continue_target = self.code.instructions.len();
+        for jump_pos in end_if_jumps {
+            self.code.instructions[jump_pos].arg2 = continue_target as u32;
+        }
+
+        // Jump back to loop start
+        self.emit(OpCode::Jump, loop_start as u32, 0, 0, self.current_line);
+
+        // End of loop
+        let loop_end = self.code.instructions.len();
+
+        // Patch ForIter jump target
+        self.code.instructions[for_iter_pos].arg3 = loop_end as u32;
+
+        // Pop loop block
+        self.emit(OpCode::PopBlock, 0, 0, 0, self.current_line);
+
+        Ok(())
+    }
+}
+
+enum ComprehensionType {
+    List,
+    Set,
 }
