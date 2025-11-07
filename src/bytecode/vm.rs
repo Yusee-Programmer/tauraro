@@ -73,6 +73,12 @@ pub struct SuperBytecodeVM {
     // Strong static typing: track variables with type annotations for enforcement
     // Maps variable name to its declared type string (e.g., "int", "str", "List[int]")
     typed_variables: HashMap<String, String>,
+
+    // EXCEPTION SYSTEM: Source code storage for accurate error reporting
+    // Maps filename to source code for traceback generation
+    source_code: HashMap<String, String>,
+    // Current file being executed (for error reporting)
+    current_filename: String,
 }
 
 // Type alias for builtin functions
@@ -167,6 +173,10 @@ impl SuperBytecodeVM {
 
             // Initialize typed variables map for strong static typing
             typed_variables: HashMap::new(),
+
+            // Initialize exception system
+            source_code: HashMap::new(),
+            current_filename: "<unknown>".to_string(),
         }
     }
 
@@ -401,6 +411,86 @@ impl SuperBytecodeVM {
             self.frame_pool.push(frame);
         }
     }
+
+    // ========== EXCEPTION SYSTEM: Helper methods for Python-like error reporting ==========
+
+    /// Store source code for a file (for traceback generation)
+    pub fn set_source_code(&mut self, filename: String, source: String) {
+        self.source_code.insert(filename, source);
+    }
+
+    /// Set the current filename being executed
+    pub fn set_current_filename(&mut self, filename: String) {
+        self.current_filename = filename;
+    }
+
+    /// Get a specific source line from stored source code
+    fn get_source_line(&self, filename: &str, line: usize) -> Option<String> {
+        self.source_code.get(filename).and_then(|source| {
+            crate::traceback::get_source_line(source, line)
+        })
+    }
+
+    /// Build a traceback from the current call stack
+    fn build_traceback(&self) -> Vec<crate::traceback::TracebackFrame> {
+        let mut traceback = Vec::new();
+
+        // Build traceback from frames (most recent call last)
+        for frame in self.frames.iter().rev() {
+            let function_name = frame.code.name.clone();
+            let filename = frame.code.filename.clone();
+            let line = if frame.pc < frame.code.instructions.len() {
+                frame.code.instructions[frame.pc].line as usize
+            } else if !frame.code.instructions.is_empty() {
+                frame.code.instructions[frame.code.instructions.len() - 1].line as usize
+            } else {
+                0
+            };
+
+            let source_line = self.get_source_line(&filename, line);
+
+            traceback.push(crate::traceback::TracebackFrame::new(
+                filename,
+                line,
+                0,  // Column not tracked in bytecode currently
+                function_name,
+            ).with_source(source_line.unwrap_or_else(|| String::new())));
+        }
+
+        traceback
+    }
+
+    /// Create a TauraroException with full traceback
+    fn create_exception(&self, exception_type: String, message: String) -> crate::traceback::TauraroException {
+        let (filename, line) = if let Some(frame) = self.frames.last() {
+            let filename = frame.code.filename.clone();
+            let line = if frame.pc < frame.code.instructions.len() {
+                frame.code.instructions[frame.pc].line as usize
+            } else if !frame.code.instructions.is_empty() {
+                frame.code.instructions[frame.code.instructions.len() - 1].line as usize
+            } else {
+                1
+            };
+            (filename, line)
+        } else {
+            (self.current_filename.clone(), 1)
+        };
+
+        let source_line = self.get_source_line(&filename, line);
+        let traceback = self.build_traceback();
+
+        crate::traceback::TauraroException::new(
+            exception_type,
+            message,
+            filename,
+            line,
+            0,  // Column not tracked
+        )
+        .with_source(source_line.unwrap_or_else(|| String::new()))
+        .with_traceback(traceback)
+    }
+
+    // ========== END EXCEPTION SYSTEM ==========
 
     pub fn execute(&mut self, code: CodeObject) -> Result<Value> {
         // Just clone the Rc pointers (cheap!) instead of cloning the entire HashMap

@@ -19,31 +19,35 @@ impl VM {
     
     pub fn run_file_with_options(source: &str, filename: &str, _backend: &str, _optimization: u8, strict_types: bool) -> Result<()> {
         println!("Running file with VM backend");
-        
+
         // Create a VM instance and use it for execution
         let mut vm = VM::new();
-        
+
+        // EXCEPTION SYSTEM: Store source code for traceback generation
+        vm.bytecode_vm.set_source_code(filename.to_string(), source.to_string());
+        vm.bytecode_vm.set_current_filename(filename.to_string());
+
         // Normalize the module name by removing the extension
         let main_module_name = Path::new(filename)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(filename)
             .to_string();
-            
+
         // Track main module loading to prevent circular imports
         if vm.bytecode_vm.loading_modules.contains(&main_module_name) {
             return Err(anyhow!("ImportError: cannot import name '{}' (circular import)", main_module_name));
         }
         vm.bytecode_vm.loading_modules.insert(main_module_name.clone());
-        
+
         // Execute the code through the VM's execute_script method
         let result = vm.execute_script(source, vec![]);
-        
+
         // Remove main module from loading set
         vm.bytecode_vm.loading_modules.remove(&main_module_name);
-        
+
         result?;
-        
+
         Ok(())
     }
     
