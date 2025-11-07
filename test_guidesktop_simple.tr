@@ -1,6 +1,0 @@
-import guidesktop
-
-print("\n=== Testing GuiDesktop Module Variables ===")
-print("Checking if we can access module-level variables...")
-print("_is_linux =", guidesktop._is_linux)
-print("_cairo_lib =", guidesktop._cairo_lib)

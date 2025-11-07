@@ -1,7 +1,0 @@
-import guidesktop
-
-print("Platform variables:")
-print("  _is_windows =", guidesktop._is_windows)
-print("  _is_macos =", guidesktop._is_macos)
-print("  _is_linux =", guidesktop._is_linux)
-print("  _window_backend =", guidesktop._window_backend)

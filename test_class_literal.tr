@@ -1,5 +1,0 @@
-# Test class with just a literal
-class Test:
-    x = 42
-
-print("Class created")

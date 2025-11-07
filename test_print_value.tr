@@ -1,7 +1,0 @@
-x = 42
-print("x =", x)
-
-class Test:
-    pass
-
-print("Test created")
