@@ -1665,10 +1665,11 @@ impl SuperBytecodeVM {
                         let loop_end_pc = target;
 
                         // Get iterator state for range loops
-                        // Note: 'current' is the last value that was yielded, so the next value is current + step
+                        // When compilation triggers, 'current' is the last value yielded by ForIter
+                        // but the loop body for that value hasn't executed yet, so JIT should start from 'current'
                         let (start_value, step_value) = if let Value::RangeIterator { current, step, .. } =
                             &self.frames[frame_idx].registers[iter_reg].value {
-                            (current + step, *step)  // Start from NEXT value
+                            (*current, *step)  // Start from current (last yielded, not yet processed)
                         } else {
                             (0, 1)  // Default fallback
                         };
@@ -1728,16 +1729,16 @@ impl SuperBytecodeVM {
                     let iter_value = self.frames[frame_idx].registers[iter_reg].value.clone();
                     if let Value::RangeIterator { start, stop, step, current } = iter_value {
                         // Calculate remaining iterations
-                        // Note: 'current' is the last value yielded, so we need to count from current+step to stop
+                        // We start from 'current' (last yielded value, not yet processed) to stop (exclusive)
                         let remaining = if step > 0 {
-                            if current + step < stop {
-                                (stop - current - step) / step
+                            if current < stop {
+                                (stop - current + step - 1) / step
                             } else {
                                 0
                             }
                         } else if step < 0 {
-                            if current + step > stop {
-                                (stop - current - step) / step
+                            if current > stop {
+                                (stop - current + step + 1) / step
                             } else {
                                 0
                             }
@@ -1746,9 +1747,38 @@ impl SuperBytecodeVM {
                         };
 
                         if remaining > 0 {
-                            eprintln!("JIT: About to execute native loop");
-                            eprintln!("JIT:   current={}, stop={}, step={}, remaining={}", current, stop, step, remaining);
-                            eprintln!("JIT:   result_reg={}, iter_reg={}", result_reg, iter_reg);
+                            // Sync LoadGlobal instructions: Load globals into source registers before JIT execution
+                            // JIT LoadGlobal loads from register[arg1] into register[arg2]
+                            // So we need to pre-populate register[arg1] with the global value
+                            let loop_body_start = loop_start_pc + 1;
+                            let loop_body_end = target;
+                            if loop_body_start < loop_body_end && loop_body_end <= self.frames[frame_idx].code.instructions.len() {
+                                for instr_idx in loop_body_start..loop_body_end {
+                                    let instr = &self.frames[frame_idx].code.instructions[instr_idx];
+                                    if instr.opcode == OpCode::LoadGlobal {
+                                        let name_idx = instr.arg1 as usize;  // Name index AND source register for JIT
+                                        let _dest_reg = instr.arg2 as usize;  // Destination register (not used for pre-loading)
+
+                                        if name_idx < self.frames[frame_idx].code.names.len() &&
+                                           name_idx < self.frames[frame_idx].registers.len() {
+                                            let name = self.frames[frame_idx].code.names[name_idx].clone();
+
+                                            // Look up global value
+                                            let value = if self.frames[frame_idx].globals.borrow().contains_key(&name) {
+                                                self.frames[frame_idx].globals.borrow().get(&name).cloned()
+                                            } else if self.globals.borrow().contains_key(&name) {
+                                                self.globals.borrow().get(&name).cloned()
+                                            } else {
+                                                None
+                                            };
+
+                                            if let Some(val) = value {
+                                                self.frames[frame_idx].registers[name_idx] = val;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             // Execute loop natively
                             // For now, we'll extract integer registers, call native code, and update state
@@ -1757,16 +1787,9 @@ impl SuperBytecodeVM {
                             let mut native_registers: Vec<i64> = vec![0; self.frames[frame_idx].registers.len()];
 
                             // Convert current Value registers to i64 (only for Int values)
-                            eprintln!("JIT: Converting registers to native format:");
                             for (i, reg) in self.frames[frame_idx].registers.iter().enumerate() {
-                                match &reg.value {
-                                    Value::Int(val) => {
-                                        native_registers[i] = *val;
-                                        eprintln!("JIT:   reg[{}] = Int({})", i, val);
-                                    }
-                                    other => {
-                                        eprintln!("JIT:   reg[{}] = {:?} (not Int, skipping)", i, other);
-                                    }
+                                if let Value::Int(val) = reg.value {
+                                    native_registers[i] = val;
                                 }
                             }
 
@@ -1793,15 +1816,37 @@ impl SuperBytecodeVM {
                             };
 
                             if result_code == 0 {
-                                eprintln!("JIT: Native execution succeeded, updating VM registers:");
                                 // Success - update VM registers from native registers
                                 for (i, &val) in native_registers.iter().enumerate() {
                                     if i < self.frames[frame_idx].registers.len() {
                                         // Only update if it was an integer before
-                                        if let Value::Int(old_val) = self.frames[frame_idx].registers[i].value {
-                                            let changed = if val != old_val { " CHANGED" } else { "" };
-                                            eprintln!("JIT:   reg[{}] = Int({}) -> Int({}){}", i, old_val, val, changed);
+                                        if let Value::Int(_) = self.frames[frame_idx].registers[i].value {
                                             self.frames[frame_idx].registers[i] = RcValue::new(value_pool::create_int(val));
+                                        }
+                                    }
+                                }
+
+                                // Execute any StoreGlobal instructions from the loop body to sync globals
+                                // This is necessary because JIT code only updates registers, not the globals HashMap
+                                let loop_body_start = loop_start_pc + 1;
+                                let loop_body_end = target;
+                                if loop_body_start < loop_body_end && loop_body_end <= self.frames[frame_idx].code.instructions.len() {
+                                    for instr_idx in loop_body_start..loop_body_end {
+                                        let instr = &self.frames[frame_idx].code.instructions[instr_idx];
+                                        if instr.opcode == OpCode::StoreGlobal {
+                                            let value_reg = instr.arg1 as usize;
+                                            let name_idx = instr.arg2 as usize;
+
+                                            if value_reg < self.frames[frame_idx].registers.len() &&
+                                               name_idx < self.frames[frame_idx].code.names.len() {
+                                                let value = self.frames[frame_idx].registers[value_reg].clone();
+                                                let name = self.frames[frame_idx].code.names[name_idx].clone();
+
+                                                // Store in frame globals
+                                                self.frames[frame_idx].globals.borrow_mut().insert(name.clone(), value.clone());
+                                                // Also store in VM globals for consistency
+                                                self.globals.borrow_mut().insert(name, value);
+                                            }
                                         }
                                     }
                                 }
@@ -1818,10 +1863,9 @@ impl SuperBytecodeVM {
                                 // Jump to loop exit (target)
                                 self.frames[frame_idx].pc = target;
 
-                                eprintln!("JIT: Executed native loop ({} iterations)", remaining);
                                 return Ok(None);
                             } else {
-                                eprintln!("JIT: Native execution failed with code {}, falling back to interpreter", result_code);
+                                // Native execution failed, fall back to interpreter
                             }
                         }
                     }

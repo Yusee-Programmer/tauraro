@@ -114,10 +114,6 @@ impl JITCompiler {
             &[]  // Empty loop body
         };
 
-        eprintln!("JIT: Compiling loop body with {} instructions:", loop_instructions.len());
-        for (i, instr) in loop_instructions.iter().enumerate() {
-            eprintln!("JIT:   [{}] {:?}", i, instr);
-        }
 
         // Create loop blocks
         let loop_header = builder.create_block();
@@ -192,8 +188,8 @@ impl JITCompiler {
         // Finalize function
         builder.finalize();
 
-        // Declare function in module
-        let func_name = format!("jit_{}", function_name);
+        // Declare function in module with unique name (include loop_start for uniqueness)
+        let func_name = format!("jit_{}_pc{}", function_name, loop_start);
         let func_id = self.module
             .declare_function(&func_name, Linkage::Export, &self.ctx.func.signature)?;
 
