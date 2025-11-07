@@ -369,6 +369,89 @@ impl TaggedValue {
         self.0 != other.0
     }
 
+    // === Bitwise Operations ===
+
+    /// Bitwise AND
+    #[inline(always)]
+    pub fn bitwise_and(&self, other: &TaggedValue) -> Option<TaggedValue> {
+        if self.is_int() && other.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            let b = unsafe { other.as_int_unchecked() };
+            Some(TaggedValue::new_int(a & b))
+        } else {
+            None
+        }
+    }
+
+    /// Bitwise OR
+    #[inline(always)]
+    pub fn bitwise_or(&self, other: &TaggedValue) -> Option<TaggedValue> {
+        if self.is_int() && other.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            let b = unsafe { other.as_int_unchecked() };
+            Some(TaggedValue::new_int(a | b))
+        } else {
+            None
+        }
+    }
+
+    /// Bitwise XOR
+    #[inline(always)]
+    pub fn bitwise_xor(&self, other: &TaggedValue) -> Option<TaggedValue> {
+        if self.is_int() && other.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            let b = unsafe { other.as_int_unchecked() };
+            Some(TaggedValue::new_int(a ^ b))
+        } else {
+            None
+        }
+    }
+
+    /// Bitwise NOT (unary)
+    #[inline(always)]
+    pub fn bitwise_not(&self) -> Option<TaggedValue> {
+        if self.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            Some(TaggedValue::new_int(!a))
+        } else {
+            None
+        }
+    }
+
+    /// Left shift
+    #[inline(always)]
+    pub fn left_shift(&self, other: &TaggedValue) -> Option<TaggedValue> {
+        if self.is_int() && other.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            let b = unsafe { other.as_int_unchecked() };
+            // Protect against overflow
+            if b >= 0 && b < 64 {
+                Some(TaggedValue::new_int(a << b))
+            } else {
+                Some(TaggedValue::new_int(0))
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Right shift
+    #[inline(always)]
+    pub fn right_shift(&self, other: &TaggedValue) -> Option<TaggedValue> {
+        if self.is_int() && other.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            let b = unsafe { other.as_int_unchecked() };
+            // Protect against overflow
+            if b >= 0 && b < 64 {
+                Some(TaggedValue::new_int(a >> b))
+            } else {
+                Some(TaggedValue::new_int(0))
+            }
+        } else {
+            None
+        }
+    }
+
     /// Get raw bits (for debugging)
     #[inline(always)]
     pub fn raw_bits(&self) -> u64 {
