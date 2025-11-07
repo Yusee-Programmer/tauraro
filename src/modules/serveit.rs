@@ -339,7 +339,7 @@ fn convert_to_hyper_response(value: Value) -> Result<hyper::Response<String>> {
             let body_len = s.len();
             Ok(Response::builder()
                 .status(StatusCode::OK)
-                .header("content-type", "text/plain")
+                .header("content-type", "text/plain; charset=utf-8")
                 .header("content-length", body_len.to_string())
                 .body(s)
                 .unwrap())
@@ -464,7 +464,7 @@ fn create_response(args: Vec<Value>) -> Result<Value> {
 
     // Headers
     let mut headers = HashMap::new();
-    headers.insert("content-type".to_string(), Value::Str("text/plain".to_string()));
+    headers.insert("content-type".to_string(), Value::Str("text/plain; charset=utf-8".to_string()));
     response.insert("headers".to_string(), Value::Dict(std::rc::Rc::new(std::cell::RefCell::new(headers))));
 
     Ok(Value::Dict(std::rc::Rc::new(std::cell::RefCell::new(response))))
@@ -501,7 +501,8 @@ fn json_response(args: Vec<Value>) -> Result<Value> {
     response.insert("body".to_string(), Value::Str(json_body));
 
     let mut headers = HashMap::new();
-    headers.insert("content-type".to_string(), Value::Str("application/json".to_string()));
+    // Add charset to content-type for proper JSON rendering
+    headers.insert("content-type".to_string(), Value::Str("application/json; charset=utf-8".to_string()));
     response.insert("headers".to_string(), Value::Dict(std::rc::Rc::new(std::cell::RefCell::new(headers))));
 
     Ok(Value::Dict(std::rc::Rc::new(std::cell::RefCell::new(response))))
@@ -532,7 +533,8 @@ fn html_response(args: Vec<Value>) -> Result<Value> {
     response.insert("body".to_string(), Value::Str(html));
 
     let mut headers = HashMap::new();
-    headers.insert("content-type".to_string(), Value::Str("text/html".to_string()));
+    // Add charset to content-type for proper HTML rendering
+    headers.insert("content-type".to_string(), Value::Str("text/html; charset=utf-8".to_string()));
     response.insert("headers".to_string(), Value::Dict(std::rc::Rc::new(std::cell::RefCell::new(headers))));
 
     Ok(Value::Dict(std::rc::Rc::new(std::cell::RefCell::new(response))))
