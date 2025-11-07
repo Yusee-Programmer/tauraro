@@ -15,6 +15,7 @@ pub mod compiler;
 pub mod type_checking;
 pub mod jit;
 pub mod jit_compiler;
+pub mod jit_runtime;
 pub mod int_cache;
 pub mod inline_cache;
 pub mod fast_ops;
