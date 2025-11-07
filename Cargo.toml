@@ -109,7 +109,7 @@ opt-level = 0
 
 [profile.release]
 opt-level = 3
-lto = "fat"  # Full LTO for maximum optimization
+lto = "thin"  # Thin LTO for good optimization without JIT symbol conflicts
 codegen-units = 1  # Better optimization at cost of compile time
 panic = "abort"  # Smaller binaries, faster code
 strip = false  # Keep symbols for profiling

@@ -235,13 +235,13 @@ pub unsafe extern "C" fn tauraro_jit_call_function(
 
     // Call based on function type
     match &func_val.value {
-        Value::BuiltinFunction(name) => {
+        Value::BuiltinFunction(_name, _func) => {
             // Call builtin function
             // This would require access to the builtin function registry
             // For now, return error to indicate interpreter fallback needed
             -1
         }
-        Value::Function { .. } | Value::Closure { .. } => {
+        Value::Closure { .. } | Value::NativeFunction(_) | Value::Code(_) => {
             // User-defined function or closure
             // Would need to set up new stack frame, etc.
             // For now, return error to indicate interpreter fallback needed
@@ -519,9 +519,13 @@ pub unsafe extern "C" fn tauraro_jit_dict_get(
                 _ => format!("{:?}", key_val.value),
             };
 
+            // Extract value before borrow ends to avoid borrow checker issues
             let dict = dict_ref.borrow();
-            if let Some(value) = dict.get(&key_str) {
-                registers[result_reg as usize] = RcValue::new(value.clone());
+            let value_opt = dict.get(&key_str).cloned();
+            drop(dict);  // Explicitly drop borrow
+
+            if let Some(value) = value_opt {
+                registers[result_reg as usize] = RcValue::new(value);
                 0
             } else {
                 -1  // Key not found
