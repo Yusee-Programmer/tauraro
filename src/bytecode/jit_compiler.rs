@@ -522,6 +522,55 @@ impl JITCompiler {
                 }
             }
 
+            OpCode::BinaryBitXorRR => {
+                // Bitwise XOR: registers[arg3] = registers[arg1] ^ registers[arg2]
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let result = builder.ins().bxor(left_val, right_val);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::BinaryLShiftRR => {
+                // Left Shift: registers[arg3] = registers[arg1] << registers[arg2]
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let result = builder.ins().ishl(left_val, right_val);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::BinaryRShiftRR => {
+                // Right Shift (arithmetic): registers[arg3] = registers[arg1] >> registers[arg2]
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    // Use arithmetic right shift (preserves sign bit)
+                    let result = builder.ins().sshr(left_val, right_val);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
             // ========== UNARY OPERATORS ==========
             OpCode::UnaryNegate => {
                 // Unary negation: registers[arg2] = -registers[arg1]
@@ -853,6 +902,250 @@ impl JITCompiler {
                     } else {
                         builder.ins().sdiv(imm_val, reg_val)
                     };
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            // ========== FLOAT OPERATIONS (F64) ==========
+            OpCode::BinaryAddF64RR => {
+                // Float addition: registers[arg3] = registers[arg1] + registers[arg2]
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    // Bitcast i64 to f64 for float operations
+                    let left_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), left_val);
+                    let right_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), right_val);
+                    let result_f64 = builder.ins().fadd(left_f64, right_f64);
+                    // Bitcast back to i64 for storage
+                    let result = builder.ins().bitcast(I64, cranelift_codegen::ir::MemFlags::new(), result_f64);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::BinarySubF64RR => {
+                // Float subtraction: registers[arg3] = registers[arg1] - registers[arg2]
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let left_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), left_val);
+                    let right_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), right_val);
+                    let result_f64 = builder.ins().fsub(left_f64, right_f64);
+                    let result = builder.ins().bitcast(I64, cranelift_codegen::ir::MemFlags::new(), result_f64);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::BinaryMulF64RR => {
+                // Float multiplication: registers[arg3] = registers[arg1] * registers[arg2]
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let left_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), left_val);
+                    let right_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), right_val);
+                    let result_f64 = builder.ins().fmul(left_f64, right_f64);
+                    let result = builder.ins().bitcast(I64, cranelift_codegen::ir::MemFlags::new(), result_f64);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::BinaryDivF64RR => {
+                // Float division: registers[arg3] = registers[arg1] / registers[arg2]
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let left_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), left_val);
+                    let right_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), right_val);
+                    let result_f64 = builder.ins().fdiv(left_f64, right_f64);
+                    let result = builder.ins().bitcast(I64, cranelift_codegen::ir::MemFlags::new(), result_f64);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::UnaryNegateF64 => {
+                // Float negation: registers[arg2] = -registers[arg1]
+                let src_reg = instr.arg1;
+                let dest_reg = instr.arg2;
+
+                if let Some(&val) = registers.get(&src_reg) {
+                    let val_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), val);
+                    let result_f64 = builder.ins().fneg(val_f64);
+                    let result = builder.ins().bitcast(I64, cranelift_codegen::ir::MemFlags::new(), result_f64);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            // ========== FLOAT COMPARISONS ==========
+            OpCode::CompareEqualF64RR => {
+                // Float equal: registers[arg3] = (registers[arg1] == registers[arg2])
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let left_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), left_val);
+                    let right_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), right_val);
+                    let cmp_result = builder.ins().fcmp(cranelift_codegen::ir::condcodes::FloatCC::Equal, left_f64, right_f64);
+                    let result = builder.ins().uextend(I64, cmp_result);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::CompareNotEqualF64RR => {
+                // Float not equal: registers[arg3] = (registers[arg1] != registers[arg2])
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let left_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), left_val);
+                    let right_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), right_val);
+                    let cmp_result = builder.ins().fcmp(cranelift_codegen::ir::condcodes::FloatCC::NotEqual, left_f64, right_f64);
+                    let result = builder.ins().uextend(I64, cmp_result);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::CompareLessF64RR => {
+                // Float less than: registers[arg3] = (registers[arg1] < registers[arg2])
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let left_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), left_val);
+                    let right_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), right_val);
+                    let cmp_result = builder.ins().fcmp(cranelift_codegen::ir::condcodes::FloatCC::LessThan, left_f64, right_f64);
+                    let result = builder.ins().uextend(I64, cmp_result);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::CompareLessEqualF64RR => {
+                // Float less than or equal: registers[arg3] = (registers[arg1] <= registers[arg2])
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let left_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), left_val);
+                    let right_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), right_val);
+                    let cmp_result = builder.ins().fcmp(cranelift_codegen::ir::condcodes::FloatCC::LessThanOrEqual, left_f64, right_f64);
+                    let result = builder.ins().uextend(I64, cmp_result);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::CompareGreaterF64RR => {
+                // Float greater than: registers[arg3] = (registers[arg1] > registers[arg2])
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let left_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), left_val);
+                    let right_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), right_val);
+                    let cmp_result = builder.ins().fcmp(cranelift_codegen::ir::condcodes::FloatCC::GreaterThan, left_f64, right_f64);
+                    let result = builder.ins().uextend(I64, cmp_result);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::CompareGreaterEqualF64RR => {
+                // Float greater than or equal: registers[arg3] = (registers[arg1] >= registers[arg2])
+                let left_reg = instr.arg1;
+                let right_reg = instr.arg2;
+                let dest_reg = instr.arg3;
+
+                if let (Some(&left_val), Some(&right_val)) = (registers.get(&left_reg), registers.get(&right_reg)) {
+                    let left_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), left_val);
+                    let right_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), right_val);
+                    let cmp_result = builder.ins().fcmp(cranelift_codegen::ir::condcodes::FloatCC::GreaterThanOrEqual, left_f64, right_f64);
+                    let result = builder.ins().uextend(I64, cmp_result);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            // ========== TYPE CONVERSIONS ==========
+            OpCode::IntToFloat => {
+                // Convert i64 to f64: registers[arg2] = float(registers[arg1])
+                let src_reg = instr.arg1;
+                let dest_reg = instr.arg2;
+
+                if let Some(&val) = registers.get(&src_reg) {
+                    let val_f64 = builder.ins().fcvt_from_sint(F64, val);
+                    let result = builder.ins().bitcast(I64, cranelift_codegen::ir::MemFlags::new(), val_f64);
+                    registers.insert(dest_reg, result);
+
+                    let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);
+                    let addr = builder.ins().iadd(registers_ptr, offset);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
+                }
+            }
+
+            OpCode::FloatToInt => {
+                // Convert f64 to i64 (truncate): registers[arg2] = int(registers[arg1])
+                let src_reg = instr.arg1;
+                let dest_reg = instr.arg2;
+
+                if let Some(&val) = registers.get(&src_reg) {
+                    let val_f64 = builder.ins().bitcast(F64, cranelift_codegen::ir::MemFlags::new(), val);
+                    let result = builder.ins().fcvt_to_sint(I64, val_f64);
                     registers.insert(dest_reg, result);
 
                     let offset = builder.ins().iconst(I64, (dest_reg as i64) * 8);

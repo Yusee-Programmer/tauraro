@@ -4178,6 +4178,98 @@ impl SuperBytecodeVM {
                 // eprintln!("DEBUG BinaryBitOrRR: registers[{}] = {:?}", result_reg, self.frames[frame_idx].registers[result_reg].value);
                 Ok(None)
             }
+            OpCode::BinaryBitXorRR => {
+                // Register-Register bitwise XOR
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryBitXorRR: register index out of bounds"));
+                }
+
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+
+                // Fast path for integer XOR
+                let result = match (&left.value, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a ^ b),
+                    (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a ^ *b),
+                    _ => {
+                        return Err(anyhow!("BinaryBitXorRR: unsupported types for XOR operation"));
+                    }
+                };
+
+                if result_reg >= self.frames[frame_idx].registers.len() {
+                    self.frames[frame_idx].registers.resize(result_reg + 1, RcValue::new(Value::None));
+                }
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryLShiftRR => {
+                // Register-Register left shift (<<)
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryLShiftRR: register index out of bounds"));
+                }
+
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+
+                // Fast path for integer left shift
+                let result = match (&left.value, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => {
+                        if *b < 0 || *b > 63 {
+                            return Err(anyhow!("BinaryLShiftRR: shift amount out of range"));
+                        }
+                        Value::Int(a << b)
+                    },
+                    _ => {
+                        return Err(anyhow!("BinaryLShiftRR: unsupported types for left shift operation"));
+                    }
+                };
+
+                if result_reg >= self.frames[frame_idx].registers.len() {
+                    self.frames[frame_idx].registers.resize(result_reg + 1, RcValue::new(Value::None));
+                }
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::BinaryRShiftRR => {
+                // Register-Register right shift (>>)
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("BinaryRShiftRR: register index out of bounds"));
+                }
+
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+
+                // Fast path for integer right shift
+                let result = match (&left.value, &right.value) {
+                    (Value::Int(a), Value::Int(b)) => {
+                        if *b < 0 || *b > 63 {
+                            return Err(anyhow!("BinaryRShiftRR: shift amount out of range"));
+                        }
+                        Value::Int(a >> b)
+                    },
+                    _ => {
+                        return Err(anyhow!("BinaryRShiftRR: unsupported types for right shift operation"));
+                    }
+                };
+
+                if result_reg >= self.frames[frame_idx].registers.len() {
+                    self.frames[frame_idx].registers.resize(result_reg + 1, RcValue::new(Value::None));
+                }
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
             OpCode::CompareInRR => {
                 // Register-Register membership test (in)
                 let left_reg = arg1 as usize;

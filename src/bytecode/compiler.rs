@@ -1572,6 +1572,9 @@ impl SuperCompiler {
                         BinaryOp::Ge | BinaryOp::Gte => OpCode::CompareGreaterEqualRR,
                         BinaryOp::BitAnd => OpCode::BinaryBitAndRR,
                         BinaryOp::BitOr => OpCode::BinaryBitOrRR,
+                        BinaryOp::BitXor => OpCode::BinaryBitXorRR,
+                        BinaryOp::LShift => OpCode::BinaryLShiftRR,
+                        BinaryOp::RShift => OpCode::BinaryRShiftRR,
                         BinaryOp::And => {
                             // Short-circuit AND: if left is false, return left, otherwise return right
                             // This is a simplified implementation
