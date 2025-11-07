@@ -2241,18 +2241,31 @@ impl Value {
     }
 
     fn call_dict_method(args: Vec<Value>) -> anyhow::Result<Value> {
-        if args.is_empty() {
-            return Err(anyhow::anyhow!("dict method called with no arguments"));
+        if args.len() < 2 {
+            return Err(anyhow::anyhow!("dict method called with insufficient arguments"));
         }
+
+        // First arg is method name, second is the dict itself (self)
         let method_name = if let Value::Str(name) = &args[0] {
-            name
+            name.clone()
         } else {
             return Err(anyhow::anyhow!("First argument must be method name"));
         };
-        // We can't actually call dict methods without a mutable reference to the dict
-        // This is a limitation of this approach - in a real implementation, 
-        // method calls would be handled by the VM with proper references
-        Err(anyhow::anyhow!("Dict method '{}' cannot be called directly", method_name))
+
+        let dict = if let Value::Dict(d) = &args[1] {
+            d.clone()
+        } else {
+            return Err(anyhow::anyhow!("Second argument must be a dict, got {}", args[1].type_name()));
+        };
+
+        // Remaining args are the actual method arguments
+        let method_args = if args.len() > 2 {
+            args[2..].to_vec()
+        } else {
+            vec![]
+        };
+
+        Self::call_dict_method_static(dict, &method_name, method_args)
     }
 
     fn call_set_method(args: Vec<Value>) -> anyhow::Result<Value> {

@@ -3754,12 +3754,25 @@ impl SuperBytecodeVM {
                                     // Create arguments with self as the first argument
                                     let mut method_args = vec![*object.clone()];
                                     method_args.extend(args);
-                                    
+
                                     // Call the method through the VM
                                     // Pass object_reg as the result register so the return value is stored correctly
                                     self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
                                 } else {
                                     return Err(anyhow!("Method '{}' not found in class methods", bound_method_name));
+                                }
+                            },
+                            Value::Dict(_) | Value::List(_) | Value::Str(_) | Value::Set(_) | Value::Tuple(_) => {
+                                // For builtin types (dict, list, str, set, tuple), get the method and call it
+                                if let Some(method) = object.as_ref().get_method(&bound_method_name) {
+                                    // Create arguments: method_name, self, then the actual args
+                                    let mut method_args = vec![Value::Str(bound_method_name.clone()), *object.clone()];
+                                    method_args.extend(args);
+
+                                    // Call the method
+                                    self.call_function_fast(method, method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                                } else {
+                                    return Err(anyhow!("Method '{}' not found for type '{}'", bound_method_name, object.as_ref().type_name()));
                                 }
                             },
                             _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.as_ref().type_name())),
@@ -4179,6 +4192,30 @@ impl SuperBytecodeVM {
                             }
                         }
                     }
+                    Value::Dict(_) => {
+                        // Handle dict methods by calling them directly and storing the result immediately
+                        // We need to bypass the None-preservation logic because dict.get() can return None as a valid result
+                        if let Some(method) = object_value.get_method(&method_name) {
+                            // Create arguments: method_name, self, then the actual args
+                            let mut method_args = vec![Value::Str(method_name.clone()), object_value.clone()];
+                            method_args.extend(args);
+
+                            // Call the builtin function directly
+                            let result = match method {
+                                Value::BuiltinFunction(_, func) => func(method_args)?,
+                                _ => {
+                                    // Fallback to call_function_fast for non-builtin methods
+                                    self.call_function_fast(method, method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                                }
+                            };
+
+                            // Store the result directly in object_reg and return early to bypass None-preservation logic
+                            self.frames[frame_idx].registers[object_reg] = RcValue::new(result);
+                            return Ok(None);
+                        } else {
+                            return Err(anyhow!("'dict' object has no attribute '{}'", method_name));
+                        }
+                    }
                     _ => {
                         // For other builtin types that don't have direct VM support yet
                         return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), method_name));
@@ -4430,11 +4467,24 @@ impl SuperBytecodeVM {
                                     // Create arguments with self as the first argument
                                     let mut method_args = vec![*object.clone()];
                                     method_args.extend(args);
-                                    
+
                                     // Call the method through the VM
                                     self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?
                                 } else {
                                     return Err(anyhow!("Method '{}' not found in class methods", method_name));
+                                }
+                            },
+                            Value::Dict(_) | Value::List(_) | Value::Str(_) | Value::Set(_) | Value::Tuple(_) => {
+                                // For builtin types, get the method and call it
+                                if let Some(method) = object.as_ref().get_method(&method_name) {
+                                    // Create arguments: method_name, self, then the actual args
+                                    let mut method_args = vec![Value::Str(method_name.clone()), *object.clone()];
+                                    method_args.extend(args);
+
+                                    // Call the method
+                                    self.call_function_fast(method, method_args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?
+                                } else {
+                                    return Err(anyhow!("Method '{}' not found for type '{}'", method_name, object.as_ref().type_name()));
                                 }
                             },
                             _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.as_ref().type_name())),
@@ -5354,8 +5404,16 @@ impl SuperBytecodeVM {
                         }
                     },
                     Value::Dict(dict) => {
-                        // For dictionaries, treat keys as attributes
-                        if let Some(value) = dict.borrow().get(&attr_name) {
+                        // First check if this is a method name
+                        if let Some(_method) = object_value.get_method(&attr_name) {
+                            // Return a BoundMethod so the dict instance is available when called
+                            Value::BoundMethod {
+                                object: Box::new(object_value.clone()),
+                                method_name: attr_name.clone(),
+                            }
+                        }
+                        // Otherwise treat keys as attributes
+                        else if let Some(value) = dict.borrow().get(&attr_name) {
                             value.clone()
                         } else {
                             return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
@@ -6722,6 +6780,19 @@ impl SuperBytecodeVM {
                             method_args.extend(args);
                             // We can't call call_method on a non-mutable reference, so we'll return an error
                             return Err(anyhow!("Method '{}' not found in class methods", method_name));
+                        }
+                    }
+                    Value::Dict(_) | Value::List(_) | Value::Str(_) | Value::Set(_) | Value::Tuple(_) => {
+                        // For builtin types, get the method and call it
+                        if let Some(method) = object.as_ref().get_method(&method_name) {
+                            // Create arguments: method_name, self, then the actual args
+                            let mut method_args = vec![Value::Str(method_name.clone()), *object.clone()];
+                            method_args.extend(args);
+
+                            // Call the method
+                            return self.call_function_fast(method, method_args, kwargs, frame_idx, result_reg);
+                        } else {
+                            return Err(anyhow!("Method '{}' not found for type '{}'", method_name, object.type_name()));
                         }
                     }
                     _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.type_name()))
