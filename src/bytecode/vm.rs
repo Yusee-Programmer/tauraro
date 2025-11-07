@@ -1177,8 +1177,13 @@ impl SuperBytecodeVM {
                             regs[result_reg].value = Value::Int(a.wrapping_add(*b));
                         }
                         _ => {
-                            let result = self.add_values(regs[left_reg].value.clone(), regs[right_reg].value.clone())?;
-                            regs[result_reg].value = result;
+                            // Clone values before dropping mutable borrow
+                            let left_val = regs[left_reg].value.clone();
+                            let right_val = regs[right_reg].value.clone();
+                            drop(regs); // Drop mutable borrow
+                            let result = self.add_values(left_val, right_val)?;
+                            self.frames[frame_idx].registers[result_reg].value = result;
+                            return Ok(None);
                         }
                     }
                     Ok(None)
@@ -1219,8 +1224,12 @@ impl SuperBytecodeVM {
                             regs[result_reg].value = Value::Int(a.wrapping_sub(*b));
                         }
                         _ => {
-                            let result = self.sub_values(regs[left_reg].value.clone(), regs[right_reg].value.clone())?;
-                            regs[result_reg].value = result;
+                            let left_val = regs[left_reg].value.clone();
+                            let right_val = regs[right_reg].value.clone();
+                            drop(regs);
+                            let result = self.sub_values(left_val, right_val)?;
+                            self.frames[frame_idx].registers[result_reg].value = result;
+                            return Ok(None);
                         }
                     }
                     Ok(None)
@@ -1261,8 +1270,12 @@ impl SuperBytecodeVM {
                             regs[result_reg].value = Value::Int(a.wrapping_mul(*b));
                         }
                         _ => {
-                            let result = self.mul_values(regs[left_reg].value.clone(), regs[right_reg].value.clone())?;
-                            regs[result_reg].value = result;
+                            let left_val = regs[left_reg].value.clone();
+                            let right_val = regs[right_reg].value.clone();
+                            drop(regs);
+                            let result = self.mul_values(left_val, right_val)?;
+                            self.frames[frame_idx].registers[result_reg].value = result;
+                            return Ok(None);
                         }
                     }
                     Ok(None)
