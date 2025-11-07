@@ -5354,8 +5354,16 @@ impl SuperBytecodeVM {
                         }
                     },
                     Value::Dict(dict) => {
-                        // For dictionaries, treat keys as attributes
-                        if let Some(value) = dict.borrow().get(&attr_name) {
+                        // First check if this is a method name
+                        if let Some(_method) = object_value.get_method(&attr_name) {
+                            // Return a BoundMethod so the dict instance is available when called
+                            Value::BoundMethod {
+                                object: Box::new(object_value.clone()),
+                                method_name: attr_name.clone(),
+                            }
+                        }
+                        // Otherwise treat keys as attributes
+                        else if let Some(value) = dict.borrow().get(&attr_name) {
                             value.clone()
                         } else {
                             return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
