@@ -1304,35 +1304,56 @@ impl Parser {
             self.advance();
             Ok(Expr::Identifier(name))
         } else if self.match_token(&[Token::LParen]) {
+            // Skip newlines and comments after opening paren
+            while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                self.advance();
+            }
+
             // Check for empty tuple
             if self.match_token(&[Token::RParen]) {
                 return Ok(Expr::Tuple(Vec::new()));
             }
-            
+
             let first_expr = self.expression()?;
-            
+
             // Check if this is a tuple (has comma) or just grouped expression
             if self.match_token(&[Token::Comma]) {
+                // Skip newlines and comments after comma
+                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                    self.advance();
+                }
+
                 // Tuple
                 let mut items = vec![first_expr];
-                while !self.check(&Token::RParen) {
-                    if self.match_token(&[Token::Comma]) {
-                        // Allow trailing comma
-                        if self.check(&Token::RParen) {
-                            break;
-                        }
-                        items.push(self.expression()?);
-                    } else {
-                        items.push(self.expression()?);
-                        // After expression, we should have either comma or closing paren
-                        if !self.check(&Token::RParen) && !self.check(&Token::Comma) {
-                            return Err(ParseError::UnexpectedToken {
-                                expected: "',' or ')'".to_string(),
-                                found: format!("{:?}", self.peek().token),
-                            });
-                        }
+                // Allow trailing comma
+                if self.check(&Token::RParen) {
+                    self.consume(Token::RParen, "Expected ')' after tuple items")?;
+                    return Ok(Expr::Tuple(items));
+                }
+
+                loop {
+                    items.push(self.expression()?);
+
+                    if !self.match_token(&[Token::Comma]) {
+                        break;
+                    }
+
+                    // Skip newlines and comments after comma
+                    while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                        self.advance();
+                    }
+
+                    // Allow trailing comma
+                    if self.check(&Token::RParen) {
+                        break;
                     }
                 }
+
+                // Skip newlines and comments before closing paren
+                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                    self.advance();
+                }
+
                 self.consume(Token::RParen, "Expected ')' after tuple items")?;
                 Ok(Expr::Tuple(items))
             } else {
@@ -1347,8 +1368,8 @@ impl Parser {
                 self.advance();
                 Ok(Expr::List(Vec::new()))
             } else {
-                // Skip newlines after opening bracket
-                while self.check(&Token::Newline) {
+                // Skip newlines and comments after opening bracket
+                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
                     self.advance();
                 }
                 
@@ -1388,38 +1409,54 @@ impl Parser {
                             }
                             break;
                         }
-                        
-                        // Skip newlines after comma
-                        while self.check(&Token::Newline) {
+
+                        // Skip newlines and comments after comma
+                        while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
                             self.advance();
                         }
-                        
+
                         // Check for closing bracket (allowing trailing comma)
                         if self.check(&Token::RBracket) {
                             break;
                         }
-                        
+
                         items.push(self.expression()?);
                     }
+
+                    // Skip newlines and comments before closing bracket
+                    while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                        self.advance();
+                    }
+
                     self.consume(Token::RBracket, "Expected ']' after list items")?;
                     Ok(Expr::List(items))
                 }
             }
         } else if self.match_token(&[Token::LBrace]) {
             // Dict, set, or comprehension
+            // Skip newlines and comments after opening brace
+            while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                self.advance();
+            }
+
             if self.check(&Token::RBrace) {
                 // Empty dict
                 self.advance();
                 Ok(Expr::Dict(Vec::new()))
             } else {
                 let first_expr = self.expression()?;
-                
+
                 // Check if it's a dict
                 if self.match_token(&[Token::Colon]) {
+                    // Skip newlines and comments after colon
+                    while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                        self.advance();
+                    }
+
                     // Dict or dict comprehension
                     let first_value = self.expression()?;
                     let mut pairs = vec![(first_expr.clone(), first_value.clone())];
-                    
+
                     // Check if this is a dict comprehension
                     if self.match_token(&[Token::KwFor]) {
                         // Dict comprehension
@@ -1433,21 +1470,40 @@ impl Parser {
                     } else {
                         // Regular dict
                         while self.match_token(&[Token::Comma]) {
+                            // Skip newlines and comments after comma
+                            while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                                self.advance();
+                            }
+
+                            // Check for closing brace (allowing trailing comma)
                             if self.check(&Token::RBrace) {
                                 break;
                             }
+
                             let key = self.expression()?;
                             self.consume(Token::Colon, "Expected ':' in dict")?;
+
+                            // Skip newlines and comments after colon
+                            while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                                self.advance();
+                            }
+
                             let value = self.expression()?;
                             pairs.push((key, value));
                         }
+
+                        // Skip newlines and comments before closing brace
+                        while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                            self.advance();
+                        }
+
                         self.consume(Token::RBrace, "Expected '}' after dict items")?;
                         Ok(Expr::Dict(pairs))
                     }
                 } else {
                     // Set or set comprehension
                     let mut items = vec![first_expr.clone()];
-                    
+
                     // Check if this is a set comprehension
                     if self.match_token(&[Token::KwFor]) {
                         // Set comprehension
@@ -1460,11 +1516,24 @@ impl Parser {
                     } else {
                         // Regular set
                         while self.match_token(&[Token::Comma]) {
+                            // Skip newlines and comments after comma
+                            while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                                self.advance();
+                            }
+
+                            // Check for closing brace (allowing trailing comma)
                             if self.check(&Token::RBrace) {
                                 break;
                             }
+
                             items.push(self.expression()?);
                         }
+
+                        // Skip newlines and comments before closing brace
+                        while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                            self.advance();
+                        }
+
                         self.consume(Token::RBrace, "Expected '}' after set items")?;
                         Ok(Expr::Set(items))
                     }

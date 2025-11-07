@@ -186,8 +186,8 @@ pub fn generate_instruction(
         IRInstruction::ListCreate { elements: _, result } => {
             generate_list_create(result, local_vars)
         }
-        IRInstruction::DictCreate { pairs: _, result } => {
-            generate_dict_create(result, local_vars)
+        IRInstruction::DictCreate { pairs, result } => {
+            generate_dict_create(pairs, result, local_vars)
         }
         IRInstruction::Import { module } => {
             Ok(format!("// Import module: {}", module))
@@ -473,10 +473,24 @@ fn generate_list_create(result: &str, local_vars: &mut HashMap<String, String>) 
     Ok(format!("tauraro_value_t* {} = tauraro_list(0, NULL);", unique_result))
 }
 
-fn generate_dict_create(result: &str, local_vars: &mut HashMap<String, String>) -> Result<String> {
+fn generate_dict_create(pairs: &[(String, String)], result: &str, local_vars: &mut HashMap<String, String>) -> Result<String> {
     let unique_result = get_unique_var_name(result, local_vars);
     local_vars.insert(unique_result.clone(), "tauraro_value_t*".to_string());
-    Ok(format!("tauraro_value_t* {} = tauraro_dict(0, NULL);", unique_result))
+
+    if pairs.is_empty() {
+        return Ok(format!("tauraro_value_t* {} = tauraro_dict(0, NULL);", unique_result));
+    }
+
+    // Create a dict with the key-value pairs
+    let mut code = String::new();
+    code.push_str(&format!("tauraro_value_t* {} = tauraro_dict(0, NULL);\n", unique_result));
+
+    // Add each key-value pair to the dict
+    for (key, value) in pairs {
+        code.push_str(&format!("    tauraro_dict_set({}, {}, {});\n", unique_result, key, value));
+    }
+
+    Ok(code.trim_end().to_string())
 }
 
 fn generate_object_create(class_name: &str, result: &str, local_vars: &mut HashMap<String, String>) -> Result<String> {
