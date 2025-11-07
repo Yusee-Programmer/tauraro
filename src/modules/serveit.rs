@@ -15,6 +15,8 @@ use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::rc::Rc;
+use std::cell::RefCell;
 use tokio::runtime::Runtime;
 use std::net::SocketAddr;
 
@@ -315,6 +317,13 @@ async fn call_asgi_app(app: &Value, scope: Value) -> Result<hyper::Response<Stri
             // Convert result to HTTP response
             convert_to_hyper_response(result)
         }
+        Value::Closure { .. } => {
+            // For closures, execute them directly (we're in a LocalSet, so single-threaded)
+            let result = execute_closure(app, scope)?;
+
+            // Convert result to HTTP response
+            convert_to_hyper_response(result)
+        }
         Value::Dict(dict) => {
             // If app is a dict, it might be a response dict
             convert_dict_to_response(dict)
@@ -326,6 +335,55 @@ async fn call_asgi_app(app: &Value, scope: Value) -> Result<hyper::Response<Stri
                 .body("Hello from ServEit!".to_string())
                 .unwrap())
         }
+    }
+}
+
+/// Execute a closure (Python function) with the given scope
+fn execute_closure(app: &Value, scope: Value) -> Result<Value> {
+    use crate::bytecode::vm::SuperBytecodeVM;
+    use crate::bytecode::compiler::SuperCompiler;
+    use crate::ast::Program;
+
+    match app {
+        Value::Closure { name, params, body, captured_scope, docstring, compiled_code, module_globals } => {
+            // Create a VM instance to execute the closure
+            let mut vm = SuperBytecodeVM::new();
+
+            // Set up the function arguments
+            // The scope should be bound to the first parameter
+            if params.is_empty() {
+                return Err(anyhow!("App function must accept at least one parameter (scope)"));
+            }
+
+            let param_name = &params[0].name;
+
+            // Set up the local scope with captured variables
+            for (name, value) in captured_scope.iter() {
+                // Convert Value to RcValue for VM
+                let rc_value = value_to_rc_value(value.clone());
+                vm.globals.borrow_mut().insert(name.clone(), rc_value);
+            }
+
+             // Call the closure using the VM's function calling mechanism
+            // This will properly set up parameters
+            let args = vec![scope];
+            let kwargs = HashMap::new();
+
+            match vm.call_function_fast(app.clone(), args, kwargs, None, None) {
+                Ok(result) => Ok(result),
+                Err(e) => Err(e)
+            }
+        }
+        _ => Err(anyhow!("Expected a closure")),
+    }
+}
+
+
+/// Helper to convert Value to RcValue for VM execution
+fn value_to_rc_value(value: Value) -> crate::bytecode::objects::RcValue {
+    crate::bytecode::objects::RcValue {
+        value,
+        ref_count: 1,
     }
 }
 

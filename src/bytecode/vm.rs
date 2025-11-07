@@ -6121,7 +6121,7 @@ impl SuperBytecodeVM {
     }
     
     /// Call a function with optimized fast path
-    fn call_function_fast(&mut self, func_value: Value, args: Vec<Value>, kwargs: HashMap<String, Value>, frame_idx: Option<usize>, result_reg: Option<u32>) -> Result<Value> {
+    pub fn call_function_fast(&mut self, func_value: Value, args: Vec<Value>, kwargs: HashMap<String, Value>, frame_idx: Option<usize>, result_reg: Option<u32>) -> Result<Value> {
         match func_value {
             Value::BuiltinFunction(name, func) => {
                 // Special handling for eval/exec/compile - they need VM access
