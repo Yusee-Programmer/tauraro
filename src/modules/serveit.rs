@@ -341,37 +341,73 @@ async fn call_asgi_app(app: &Value, scope: Value) -> Result<hyper::Response<Stri
 /// Execute a closure (Python function) with the given scope
 fn execute_closure(app: &Value, scope: Value) -> Result<Value> {
     use crate::bytecode::vm::SuperBytecodeVM;
+    use crate::bytecode::objects::RcValue;
     use crate::bytecode::compiler::SuperCompiler;
     use crate::ast::Program;
 
     match app {
-        Value::Closure { name, params, body, captured_scope, docstring, compiled_code, module_globals } => {
+        Value::Closure { params, body, captured_scope, compiled_code, module_globals, .. } => {
             // Create a VM instance to execute the closure
             let mut vm = SuperBytecodeVM::new();
 
-            // Set up the function arguments
-            // The scope should be bound to the first parameter
-            if params.is_empty() {
-                return Err(anyhow!("App function must accept at least one parameter (scope)"));
+            // Load all builtin modules into the VM so they're accessible
+            let builtin_modules = crate::modules::init_builtin_modules();
+            for (module_name, module_value) in builtin_modules.iter() {
+                let rc_module = RcValue::new(module_value.clone());
+                vm.globals.borrow_mut().insert(module_name.clone(), rc_module);
             }
 
-            let param_name = &params[0].name;
-
-            // Set up the local scope with captured variables
+            // Set up the captured variables in globals
             for (name, value) in captured_scope.iter() {
-                // Convert Value to RcValue for VM
                 let rc_value = value_to_rc_value(value.clone());
                 vm.globals.borrow_mut().insert(name.clone(), rc_value);
             }
 
-             // Call the closure using the VM's function calling mechanism
-            // This will properly set up parameters
-            let args = vec![scope];
-            let kwargs = HashMap::new();
+            // If the closure has module_globals, copy them over
+            if let Some(mg) = module_globals {
+                for (name, rc_value) in mg.borrow().iter() {
+                    vm.globals.borrow_mut().insert(name.clone(), rc_value.clone());
+                }
+            }
 
-            match vm.call_function_fast(app.clone(), args, kwargs, None, None) {
-                Ok(result) => Ok(result),
-                Err(e) => Err(e)
+            // Execute the closure body
+            if let Some(code_obj) = compiled_code {
+                // For compiled code, set up parameters properly in locals
+                use crate::bytecode::memory::Frame;
+
+                let rc_scope = value_to_rc_value(scope);
+
+                // Create a frame with the parameter in locals (proper way)
+                let mut frame = Frame::new(
+                    *code_obj.clone(),
+                    vm.globals.clone(),
+                    vm.builtins.clone(),
+                );
+
+                // Set up the parameter in locals
+                frame.locals = vec![rc_scope];
+                if !params.is_empty() {
+                    frame.locals_map.insert(params[0].name.clone(), 0);
+                }
+
+                // Push frame and execute
+                vm.frames.push(frame);
+                let result = vm.run_frame();
+                vm.frames.pop();
+
+                result
+            } else {
+                // For non-compiled code, set scope in globals and compile+execute
+                if !params.is_empty() {
+                    let param_name = &params[0].name;
+                    let rc_scope = value_to_rc_value(scope);
+                    vm.globals.borrow_mut().insert(param_name.clone(), rc_scope);
+                }
+
+                let program = Program { statements: body.clone() };
+                let mut compiler = SuperCompiler::new("<serveit_app>".to_string());
+                let code = compiler.compile(program)?;
+                vm.execute(code)
             }
         }
         _ => Err(anyhow!("Expected a closure")),

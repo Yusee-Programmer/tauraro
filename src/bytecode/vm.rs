@@ -371,7 +371,7 @@ impl SuperBytecodeVM {
     }
     
     /// Optimized frame execution using computed GOTOs for maximum performance
-    fn run_frame(&mut self) -> Result<Value> {
+    pub fn run_frame(&mut self) -> Result<Value> {
         // Check for stack overflow using a simple counter
         if self.frames.len() > 1000 {
             return Err(anyhow!("Stack overflow: maximum recursion depth exceeded"));
