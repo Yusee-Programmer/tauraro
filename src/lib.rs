@@ -32,6 +32,7 @@ pub mod package_manager;
 pub mod base_object;
 pub mod bytecode;
 pub mod type_checker;
+pub mod traceback;
 
 // Re-export commonly used items
 pub use value::Value;

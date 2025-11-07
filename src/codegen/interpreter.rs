@@ -295,6 +295,33 @@ pub fn run_repl() -> Result<()> {
                     // Starting fresh - check if this line starts a multiline construct
                     let trimmed = line.trim();
 
+                    // Check for common capitalization errors and provide helpful messages
+                    if trimmed.starts_with("Class ") || trimmed.starts_with("Class:") {
+                        eprintln!("  File \"<stdin>\", line 1");
+                        eprintln!("    {}", trimmed);
+                        eprintln!("    ^");
+                        eprintln!("SyntaxError: 'class' keyword must be lowercase");
+                        buffer.clear();
+                        continue;
+                    }
+                    if trimmed.starts_with("Def ") {
+                        eprintln!("  File \"<stdin>\", line 1");
+                        eprintln!("    {}", trimmed);
+                        eprintln!("    ^");
+                        eprintln!("SyntaxError: 'def' keyword must be lowercase");
+                        buffer.clear();
+                        continue;
+                    }
+                    if trimmed.starts_with("If ") || trimmed.starts_with("Elif ") || trimmed.starts_with("Else:") ||
+                       trimmed.starts_with("For ") || trimmed.starts_with("While ") {
+                        eprintln!("  File \"<stdin>\", line 1");
+                        eprintln!("    {}", trimmed);
+                        eprintln!("    ^");
+                        eprintln!("SyntaxError: Python keywords must be lowercase");
+                        buffer.clear();
+                        continue;
+                    }
+
                     // Check for multiline constructs
                     if trimmed.ends_with(':') ||
                        trimmed.starts_with('@') ||
