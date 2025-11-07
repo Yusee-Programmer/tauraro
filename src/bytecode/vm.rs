@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use crate::modules;
 // Import type checker for runtime type enforcement
 use crate::type_checker::TypeChecker;
+use crate::bytecode::memory::MethodCache;
 
 /// Register-based bytecode virtual machine with computed GOTOs for maximum performance
 pub struct SuperBytecodeVM {
@@ -25,12 +26,22 @@ pub struct SuperBytecodeVM {
     pub builtins: Rc<RefCell<HashMap<String, RcValue>>>,
     pub globals: Rc<RefCell<HashMap<String, RcValue>>>,
     pub globals_version: u32,
-    
+
     // Memory management and stack overflow protection
     pub memory_ops: MemoryOps,
 
     // Cache compiled code objects for closures to avoid recompiling on each call
     function_code_cache: HashMap<Value, CodeObject>,
+
+    // OPTIMIZATION: Global method cache shared across all frames for maximum performance
+    // Key: (class_name, method_name) -> cached method
+    global_method_cache: HashMap<(String, String), MethodCache>,
+    method_cache_version: u32,
+
+    // OPTIMIZATION: Global attribute cache for fast attribute lookups
+    // Key: (class_name, attr_name) -> (offset, cached_value)
+    global_attr_cache: HashMap<(String, String), (usize, Option<Value>)>,
+    attr_cache_version: u32,
 
     // Profiling and JIT compilation tracking
     instruction_execution_count: HashMap<(String, usize), u64>, // (function_name, instruction_index) -> count
@@ -116,6 +127,12 @@ impl SuperBytecodeVM {
             globals_version: 0,
             memory_ops,
             function_code_cache: HashMap::new(),
+
+            // Initialize global caches for maximum performance
+            global_method_cache: HashMap::new(),
+            method_cache_version: 0,
+            global_attr_cache: HashMap::new(),
+            attr_cache_version: 0,
 
             // Initialize profiling counters
             instruction_execution_count: HashMap::new(),
@@ -4509,7 +4526,7 @@ impl SuperBytecodeVM {
                 Ok(None)
             }
             OpCode::LoadMethodCached => {
-                // Load method from cache
+                // Load method from GLOBAL cache for maximum performance
                 // arg1 = object register, arg2 = method name index, arg3 = result register
                 let object_reg = arg1 as usize;
                 let method_name_idx = arg2 as usize;
@@ -4527,13 +4544,16 @@ impl SuperBytecodeVM {
                 let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
                 let method_name = self.frames[frame_idx].code.names[method_name_idx].clone();
 
-                // Try to lookup method in cache first
+                // Try to lookup method in GLOBAL cache first (much faster than per-frame cache)
                 let class_name = object_value.type_name();
-                if let Some(cache_entry) = self.frames[frame_idx].lookup_method_cache(&class_name, &method_name) {
-                    if let Some(method) = &cache_entry.method {
-                        // Found in cache, use cached method
-                        self.frames[frame_idx].registers[result_reg] = RcValue::new(method.clone());
-                        return Ok(None);
+                let cache_key = (class_name.to_string(), method_name.clone());
+                if let Some(cache_entry) = self.global_method_cache.get(&cache_key) {
+                    if cache_entry.version == self.method_cache_version {
+                        if let Some(method) = &cache_entry.method {
+                            // CACHE HIT: Use cached method without any lookups
+                            self.frames[frame_idx].registers[result_reg] = RcValue::new(method.clone());
+                            return Ok(None);
+                        }
                     }
                 }
 
@@ -4601,8 +4621,14 @@ impl SuperBytecodeVM {
                     }
                 };
 
-                // Update method cache
-                self.frames[frame_idx].update_method_cache(class_name.to_string(), method_name, Some(method_value.clone()));
+                // Store method in GLOBAL cache for future use (much better performance)
+                let cache_entry = MethodCache {
+                    class_name: class_name.to_string(),
+                    method_name: method_name.clone(),
+                    method: Some(method_value.clone()),
+                    version: self.method_cache_version,
+                };
+                self.global_method_cache.insert(cache_key, cache_entry);
 
                 // Store the method in the result register
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(method_value);
@@ -5324,23 +5350,33 @@ impl SuperBytecodeVM {
                 Ok(None)
             }
             OpCode::LoadAttr => {
-                // Load attribute from object (obj.attr)
+                // Load attribute from object (obj.attr) with FAST PATH caching
                 let object_reg = arg1 as usize;
                 let attr_name_idx = arg2 as usize;
                 let result_reg = arg3 as usize;
-                
+
                 if object_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("LoadAttr: object register index {} out of bounds (len: {})", object_reg, self.frames[frame_idx].registers.len()));
                 }
-                
+
                 if attr_name_idx >= self.frames[frame_idx].code.names.len() {
                     return Err(anyhow!("LoadAttr: attribute name index {} out of bounds (len: {})", attr_name_idx, self.frames[frame_idx].code.names.len()));
                 }
-                
+
                 // Clone values to avoid borrowing issues
                 let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
                 let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();
-                
+
+                // OPTIMIZATION: Fast path for common Object attribute access
+                // This bypasses the expensive match statements below for hot paths
+                if let Value::Object { fields, .. } = &object_value {
+                    if let Some(attr_value) = fields.get(&attr_name) {
+                        // FAST PATH: Direct attribute access without cache lookup
+                        self.frames[frame_idx].registers[result_reg] = RcValue::new(attr_value.clone());
+                        return Ok(None);
+                    }
+                }
+
                 // Try to get the attribute from the object
                 
                 let result = match &object_value {
