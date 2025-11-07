@@ -59,10 +59,34 @@ pub enum OpCode {
     BinaryPowIR,    // Immediate-Register power
     BinaryBitAndRR, // Register-Register bitwise AND
     BinaryBitOrRR,  // Register-Register bitwise OR
-    
+    BinaryBitXorRR, // Register-Register bitwise XOR
+    BinaryLShiftRR, // Register-Register left shift (<<)
+    BinaryRShiftRR, // Register-Register right shift (>>)
+
     // Fast integer operations
     BinaryDivRRFastInt, // Fast integer division
     BinaryModRRFastInt, // Fast integer modulo
+
+    // Float operations (f64)
+    BinaryAddF64RR,    // Float addition
+    BinarySubF64RR,    // Float subtraction
+    BinaryMulF64RR,    // Float multiplication
+    BinaryDivF64RR,    // Float division (true division, not floor)
+    BinaryPowF64RR,    // Float power
+    BinaryModF64RR,    // Float modulo
+    UnaryNegateF64,    // Float negation
+
+    // Float comparisons
+    CompareEqualF64RR,     // Float equality
+    CompareNotEqualF64RR,  // Float inequality
+    CompareLessF64RR,      // Float less than
+    CompareLessEqualF64RR, // Float less than or equal
+    CompareGreaterF64RR,   // Float greater than
+    CompareGreaterEqualF64RR, // Float greater than or equal
+
+    // Type conversions
+    IntToFloat,        // Convert i64 to f64
+    FloatToInt,        // Convert f64 to i64 (truncate)
     
     // Comparison operations
     CompareEqualRR,     // Register-Register equality comparison
