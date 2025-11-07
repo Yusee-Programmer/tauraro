@@ -264,9 +264,11 @@ pub enum Token {
     Indent,
     Dedent,
 
-    // Docstring literals (triple-quoted strings)
-    #[regex(r#""{3}[^"]*"{3}"#, |lex| lex.slice()[3..lex.slice().len()-3].to_string())]
-    #[regex(r#"'{3}[^']*'{3}"#, |lex| lex.slice()[3..lex.slice().len()-3].to_string())]
+    // Docstring literals (triple-quoted strings) - must come before regular strings
+    // Pattern: opening triple quote, then any chars that aren't three consecutive quotes, then closing triple quote
+    // [^"] matches any char including newlines except ", plus ""+non-quote and "+non-quote patterns
+    #[regex(r#""{3}(?:[^"]|"{1}[^"]|"{2}[^"])*"{3}"#, |lex| lex.slice()[3..lex.slice().len()-3].to_string())]
+    #[regex(r#"'{3}(?:[^']|'{1}[^']|'{2}[^'])*'{3}"#, |lex| lex.slice()[3..lex.slice().len()-3].to_string())]
     DocString(String),
 
     // Comments (Python-style)
