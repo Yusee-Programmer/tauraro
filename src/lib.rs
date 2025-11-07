@@ -8,6 +8,8 @@ pub mod ir;
 pub mod codegen;
 pub mod value;
 pub mod value_pool;
+pub mod string_interner;
+pub mod tagged_value;
 
 // FFI modules (before builtins so it can be imported)
 #[cfg(feature = "ffi")]

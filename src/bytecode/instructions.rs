@@ -162,6 +162,7 @@ pub enum OpCode {
     // Specialized fast paths
     FastLoop,       // Fast loop implementation
     FastRangeIter,  // Fast range iteration
+    FastRangeLoop,  // Ultra-fast range-based for loop (combines range + iteration)
     FastListAppend, // Fast list append
     FastIntCompare, // Fast integer comparison
     FastIntArithmetic, // Fast integer arithmetic operations
@@ -170,6 +171,10 @@ pub enum OpCode {
     FastIntMul,     // Ultra-fast integer multiplication
     FastIntDiv,     // Ultra-fast integer division
     FastIntMod,     // Ultra-fast integer modulo
+
+    // Fast conditional operations
+    FastBoolJump,   // Fast jump for boolean values (skip conversion)
+    FastIntCompareJump, // Combined integer comparison + jump
     
     // Super() support
     LoadZeroArgSuper, // Load super object with zero arguments (special handling)
