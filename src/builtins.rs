@@ -294,14 +294,18 @@ fn range_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
 }
 
 fn input_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    use std::io::Write;
+
     if args.len() > 1 {
         return Err(anyhow::anyhow!("input() takes at most 1 argument ({} given)", args.len()));
     }
-    
+
+    // Print prompt and flush stdout to ensure it appears before reading input
     if !args.is_empty() {
         print!("{}", args[0]);
+        std::io::stdout().flush()?;
     }
-    
+
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
     // Remove trailing newline
@@ -311,7 +315,7 @@ fn input_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
             input.pop();
         }
     }
-    
+
     Ok(Value::Str(input))
 }
 
