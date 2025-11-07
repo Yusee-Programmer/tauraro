@@ -1,6 +1,6 @@
 """
 Serveit benchmark application
-Simple routes for performance testing
+Simple routes for performance testing - with dynamic routing
 """
 import serveit
 
@@ -11,18 +11,20 @@ def app(scope):
         return serveit.HTMLResponse("<h1>Serveit Root</h1>")
     elif path == "/api/hello":
         return serveit.JSONResponse({"message": "Hello, World!"})
-    elif path == "/api/user/123":
-        return serveit.JSONResponse({
-            "id": 123,
-            "name": "User 123",
-            "email": "user123@example.com"
-        })
-    elif path == "/api/user/456":
-        return serveit.JSONResponse({
-            "id": 456,
-            "name": "User 456",
-            "email": "user456@example.com"
-        })
+    elif path.startswith("/api/user/"):
+        # Extract user_id from path using split()
+        parts = path.split("/")
+        if len(parts) >= 4:
+            try:
+                user_id = int(parts[3])
+                return serveit.JSONResponse({
+                    "id": user_id,
+                    "name": f"User {user_id}",
+                    "email": f"user{user_id}@example.com"
+                })
+            except:
+                pass
+        return serveit.JSONResponse({"error": "Invalid user ID"}, status_code=400)
     elif path == "/api/data":
         items = []
         for i in range(100):

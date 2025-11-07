@@ -4161,6 +4161,181 @@ impl SuperBytecodeVM {
                                 let expanded = s_clone.replace('\t', &" ".repeat(tabsize));
                                 Value::Str(expanded)
                             }
+                            "startswith" => {
+                                // Check if string starts with prefix
+                                if args.is_empty() {
+                                    return Err(anyhow!("startswith() missing required argument: 'prefix'"));
+                                }
+                                if let Value::Str(prefix) = &args[0] {
+                                    Value::Bool(s_clone.starts_with(prefix))
+                                } else {
+                                    return Err(anyhow!("startswith() argument must be a string"));
+                                }
+                            }
+                            "endswith" => {
+                                // Check if string ends with suffix
+                                if args.is_empty() {
+                                    return Err(anyhow!("endswith() missing required argument: 'suffix'"));
+                                }
+                                if let Value::Str(suffix) = &args[0] {
+                                    Value::Bool(s_clone.ends_with(suffix))
+                                } else {
+                                    return Err(anyhow!("endswith() argument must be a string"));
+                                }
+                            }
+                            "split" => {
+                                // Split string by separator
+                                if args.is_empty() {
+                                    // Split by whitespace
+                                    let parts: Vec<Value> = s_clone
+                                        .split_whitespace()
+                                        .map(|s| Value::Str(s.to_string()))
+                                        .collect();
+                                    Value::List(HPList::from_values(parts))
+                                } else if let Value::Str(sep) = &args[0] {
+                                    let parts: Vec<Value> = s_clone
+                                        .split(sep.as_str())
+                                        .map(|s| Value::Str(s.to_string()))
+                                        .collect();
+                                    Value::List(HPList::from_values(parts))
+                                } else {
+                                    return Err(anyhow!("split() separator must be a string"));
+                                }
+                            }
+                            "rsplit" => {
+                                // Split string from the right
+                                if args.is_empty() {
+                                    // Split by whitespace
+                                    let parts: Vec<Value> = s_clone
+                                        .split_whitespace()
+                                        .map(|s| Value::Str(s.to_string()))
+                                        .collect();
+                                    Value::List(HPList::from_values(parts))
+                                } else if let Value::Str(sep) = &args[0] {
+                                    let mut parts: Vec<Value> = s_clone
+                                        .rsplit(sep.as_str())
+                                        .map(|s| Value::Str(s.to_string()))
+                                        .collect();
+                                    parts.reverse();
+                                    Value::List(HPList::from_values(parts))
+                                } else {
+                                    return Err(anyhow!("rsplit() separator must be a string"));
+                                }
+                            }
+                            "join" => {
+                                // Join iterable with string as separator
+                                if args.is_empty() {
+                                    return Err(anyhow!("join() missing required argument: 'iterable'"));
+                                }
+                                match &args[0] {
+                                    Value::List(list) => {
+                                        let strings: Result<Vec<String>, _> = list.as_vec()
+                                            .iter()
+                                            .map(|v| {
+                                                if let Value::Str(s) = v {
+                                                    Ok(s.clone())
+                                                } else {
+                                                    Err(anyhow!("join() iterable must contain only strings"))
+                                                }
+                                            })
+                                            .collect();
+                                        Value::Str(strings?.join(&s_clone))
+                                    }
+                                    Value::Tuple(items) => {
+                                        let strings: Result<Vec<String>, _> = items
+                                            .iter()
+                                            .map(|v| {
+                                                if let Value::Str(s) = v {
+                                                    Ok(s.clone())
+                                                } else {
+                                                    Err(anyhow!("join() iterable must contain only strings"))
+                                                }
+                                            })
+                                            .collect();
+                                        Value::Str(strings?.join(&s_clone))
+                                    }
+                                    _ => return Err(anyhow!("join() argument must be an iterable")),
+                                }
+                            }
+                            "replace" => {
+                                // Replace occurrences of old with new
+                                if args.len() < 2 {
+                                    return Err(anyhow!("replace() requires 2 arguments: old and new"));
+                                }
+                                if let (Value::Str(old), Value::Str(new)) = (&args[0], &args[1]) {
+                                    Value::Str(s_clone.replace(old, new))
+                                } else {
+                                    return Err(anyhow!("replace() arguments must be strings"));
+                                }
+                            }
+                            "find" => {
+                                // Find first occurrence of substring
+                                if args.is_empty() {
+                                    return Err(anyhow!("find() missing required argument: 'sub'"));
+                                }
+                                if let Value::Str(sub) = &args[0] {
+                                    match s_clone.find(sub.as_str()) {
+                                        Some(pos) => Value::Int(pos as i64),
+                                        None => Value::Int(-1),
+                                    }
+                                } else {
+                                    return Err(anyhow!("find() argument must be a string"));
+                                }
+                            }
+                            "rfind" => {
+                                // Find last occurrence of substring
+                                if args.is_empty() {
+                                    return Err(anyhow!("rfind() missing required argument: 'sub'"));
+                                }
+                                if let Value::Str(sub) = &args[0] {
+                                    match s_clone.rfind(sub.as_str()) {
+                                        Some(pos) => Value::Int(pos as i64),
+                                        None => Value::Int(-1),
+                                    }
+                                } else {
+                                    return Err(anyhow!("rfind() argument must be a string"));
+                                }
+                            }
+                            "index" => {
+                                // Find first occurrence of substring (raises error if not found)
+                                if args.is_empty() {
+                                    return Err(anyhow!("index() missing required argument: 'sub'"));
+                                }
+                                if let Value::Str(sub) = &args[0] {
+                                    match s_clone.find(sub.as_str()) {
+                                        Some(pos) => Value::Int(pos as i64),
+                                        None => return Err(anyhow!("substring not found")),
+                                    }
+                                } else {
+                                    return Err(anyhow!("index() argument must be a string"));
+                                }
+                            }
+                            "rindex" => {
+                                // Find last occurrence of substring (raises error if not found)
+                                if args.is_empty() {
+                                    return Err(anyhow!("rindex() missing required argument: 'sub'"));
+                                }
+                                if let Value::Str(sub) = &args[0] {
+                                    match s_clone.rfind(sub.as_str()) {
+                                        Some(pos) => Value::Int(pos as i64),
+                                        None => return Err(anyhow!("substring not found")),
+                                    }
+                                } else {
+                                    return Err(anyhow!("rindex() argument must be a string"));
+                                }
+                            }
+                            "count" => {
+                                // Count occurrences of substring
+                                if args.is_empty() {
+                                    return Err(anyhow!("count() missing required argument: 'sub'"));
+                                }
+                                if let Value::Str(sub) = &args[0] {
+                                    let count = s_clone.matches(sub.as_str()).count();
+                                    Value::Int(count as i64)
+                                } else {
+                                    return Err(anyhow!("count() argument must be a string"));
+                                }
+                            }
                             _ => {
                                 return Err(anyhow!("String has no method '{}'", method_name));
                             }
