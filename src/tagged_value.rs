@@ -269,6 +269,44 @@ impl TaggedValue {
         }
     }
 
+    /// Divide two tagged values (fast path for small ints)
+    #[inline(always)]
+    pub fn div(&self, other: &TaggedValue) -> Option<TaggedValue> {
+        if self.is_int() && other.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            let b = unsafe { other.as_int_unchecked() };
+
+            // Check for division by zero
+            if b == 0 {
+                return None;
+            }
+
+            let result = a / b;
+            Some(TaggedValue::new_int(result))
+        } else {
+            None
+        }
+    }
+
+    /// Modulo two tagged values (fast path for small ints)
+    #[inline(always)]
+    pub fn modulo(&self, other: &TaggedValue) -> Option<TaggedValue> {
+        if self.is_int() && other.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            let b = unsafe { other.as_int_unchecked() };
+
+            // Check for modulo by zero
+            if b == 0 {
+                return None;
+            }
+
+            let result = a % b;
+            Some(TaggedValue::new_int(result))
+        } else {
+            None
+        }
+    }
+
     /// Compare two tagged values for equality (fast path)
     #[inline(always)]
     pub fn eq(&self, other: &TaggedValue) -> bool {
