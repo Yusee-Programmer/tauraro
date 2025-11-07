@@ -1,6 +1,7 @@
 //! Virtual machine implementation
 
 use crate::value::Value;
+use crate::value_pool as value_pool;
 use crate::modules::hplist::HPList;
 use crate::bytecode::instructions::OpCode;
 use crate::bytecode::objects::RcValue;
@@ -725,7 +726,7 @@ impl SuperBytecodeVM {
                         
                         if should_continue {
                             // Store the current value in the result register
-                            let value = RcValue::new(Value::Int(current));
+                            let value = RcValue::new(value_pool::create_int(current));
                             self.frames[frame_idx].set_register(result_reg as u32, value);
                             
                             // Update the iterator's current position
@@ -833,7 +834,7 @@ impl SuperBytecodeVM {
                         
                         if should_continue {
                             // Store the current value in the result register
-                            let value = RcValue::new(Value::Int(current));
+                            let value = RcValue::new(value_pool::create_int(current));
                             self.frames[frame_idx].set_register(result_reg as u32, value);
                             
                             // Update the iterator's current position
@@ -875,9 +876,9 @@ impl SuperBytecodeVM {
                 // Get the value to add
                 let add_value = &self.frames[frame_idx].registers[add_reg];
 
-                // Perform addition
+                // Perform addition (using value pool for integer results)
                 let result = match (&load_value.value, &add_value.value) {
-                    (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+                    (Value::Int(a), Value::Int(b)) => value_pool::create_int(a + b),
                     (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
                     (Value::Str(a), Value::Str(b)) => Value::Str(format!("{}{}", a, b)),
                     _ => {
@@ -898,7 +899,7 @@ impl SuperBytecodeVM {
                 let add_reg = arg2 as usize;
                 let store_reg = arg3 as usize;
 
-                if load_reg >= self.frames[frame_idx].registers.len() || 
+                if load_reg >= self.frames[frame_idx].registers.len() ||
                    add_reg >= self.frames[frame_idx].registers.len() ||
                    store_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("LoadAddStore: register index out of bounds"));
@@ -909,9 +910,9 @@ impl SuperBytecodeVM {
                 // Get the value to add
                 let add_value = &self.frames[frame_idx].registers[add_reg];
 
-                // Perform addition
+                // Perform addition (using value pool for integer results)
                 let result = match (&load_value.value, &add_value.value) {
-                    (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+                    (Value::Int(a), Value::Int(b)) => value_pool::create_int(a + b),
                     (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
                     (Value::Str(a), Value::Str(b)) => Value::Str(format!("{}{}", a, b)),
                     _ => {

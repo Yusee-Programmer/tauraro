@@ -4,6 +4,7 @@ use crate::ast::{Program, Statement, Expr, Literal, BinaryOp, UnaryOp, Param, Pa
 use crate::bytecode::instructions::{OpCode, Instruction};
 use crate::bytecode::memory::CodeObject;
 use crate::value::Value;
+use crate::value_pool;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
@@ -511,8 +512,8 @@ impl SuperCompiler {
                     let elem_reg = self.allocate_register();
 
                     for (idx, var_name) in variables.iter().enumerate() {
-                        // Load the index constant
-                        let idx_const = self.code.add_constant(Value::Int(idx as i64));
+                        // Load the index constant (using pool for small integers)
+                        let idx_const = self.code.add_constant(value_pool::create_int(idx as i64));
                         self.emit(OpCode::LoadConst, idx_const, index_reg, 0, self.current_line);
 
                         // Extract element by index
@@ -1094,7 +1095,7 @@ impl SuperCompiler {
                 // For each target, we need to extract the value from the tuple and store it
                 for (i, target) in targets.iter().enumerate() {
                     // Create a register for the index
-                    let index_const = self.code.add_constant(Value::Int(i as i64));
+                    let index_const = self.code.add_constant(value_pool::create_int(i as i64));
                     let index_reg = self.allocate_register();
                     self.emit(OpCode::LoadConst, index_const, index_reg, 0, self.current_line);
 
@@ -1138,7 +1139,7 @@ impl SuperCompiler {
                     // First, extract the regular items before the starred target
                     for (i, target) in targets[..star_idx].iter().enumerate() {
                         if let UnpackTarget::Identifier(name) = target {
-                            let index_const = self.code.add_constant(Value::Int(i as i64));
+                            let index_const = self.code.add_constant(value_pool::create_int(i as i64));
                             let index_reg = self.allocate_register();
                             self.emit(OpCode::LoadConst, index_const, index_reg, 0, self.current_line);
 
@@ -1168,13 +1169,13 @@ impl SuperCompiler {
                         // Copy value_reg to slice_reg (we'll slice slice_reg)
                         self.emit(OpCode::MoveReg, value_reg, slice_reg, 0, self.current_line);
 
-                        let start_const = self.code.add_constant(Value::Int(before_count as i64));
+                        let start_const = self.code.add_constant(value_pool::create_int(before_count as i64));
                         let start_reg = self.allocate_register();
                         self.emit(OpCode::LoadConst, start_const, start_reg, 0, self.current_line);
 
                         let stop_reg = if after_count > 0 {
                             // Negative index: -after_count
-                            let stop_const = self.code.add_constant(Value::Int(-(after_count as i64)));
+                            let stop_const = self.code.add_constant(value_pool::create_int(-(after_count as i64)));
                             let reg = self.allocate_register();
                             self.emit(OpCode::LoadConst, stop_const, reg, 0, self.current_line);
                             reg
@@ -1203,7 +1204,7 @@ impl SuperCompiler {
                     for (i, target) in targets[(star_idx + 1)..].iter().enumerate() {
                         if let UnpackTarget::Identifier(name) = target {
                             // Negative indexing from the end
-                            let index_const = self.code.add_constant(Value::Int(-((after_count - i) as i64)));
+                            let index_const = self.code.add_constant(value_pool::create_int(-((after_count - i) as i64)));
                             let index_reg = self.allocate_register();
                             self.emit(OpCode::LoadConst, index_const, index_reg, 0, self.current_line);
 
@@ -1224,7 +1225,7 @@ impl SuperCompiler {
                     // No starred targets, treat as regular unpacking
                     for (i, target) in targets.iter().enumerate() {
                         if let UnpackTarget::Identifier(name) = target {
-                            let index_const = self.code.add_constant(Value::Int(i as i64));
+                            let index_const = self.code.add_constant(value_pool::create_int(i as i64));
                             let index_reg = self.allocate_register();
                             self.emit(OpCode::LoadConst, index_const, index_reg, 0, self.current_line);
 
@@ -1478,12 +1479,13 @@ impl SuperCompiler {
     fn compile_expression(&mut self, expr: Expr) -> Result<u32> {
         match expr {
             Expr::Literal(literal) => {
+                // Use value pool for common values to reduce allocations
                 let value = match literal {
-                    Literal::Int(n) => Value::Int(n),
+                    Literal::Int(n) => value_pool::create_int(n),
                     Literal::Float(n) => Value::Float(n),
-                    Literal::String(s) => Value::Str(s),
-                    Literal::Bool(b) => Value::Bool(b),
-                    Literal::None => Value::None,
+                    Literal::String(s) => value_pool::create_string(s),
+                    Literal::Bool(b) => value_pool::create_bool(b),
+                    Literal::None => value_pool::create_none(),
                     _ => return Err(anyhow!("Unsupported literal type")),
                 };
                 let const_idx = self.code.add_constant(value);

@@ -14,6 +14,7 @@ mod semantic;
 mod ir;
 mod codegen;
 mod value;
+mod value_pool;
 
 // FFI modules (declare before builtins so it can be imported)
 #[cfg(feature = "ffi")]
