@@ -1575,16 +1575,1278 @@ impl SuperBytecodeVM {
         Ok(None)
     }
 
+    #[inline(always)]
+    fn handle_get_iter(&mut self, frame_idx: usize, arg1: u32, arg2: u32, _arg3: u32) -> Result<Option<Value>> {
+        // Get an iterator from an iterable object
+        let iterable_reg = arg1 as usize;
+        let result_reg = arg2;
+
+        if iterable_reg >= self.frames[frame_idx].registers.len() {
+            return Err(anyhow!("GetIter: register index {} out of bounds (len: {})", iterable_reg, self.frames[frame_idx].registers.len()));
+        }
+
+        let iterable_value = &self.frames[frame_idx].registers[iterable_reg];
+
+        // Convert iterable to iterator based on its type
+        let iterator = match &iterable_value.value {
+            Value::Generator { .. } => {
+                // For generators, we return the generator itself as an iterator
+                iterable_value.value.clone()
+            },
+            Value::Iterator { .. } => {
+                // For Iterator objects, we return the iterator itself
+                iterable_value.value.clone()
+            },
+            Value::Range { start, stop, step } => {
+                // For range, create a RangeIterator
+                Value::RangeIterator {
+                    start: *start,
+                    stop: *stop,
+                    step: *step,
+                    current: *start,
+                }
+            },
+            Value::List(items) => {
+                // For list, create an Iterator object
+                Value::Iterator {
+                    items: items.as_vec().clone(),
+                    current_index: 0,
+                }
+            },
+            Value::Tuple(items) => {
+                // For tuple, create an Iterator object
+                Value::Iterator {
+                    items: items.clone(),
+                    current_index: 0,
+                }
+            },
+            Value::Str(s) => {
+                // For string, create a StringIterator (using RangeIterator for indices)
+                Value::RangeIterator {
+                    start: 0,
+                    stop: s.len() as i64,
+                    step: 1,
+                    current: 0,
+                }
+            },
+            _ => {
+                // For other types, we'll just jump to end for now
+                // In a full implementation, we'd try to call the __iter__ method
+                return Err(anyhow!("GetIter: cannot create iterator for type {}", iterable_value.value.type_name()));
+            }
+        };
+
+        self.frames[frame_idx].set_register(result_reg, RcValue::new(iterator));
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn handle_for_iter(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Iterate over an iterator
+        let iter_reg = arg1 as usize;
+        let result_reg = arg2 as usize;
+        let target = arg3 as usize;
+
+        if iter_reg >= self.frames[frame_idx].registers.len() || result_reg >= self.frames[frame_idx].registers.len() {
+            return Err(anyhow!("ForIter: register index out of bounds"));
+        }
+
+        // Handle different iterator types
+        // Clone the iterator value to avoid borrowing issues
+        let iter_value = self.frames[frame_idx].registers[iter_reg].value.clone();
+        match iter_value {
+            Value::RangeIterator { start, stop, step, current } => {
+                // Check if we've reached the end of the range
+                let should_continue = if step > 0 {
+                    current < stop
+                } else if step < 0 {
+                    current > stop
+                } else {
+                    // step == 0 is invalid, but we'll treat it as end of iteration
+                    false
+                };
+
+                if should_continue {
+                    // Store the current value in the result register
+                    let value = RcValue::new(value_pool::create_int(current));
+                    self.frames[frame_idx].set_register(result_reg as u32, value);
+
+                    // Update the iterator's current position
+                    let new_current = current + step;
+                    let updated_iterator = Value::RangeIterator {
+                        start,
+                        stop,
+                        step,
+                        current: new_current,
+                    };
+                    self.frames[frame_idx].registers[iter_reg] = RcValue::new(updated_iterator);
+
+                    // Continue with the loop body
+                    Ok(None)
+                } else {
+                    // End of iteration - jump to the target (after the loop)
+                    self.frames[frame_idx].pc = target;
+                    // Return Ok(None) to indicate that PC has changed
+                    Ok(None)
+                }
+            },
+            Value::Generator { code, frame, finished } => {
+                // For generators, we need to resume execution and get the next value
+                if finished {
+                    // Generator is finished, jump to the target (end of loop)
+                    self.frames[frame_idx].pc = target;
+                    Ok(None)
+                } else {
+                    // Resume the generator execution
+                    // If frame is None, this is the first time we're calling the generator
+                    let generator_frame = if let Some(f) = frame {
+                        *f
+                    } else {
+                        // Create a new frame for the generator
+                        let globals_rc = Rc::clone(&self.globals);
+                        let builtins_rc = Rc::clone(&self.builtins);
+                        Frame::new_function_frame(*code, globals_rc, builtins_rc, vec![], HashMap::new())
+                    };
+
+                    // Set up return register so the generator can return yielded values to this frame
+                    let mut gen_frame = generator_frame;
+                    gen_frame.return_register = Some((frame_idx, result_reg as u32));
+
+                    // Push the generator frame onto the stack
+                    self.frames.push(gen_frame);
+
+                    // We'll handle the generator execution result in the main execution loop
+                    // For now, we just continue execution which will run the generator frame
+                    Ok(None)
+                }
+            },
+            Value::Iterator { ref items, ref current_index } => {
+                // For Iterator objects, check if we've reached the end
+                if *current_index < items.len() {
+                    // Store the current value in the result register
+                    let value = RcValue::new(items[*current_index].clone());
+                    self.frames[frame_idx].set_register(result_reg as u32, value);
+
+                    // Update the iterator's current position
+                    let updated_iterator = Value::Iterator {
+                        items: items.clone(),
+                        current_index: current_index + 1,
+                    };
+                    self.frames[frame_idx].registers[iter_reg] = RcValue::new(updated_iterator);
+
+                    // Continue with the loop body
+                    Ok(None)
+                } else {
+                    // End of iteration - jump to the target (after the loop)
+                    self.frames[frame_idx].pc = target;
+                    // Return Ok(None) to indicate that PC has changed
+                    Ok(None)
+                }
+            },
+            _ => {
+                // For other types, we'll just jump to end for now
+                // In a full implementation, we'd try to call the __next__ method
+                self.frames[frame_idx].pc = target;
+                Ok(None)
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn handle_fast_int_add(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // ULTRA-FAST integer addition using TaggedValue fast path
+        let left_reg = arg1 as usize;
+        let right_reg = arg2 as usize;
+        let result_reg = arg3 as usize;
+
+        let regs = &mut self.frames[frame_idx].registers;
+
+        #[cfg(not(debug_assertions))]
+        unsafe {
+            let left_ptr = regs.as_ptr().add(left_reg);
+            let right_ptr = regs.as_ptr().add(right_reg);
+            let result_ptr = regs.as_mut_ptr().add(result_reg);
+
+            // Try TaggedValue fast path first (2-3x faster!)
+            if let (Some(left_tagged), Some(right_tagged)) =
+                (value_to_tagged(&(*left_ptr).value), value_to_tagged(&(*right_ptr).value)) {
+
+                if let Some(result_tagged) = left_tagged.add(&right_tagged) {
+                    // ULTRA FAST PATH: TaggedValue arithmetic (no allocation!)
+                    (*result_ptr).value = tagged_to_value(&result_tagged);
+                    return Ok(None);
+                }
+            }
+
+            // Regular fast path for Value::Int
+            if let (Value::Int(a), Value::Int(b)) = (&(*left_ptr).value, &(*right_ptr).value) {
+                (*result_ptr).value = Value::Int(a.wrapping_add(*b));
+                return Ok(None);
+            }
+
+            // Slow path: non-integer operands
+            let result = self.add_values((*left_ptr).value.clone(), (*right_ptr).value.clone())?;
+            (*result_ptr).value = result;
+            return Ok(None);
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
+                return Err(anyhow!("FastIntAdd: register out of bounds"));
+            }
+
+            // Try TaggedValue fast path first
+            if let (Some(left_tagged), Some(right_tagged)) =
+                (value_to_tagged(&regs[left_reg].value), value_to_tagged(&regs[right_reg].value)) {
+
+                if let Some(result_tagged) = left_tagged.add(&right_tagged) {
+                    regs[result_reg].value = tagged_to_value(&result_tagged);
+                    return Ok(None);
+                }
+            }
+
+            match (&regs[left_reg].value, &regs[right_reg].value) {
+                (Value::Int(a), Value::Int(b)) => {
+                    regs[result_reg].value = Value::Int(a.wrapping_add(*b));
+                }
+                _ => {
+                    let left_val = regs[left_reg].value.clone();
+                    let right_val = regs[right_reg].value.clone();
+                    drop(regs);
+                    let result = self.add_values(left_val, right_val)?;
+                    self.frames[frame_idx].registers[result_reg].value = result;
+                    return Ok(None);
+                }
+            }
+            Ok(None)
+        }
+    }
+
+    #[inline(always)]
+    fn handle_fast_int_sub(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // ULTRA-FAST integer subtraction using TaggedValue fast path
+        let left_reg = arg1 as usize;
+        let right_reg = arg2 as usize;
+        let result_reg = arg3 as usize;
+
+        let regs = &mut self.frames[frame_idx].registers;
+
+        #[cfg(not(debug_assertions))]
+        unsafe {
+            let left_ptr = regs.as_ptr().add(left_reg);
+            let right_ptr = regs.as_ptr().add(right_reg);
+            let result_ptr = regs.as_mut_ptr().add(result_reg);
+
+            // TaggedValue fast path (2-3x faster!)
+            if let (Some(left_tagged), Some(right_tagged)) =
+                (value_to_tagged(&(*left_ptr).value), value_to_tagged(&(*right_ptr).value)) {
+
+                if let Some(result_tagged) = left_tagged.sub(&right_tagged) {
+                    (*result_ptr).value = tagged_to_value(&result_tagged);
+                    return Ok(None);
+                }
+            }
+
+            if let (Value::Int(a), Value::Int(b)) = (&(*left_ptr).value, &(*right_ptr).value) {
+                (*result_ptr).value = Value::Int(a.wrapping_sub(*b));
+                return Ok(None);
+            }
+
+            let result = self.sub_values((*left_ptr).value.clone(), (*right_ptr).value.clone())?;
+            (*result_ptr).value = result;
+            return Ok(None);
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
+                return Err(anyhow!("FastIntSub: register out of bounds"));
+            }
+
+            // TaggedValue fast path
+            if let (Some(left_tagged), Some(right_tagged)) =
+                (value_to_tagged(&regs[left_reg].value), value_to_tagged(&regs[right_reg].value)) {
+
+                if let Some(result_tagged) = left_tagged.sub(&right_tagged) {
+                    regs[result_reg].value = tagged_to_value(&result_tagged);
+                    return Ok(None);
+                }
+            }
+
+            match (&regs[left_reg].value, &regs[right_reg].value) {
+                (Value::Int(a), Value::Int(b)) => {
+                    regs[result_reg].value = Value::Int(a.wrapping_sub(*b));
+                }
+                _ => {
+                    let left_val = regs[left_reg].value.clone();
+                    let right_val = regs[right_reg].value.clone();
+                    drop(regs);
+                    let result = self.sub_values(left_val, right_val)?;
+                    self.frames[frame_idx].registers[result_reg].value = result;
+                    return Ok(None);
+                }
+            }
+            Ok(None)
+        }
+    }
+
+    #[inline(always)]
+    fn handle_fast_int_mul(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // ULTRA-FAST integer multiplication - zero allocation
+        let left_reg = arg1 as usize;
+        let right_reg = arg2 as usize;
+        let result_reg = arg3 as usize;
+
+        let regs = &mut self.frames[frame_idx].registers;
+
+        #[cfg(not(debug_assertions))]
+        unsafe {
+            let left_ptr = regs.as_ptr().add(left_reg);
+            let right_ptr = regs.as_ptr().add(right_reg);
+            let result_ptr = regs.as_mut_ptr().add(result_reg);
+
+            // Try TaggedValue fast path first (2-3x faster!)
+            if let (Some(left_tagged), Some(right_tagged)) =
+                (value_to_tagged(&(*left_ptr).value), value_to_tagged(&(*right_ptr).value)) {
+
+                if let Some(result_tagged) = left_tagged.mul(&right_tagged) {
+                    // ULTRA FAST PATH: TaggedValue arithmetic (no allocation!)
+                    (*result_ptr).value = tagged_to_value(&result_tagged);
+                    return Ok(None);
+                }
+            }
+
+            // Regular fast path for Value::Int
+            if let (Value::Int(a), Value::Int(b)) = (&(*left_ptr).value, &(*right_ptr).value) {
+                (*result_ptr).value = Value::Int(a.wrapping_mul(*b));
+                return Ok(None);
+            }
+
+            let result = self.mul_values((*left_ptr).value.clone(), (*right_ptr).value.clone())?;
+            (*result_ptr).value = result;
+            return Ok(None);
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
+                return Err(anyhow!("FastIntMul: register out of bounds"));
+            }
+
+            // Try TaggedValue fast path first
+            if let (Some(left_tagged), Some(right_tagged)) =
+                (value_to_tagged(&regs[left_reg].value), value_to_tagged(&regs[right_reg].value)) {
+
+                if let Some(result_tagged) = left_tagged.mul(&right_tagged) {
+                    regs[result_reg].value = tagged_to_value(&result_tagged);
+                    return Ok(None);
+                }
+            }
+
+            match (&regs[left_reg].value, &regs[right_reg].value) {
+                (Value::Int(a), Value::Int(b)) => {
+                    regs[result_reg].value = Value::Int(a.wrapping_mul(*b));
+                }
+                _ => {
+                    let left_val = regs[left_reg].value.clone();
+                    let right_val = regs[right_reg].value.clone();
+                    let result = self.mul_values(left_val, right_val)?;
+                    self.frames[frame_idx].registers[result_reg].value = result;
+                    return Ok(None);
+                }
+            }
+            Ok(None)
+        }
+    }
+
+    #[inline(always)]
+    fn handle_fast_int_div(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Ultra-fast integer division with TaggedValue fast path
+        let left_reg = arg1 as usize;
+        let right_reg = arg2 as usize;
+        let result_reg = arg3 as usize;
+
+        // Try TaggedValue fast path first (2-3x faster!)
+        let left_value = &self.frames[frame_idx].registers[left_reg].value;
+        let right_value = &self.frames[frame_idx].registers[right_reg].value;
+
+        if let (Some(left_tagged), Some(right_tagged)) =
+            (value_to_tagged(left_value), value_to_tagged(right_value)) {
+
+            if let Some(result_tagged) = left_tagged.div(&right_tagged) {
+                self.frames[frame_idx].registers[result_reg].value = tagged_to_value(&result_tagged);
+                return Ok(None);
+            } else {
+                // Division by zero in TaggedValue
+                return Err(anyhow!("Division by zero"));
+            }
+        }
+
+        // Regular fast path for Value::Int
+        if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
+            if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
+                if right_val == 0 {
+                    return Err(anyhow!("Division by zero"));
+                }
+                self.frames[frame_idx].registers[result_reg] = RcValue {
+                    value: Value::Int(left_val / right_val),
+                    ref_count: 1,
+                };
+                return Ok(None);
+            }
+        }
+
+        // Fallback to regular division
+        let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
+        let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
+        let result = self.div_values(left_val, right_val)
+            .map_err(|e| anyhow!("Error in FastIntDiv: {}", e))?;
+        self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn handle_fast_int_mod(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Ultra-fast integer modulo with TaggedValue fast path
+        let left_reg = arg1 as usize;
+        let right_reg = arg2 as usize;
+        let result_reg = arg3 as usize;
+
+        // Try TaggedValue fast path first (2-3x faster!)
+        let left_value = &self.frames[frame_idx].registers[left_reg].value;
+        let right_value = &self.frames[frame_idx].registers[right_reg].value;
+
+        if let (Some(left_tagged), Some(right_tagged)) =
+            (value_to_tagged(left_value), value_to_tagged(right_value)) {
+
+            if let Some(result_tagged) = left_tagged.modulo(&right_tagged) {
+                self.frames[frame_idx].registers[result_reg].value = tagged_to_value(&result_tagged);
+                return Ok(None);
+            } else {
+                // Modulo by zero in TaggedValue
+                return Err(anyhow!("Modulo by zero"));
+            }
+        }
+
+        // Regular fast path for Value::Int
+        if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
+            if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
+                if right_val == 0 {
+                    return Err(anyhow!("Modulo by zero"));
+                }
+                self.frames[frame_idx].registers[result_reg] = RcValue {
+                    value: Value::Int(left_val % right_val),
+                    ref_count: 1,
+                };
+                return Ok(None);
+            }
+        }
+
+        // Fallback to regular modulo
+        let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
+        let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
+        let result = self.mod_values(left_val, right_val)
+            .map_err(|e| anyhow!("Error in FastIntMod: {}", e))?;
+        self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn handle_compare_less_equal_rr(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Register-Register less than or equal comparison with TaggedValue fast path
+        let left_reg = arg1 as usize;
+        let right_reg = arg2 as usize;
+        let result_reg = arg3 as usize;
+
+        if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+            return Err(anyhow!("CompareLessEqualRR: register index out of bounds"));
+        }
+
+        let left = &self.frames[frame_idx].registers[left_reg];
+        let right = &self.frames[frame_idx].registers[right_reg];
+
+        // ULTRA FAST: TaggedValue comparison (2-3x faster!)
+        if let (Some(left_tagged), Some(right_tagged)) =
+            (value_to_tagged(&left.value), value_to_tagged(&right.value)) {
+
+            if let Some(cmp_result) = left_tagged.le(&right_tagged) {
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(Value::Bool(cmp_result));
+                return Ok(None);
+            }
+        }
+
+        // Fast path for integer comparison
+        let result = match (&left.value, &right.value) {
+            (Value::Int(a), Value::Int(b)) => Value::Bool(a <= b),
+            (Value::Float(a), Value::Float(b)) => Value::Bool(a <= b),
+            (Value::Str(a), Value::Str(b)) => Value::Bool(a <= b),
+            _ => {
+                // For other types, use the general comparison
+                match left.value.partial_cmp(&right.value) {
+                    Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal) => Value::Bool(true),
+                    _ => Value::Bool(false),
+                }
+            }
+        };
+
+        self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn handle_compare_greater_equal_rr(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Register-Register greater than or equal comparison with TaggedValue fast path
+        let left_reg = arg1 as usize;
+        let right_reg = arg2 as usize;
+        let result_reg = arg3 as usize;
+
+        if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+            return Err(anyhow!("CompareGreaterEqualRR: register index out of bounds"));
+        }
+
+        let left = &self.frames[frame_idx].registers[left_reg];
+        let right = &self.frames[frame_idx].registers[right_reg];
+
+        // ULTRA FAST: TaggedValue comparison (2-3x faster!)
+        if let (Some(left_tagged), Some(right_tagged)) =
+            (value_to_tagged(&left.value), value_to_tagged(&right.value)) {
+
+            if let Some(cmp_result) = left_tagged.ge(&right_tagged) {
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(Value::Bool(cmp_result));
+                return Ok(None);
+            }
+        }
+
+        // Fast path for integer comparison
+        let result = match (&left.value, &right.value) {
+            (Value::Int(a), Value::Int(b)) => Value::Bool(a >= b),
+            (Value::Float(a), Value::Float(b)) => Value::Bool(a >= b),
+            (Value::Str(a), Value::Str(b)) => Value::Bool(a >= b),
+            _ => {
+                // For other types, use the general comparison
+                match left.value.partial_cmp(&right.value) {
+                    Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal) => Value::Bool(true),
+                    _ => Value::Bool(false),
+                }
+            }
+        };
+
+        self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn handle_compare_not_equal_rr(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Register-Register not equal comparison with TaggedValue fast path
+        let left_reg = arg1 as usize;
+        let right_reg = arg2 as usize;
+        let result_reg = arg3 as usize;
+
+        if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+            return Err(anyhow!("CompareNotEqualRR: register index out of bounds"));
+        }
+
+        let left = &self.frames[frame_idx].registers[left_reg];
+        let right = &self.frames[frame_idx].registers[right_reg];
+
+        // ULTRA FAST: TaggedValue comparison (direct bit comparison!)
+        if let (Some(left_tagged), Some(right_tagged)) =
+            (value_to_tagged(&left.value), value_to_tagged(&right.value)) {
+
+            let cmp_result = left_tagged.ne(&right_tagged);
+            self.frames[frame_idx].registers[result_reg] = RcValue::new(Value::Bool(cmp_result));
+            return Ok(None);
+        }
+
+        // Fast path for integer comparison
+        let result = match (&left.value, &right.value) {
+            (Value::Int(a), Value::Int(b)) => Value::Bool(a != b),
+            (Value::Float(a), Value::Float(b)) => Value::Bool(a != b),
+            (Value::Str(a), Value::Str(b)) => Value::Bool(a != b),
+            (Value::Bool(a), Value::Bool(b)) => Value::Bool(a != b),
+            _ => {
+                // For other types, use the general comparison
+                Value::Bool(left.value != right.value)
+            }
+        };
+
+        self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn handle_build_dict(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Build a dict from key-value pairs on the stack/register
+        // Keys and values are interleaved: key1, value1, key2, value2, ...
+        let pair_count = arg1 as usize;
+        let first_key_reg = arg2 as usize;
+        let result_reg = arg3 as u32;
+
+        // eprintln!("DEBUG BuildDict: pair_count={}, first_key_reg={}, result_reg={}", pair_count, first_key_reg, result_reg);
+
+        // Create a new dict
+        let mut dict = HashMap::new();
+
+        // Get items from consecutive registers starting from first_key_reg
+        for i in 0..pair_count {
+            let key_reg = first_key_reg + 2 * i;
+            let value_reg = first_key_reg + 2 * i + 1;
+            if key_reg >= self.frames[frame_idx].registers.len() {
+                return Err(anyhow!("BuildDict: key register index {} out of bounds (len: {})", key_reg, self.frames[frame_idx].registers.len()));
+            }
+            if value_reg >= self.frames[frame_idx].registers.len() {
+                return Err(anyhow!("BuildDict: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
+            }
+
+            // Keys must be strings - convert them or error
+            let key = &self.frames[frame_idx].registers[key_reg].value;
+            let key_str = match key {
+                Value::Str(s) => s.clone(),
+                _ => return Err(anyhow!("BuildDict: dictionary keys must be strings, got {}", key.type_name())),
+            };
+
+            dict.insert(key_str, self.frames[frame_idx].registers[value_reg].value.clone());
+        }
+
+        // eprintln!("DEBUG BuildDict: created dict with {} entries", dict.len());
+        let dict_value = Value::Dict(Rc::new(RefCell::new(dict)));
+        self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(dict_value));
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn handle_build_tuple(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Build a tuple from items on the stack/register
+        let item_count = arg1 as usize;
+        let first_item_reg = arg2 as usize;
+        let result_reg = arg3 as u32;
+
+        // Create a new tuple
+        let mut items = Vec::new();
+
+        // Get items from consecutive registers starting from first_item_reg
+        for i in 0..item_count {
+            let item_reg = first_item_reg + i;
+            if item_reg >= self.frames[frame_idx].registers.len() {
+                return Err(anyhow!("BuildTuple: item register index {} out of bounds (len: {})", item_reg, self.frames[frame_idx].registers.len()));
+            }
+            items.push(self.frames[frame_idx].registers[item_reg].value.clone());
+        }
+
+        let tuple_value = Value::Tuple(items);
+        self.frames[frame_idx].set_register(result_reg, RcValue::new(tuple_value));
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn handle_build_set(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Build a set from items on the stack/register
+        let item_count = arg1 as usize;
+        let first_item_reg = arg2 as usize;
+        let result_reg = arg3 as u32;
+
+        // Create a new set
+        let mut items = Vec::new();
+
+        // Get items from consecutive registers starting from first_item_reg
+        for i in 0..item_count {
+            let item_reg = first_item_reg + i;
+            if item_reg >= self.frames[frame_idx].registers.len() {
+                return Err(anyhow!("BuildSet: item register index {} out of bounds (len: {})", item_reg, self.frames[frame_idx].registers.len()));
+            }
+            items.push(self.frames[frame_idx].registers[item_reg].value.clone());
+        }
+
+        let set_value = Value::Set(items);
+        self.frames[frame_idx].set_register(result_reg, RcValue::new(set_value));
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn handle_load_attr(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Load attribute from object (obj.attr) with FAST PATH caching
+        let object_reg = arg1 as usize;
+        let attr_name_idx = arg2 as usize;
+        let result_reg = arg3 as usize;
+
+        if object_reg >= self.frames[frame_idx].registers.len() {
+            return Err(anyhow!("LoadAttr: object register index {} out of bounds (len: {})", object_reg, self.frames[frame_idx].registers.len()));
+        }
+
+        if attr_name_idx >= self.frames[frame_idx].code.names.len() {
+            return Err(anyhow!("LoadAttr: attribute name index {} out of bounds (len: {})", attr_name_idx, self.frames[frame_idx].code.names.len()));
+        }
+
+        // Clone values to avoid borrowing issues
+        let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
+        let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();
+
+        // OPTIMIZATION: Fast path for common Object attribute access
+        // This bypasses the expensive match statements below for hot paths
+        if let Value::Object { fields, .. } = &object_value {
+            if let Some(attr_value) = fields.get(&attr_name) {
+                // FAST PATH: Direct attribute access without cache lookup
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(attr_value.clone());
+                return Ok(None);
+            }
+        }
+
+        // Try to get the attribute from the object
+
+        let result = match &object_value {
+            Value::Super(current_class, parent_class, instance, parent_methods) => {
+                // Handle super() object - delegate to parent class
+
+                if let Some(instance_value) = instance {
+                    // For super() objects, we need to look up the method in the parent class hierarchy
+
+                    // First, try to find the current class in globals to get its MRO
+                    // Convert globals from RcValue to Value for MRO lookup
+                    let globals_values: HashMap<String, Value> = self.globals
+                        .borrow().iter()
+                        .map(|(k, v)| (k.clone(), v.value.clone()))
+                        .collect();
+
+                    // Look for the current class in globals
+                    if let Some(class_value) = globals_values.get(current_class) {
+                        if let Value::Class { name, mro, .. } = class_value {
+
+                            // Use MRO to find the method in parent classes
+                            if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
+                                // Found the method, create a BoundMethod
+                                let bound_method = Value::BoundMethod {
+                                    object: instance_value.clone(),
+                                    method_name: attr_name.clone(),
+                                };
+                                self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                                return Ok(None);
+                            }
+                        }
+                    }
+
+                    // If not found through MRO, check parent_methods as fallback
+                    if let Some(methods) = parent_methods {
+                        if let Some(method) = methods.get(&attr_name) {
+                            // Found the method in parent methods, create a BoundMethod
+                            let bound_method = Value::BoundMethod {
+                                object: instance_value.clone(),
+                                method_name: attr_name.clone(),
+                            };
+                            self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                            return Ok(None);
+                        }
+                    }
+
+                    // If still not found, check if this is a special case
+                    // For methods that might not be in the class methods, try to find them in the instance
+                    if let Value::Object { class_methods, .. } = instance_value.as_ref() {
+                        if let Some(method) = class_methods.get(&attr_name) {
+                            // Found the method in the instance's class methods, create a BoundMethod
+                            let bound_method = Value::BoundMethod {
+                                object: instance_value.clone(),
+                                method_name: attr_name.clone(),
+                            };
+                            self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                            return Ok(None);
+                        }
+                    }
+
+                    // If still not found, create a BoundMethod but it will fail at call time
+                    // This maintains compatibility with the existing approach
+                    let bound_method = Value::BoundMethod {
+                        object: instance_value.clone(),
+                        method_name: attr_name.clone(),
+                    };
+                    self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
+                    return Ok(None);
+                } else {
+                    return Err(anyhow!("super(): unbound super object has no attribute '{}'", attr_name));
+                }
+            },
+            Value::Object { fields, class_methods, mro, .. } => {
+                // First check fields (instance attributes)
+                let result = if let Some(value) = fields.as_ref().get(&attr_name) {
+                    // Check if this is a descriptor (has __get__ method)
+                    if let Some(getter) = value.get_method("__get__") {
+                        // Call the descriptor's __get__ method
+                        // __get__(self, obj, owner)
+                        let args = vec![value.clone(), object_value.clone(), Value::None]; // Simplified - in full implementation we'd pass the owner
+                        match getter {
+                            Value::BuiltinFunction(_, func) => func(args)?,
+                            Value::NativeFunction(func) => func(args)?,
+                            _ => value.clone(), // Fallback to returning the descriptor itself
+                        }
+                    } else {
+                        value.clone()
+                    }
+                }
+                // Then check class methods - return as BoundMethod so self is bound
+                else if let Some(method) = class_methods.get(&attr_name) {
+                    // Check if this is a descriptor (has __get__ method)
+                    // Descriptors take precedence over everything
+                    if let Some(getter) = method.get_method("__get__") {
+                        // Call the descriptor's __get__ method
+                        // __get__(self, obj, owner)
+                        let args = vec![method.clone(), object_value.clone(), Value::None];
+                        match getter {
+                            Value::BuiltinFunction(_, func) => func(args)?,
+                            Value::NativeFunction(func) => func(args)?,
+                            Value::Closure { .. } => {
+                                // For closure, we need to call it through the VM
+                                self.call_function_fast(getter.clone(), args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?;
+                                return Ok(None);
+                            },
+                            _ => method.clone(), // Fallback
+                        }
+                    }
+                    // Check if this is a property object that needs to be called
+                    else if let Value::Object { class_name, fields, .. } = method {
+                        if class_name == "property" {
+                            // This is a property, call its getter function if it exists
+                            if let Some(getter) = fields.as_ref().get("fget") {
+                                // Call the getter function with self as argument
+                                let args = vec![object_value.clone()];
+                                match getter {
+                                    Value::BuiltinFunction(_, func) => func(args)?,
+                                    Value::NativeFunction(func) => func(args)?,
+                                    Value::Closure { .. } => {
+                                        // For closure, we need to call it through the VM
+                                        // Push a new frame for the property getter
+                                        self.call_function_fast(getter.clone(), args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?;
+                                        // Return None to let the main VM loop handle the new frame
+                                        // The result will be stored in result_reg when the frame completes
+                                        return Ok(None);
+                                    },
+                                    _ => method.clone() // Fallback
+                                }
+                            } else {
+                                method.clone()
+                            }
+                        } else {
+                            // Create a BoundMethod to bind self to the method
+                            Value::BoundMethod {
+                                object: Box::new(object_value.clone()),
+                                method_name: attr_name.clone(),
+                            }
+                        }
+                    } else {
+                        // Create a BoundMethod to bind self to the method
+                        Value::BoundMethod {
+                            object: Box::new(object_value.clone()),
+                            method_name: attr_name.clone(),
+                        }
+                    }
+                }
+                // Then check MRO for inherited methods and attributes
+                else {
+                    // Convert globals from RcValue to Value for MRO lookup
+                    let globals_values: HashMap<String, Value> = self.globals
+                        .borrow().iter()
+                        .map(|(k, v)| (k.clone(), v.value.clone()))
+                        .collect();
+                    if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
+                        // Check if this is a property object that needs to be called
+                        if let Value::Object { class_name, fields, .. } = &method {
+                            if class_name == "property" {
+                                // This is a property, call its getter function if it exists
+                                if let Some(getter) = fields.as_ref().get("fget") {
+                                    // Call the getter function with self as argument
+                                    let args = vec![object_value.clone()];
+                                    match getter {
+                                        Value::BuiltinFunction(_, func) => func(args)?,
+                                        Value::NativeFunction(func) => func(args)?,
+                                        Value::Closure { .. } => {
+                                            // For closure, we need to call it through the VM
+                                            // Push a new frame for the property getter
+                                            self.call_function_fast(getter.clone(), args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?;
+                                            // Return None to let the main VM loop handle the new frame
+                                            // The result will be stored in result_reg when the frame completes
+                                            return Ok(None);
+                                        },
+                                        _ => method.clone(), // Fallback
+                                    }
+                                } else {
+                                    method.clone()
+                                }
+                            } else {
+                                // If we found a method in the MRO, create a BoundMethod
+                                Value::BoundMethod {
+                                    object: Box::new(object_value.clone()),
+                                    method_name: attr_name.clone(),
+                                }
+                            }
+                        } else {
+                            // If we found a method in the MRO, create a BoundMethod
+                            Value::BoundMethod {
+                                object: Box::new(object_value.clone()),
+                                method_name: attr_name.clone(),
+                            }
+                        }
+                    } else {
+                        // Check if any parent class has this as an attribute (not just a method)
+                        // This handles the case where a parent class sets an attribute in __init__
+                        for class_name in mro.get_linearization() {
+                            if let Some(class_value) = globals_values.get(class_name) {
+                                if let Value::Class { methods, .. } = class_value {
+                                    // Check if this class has any instances with this attribute
+                                    // This is a simplified approach - in a full implementation we'd need to search instances
+                                    // For now, we'll just return an error if not found
+                                    continue;
+                                }
+                            }
+                        }
+                        return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
+                    }
+                };
+
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                return Ok(None);
+            },
+            Value::Class { methods, mro, .. } => {
+                // Check class methods
+                if let Some(method) = methods.get(&attr_name) {
+                    method.clone()
+                }
+                // Then check MRO for inherited methods
+                else {
+                    // Convert globals from RcValue to Value for MRO lookup
+                    let globals_values: HashMap<String, Value> = self.globals
+                        .borrow().iter()
+                        .map(|(k, v)| (k.clone(), v.value.clone()))
+                        .collect();
+                    if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
+                        method.clone()
+                    } else {
+                        return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
+                    }
+                }
+            },
+            Value::Module(_, namespace) => {
+                // Check module attributes
+                if let Some(value) = namespace.get(&attr_name) {
+                    value.clone()
+                } else {
+                    return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
+                }
+            },
+            Value::Dict(dict) => {
+                // First check if this is a method name
+                if let Some(_method) = object_value.get_method(&attr_name) {
+                    // Return a BoundMethod so the dict instance is available when called
+                    Value::BoundMethod {
+                        object: Box::new(object_value.clone()),
+                        method_name: attr_name.clone(),
+                    }
+                }
+                // Otherwise treat keys as attributes
+                else if let Some(value) = dict.borrow().get(&attr_name) {
+                    value.clone()
+                } else {
+                    return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
+                }
+            },
+            _ => {
+                // For other objects, try to get method
+                if let Some(method) = object_value.get_method(&attr_name) {
+                    method
+                } else {
+                    return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
+                }
+            }
+        };
+
+        self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn handle_store_attr(&mut self, frame_idx: usize, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
+        // Store attribute to object (obj.attr = value)
+        let object_reg = arg1 as usize;
+        let attr_name_idx = arg2 as usize;
+        let value_reg = arg3 as usize;
+
+        if object_reg >= self.frames[frame_idx].registers.len() {
+            return Err(anyhow!("StoreAttr: object register index {} out of bounds (len: {})", object_reg, self.frames[frame_idx].registers.len()));
+        }
+
+        if attr_name_idx >= self.frames[frame_idx].code.names.len() {
+            return Err(anyhow!("StoreAttr: attribute name index {} out of bounds (len: {})", attr_name_idx, self.frames[frame_idx].code.names.len()));
+        }
+
+        if value_reg >= self.frames[frame_idx].registers.len() {
+            return Err(anyhow!("StoreAttr: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
+        }
+
+        // Clone the values first to avoid borrowing issues
+        let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();
+        let value_to_store = self.frames[frame_idx].registers[value_reg].value.clone();
+        let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
+        let object_type_name = object_value.type_name();
+
+        // CRITICAL FIX: Track which variables reference this object before modification
+        // so we can update them after modification to see the changes
+        let mut vars_to_update: Vec<String> = Vec::new();
+
+        // Check if this is an Object and get its Rc<HashMap> pointer for comparison
+        if let Value::Object { fields: obj_fields, .. } = &object_value {
+            let obj_ptr = Rc::as_ptr(obj_fields);
+
+            // Check globals
+            for (name, global_value) in self.globals.borrow().iter() {
+                if let Value::Object { fields: global_fields, .. } = &global_value.value {
+                    if Rc::as_ptr(&global_fields) == obj_ptr {
+                        vars_to_update.push(format!("global:{}", name));
+                    }
+                }
+            }
+
+            // Check frame globals
+            for (name, frame_global_value) in self.frames[frame_idx].globals.borrow().iter() {
+                if let Value::Object { fields: frame_fields, .. } = &frame_global_value.value {
+                    if Rc::as_ptr(&frame_fields) == obj_ptr {
+                        vars_to_update.push(format!("frame_global:{}", name));
+                    }
+                }
+            }
+
+            // Check locals
+            for (idx, local_value) in self.frames[frame_idx].locals.iter().enumerate() {
+                if let Value::Object { fields: local_fields, .. } = &local_value.value {
+                    if Rc::as_ptr(local_fields) == obj_ptr {
+                        vars_to_update.push(format!("local:{}", idx));
+                    }
+                }
+            }
+        }
+
+        // Check if we're in an __init__ frame
+        if self.frames[frame_idx].code.name == "__init__" || self.frames[frame_idx].code.name == "<fn:__init__>" {
+            // Check if this is the self parameter (locals[0])
+            if object_reg < self.frames[frame_idx].registers.len() {
+                // Get the self instance from locals[0]
+                if !self.frames[frame_idx].locals.is_empty() {
+                }
+            }
+        }
+
+        // Check if we're dealing with an Object that might have properties or descriptors
+        let is_object_with_fields = matches!(object_value, Value::Object { .. });
+
+        if is_object_with_fields {
+            // First, check if this attribute is a descriptor in class_methods
+            let descriptor_setter_result = match &object_value {
+                Value::Object { class_methods, .. } => {
+                    if let Some(descriptor_obj) = class_methods.get(&attr_name) {
+                        // Check if it's a descriptor (has __set__ method)
+                        if let Some(setter) = descriptor_obj.get_method("__set__") {
+                            // Call the descriptor's __set__ method
+                            // __set__(self, obj, value)
+                            let args = vec![descriptor_obj.clone(), object_value.clone(), value_to_store.clone()];
+                            match setter {
+                                Value::BuiltinFunction(_, func) => Some(func(args)),
+                                Value::NativeFunction(func) => Some(func(args)),
+                                Value::Closure { .. } => {
+                                    // For closure, we need to call it through the VM
+                                    self.call_function_fast(setter.clone(), args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+                                    return Ok(None);
+                                },
+                                _ => None
+                            }
+                        } else if let Value::Object { class_name, fields, .. } = descriptor_obj {
+                            // Check if it's a property object
+                            if class_name == "property" {
+                                // This is a property, check if it has a setter
+                                if let Some(setter) = fields.as_ref().get("fset") {
+                                    // Call the setter with self and the value
+                                    let args = vec![object_value.clone(), value_to_store.clone()];
+                                    match setter {
+                                        Value::BuiltinFunction(_, func) => Some(func(args.clone())),
+                                        Value::NativeFunction(func) => Some(func(args.clone())),
+                                        Value::Closure { compiled_code: Some(code_obj), .. } => {
+                                            // For property setters, we need to create a frame and mark it as a setter
+                                            let globals_rc = Rc::clone(&self.globals);
+                                            let builtins_rc = Rc::clone(&self.builtins);
+
+                                            let mut setter_frame = Frame::new_function_frame(code_obj.as_ref().clone(), globals_rc, builtins_rc, args, HashMap::new());
+
+                                            // Mark this frame as a property setter
+                                            setter_frame.is_property_setter = true;
+
+                                            // Store the vars_to_update list so we can update them after the setter completes
+                                            setter_frame.vars_to_update = vars_to_update.clone();
+
+                                            // Set the return register so the modified object gets stored back
+                                            setter_frame.return_register = Some((frame_idx, object_reg as u32));
+
+                                            // Push the setter frame onto the stack
+                                            self.frames.push(setter_frame);
+
+                                            // Return None to let the VM execute the setter frame
+                                            return Ok(None);
+                                        },
+                                        Value::Closure { .. } => {
+                                            // If there's no compiled code, fall back to normal call
+                                            self.call_function_fast(setter.clone(), args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+                                            return Ok(None);
+                                        },
+                                        _ => None
+                                    }
+                                } else {
+                                    // Property has no setter, it's read-only
+                                    return Err(anyhow!("can't set attribute '{}' on '{}' object", attr_name, object_type_name));
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None
+            };
+
+            // If we called a descriptor setter, return early
+            if let Some(result) = descriptor_setter_result {
+                result?;
+                return Ok(None);
+            }
+
+            // Get the current value of the field to check if it's a descriptor
+            let current_field_value = match &object_value {
+                Value::Object { fields, .. } => fields.as_ref().get(&attr_name).cloned(),
+                _ => None
+            };
+
+            // If the field exists and is a descriptor, call its __set__ method
+            if let Some(descriptor) = current_field_value {
+                if let Some(setter) = descriptor.get_method("__set__") {
+                    // Call the descriptor's __set__ method
+                    // __set__(self, obj, value)
+                    let args = vec![descriptor.clone(), object_value.clone(), value_to_store.clone()];
+                    match setter {
+                        Value::BuiltinFunction(_, func) => {
+                            func(args.clone())?;
+                            return Ok(None); // Successfully called descriptor setter
+                        },
+                        Value::NativeFunction(func) => {
+                            func(args.clone())?;
+                            return Ok(None); // Successfully called descriptor setter
+                        },
+                        _ => {
+                            // Continue with normal assignment below
+                        }
+                    }
+                }
+            }
+        }
+
+        // Normal assignment for all other cases
+        match &mut self.frames[frame_idx].registers[object_reg].value {
+            Value::Class { methods, .. } => {
+                // Store class attribute in methods HashMap
+                methods.insert(attr_name.clone(), value_to_store.clone());
+
+                // Update the class in globals to reflect the change
+                // Find the class in globals and update it
+                let updated_class = self.frames[frame_idx].registers[object_reg].clone();
+                for (var_name, var_value) in self.globals.borrow_mut().iter_mut() {
+                    if let Value::Class { name: class_name, .. } = &var_value.value {
+                        if let Value::Class { name: updated_class_name, .. } = &updated_class.value {
+                            if class_name == updated_class_name {
+                                *var_value = updated_class.clone();
+                                break;
+                            }
+                        }
+                    }
+                }
+            },
+            Value::Object { fields, .. } => {
+                // Store in fields using Rc::make_mut to get a mutable reference
+                Rc::make_mut(fields).insert(attr_name.clone(), value_to_store.clone());
+
+                // CRITICAL FIX: Update locals[0] (self) with the modified object
+                // This ensures that subsequent loads of 'self' see the updated fields
+                // This applies to ALL methods, not just __init__
+                if !self.frames[frame_idx].locals.is_empty() {
+                    // Update locals[0] with the modified object from the register
+                    let updated_object = self.frames[frame_idx].registers[object_reg].clone();
+                    self.frames[frame_idx].locals[0] = updated_object;
+                }
+
+                // For ALL methods (not just __init__), update the instance in the caller frame's register
+                // This ensures that when methods modify self, the changes are visible to the caller
+                if let Some((caller_frame_idx, result_reg)) = self.frames[frame_idx].return_register {
+                    if caller_frame_idx < self.frames.len() {
+                        // Update the instance in the caller frame's register with all modified fields
+                        // Clone the entire modified object from current frame to caller frame
+                        let modified_object = self.frames[frame_idx].registers[object_reg].clone();
+                        self.frames[caller_frame_idx].registers[result_reg as usize] = modified_object;
+                    }
+                }
+
+        // Let's verify that the value was actually stored
+        if let Value::Object { fields, .. } = &self.frames[frame_idx].registers[object_reg].value {
+        }
+            },
+            Value::Dict(dict) => {
+                // For dictionaries, treat keys as attributes
+                dict.borrow_mut().insert(attr_name, value_to_store);
+            },
+            Value::Module(_, namespace) => {
+                // For modules, store in namespace
+                namespace.insert(attr_name, value_to_store);
+            },
+            _ => {
+                return Err(anyhow!("'{}' object does not support attribute assignment", object_type_name));
+            }
+        };
+
+        // CRITICAL FIX: After modifying an object in a register, update all variables
+        // that were referencing this object so they see the modifications
+        let modified_object = self.frames[frame_idx].registers[object_reg].clone();
+
+        for var_spec in vars_to_update {
+            let parts: Vec<&str> = var_spec.split(':').collect();
+            match parts[0] {
+                "global" => {
+                    if self.globals.borrow().contains_key(parts[1]) {
+                        self.globals.borrow_mut().insert(parts[1].to_string(), modified_object.clone());
+                    }
+                }
+                "frame_global" => {
+                    if self.frames[frame_idx].globals.borrow().contains_key(parts[1]) {
+                        self.frames[frame_idx].globals.borrow_mut().insert(parts[1].to_string(), modified_object.clone());
+                    }
+                }
+                "local" => {
+                    if let Ok(idx) = parts[1].parse::<usize>() {
+                        if idx < self.frames[frame_idx].locals.len() {
+                            self.frames[frame_idx].locals[idx] = modified_object.clone();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(None)
+    }
+
     // ==================== END OF EXTRACTED HANDLERS ====================
 
     /// Optimized instruction execution with computed GOTOs for maximum performance
     /// OPTIMIZATION: Hybrid dispatch - hot opcodes use function pointers (30-50% speedup)
     #[inline(always)]
     fn execute_instruction_fast(&mut self, frame_idx: usize, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
-        // PHASE 1 OPTIMIZATION: Fast path for top 20 hot opcodes (covers 75-85% of execution)
+        // PHASE 1+2 OPTIMIZATION: Fast path for top 35 opcodes (covers 90-95% of execution)
         // Use function pointer dispatch to eliminate branch mispredictions
         match opcode {
-            // Hot opcodes - direct dispatch to handler functions
+            // Tier 1: Hot opcodes (20 opcodes - 75-85% of execution)
             OpCode::LoadConst => return self.handle_load_const(frame_idx, arg1, arg2, arg3),
             OpCode::LoadGlobal => return self.handle_load_global(frame_idx, arg1, arg2, arg3),
             OpCode::StoreGlobal => return self.handle_store_global(frame_idx, arg1, arg2, arg3),
@@ -1606,185 +2868,29 @@ impl SuperBytecodeVM {
             OpCode::BuildList => return self.handle_build_list(frame_idx, arg1, arg2, arg3),
             OpCode::SubscrLoad => return self.handle_subscr_load(frame_idx, arg1, arg2, arg3),
 
+            // Tier 2: Medium-frequency opcodes (15 opcodes - adds 10-15% coverage)
+            OpCode::GetIter => return self.handle_get_iter(frame_idx, arg1, arg2, arg3),
+            OpCode::ForIter => return self.handle_for_iter(frame_idx, arg1, arg2, arg3),
+            OpCode::FastIntAdd => return self.handle_fast_int_add(frame_idx, arg1, arg2, arg3),
+            OpCode::FastIntSub => return self.handle_fast_int_sub(frame_idx, arg1, arg2, arg3),
+            OpCode::FastIntMul => return self.handle_fast_int_mul(frame_idx, arg1, arg2, arg3),
+            OpCode::FastIntDiv => return self.handle_fast_int_div(frame_idx, arg1, arg2, arg3),
+            OpCode::FastIntMod => return self.handle_fast_int_mod(frame_idx, arg1, arg2, arg3),
+            OpCode::CompareLessEqualRR => return self.handle_compare_less_equal_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::CompareGreaterEqualRR => return self.handle_compare_greater_equal_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::CompareNotEqualRR => return self.handle_compare_not_equal_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::BuildDict => return self.handle_build_dict(frame_idx, arg1, arg2, arg3),
+            OpCode::BuildTuple => return self.handle_build_tuple(frame_idx, arg1, arg2, arg3),
+            OpCode::BuildSet => return self.handle_build_set(frame_idx, arg1, arg2, arg3),
+            OpCode::LoadAttr => return self.handle_load_attr(frame_idx, arg1, arg2, arg3),
+            OpCode::StoreAttr => return self.handle_store_attr(frame_idx, arg1, arg2, arg3),
+
             // Cold opcodes - continue to original match statement below
             _ => {}
         }
 
         // FALLBACK: Original match statement for cold opcodes (15-20% of execution)
         match opcode {
-            OpCode::GetIter => {
-                // Get an iterator from an iterable object
-                let iterable_reg = arg1 as usize;
-                let result_reg = arg2;
-                
-                if iterable_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("GetIter: register index {} out of bounds (len: {})", iterable_reg, self.frames[frame_idx].registers.len()));
-                }
-                
-                let iterable_value = &self.frames[frame_idx].registers[iterable_reg];
-                
-                // Convert iterable to iterator based on its type
-                let iterator = match &iterable_value.value {
-                    Value::Generator { .. } => {
-                        // For generators, we return the generator itself as an iterator
-                        iterable_value.value.clone()
-                    },
-                    Value::Iterator { .. } => {
-                        // For Iterator objects, we return the iterator itself
-                        iterable_value.value.clone()
-                    },
-                    Value::Range { start, stop, step } => {
-                        // For range, create a RangeIterator
-                        Value::RangeIterator {
-                            start: *start,
-                            stop: *stop,
-                            step: *step,
-                            current: *start,
-                        }
-                    },
-                    Value::List(items) => {
-                        // For list, create an Iterator object
-                        Value::Iterator {
-                            items: items.as_vec().clone(),
-                            current_index: 0,
-                        }
-                    },
-                    Value::Tuple(items) => {
-                        // For tuple, create an Iterator object
-                        Value::Iterator {
-                            items: items.clone(),
-                            current_index: 0,
-                        }
-                    },
-                    Value::Str(s) => {
-                        // For string, create a StringIterator (using RangeIterator for indices)
-                        Value::RangeIterator {
-                            start: 0,
-                            stop: s.len() as i64,
-                            step: 1,
-                            current: 0,
-                        }
-                    },
-                    _ => {
-                        // For other types, we'll just jump to end for now
-                        // In a full implementation, we'd try to call the __iter__ method
-                        return Err(anyhow!("GetIter: cannot create iterator for type {}", iterable_value.value.type_name()));
-                    }
-                };
-                
-                self.frames[frame_idx].set_register(result_reg, RcValue::new(iterator));
-                Ok(None)
-            }
-            OpCode::ForIter => {
-                // Iterate over an iterator
-                let iter_reg = arg1 as usize;
-                let result_reg = arg2 as usize;
-                let target = arg3 as usize;
-                
-                if iter_reg >= self.frames[frame_idx].registers.len() || result_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("ForIter: register index out of bounds"));
-                }
-                
-                // Handle different iterator types
-                // Clone the iterator value to avoid borrowing issues
-                let iter_value = self.frames[frame_idx].registers[iter_reg].value.clone();
-                match iter_value {
-                    Value::RangeIterator { start, stop, step, current } => {
-                        // Check if we've reached the end of the range
-                        let should_continue = if step > 0 {
-                            current < stop
-                        } else if step < 0 {
-                            current > stop
-                        } else {
-                            // step == 0 is invalid, but we'll treat it as end of iteration
-                            false
-                        };
-                        
-                        if should_continue {
-                            // Store the current value in the result register
-                            let value = RcValue::new(value_pool::create_int(current));
-                            self.frames[frame_idx].set_register(result_reg as u32, value);
-                            
-                            // Update the iterator's current position
-                            let new_current = current + step;
-                            let updated_iterator = Value::RangeIterator {
-                                start,
-                                stop,
-                                step,
-                                current: new_current,
-                            };
-                            self.frames[frame_idx].registers[iter_reg] = RcValue::new(updated_iterator);
-                            
-                            // Continue with the loop body
-                            Ok(None)
-                        } else {
-                            // End of iteration - jump to the target (after the loop)
-                            self.frames[frame_idx].pc = target;
-                            // Return Ok(None) to indicate that PC has changed
-                            Ok(None)
-                        }
-                    },
-                    Value::Generator { code, frame, finished } => {
-                        // For generators, we need to resume execution and get the next value
-                        if finished {
-                            // Generator is finished, jump to the target (end of loop)
-                            self.frames[frame_idx].pc = target;
-                            Ok(None)
-                        } else {
-                            // Resume the generator execution
-                            // If frame is None, this is the first time we're calling the generator
-                            let generator_frame = if let Some(f) = frame {
-                                *f
-                            } else {
-                                // Create a new frame for the generator
-                                let globals_rc = Rc::clone(&self.globals);
-                                let builtins_rc = Rc::clone(&self.builtins);
-                                Frame::new_function_frame(*code, globals_rc, builtins_rc, vec![], HashMap::new())
-                            };
-                            
-                            // Set up return register so the generator can return yielded values to this frame
-                            let mut gen_frame = generator_frame;
-                            gen_frame.return_register = Some((frame_idx, result_reg as u32));
-                            
-                            // Push the generator frame onto the stack
-                            self.frames.push(gen_frame);
-                            
-                            // We'll handle the generator execution result in the main execution loop
-                            // For now, we just continue execution which will run the generator frame
-                            Ok(None)
-                        }
-                    },
-                    Value::Iterator { ref items, ref current_index } => {
-                        // For Iterator objects, check if we've reached the end
-                        if *current_index < items.len() {
-                            // Store the current value in the result register
-                            let value = RcValue::new(items[*current_index].clone());
-                            self.frames[frame_idx].set_register(result_reg as u32, value);
-                            
-                            // Update the iterator's current position
-                            let updated_iterator = Value::Iterator {
-                                items: items.clone(),
-                                current_index: current_index + 1,
-                            };
-                            self.frames[frame_idx].registers[iter_reg] = RcValue::new(updated_iterator);
-                            
-                            // Continue with the loop body
-                            Ok(None)
-                        } else {
-                            // End of iteration - jump to the target (after the loop)
-                            self.frames[frame_idx].pc = target;
-                            // Return Ok(None) to indicate that PC has changed
-                            Ok(None)
-                        }
-                    },
-                    _ => {
-                        // For other types, we'll just jump to end for now
-                        // In a full implementation, we'd try to call the __next__ method
-                        self.frames[frame_idx].pc = target;
-                        Ok(None)
-                    }
-                }
-            }
             OpCode::Next => {
                 // Call next() on an iterator and update the iterator variable
                 let iter_reg = arg1 as usize;
@@ -2015,296 +3121,6 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].block_stack.pop();
                 Ok(None)
             }
-            OpCode::FastIntAdd => {
-                // ULTRA-FAST integer addition using TaggedValue fast path
-                let left_reg = arg1 as usize;
-                let right_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                let regs = &mut self.frames[frame_idx].registers;
-
-                #[cfg(not(debug_assertions))]
-                unsafe {
-                    let left_ptr = regs.as_ptr().add(left_reg);
-                    let right_ptr = regs.as_ptr().add(right_reg);
-                    let result_ptr = regs.as_mut_ptr().add(result_reg);
-
-                    // Try TaggedValue fast path first (2-3x faster!)
-                    if let (Some(left_tagged), Some(right_tagged)) =
-                        (value_to_tagged(&(*left_ptr).value), value_to_tagged(&(*right_ptr).value)) {
-
-                        if let Some(result_tagged) = left_tagged.add(&right_tagged) {
-                            // ULTRA FAST PATH: TaggedValue arithmetic (no allocation!)
-                            (*result_ptr).value = tagged_to_value(&result_tagged);
-                            return Ok(None);
-                        }
-                    }
-
-                    // Regular fast path for Value::Int
-                    if let (Value::Int(a), Value::Int(b)) = (&(*left_ptr).value, &(*right_ptr).value) {
-                        (*result_ptr).value = Value::Int(a.wrapping_add(*b));
-                        return Ok(None);
-                    }
-
-                    // Slow path: non-integer operands
-                    let result = self.add_values((*left_ptr).value.clone(), (*right_ptr).value.clone())?;
-                    (*result_ptr).value = result;
-                    return Ok(None);
-                }
-
-                #[cfg(debug_assertions)]
-                {
-                    if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
-                        return Err(anyhow!("FastIntAdd: register out of bounds"));
-                    }
-
-                    // Try TaggedValue fast path first
-                    if let (Some(left_tagged), Some(right_tagged)) =
-                        (value_to_tagged(&regs[left_reg].value), value_to_tagged(&regs[right_reg].value)) {
-
-                        if let Some(result_tagged) = left_tagged.add(&right_tagged) {
-                            regs[result_reg].value = tagged_to_value(&result_tagged);
-                            return Ok(None);
-                        }
-                    }
-
-                    match (&regs[left_reg].value, &regs[right_reg].value) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            regs[result_reg].value = Value::Int(a.wrapping_add(*b));
-                        }
-                        _ => {
-                            let left_val = regs[left_reg].value.clone();
-                            let right_val = regs[right_reg].value.clone();
-                            drop(regs);
-                            let result = self.add_values(left_val, right_val)?;
-                            self.frames[frame_idx].registers[result_reg].value = result;
-                            return Ok(None);
-                        }
-                    }
-                    Ok(None)
-                }
-            }
-            OpCode::FastIntSub => {
-                // ULTRA-FAST integer subtraction using TaggedValue fast path
-                let left_reg = arg1 as usize;
-                let right_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                let regs = &mut self.frames[frame_idx].registers;
-
-                #[cfg(not(debug_assertions))]
-                unsafe {
-                    let left_ptr = regs.as_ptr().add(left_reg);
-                    let right_ptr = regs.as_ptr().add(right_reg);
-                    let result_ptr = regs.as_mut_ptr().add(result_reg);
-
-                    // TaggedValue fast path (2-3x faster!)
-                    if let (Some(left_tagged), Some(right_tagged)) =
-                        (value_to_tagged(&(*left_ptr).value), value_to_tagged(&(*right_ptr).value)) {
-
-                        if let Some(result_tagged) = left_tagged.sub(&right_tagged) {
-                            (*result_ptr).value = tagged_to_value(&result_tagged);
-                            return Ok(None);
-                        }
-                    }
-
-                    if let (Value::Int(a), Value::Int(b)) = (&(*left_ptr).value, &(*right_ptr).value) {
-                        (*result_ptr).value = Value::Int(a.wrapping_sub(*b));
-                        return Ok(None);
-                    }
-
-                    let result = self.sub_values((*left_ptr).value.clone(), (*right_ptr).value.clone())?;
-                    (*result_ptr).value = result;
-                    return Ok(None);
-                }
-
-                #[cfg(debug_assertions)]
-                {
-                    if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
-                        return Err(anyhow!("FastIntSub: register out of bounds"));
-                    }
-
-                    // TaggedValue fast path
-                    if let (Some(left_tagged), Some(right_tagged)) =
-                        (value_to_tagged(&regs[left_reg].value), value_to_tagged(&regs[right_reg].value)) {
-
-                        if let Some(result_tagged) = left_tagged.sub(&right_tagged) {
-                            regs[result_reg].value = tagged_to_value(&result_tagged);
-                            return Ok(None);
-                        }
-                    }
-
-                    match (&regs[left_reg].value, &regs[right_reg].value) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            regs[result_reg].value = Value::Int(a.wrapping_sub(*b));
-                        }
-                        _ => {
-                            let left_val = regs[left_reg].value.clone();
-                            let right_val = regs[right_reg].value.clone();
-                            drop(regs);
-                            let result = self.sub_values(left_val, right_val)?;
-                            self.frames[frame_idx].registers[result_reg].value = result;
-                            return Ok(None);
-                        }
-                    }
-                    Ok(None)
-                }
-            }
-            OpCode::FastIntMul => {
-                // ULTRA-FAST integer multiplication - zero allocation
-                let left_reg = arg1 as usize;
-                let right_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                let regs = &mut self.frames[frame_idx].registers;
-
-                #[cfg(not(debug_assertions))]
-                unsafe {
-                    let left_ptr = regs.as_ptr().add(left_reg);
-                    let right_ptr = regs.as_ptr().add(right_reg);
-                    let result_ptr = regs.as_mut_ptr().add(result_reg);
-
-                    // Try TaggedValue fast path first (2-3x faster!)
-                    if let (Some(left_tagged), Some(right_tagged)) =
-                        (value_to_tagged(&(*left_ptr).value), value_to_tagged(&(*right_ptr).value)) {
-
-                        if let Some(result_tagged) = left_tagged.mul(&right_tagged) {
-                            // ULTRA FAST PATH: TaggedValue arithmetic (no allocation!)
-                            (*result_ptr).value = tagged_to_value(&result_tagged);
-                            return Ok(None);
-                        }
-                    }
-
-                    // Regular fast path for Value::Int
-                    if let (Value::Int(a), Value::Int(b)) = (&(*left_ptr).value, &(*right_ptr).value) {
-                        (*result_ptr).value = Value::Int(a.wrapping_mul(*b));
-                        return Ok(None);
-                    }
-
-                    let result = self.mul_values((*left_ptr).value.clone(), (*right_ptr).value.clone())?;
-                    (*result_ptr).value = result;
-                    return Ok(None);
-                }
-
-                #[cfg(debug_assertions)]
-                {
-                    if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
-                        return Err(anyhow!("FastIntMul: register out of bounds"));
-                    }
-
-                    // Try TaggedValue fast path first
-                    if let (Some(left_tagged), Some(right_tagged)) =
-                        (value_to_tagged(&regs[left_reg].value), value_to_tagged(&regs[right_reg].value)) {
-
-                        if let Some(result_tagged) = left_tagged.mul(&right_tagged) {
-                            regs[result_reg].value = tagged_to_value(&result_tagged);
-                            return Ok(None);
-                        }
-                    }
-
-                    match (&regs[left_reg].value, &regs[right_reg].value) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            regs[result_reg].value = Value::Int(a.wrapping_mul(*b));
-                        }
-                        _ => {
-                            let left_val = regs[left_reg].value.clone();
-                            let right_val = regs[right_reg].value.clone();
-                            let result = self.mul_values(left_val, right_val)?;
-                            self.frames[frame_idx].registers[result_reg].value = result;
-                            return Ok(None);
-                        }
-                    }
-                    Ok(None)
-                }
-            }
-            OpCode::FastIntDiv => {
-                // Ultra-fast integer division with TaggedValue fast path
-                let left_reg = arg1 as usize;
-                let right_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                // Try TaggedValue fast path first (2-3x faster!)
-                let left_value = &self.frames[frame_idx].registers[left_reg].value;
-                let right_value = &self.frames[frame_idx].registers[right_reg].value;
-
-                if let (Some(left_tagged), Some(right_tagged)) =
-                    (value_to_tagged(left_value), value_to_tagged(right_value)) {
-
-                    if let Some(result_tagged) = left_tagged.div(&right_tagged) {
-                        self.frames[frame_idx].registers[result_reg].value = tagged_to_value(&result_tagged);
-                        return Ok(None);
-                    } else {
-                        // Division by zero in TaggedValue
-                        return Err(anyhow!("Division by zero"));
-                    }
-                }
-
-                // Regular fast path for Value::Int
-                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
-                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
-                        if right_val == 0 {
-                            return Err(anyhow!("Division by zero"));
-                        }
-                        self.frames[frame_idx].registers[result_reg] = RcValue {
-                            value: Value::Int(left_val / right_val),
-                            ref_count: 1,
-                        };
-                        return Ok(None);
-                    }
-                }
-
-                // Fallback to regular division
-                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
-                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
-                let result = self.div_values(left_val, right_val)
-                    .map_err(|e| anyhow!("Error in FastIntDiv: {}", e))?;
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
-                Ok(None)
-            }
-            OpCode::FastIntMod => {
-                // Ultra-fast integer modulo with TaggedValue fast path
-                let left_reg = arg1 as usize;
-                let right_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                // Try TaggedValue fast path first (2-3x faster!)
-                let left_value = &self.frames[frame_idx].registers[left_reg].value;
-                let right_value = &self.frames[frame_idx].registers[right_reg].value;
-
-                if let (Some(left_tagged), Some(right_tagged)) =
-                    (value_to_tagged(left_value), value_to_tagged(right_value)) {
-
-                    if let Some(result_tagged) = left_tagged.modulo(&right_tagged) {
-                        self.frames[frame_idx].registers[result_reg].value = tagged_to_value(&result_tagged);
-                        return Ok(None);
-                    } else {
-                        // Modulo by zero in TaggedValue
-                        return Err(anyhow!("Modulo by zero"));
-                    }
-                }
-
-                // Regular fast path for Value::Int
-                if let Value::Int(left_val) = self.frames[frame_idx].registers[left_reg].value {
-                    if let Value::Int(right_val) = self.frames[frame_idx].registers[right_reg].value {
-                        if right_val == 0 {
-                            return Err(anyhow!("Modulo by zero"));
-                        }
-                        self.frames[frame_idx].registers[result_reg] = RcValue {
-                            value: Value::Int(left_val % right_val),
-                            ref_count: 1,
-                        };
-                        return Ok(None);
-                    }
-                }
-
-                // Fallback to regular modulo
-                let left_val = self.frames[frame_idx].registers[left_reg].value.clone();
-                let right_val = self.frames[frame_idx].registers[right_reg].value.clone();
-                let result = self.mod_values(left_val, right_val)
-                    .map_err(|e| anyhow!("Error in FastIntMod: {}", e))?;
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
-                Ok(None)
-            }
             OpCode::CallFunctionKw => {
                 // Call a function with keyword arguments
                 // arg1 = function register, arg2 = positional argument count, arg3 = result register
@@ -2471,46 +3287,6 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
-            OpCode::CompareLessEqualRR => {
-                // Register-Register less than or equal comparison with TaggedValue fast path
-                let left_reg = arg1 as usize;
-                let right_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("CompareLessEqualRR: register index out of bounds"));
-                }
-
-                let left = &self.frames[frame_idx].registers[left_reg];
-                let right = &self.frames[frame_idx].registers[right_reg];
-
-                // ULTRA FAST: TaggedValue comparison (2-3x faster!)
-                if let (Some(left_tagged), Some(right_tagged)) =
-                    (value_to_tagged(&left.value), value_to_tagged(&right.value)) {
-
-                    if let Some(cmp_result) = left_tagged.le(&right_tagged) {
-                        self.frames[frame_idx].registers[result_reg] = RcValue::new(Value::Bool(cmp_result));
-                        return Ok(None);
-                    }
-                }
-
-                // Fast path for integer comparison
-                let result = match (&left.value, &right.value) {
-                    (Value::Int(a), Value::Int(b)) => Value::Bool(a <= b),
-                    (Value::Float(a), Value::Float(b)) => Value::Bool(a <= b),
-                    (Value::Str(a), Value::Str(b)) => Value::Bool(a <= b),
-                    _ => {
-                        // For other types, use the general comparison
-                        match left.value.partial_cmp(&right.value) {
-                            Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal) => Value::Bool(true),
-                            _ => Value::Bool(false),
-                        }
-                    }
-                };
-
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
-                Ok(None)
-            }
             OpCode::CompareNotInRR => {
                 // Register-Register non-membership test (not in)
                 let left_reg = arg1 as usize;
@@ -2563,88 +3339,6 @@ impl SuperBytecodeVM {
                 };
                 
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
-                Ok(None)
-            }
-            OpCode::BuildTuple => {
-                // Build a tuple from items on the stack/register
-                let item_count = arg1 as usize;
-                let first_item_reg = arg2 as usize;
-                let result_reg = arg3 as u32;
-
-                // Create a new tuple
-                let mut items = Vec::new();
-
-                // Get items from consecutive registers starting from first_item_reg
-                for i in 0..item_count {
-                    let item_reg = first_item_reg + i;
-                    if item_reg >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildTuple: item register index {} out of bounds (len: {})", item_reg, self.frames[frame_idx].registers.len()));
-                    }
-                    items.push(self.frames[frame_idx].registers[item_reg].value.clone());
-                }
-
-                let tuple_value = Value::Tuple(items);
-                self.frames[frame_idx].set_register(result_reg, RcValue::new(tuple_value));
-                Ok(None)
-            }
-            OpCode::BuildDict => {
-                // Build a dict from key-value pairs on the stack/register
-                // Keys and values are interleaved: key1, value1, key2, value2, ...
-                let pair_count = arg1 as usize;
-                let first_key_reg = arg2 as usize;
-                let result_reg = arg3 as u32;
-
-                // eprintln!("DEBUG BuildDict: pair_count={}, first_key_reg={}, result_reg={}", pair_count, first_key_reg, result_reg);
-
-                // Create a new dict
-                let mut dict = HashMap::new();
-
-                // Get items from consecutive registers starting from first_key_reg
-                for i in 0..pair_count {
-                    let key_reg = first_key_reg + 2 * i;
-                    let value_reg = first_key_reg + 2 * i + 1;
-                    if key_reg >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildDict: key register index {} out of bounds (len: {})", key_reg, self.frames[frame_idx].registers.len()));
-                    }
-                    if value_reg >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildDict: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
-                    }
-
-                    // Keys must be strings - convert them or error
-                    let key = &self.frames[frame_idx].registers[key_reg].value;
-                    let key_str = match key {
-                        Value::Str(s) => s.clone(),
-                        _ => return Err(anyhow!("BuildDict: dictionary keys must be strings, got {}", key.type_name())),
-                    };
-
-                    dict.insert(key_str, self.frames[frame_idx].registers[value_reg].value.clone());
-                }
-
-                // eprintln!("DEBUG BuildDict: created dict with {} entries", dict.len());
-                let dict_value = Value::Dict(Rc::new(RefCell::new(dict)));
-                self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(dict_value));
-                Ok(None)
-            }
-            OpCode::BuildSet => {
-                // Build a set from items on the stack/register
-                let item_count = arg1 as usize;
-                let first_item_reg = arg2 as usize;
-                let result_reg = arg3 as u32;
-                
-                // Create a new set
-                let mut items = Vec::new();
-                
-                // Get items from consecutive registers starting from first_item_reg
-                for i in 0..item_count {
-                    let item_reg = first_item_reg + i;
-                    if item_reg >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildSet: item register index {} out of bounds (len: {})", item_reg, self.frames[frame_idx].registers.len()));
-                    }
-                    items.push(self.frames[frame_idx].registers[item_reg].value.clone());
-                }
-                
-                let set_value = Value::Set(items);
-                self.frames[frame_idx].set_register(result_reg, RcValue::new(set_value));
                 Ok(None)
             }
             OpCode::BinaryFloorDivRR => {
@@ -3261,83 +3955,6 @@ impl SuperBytecodeVM {
                 // eprintln!("DEBUG BinaryBitOrRR: registers[{}] = {:?}", result_reg, self.frames[frame_idx].registers[result_reg].value);
                 Ok(None)
             }
-            OpCode::CompareNotEqualRR => {
-                // Register-Register not equal comparison with TaggedValue fast path
-                let left_reg = arg1 as usize;
-                let right_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("CompareNotEqualRR: register index out of bounds"));
-                }
-
-                let left = &self.frames[frame_idx].registers[left_reg];
-                let right = &self.frames[frame_idx].registers[right_reg];
-
-                // ULTRA FAST: TaggedValue comparison (direct bit comparison!)
-                if let (Some(left_tagged), Some(right_tagged)) =
-                    (value_to_tagged(&left.value), value_to_tagged(&right.value)) {
-
-                    let cmp_result = left_tagged.ne(&right_tagged);
-                    self.frames[frame_idx].registers[result_reg] = RcValue::new(Value::Bool(cmp_result));
-                    return Ok(None);
-                }
-
-                // Fast path for integer comparison
-                let result = match (&left.value, &right.value) {
-                    (Value::Int(a), Value::Int(b)) => Value::Bool(a != b),
-                    (Value::Float(a), Value::Float(b)) => Value::Bool(a != b),
-                    (Value::Str(a), Value::Str(b)) => Value::Bool(a != b),
-                    (Value::Bool(a), Value::Bool(b)) => Value::Bool(a != b),
-                    _ => {
-                        // For other types, use the general comparison
-                        Value::Bool(left.value != right.value)
-                    }
-                };
-
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
-                Ok(None)
-            }
-            OpCode::CompareGreaterEqualRR => {
-                // Register-Register greater than or equal comparison with TaggedValue fast path
-                let left_reg = arg1 as usize;
-                let right_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("CompareGreaterEqualRR: register index out of bounds"));
-                }
-
-                let left = &self.frames[frame_idx].registers[left_reg];
-                let right = &self.frames[frame_idx].registers[right_reg];
-
-                // ULTRA FAST: TaggedValue comparison (2-3x faster!)
-                if let (Some(left_tagged), Some(right_tagged)) =
-                    (value_to_tagged(&left.value), value_to_tagged(&right.value)) {
-
-                    if let Some(cmp_result) = left_tagged.ge(&right_tagged) {
-                        self.frames[frame_idx].registers[result_reg] = RcValue::new(Value::Bool(cmp_result));
-                        return Ok(None);
-                    }
-                }
-
-                // Fast path for integer comparison
-                let result = match (&left.value, &right.value) {
-                    (Value::Int(a), Value::Int(b)) => Value::Bool(a >= b),
-                    (Value::Float(a), Value::Float(b)) => Value::Bool(a >= b),
-                    (Value::Str(a), Value::Str(b)) => Value::Bool(a >= b),
-                    _ => {
-                        // For other types, use the general comparison
-                        match left.value.partial_cmp(&right.value) {
-                            Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal) => Value::Bool(true),
-                            _ => Value::Bool(false),
-                        }
-                    }
-                };
-
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
-                Ok(None)
-            }
             OpCode::CompareInRR => {
                 // Register-Register membership test (in)
                 let left_reg = arg1 as usize;
@@ -3597,99 +4214,6 @@ impl SuperBytecodeVM {
                 } else {
                     Err(anyhow!("LoadClassDeref: name '{}' not found", name))
                 }
-            }
-            OpCode::BuildTuple => {
-                // Build a tuple from a set of registers
-                let num_items = arg1 as usize;
-                let start_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                // Collect register indices first to avoid borrowing conflicts
-                let register_indices: Vec<usize> = (0..num_items)
-                    .map(|i| start_reg + i)
-                    .collect();
-
-                // Check bounds first
-                for &reg_idx in &register_indices {
-                    if reg_idx >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildTuple: register index {} out of bounds (len: {})", reg_idx, self.frames[frame_idx].registers.len()));
-                    }
-                }
-
-                // Collect values
-                let items: Vec<Value> = register_indices
-                    .into_iter()
-                    .map(|reg_idx| self.frames[frame_idx].registers[reg_idx].value.clone())
-                    .collect();
-
-                let tuple = Value::Tuple(items);
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(tuple);
-                Ok(None)
-            }
-            OpCode::BuildDict => {
-                // Build a dictionary from a set of key-value pairs in registers
-                let num_pairs = arg1 as usize;
-                let start_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                // Collect register indices first to avoid borrowing conflicts
-                let register_pairs: Vec<(usize, usize)> = (0..num_pairs)
-                    .map(|i| (start_reg + i * 2, start_reg + i * 2 + 1))
-                    .collect();
-
-                // Check bounds first
-                for &(key_reg, value_reg) in &register_pairs {
-                    if key_reg >= self.frames[frame_idx].registers.len() || value_reg >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildDict: register index out of bounds"));
-                    }
-                }
-
-                // Collect key-value pairs
-                let mut items = HashMap::new();
-                for &(key_reg, value_reg) in &register_pairs {
-                    let key_value = &self.frames[frame_idx].registers[key_reg].value;
-                    let value_value = &self.frames[frame_idx].registers[value_reg].value;
-
-                    // Keys must be strings
-                    let key_str = match key_value {
-                        Value::Str(s) => s.clone(),
-                        _ => format!("{}", key_value),
-                    };
-
-                    items.insert(key_str, value_value.clone());
-                }
-
-                let dict = Value::Dict(Rc::new(RefCell::new(items)));
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(dict);
-                Ok(None)
-            }
-            OpCode::BuildSet => {
-                // Build a set from a set of registers
-                let num_items = arg1 as usize;
-                let start_reg = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                // Collect register indices first to avoid borrowing conflicts
-                let register_indices: Vec<usize> = (0..num_items)
-                    .map(|i| start_reg + i)
-                    .collect();
-
-                // Check bounds first
-                for &reg_idx in &register_indices {
-                    if reg_idx >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("BuildSet: register index {} out of bounds (len: {})", reg_idx, self.frames[frame_idx].registers.len()));
-                    }
-                }
-
-                // Collect values
-                let items: Vec<Value> = register_indices
-                    .into_iter()
-                    .map(|reg_idx| self.frames[frame_idx].registers[reg_idx].value.clone())
-                    .collect();
-
-                let set = Value::Set(items);
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(set);
-                Ok(None)
             }
             OpCode::UnaryNot => {
                 // Logical NOT operation - negate boolean value
@@ -5032,576 +5556,6 @@ impl SuperBytecodeVM {
                 // In a full implementation, we would suspend execution until the future completes
                 let value = self.frames[frame_idx].registers[value_reg].value.clone();
                 self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(value));
-                Ok(None)
-            }
-            OpCode::LoadAttr => {
-                // Load attribute from object (obj.attr) with FAST PATH caching
-                let object_reg = arg1 as usize;
-                let attr_name_idx = arg2 as usize;
-                let result_reg = arg3 as usize;
-
-                if object_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("LoadAttr: object register index {} out of bounds (len: {})", object_reg, self.frames[frame_idx].registers.len()));
-                }
-
-                if attr_name_idx >= self.frames[frame_idx].code.names.len() {
-                    return Err(anyhow!("LoadAttr: attribute name index {} out of bounds (len: {})", attr_name_idx, self.frames[frame_idx].code.names.len()));
-                }
-
-                // Clone values to avoid borrowing issues
-                let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
-                let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();
-
-                // OPTIMIZATION: Fast path for common Object attribute access
-                // This bypasses the expensive match statements below for hot paths
-                if let Value::Object { fields, .. } = &object_value {
-                    if let Some(attr_value) = fields.get(&attr_name) {
-                        // FAST PATH: Direct attribute access without cache lookup
-                        self.frames[frame_idx].registers[result_reg] = RcValue::new(attr_value.clone());
-                        return Ok(None);
-                    }
-                }
-
-                // Try to get the attribute from the object
-                
-                let result = match &object_value {
-                    Value::Super(current_class, parent_class, instance, parent_methods) => {
-                        // Handle super() object - delegate to parent class
-                        
-                        if let Some(instance_value) = instance {
-                            // For super() objects, we need to look up the method in the parent class hierarchy
-                            
-                            // First, try to find the current class in globals to get its MRO
-                            // Convert globals from RcValue to Value for MRO lookup
-                            let globals_values: HashMap<String, Value> = self.globals
-                                .borrow().iter()
-                                .map(|(k, v)| (k.clone(), v.value.clone()))
-                                .collect();
-                            
-                            // Look for the current class in globals
-                            if let Some(class_value) = globals_values.get(current_class) {
-                                if let Value::Class { name, mro, .. } = class_value {
-                                    
-                                    // Use MRO to find the method in parent classes
-                                    if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
-                                        // Found the method, create a BoundMethod
-                                        let bound_method = Value::BoundMethod {
-                                            object: instance_value.clone(),
-                                            method_name: attr_name.clone(),
-                                        };
-                                        self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
-                                        return Ok(None);
-                                    }
-                                }
-                            }
-                            
-                            // If not found through MRO, check parent_methods as fallback
-                            if let Some(methods) = parent_methods {
-                                if let Some(method) = methods.get(&attr_name) {
-                                    // Found the method in parent methods, create a BoundMethod
-                                    let bound_method = Value::BoundMethod {
-                                        object: instance_value.clone(),
-                                        method_name: attr_name.clone(),
-                                    };
-                                    self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
-                                    return Ok(None);
-                                }
-                            }
-                            
-                            // If still not found, check if this is a special case
-                            // For methods that might not be in the class methods, try to find them in the instance
-                            if let Value::Object { class_methods, .. } = instance_value.as_ref() {
-                                if let Some(method) = class_methods.get(&attr_name) {
-                                    // Found the method in the instance's class methods, create a BoundMethod
-                                    let bound_method = Value::BoundMethod {
-                                        object: instance_value.clone(),
-                                        method_name: attr_name.clone(),
-                                    };
-                                    self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
-                                    return Ok(None);
-                                }
-                            }
-                            
-                            // If still not found, create a BoundMethod but it will fail at call time
-                            // This maintains compatibility with the existing approach
-                            let bound_method = Value::BoundMethod {
-                                object: instance_value.clone(),
-                                method_name: attr_name.clone(),
-                            };
-                            self.frames[frame_idx].registers[result_reg] = RcValue::new(bound_method);
-                            return Ok(None);
-                        } else {
-                            return Err(anyhow!("super(): unbound super object has no attribute '{}'", attr_name));
-                        }
-                    },
-                    Value::Object { fields, class_methods, mro, .. } => {
-                        // First check fields (instance attributes)
-                        let result = if let Some(value) = fields.as_ref().get(&attr_name) {
-                            // Check if this is a descriptor (has __get__ method)
-                            if let Some(getter) = value.get_method("__get__") {
-                                // Call the descriptor's __get__ method
-                                // __get__(self, obj, owner)
-                                let args = vec![value.clone(), object_value.clone(), Value::None]; // Simplified - in full implementation we'd pass the owner
-                                match getter {
-                                    Value::BuiltinFunction(_, func) => func(args)?,
-                                    Value::NativeFunction(func) => func(args)?,
-                                    _ => value.clone(), // Fallback to returning the descriptor itself
-                                }
-                            } else {
-                                value.clone()
-                            }
-                        }
-                        // Then check class methods - return as BoundMethod so self is bound
-                        else if let Some(method) = class_methods.get(&attr_name) {
-                            // Check if this is a descriptor (has __get__ method)
-                            // Descriptors take precedence over everything
-                            if let Some(getter) = method.get_method("__get__") {
-                                // Call the descriptor's __get__ method
-                                // __get__(self, obj, owner)
-                                let args = vec![method.clone(), object_value.clone(), Value::None];
-                                match getter {
-                                    Value::BuiltinFunction(_, func) => func(args)?,
-                                    Value::NativeFunction(func) => func(args)?,
-                                    Value::Closure { .. } => {
-                                        // For closure, we need to call it through the VM
-                                        self.call_function_fast(getter.clone(), args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?;
-                                        return Ok(None);
-                                    },
-                                    _ => method.clone(), // Fallback
-                                }
-                            }
-                            // Check if this is a property object that needs to be called
-                            else if let Value::Object { class_name, fields, .. } = method {
-                                if class_name == "property" {
-                                    // This is a property, call its getter function if it exists
-                                    if let Some(getter) = fields.as_ref().get("fget") {
-                                        // Call the getter function with self as argument
-                                        let args = vec![object_value.clone()];
-                                        match getter {
-                                            Value::BuiltinFunction(_, func) => func(args)?,
-                                            Value::NativeFunction(func) => func(args)?,
-                                            Value::Closure { .. } => {
-                                                // For closure, we need to call it through the VM
-                                                // Push a new frame for the property getter
-                                                self.call_function_fast(getter.clone(), args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?;
-                                                // Return None to let the main VM loop handle the new frame
-                                                // The result will be stored in result_reg when the frame completes
-                                                return Ok(None);
-                                            },
-                                            _ => method.clone() // Fallback
-                                        }
-                                    } else {
-                                        method.clone()
-                                    }
-                                } else {
-                                    // Create a BoundMethod to bind self to the method
-                                    Value::BoundMethod {
-                                        object: Box::new(object_value.clone()),
-                                        method_name: attr_name.clone(),
-                                    }
-                                }
-                            } else {
-                                // Create a BoundMethod to bind self to the method
-                                Value::BoundMethod {
-                                    object: Box::new(object_value.clone()),
-                                    method_name: attr_name.clone(),
-                                }
-                            }
-                        }
-                        // Then check MRO for inherited methods and attributes
-                        else {
-                            // Convert globals from RcValue to Value for MRO lookup
-                            let globals_values: HashMap<String, Value> = self.globals
-                                .borrow().iter()
-                                .map(|(k, v)| (k.clone(), v.value.clone()))
-                                .collect();
-                            if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
-                                // Check if this is a property object that needs to be called
-                                if let Value::Object { class_name, fields, .. } = &method {
-                                    if class_name == "property" {
-                                        // This is a property, call its getter function if it exists
-                                        if let Some(getter) = fields.as_ref().get("fget") {
-                                            // Call the getter function with self as argument
-                                            let args = vec![object_value.clone()];
-                                            match getter {
-                                                Value::BuiltinFunction(_, func) => func(args)?,
-                                                Value::NativeFunction(func) => func(args)?,
-                                                Value::Closure { .. } => {
-                                                    // For closure, we need to call it through the VM
-                                                    // Push a new frame for the property getter
-                                                    self.call_function_fast(getter.clone(), args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?;
-                                                    // Return None to let the main VM loop handle the new frame
-                                                    // The result will be stored in result_reg when the frame completes
-                                                    return Ok(None);
-                                                },
-                                                _ => method.clone(), // Fallback
-                                            }
-                                        } else {
-                                            method.clone()
-                                        }
-                                    } else {
-                                        // If we found a method in the MRO, create a BoundMethod
-                                        Value::BoundMethod {
-                                            object: Box::new(object_value.clone()),
-                                            method_name: attr_name.clone(),
-                                        }
-                                    }
-                                } else {
-                                    // If we found a method in the MRO, create a BoundMethod
-                                    Value::BoundMethod {
-                                        object: Box::new(object_value.clone()),
-                                        method_name: attr_name.clone(),
-                                    }
-                                }
-                            } else {
-                                // Check if any parent class has this as an attribute (not just a method)
-                                // This handles the case where a parent class sets an attribute in __init__
-                                for class_name in mro.get_linearization() {
-                                    if let Some(class_value) = globals_values.get(class_name) {
-                                        if let Value::Class { methods, .. } = class_value {
-                                            // Check if this class has any instances with this attribute
-                                            // This is a simplified approach - in a full implementation we'd need to search instances
-                                            // For now, we'll just return an error if not found
-                                            continue;
-                                        }
-                                    }
-                                }
-                                return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
-                            }
-                        };
-
-                        self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
-                        return Ok(None);
-                    },
-                    Value::Class { methods, mro, .. } => {
-                        // Check class methods
-                        if let Some(method) = methods.get(&attr_name) {
-                            method.clone()
-                        }
-                        // Then check MRO for inherited methods
-                        else {
-                            // Convert globals from RcValue to Value for MRO lookup
-                            let globals_values: HashMap<String, Value> = self.globals
-                                .borrow().iter()
-                                .map(|(k, v)| (k.clone(), v.value.clone()))
-                                .collect();
-                            if let Some(method) = mro.find_method_in_mro(&attr_name, &globals_values) {
-                                method.clone()
-                            } else {
-                                return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
-                            }
-                        }
-                    },
-                    Value::Module(_, namespace) => {
-                        // Check module attributes
-                        if let Some(value) = namespace.get(&attr_name) {
-                            value.clone()
-                        } else {
-                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
-                        }
-                    },
-                    Value::Dict(dict) => {
-                        // First check if this is a method name
-                        if let Some(_method) = object_value.get_method(&attr_name) {
-                            // Return a BoundMethod so the dict instance is available when called
-                            Value::BoundMethod {
-                                object: Box::new(object_value.clone()),
-                                method_name: attr_name.clone(),
-                            }
-                        }
-                        // Otherwise treat keys as attributes
-                        else if let Some(value) = dict.borrow().get(&attr_name) {
-                            value.clone()
-                        } else {
-                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
-                        }
-                    },
-                    _ => {
-                        // For other objects, try to get method
-                        if let Some(method) = object_value.get_method(&attr_name) {
-                            method
-                        } else {
-                            return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
-                        }
-                    }
-                };
-                
-                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
-                Ok(None)
-            }
-            OpCode::StoreAttr => {
-                // Store attribute to object (obj.attr = value)
-                let object_reg = arg1 as usize;
-                let attr_name_idx = arg2 as usize;
-                let value_reg = arg3 as usize;
-                
-                if object_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("StoreAttr: object register index {} out of bounds (len: {})", object_reg, self.frames[frame_idx].registers.len()));
-                }
-                
-                if attr_name_idx >= self.frames[frame_idx].code.names.len() {
-                    return Err(anyhow!("StoreAttr: attribute name index {} out of bounds (len: {})", attr_name_idx, self.frames[frame_idx].code.names.len()));
-                }
-                
-                if value_reg >= self.frames[frame_idx].registers.len() {
-                    return Err(anyhow!("StoreAttr: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
-                }
-                
-                // Clone the values first to avoid borrowing issues
-                let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();
-                let value_to_store = self.frames[frame_idx].registers[value_reg].value.clone();
-                let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
-                let object_type_name = object_value.type_name();
-
-                // CRITICAL FIX: Track which variables reference this object before modification
-                // so we can update them after modification to see the changes
-                let mut vars_to_update: Vec<String> = Vec::new();
-
-                // Check if this is an Object and get its Rc<HashMap> pointer for comparison
-                if let Value::Object { fields: obj_fields, .. } = &object_value {
-                    let obj_ptr = Rc::as_ptr(obj_fields);
-
-                    // Check globals
-                    for (name, global_value) in self.globals.borrow().iter() {
-                        if let Value::Object { fields: global_fields, .. } = &global_value.value {
-                            if Rc::as_ptr(&global_fields) == obj_ptr {
-                                vars_to_update.push(format!("global:{}", name));
-                            }
-                        }
-                    }
-
-                    // Check frame globals
-                    for (name, frame_global_value) in self.frames[frame_idx].globals.borrow().iter() {
-                        if let Value::Object { fields: frame_fields, .. } = &frame_global_value.value {
-                            if Rc::as_ptr(&frame_fields) == obj_ptr {
-                                vars_to_update.push(format!("frame_global:{}", name));
-                            }
-                        }
-                    }
-
-                    // Check locals
-                    for (idx, local_value) in self.frames[frame_idx].locals.iter().enumerate() {
-                        if let Value::Object { fields: local_fields, .. } = &local_value.value {
-                            if Rc::as_ptr(local_fields) == obj_ptr {
-                                vars_to_update.push(format!("local:{}", idx));
-                            }
-                        }
-                    }
-                }
-                
-                // Check if we're in an __init__ frame
-                if self.frames[frame_idx].code.name == "__init__" || self.frames[frame_idx].code.name == "<fn:__init__>" {
-                    // Check if this is the self parameter (locals[0])
-                    if object_reg < self.frames[frame_idx].registers.len() {
-                        // Get the self instance from locals[0]
-                        if !self.frames[frame_idx].locals.is_empty() {
-                        }
-                    }
-                }
-                
-                // Check if we're dealing with an Object that might have properties or descriptors
-                let is_object_with_fields = matches!(object_value, Value::Object { .. });
-
-                if is_object_with_fields {
-                    // First, check if this attribute is a descriptor in class_methods
-                    let descriptor_setter_result = match &object_value {
-                        Value::Object { class_methods, .. } => {
-                            if let Some(descriptor_obj) = class_methods.get(&attr_name) {
-                                // Check if it's a descriptor (has __set__ method)
-                                if let Some(setter) = descriptor_obj.get_method("__set__") {
-                                    // Call the descriptor's __set__ method
-                                    // __set__(self, obj, value)
-                                    let args = vec![descriptor_obj.clone(), object_value.clone(), value_to_store.clone()];
-                                    match setter {
-                                        Value::BuiltinFunction(_, func) => Some(func(args)),
-                                        Value::NativeFunction(func) => Some(func(args)),
-                                        Value::Closure { .. } => {
-                                            // For closure, we need to call it through the VM
-                                            self.call_function_fast(setter.clone(), args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
-                                            return Ok(None);
-                                        },
-                                        _ => None
-                                    }
-                                } else if let Value::Object { class_name, fields, .. } = descriptor_obj {
-                                    // Check if it's a property object
-                                    if class_name == "property" {
-                                        // This is a property, check if it has a setter
-                                        if let Some(setter) = fields.as_ref().get("fset") {
-                                            // Call the setter with self and the value
-                                            let args = vec![object_value.clone(), value_to_store.clone()];
-                                            match setter {
-                                                Value::BuiltinFunction(_, func) => Some(func(args.clone())),
-                                                Value::NativeFunction(func) => Some(func(args.clone())),
-                                                Value::Closure { compiled_code: Some(code_obj), .. } => {
-                                                    // For property setters, we need to create a frame and mark it as a setter
-                                                    let globals_rc = Rc::clone(&self.globals);
-                                                    let builtins_rc = Rc::clone(&self.builtins);
-
-                                                    let mut setter_frame = Frame::new_function_frame(code_obj.as_ref().clone(), globals_rc, builtins_rc, args, HashMap::new());
-
-                                                    // Mark this frame as a property setter
-                                                    setter_frame.is_property_setter = true;
-
-                                                    // Store the vars_to_update list so we can update them after the setter completes
-                                                    setter_frame.vars_to_update = vars_to_update.clone();
-
-                                                    // Set the return register so the modified object gets stored back
-                                                    setter_frame.return_register = Some((frame_idx, object_reg as u32));
-
-                                                    // Push the setter frame onto the stack
-                                                    self.frames.push(setter_frame);
-
-                                                    // Return None to let the VM execute the setter frame
-                                                    return Ok(None);
-                                                },
-                                                Value::Closure { .. } => {
-                                                    // If there's no compiled code, fall back to normal call
-                                                    self.call_function_fast(setter.clone(), args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
-                                                    return Ok(None);
-                                                },
-                                                _ => None
-                                            }
-                                        } else {
-                                            // Property has no setter, it's read-only
-                                            return Err(anyhow!("can't set attribute '{}' on '{}' object", attr_name, object_type_name));
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None
-                    };
-
-                    // If we called a descriptor setter, return early
-                    if let Some(result) = descriptor_setter_result {
-                        result?;
-                        return Ok(None);
-                    }
-
-                    // Get the current value of the field to check if it's a descriptor
-                    let current_field_value = match &object_value {
-                        Value::Object { fields, .. } => fields.as_ref().get(&attr_name).cloned(),
-                        _ => None
-                    };
-
-                    // If the field exists and is a descriptor, call its __set__ method
-                    if let Some(descriptor) = current_field_value {
-                        if let Some(setter) = descriptor.get_method("__set__") {
-                            // Call the descriptor's __set__ method
-                            // __set__(self, obj, value)
-                            let args = vec![descriptor.clone(), object_value.clone(), value_to_store.clone()];
-                            match setter {
-                                Value::BuiltinFunction(_, func) => {
-                                    func(args.clone())?;
-                                    return Ok(None); // Successfully called descriptor setter
-                                },
-                                Value::NativeFunction(func) => {
-                                    func(args.clone())?;
-                                    return Ok(None); // Successfully called descriptor setter
-                                },
-                                _ => {
-                                    // Continue with normal assignment below
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // Normal assignment for all other cases
-                match &mut self.frames[frame_idx].registers[object_reg].value {
-                    Value::Class { methods, .. } => {
-                        // Store class attribute in methods HashMap
-                        methods.insert(attr_name.clone(), value_to_store.clone());
-
-                        // Update the class in globals to reflect the change
-                        // Find the class in globals and update it
-                        let updated_class = self.frames[frame_idx].registers[object_reg].clone();
-                        for (var_name, var_value) in self.globals.borrow_mut().iter_mut() {
-                            if let Value::Class { name: class_name, .. } = &var_value.value {
-                                if let Value::Class { name: updated_class_name, .. } = &updated_class.value {
-                                    if class_name == updated_class_name {
-                                        *var_value = updated_class.clone();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    Value::Object { fields, .. } => {
-                        // Store in fields using Rc::make_mut to get a mutable reference
-                        Rc::make_mut(fields).insert(attr_name.clone(), value_to_store.clone());
-
-                        // CRITICAL FIX: Update locals[0] (self) with the modified object
-                        // This ensures that subsequent loads of 'self' see the updated fields
-                        // This applies to ALL methods, not just __init__
-                        if !self.frames[frame_idx].locals.is_empty() {
-                            // Update locals[0] with the modified object from the register
-                            let updated_object = self.frames[frame_idx].registers[object_reg].clone();
-                            self.frames[frame_idx].locals[0] = updated_object;
-                        }
-
-                        // For ALL methods (not just __init__), update the instance in the caller frame's register
-                        // This ensures that when methods modify self, the changes are visible to the caller
-                        if let Some((caller_frame_idx, result_reg)) = self.frames[frame_idx].return_register {
-                            if caller_frame_idx < self.frames.len() {
-                                // Update the instance in the caller frame's register with all modified fields
-                                // Clone the entire modified object from current frame to caller frame
-                                let modified_object = self.frames[frame_idx].registers[object_reg].clone();
-                                self.frames[caller_frame_idx].registers[result_reg as usize] = modified_object;
-                            }
-                        }
-
-                // Let's verify that the value was actually stored
-                if let Value::Object { fields, .. } = &self.frames[frame_idx].registers[object_reg].value {
-                }
-                    },
-                    Value::Dict(dict) => {
-                        // For dictionaries, treat keys as attributes
-                        dict.borrow_mut().insert(attr_name, value_to_store);
-                    },
-                    Value::Module(_, namespace) => {
-                        // For modules, store in namespace
-                        namespace.insert(attr_name, value_to_store);
-                    },
-                    _ => {
-                        return Err(anyhow!("'{}' object does not support attribute assignment", object_type_name));
-                    }
-                };
-
-                // CRITICAL FIX: After modifying an object in a register, update all variables
-                // that were referencing this object so they see the modifications
-                let modified_object = self.frames[frame_idx].registers[object_reg].clone();
-
-                for var_spec in vars_to_update {
-                    let parts: Vec<&str> = var_spec.split(':').collect();
-                    match parts[0] {
-                        "global" => {
-                            if self.globals.borrow().contains_key(parts[1]) {
-                                self.globals.borrow_mut().insert(parts[1].to_string(), modified_object.clone());
-                            }
-                        }
-                        "frame_global" => {
-                            if self.frames[frame_idx].globals.borrow().contains_key(parts[1]) {
-                                self.frames[frame_idx].globals.borrow_mut().insert(parts[1].to_string(), modified_object.clone());
-                            }
-                        }
-                        "local" => {
-                            if let Ok(idx) = parts[1].parse::<usize>() {
-                                if idx < self.frames[frame_idx].locals.len() {
-                                    self.frames[frame_idx].locals[idx] = modified_object.clone();
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
                 Ok(None)
             }
             OpCode::DeleteAttr => {
