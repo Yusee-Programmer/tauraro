@@ -7,6 +7,7 @@ pub mod semantic;
 pub mod ir;
 pub mod codegen;
 pub mod value;
+pub mod value_pool;
 
 // FFI modules (before builtins so it can be imported)
 #[cfg(feature = "ffi")]
