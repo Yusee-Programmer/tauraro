@@ -61,9 +61,11 @@ pub struct SuperBytecodeVM {
     hot_function_threshold: u64, // Threshold for considering a function "hot"
     jit_compiled_functions: HashMap<String, bool>, // Track which functions have been JIT compiled
 
-    // JIT compiler for hot function compilation
+    // JIT compilation infrastructure
+    hot_loop_detector: crate::bytecode::jit::HotLoopDetector,
+
     #[cfg(feature = "jit")]
-    jit_builder: Option<cranelift_module::Module<cranelift_module::Backend>>,
+    jit_compiler: Option<crate::bytecode::jit_compiler::JITCompiler>,
 
     // Type checker for runtime type enforcement
     pub type_checker: TypeChecker,
@@ -99,24 +101,6 @@ impl SuperBytecodeVM {
             builtins.insert(name.clone(), RcValue::new(value.clone()));
         }
 
-        // Initialize JIT builder if JIT feature is enabled
-        #[cfg(feature = "jit")]
-        let jit_builder = {
-            use cranelift_codegen::isa;
-            use cranelift_module::Module;
-            use target_lexicon::triple;
-
-            let mut flag_builder = cranelift_codegen::settings::builder();
-            flag_builder.set("use_colocated_libcalls", "false").unwrap();
-            let isa_builder = isa::lookup(triple!()).unwrap_or_else(|_| {
-                panic!("Unsupported target triple");
-            });
-            let isa = isa_builder.finish(cranelift_codegen::settings::Flags::new(flag_builder));
-            Some(Module::new())
-        };
-
-        #[cfg(not(feature = "jit"))]
-        let _jit_builder: Option<()> = None;
 
         // Create builtins module
         let builtins_module = Value::Module("builtins".to_string(), builtins_values.clone());
@@ -163,9 +147,19 @@ impl SuperBytecodeVM {
             hot_function_threshold: 1000, // Consider functions hot after 1000 calls
             jit_compiled_functions: HashMap::new(),
 
-            // Initialize JIT compiler
+            // Initialize JIT infrastructure
+            hot_loop_detector: crate::bytecode::jit::HotLoopDetector::new(),
+
             #[cfg(feature = "jit")]
-            jit_builder,
+            jit_compiler: {
+                match crate::bytecode::jit_compiler::JITCompiler::new() {
+                    Ok(compiler) => Some(compiler),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to initialize JIT compiler: {}", e);
+                        None
+                    }
+                }
+            },
 
             // Initialize type checker
             type_checker: TypeChecker::new(),
@@ -1651,6 +1645,235 @@ impl SuperBytecodeVM {
             return Err(anyhow!("ForIter: register index out of bounds"));
         }
 
+        // JIT COMPILATION: Track loop iterations and compile hot loops
+        let function_name = self.frames[frame_idx].code.name.clone();
+        let loop_start_pc = self.frames[frame_idx].pc;  // Current ForIter instruction PC
+
+        // Check if this loop has been JIT-compiled
+        let is_compiled = self.hot_loop_detector.is_compiled(&function_name, loop_start_pc);
+
+        if !is_compiled {
+            // Track loop iteration
+            let should_compile = self.hot_loop_detector.record_loop_iteration(function_name.clone(), loop_start_pc);
+
+            if should_compile {
+                // Threshold reached - trigger JIT compilation
+                #[cfg(feature = "jit")]
+                {
+                    if let Some(ref mut compiler) = self.jit_compiler {
+                        // Find loop end (the target jump address)
+                        let loop_end_pc = target;
+
+                        // Get iterator state for range loops
+                        // When compilation triggers, 'current' is the last value yielded by ForIter
+                        // but the loop body for that value hasn't executed yet, so JIT should start from 'current'
+                        let (start_value, step_value) = if let Value::RangeIterator { current, step, .. } =
+                            &self.frames[frame_idx].registers[iter_reg].value {
+                            (*current, *step)  // Start from current (last yielded, not yet processed)
+                        } else {
+                            (0, 1)  // Default fallback
+                        };
+
+                        // Compile the loop
+                        match compiler.compile_loop(
+                            &function_name,
+                            &self.frames[frame_idx].code.instructions,
+                            &self.frames[frame_idx].code.constants,
+                            loop_start_pc,
+                            loop_end_pc,
+                            result_reg as u32,  // Pass the register that holds the loop variable
+                            start_value,  // Starting iteration value
+                            step_value,  // Step between iterations
+                        ) {
+                            Ok(native_fn_ptr) => {
+                                // Store compiled loop
+                                let compiled_loop = crate::bytecode::jit::CompiledLoop {
+                                    function_name: function_name.clone(),
+                                    loop_start_pc,
+                                    loop_end_pc,
+                                    execution_count: 0,
+                                    native_code: Some(native_fn_ptr as usize),
+                                };
+                                self.hot_loop_detector.mark_compiled(function_name.clone(), loop_start_pc, compiled_loop);
+                                eprintln!("JIT: Compiled loop in {} at PC {}", function_name, loop_start_pc);
+                            }
+                            Err(e) => {
+                                eprintln!("JIT: Failed to compile loop in {} at PC {}: {}", function_name, loop_start_pc, e);
+                            }
+                        }
+                    }
+                }
+
+                #[cfg(not(feature = "jit"))]
+                {
+                    // JIT not available - just mark as "compiled" to avoid repeated attempts
+                    let dummy_loop = crate::bytecode::jit::CompiledLoop {
+                        function_name: function_name.clone(),
+                        loop_start_pc,
+                        loop_end_pc: target,
+                        execution_count: 0,
+                        native_code: None,
+                    };
+                    self.hot_loop_detector.mark_compiled(function_name, loop_start_pc, dummy_loop);
+                }
+            }
+        }
+
+        // === NATIVE CODE EXECUTION: Call JIT-compiled loop if available ===
+        #[cfg(feature = "jit")]
+        {
+            if let Some(compiled_loop) = self.hot_loop_detector.get_compiled_loop(&function_name, loop_start_pc) {
+                if let Some(native_code_ptr) = compiled_loop.native_code {
+                    // Check if this is a RangeIterator (required for native execution)
+                    // Clone the value to avoid borrowing issues
+                    let iter_value = self.frames[frame_idx].registers[iter_reg].value.clone();
+                    if let Value::RangeIterator { start, stop, step, current } = iter_value {
+                        // Calculate remaining iterations
+                        // We start from 'current' (last yielded value, not yet processed) to stop (exclusive)
+                        let remaining = if step > 0 {
+                            if current < stop {
+                                (stop - current + step - 1) / step
+                            } else {
+                                0
+                            }
+                        } else if step < 0 {
+                            if current > stop {
+                                (stop - current + step + 1) / step
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        };
+
+                        if remaining > 0 {
+                            // Sync LoadGlobal instructions: Load globals into source registers before JIT execution
+                            // JIT LoadGlobal loads from register[arg1] into register[arg2]
+                            // So we need to pre-populate register[arg1] with the global value
+                            let loop_body_start = loop_start_pc + 1;
+                            let loop_body_end = target;
+                            if loop_body_start < loop_body_end && loop_body_end <= self.frames[frame_idx].code.instructions.len() {
+                                for instr_idx in loop_body_start..loop_body_end {
+                                    let instr = &self.frames[frame_idx].code.instructions[instr_idx];
+                                    if instr.opcode == OpCode::LoadGlobal {
+                                        let name_idx = instr.arg1 as usize;  // Name index AND source register for JIT
+                                        let _dest_reg = instr.arg2 as usize;  // Destination register (not used for pre-loading)
+
+                                        if name_idx < self.frames[frame_idx].code.names.len() &&
+                                           name_idx < self.frames[frame_idx].registers.len() {
+                                            let name = self.frames[frame_idx].code.names[name_idx].clone();
+
+                                            // Look up global value
+                                            let value = if self.frames[frame_idx].globals.borrow().contains_key(&name) {
+                                                self.frames[frame_idx].globals.borrow().get(&name).cloned()
+                                            } else if self.globals.borrow().contains_key(&name) {
+                                                self.globals.borrow().get(&name).cloned()
+                                            } else {
+                                                None
+                                            };
+
+                                            if let Some(val) = value {
+                                                self.frames[frame_idx].registers[name_idx] = val;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Execute loop natively
+                            // For now, we'll extract integer registers, call native code, and update state
+
+                            // Prepare i64 register array (simplified: just allocate space)
+                            let mut native_registers: Vec<i64> = vec![0; self.frames[frame_idx].registers.len()];
+
+                            // Convert current Value registers to i64 (only for Int values)
+                            for (i, reg) in self.frames[frame_idx].registers.iter().enumerate() {
+                                if let Value::Int(val) = reg.value {
+                                    native_registers[i] = val;
+                                }
+                            }
+
+                            // Prepare constant array
+                            let mut native_constants: Vec<i64> = Vec::new();
+                            for constant in &self.frames[frame_idx].code.constants {
+                                if let Value::Int(val) = constant {
+                                    native_constants.push(*val);
+                                } else {
+                                    native_constants.push(0);
+                                }
+                            }
+
+                            // Call native function
+                            let native_fn: crate::bytecode::jit_compiler::NativeLoopFn =
+                                unsafe { std::mem::transmute(native_code_ptr as *const u8) };
+
+                            let result_code = unsafe {
+                                native_fn(
+                                    native_registers.as_mut_ptr(),
+                                    native_constants.as_ptr(),
+                                    remaining,
+                                )
+                            };
+
+                            if result_code == 0 {
+                                // Success - update VM registers from native registers
+                                for (i, &val) in native_registers.iter().enumerate() {
+                                    if i < self.frames[frame_idx].registers.len() {
+                                        // Only update if it was an integer before
+                                        if let Value::Int(_) = self.frames[frame_idx].registers[i].value {
+                                            self.frames[frame_idx].registers[i] = RcValue::new(value_pool::create_int(val));
+                                        }
+                                    }
+                                }
+
+                                // Execute any StoreGlobal instructions from the loop body to sync globals
+                                // This is necessary because JIT code only updates registers, not the globals HashMap
+                                let loop_body_start = loop_start_pc + 1;
+                                let loop_body_end = target;
+                                if loop_body_start < loop_body_end && loop_body_end <= self.frames[frame_idx].code.instructions.len() {
+                                    for instr_idx in loop_body_start..loop_body_end {
+                                        let instr = &self.frames[frame_idx].code.instructions[instr_idx];
+                                        if instr.opcode == OpCode::StoreGlobal {
+                                            let value_reg = instr.arg1 as usize;
+                                            let name_idx = instr.arg2 as usize;
+
+                                            if value_reg < self.frames[frame_idx].registers.len() &&
+                                               name_idx < self.frames[frame_idx].code.names.len() {
+                                                let value = self.frames[frame_idx].registers[value_reg].clone();
+                                                let name = self.frames[frame_idx].code.names[name_idx].clone();
+
+                                                // Store in frame globals
+                                                self.frames[frame_idx].globals.borrow_mut().insert(name.clone(), value.clone());
+                                                // Also store in VM globals for consistency
+                                                self.globals.borrow_mut().insert(name, value);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Mark iterator as exhausted
+                                let exhausted_iterator = Value::RangeIterator {
+                                    start,
+                                    stop,
+                                    step,
+                                    current: stop, // Move to end
+                                };
+                                self.frames[frame_idx].registers[iter_reg] = RcValue::new(exhausted_iterator);
+
+                                // Jump to loop exit (target)
+                                self.frames[frame_idx].pc = target;
+
+                                return Ok(None);
+                            } else {
+                                // Native execution failed, fall back to interpreter
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // === FALLBACK: Interpret normally (if JIT not available or failed) ===
         // Handle different iterator types
         // Clone the iterator value to avoid borrowing issues
         let iter_value = self.frames[frame_idx].registers[iter_reg].value.clone();

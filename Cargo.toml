@@ -31,6 +31,7 @@ cranelift = { version = "0.119", optional = true }
 cranelift-codegen = { version = "0.119", optional = true }
 cranelift-frontend = { version = "0.119", optional = true }
 cranelift-jit = { version = "0.119", optional = true }
+cranelift-module = { version = "0.119", optional = true }
 
 # For C code generation and FFI
 tempfile = "3.8"
@@ -94,7 +95,7 @@ ffi = ["dep:libffi", "dep:libloading", "dep:winapi"]  # Foreign Function Interfa
 python-interop = ["dep:pyo3"]  # Python interoperability
 async = []  # Async/await support (now always available)
 http = []  # HTTP and WebSocket support (now always available)
-jit = ["dep:cranelift", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit"]  # JIT compilation with Cranelift
+jit = ["dep:cranelift", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module"]  # JIT compilation with Cranelift
 test-llvm = []  # Feature for testing LLVM backend
 type_checking = []  # Runtime type checking support
 

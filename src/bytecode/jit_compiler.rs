@@ -47,10 +47,12 @@ impl JITCompiler {
     /// Create a new JIT compiler
     pub fn new() -> Result<Self> {
         // Create Cranelift JIT builder
-        let mut builder = JITBuilder::new(cranelift_module::default_libcall_names())?;
+        let builder = JITBuilder::new(cranelift_module::default_libcall_names())
+            .map_err(|e| anyhow!("Failed to create JIT builder: {}", e))?;
         let module = JITModule::new(builder);
 
-        let ctx = module.make_context();
+        // Create context manually (not from module)
+        let ctx = Context::new();
         let builder_ctx = FunctionBuilderContext::new();
 
         Ok(Self {
@@ -68,6 +70,9 @@ impl JITCompiler {
         constants: &[Value],
         loop_start: usize,
         loop_end: usize,
+        result_reg: u32,  // Register that holds the loop variable (e.g., 'i' in 'for i in range()')
+        start_value: i64,  // Starting value for the loop variable
+        step: i64,  // Step value for the loop variable
     ) -> Result<*const u8> {
         // Clear previous function
         self.ctx.func.clear();
@@ -98,33 +103,55 @@ impl JITCompiler {
         // Track register values in Cranelift IR
         let mut register_values: HashMap<u32, cranelift_codegen::ir::Value> = HashMap::new();
 
-        // Extract loop body instructions (between loop_start and loop_end)
-        let loop_instructions = if loop_end < instructions.len() {
-            &instructions[loop_start..loop_end]
+        // Extract loop body instructions (AFTER loop_start, which is the ForIter instruction)
+        // The loop body starts at loop_start + 1 and goes until loop_end (exclusive)
+        let loop_body_start = loop_start + 1;
+        let loop_instructions = if loop_end < instructions.len() && loop_body_start < loop_end {
+            &instructions[loop_body_start..loop_end]
+        } else if loop_body_start < instructions.len() {
+            &instructions[loop_body_start..]
         } else {
-            &instructions[loop_start..]
+            &[]  // Empty loop body
         };
 
-        // Create loop block
-        let loop_block = builder.create_block();
+
+        // Create loop blocks
+        let loop_header = builder.create_block();
+        let loop_body = builder.create_block();
         let exit_block = builder.create_block();
 
         // Initialize loop counter
-        let loop_counter_var = Variable::new(0);
+        let loop_counter_var = Variable::from_u32(0);
         builder.declare_var(loop_counter_var, I64);
         let zero = builder.ins().iconst(I64, 0);
         builder.def_var(loop_counter_var, zero);
 
-        // Jump to loop
-        builder.ins().jump(loop_block, &[]);
+        // Jump to loop header
+        builder.ins().jump(loop_header, &[]);
 
-        // === Loop Block ===
-        builder.switch_to_block(loop_block);
+        // === Loop Header: Check condition ===
+        builder.switch_to_block(loop_header);
 
         // Check loop condition: counter < iteration_count
         let counter = builder.use_var(loop_counter_var);
         let cond = builder.ins().icmp(cranelift_codegen::ir::condcodes::IntCC::SignedLessThan, counter, iteration_count);
-        builder.ins().brif(cond, loop_block, &[], exit_block, &[]);
+        builder.ins().brif(cond, loop_body, &[], exit_block, &[]);
+
+        // === Loop Body: Execute instructions ===
+        builder.switch_to_block(loop_body);
+
+        // Calculate and store the loop variable value: start_value + (counter * step)
+        let counter_for_iter = builder.use_var(loop_counter_var);
+        let start_val = builder.ins().iconst(I64, start_value);
+        let step_val = builder.ins().iconst(I64, step);
+        let offset = builder.ins().imul(counter_for_iter, step_val);
+        let iter_value = builder.ins().iadd(start_val, offset);
+
+        // Store iteration value in result_reg
+        register_values.insert(result_reg, iter_value);
+        let result_offset = builder.ins().iconst(I64, (result_reg as i64) * 8);
+        let result_addr = builder.ins().iadd(registers_ptr, result_offset);
+        builder.ins().store(cranelift_codegen::ir::MemFlags::new(), iter_value, result_addr, 0);
 
         // Translate loop body instructions to IR
         for instr in loop_instructions {
@@ -140,16 +167,18 @@ impl JITCompiler {
         }
 
         // Increment loop counter
+        let counter_body = builder.use_var(loop_counter_var);
         let one = builder.ins().iconst(I64, 1);
-        let new_counter = builder.ins().iadd(counter, one);
+        let new_counter = builder.ins().iadd(counter_body, one);
         builder.def_var(loop_counter_var, new_counter);
 
-        // Back edge to loop start
-        builder.ins().jump(loop_block, &[]);
+        // Back edge to loop header
+        builder.ins().jump(loop_header, &[]);
 
         // === Exit Block ===
         builder.switch_to_block(exit_block);
-        builder.seal_block(loop_block);
+        builder.seal_block(loop_header);
+        builder.seal_block(loop_body);
         builder.seal_block(exit_block);
 
         // Return success (0)
@@ -159,8 +188,8 @@ impl JITCompiler {
         // Finalize function
         builder.finalize();
 
-        // Declare function in module
-        let func_name = format!("jit_{}", function_name);
+        // Declare function in module with unique name (include loop_start for uniqueness)
+        let func_name = format!("jit_{}_pc{}", function_name, loop_start);
         let func_id = self.module
             .declare_function(&func_name, Linkage::Export, &self.ctx.func.signature)?;
 
@@ -207,8 +236,8 @@ impl JITCompiler {
                 }
             }
 
-            OpCode::LoadFast | OpCode::LoadLocal => {
-                // Load from local variable: registers[arg2] = locals[arg1]
+            OpCode::LoadFast | OpCode::LoadLocal | OpCode::LoadGlobal => {
+                // Load from local/global variable: registers[arg2] = locals[arg1] or globals[arg1]
                 // For JIT, we'll load from the register array
                 let src_reg = instr.arg1;
                 let dest_reg = instr.arg2;
@@ -219,8 +248,8 @@ impl JITCompiler {
                 registers.insert(dest_reg, val);
             }
 
-            OpCode::StoreFast | OpCode::StoreLocal => {
-                // Store to local variable: locals[arg2] = registers[arg1]
+            OpCode::StoreFast | OpCode::StoreLocal | OpCode::StoreGlobal => {
+                // Store to local/global variable: locals[arg2] = registers[arg1] or globals[arg2] = registers[arg1]
                 let src_reg = instr.arg1;
                 let dest_idx = instr.arg2;
 
