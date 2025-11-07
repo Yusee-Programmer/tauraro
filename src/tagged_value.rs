@@ -326,6 +326,49 @@ impl TaggedValue {
         }
     }
 
+    /// Compare two tagged values (greater than)
+    #[inline(always)]
+    pub fn gt(&self, other: &TaggedValue) -> Option<bool> {
+        if self.is_int() && other.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            let b = unsafe { other.as_int_unchecked() };
+            Some(a > b)
+        } else {
+            None
+        }
+    }
+
+    /// Compare two tagged values (less than or equal)
+    #[inline(always)]
+    pub fn le(&self, other: &TaggedValue) -> Option<bool> {
+        if self.is_int() && other.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            let b = unsafe { other.as_int_unchecked() };
+            Some(a <= b)
+        } else {
+            None
+        }
+    }
+
+    /// Compare two tagged values (greater than or equal)
+    #[inline(always)]
+    pub fn ge(&self, other: &TaggedValue) -> Option<bool> {
+        if self.is_int() && other.is_int() {
+            let a = unsafe { self.as_int_unchecked() };
+            let b = unsafe { other.as_int_unchecked() };
+            Some(a >= b)
+        } else {
+            None
+        }
+    }
+
+    /// Compare two tagged values (not equal)
+    #[inline(always)]
+    pub fn ne(&self, other: &TaggedValue) -> bool {
+        // For simple values, direct comparison works
+        self.0 != other.0
+    }
+
     /// Get raw bits (for debugging)
     #[inline(always)]
     pub fn raw_bits(&self) -> u64 {
