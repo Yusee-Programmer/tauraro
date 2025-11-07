@@ -15,6 +15,9 @@ mod ir;
 mod codegen;
 mod value;
 mod value_pool;
+mod string_interner;
+mod tagged_value;
+mod value_bridge;
 
 // FFI modules (declare before builtins so it can be imported)
 #[cfg(feature = "ffi")]
