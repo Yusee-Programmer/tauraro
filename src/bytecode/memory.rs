@@ -248,6 +248,46 @@ impl Frame {
         }
     }
 
+    /// OPTIMIZATION: Reinitialize a pooled frame for reuse (avoids allocation)
+    pub fn reinit(&mut self, code: CodeObject, globals: Rc<RefCell<HashMap<String, RcValue>>>, builtins: Rc<RefCell<HashMap<String, RcValue>>>) {
+        // Reset frame state
+        self.code = code;
+        self.pc = 0;
+        self.line_number = 0;
+
+        // Resize registers to match new code
+        let reg_count = self.code.registers as usize;
+        if reg_count == 0 && !self.code.instructions.is_empty() {
+            self.registers.resize(64, RcValue::new(Value::None));
+        } else {
+            self.registers.resize(reg_count, RcValue::new(Value::None));
+        }
+
+        // Reset locals
+        self.locals.clear();
+        self.locals.resize(self.code.varnames.len(), RcValue::new(Value::None));
+
+        // Rebuild locals map
+        self.locals_map.clear();
+        for (i, name) in self.code.varnames.iter().enumerate() {
+            self.locals_map.insert(name.clone(), i);
+        }
+
+        // Update globals and builtins references
+        self.globals = globals;
+        self.builtins = builtins;
+
+        // Reset other state
+        self.free_vars.clear();
+        self.block_stack.clear();
+        self.cache_version = 0;
+        self.method_cache.clear();
+        self.return_register = None;
+        self.is_property_setter = false;
+        self.vars_to_update.clear();
+        self.last_loaded_attr = None;
+    }
+
     /// Create a frame optimized for function calls with pre-allocated registers
     pub fn new_function_frame(code: CodeObject, globals: Rc<RefCell<HashMap<String, RcValue>>>, builtins: Rc<RefCell<HashMap<String, RcValue>>>, args: Vec<Value>, kwargs: HashMap<String, Value>) -> Self {
         // Initialize registers
