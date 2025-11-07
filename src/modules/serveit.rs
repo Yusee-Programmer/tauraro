@@ -370,21 +370,40 @@ fn execute_closure(app: &Value, scope: Value) -> Result<Value> {
                 }
             }
 
-            // Set the scope parameter in globals
-            // NOTE: This is a workaround - ideally parameters would be in locals
-            // but setting up proper frame context is complex. Works for now.
-            if !params.is_empty() {
-                let param_name = &params[0].name;
-                let rc_scope = value_to_rc_value(scope.clone());
-                vm.globals.borrow_mut().insert(param_name.clone(), rc_scope);
-            }
-
             // Execute the closure body
             if let Some(code_obj) = compiled_code {
-                // Execute the compiled code
-                vm.execute(*code_obj.clone())
+                // For compiled code, set up parameters properly in locals
+                use crate::bytecode::memory::Frame;
+
+                let rc_scope = value_to_rc_value(scope);
+
+                // Create a frame with the parameter in locals (proper way)
+                let mut frame = Frame::new(
+                    *code_obj.clone(),
+                    vm.globals.clone(),
+                    vm.builtins.clone(),
+                );
+
+                // Set up the parameter in locals
+                frame.locals = vec![rc_scope];
+                if !params.is_empty() {
+                    frame.locals_map.insert(params[0].name.clone(), 0);
+                }
+
+                // Push frame and execute
+                vm.frames.push(frame);
+                let result = vm.run_frame();
+                vm.frames.pop();
+
+                result
             } else {
-                // Compile and execute the body
+                // For non-compiled code, set scope in globals and compile+execute
+                if !params.is_empty() {
+                    let param_name = &params[0].name;
+                    let rc_scope = value_to_rc_value(scope);
+                    vm.globals.borrow_mut().insert(param_name.clone(), rc_scope);
+                }
+
                 let program = Program { statements: body.clone() };
                 let mut compiler = SuperCompiler::new("<serveit_app>".to_string());
                 let code = compiler.compile(program)?;
