@@ -1,4 +1,4 @@
-/// ServEit - High-performance ASGI server for Tauraro
+/// Serveit - High-performance ASGI server for Tauraro
 /// Similar to Python's uvicorn, built on Tokio and Hyper
 ///
 /// Features:
@@ -116,7 +116,7 @@ fn serveit_run(args: Vec<Value>) -> Result<Value> {
 
     // Print startup message
     println!("╭─────────────────────────────────────────────────────╮");
-    println!("│  ServEit - High-Performance ASGI Server (Tauraro)  │");
+    println!("│  ServeIt - High-Performance ASGI Server (Tauraro)  │");
     println!("╰─────────────────────────────────────────────────────╯");
     println!();
     println!("  Starting server at: http://{}:{}", host, port);
