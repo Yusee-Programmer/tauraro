@@ -130,6 +130,8 @@ fn serveit_run(args: Vec<Value>) -> Result<Value> {
     println!();
 
     // Create Tokio runtime
+    // Note: Currently single-threaded due to Rc<RefCell> in Value
+    // TODO: Migrate to Arc<RwLock> for multi-threading support
     let rt = Runtime::new()?;
 
     // Run the server with LocalSet to support spawn_local
@@ -178,6 +180,8 @@ async fn run_server(
         let log_clone = log_level.as_ref().clone();
 
         // Spawn a task to handle each connection concurrently
+        // Note: Using spawn_local for now due to Rc<RefCell> in Value
+        // TODO: Upgrade to Arc<Mutex> for true multi-threading
         tokio::task::spawn_local(async move {
             if let Err(err) = http1::Builder::new()
                 .keep_alive(false)  // Disable keep-alive to prevent incomplete message errors
