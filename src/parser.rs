@@ -1314,7 +1314,33 @@ impl Parser {
                 return Ok(Expr::Tuple(Vec::new()));
             }
 
-            let first_expr = self.expression()?;
+            // Parse first expression - use or() to avoid consuming 'for' in generator expressions
+            let first_expr = self.or()?;
+
+            // Check if this is a generator expression (don't consume the 'for' token!)
+            if self.check(&Token::KwFor) {
+                // Generator expression
+                let generators = self.parse_comprehension()?;
+                self.consume(Token::RParen, "Expected ')' after generator expression")?;
+                return Ok(Expr::GeneratorExp {
+                    element: Box::new(first_expr),
+                    generators,
+                });
+            }
+
+            // If not a generator, check for ternary conditional
+            let first_expr = if self.match_token(&[Token::KwIf]) {
+                let condition = Box::new(self.or()?);
+                self.consume(Token::KwElse, "Expected 'else' in conditional expression")?;
+                let else_expr = Box::new(self.or()?);
+                Expr::IfExp {
+                    condition,
+                    then_expr: Box::new(first_expr),
+                    else_expr,
+                }
+            } else {
+                first_expr
+            };
 
             // Check if this is a tuple (has comma) or just grouped expression
             if self.match_token(&[Token::Comma]) {
@@ -1374,9 +1400,9 @@ impl Parser {
                 }
                 
                 let first_expr = self.expression()?;
-                
-                // Check if this is a list comprehension
-                if self.match_token(&[Token::KwFor]) {
+
+                // Check if this is a list comprehension (don't consume the 'for' token!)
+                if self.check(&Token::KwFor) {
                     // List comprehension
                     let generators = self.parse_comprehension()?;
                     self.consume(Token::RBracket, "Expected ']' after list comprehension")?;
@@ -1457,8 +1483,8 @@ impl Parser {
                     let first_value = self.expression()?;
                     let mut pairs = vec![(first_expr.clone(), first_value.clone())];
 
-                    // Check if this is a dict comprehension
-                    if self.match_token(&[Token::KwFor]) {
+                    // Check if this is a dict comprehension (don't consume the 'for' token!)
+                    if self.check(&Token::KwFor) {
                         // Dict comprehension
                         let generators = self.parse_comprehension()?;
                         self.consume(Token::RBrace, "Expected '}' after dict comprehension")?;
@@ -1504,8 +1530,8 @@ impl Parser {
                     // Set or set comprehension
                     let mut items = vec![first_expr.clone()];
 
-                    // Check if this is a set comprehension
-                    if self.match_token(&[Token::KwFor]) {
+                    // Check if this is a set comprehension (don't consume the 'for' token!)
+                    if self.check(&Token::KwFor) {
                         // Set comprehension
                         let generators = self.parse_comprehension()?;
                         self.consume(Token::RBrace, "Expected '}' after set comprehension")?;
@@ -1971,11 +1997,13 @@ impl Parser {
             self.consume(Token::KwFor, "Expected 'for' in comprehension")?;
             let target = self.consume_identifier()?;
             self.consume(Token::KwIn, "Expected 'in' in comprehension")?;
-            let iter = self.expression()?;
-            
+            // Use or() instead of expression() to avoid parsing ternary operators
+            let iter = self.or()?;
+
             let mut ifs = Vec::new();
             while self.match_token(&[Token::KwIf]) {
-                ifs.push(self.expression()?);
+                // Use or() instead of expression() to avoid parsing ternary operators
+                ifs.push(self.or()?);
             }
             
             generators.push(Comprehension {
