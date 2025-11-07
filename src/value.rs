@@ -2204,8 +2204,10 @@ impl fmt::Display for Value {
             },
             Value::Generator { .. } => write!(f, "<generator object>"),
             Value::Iterator { .. } => write!(f, "<iterator object>"),
-            Value::Exception { class_name, message, .. } => {
-                write!(f, "{}({})", class_name, message)
+            Value::Exception { message, .. } => {
+                // When displaying an exception object (like in print(e)), just show the message
+                // The class name will be shown in the traceback
+                write!(f, "{}", message)
             },
         }
     }
