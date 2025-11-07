@@ -130,9 +130,12 @@ fn serveit_run(args: Vec<Value>) -> Result<Value> {
     // Create Tokio runtime
     let rt = Runtime::new()?;
 
-    // Run the server
+    // Run the server with LocalSet to support spawn_local
     rt.block_on(async {
-        run_server(app, host, port, log_level, reload, workers).await
+        let local = tokio::task::LocalSet::new();
+        local.run_until(async {
+            run_server(app, host, port, log_level, reload, workers).await
+        }).await
     })?;
 
     Ok(Value::None)
@@ -168,23 +171,29 @@ async fn run_server(
         let (stream, _) = listener.accept().await?;
         let io = TokioIo::new(stream);
 
-        // Handle connection without spawning (single-threaded for now)
-        // This avoids Send/Sync issues with Value containing Rc
+        // Clone for the spawned task
         let app_clone = app.as_ref().clone();
         let log_clone = log_level.as_ref().clone();
 
-        if let Err(err) = http1::Builder::new()
-            .serve_connection(io, service_fn(move |req| {
-                let app_ref = app_clone.clone();
-                let log_ref = log_clone.clone();
-                async move {
-                    handle_request(req, Arc::new(app_ref), Arc::new(log_ref)).await
+        // Spawn a task to handle each connection concurrently
+        tokio::task::spawn_local(async move {
+            if let Err(err) = http1::Builder::new()
+                .keep_alive(false)  // Disable keep-alive to prevent incomplete message errors
+                .serve_connection(io, service_fn(move |req| {
+                    let app_ref = app_clone.clone();
+                    let log_ref = log_clone.clone();
+                    async move {
+                        handle_request(req, Arc::new(app_ref), Arc::new(log_ref)).await
+                    }
+                }))
+                .await
+            {
+                // Only log errors that aren't connection closed errors
+                if !err.to_string().contains("connection closed") {
+                    eprintln!("Error serving connection: {:?}", err);
                 }
-            }))
-            .await
-        {
-            eprintln!("Error serving connection: {:?}", err);
-        }
+            }
+        });
     }
 }
 
@@ -327,16 +336,21 @@ fn convert_to_hyper_response(value: Value) -> Result<hyper::Response<String>> {
     match value {
         Value::Dict(dict) => convert_dict_to_response(&dict),
         Value::Str(s) => {
+            let body_len = s.len();
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("content-type", "text/plain")
+                .header("content-length", body_len.to_string())
                 .body(s)
                 .unwrap())
         }
         _ => {
+            let body = format!("{:?}", value);
+            let body_len = body.len();
             Ok(Response::builder()
                 .status(StatusCode::OK)
-                .body(format!("{:?}", value))
+                .header("content-length", body_len.to_string())
+                .body(body)
                 .unwrap())
         }
     }
@@ -353,18 +367,7 @@ fn convert_dict_to_response(dict: &std::rc::Rc<std::cell::RefCell<HashMap<String
         .and_then(|v| if let Value::Int(s) = v { Some(*s as u16) } else { None })
         .unwrap_or(200);
 
-    // Get headers
-    let mut response = Response::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
-
-    if let Some(Value::Dict(headers)) = dict_ref.get("headers") {
-        for (key, value) in headers.borrow().iter() {
-            if let Value::Str(val) = value {
-                response = response.header(key.as_str(), val.as_str());
-            }
-        }
-    }
-
-    // Get body
+    // Get body first to calculate content length
     let body = dict_ref.get("body")
         .and_then(|v| match v {
             Value::Str(s) => Some(s.clone()),
@@ -372,6 +375,25 @@ fn convert_dict_to_response(dict: &std::rc::Rc<std::cell::RefCell<HashMap<String
             _ => None,
         })
         .unwrap_or_else(|| String::new());
+
+    let body_len = body.len();
+
+    // Get headers
+    let mut response = Response::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
+
+    // Add content-length header first
+    response = response.header("content-length", body_len.to_string());
+
+    if let Some(Value::Dict(headers)) = dict_ref.get("headers") {
+        for (key, value) in headers.borrow().iter() {
+            if let Value::Str(val) = value {
+                // Don't override content-length if already set
+                if key.to_lowercase() != "content-length" {
+                    response = response.header(key.as_str(), val.as_str());
+                }
+            }
+        }
+    }
 
     Ok(response.body(body).unwrap())
 }
