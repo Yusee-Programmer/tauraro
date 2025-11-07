@@ -1541,13 +1541,13 @@ impl SuperCompiler {
                         BinaryOp::Add => OpCode::FastIntAdd,
                         BinaryOp::Sub => OpCode::FastIntSub,
                         BinaryOp::Mul => OpCode::FastIntMul,
-                        BinaryOp::Div => OpCode::BinaryDivRRFastInt,
-                        BinaryOp::Mod => OpCode::BinaryModRRFastInt,
+                        BinaryOp::Div => OpCode::FastIntDiv,  // Use FastIntDiv instead of BinaryDivRRFastInt
+                        BinaryOp::Mod => OpCode::FastIntMod,  // Use FastIntMod instead of BinaryModRRFastInt
                         BinaryOp::BitAnd => OpCode::BinaryBitAndRR, // No fast int version for BitAnd
                         BinaryOp::BitOr => OpCode::BinaryBitOrRR,   // No fast int version for BitOr
                         _ => OpCode::BinaryAddRR, // fallback
                     };
-                    // eprintln!("DEBUG COMPILER BinaryOp: Emitting FAST opcode {:?}", opcode);
+                    // Use FastInt opcodes for all arithmetic - they handle fallback gracefully
                     self.emit(opcode, left_reg, right_reg, result_reg, self.current_line);
                 } else {
                     let opcode = match op {

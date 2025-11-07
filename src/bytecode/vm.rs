@@ -1108,36 +1108,45 @@ impl SuperBytecodeVM {
                 let right_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
 
+                // SAFETY: Compiler guarantees valid register indices
+                // In release builds, this is EXTREMELY fast with zero overhead
+                let regs = &mut self.frames[frame_idx].registers;
+
+                #[cfg(not(debug_assertions))]
+                unsafe {
+                    // ZERO-COST fast path for integers
+                    let left_ptr = regs.as_ptr().add(left_reg);
+                    let right_ptr = regs.as_ptr().add(right_reg);
+                    let result_ptr = regs.as_mut_ptr().add(result_reg);
+
+                    if let (Value::Int(a), Value::Int(b)) = (&(*left_ptr).value, &(*right_ptr).value) {
+                        (*result_ptr).value = Value::Int(a.wrapping_add(*b));
+                        return Ok(None);
+                    }
+
+                    // Slow path: non-integer operands
+                    let result = self.add_values((*left_ptr).value.clone(), (*right_ptr).value.clone())?;
+                    (*result_ptr).value = result;
+                    return Ok(None);
+                }
+
                 #[cfg(debug_assertions)]
                 {
-                    if left_reg >= self.frames[frame_idx].registers.len() ||
-                       right_reg >= self.frames[frame_idx].registers.len() ||
-                       result_reg >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("FastIntAdd: register index out of bounds"));
+                    if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
+                        return Err(anyhow!("FastIntAdd: register out of bounds"));
                     }
-                }
 
-                // SAFETY: Bounds checked in debug, guaranteed by compiler in release
-                // This path does ZERO error handling for maximum speed
-                unsafe {
-                    let regs = &self.frames[frame_idx].registers;
-                    if let Value::Int(left_val) = regs.get_unchecked(left_reg).value {
-                        if let Value::Int(right_val) = regs.get_unchecked(right_reg).value {
-                            // Direct integer arithmetic - NO allocation, NO error handling
-                            let result = left_val.wrapping_add(right_val);
-                            self.frames[frame_idx].registers.get_unchecked_mut(result_reg).value = Value::Int(result);
-                            return Ok(None);
+                    match (&regs[left_reg].value, &regs[right_reg].value) {
+                        (Value::Int(a), Value::Int(b)) => {
+                            regs[result_reg].value = Value::Int(a.wrapping_add(*b));
+                        }
+                        _ => {
+                            let result = self.add_values(regs[left_reg].value.clone(), regs[right_reg].value.clone())?;
+                            regs[result_reg].value = result;
                         }
                     }
-
-                    // Fallback to regular addition (rare path)
-                    let left_val = regs.get_unchecked(left_reg).value.clone();
-                    let right_val = regs.get_unchecked(right_reg).value.clone();
-                    let result = self.add_values(left_val, right_val)
-                        .map_err(|e| anyhow!("Error in FastIntAdd: {}", e))?;
-                    *self.frames[frame_idx].registers.get_unchecked_mut(result_reg) = RcValue::new(result);
+                    Ok(None)
                 }
-                Ok(None)
             }
             OpCode::FastIntSub => {
                 // ULTRA-FAST integer subtraction - zero allocation
@@ -1145,34 +1154,41 @@ impl SuperBytecodeVM {
                 let right_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
 
+                let regs = &mut self.frames[frame_idx].registers;
+
+                #[cfg(not(debug_assertions))]
+                unsafe {
+                    let left_ptr = regs.as_ptr().add(left_reg);
+                    let right_ptr = regs.as_ptr().add(right_reg);
+                    let result_ptr = regs.as_mut_ptr().add(result_reg);
+
+                    if let (Value::Int(a), Value::Int(b)) = (&(*left_ptr).value, &(*right_ptr).value) {
+                        (*result_ptr).value = Value::Int(a.wrapping_sub(*b));
+                        return Ok(None);
+                    }
+
+                    let result = self.sub_values((*left_ptr).value.clone(), (*right_ptr).value.clone())?;
+                    (*result_ptr).value = result;
+                    return Ok(None);
+                }
+
                 #[cfg(debug_assertions)]
                 {
-                    if left_reg >= self.frames[frame_idx].registers.len() ||
-                       right_reg >= self.frames[frame_idx].registers.len() ||
-                       result_reg >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("FastIntSub: register index out of bounds"));
+                    if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
+                        return Err(anyhow!("FastIntSub: register out of bounds"));
                     }
-                }
 
-                unsafe {
-                    let regs = &self.frames[frame_idx].registers;
-                    if let Value::Int(left_val) = regs.get_unchecked(left_reg).value {
-                        if let Value::Int(right_val) = regs.get_unchecked(right_reg).value {
-                            // Direct integer arithmetic - NO allocation
-                            let result = left_val.wrapping_sub(right_val);
-                            self.frames[frame_idx].registers.get_unchecked_mut(result_reg).value = Value::Int(result);
-                            return Ok(None);
+                    match (&regs[left_reg].value, &regs[right_reg].value) {
+                        (Value::Int(a), Value::Int(b)) => {
+                            regs[result_reg].value = Value::Int(a.wrapping_sub(*b));
+                        }
+                        _ => {
+                            let result = self.sub_values(regs[left_reg].value.clone(), regs[right_reg].value.clone())?;
+                            regs[result_reg].value = result;
                         }
                     }
-
-                    // Fallback to regular subtraction
-                    let left_val = regs.get_unchecked(left_reg).value.clone();
-                    let right_val = regs.get_unchecked(right_reg).value.clone();
-                    let result = self.sub_values(left_val, right_val)
-                        .map_err(|e| anyhow!("Error in FastIntSub: {}", e))?;
-                    *self.frames[frame_idx].registers.get_unchecked_mut(result_reg) = RcValue::new(result);
+                    Ok(None)
                 }
-                Ok(None)
             }
             OpCode::FastIntMul => {
                 // ULTRA-FAST integer multiplication - zero allocation
@@ -1180,34 +1196,41 @@ impl SuperBytecodeVM {
                 let right_reg = arg2 as usize;
                 let result_reg = arg3 as usize;
 
+                let regs = &mut self.frames[frame_idx].registers;
+
+                #[cfg(not(debug_assertions))]
+                unsafe {
+                    let left_ptr = regs.as_ptr().add(left_reg);
+                    let right_ptr = regs.as_ptr().add(right_reg);
+                    let result_ptr = regs.as_mut_ptr().add(result_reg);
+
+                    if let (Value::Int(a), Value::Int(b)) = (&(*left_ptr).value, &(*right_ptr).value) {
+                        (*result_ptr).value = Value::Int(a.wrapping_mul(*b));
+                        return Ok(None);
+                    }
+
+                    let result = self.mul_values((*left_ptr).value.clone(), (*right_ptr).value.clone())?;
+                    (*result_ptr).value = result;
+                    return Ok(None);
+                }
+
                 #[cfg(debug_assertions)]
                 {
-                    if left_reg >= self.frames[frame_idx].registers.len() ||
-                       right_reg >= self.frames[frame_idx].registers.len() ||
-                       result_reg >= self.frames[frame_idx].registers.len() {
-                        return Err(anyhow!("FastIntMul: register index out of bounds"));
+                    if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
+                        return Err(anyhow!("FastIntMul: register out of bounds"));
                     }
-                }
 
-                unsafe {
-                    let regs = &self.frames[frame_idx].registers;
-                    if let Value::Int(left_val) = regs.get_unchecked(left_reg).value {
-                        if let Value::Int(right_val) = regs.get_unchecked(right_reg).value {
-                            // Direct integer arithmetic - NO allocation
-                            let result = left_val.wrapping_mul(right_val);
-                            self.frames[frame_idx].registers.get_unchecked_mut(result_reg).value = Value::Int(result);
-                            return Ok(None);
+                    match (&regs[left_reg].value, &regs[right_reg].value) {
+                        (Value::Int(a), Value::Int(b)) => {
+                            regs[result_reg].value = Value::Int(a.wrapping_mul(*b));
+                        }
+                        _ => {
+                            let result = self.mul_values(regs[left_reg].value.clone(), regs[right_reg].value.clone())?;
+                            regs[result_reg].value = result;
                         }
                     }
-
-                    // Fallback to regular multiplication
-                    let left_val = regs.get_unchecked(left_reg).value.clone();
-                    let right_val = regs.get_unchecked(right_reg).value.clone();
-                    let result = self.mul_values(left_val, right_val)
-                        .map_err(|e| anyhow!("Error in FastIntMul: {}", e))?;
-                    *self.frames[frame_idx].registers.get_unchecked_mut(result_reg) = RcValue::new(result);
+                    Ok(None)
                 }
-                Ok(None)
             }
             OpCode::FastIntDiv => {
                 // Ultra-fast integer division without cloning
@@ -2667,47 +2690,38 @@ impl SuperBytecodeVM {
                 Ok(None)
             }
             OpCode::LoadFast => {
-                // Load from fast local variable (indexed access)
+                // OPTIMIZED: Load from fast local variable without extra cloning
                 let local_idx = arg1 as usize;
-                let result_reg = arg2 as u32;
-
-                // eprintln!("DEBUG LoadFast: local_idx={}, result_reg={}", local_idx, result_reg);
-                // eprintln!("DEBUG LoadFast: locals.len()={}", self.frames[frame_idx].locals.len());
+                let result_reg = arg2 as usize;
 
                 if local_idx >= self.frames[frame_idx].locals.len() {
                     return Err(anyhow!("LoadFast: local variable index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
                 }
 
-                let value = self.frames[frame_idx].locals[local_idx].clone();
-                // eprintln!("DEBUG LoadFast: Loading locals[{}] = {:?} into register {}", local_idx, value.value, result_reg);
-                self.frames[frame_idx].set_register(result_reg, value.clone());
-                // eprintln!("DEBUG LoadFast: Loaded! registers[{}] = {:?}", result_reg, value.value);
+                // OPTIMIZATION: Just copy the value, avoiding RcValue clone overhead
+                self.frames[frame_idx].registers[result_reg].value =
+                    self.frames[frame_idx].locals[local_idx].value.clone();
+
                 Ok(None)
             }
             OpCode::StoreFast => {
-                // Store to fast local variable (indexed access)
+                // OPTIMIZED: Store to fast local variable without extra cloning
                 let value_reg = arg1 as usize;
                 let local_idx = arg2 as usize;
-
-                // eprintln!("DEBUG StoreFast: value_reg={}, local_idx={}", value_reg, local_idx);
-                // eprintln!("DEBUG StoreFast: registers.len()={}, locals.len()={}",
-                //     self.frames[frame_idx].registers.len(), self.frames[frame_idx].locals.len());
 
                 if value_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("StoreFast: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
                 }
 
-                let value = self.frames[frame_idx].registers[value_reg].clone();
-                // eprintln!("DEBUG StoreFast: Storing value {:?} from register {} to local {}", value.value, value_reg, local_idx);
-
                 if local_idx >= self.frames[frame_idx].locals.len() {
                     // Extend locals if needed
-                    // eprintln!("DEBUG StoreFast: Extending locals from {} to {}", self.frames[frame_idx].locals.len(), local_idx + 1);
                     self.frames[frame_idx].locals.resize(local_idx + 1, RcValue::new(Value::None));
                 }
 
-                self.frames[frame_idx].locals[local_idx] = value.clone();
-                // eprintln!("DEBUG StoreFast: Stored! Verifying locals[{}] = {:?}", local_idx, self.frames[frame_idx].locals[local_idx].value);
+                // OPTIMIZATION: Just copy the value, avoiding double RcValue clone
+                self.frames[frame_idx].locals[local_idx].value =
+                    self.frames[frame_idx].registers[value_reg].value.clone();
+
                 Ok(None)
             }
             OpCode::LoadClosure => {
