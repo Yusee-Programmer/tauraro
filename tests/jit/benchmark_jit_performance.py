@@ -195,7 +195,11 @@ for name, bench_time in benchmarks:
     throughput = ITERATIONS / bench_time / 1000000
     print(f"{name:<40} {bench_time:<12.4f} {throughput:<20.2f}")
 
-avg_time = sum(t for _, t in benchmarks) / len(benchmarks)
+# Calculate average
+total_time = 0.0
+for _, t in benchmarks:
+    total_time = total_time + t
+avg_time = total_time / len(benchmarks)
 avg_throughput = ITERATIONS / avg_time / 1000000
 
 print("-" * 70)

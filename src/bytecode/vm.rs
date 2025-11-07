@@ -5414,24 +5414,40 @@ impl SuperBytecodeVM {
                 
                 // Clone the exception value to avoid borrowing issues
                 let exception_value = self.frames[frame_idx].registers[exception_reg].value.clone();
-                
-                // Add traceback information to the exception
-                let mut enhanced_exception = exception_value.clone();
-                if let Value::Exception { class_name, message, traceback: _ } = &exception_value {
-                    // Create traceback information
-                    let mut traceback_info = format!("Traceback (most recent call last):\n");
-                    traceback_info.push_str(&format!("  File \"{}\", line {}, in {}\n", 
-                        self.frames[frame_idx].code.filename, 
-                        self.frames[frame_idx].line_number,
-                        self.frames[frame_idx].code.name));
-                    traceback_info.push_str(&format!("{}: {}\n", class_name, message));
-                    
-                    enhanced_exception = Value::new_exception(
-                        class_name.clone(),
-                        message.clone(),
-                        Some(traceback_info)
-                    );
-                }
+
+                // Convert custom exception objects to Exception values if needed
+                let (class_name, message) = match &exception_value {
+                    Value::Exception { class_name, message, .. } => {
+                        (class_name.clone(), message.clone())
+                    }
+                    Value::Object { class_name, fields, .. } => {
+                        // Custom exception class instance - extract message
+                        let msg = fields.get("message")
+                            .or_else(|| fields.get("msg"))
+                            .or_else(|| fields.get("args"))
+                            .map(|v| format!("{}", v))
+                            .unwrap_or_default();
+                        (class_name.clone(), msg)
+                    }
+                    _ => {
+                        // Not an exception, just use its string representation
+                        ("RuntimeError".to_string(), format!("{}", exception_value))
+                    }
+                };
+
+                // Create traceback information matching Python format
+                let mut traceback_info = format!("Traceback (most recent call last):\n");
+                traceback_info.push_str(&format!("  File \"{}\", line {}, in {}\n",
+                    self.frames[frame_idx].code.filename,
+                    self.frames[frame_idx].line_number,
+                    self.frames[frame_idx].code.name));
+                traceback_info.push_str(&format!("{}: {}", class_name, message));
+
+                let enhanced_exception = Value::new_exception(
+                    class_name.clone(),
+                    message.clone(),
+                    Some(traceback_info)
+                );
                 
                 // Search for exception handlers in the block stack
                 // Find the innermost exception handler
@@ -5452,9 +5468,15 @@ impl SuperBytecodeVM {
                     if let Some(traceback) = enhanced_exception.get_traceback() {
                         eprintln!("{}", traceback);
                     } else {
-                        eprintln!("{}", enhanced_exception);
+                        // If no traceback was added (shouldn't happen), format a basic error
+                        if let Value::Exception { class_name, message, .. } = &enhanced_exception {
+                            eprintln!("{}: {}", class_name, message);
+                        } else {
+                            eprintln!("{}", enhanced_exception);
+                        }
                     }
-                    Err(anyhow!("Unhandled exception: {}", enhanced_exception))
+                    // Return error without additional message (traceback already printed)
+                    Err(anyhow!(""))
                 }
             }
             OpCode::GetExceptionValue => {
@@ -7508,6 +7530,26 @@ impl SuperBytecodeVM {
                 }
             }
             Value::Class { name: class_name, methods, mro, base_object, .. } => {
+                // Check if this class inherits from Exception
+                let is_exception_class = mro.get_linearization().iter().any(|cls| cls == "Exception" || cls == "BaseException");
+
+                // For exception classes, create Value::Exception instead of Value::Object
+                if is_exception_class {
+                    let message = if args.is_empty() {
+                        String::new()
+                    } else {
+                        match &args[0] {
+                            Value::Str(s) => s.clone(),
+                            _ => format!("{}", args[0]),
+                        }
+                    };
+                    return Ok(Value::new_exception(
+                        class_name.clone(),
+                        message,
+                        None,
+                    ));
+                }
+
                 // When a class is called, it creates a new instance of that class
                 // Create the object instance
                 let instance = Value::Object {

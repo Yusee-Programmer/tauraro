@@ -28,7 +28,10 @@ def test_float_addition():
 result = test_float_addition()
 expected = 15000.0
 diff = abs(result - expected)
-print(f"Test 1 - Float Addition: {result} ≈ {expected} : {'PASS' if diff < 0.01 else 'FAIL'}")
+status = "PASS"
+if diff >= 0.01:
+    status = "FAIL"
+print(f"Test 1 - Float Addition: {result} ≈ {expected} : {status}")
 
 # Test 2: Float subtraction
 def test_float_subtraction():
@@ -40,7 +43,10 @@ def test_float_subtraction():
 result = test_float_subtraction()
 expected = 10000.0 - 7500.0
 diff = abs(result - expected)
-print(f"Test 2 - Float Subtraction: {result} ≈ {expected} : {'PASS' if diff < 0.01 else 'FAIL'}")
+status = "PASS"
+if diff >= 0.01:
+    status = "FAIL"
+print(f"Test 2 - Float Subtraction: {result} ≈ {expected} : {status}")
 
 # Test 3: Float multiplication
 def test_float_multiplication():
@@ -52,7 +58,10 @@ def test_float_multiplication():
 result = test_float_multiplication()
 expected = 1.01 ** 100
 diff = abs(result - expected) / expected  # Relative error
-print(f"Test 3 - Float Multiplication: {result} ≈ {expected} : {'PASS' if diff < 0.001 else 'FAIL'}")
+status = "PASS"
+if diff >= 0.001:
+    status = "FAIL"
+print(f"Test 3 - Float Multiplication: {result} ≈ {expected} : {status}")
 
 # Test 4: Float division
 def test_float_division():
@@ -64,7 +73,10 @@ def test_float_division():
 result = test_float_division()
 expected = 10000.0 / (2.0 ** 10)
 diff = abs(result - expected)
-print(f"Test 4 - Float Division: {result} ≈ {expected} : {'PASS' if diff < 0.01 else 'FAIL'}")
+status = "PASS"
+if diff >= 0.01:
+    status = "FAIL"
+print(f"Test 4 - Float Division: {result} ≈ {expected} : {status}")
 
 # Test 5: Float power
 def test_float_power():
@@ -76,7 +88,10 @@ def test_float_power():
 result = test_float_power()
 expected = 100.0 * 8.0
 diff = abs(result - expected)
-print(f"Test 5 - Float Power: {result} ≈ {expected} : {'PASS' if diff < 0.01 else 'FAIL'}")
+status = "PASS"
+if diff >= 0.01:
+    status = "FAIL"
+print(f"Test 5 - Float Power: {result} ≈ {expected} : {status}")
 
 # Test 6: Float modulo
 def test_float_modulo():
@@ -93,7 +108,10 @@ for i in range(1000):
     x = float(i)
     expected = expected + (x % 7.0)
 diff = abs(result - expected)
-print(f"Test 6 - Float Modulo: {result} ≈ {expected} : {'PASS' if diff < 0.01 else 'FAIL'}")
+status = "PASS"
+if diff >= 0.01:
+    status = "FAIL"
+print(f"Test 6 - Float Modulo: {result} ≈ {expected} : {status}")
 
 # Test 7: Mixed int and float (requires type conversion)
 def test_mixed_int_float():
@@ -105,7 +123,10 @@ def test_mixed_int_float():
 result = test_mixed_int_float()
 expected = 499500.0  # sum(0..999)
 diff = abs(result - expected)
-print(f"Test 7 - Mixed Int/Float: {result} ≈ {expected} : {'PASS' if diff < 0.01 else 'FAIL'}")
+status = "PASS"
+if diff >= 0.01:
+    status = "FAIL"
+print(f"Test 7 - Mixed Int/Float: {result} ≈ {expected} : {status}")
 
 # Test 8: Float negation
 def test_float_negation():
@@ -119,7 +140,10 @@ def test_float_negation():
 result = test_float_negation()
 expected = -499500.0  # -sum(0..999)
 diff = abs(result - expected)
-print(f"Test 8 - Float Negation: {result} ≈ {expected} : {'PASS' if diff < 0.01 else 'FAIL'}")
+status = "PASS"
+if diff >= 0.01:
+    status = "FAIL"
+print(f"Test 8 - Float Negation: {result} ≈ {expected} : {status}")
 
 # Test 9: Complex float expression
 def test_complex_float():
@@ -135,7 +159,10 @@ for i in range(500):
     x = float(i)
     expected = expected + ((x * 2.5 + 1.0) / 3.0)
 diff = abs(result - expected)
-print(f"Test 9 - Complex Float Expression: {result} ≈ {expected} : {'PASS' if diff < 0.01 else 'FAIL'}")
+status = "PASS"
+if diff >= 0.01:
+    status = "FAIL"
+print(f"Test 9 - Complex Float Expression: {result} ≈ {expected} : {status}")
 
 # Test 10: Float to int conversion in loop
 def test_float_to_int():
@@ -150,7 +177,10 @@ expected = 0
 for i in range(1000):
     x = float(i) / 3.0
     expected = expected + int(x)
-print(f"Test 10 - Float to Int: {result} == {expected} : {'PASS' if result == expected else 'FAIL'}")
+status = "PASS"
+if result != expected:
+    status = "FAIL"
+print(f"Test 10 - Float to Int: {result} == {expected} : {status}")
 
 print("=" * 60)
 print("Float Arithmetic Tests Complete")
