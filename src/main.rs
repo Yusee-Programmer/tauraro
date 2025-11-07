@@ -39,6 +39,7 @@ mod base_object;
 mod bytecode;
 mod type_checker;
 mod runtime_error;
+mod traceback;
 
 
 

@@ -19,6 +19,8 @@ anyhow = "1.0"
 indexmap = "2.0"
 unicode-segmentation = "1.10"
 smallvec = "1.13"
+colored = "2.0"
+atty = "0.2"
 
 # Optional backends
 llvm-sys = { version = "170.0", optional = true }
