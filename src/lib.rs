@@ -10,6 +10,7 @@ pub mod value;
 pub mod value_pool;
 pub mod string_interner;
 pub mod tagged_value;
+pub mod value_bridge;
 
 // FFI modules (before builtins so it can be imported)
 #[cfg(feature = "ffi")]
