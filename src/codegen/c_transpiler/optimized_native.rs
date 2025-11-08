@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use crate::ast::*;
 use crate::codegen::c_transpiler::native_types::{NativeType, NativeTypeContext};
 use crate::codegen::c_transpiler::optimizer::NativeOptimizer;
+use crate::codegen::c_transpiler::memory_management::{MemoryCodeGenerator, MemoryStrategy};
 
 pub struct OptimizedNativeTranspiler {
     /// Type context for tracking variable types
@@ -18,6 +19,8 @@ pub struct OptimizedNativeTranspiler {
     optimizer: NativeOptimizer,
     /// Enable optimizations
     optimizations_enabled: bool,
+    /// Memory management code generator
+    memory_manager: MemoryCodeGenerator,
 }
 
 impl OptimizedNativeTranspiler {
@@ -28,11 +31,17 @@ impl OptimizedNativeTranspiler {
             temp_counter: 0,
             optimizer: NativeOptimizer::new(),
             optimizations_enabled: true,
+            memory_manager: MemoryCodeGenerator::new(MemoryStrategy::default()),
         }
     }
 
     pub fn with_optimizations(mut self, enabled: bool) -> Self {
         self.optimizations_enabled = enabled;
+        self
+    }
+
+    pub fn with_memory_strategy(mut self, strategy: MemoryStrategy) -> Self {
+        self.memory_manager = MemoryCodeGenerator::new(strategy);
         self
     }
 
@@ -98,6 +107,10 @@ impl OptimizedNativeTranspiler {
         headers.push_str("#include <string.h>\n");
         headers.push_str("#include <math.h>\n");
         headers.push_str("#include <setjmp.h>\n");
+        headers.push_str("\n");
+
+        // Add memory management runtime
+        headers.push_str(&self.memory_manager.generate_runtime_header());
         headers.push_str("\n");
 
         // Add built-in function implementations
