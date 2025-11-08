@@ -14,7 +14,7 @@ use crate::bytecode::objects::RcValue;
 use crate::value::Value as TauraroValue;
 
 /// JIT-compiled function type: takes register array pointer, returns error code
-type JitFunction = unsafe extern "C" fn(*mut RcValue, usize) -> i32;
+pub type JitFunction = unsafe extern "C" fn(*mut RcValue, usize) -> i32;
 
 /// Cranelift JIT compiler for hot loops
 pub struct CraneliftJIT {
@@ -257,6 +257,54 @@ impl CraneliftJIT {
         builder.seal_block(continue_block);
 
         Ok(())
+    }
+
+    /// Compile a loop with VM-compatible signature
+    ///
+    /// This wrapper method provides compatibility with the VM's hot loop detection system.
+    /// It adapts the old jit_compiler.rs signature to work with the new CraneliftJIT implementation.
+    ///
+    /// # Parameters
+    /// - `function_name`: Name of the function containing the loop
+    /// - `instructions`: All bytecode instructions in the function
+    /// - `constants`: Constant pool for the function
+    /// - `loop_start`: PC of the loop start instruction (ForIter)
+    /// - `loop_end`: PC of the loop end (jump target)
+    /// - `_result_reg`: Register holding the loop variable (unused in Phase 5.1)
+    /// - `_start_value`: Initial loop value (unused in Phase 5.1)
+    /// - `_step`: Loop step value (unused in Phase 5.1)
+    ///
+    /// # Returns
+    /// Raw function pointer for VM execution
+    pub fn compile_loop_vm(
+        &mut self,
+        function_name: &str,
+        instructions: &[Instruction],
+        constants: &[TauraroValue],
+        loop_start: usize,
+        loop_end: usize,
+        _result_reg: u32,
+        _start_value: i64,
+        _step: i64,
+    ) -> Result<*const u8> {
+        // Extract loop body instructions
+        // The loop body is between loop_start (ForIter) and loop_end (jump target)
+        let loop_body = if loop_start + 1 < loop_end && loop_end <= instructions.len() {
+            &instructions[loop_start + 1..loop_end]
+        } else {
+            // Empty or invalid loop
+            return Err(anyhow!("Invalid loop range: start={}, end={}, len={}",
+                loop_start, loop_end, instructions.len()));
+        };
+
+        // Generate unique function name for this loop
+        let jit_function_name = format!("{}_loop_{}", function_name, loop_start);
+
+        // Compile with Cranelift
+        let jit_fn = self.compile_loop(&jit_function_name, loop_body, constants)?;
+
+        // Return raw function pointer for VM
+        Ok(jit_fn as *const u8)
     }
 }
 

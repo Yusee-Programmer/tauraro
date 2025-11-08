@@ -65,7 +65,7 @@ pub struct SuperBytecodeVM {
     hot_loop_detector: crate::bytecode::jit::HotLoopDetector,
 
     #[cfg(feature = "jit")]
-    jit_compiler: Option<crate::bytecode::jit_compiler::JITCompiler>,
+    jit_compiler: Option<crate::bytecode::cranelift_jit::CraneliftJIT>,
 
     // Type checker for runtime type enforcement
     pub type_checker: TypeChecker,
@@ -152,10 +152,10 @@ impl SuperBytecodeVM {
 
             #[cfg(feature = "jit")]
             jit_compiler: {
-                match crate::bytecode::jit_compiler::JITCompiler::new() {
+                match crate::bytecode::cranelift_jit::CraneliftJIT::new() {
                     Ok(compiler) => Some(compiler),
                     Err(e) => {
-                        eprintln!("Warning: Failed to initialize JIT compiler: {}", e);
+                        eprintln!("Warning: Failed to initialize Cranelift JIT compiler: {}", e);
                         None
                     }
                 }
@@ -1674,8 +1674,8 @@ impl SuperBytecodeVM {
                             (0, 1)  // Default fallback
                         };
 
-                        // Compile the loop
-                        match compiler.compile_loop(
+                        // Compile the loop (using Cranelift JIT with runtime helpers)
+                        match compiler.compile_loop_vm(
                             &function_name,
                             &self.frames[frame_idx].code.instructions,
                             &self.frames[frame_idx].code.constants,
@@ -1780,51 +1780,24 @@ impl SuperBytecodeVM {
                                 }
                             }
 
-                            // Execute loop natively
-                            // For now, we'll extract integer registers, call native code, and update state
+                            // Execute loop natively using Cranelift JIT with runtime helpers
+                            // New implementation: Pass RcValue array directly (no conversion needed)
 
-                            // Prepare i64 register array (simplified: just allocate space)
-                            let mut native_registers: Vec<i64> = vec![0; self.frames[frame_idx].registers.len()];
+                            // Get mutable pointer to registers array
+                            let registers_ptr = self.frames[frame_idx].registers.as_mut_ptr();
+                            let reg_count = self.frames[frame_idx].registers.len();
 
-                            // Convert current Value registers to i64 (only for Int values)
-                            for (i, reg) in self.frames[frame_idx].registers.iter().enumerate() {
-                                if let Value::Int(val) = reg.value {
-                                    native_registers[i] = val;
-                                }
-                            }
-
-                            // Prepare constant array
-                            let mut native_constants: Vec<i64> = Vec::new();
-                            for constant in &self.frames[frame_idx].code.constants {
-                                if let Value::Int(val) = constant {
-                                    native_constants.push(*val);
-                                } else {
-                                    native_constants.push(0);
-                                }
-                            }
-
-                            // Call native function
-                            let native_fn: crate::bytecode::jit_compiler::NativeLoopFn =
+                            // Call native function with new signature: fn(*mut RcValue, usize) -> i32
+                            let native_fn: crate::bytecode::cranelift_jit::JitFunction =
                                 unsafe { std::mem::transmute(native_code_ptr as *const u8) };
 
                             let result_code = unsafe {
-                                native_fn(
-                                    native_registers.as_mut_ptr(),
-                                    native_constants.as_ptr(),
-                                    remaining,
-                                )
+                                native_fn(registers_ptr, reg_count)
                             };
 
                             if result_code == 0 {
-                                // Success - update VM registers from native registers
-                                for (i, &val) in native_registers.iter().enumerate() {
-                                    if i < self.frames[frame_idx].registers.len() {
-                                        // Only update if it was an integer before
-                                        if let Value::Int(_) = self.frames[frame_idx].registers[i].value {
-                                            self.frames[frame_idx].registers[i] = RcValue::new(value_pool::create_int(val));
-                                        }
-                                    }
-                                }
+                                // Success - JIT code has modified registers directly
+                                // No register conversion needed (RcValue pointers used directly)
 
                                 // Execute any StoreGlobal instructions from the loop body to sync globals
                                 // This is necessary because JIT code only updates registers, not the globals HashMap
