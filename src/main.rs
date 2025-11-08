@@ -207,9 +207,21 @@ fn compile_file(
     // Semantic analysis
     let semantic_ast = tauraro::semantic::Analyzer::new(strict_types).analyze(ast)
         .map_err(|errors| format!("Semantic errors: {:?}", errors))?;
-    
-    // Generate IR
-    let ir_module = tauraro::ir::Generator::new().generate(semantic_ast)?;
+
+    // Generate IR (clone semantic_ast if needed for native transpiler)
+    let ir_module = if backend == "c" && use_native_transpiler {
+        // Skip IR generation when using native transpiler
+        tauraro::ir::IRModule {
+            globals: vec![],
+            functions: std::collections::HashMap::new(),
+            type_info: tauraro::ir::IRTypeInfo {
+                variable_types: std::collections::HashMap::new(),
+                function_types: std::collections::HashMap::new(),
+            },
+        }
+    } else {
+        tauraro::ir::Generator::new().generate(semantic_ast.clone())?
+    };
     
     // Check if IR module has imports (both in global instructions and function blocks)
     let has_imports = ir_module.globals.iter().any(|instruction| {
