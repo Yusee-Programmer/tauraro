@@ -22,6 +22,13 @@ pub mod compiler;
 pub mod imports;
 pub mod type_inference;
 
+// New high-performance native type system
+pub mod native_types;
+pub mod module_system;
+// TODO: Complete AST integration for these modules
+// pub mod class_to_struct;
+// pub mod optimized_native;
+
 use crate::codegen::{CodeGenerator, CodegenOptions, Target};
 use crate::ir::{IRModule, IRFunction, IRInstruction, IRTypeInfo};
 use crate::ast::Type;
