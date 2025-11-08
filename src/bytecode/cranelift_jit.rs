@@ -92,6 +92,17 @@ impl CraneliftJIT {
         // Loop variable storage
         builder.symbol("tauraro_jit_store_int", crate::bytecode::jit_runtime::tauraro_jit_store_int as *const u8);
 
+        // Binary arithmetic operations
+        builder.symbol("tauraro_jit_binary_add_rr", crate::bytecode::jit_runtime::tauraro_jit_binary_add_rr as *const u8);
+        builder.symbol("tauraro_jit_binary_sub_rr", crate::bytecode::jit_runtime::tauraro_jit_binary_sub_rr as *const u8);
+        builder.symbol("tauraro_jit_binary_mul_rr", crate::bytecode::jit_runtime::tauraro_jit_binary_mul_rr as *const u8);
+
+        // Variable load/store operations
+        builder.symbol("tauraro_jit_load_fast", crate::bytecode::jit_runtime::tauraro_jit_load_fast as *const u8);
+        builder.symbol("tauraro_jit_store_fast", crate::bytecode::jit_runtime::tauraro_jit_store_fast as *const u8);
+        builder.symbol("tauraro_jit_load_global", crate::bytecode::jit_runtime::tauraro_jit_load_global as *const u8);
+        builder.symbol("tauraro_jit_store_global", crate::bytecode::jit_runtime::tauraro_jit_store_global as *const u8);
+
         // Note: Iterator and type conversion helpers will be added when needed
         // builder.symbol("tauraro_jit_get_iter", ...);
         // builder.symbol("tauraro_jit_for_iter", ...);
@@ -258,6 +269,32 @@ impl CraneliftJIT {
             }
             OpCode::BuildTuple => {
                 Self::compile_helper_call_static(builder, "tauraro_jit_build_tuple", inst, registers_ptr, module, helpers)?;
+            }
+
+            // Binary arithmetic operations
+            OpCode::BinaryAddRR | OpCode::FastIntAdd => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_binary_add_rr", inst, registers_ptr, module, helpers)?;
+            }
+            OpCode::BinarySubRR => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_binary_sub_rr", inst, registers_ptr, module, helpers)?;
+            }
+            OpCode::BinaryMulRR => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_binary_mul_rr", inst, registers_ptr, module, helpers)?;
+            }
+
+            // Variable load/store operations
+            OpCode::LoadFast | OpCode::LoadGlobal => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_load_global", inst, registers_ptr, module, helpers)?;
+            }
+            OpCode::StoreFast | OpCode::StoreGlobal => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_store_global", inst, registers_ptr, module, helpers)?;
+            }
+
+            // Type inference and control flow - can be skipped in JIT
+            OpCode::InferType | OpCode::Jump => {
+                // These are no-ops in JIT context
+                // InferType is compile-time only
+                // Jump is handled by loop control flow
             }
 
             _ => {

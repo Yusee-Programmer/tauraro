@@ -738,3 +738,156 @@ pub unsafe extern "C" fn tauraro_jit_store_int(
     registers[reg_index as usize] = RcValue::new(Value::Int(value));
     0  // Success
 }
+
+/// Runtime helper: Binary addition (register-to-register)
+/// Performs registers[result_reg] = registers[left_reg] + registers[right_reg]
+#[no_mangle]
+pub unsafe extern "C" fn tauraro_jit_binary_add_rr(
+    registers_ptr: *mut RcValue,
+    left_reg: u32,
+    right_reg: u32,
+    result_reg: u32,
+) -> i32 {
+    let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
+
+    let left = &registers[left_reg as usize];
+    let right = &registers[right_reg as usize];
+
+    // Fast path for common types
+    let result = match (&left.value, &right.value) {
+        (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+        (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+        (Value::Str(a), Value::Str(b)) => {
+            let mut s = String::with_capacity(a.len() + b.len());
+            s.push_str(a);
+            s.push_str(b);
+            Value::Str(s)
+        },
+        _ => {
+            // Type mismatch or unsupported - deoptimize
+            return -1;
+        }
+    };
+
+    registers[result_reg as usize] = RcValue::new(result);
+    0  // Success
+}
+
+/// Runtime helper: Binary subtraction (register-to-register)
+/// Performs registers[result_reg] = registers[left_reg] - registers[right_reg]
+#[no_mangle]
+pub unsafe extern "C" fn tauraro_jit_binary_sub_rr(
+    registers_ptr: *mut RcValue,
+    left_reg: u32,
+    right_reg: u32,
+    result_reg: u32,
+) -> i32 {
+    let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
+
+    let left = &registers[left_reg as usize];
+    let right = &registers[right_reg as usize];
+
+    let result = match (&left.value, &right.value) {
+        (Value::Int(a), Value::Int(b)) => Value::Int(a - b),
+        (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
+        _ => return -1,  // Deoptimize
+    };
+
+    registers[result_reg as usize] = RcValue::new(result);
+    0  // Success
+}
+
+/// Runtime helper: Binary multiplication (register-to-register)
+/// Performs registers[result_reg] = registers[left_reg] * registers[right_reg]
+#[no_mangle]
+pub unsafe extern "C" fn tauraro_jit_binary_mul_rr(
+    registers_ptr: *mut RcValue,
+    left_reg: u32,
+    right_reg: u32,
+    result_reg: u32,
+) -> i32 {
+    let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
+
+    let left = &registers[left_reg as usize];
+    let right = &registers[right_reg as usize];
+
+    let result = match (&left.value, &right.value) {
+        (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
+        (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
+        _ => return -1,  // Deoptimize
+    };
+
+    registers[result_reg as usize] = RcValue::new(result);
+    0  // Success
+}
+
+/// Runtime helper: Load from fast local (locals array)
+/// Performs registers[result_reg] = locals[local_idx]
+/// NOTE: This requires access to locals array, not just registers!
+/// For now, we'll treat LoadFast as a register copy operation
+/// The compiler should optimize away locals for hot loops
+#[no_mangle]
+pub unsafe extern "C" fn tauraro_jit_load_fast(
+    registers_ptr: *mut RcValue,
+    local_idx: u32,
+    result_reg: u32,
+    _unused: u32,
+) -> i32 {
+    // HACK: Assume locals and registers are the same array for hot loops
+    // This works when the compiler has optimized everything into registers
+    let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
+    registers[result_reg as usize] = registers[local_idx as usize].clone();
+    0  // Success
+}
+
+/// Runtime helper: Store to fast local (locals array)
+/// Performs locals[local_idx] = registers[value_reg]
+#[no_mangle]
+pub unsafe extern "C" fn tauraro_jit_store_fast(
+    registers_ptr: *mut RcValue,
+    value_reg: u32,
+    local_idx: u32,
+    _unused: u32,
+) -> i32 {
+    // HACK: Assume locals and registers are the same array for hot loops
+    let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
+    registers[local_idx as usize] = registers[value_reg as usize].clone();
+    0  // Success
+}
+
+/// Runtime helper: Load global variable
+/// For JIT, globals are pre-synced into registers by the VM
+/// This is just a register-to-register copy
+/// LoadGlobal(name_idx, dest_reg, _) => registers[dest_reg] = registers[name_idx]
+#[no_mangle]
+pub unsafe extern "C" fn tauraro_jit_load_global(
+    registers_ptr: *mut RcValue,
+    name_idx: u32,
+    dest_reg: u32,
+    _unused: u32,
+) -> i32 {
+    let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
+
+    // VM pre-loads globals into registers[name_idx] before JIT execution
+    // So we just need to copy from name_idx to dest_reg
+    registers[dest_reg as usize] = registers[name_idx as usize].clone();
+    0  // Success
+}
+
+/// Runtime helper: Store global variable
+/// For JIT, we update the register and the VM will sync it back to globals after JIT execution
+/// StoreGlobal(value_reg, name_idx, _) => registers[name_idx] = registers[value_reg]
+#[no_mangle]
+pub unsafe extern "C" fn tauraro_jit_store_global(
+    registers_ptr: *mut RcValue,
+    value_reg: u32,
+    name_idx: u32,
+    _unused: u32,
+) -> i32 {
+    let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
+
+    // Store value in the global's register slot
+    // VM will sync this back to the globals HashMap after JIT execution
+    registers[name_idx as usize] = registers[value_reg as usize].clone();
+    0  // Success
+}
