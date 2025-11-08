@@ -4,6 +4,12 @@
 
 Tauraro provides a flexible memory management system that gives developers control over how memory is allocated and freed, while maintaining the ease-of-use of Python. By default, Tauraro uses automatic memory management, but developers can opt into manual or arena-based strategies for specific use cases.
 
+**Key Features:**
+- Works with both **VM execution** and **C transpilation**
+- Seamless switching between strategies using decorators
+- Built-in functions for manual memory control
+- Zero runtime overhead options for C compilation
+
 ## Memory Management Strategies
 
 ### 1. Automatic (Default)
@@ -427,6 +433,127 @@ class Compiler:
         return self.emit(optimized)  # Automatic
 ```
 
+## VM Integration
+
+The memory management system works seamlessly with both VM execution and C transpilation.
+
+### Built-in Functions for VM
+
+Tauraro provides these built-in functions that work in VM mode:
+
+#### `allocate(size)` - Manual Allocation
+Allocates a buffer of the given size.
+
+```python
+buffer = allocate(1024)  # Allocate 1KB buffer
+```
+
+#### `free(buffer)` - Manual Deallocation
+Frees a manually allocated buffer.
+
+```python
+free(buffer)  # Free the buffer
+```
+
+#### `create_arena(name)` - Create Arena
+Creates a new memory arena with the given name.
+
+```python
+create_arena("my_arena")
+```
+
+#### `reset_arena(name)` - Reset Arena
+Resets an arena, freeing all allocations but keeping the arena.
+
+```python
+reset_arena("my_arena")
+```
+
+#### `destroy_arena(name)` - Destroy Arena
+Destroys an arena and frees all its allocations.
+
+```python
+destroy_arena("my_arena")
+```
+
+#### `memory_stats()` - Get Statistics
+Returns memory allocation statistics.
+
+```python
+stats = memory_stats()
+print(stats)
+# Output:
+# Memory Strategy: Automatic
+# Manual Buffers: 5 (2048 bytes)
+# Arenas: 2 (8192 bytes)
+```
+
+### VM Execution Examples
+
+**Example 1: Testing Memory Functions in VM**
+
+```python
+# test_memory.py
+print("Testing memory management in VM")
+
+# Manual allocation
+buf1 = allocate(512)
+buf2 = allocate(256)
+print("Allocated buffers")
+
+# Check stats
+print(memory_stats())
+
+# Free buffers
+free(buf1)
+free(buf2)
+print("Freed buffers")
+```
+
+Run with:
+```bash
+tauraro run test_memory.py
+```
+
+**Example 2: Arena in VM**
+
+```python
+# test_arena.py
+create_arena("temp_arena")
+print("Arena created")
+
+for i in range(10):
+    temp_buf = allocate(100)
+    # Use buffer...
+
+destroy_arena("temp_arena")
+print("All allocations freed")
+```
+
+### C Transpilation vs VM Execution
+
+The same code works in both modes:
+
+```python
+@manual_memory
+def process_data():
+    buffer = allocate(4096)
+    # Process data...
+    free(buffer)
+```
+
+**VM Mode:** Uses thread-local Rust memory management
+```bash
+tauraro run myfile.py
+```
+
+**C Transpilation Mode:** Generates native C malloc/free calls
+```bash
+tauraro compile myfile.py --backend c --use-native-transpiler --memory-strategy manual
+```
+
+Both produce the same behavior, but C transpilation can be much faster.
+
 ## Summary
 
 Tauraro's memory management system provides:
@@ -435,7 +562,8 @@ Tauraro's memory management system provides:
 2. **Manual when needed** - C-like control
 3. **Arena for performance** - Fast bulk allocation
 4. **Seamless C integration** - Works perfectly with C transpilation
-5. **Zero runtime overhead options** - Choose your trade-offs
+5. **VM compatibility** - Same code works in both VM and C modes
+6. **Zero runtime overhead options** - Choose your trade-offs
 
 The system is designed to be:
 - **Safe by default** (automatic)
@@ -443,3 +571,4 @@ The system is designed to be:
 - **Flexible** (mix strategies)
 - **Easy to use** (Python-like syntax)
 - **C-compatible** (clean generated code)
+- **VM-friendly** (works in interpreted mode)

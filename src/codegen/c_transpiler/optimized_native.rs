@@ -151,8 +151,31 @@ impl OptimizedNativeTranspiler {
     }
 
     fn transpile_function(&mut self, stmt: &Statement) -> Result<String, String> {
-        if let Statement::FunctionDef { name, params, return_type, body, .. } = stmt {
+        if let Statement::FunctionDef { name, params, return_type, body, decorators, .. } = stmt {
             let mut code = String::new();
+
+            // Check for memory management decorators
+            let mut func_memory_strategy = None;
+            for decorator in decorators {
+                if let Expr::Identifier(dec_name) = decorator {
+                    if dec_name == "manual_memory" {
+                        func_memory_strategy = Some(MemoryStrategy::Manual);
+                    } else if dec_name == "arena_memory" {
+                        func_memory_strategy = Some(MemoryStrategy::Arena);
+                    } else if dec_name == "auto_memory" {
+                        func_memory_strategy = Some(MemoryStrategy::Automatic);
+                    }
+                }
+            }
+
+            // Save current strategy and switch if decorator present
+            let prev_strategy = if let Some(strategy) = func_memory_strategy {
+                let prev = self.memory_manager.context().strategy;
+                self.memory_manager = MemoryCodeGenerator::new(strategy);
+                Some(prev)
+            } else {
+                None
+            };
 
             // Determine return type
             let ret_type = return_type.as_ref()
@@ -196,6 +219,11 @@ impl OptimizedNativeTranspiler {
             self.indent_level -= 1;
 
             code.push_str("}\n");
+
+            // Restore previous memory strategy
+            if let Some(prev) = prev_strategy {
+                self.memory_manager = MemoryCodeGenerator::new(prev);
+            }
 
             Ok(code)
         } else {

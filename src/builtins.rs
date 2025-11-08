@@ -107,6 +107,14 @@ pub fn init_builtins() -> HashMap<String, Value> {
         builtins.insert("free_buffer".to_string(), Value::BuiltinFunction("free_buffer".to_string(), ffi_free_buffer));
     }
 
+    // Memory management builtins
+    builtins.insert("allocate".to_string(), Value::BuiltinFunction("allocate".to_string(), memory_allocate_builtin));
+    builtins.insert("free".to_string(), Value::BuiltinFunction("free".to_string(), memory_free_builtin));
+    builtins.insert("create_arena".to_string(), Value::BuiltinFunction("create_arena".to_string(), memory_create_arena_builtin));
+    builtins.insert("destroy_arena".to_string(), Value::BuiltinFunction("destroy_arena".to_string(), memory_destroy_arena_builtin));
+    builtins.insert("reset_arena".to_string(), Value::BuiltinFunction("reset_arena".to_string(), memory_reset_arena_builtin));
+    builtins.insert("memory_stats".to_string(), Value::BuiltinFunction("memory_stats".to_string(), memory_stats_builtin));
+
     builtins
 }
 
@@ -1992,4 +2000,127 @@ fn ffi_free_buffer(args: Vec<Value>) -> anyhow::Result<Value> {
 #[cfg(not(feature = "ffi"))]
 fn ffi_free_buffer(_args: Vec<Value>) -> anyhow::Result<Value> {
     Err(anyhow!("FFI feature is not enabled"))
+}
+
+// ============================================================================
+// Memory Management Builtin Functions
+// ============================================================================
+
+use crate::vm::memory_management::VMMemoryContext;
+
+// Thread-local memory context for the VM
+thread_local! {
+    static MEMORY_CONTEXT: RefCell<VMMemoryContext> = RefCell::new(VMMemoryContext::default());
+}
+
+/// Allocate a buffer of the given size
+/// Usage: buffer = allocate(size)
+fn memory_allocate_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("allocate() takes exactly 1 argument (size)"));
+    }
+
+    let size = match &args[0] {
+        Value::Int(n) if *n > 0 => *n as usize,
+        Value::Int(_) => return Err(anyhow!("allocate() size must be positive")),
+        _ => return Err(anyhow!("allocate() size must be an integer")),
+    };
+
+    MEMORY_CONTEXT.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        let (id, _buffer) = ctx.allocate(size);
+        // Return a ByteArray containing the buffer ID
+        Ok(Value::ByteArray(vec![id as u8]))
+    })
+}
+
+/// Free a manually allocated buffer
+/// Usage: free(buffer)
+fn memory_free_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("free() takes exactly 1 argument (buffer)"));
+    }
+
+    let buffer_id = match &args[0] {
+        Value::ByteArray(bytes) if !bytes.is_empty() => bytes[0] as usize,
+        _ => return Err(anyhow!("free() requires a buffer allocated with allocate()")),
+    };
+
+    MEMORY_CONTEXT.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        ctx.free(buffer_id)?;
+        Ok(Value::None)
+    })
+}
+
+/// Create a new arena
+/// Usage: create_arena(name)
+fn memory_create_arena_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("create_arena() takes exactly 1 argument (name)"));
+    }
+
+    let name = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("create_arena() name must be a string")),
+    };
+
+    MEMORY_CONTEXT.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        ctx.create_arena(name.clone());
+        ctx.set_current_arena(name);
+        Ok(Value::None)
+    })
+}
+
+/// Destroy an arena and free all its allocations
+/// Usage: destroy_arena(name)
+fn memory_destroy_arena_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("destroy_arena() takes exactly 1 argument (name)"));
+    }
+
+    let name = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("destroy_arena() name must be a string")),
+    };
+
+    MEMORY_CONTEXT.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        ctx.destroy_arena(&name)?;
+        Ok(Value::None)
+    })
+}
+
+/// Reset an arena (free all allocations but keep the arena)
+/// Usage: reset_arena(name)
+fn memory_reset_arena_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("reset_arena() takes exactly 1 argument (name)"));
+    }
+
+    let name = match &args[0] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow!("reset_arena() name must be a string")),
+    };
+
+    MEMORY_CONTEXT.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        ctx.reset_arena(&name)?;
+        Ok(Value::None)
+    })
+}
+
+/// Get memory statistics
+/// Usage: stats = memory_stats()
+fn memory_stats_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow!("memory_stats() takes no arguments"));
+    }
+
+    MEMORY_CONTEXT.with(|ctx| {
+        let ctx = ctx.borrow();
+        let stats = ctx.get_stats();
+        Ok(Value::Str(stats.to_string()))
+    })
 }
