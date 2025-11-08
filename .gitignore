@@ -104,3 +104,4 @@ __pycache__/
 test_ffi_*.c
 test_ffi_simple
 test_ffi_v*
+test_ffi_fixed
