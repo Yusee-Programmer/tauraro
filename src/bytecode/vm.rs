@@ -1667,11 +1667,11 @@ impl SuperBytecodeVM {
                         // Get iterator state for range loops
                         // When compilation triggers, 'current' is the last value yielded by ForIter
                         // but the loop body for that value hasn't executed yet, so JIT should start from 'current'
-                        let (start_value, step_value) = if let Value::RangeIterator { current, step, .. } =
+                        let (start_value, stop_value, step_value) = if let Value::RangeIterator { current, stop, step, .. } =
                             &self.frames[frame_idx].registers[iter_reg].value {
-                            (*current, *step)  // Start from current (last yielded, not yet processed)
+                            (*current, *stop, *step)  // Start from current (last yielded, not yet processed)
                         } else {
-                            (0, 1)  // Default fallback
+                            (0, 0, 1)  // Default fallback
                         };
 
                         // Compile the loop (using Cranelift JIT with runtime helpers)
@@ -1683,6 +1683,7 @@ impl SuperBytecodeVM {
                             loop_end_pc,
                             result_reg as u32,  // Pass the register that holds the loop variable
                             start_value,  // Starting iteration value
+                            stop_value,   // Stop value (exclusive)
                             step_value,  // Step between iterations
                         ) {
                             Ok(native_fn_ptr) => {

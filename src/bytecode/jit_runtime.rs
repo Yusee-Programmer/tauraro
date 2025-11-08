@@ -725,3 +725,16 @@ pub unsafe extern "C" fn tauraro_jit_to_bool(
     registers[result_reg as usize] = RcValue::new(Value::Bool(bool_val));
     0
 }
+
+/// Runtime helper: Store integer value in register
+/// Used by JIT code to update loop variables
+#[no_mangle]
+pub unsafe extern "C" fn tauraro_jit_store_int(
+    registers_ptr: *mut RcValue,
+    reg_index: u32,
+    value: i64,
+) -> i32 {
+    let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
+    registers[reg_index as usize] = RcValue::new(Value::Int(value));
+    0  // Success
+}

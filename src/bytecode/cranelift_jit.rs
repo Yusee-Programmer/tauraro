@@ -89,6 +89,9 @@ impl CraneliftJIT {
         builder.symbol("tauraro_jit_build_set", crate::bytecode::jit_runtime::tauraro_jit_build_set as *const u8);
         builder.symbol("tauraro_jit_set_add", crate::bytecode::jit_runtime::tauraro_jit_set_add as *const u8);
 
+        // Loop variable storage
+        builder.symbol("tauraro_jit_store_int", crate::bytecode::jit_runtime::tauraro_jit_store_int as *const u8);
+
         // Note: Iterator and type conversion helpers will be added when needed
         // builder.symbol("tauraro_jit_get_iter", ...);
         // builder.symbol("tauraro_jit_for_iter", ...);
@@ -97,12 +100,16 @@ impl CraneliftJIT {
         // builder.symbol("tauraro_jit_to_bool", ...);
     }
 
-    /// Compile a loop to native code
+    /// Compile a loop to native code with iteration control
     pub fn compile_loop(
         &mut self,
         function_name: &str,
         instructions: &[Instruction],
         _constants: &[TauraroValue],
+        result_reg: u32,
+        start_value: i64,
+        stop_value: i64,
+        step: i64,
     ) -> Result<JitFunction> {
         // Clear previous context
         self.ctx.clear();
@@ -128,10 +135,73 @@ impl CraneliftJIT {
         let registers_ptr = builder.block_params(entry_block)[0];
         let _reg_count = builder.block_params(entry_block)[1];
 
-        // Compile instructions
+        // Create loop blocks
+        let loop_header = builder.create_block();
+        let loop_body = builder.create_block();
+        let loop_exit = builder.create_block();
+
+        // Initialize loop variable
+        let start_val = builder.ins().iconst(types::I64, start_value);
+        let stop_val = builder.ins().iconst(types::I64, stop_value);
+        let step_val = builder.ins().iconst(types::I64, step);
+
+        // Jump to loop header
+        builder.ins().jump(loop_header, &[start_val]);
+
+        // Loop header: check condition
+        builder.switch_to_block(loop_header);
+        builder.append_block_param(loop_header, types::I64); // current iteration value
+        let current = builder.block_params(loop_header)[0];
+
+        // Check if current < stop (for positive step) or current > stop (for negative step)
+        let condition = if step > 0 {
+            builder.ins().icmp(IntCC::SignedLessThan, current, stop_val)
+        } else {
+            builder.ins().icmp(IntCC::SignedGreaterThan, current, stop_val)
+        };
+
+        builder.ins().brif(condition, loop_body, &[], loop_exit, &[]);
+
+        // Loop body: execute instructions
+        builder.switch_to_block(loop_body);
+
+        // Store current iteration value in result_reg using runtime helper
+        // Get or declare store_int helper
+        let store_helper_id = if let Some(&id) = self.helpers.get("tauraro_jit_store_int") {
+            id
+        } else {
+            let mut sig = self.module.make_signature();
+            let ptr_type = self.module.target_config().pointer_type();
+            sig.params.push(AbiParam::new(ptr_type)); // registers_ptr
+            sig.params.push(AbiParam::new(types::I32)); // reg_index
+            sig.params.push(AbiParam::new(types::I64)); // value
+            sig.returns.push(AbiParam::new(types::I32)); // return code
+
+            let id = self.module.declare_function("tauraro_jit_store_int", Linkage::Import, &sig)?;
+            self.helpers.insert("tauraro_jit_store_int".to_string(), id);
+            id
+        };
+
+        let store_ref = self.module.declare_func_in_func(store_helper_id, &mut builder.func);
+        let result_reg_val = builder.ins().iconst(types::I32, result_reg as i64);
+        builder.ins().call(store_ref, &[registers_ptr, result_reg_val, current]);
+
+        // Compile loop body instructions
         for inst in instructions {
             Self::compile_instruction_static(&mut builder, inst, registers_ptr, &mut self.module, &mut self.helpers)?;
         }
+
+        // Increment loop variable
+        let next = builder.ins().iadd(current, step_val);
+
+        // Jump back to header with updated value
+        builder.ins().jump(loop_header, &[next]);
+
+        // Loop exit
+        builder.switch_to_block(loop_exit);
+        builder.seal_block(loop_header); // Seal loop header after all predecessors defined
+        builder.seal_block(loop_body);
+        builder.seal_block(loop_exit);
 
         // Return success (0)
         let zero = builder.ins().iconst(types::I32, 0);
@@ -270,9 +340,10 @@ impl CraneliftJIT {
     /// - `constants`: Constant pool for the function
     /// - `loop_start`: PC of the loop start instruction (ForIter)
     /// - `loop_end`: PC of the loop end (jump target)
-    /// - `_result_reg`: Register holding the loop variable (unused in Phase 5.1)
-    /// - `_start_value`: Initial loop value (unused in Phase 5.1)
-    /// - `_step`: Loop step value (unused in Phase 5.1)
+    /// - `result_reg`: Register holding the loop variable
+    /// - `start_value`: Initial loop value (current iteration when JIT triggers)
+    /// - `stop_value`: Loop stop value (exclusive)
+    /// - `step`: Loop step value
     ///
     /// # Returns
     /// Raw function pointer for VM execution
@@ -283,9 +354,10 @@ impl CraneliftJIT {
         constants: &[TauraroValue],
         loop_start: usize,
         loop_end: usize,
-        _result_reg: u32,
-        _start_value: i64,
-        _step: i64,
+        result_reg: u32,
+        start_value: i64,
+        stop_value: i64,
+        step: i64,
     ) -> Result<*const u8> {
         // Extract loop body instructions
         // The loop body is between loop_start (ForIter) and loop_end (jump target)
@@ -300,8 +372,16 @@ impl CraneliftJIT {
         // Generate unique function name for this loop
         let jit_function_name = format!("{}_loop_{}", function_name, loop_start);
 
-        // Compile with Cranelift
-        let jit_fn = self.compile_loop(&jit_function_name, loop_body, constants)?;
+        // Compile with Cranelift including loop control
+        let jit_fn = self.compile_loop(
+            &jit_function_name,
+            loop_body,
+            constants,
+            result_reg,
+            start_value,
+            stop_value,
+            step,
+        )?;
 
         // Return raw function pointer for VM
         Ok(jit_fn as *const u8)

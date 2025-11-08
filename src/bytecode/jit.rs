@@ -24,7 +24,8 @@ use std::collections::HashMap;
 use anyhow::{Result, anyhow};
 
 /// Default threshold for JIT compilation (number of loop iterations)
-pub const JIT_COMPILATION_THRESHOLD: u64 = 10_000;
+/// Lowered to 100 for better performance on small-to-medium loops
+pub const JIT_COMPILATION_THRESHOLD: u64 = 100;
 
 /// Loop identifier: (function_name, loop_start_pc)
 pub type LoopId = (String, usize);
