@@ -115,6 +115,11 @@ pub fn init_builtins() -> HashMap<String, Value> {
     builtins.insert("reset_arena".to_string(), Value::BuiltinFunction("reset_arena".to_string(), memory_reset_arena_builtin));
     builtins.insert("memory_stats".to_string(), Value::BuiltinFunction("memory_stats".to_string(), memory_stats_builtin));
 
+    // Memory management decorators (for VM compatibility, they're identity functions)
+    builtins.insert("manual_memory".to_string(), Value::BuiltinFunction("manual_memory".to_string(), decorator_identity));
+    builtins.insert("arena_memory".to_string(), Value::BuiltinFunction("arena_memory".to_string(), decorator_identity));
+    builtins.insert("auto_memory".to_string(), Value::BuiltinFunction("auto_memory".to_string(), decorator_identity));
+
     builtins
 }
 
@@ -2123,4 +2128,14 @@ fn memory_stats_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         let stats = ctx.get_stats();
         Ok(Value::Str(stats.to_string()))
     })
+}
+
+/// Identity decorator - returns the decorated function unchanged
+/// Used for memory management decorators in VM mode
+fn decorator_identity(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("Decorator requires exactly 1 argument (the function)"));
+    }
+    // Just return the function unchanged
+    Ok(args[0].clone())
 }

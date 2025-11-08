@@ -245,7 +245,7 @@ impl SuperCompiler {
     }
     
     fn emit(&mut self, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32, line: u32) -> usize {
-        // eprintln!("DEBUG: Emitting opcode {:?} with args {}, {}, {}", opcode, arg1, arg2, arg3); // Debug output
+        // eprintln!("DEBUG EMIT: pos={}, opcode={:?}, args=({}, {}, {})", pos, opcode, arg1, arg2, arg3);
         let pos = self.code.instructions.len();
         self.code.add_instruction(opcode, arg1, arg2, arg3, line);
         pos

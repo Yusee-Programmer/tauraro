@@ -232,7 +232,7 @@ impl Parser {
     }
 
     fn statement(&mut self) -> Result<Statement, ParseError> {
-        match &self.peek().token {
+        let stmt = match &self.peek().token {
             Token::Comment(text) => {
                 // Capture comment and create Comment statement
                 let comment_text = text.clone();
@@ -409,7 +409,15 @@ impl Parser {
                         if has_starred && !unpack_targets.is_empty() {
                             return Ok(Statement::ExtendedUnpack { targets: unpack_targets, value });
                         } else {
-                            return self.variable_def(Expr::Tuple(tuple_items));
+                            // Create TupleUnpack directly - don't call variable_def again!
+                            // Convert Vec<UnpackTarget> to Vec<String>
+                            let target_names: Vec<String> = unpack_targets.into_iter()
+                                .filter_map(|t| match t {
+                                    UnpackTarget::Identifier(name) => Some(name),
+                                    UnpackTarget::Starred(_) => None,  // Shouldn't happen in this branch
+                                })
+                                .collect();
+                            return Ok(Statement::TupleUnpack { targets: target_names, value });
                         }
                     } else {
                         // Not an assignment, treat as expression statement
@@ -432,7 +440,8 @@ impl Parser {
                     Ok(Statement::Expression(first_expr))
                 }
             }
-        }
+        };
+        stmt
     }
 
     fn function_def(&mut self) -> Result<Statement, ParseError> {
