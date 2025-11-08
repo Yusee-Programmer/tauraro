@@ -488,6 +488,9 @@ impl OptimizedNativeTranspiler {
                 // Generator expressions are more complex - for now convert to list
                 self.transpile_list_comprehension(element, generators)
             }
+            Expr::FormatString { parts } => {
+                self.transpile_format_string(parts)
+            }
             _ => Ok("/* unsupported expr */".to_string()),
         }
     }
@@ -496,11 +499,106 @@ impl OptimizedNativeTranspiler {
         Ok(match lit {
             Literal::Int(n) => n.to_string(),
             Literal::Float(f) => f.to_string(),
-            Literal::String(s) => format!("\"{}\"", s.replace("\"", "\\\"")),
+            Literal::String(s) => {
+                // Properly escape string literals for C
+                let escaped = s
+                    .replace("\\", "\\\\")  // Backslash first
+                    .replace("\"", "\\\"")  // Quote
+                    .replace("\n", "\\n")   // Newline
+                    .replace("\r", "\\r")   // Carriage return
+                    .replace("\t", "\\t")   // Tab
+                    .replace("\0", "\\0");  // Null
+                format!("\"{}\"", escaped)
+            }
             Literal::Bool(b) => if *b { "true" } else { "false" }.to_string(),
             Literal::None => "NULL".to_string(),
             _ => "NULL".to_string(),
         })
+    }
+
+    fn transpile_format_string(&mut self, parts: &[FormatPart]) -> Result<String, String> {
+        // Convert f-string to sprintf or direct concatenation
+        // For now, generate a sprintf call
+        let mut format_str = String::new();
+        let mut args = Vec::new();
+
+        for part in parts {
+            match part {
+                FormatPart::String(s) => {
+                    // Escape the string part
+                    let escaped = s
+                        .replace("\\", "\\\\")
+                        .replace("\"", "\\\"")
+                        .replace("\n", "\\n")
+                        .replace("\r", "\\r")
+                        .replace("\t", "\\t");
+                    format_str.push_str(&escaped);
+                }
+                FormatPart::Expression { expr, format_spec, .. } => {
+                    // Infer type and add appropriate format specifier
+                    let expr_type = self.infer_expr_type(expr)?;
+                    let expr_code = self.transpile_expr(expr)?;
+
+                    // Handle format spec if present
+                    let fmt = if let Some(spec) = format_spec {
+                        // Parse format spec (e.g., ".4f" for floats)
+                        if spec.contains('f') || spec.contains('e') || spec.contains('g') {
+                            format!("%{}", spec)
+                        } else if spec.contains('d') {
+                            format!("%{}", spec)
+                        } else {
+                            // Default based on type
+                            match expr_type {
+                                NativeType::Int => "%lld".to_string(),
+                                NativeType::Float => {
+                                    if spec.is_empty() {
+                                        "%g".to_string()
+                                    } else {
+                                        format!("%{}", spec)
+                                    }
+                                }
+                                NativeType::String => "%s".to_string(),
+                                NativeType::Bool => "%s".to_string(),
+                                _ => "%p".to_string(),
+                            }
+                        }
+                    } else {
+                        // Default format based on type
+                        match expr_type {
+                            NativeType::Int => "%lld".to_string(),
+                            NativeType::Float => "%g".to_string(),
+                            NativeType::String => "%s".to_string(),
+                            NativeType::Bool => "%s".to_string(),
+                            _ => "%p".to_string(),
+                        }
+                    };
+
+                    format_str.push_str(&fmt);
+
+                    // Convert bool to string
+                    if expr_type == NativeType::Bool {
+                        args.push(format!("({} ? \"True\" : \"False\")", expr_code));
+                    } else {
+                        args.push(expr_code);
+                    }
+                }
+            }
+        }
+
+        // Generate sprintf call to temp buffer
+        self.temp_counter += 1;
+        let temp_var = format!("_fstr_{}", self.temp_counter);
+
+        // Return a compound expression that allocates, formats, and returns the string
+        // For simplicity, we'll just return a direct string if no expressions
+        if args.is_empty() {
+            Ok(format!("\"{}\"", format_str))
+        } else {
+            // Need to generate a temporary string
+            // This requires statement context, so we return a placeholder
+            // that indicates this f-string has dynamic parts
+            Ok(format!("/* f-string: {} with args: {:?} */", format_str, args))
+        }
     }
 
     fn transpile_function_call(&mut self, func: &Expr, args: &[Expr]) -> Result<String, String> {
