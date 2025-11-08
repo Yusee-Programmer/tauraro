@@ -15,6 +15,9 @@ pub mod compiler;
 pub mod type_checking;
 pub mod jit;
 pub mod jit_compiler;
+
+// JIT runtime helpers (only available with "jit" feature)
+#[cfg(feature = "jit")]
 pub mod jit_runtime;
 
 // Cranelift JIT module (only available with "jit" feature)
