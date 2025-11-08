@@ -1,5 +1,0 @@
-print("Test: Create Exception and check its type")
-e = Exception("Test message")
-print(f"Value: {e}")
-print(f"Type: {type(e)}")
-print(f"Has __class__: {hasattr(e, '__class__')}")
