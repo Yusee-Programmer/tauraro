@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use crate::ast::*;
 use crate::codegen::c_transpiler::native_types::{NativeType, NativeTypeContext};
 use crate::codegen::c_transpiler::optimizer::NativeOptimizer;
+use crate::codegen::c_transpiler::memory_management::{MemoryCodeGenerator, MemoryStrategy};
 
 pub struct OptimizedNativeTranspiler {
     /// Type context for tracking variable types
@@ -18,6 +19,8 @@ pub struct OptimizedNativeTranspiler {
     optimizer: NativeOptimizer,
     /// Enable optimizations
     optimizations_enabled: bool,
+    /// Memory management code generator
+    memory_manager: MemoryCodeGenerator,
 }
 
 impl OptimizedNativeTranspiler {
@@ -28,11 +31,17 @@ impl OptimizedNativeTranspiler {
             temp_counter: 0,
             optimizer: NativeOptimizer::new(),
             optimizations_enabled: true,
+            memory_manager: MemoryCodeGenerator::new(MemoryStrategy::default()),
         }
     }
 
     pub fn with_optimizations(mut self, enabled: bool) -> Self {
         self.optimizations_enabled = enabled;
+        self
+    }
+
+    pub fn with_memory_strategy(mut self, strategy: MemoryStrategy) -> Self {
+        self.memory_manager = MemoryCodeGenerator::new(strategy);
         self
     }
 
@@ -100,6 +109,10 @@ impl OptimizedNativeTranspiler {
         headers.push_str("#include <setjmp.h>\n");
         headers.push_str("\n");
 
+        // Add memory management runtime
+        headers.push_str(&self.memory_manager.generate_runtime_header());
+        headers.push_str("\n");
+
         // Add built-in function implementations
         headers.push_str(&crate::codegen::c_transpiler::native_builtins::NativeBuiltins::generate_all_implementations());
         headers.push_str("\n");
@@ -138,8 +151,31 @@ impl OptimizedNativeTranspiler {
     }
 
     fn transpile_function(&mut self, stmt: &Statement) -> Result<String, String> {
-        if let Statement::FunctionDef { name, params, return_type, body, .. } = stmt {
+        if let Statement::FunctionDef { name, params, return_type, body, decorators, .. } = stmt {
             let mut code = String::new();
+
+            // Check for memory management decorators
+            let mut func_memory_strategy = None;
+            for decorator in decorators {
+                if let Expr::Identifier(dec_name) = decorator {
+                    if dec_name == "manual_memory" {
+                        func_memory_strategy = Some(MemoryStrategy::Manual);
+                    } else if dec_name == "arena_memory" {
+                        func_memory_strategy = Some(MemoryStrategy::Arena);
+                    } else if dec_name == "auto_memory" {
+                        func_memory_strategy = Some(MemoryStrategy::Automatic);
+                    }
+                }
+            }
+
+            // Save current strategy and switch if decorator present
+            let prev_strategy = if let Some(strategy) = func_memory_strategy {
+                let prev = self.memory_manager.context().strategy;
+                self.memory_manager = MemoryCodeGenerator::new(strategy);
+                Some(prev)
+            } else {
+                None
+            };
 
             // Determine return type
             let ret_type = return_type.as_ref()
@@ -183,6 +219,11 @@ impl OptimizedNativeTranspiler {
             self.indent_level -= 1;
 
             code.push_str("}\n");
+
+            // Restore previous memory strategy
+            if let Some(prev) = prev_strategy {
+                self.memory_manager = MemoryCodeGenerator::new(prev);
+            }
 
             Ok(code)
         } else {

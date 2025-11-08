@@ -85,6 +85,10 @@ enum Commands {
         /// Use native type transpiler (generates optimized C with native types)
         #[arg(long)]
         use_native_transpiler: bool,
+
+        /// Memory management strategy (auto, manual, arena)
+        #[arg(long, default_value = "auto")]
+        memory_strategy: String,
     },
     
     /// Debug AST parsing
@@ -130,8 +134,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
-        Commands::Compile { 
-            file, 
+        Commands::Compile {
+            file,
             output,
             backend,
             target,
@@ -141,6 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             strict_types,
             native,
             use_native_transpiler,
+            memory_strategy,
         } => {
             compile_file(
                 &file,
@@ -153,6 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 strict_types,
                 native,
                 use_native_transpiler,
+                &memory_strategy,
             )?;
         }
         Commands::DebugAst { file } => {
@@ -179,10 +185,11 @@ fn compile_file(
     target: &str,
     optimization: u8,
     export: bool,
-    generate_header: bool,
+    _generate_header: bool,
     strict_types: bool,
     native: bool,
     use_native_transpiler: bool,
+    memory_strategy: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
     
@@ -264,9 +271,22 @@ fn compile_file(
         }
         "c" => {
             let c_code_bytes = if use_native_transpiler {
+                // Parse memory strategy
+                use tauraro::codegen::c_transpiler::memory_management::MemoryStrategy;
+                let mem_strategy = match memory_strategy {
+                    "auto" | "automatic" => MemoryStrategy::Automatic,
+                    "manual" => MemoryStrategy::Manual,
+                    "arena" | "region" => MemoryStrategy::Arena,
+                    _ => {
+                        eprintln!("Warning: Unknown memory strategy '{}', using automatic", memory_strategy);
+                        MemoryStrategy::Automatic
+                    }
+                };
+
                 // Use native type transpiler (works directly from AST)
                 let mut native_transpiler = tauraro::codegen::c_transpiler::optimized_native::OptimizedNativeTranspiler::new()
-                    .with_optimizations(optimization > 0);
+                    .with_optimizations(optimization > 0)
+                    .with_memory_strategy(mem_strategy);
                 let c_code = native_transpiler.transpile_program(&semantic_ast)?;
                 c_code.into_bytes()
             } else {
