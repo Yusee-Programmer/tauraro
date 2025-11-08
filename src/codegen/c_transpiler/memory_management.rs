@@ -137,6 +137,11 @@ typedef struct tauraro_arena {
     struct tauraro_arena* next;
 } tauraro_arena_t;
 
+// Forward declarations for native container types
+typedef struct tauraro_native_list tauraro_native_list_t;
+typedef struct tauraro_native_dict tauraro_native_dict_t;
+typedef struct tauraro_dict_entry tauraro_dict_entry_t;
+
 "#);
 
         // Strategy-specific functions
