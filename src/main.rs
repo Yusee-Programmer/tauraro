@@ -81,6 +81,10 @@ enum Commands {
         /// Compile generated C code to native binary/library
         #[arg(long)]
         native: bool,
+
+        /// Use native type transpiler (generates optimized C with native types)
+        #[arg(long)]
+        use_native_transpiler: bool,
     },
     
     /// Debug AST parsing
@@ -128,25 +132,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Compile { 
             file, 
-            output, 
-            backend, 
-            target, 
-            optimization, 
-            export, 
+            output,
+            backend,
+            target,
+            optimization,
+            export,
             generate_header,
             strict_types,
             native,
+            use_native_transpiler,
         } => {
             compile_file(
-                &file, 
-                output.as_ref(), 
-                &backend, 
-                &target, 
-                optimization, 
-                export, 
+                &file,
+                output.as_ref(),
+                &backend,
+                &target,
+                optimization,
+                export,
                 generate_header,
                 strict_types,
                 native,
+                use_native_transpiler,
             )?;
         }
         Commands::DebugAst { file } => {
@@ -176,6 +182,7 @@ fn compile_file(
     generate_header: bool,
     strict_types: bool,
     native: bool,
+    use_native_transpiler: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
     
@@ -200,9 +207,21 @@ fn compile_file(
     // Semantic analysis
     let semantic_ast = tauraro::semantic::Analyzer::new(strict_types).analyze(ast)
         .map_err(|errors| format!("Semantic errors: {:?}", errors))?;
-    
-    // Generate IR
-    let ir_module = tauraro::ir::Generator::new().generate(semantic_ast)?;
+
+    // Generate IR (clone semantic_ast if needed for native transpiler)
+    let ir_module = if backend == "c" && use_native_transpiler {
+        // Skip IR generation when using native transpiler
+        tauraro::ir::IRModule {
+            globals: vec![],
+            functions: std::collections::HashMap::new(),
+            type_info: tauraro::ir::IRTypeInfo {
+                variable_types: std::collections::HashMap::new(),
+                function_types: std::collections::HashMap::new(),
+            },
+        }
+    } else {
+        tauraro::ir::Generator::new().generate(semantic_ast.clone())?
+    };
     
     // Check if IR module has imports (both in global instructions and function blocks)
     let has_imports = ir_module.globals.iter().any(|instruction| {
@@ -244,21 +263,28 @@ fn compile_file(
             }
         }
         "c" => {
-            // Use our new C transpiler
-            let c_transpiler = tauraro::codegen::CTranspiler::new();
-            let options = tauraro::codegen::CodegenOptions {
-                target: tauraro::codegen::Target::C,
-                opt_level: optimization,
-                target_triple: Some(target.to_string()),
-                export_symbols: export,
-                generate_debug_info: false,
-                enable_async: true,
-                enable_ffi: true,
-                strict_types,
-                output_path: output.map(|p| p.to_string_lossy().to_string()),
+            let c_code_bytes = if use_native_transpiler {
+                // Use native type transpiler (works directly from AST)
+                let mut native_transpiler = tauraro::codegen::c_transpiler::optimized_native::OptimizedNativeTranspiler::new()
+                    .with_optimizations(optimization > 0);
+                let c_code = native_transpiler.transpile_program(&semantic_ast)?;
+                c_code.into_bytes()
+            } else {
+                // Use traditional IR-based C transpiler
+                let c_transpiler = tauraro::codegen::CTranspiler::new();
+                let options = tauraro::codegen::CodegenOptions {
+                    target: tauraro::codegen::Target::C,
+                    opt_level: optimization,
+                    target_triple: Some(target.to_string()),
+                    export_symbols: export,
+                    generate_debug_info: false,
+                    enable_async: true,
+                    enable_ffi: true,
+                    strict_types,
+                    output_path: output.map(|p| p.to_string_lossy().to_string()),
+                };
+                c_transpiler.generate(ir_module, &options)?
             };
-            
-            let c_code_bytes = c_transpiler.generate(ir_module, &options)?;
             
             // Determine output path
             let output_path = if let Some(output_file) = output {
