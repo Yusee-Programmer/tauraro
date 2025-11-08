@@ -100,4 +100,7 @@ yarn.lock
 # Python bytecode (if using Python interop)
 __pycache__/
 *.py[cod]
-*$py.class
+*$py.class# FFI test artifacts
+test_ffi_*.c
+test_ffi_simple
+test_ffi_v*
