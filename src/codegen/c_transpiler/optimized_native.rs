@@ -56,12 +56,8 @@ impl OptimizedNativeTranspiler {
         let program = &optimized_program;
         let mut code = String::new();
 
-        // Generate headers
+        // Generate headers (includes native type system and builtins)
         code.push_str(self.generate_headers().as_str());
-
-        // Generate native type system
-        code.push_str(&crate::codegen::c_transpiler::native_types::generate_native_type_declarations());
-        code.push_str("\n");
 
         // Generate forward declarations
         code.push_str("// Forward declarations\n");
@@ -111,6 +107,10 @@ impl OptimizedNativeTranspiler {
 
         // Add memory management runtime
         headers.push_str(&self.memory_manager.generate_runtime_header());
+        headers.push_str("\n");
+
+        // Add native type system BEFORE builtin implementations (builtins need full struct definitions)
+        headers.push_str(&crate::codegen::c_transpiler::native_types::generate_native_type_declarations());
         headers.push_str("\n");
 
         // Add built-in function implementations
@@ -181,6 +181,9 @@ impl OptimizedNativeTranspiler {
             let ret_type = return_type.as_ref()
                 .map(|t| self.map_type_to_native(t))
                 .unwrap_or(NativeType::Void);
+
+            // Clear local variables from previous function scope
+            self.context.clear_local_variables();
 
             // Function signature
             code.push_str(&ret_type.to_c_type());
@@ -356,16 +359,30 @@ impl OptimizedNativeTranspiler {
                     NativeType::Dynamic
                 };
 
-                self.context.set_variable_type(name.clone(), var_type.clone());
-                code.push_str(&var_type.to_c_type());
-                code.push(' ');
-                code.push_str(name);
+                // Check if variable already exists in current scope
+                let already_declared = self.context.get_variable_type(name).is_some();
 
-                if let Some(val) = value {
-                    code.push_str(" = ");
-                    code.push_str(&self.transpile_expr(val)?);
+                if already_declared {
+                    // Variable already declared - generate assignment only
+                    code.push_str(name);
+                    if let Some(val) = value {
+                        code.push_str(" = ");
+                        code.push_str(&self.transpile_expr(val)?);
+                    }
+                    code.push_str(";\n");
+                } else {
+                    // First declaration - generate type and declaration
+                    self.context.set_variable_type(name.clone(), var_type.clone());
+                    code.push_str(&var_type.to_c_type());
+                    code.push(' ');
+                    code.push_str(name);
+
+                    if let Some(val) = value {
+                        code.push_str(" = ");
+                        code.push_str(&self.transpile_expr(val)?);
+                    }
+                    code.push_str(";\n");
                 }
-                code.push_str(";\n");
             }
             Statement::AttributeAssignment { object, name, value } => {
                 code.push_str(&self.transpile_expr(object)?);
@@ -682,6 +699,34 @@ impl OptimizedNativeTranspiler {
                 ) {
                     return Ok(optimized);
                 }
+            }
+            // FFI Functions
+            "load_library" => {
+                if args.is_empty() {
+                    return Err("load_library() requires at least 1 argument".to_string());
+                }
+                let library_name = self.transpile_expr(&args[0])?;
+                return Ok(format!("tauraro_ffi_load_library({})", library_name));
+            }
+            "define_function" => {
+                if args.len() < 3 {
+                    return Err("define_function() requires at least 3 arguments".to_string());
+                }
+                // For native transpiler, we generate a comment indicating FFI function definition
+                // Full implementation would need runtime symbol resolution
+                let library = self.transpile_expr(&args[0])?;
+                let func_name_arg = self.transpile_expr(&args[1])?;
+                let return_type = self.transpile_expr(&args[2])?;
+
+                return Ok(format!(
+                    "/* FFI function definition: library={}, function={}, return_type={} */ NULL",
+                    library, func_name_arg, return_type
+                ));
+            }
+            "call_function" => {
+                // For native transpiler, FFI calls need runtime support
+                // Generate a comment for now
+                return Ok("/* FFI call_function not fully supported in native mode */ NULL".to_string());
             }
             _ => {}
         }

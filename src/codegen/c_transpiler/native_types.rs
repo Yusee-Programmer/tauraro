@@ -293,6 +293,11 @@ impl NativeTypeContext {
     pub fn get_class(&self, name: &str) -> Option<&ClassInfo> {
         self.classes.get(name)
     }
+
+    /// Clear all local variables (called when entering a new function scope)
+    pub fn clear_local_variables(&mut self) {
+        self.variables.clear();
+    }
 }
 
 #[cfg(test)]
