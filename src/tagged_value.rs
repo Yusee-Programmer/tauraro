@@ -213,7 +213,7 @@ impl TaggedValue {
 
     // === Fast Arithmetic Operations ===
 
-    /// Add two tagged values (fast path for small ints)
+    /// Add two tagged values (fast path for small ints and floats)
     #[inline(always)]
     pub fn add(&self, other: &TaggedValue) -> Option<TaggedValue> {
         if self.is_int() && other.is_int() {
@@ -228,12 +228,30 @@ impl TaggedValue {
                 // Overflow - would allocate on heap
                 Some(TaggedValue::new_int(result)) // For now, wrap
             }
+        } else if self.is_float() && other.is_float() {
+            // Float addition
+            let a = unsafe { f64::from_bits(self.0) };
+            let b = unsafe { f64::from_bits(other.0) };
+            let result = a + b;
+            Some(TaggedValue::new_float(result))
+        } else if self.is_float() && other.is_int() {
+            // Float + Int
+            let a = unsafe { f64::from_bits(self.0) };
+            let b = unsafe { other.as_int_unchecked() } as f64;
+            let result = a + b;
+            Some(TaggedValue::new_float(result))
+        } else if self.is_int() && other.is_float() {
+            // Int + Float
+            let a = unsafe { self.as_int_unchecked() } as f64;
+            let b = unsafe { f64::from_bits(other.0) };
+            let result = a + b;
+            Some(TaggedValue::new_float(result))
         } else {
             None // Fall back to slow path
         }
     }
 
-    /// Subtract two tagged values (fast path for small ints)
+    /// Subtract two tagged values (fast path for small ints and floats)
     #[inline(always)]
     pub fn sub(&self, other: &TaggedValue) -> Option<TaggedValue> {
         if self.is_int() && other.is_int() {
@@ -246,12 +264,30 @@ impl TaggedValue {
             } else {
                 Some(TaggedValue::new_int(result))
             }
+        } else if self.is_float() && other.is_float() {
+            // Float subtraction
+            let a = unsafe { f64::from_bits(self.0) };
+            let b = unsafe { f64::from_bits(other.0) };
+            let result = a - b;
+            Some(TaggedValue::new_float(result))
+        } else if self.is_float() && other.is_int() {
+            // Float - Int
+            let a = unsafe { f64::from_bits(self.0) };
+            let b = unsafe { other.as_int_unchecked() } as f64;
+            let result = a - b;
+            Some(TaggedValue::new_float(result))
+        } else if self.is_int() && other.is_float() {
+            // Int - Float
+            let a = unsafe { self.as_int_unchecked() } as f64;
+            let b = unsafe { f64::from_bits(other.0) };
+            let result = a - b;
+            Some(TaggedValue::new_float(result))
         } else {
             None
         }
     }
 
-    /// Multiply two tagged values (fast path for small ints)
+    /// Multiply two tagged values (fast path for small ints and floats)
     #[inline(always)]
     pub fn mul(&self, other: &TaggedValue) -> Option<TaggedValue> {
         if self.is_int() && other.is_int() {
@@ -264,12 +300,30 @@ impl TaggedValue {
             } else {
                 Some(TaggedValue::new_int(result))
             }
+        } else if self.is_float() && other.is_float() {
+            // Float multiplication
+            let a = unsafe { f64::from_bits(self.0) };
+            let b = unsafe { f64::from_bits(other.0) };
+            let result = a * b;
+            Some(TaggedValue::new_float(result))
+        } else if self.is_float() && other.is_int() {
+            // Float * Int
+            let a = unsafe { f64::from_bits(self.0) };
+            let b = unsafe { other.as_int_unchecked() } as f64;
+            let result = a * b;
+            Some(TaggedValue::new_float(result))
+        } else if self.is_int() && other.is_float() {
+            // Int * Float
+            let a = unsafe { self.as_int_unchecked() } as f64;
+            let b = unsafe { f64::from_bits(other.0) };
+            let result = a * b;
+            Some(TaggedValue::new_float(result))
         } else {
             None
         }
     }
 
-    /// Divide two tagged values (fast path for small ints)
+    /// Divide two tagged values (fast path for small ints and floats)
     #[inline(always)]
     pub fn div(&self, other: &TaggedValue) -> Option<TaggedValue> {
         if self.is_int() && other.is_int() {
@@ -283,6 +337,40 @@ impl TaggedValue {
 
             let result = a / b;
             Some(TaggedValue::new_int(result))
+        } else if self.is_float() && other.is_float() {
+            // Float division
+            let a = unsafe { f64::from_bits(self.0) };
+            let b = unsafe { f64::from_bits(other.0) };
+
+            // Check for division by zero
+            if b == 0.0 {
+                return None;
+            }
+
+            let result = a / b;
+            Some(TaggedValue::new_float(result))
+        } else if self.is_float() && other.is_int() {
+            // Float / Int
+            let a = unsafe { f64::from_bits(self.0) };
+            let b = unsafe { other.as_int_unchecked() } as f64;
+
+            if b == 0.0 {
+                return None;
+            }
+
+            let result = a / b;
+            Some(TaggedValue::new_float(result))
+        } else if self.is_int() && other.is_float() {
+            // Int / Float
+            let a = unsafe { self.as_int_unchecked() } as f64;
+            let b = unsafe { f64::from_bits(other.0) };
+
+            if b == 0.0 {
+                return None;
+            }
+
+            let result = a / b;
+            Some(TaggedValue::new_float(result))
         } else {
             None
         }

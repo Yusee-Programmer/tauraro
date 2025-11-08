@@ -24,8 +24,8 @@ for i in range(1000):
     idx = i % 3
     total2 = total2 + items[idx]
 print(f"Result: {total2}")
-print(f"Expected: 20000")
-if total2 == 20000:
+print(f"Expected: 19990")
+if total2 == 19990:
     print("✓ Test 2 PASSED")
 else:
     print("✗ Test 2 FAILED")
@@ -38,8 +38,8 @@ for i in range(5000):
     x = x + i
     y = y + x
 print(f"Result x: {x}, y: {y}")
-print(f"Expected x: 12497500, y: 20829175000")
-if x == 12497500 and y == 20829175000:
+print(f"Expected x: 12497500, y: 20833332500")
+if x == 12497500 and y == 20833332500:
     print("✓ Test 3 PASSED")
 else:
     print("✗ Test 3 FAILED")

@@ -13,7 +13,10 @@ pub fn value_to_tagged(value: &Value) -> Option<TaggedValue> {
         Value::Int(n) => Some(TaggedValue::new_int(*n)),
         Value::Bool(b) => Some(TaggedValue::new_bool(*b)),
         Value::None => Some(TaggedValue::new_none()),
-        Value::Float(f) => Some(TaggedValue::new_float(*f)),
+        // DISABLED: TaggedValue cannot reliably distinguish floats from small ints
+        // in the normal value range (< TAG_NAN_BASE). Use slow path for floats.
+        // Value::Float(f) => Some(TaggedValue::new_float(*f)),
+        Value::Float(_) => None,  // Use slow path for floats
         _ => None, // Complex types stay as Value for now
     }
 }
