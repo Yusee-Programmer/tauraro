@@ -8,6 +8,16 @@ use crate::codegen::c_transpiler::native_types::{NativeType, NativeTypeContext};
 use crate::codegen::c_transpiler::optimizer::NativeOptimizer;
 use crate::codegen::c_transpiler::memory_management::{MemoryCodeGenerator, MemoryStrategy};
 
+/// FFI function signature information
+#[derive(Debug, Clone)]
+struct FFIFunctionInfo {
+    library_name: String,
+    function_name: String,
+    return_type: String,
+    param_types: Vec<String>,
+    func_ptr_var: String,  // Name of the function pointer variable
+}
+
 pub struct OptimizedNativeTranspiler {
     /// Type context for tracking variable types
     context: NativeTypeContext,
@@ -21,6 +31,12 @@ pub struct OptimizedNativeTranspiler {
     optimizations_enabled: bool,
     /// Memory management code generator
     memory_manager: MemoryCodeGenerator,
+    /// FFI: Loaded libraries (library name -> handle variable)
+    ffi_libraries: HashMap<String, String>,
+    /// FFI: Defined functions
+    ffi_functions: HashMap<String, FFIFunctionInfo>,
+    /// FFI: Enable FFI support
+    ffi_enabled: bool,
 }
 
 impl OptimizedNativeTranspiler {
@@ -32,6 +48,9 @@ impl OptimizedNativeTranspiler {
             optimizer: NativeOptimizer::new(),
             optimizations_enabled: true,
             memory_manager: MemoryCodeGenerator::new(MemoryStrategy::default()),
+            ffi_libraries: HashMap::new(),
+            ffi_functions: HashMap::new(),
+            ffi_enabled: false,
         }
     }
 
@@ -54,9 +73,13 @@ impl OptimizedNativeTranspiler {
         }
 
         let program = &optimized_program;
+
+        // First pass: detect FFI usage (BEFORE generating headers)
+        self.detect_ffi_usage(program);
+
         let mut code = String::new();
 
-        // Generate headers (includes native type system and builtins)
+        // Generate headers (includes native type system and builtins, and FFI if detected)
         code.push_str(self.generate_headers().as_str());
 
         // Generate forward declarations
@@ -70,6 +93,9 @@ impl OptimizedNativeTranspiler {
             }
         }
         code.push_str("\n");
+
+        // Generate FFI globals
+        code.push_str(&self.generate_ffi_globals());
 
         // Generate classes
         for stmt in &program.statements {
@@ -103,6 +129,26 @@ impl OptimizedNativeTranspiler {
         headers.push_str("#include <string.h>\n");
         headers.push_str("#include <math.h>\n");
         headers.push_str("#include <setjmp.h>\n");
+
+        // Add FFI support if needed
+        if self.ffi_enabled {
+            headers.push_str("\n// FFI Support\n");
+            headers.push_str("#ifdef _WIN32\n");
+            headers.push_str("    #include <windows.h>\n");
+            headers.push_str("    typedef HMODULE ffi_lib_handle;\n");
+            headers.push_str("    #define FFI_DLOPEN(name) LoadLibraryA(name)\n");
+            headers.push_str("    #define FFI_DLSYM(handle, name) GetProcAddress(handle, name)\n");
+            headers.push_str("    #define FFI_DLCLOSE(handle) FreeLibrary(handle)\n");
+            headers.push_str("#else\n");
+            headers.push_str("    #include <dlfcn.h>\n");
+            headers.push_str("    typedef void* ffi_lib_handle;\n");
+            headers.push_str("    #define FFI_DLOPEN(name) dlopen(name, RTLD_LAZY)\n");
+            headers.push_str("    #define FFI_DLSYM(handle, name) dlsym(handle, name)\n");
+            headers.push_str("    #define FFI_DLCLOSE(handle) dlclose(handle)\n");
+            headers.push_str("#endif\n");
+            headers.push_str("// Compatibility typedef for FFI references\n");
+            headers.push_str("typedef void* tauraro_value_t;\n");
+        }
         headers.push_str("\n");
 
         // Add memory management runtime
@@ -118,6 +164,144 @@ impl OptimizedNativeTranspiler {
         headers.push_str("\n");
 
         headers
+    }
+
+    /// Generate FFI global variables and function pointers
+    fn generate_ffi_globals(&self) -> String {
+        if !self.ffi_enabled {
+            return String::new();
+        }
+
+        let mut code = String::new();
+        code.push_str("// FFI Global Variables\n");
+
+        // Generate library handle variables
+        for (lib_name, handle_var) in &self.ffi_libraries {
+            code.push_str(&format!("static ffi_lib_handle {} = NULL;\n", handle_var));
+        }
+
+        // Generate function pointer variables
+        for (_, func_info) in &self.ffi_functions {
+            code.push_str(&self.generate_ffi_function_pointer_decl(func_info));
+        }
+
+        code.push_str("\n");
+        code
+    }
+
+    /// Generate function pointer declaration for FFI function
+    fn generate_ffi_function_pointer_decl(&self, func_info: &FFIFunctionInfo) -> String {
+        let return_c_type = self.ffi_type_to_c(&func_info.return_type);
+        let param_c_types: Vec<String> = func_info.param_types.iter()
+            .map(|t| self.ffi_type_to_c(t))
+            .collect();
+
+        let params_str = if param_c_types.is_empty() {
+            "void".to_string()
+        } else {
+            param_c_types.join(", ")
+        };
+
+        format!("static {} (*{})({}); // FFI: {}\n",
+            return_c_type,
+            func_info.func_ptr_var,
+            params_str,
+            func_info.function_name)
+    }
+
+    /// Convert FFI type string to C type
+    fn ffi_type_to_c(&self, ffi_type: &str) -> String {
+        match ffi_type {
+            "void" => "void".to_string(),
+            "int" | "int32" => "int32_t".to_string(),
+            "int64" => "int64_t".to_string(),
+            "uint" | "uint32" => "uint32_t".to_string(),
+            "uint64" => "uint64_t".to_string(),
+            "float" => "float".to_string(),
+            "double" => "double".to_string(),
+            "char" => "char".to_string(),
+            "string" => "char*".to_string(),
+            "pointer" => "void*".to_string(),
+            "bool" => "bool".to_string(),
+            _ => "void*".to_string(),  // Default to void pointer
+        }
+    }
+
+    /// Detect FFI usage in the program (first pass)
+    fn detect_ffi_usage(&mut self, program: &Program) {
+        for stmt in &program.statements {
+            self.detect_ffi_in_statement(stmt);
+        }
+    }
+
+    /// Recursively detect FFI calls in statements
+    fn detect_ffi_in_statement(&mut self, stmt: &Statement) {
+        match stmt {
+            Statement::Expression(expr) => self.detect_ffi_in_expr(expr),
+            Statement::VariableDef { value: Some(expr), .. } => self.detect_ffi_in_expr(expr),
+            Statement::AttributeAssignment { value, .. } => self.detect_ffi_in_expr(value),
+            Statement::SubscriptAssignment { value, .. } => self.detect_ffi_in_expr(value),
+            Statement::If { condition, then_branch, else_branch, .. } => {
+                self.detect_ffi_in_expr(condition);
+                for s in then_branch {
+                    self.detect_ffi_in_statement(s);
+                }
+                if let Some(else_stmts) = else_branch {
+                    for s in else_stmts {
+                        self.detect_ffi_in_statement(s);
+                    }
+                }
+            }
+            Statement::While { condition, body, .. } => {
+                self.detect_ffi_in_expr(condition);
+                for s in body {
+                    self.detect_ffi_in_statement(s);
+                }
+            }
+            Statement::For { iterable, body, .. } => {
+                self.detect_ffi_in_expr(iterable);
+                for s in body {
+                    self.detect_ffi_in_statement(s);
+                }
+            }
+            Statement::FunctionDef { body, .. } => {
+                for s in body {
+                    self.detect_ffi_in_statement(s);
+                }
+            }
+            Statement::Return(Some(expr)) => self.detect_ffi_in_expr(expr),
+            _ => {}
+        }
+    }
+
+    /// Detect FFI calls in expressions
+    fn detect_ffi_in_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Call { func, args, .. } => {
+                if let Expr::Identifier(name) = func.as_ref() {
+                    if name == "load_library" || name == "define_function" || name == "call_function" {
+                        self.ffi_enabled = true;
+                    }
+                }
+                // Check args recursively
+                for arg in args {
+                    self.detect_ffi_in_expr(arg);
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.detect_ffi_in_expr(left);
+                self.detect_ffi_in_expr(right);
+            }
+            Expr::UnaryOp { operand, .. } => {
+                self.detect_ffi_in_expr(operand);
+            }
+            Expr::List(items) => {
+                for item in items {
+                    self.detect_ffi_in_expr(item);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn transpile_class(&mut self, stmt: &Statement) -> Result<String, String> {
@@ -240,16 +424,49 @@ impl OptimizedNativeTranspiler {
         code.push_str("int main(int argc, char** argv) {\n");
         self.indent_level += 1;
 
-        // Transpile top-level statements
+        // First transpile all statements to populate FFI tracking
+        let mut statements_code = String::new();
         for stmt in &program.statements {
             // Skip function and class definitions
             match stmt {
                 Statement::FunctionDef { .. } | Statement::ClassDef { .. } => continue,
                 _ => {
-                    code.push_str(&self.transpile_statement(stmt)?);
+                    statements_code.push_str(&self.transpile_statement(stmt)?);
                 }
             }
         }
+
+        // Now inject FFI variable declarations at the start of main if needed
+        if self.ffi_enabled && (!self.ffi_libraries.is_empty() || !self.ffi_functions.is_empty()) {
+            code.push_str(&self.indent());
+            code.push_str("// FFI Variables\n");
+
+            // Declare library handles
+            for (_, handle_var) in &self.ffi_libraries {
+                code.push_str(&self.indent());
+                code.push_str(&format!("ffi_lib_handle {} = NULL;\n", handle_var));
+            }
+
+            // Declare function pointers
+            for (_, func_info) in &self.ffi_functions {
+                code.push_str(&self.indent());
+                let return_c_type = self.ffi_type_to_c(&func_info.return_type);
+                let param_c_types: Vec<String> = func_info.param_types.iter()
+                    .map(|t| self.ffi_type_to_c(t))
+                    .collect();
+                let params_str = if param_c_types.is_empty() {
+                    "void".to_string()
+                } else {
+                    param_c_types.join(", ")
+                };
+                code.push_str(&format!("{} (*{})({}); // {}\n",
+                    return_c_type, func_info.func_ptr_var, params_str, func_info.function_name));
+            }
+            code.push_str("\n");
+        }
+
+        // Append the transpiled statements
+        code.push_str(&statements_code);
 
         code.push_str(&self.indent());
         code.push_str("return 0;\n");
@@ -702,31 +919,13 @@ impl OptimizedNativeTranspiler {
             }
             // FFI Functions
             "load_library" => {
-                if args.is_empty() {
-                    return Err("load_library() requires at least 1 argument".to_string());
-                }
-                let library_name = self.transpile_expr(&args[0])?;
-                return Ok(format!("tauraro_ffi_load_library({})", library_name));
+                return self.generate_ffi_load_library(args);
             }
             "define_function" => {
-                if args.len() < 3 {
-                    return Err("define_function() requires at least 3 arguments".to_string());
-                }
-                // For native transpiler, we generate a comment indicating FFI function definition
-                // Full implementation would need runtime symbol resolution
-                let library = self.transpile_expr(&args[0])?;
-                let func_name_arg = self.transpile_expr(&args[1])?;
-                let return_type = self.transpile_expr(&args[2])?;
-
-                return Ok(format!(
-                    "/* FFI function definition: library={}, function={}, return_type={} */ NULL",
-                    library, func_name_arg, return_type
-                ));
+                return self.generate_ffi_define_function(args);
             }
             "call_function" => {
-                // For native transpiler, FFI calls need runtime support
-                // Generate a comment for now
-                return Ok("/* FFI call_function not fully supported in native mode */ NULL".to_string());
+                return self.generate_ffi_call_function(args);
             }
             _ => {}
         }
@@ -1073,6 +1272,170 @@ impl OptimizedNativeTranspiler {
 
     fn indent(&self) -> String {
         "    ".repeat(self.indent_level)
+    }
+
+    /// Generate code for load_library() FFI call
+    fn generate_ffi_load_library(&mut self, args: &[Expr]) -> Result<String, String> {
+        if args.is_empty() {
+            return Err("load_library() requires at least 1 argument".to_string());
+        }
+
+        // Extract library name (must be a literal for now)
+        let lib_name_str = match &args[0] {
+            Expr::Literal(Literal::String(s)) => s.clone(),
+            _ => return Err("load_library() argument must be a string literal".to_string()),
+        };
+
+        // Try to convert short library names to full paths
+        let full_lib_name = if lib_name_str == "m" {
+            "libm.so.6".to_string()  // Standard math library on Linux
+        } else if !lib_name_str.contains('.') && !lib_name_str.starts_with("lib") {
+            format!("lib{}.so", lib_name_str)  // Auto-add lib prefix and .so extension
+        } else {
+            lib_name_str.clone()
+        };
+
+        // Generate handle variable name
+        let handle_var = format!("_ffi_lib_{}", self.ffi_libraries.len());
+
+        // Track this library
+        self.ffi_libraries.insert(lib_name_str.clone(), handle_var.clone());
+
+        // Generate dlopen code with error checking
+        // Note: Variable must be declared at function/file scope before use
+        let mut code = String::new();
+        code.push_str(&format!("({} = FFI_DLOPEN(\"{}\"), ", handle_var, full_lib_name));
+        code.push_str(&format!("{} == NULL ? fprintf(stderr, \"Failed to load library: {}\\n\"), NULL : (void*){})",
+            handle_var, full_lib_name, handle_var));
+
+        Ok(code)
+    }
+
+    /// Generate code for define_function() FFI call
+    fn generate_ffi_define_function(&mut self, args: &[Expr]) -> Result<String, String> {
+        if args.len() < 3 {
+            return Err("define_function() requires at least 3 arguments".to_string());
+        }
+
+        // Extract library name
+        let lib_name = match &args[0] {
+            Expr::Literal(Literal::String(s)) => s.clone(),
+            _ => return Err("define_function() library name must be a string literal".to_string()),
+        };
+
+        // Extract function name
+        let func_name = match &args[1] {
+            Expr::Literal(Literal::String(s)) => s.clone(),
+            _ => return Err("define_function() function name must be a string literal".to_string()),
+        };
+
+        // Extract return type
+        let return_type = match &args[2] {
+            Expr::Literal(Literal::String(s)) => s.clone(),
+            _ => return Err("define_function() return type must be a string literal".to_string()),
+        };
+
+        // Extract parameter types (optional)
+        let param_types = if args.len() > 3 {
+            match &args[3] {
+                Expr::List(items) => {
+                    let mut types = Vec::new();
+                    for item in items {
+                        if let Expr::Literal(Literal::String(s)) = item {
+                            types.push(s.clone());
+                        } else {
+                            return Err("Parameter types must be string literals".to_string());
+                        }
+                    }
+                    types
+                }
+                _ => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Check if library is loaded
+        let handle_var = self.ffi_libraries.get(&lib_name)
+            .ok_or_else(|| format!("Library '{}' not loaded. Call load_library() first.", lib_name))?
+            .clone();
+
+        // Generate function pointer variable name
+        let func_ptr_var = format!("_ffi_func_{}", self.ffi_functions.len());
+
+        // Create function info
+        let func_info = FFIFunctionInfo {
+            library_name: lib_name.clone(),
+            function_name: func_name.clone(),
+            return_type: return_type.clone(),
+            param_types: param_types.clone(),
+            func_ptr_var: func_ptr_var.clone(),
+        };
+
+        // Track this function
+        self.ffi_functions.insert(func_name.clone(), func_info.clone());
+
+        // Generate dlsym code with error checking
+        // Note: Variable must be declared at function/file scope before use
+        let mut code = String::new();
+        code.push_str(&format!("({} = (void*)FFI_DLSYM({}, \"{}\"), ", func_ptr_var, handle_var, func_name));
+        code.push_str(&format!("{} == NULL ? fprintf(stderr, \"Failed to load function: {}\\n\"), NULL : (void*){})",
+            func_ptr_var, func_name, func_ptr_var));
+
+        Ok(code)
+    }
+
+    /// Generate code for call_function() FFI call
+    fn generate_ffi_call_function(&mut self, args: &[Expr]) -> Result<String, String> {
+        if args.is_empty() {
+            return Err("call_function() requires at least 1 argument (function reference)".to_string());
+        }
+
+        // The first argument should be a variable holding the function reference
+        // For now, we extract the function name from the variable
+        // In a full implementation, this would need to track which variable holds which function
+
+        // Generate FFI call - for simplicity, we look up by the function variable
+        // This is a simplified approach where we directly call the most recently defined function
+        if self.ffi_functions.is_empty() {
+            return Err("No FFI functions defined. Call define_function() first.".to_string());
+        }
+
+        // Get the most recent function (in a full impl, we'd track which var holds which function)
+        let func_info = self.ffi_functions.values().last().unwrap().clone();
+
+        // Transpile the arguments (skip first arg which is the function reference)
+        let call_args: Vec<String> = args.iter().skip(1)
+            .flat_map(|arg| {
+                // Handle list arguments by unpacking them
+                match arg {
+                    Expr::List(items) => {
+                        items.iter()
+                            .map(|item| self.transpile_expr(item))
+                            .collect::<Result<Vec<_>, _>>()
+                            .unwrap_or_else(|_| vec!["0".to_string()])
+                    }
+                    _ => vec![self.transpile_expr(arg).unwrap_or_else(|_| "0".to_string())],
+                }
+            })
+            .collect();
+
+        // Generate the function call
+        let mut code = String::new();
+        if func_info.func_ptr_var.is_empty() {
+            return Err("Invalid function pointer".to_string());
+        }
+
+        code.push_str(&format!("{}(", func_info.func_ptr_var));
+        for (i, arg) in call_args.iter().enumerate() {
+            if i > 0 {
+                code.push_str(", ");
+            }
+            code.push_str(arg);
+        }
+        code.push(')');
+
+        Ok(code)
     }
 }
 
