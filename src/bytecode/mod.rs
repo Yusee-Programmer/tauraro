@@ -16,6 +16,11 @@ pub mod type_checking;
 pub mod jit;
 pub mod jit_compiler;
 pub mod jit_runtime;
+
+// Cranelift JIT module (only available with "jit" feature)
+#[cfg(feature = "jit")]
+pub mod cranelift_jit;
+
 pub mod int_cache;
 pub mod inline_cache;
 pub mod fast_ops;
