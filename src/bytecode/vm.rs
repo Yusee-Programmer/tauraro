@@ -2174,10 +2174,9 @@ impl SuperBytecodeVM {
             if let Some(result_tagged) = left_tagged.div(&right_tagged) {
                 self.frames[frame_idx].registers[result_reg].value = tagged_to_value(&result_tagged);
                 return Ok(None);
-            } else {
-                // Division by zero in TaggedValue
-                return Err(anyhow!("Division by zero"));
             }
+            // div() returned None - either division by zero or unsupported types (e.g. floats)
+            // Fall through to slow path which will handle both cases properly
         }
 
         // Regular fast path for Value::Int
@@ -3058,9 +3057,9 @@ impl SuperBytecodeVM {
             OpCode::Jump => return self.handle_jump(frame_idx, arg1, arg2, arg3),
             OpCode::JumpIfTrue => return self.handle_jump_if_true(frame_idx, arg1, arg2, arg3),
             OpCode::JumpIfFalse => return self.handle_jump_if_false(frame_idx, arg1, arg2, arg3),
-            OpCode::CompareEqualRR => return self.handle_compare_equal_rr(frame_idx, arg1, arg2, arg3),
-            OpCode::CompareLessRR => return self.handle_compare_less_rr(frame_idx, arg1, arg2, arg3),
-            OpCode::CompareGreaterRR => return self.handle_compare_greater_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::CompareEqualRR | OpCode::CompareEqualF64RR => return self.handle_compare_equal_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::CompareLessRR | OpCode::CompareLessF64RR => return self.handle_compare_less_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::CompareGreaterRR | OpCode::CompareGreaterF64RR => return self.handle_compare_greater_rr(frame_idx, arg1, arg2, arg3),
             OpCode::ReturnValue => return self.handle_return_value(frame_idx, arg1, arg2, arg3),
             OpCode::BuildList => return self.handle_build_list(frame_idx, arg1, arg2, arg3),
             OpCode::SubscrLoad => return self.handle_subscr_load(frame_idx, arg1, arg2, arg3),
@@ -3073,9 +3072,9 @@ impl SuperBytecodeVM {
             OpCode::FastIntMul => return self.handle_fast_int_mul(frame_idx, arg1, arg2, arg3),
             OpCode::FastIntDiv => return self.handle_fast_int_div(frame_idx, arg1, arg2, arg3),
             OpCode::FastIntMod => return self.handle_fast_int_mod(frame_idx, arg1, arg2, arg3),
-            OpCode::CompareLessEqualRR => return self.handle_compare_less_equal_rr(frame_idx, arg1, arg2, arg3),
-            OpCode::CompareGreaterEqualRR => return self.handle_compare_greater_equal_rr(frame_idx, arg1, arg2, arg3),
-            OpCode::CompareNotEqualRR => return self.handle_compare_not_equal_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::CompareLessEqualRR | OpCode::CompareLessEqualF64RR => return self.handle_compare_less_equal_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::CompareGreaterEqualRR | OpCode::CompareGreaterEqualF64RR => return self.handle_compare_greater_equal_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::CompareNotEqualRR | OpCode::CompareNotEqualF64RR => return self.handle_compare_not_equal_rr(frame_idx, arg1, arg2, arg3),
             OpCode::BuildDict => return self.handle_build_dict(frame_idx, arg1, arg2, arg3),
             OpCode::BuildTuple => return self.handle_build_tuple(frame_idx, arg1, arg2, arg3),
             OpCode::BuildSet => return self.handle_build_set(frame_idx, arg1, arg2, arg3),
@@ -4521,7 +4520,7 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(result));
                 Ok(None)
             }
-            OpCode::UnaryNegate => {
+            OpCode::UnaryNegate | OpCode::UnaryNegateF64 => {
                 // Unary negation operation (-)
                 let operand_reg = arg1 as usize;
                 let result_reg = arg2 as usize;

@@ -123,18 +123,12 @@ impl TaggedValue {
     /// Check if value is a float
     #[inline(always)]
     pub fn is_float(&self) -> bool {
-        let top = self.0 & 0xFFF0_0000_0000_0000;
-        // Valid floats have exponent between 0x7FF0 and 0x7FF7
-        // But we also need to check for normal floats (exponent < 0x7FF0)
-        if top < 0x7FF0_0000_0000_0000 {
-            // Could be a small int or normal float
-            // Check if it looks like a valid float by checking mantissa
-            // Actually, let's use a different approach
-            // If it's not in NaN space and not obviously an int, it's a float
-            false // For now, assume small values are ints
-        } else {
-            top < Self::TAG_NAN_BASE
-        }
+        let top16 = self.0 >> 48;  // Extract top 16 bits
+
+        // Small ints have top 16 bits = 0x0000 (see new_int encoding)
+        // Tagged special values have top 16 bits >= TAG_NAN_BASE >> 48
+        // Floats have everything in between (valid IEEE 754 exponent range)
+        top16 != 0 && top16 < (Self::TAG_NAN_BASE >> 48)
     }
 
     /// Check if value is a boolean
