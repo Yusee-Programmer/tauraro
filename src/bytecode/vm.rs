@@ -3047,10 +3047,10 @@ impl SuperBytecodeVM {
             OpCode::LoadConst => return self.handle_load_const(frame_idx, arg1, arg2, arg3),
             OpCode::LoadGlobal => return self.handle_load_global(frame_idx, arg1, arg2, arg3),
             OpCode::StoreGlobal => return self.handle_store_global(frame_idx, arg1, arg2, arg3),
-            OpCode::BinaryAddRR => return self.handle_binary_add_rr(frame_idx, arg1, arg2, arg3),
-            OpCode::BinarySubRR => return self.handle_binary_sub_rr(frame_idx, arg1, arg2, arg3),
-            OpCode::BinaryMulRR => return self.handle_binary_mul_rr(frame_idx, arg1, arg2, arg3),
-            OpCode::BinaryDivRR => return self.handle_binary_div_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::BinaryAddRR | OpCode::BinaryAddF64RR => return self.handle_binary_add_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::BinarySubRR | OpCode::BinarySubF64RR => return self.handle_binary_sub_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::BinaryMulRR | OpCode::BinaryMulF64RR => return self.handle_binary_mul_rr(frame_idx, arg1, arg2, arg3),
+            OpCode::BinaryDivRR | OpCode::BinaryDivF64RR => return self.handle_binary_div_rr(frame_idx, arg1, arg2, arg3),
             OpCode::CallFunction => return self.handle_call_function(frame_idx, arg1, arg2, arg3),
             OpCode::CallMethod => return self.handle_call_method(frame_idx, arg1, arg2, arg3),
             OpCode::LoadFast => return self.handle_load_fast(frame_idx, arg1, arg2, arg3),
@@ -3858,7 +3858,7 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
-            OpCode::BinaryModRR => {
+            OpCode::BinaryModRR | OpCode::BinaryModF64RR => {
                 // Register-Register modulo
                 let left_reg = arg1 as usize;
                 let right_reg = arg2 as usize;
@@ -3969,7 +3969,7 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
-            OpCode::BinaryPowRR => {
+            OpCode::BinaryPowRR | OpCode::BinaryPowF64RR => {
                 // Register-Register power
                 let left_reg = arg1 as usize;
                 let right_reg = arg2 as usize;
