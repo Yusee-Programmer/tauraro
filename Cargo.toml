@@ -115,6 +115,11 @@ panic = "abort"  # Smaller binaries, faster code
 strip = false  # Keep symbols for profiling
 overflow-checks = false  # Disable overflow checks in release mode
 
+[lib]
+name = "tauraro"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
 [[bin]]
 name = "tauraro"
 path = "src/main.rs"

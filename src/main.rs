@@ -4,42 +4,9 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use anyhow::Result;
 
-use crate::codegen::c_transpiler::CTranspiler;
-use crate::codegen::CodeGenerator;
-
-mod lexer;
-mod parser;
-mod ast;
-mod semantic;
-mod ir;
-mod codegen;
-mod value;
-mod value_pool;
-mod string_interner;
-mod tagged_value;
-mod value_bridge;
-
-// FFI modules (declare before builtins so it can be imported)
-#[cfg(feature = "ffi")]
-mod ffi;
-
-#[cfg(feature = "ffi")]
-mod ffi_builtins;
-
-mod builtins;
-mod builtins_super;
-mod vm;
-mod runtime;
-mod modules;
-mod module_system;
-mod module_cache;
-mod object_system;
-mod package_manager;
-mod base_object;
-mod bytecode;
-mod type_checker;
-mod runtime_error;
-mod traceback;
+// Import from the tauraro library crate instead of redeclaring modules
+use tauraro::codegen::c_transpiler::CTranspiler;
+use tauraro::codegen::CodeGenerator;
 
 
 
@@ -147,13 +114,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Repl { multilingual } => {
             // Use the enhanced REPL from interpreter module
             // Call the associated function directly
-            crate::codegen::interpreter::Interpreter::run_repl_with_multilingual(multilingual)?;
+            tauraro::codegen::interpreter::Interpreter::run_repl_with_multilingual(multilingual)?;
         }
         Commands::Run { file, backend, optimization, strict_types } => {
             let source = std::fs::read_to_string(&file)?;
 
             // Always use VM for now
-            if let Err(e) = crate::vm::core::VM::run_file_with_options(&source, &file.to_string_lossy(), &backend, optimization, strict_types) {
+            if let Err(e) = tauraro::vm::core::VM::run_file_with_options(&source, &file.to_string_lossy(), &backend, optimization, strict_types) {
                 // Error message already includes traceback information from the VM
                 eprintln!("{}", e);
                 std::process::exit(1);
@@ -213,7 +180,7 @@ fn compile_file(
     let source = std::fs::read_to_string(file)?;
     
     // Lexical analysis
-    let tokens = lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+    let tokens = tauraro::lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             eprintln!("Error in lexer:");
             eprintln!("  File \"{}\", line 1", file.display());
@@ -221,7 +188,7 @@ fn compile_file(
         })?;
     
     // Parsing
-    let mut parser = parser::Parser::new(tokens);
+    let mut parser = tauraro::parser::Parser::new(tokens);
     let ast = parser.parse().map_err(|e| {
         // Find the token that caused the error to get line/column info
         let (line, column) = parser.current_token_location();
@@ -231,21 +198,21 @@ fn compile_file(
     })?;
     
     // Semantic analysis
-    let semantic_ast = semantic::Analyzer::new(strict_types).analyze(ast)
+    let semantic_ast = tauraro::semantic::Analyzer::new(strict_types).analyze(ast)
         .map_err(|errors| format!("Semantic errors: {:?}", errors))?;
     
     // Generate IR
-    let ir_module = ir::Generator::new().generate(semantic_ast)?;
+    let ir_module = tauraro::ir::Generator::new().generate(semantic_ast)?;
     
     // Check if IR module has imports (both in global instructions and function blocks)
     let has_imports = ir_module.globals.iter().any(|instruction| {
-        matches!(instruction, crate::ir::IRInstruction::Import { .. } | 
-                                  crate::ir::IRInstruction::ImportFrom { .. })
+        matches!(instruction, tauraro::ir::IRInstruction::Import { .. } |
+                                  tauraro::ir::IRInstruction::ImportFrom { .. })
     }) || ir_module.functions.iter().any(|(_, function)| {
         function.blocks.iter().any(|block| {
             block.instructions.iter().any(|instruction| {
-                matches!(instruction, crate::ir::IRInstruction::Import { .. } | 
-                crate::ir::IRInstruction::ImportFrom { .. })
+                matches!(instruction, tauraro::ir::IRInstruction::Import { .. } |
+                tauraro::ir::IRInstruction::ImportFrom { .. })
             })
         })
     });
@@ -256,7 +223,7 @@ fn compile_file(
             #[cfg(feature = "llvm")]
             {
                 let output_path = output.map_or_else(|| PathBuf::from("a.out"), |p| p.clone());
-                        codegen::llvm::LLVMCodeGen::new()
+                        tauraro::codegen::llvm::LLVMCodeGen::new()
                     .compile(ir_module, &output_path, 0, export)?;
             }
             #[cfg(not(feature = "llvm"))]
@@ -272,15 +239,15 @@ fn compile_file(
                 
                 // Since we don't have the actual codegen, we'll just print a message
                 println!("LLVM backend not available, using VM instead");
-                crate::vm::core::VM::run_file_with_options(&source, "<main>", "vm", optimization, strict_types)?;
+                tauraro::vm::core::VM::run_file_with_options(&source, "<main>", "vm", optimization, strict_types)?;
 
             }
         }
         "c" => {
             // Use our new C transpiler
-            let c_transpiler = codegen::CTranspiler::new();
-            let options = codegen::CodegenOptions {
-                target: codegen::Target::C,
+            let c_transpiler = tauraro::codegen::CTranspiler::new();
+            let options = tauraro::codegen::CodegenOptions {
+                target: tauraro::codegen::Target::C,
                 opt_level: optimization,
                 target_triple: Some(target.to_string()),
                 export_symbols: export,
@@ -329,7 +296,7 @@ fn compile_file(
                 };
                 
                 // Use our compiler detection module for better error handling
-                if let Err(e) = codegen::c_transpiler::compiler::compile_to_executable(
+                if let Err(e) = tauraro::codegen::c_transpiler::compiler::compile_to_executable(
                     &std::fs::read_to_string(&output_path)?, 
                     exe_path.to_str().unwrap(), 
                     optimization
@@ -338,7 +305,7 @@ fn compile_file(
                     println!("Please compile manually with one of the following:");
                     
                     // Provide specific instructions based on detected compilers
-                    let compilers = codegen::c_transpiler::compiler::detect_compilers();
+                    let compilers = tauraro::codegen::c_transpiler::compiler::detect_compilers();
                     if compilers.is_empty() {
                         println!("  No C compilers detected. Please install GCC, Clang, or MSVC.");
                     } else {
@@ -369,12 +336,12 @@ fn compile_file(
             {
                 // Use VM for now since WASM backend is not available
                 println!("WASM backend not available, using VM instead");
-                crate::vm::core::VM::run_file_with_options(&source, "<main>", "vm", optimization, strict_types)?;
+                tauraro::vm::core::VM::run_file_with_options(&source, "<main>", "vm", optimization, strict_types)?;
             }
             #[cfg(not(feature = "wasm"))]
             {
                 println!("WASM backend not available, using VM instead");
-                crate::vm::core::VM::run_file_with_options(&source, "<main>", "vm", optimization, strict_types)?;
+                tauraro::vm::core::VM::run_file_with_options(&source, "<main>", "vm", optimization, strict_types)?;
             }
         }
         _ => return Err(format!("Unsupported backend: {}", backend).into()),
@@ -389,7 +356,7 @@ fn debug_ast(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     
     // Lexical analysis with debug output
     println!("=== TOKENS ===");
-    let tokens: Vec<_> = lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+    let tokens: Vec<_> = tauraro::lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             eprintln!("Error in lexer:");
             eprintln!("  File \"{}\", line 1", file.display());
@@ -402,7 +369,7 @@ fn debug_ast(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     
     // Parsing
     println!("\n=== PARSING ===");
-    let mut parser = parser::Parser::new(tokens);
+    let mut parser = tauraro::parser::Parser::new(tokens);
     match parser.parse() {
         Ok(ast) => {
             println!("Successfully parsed AST:");
@@ -436,7 +403,7 @@ fn debug_ir(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
     
     // Lexical analysis
-    let tokens = lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+    let tokens = tauraro::lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             eprintln!("Error in lexer:");
             eprintln!("  File \"{}\", line 1", file.display());
@@ -444,7 +411,7 @@ fn debug_ir(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         })?;
     
     // Parsing
-    let mut parser = parser::Parser::new(tokens);
+    let mut parser = tauraro::parser::Parser::new(tokens);
     let ast = parser.parse().map_err(|e| {
         // Find the token that caused the error to get line/column info
         let (line, column) = parser.current_token_location();
@@ -454,11 +421,11 @@ fn debug_ir(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     })?;
     
     // Semantic analysis
-    let semantic_ast = semantic::Analyzer::new(false).analyze(ast)
+    let semantic_ast = tauraro::semantic::Analyzer::new(false).analyze(ast)
         .map_err(|errors| format!("Semantic errors: {:?}", errors))?;
     
     // Generate IR
-    let ir_module = ir::Generator::new().generate(semantic_ast)?;
+    let ir_module = tauraro::ir::Generator::new().generate(semantic_ast)?;
     
     // Print the generated IR
     println!("Generated IR:");
@@ -472,7 +439,7 @@ fn debug_bytecode(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
     
     // Lexical analysis
-    let tokens = lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+    let tokens = tauraro::lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             eprintln!("Error in lexer:");
             eprintln!("  File \"{}\", line 1", file.display());
@@ -480,7 +447,7 @@ fn debug_bytecode(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         })?;
     
     // Parsing
-    let mut parser = parser::Parser::new(tokens);
+    let mut parser = tauraro::parser::Parser::new(tokens);
     let ast = parser.parse().map_err(|e| {
         // Find the token that caused the error to get line/column info
         let (line, column) = parser.current_token_location();
@@ -490,7 +457,7 @@ fn debug_bytecode(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     })?;
     
     // Compile to bytecode
-    use crate::bytecode::{SuperCompiler};
+    use tauraro::bytecode::{SuperCompiler};
     let mut compiler = SuperCompiler::new("<debug>".to_string());
     let code_object = compiler.compile(ast)?;
     
