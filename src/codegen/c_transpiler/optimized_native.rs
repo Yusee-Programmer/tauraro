@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use crate::ast::*;
 use crate::codegen::c_transpiler::native_types::{NativeType, NativeTypeContext};
+use crate::codegen::c_transpiler::optimizer::NativeOptimizer;
 
 pub struct OptimizedNativeTranspiler {
     /// Type context for tracking variable types
@@ -13,6 +14,10 @@ pub struct OptimizedNativeTranspiler {
     indent_level: usize,
     /// Counter for temporary variables
     temp_counter: usize,
+    /// Optimizer for code generation
+    optimizer: NativeOptimizer,
+    /// Enable optimizations
+    optimizations_enabled: bool,
 }
 
 impl OptimizedNativeTranspiler {
@@ -21,11 +26,25 @@ impl OptimizedNativeTranspiler {
             context: NativeTypeContext::new(),
             indent_level: 0,
             temp_counter: 0,
+            optimizer: NativeOptimizer::new(),
+            optimizations_enabled: true,
         }
+    }
+
+    pub fn with_optimizations(mut self, enabled: bool) -> Self {
+        self.optimizations_enabled = enabled;
+        self
     }
 
     /// Generate optimized C code from AST program
     pub fn transpile_program(&mut self, program: &Program) -> Result<String, String> {
+        // Apply optimizations if enabled
+        let mut optimized_program = program.clone();
+        if self.optimizations_enabled {
+            self.optimizer.optimize_program(&mut optimized_program);
+        }
+
+        let program = &optimized_program;
         let mut code = String::new();
 
         // Generate headers
@@ -78,6 +97,7 @@ impl OptimizedNativeTranspiler {
         headers.push_str("#include <stdbool.h>\n");
         headers.push_str("#include <string.h>\n");
         headers.push_str("#include <math.h>\n");
+        headers.push_str("#include <setjmp.h>\n");
         headers.push_str("\n");
 
         // Add built-in function implementations
@@ -331,6 +351,12 @@ impl OptimizedNativeTranspiler {
             Statement::Pass => {
                 code.push_str("/* pass */;\n");
             }
+            Statement::Try { body, except_handlers, else_branch, finally } => {
+                self.transpile_try_statement(body, except_handlers, else_branch, finally, &mut code)?;
+            }
+            Statement::Raise(exception) => {
+                self.transpile_raise_statement(exception, &mut code)?;
+            }
             _ => {
                 code.push_str("/* unsupported statement */;\n");
             }
@@ -407,6 +433,19 @@ impl OptimizedNativeTranspiler {
                 } else {
                     Ok("false".to_string())
                 }
+            }
+            Expr::ListComp { element, generators } => {
+                self.transpile_list_comprehension(element, generators)
+            }
+            Expr::DictComp { key, value, generators } => {
+                self.transpile_dict_comprehension(key, value, generators)
+            }
+            Expr::SetComp { element, generators } => {
+                self.transpile_set_comprehension(element, generators)
+            }
+            Expr::GeneratorExp { element, generators } => {
+                // Generator expressions are more complex - for now convert to list
+                self.transpile_list_comprehension(element, generators)
             }
             _ => Ok("/* unsupported expr */".to_string()),
         }
@@ -599,6 +638,207 @@ impl OptimizedNativeTranspiler {
         code.push(')');
 
         Ok(code)
+    }
+
+    fn transpile_list_comprehension(&mut self, element: &Expr, generators: &[crate::ast::Comprehension]) -> Result<String, String> {
+        // List comprehensions are converted to statements, not expressions
+        // We'll generate a temporary variable and build up the list
+        // For now, return a placeholder that indicates this needs statement context
+
+        // Generate a unique temporary variable name
+        self.temp_counter += 1;
+        let temp_var = format!("_listcomp_{}", self.temp_counter);
+        let temp_size = format!("_listcomp_size_{}", self.temp_counter);
+        let temp_capacity = format!("_listcomp_cap_{}", self.temp_counter);
+
+        let mut code = String::new();
+
+        // Infer the element type
+        let element_type = self.infer_expr_type(element)?;
+        let c_type = element_type.to_c_type();
+
+        // Create the dynamic array
+        code.push_str(&format!("({{\\n"));
+        code.push_str(&format!("    {}* {} = NULL;\\n", c_type, temp_var));
+        code.push_str(&format!("    size_t {} = 0;\\n", temp_size));
+        code.push_str(&format!("    size_t {} = 0;\\n", temp_capacity));
+
+        // Generate nested loops for each generator
+        for (i, gen) in generators.iter().enumerate() {
+            let iter_code = self.transpile_expr(&gen.iter)?;
+
+            // Check if it's a range() call
+            if let Expr::Call { func, args, .. } = &gen.iter {
+                if let Expr::Identifier(name) = &**func {
+                    if name == "range" {
+                        // Generate optimized range loop
+                        let (start, end, step) = match args.len() {
+                            1 => ("0".to_string(), self.transpile_expr(&args[0])?, "1".to_string()),
+                            2 => (self.transpile_expr(&args[0])?, self.transpile_expr(&args[1])?, "1".to_string()),
+                            3 => (self.transpile_expr(&args[0])?, self.transpile_expr(&args[1])?, self.transpile_expr(&args[2])?),
+                            _ => return Err("Invalid range() call".to_string()),
+                        };
+
+                        code.push_str(&format!("    for (int64_t {} = {}; {} < {}; {} += {}) {{\\n",
+                            gen.target, start, gen.target, end, gen.target, step));
+                    } else {
+                        return Err("Only range() iterators supported in comprehensions for now".to_string());
+                    }
+                } else {
+                    return Err("Only simple function calls supported in comprehensions".to_string());
+                }
+            } else {
+                return Err("Only range() iterators supported in comprehensions for now".to_string());
+            }
+
+            // Add conditional filters
+            for if_expr in &gen.ifs {
+                let cond_code = self.transpile_expr(if_expr)?;
+                code.push_str(&format!("        if ({}) {{\\n", cond_code));
+            }
+        }
+
+        // Append element to the list
+        let element_code = self.transpile_expr(element)?;
+
+        code.push_str(&format!("            if ({} >= {}) {{\\n", temp_size, temp_capacity));
+        code.push_str(&format!("                {} = ({} == 0) ? 8 : {} * 2;\\n", temp_capacity, temp_capacity, temp_capacity));
+        code.push_str(&format!("                {} = realloc({}, {} * sizeof({}));\\n", temp_var, temp_var, temp_capacity, c_type));
+        code.push_str(&format!("            }}\\n"));
+        code.push_str(&format!("            {}[{}++] = {};\\n", temp_var, temp_size, element_code));
+
+        // Close all the loops and conditions
+        for gen in generators.iter().rev() {
+            for _ in &gen.ifs {
+                code.push_str(&format!("        }}\\n"));
+            }
+            code.push_str(&format!("    }}\\n"));
+        }
+
+        // Return the list (for now, just the pointer)
+        code.push_str(&format!("    {};\\n", temp_var));
+        code.push_str(&format!("}})"));
+
+        Ok(code)
+    }
+
+    fn transpile_dict_comprehension(&mut self, key: &Expr, value: &Expr, generators: &[crate::ast::Comprehension]) -> Result<String, String> {
+        // Dict comprehensions are similar to list comprehensions but create key-value pairs
+        // For now, return a placeholder
+        Ok("/* dict comprehension not yet implemented */".to_string())
+    }
+
+    fn transpile_set_comprehension(&mut self, element: &Expr, generators: &[crate::ast::Comprehension]) -> Result<String, String> {
+        // Set comprehensions are similar to list comprehensions
+        // For now, return a placeholder
+        Ok("/* set comprehension not yet implemented */".to_string())
+    }
+
+    fn transpile_try_statement(
+        &mut self,
+        body: &[Statement],
+        except_handlers: &[crate::ast::ExceptHandler],
+        else_branch: &Option<Vec<Statement>>,
+        finally: &Option<Vec<Statement>>,
+        code: &mut String,
+    ) -> Result<(), String> {
+        // C exception handling using setjmp/longjmp
+        // We'll create a jump buffer and exception context
+
+        code.push_str(&self.indent());
+        code.push_str("{\n");
+        self.indent_level += 1;
+
+        // Create exception handling structure
+        code.push_str(&self.indent());
+        code.push_str("jmp_buf _exception_buf;\n");
+        code.push_str(&self.indent());
+        code.push_str("int _exception_code = setjmp(_exception_buf);\n\n");
+
+        code.push_str(&self.indent());
+        code.push_str("if (_exception_code == 0) {\n");
+        self.indent_level += 1;
+
+        // Try block body
+        code.push_str(&self.indent());
+        code.push_str("// Try block\n");
+        for stmt in body {
+            code.push_str(&self.transpile_statement(stmt)?);
+        }
+
+        // Else branch (executes if no exception)
+        if let Some(else_stmts) = else_branch {
+            code.push_str(&self.indent());
+            code.push_str("// Else block (no exception)\n");
+            for stmt in else_stmts {
+                code.push_str(&self.transpile_statement(stmt)?);
+            }
+        }
+
+        self.indent_level -= 1;
+        code.push_str(&self.indent());
+        code.push_str("}\n");
+
+        // Except handlers
+        for (i, handler) in except_handlers.iter().enumerate() {
+            let condition = if i == 0 { "else if" } else { "else if" };
+
+            code.push_str(&self.indent());
+            if let Some(_exc_type) = &handler.exception_type {
+                // Match specific exception type
+                code.push_str(&format!("{} (_exception_code > 0) {{\n", condition));
+            } else {
+                // Catch-all handler
+                code.push_str("else {\n");
+            }
+
+            self.indent_level += 1;
+
+            // Bind exception to name if provided
+            if let Some(exc_name) = &handler.name {
+                code.push_str(&self.indent());
+                code.push_str(&format!("// Exception: {}\n", exc_name));
+            }
+
+            // Except handler body
+            for stmt in &handler.body {
+                code.push_str(&self.transpile_statement(stmt)?);
+            }
+
+            self.indent_level -= 1;
+            code.push_str(&self.indent());
+            code.push_str("}\n");
+        }
+
+        // Finally block (always executes)
+        if let Some(finally_stmts) = finally {
+            code.push_str(&self.indent());
+            code.push_str("// Finally block (always executes)\n");
+            for stmt in finally_stmts {
+                code.push_str(&self.transpile_statement(stmt)?);
+            }
+        }
+
+        self.indent_level -= 1;
+        code.push_str(&self.indent());
+        code.push_str("}\n");
+
+        Ok(())
+    }
+
+    fn transpile_raise_statement(&mut self, exception: &Option<Expr>, code: &mut String) -> Result<(), String> {
+        code.push_str(&self.indent());
+
+        if let Some(exc_expr) = exception {
+            // Raise specific exception
+            let exc_code = self.transpile_expr(exc_expr)?;
+            code.push_str(&format!("longjmp(_exception_buf, {});\n", exc_code));
+        } else {
+            // Re-raise current exception
+            code.push_str("longjmp(_exception_buf, 1);\n");
+        }
+
+        Ok(())
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Result<NativeType, String> {

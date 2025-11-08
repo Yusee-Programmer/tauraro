@@ -421,6 +421,96 @@ fn test_boolean_operations() {
 }
 
 #[test]
+fn test_list_comprehension() {
+    let program = Program {
+        statements: vec![
+            Statement::VariableDef {
+                name: "squares".to_string(),
+                type_annotation: None,
+                value: Some(Expr::ListComp {
+                    element: Box::new(Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier("x".to_string())),
+                        op: BinaryOp::Mul,
+                        right: Box::new(Expr::Identifier("x".to_string())),
+                    }),
+                    generators: vec![
+                        Comprehension {
+                            target: "x".to_string(),
+                            iter: Expr::Call {
+                                func: Box::new(Expr::Identifier("range".to_string())),
+                                args: vec![Expr::Literal(Literal::Int(5))],
+                                kwargs: vec![],
+                            },
+                            ifs: vec![],
+                            is_async: false,
+                        },
+                    ],
+                }),
+            },
+        ],
+    };
+
+    let mut transpiler = OptimizedNativeTranspiler::new();
+    let result = transpiler.transpile_program(&program);
+
+    assert!(result.is_ok());
+    let code = result.unwrap();
+
+    // Should contain for loop
+    assert!(code.contains("for (int64_t x"));
+    // Should contain array allocation
+    assert!(code.contains("realloc"));
+}
+
+#[test]
+fn test_list_comprehension_with_filter() {
+    let program = Program {
+        statements: vec![
+            Statement::VariableDef {
+                name: "evens".to_string(),
+                type_annotation: None,
+                value: Some(Expr::ListComp {
+                    element: Box::new(Expr::Identifier("n".to_string())),
+                    generators: vec![
+                        Comprehension {
+                            target: "n".to_string(),
+                            iter: Expr::Call {
+                                func: Box::new(Expr::Identifier("range".to_string())),
+                                args: vec![Expr::Literal(Literal::Int(10))],
+                                kwargs: vec![],
+                            },
+                            ifs: vec![
+                                Expr::Compare {
+                                    left: Box::new(Expr::BinaryOp {
+                                        left: Box::new(Expr::Identifier("n".to_string())),
+                                        op: BinaryOp::Mod,
+                                        right: Box::new(Expr::Literal(Literal::Int(2))),
+                                    }),
+                                    ops: vec![CompareOp::Eq],
+                                    comparators: vec![Expr::Literal(Literal::Int(0))],
+                                },
+                            ],
+                            is_async: false,
+                        },
+                    ],
+                }),
+            },
+        ],
+    };
+
+    let mut transpiler = OptimizedNativeTranspiler::new();
+    let result = transpiler.transpile_program(&program);
+
+    assert!(result.is_ok());
+    let code = result.unwrap();
+
+    // Should contain for loop
+    assert!(code.contains("for (int64_t n"));
+    // Should contain if condition for filter
+    assert!(code.contains("if"));
+}
+
+#[test]
 fn test_nested_control_flow() {
     let program = Program {
         statements: vec![

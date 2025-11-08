@@ -28,6 +28,7 @@ pub mod module_system;
 pub mod class_to_struct;
 pub mod native_builtins;
 pub mod optimized_native;
+pub mod optimizer;
 
 use crate::codegen::{CodeGenerator, CodegenOptions, Target};
 use crate::ir::{IRModule, IRFunction, IRInstruction, IRTypeInfo};
