@@ -103,12 +103,20 @@ impl CraneliftJIT {
         builder.symbol("tauraro_jit_load_global", crate::bytecode::jit_runtime::tauraro_jit_load_global as *const u8);
         builder.symbol("tauraro_jit_store_global", crate::bytecode::jit_runtime::tauraro_jit_store_global as *const u8);
 
-        // Note: Iterator and type conversion helpers will be added when needed
-        // builder.symbol("tauraro_jit_get_iter", ...);
-        // builder.symbol("tauraro_jit_for_iter", ...);
-        // builder.symbol("tauraro_jit_isinstance", ...);
-        // builder.symbol("tauraro_jit_to_str", ...);
-        // builder.symbol("tauraro_jit_to_bool", ...);
+        // Function operations
+        builder.symbol("tauraro_jit_call_function", crate::bytecode::jit_runtime::tauraro_jit_call_function as *const u8);
+        builder.symbol("tauraro_jit_return_value", crate::bytecode::jit_runtime::tauraro_jit_return_value as *const u8);
+
+        // Class and object operations
+        builder.symbol("tauraro_jit_load_attr", crate::bytecode::jit_runtime::tauraro_jit_load_attr as *const u8);
+        builder.symbol("tauraro_jit_store_attr", crate::bytecode::jit_runtime::tauraro_jit_store_attr as *const u8);
+        builder.symbol("tauraro_jit_call_method", crate::bytecode::jit_runtime::tauraro_jit_call_method as *const u8);
+        builder.symbol("tauraro_jit_make_instance", crate::bytecode::jit_runtime::tauraro_jit_make_instance as *const u8);
+
+        // Type checking and conversion
+        builder.symbol("tauraro_jit_isinstance", crate::bytecode::jit_runtime::tauraro_jit_isinstance as *const u8);
+        builder.symbol("tauraro_jit_to_string", crate::bytecode::jit_runtime::tauraro_jit_to_string as *const u8);
+        builder.symbol("tauraro_jit_to_bool", crate::bytecode::jit_runtime::tauraro_jit_to_bool as *const u8);
     }
 
     /// Compile a loop to native code with iteration control
@@ -288,6 +296,27 @@ impl CraneliftJIT {
             }
             OpCode::StoreFast | OpCode::StoreGlobal => {
                 Self::compile_helper_call_static(builder, "tauraro_jit_store_global", inst, registers_ptr, module, helpers)?;
+            }
+
+            // Function operations
+            OpCode::CallFunction => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_call_function", inst, registers_ptr, module, helpers)?;
+            }
+            OpCode::ReturnValue => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_return_value", inst, registers_ptr, module, helpers)?;
+            }
+
+            // Attribute operations
+            OpCode::LoadAttr => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_load_attr", inst, registers_ptr, module, helpers)?;
+            }
+            OpCode::StoreAttr => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_store_attr", inst, registers_ptr, module, helpers)?;
+            }
+
+            // Method operations
+            OpCode::CallMethod => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_call_method", inst, registers_ptr, module, helpers)?;
             }
 
             // Type inference and control flow - can be skipped in JIT
