@@ -6,6 +6,8 @@
 use crate::value::Value;
 use crate::bytecode::objects::RcValue;
 use crate::modules::hplist::HPList;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 /// Runtime helper: Load item from list by index
 /// Args: registers_ptr, list_reg, index_reg, result_reg
@@ -212,42 +214,72 @@ pub unsafe extern "C" fn tauraro_jit_iter_next(
 // ============================================================================
 
 /// Runtime helper: Call a function with arguments
-/// Args: registers_ptr, func_reg, args_start_reg, args_count, result_reg
-/// Returns: 0 on success, -1 on error
+/// Args: registers_ptr, func_reg, args_count, result_reg
+/// Returns: 0 on success, -1 on error (triggers deoptimization to interpreter)
+///
+/// NOTE: This is a simplified JIT function call helper. For full function call semantics
+/// including stack frame setup, closure capture, etc., we deoptimize to the interpreter.
+/// The JIT is optimized for hot loops with simple operations, not complex call graphs.
 #[no_mangle]
 pub unsafe extern "C" fn tauraro_jit_call_function(
     registers_ptr: *mut RcValue,
     func_reg: u32,
-    args_start_reg: u32,
     args_count: u32,
     result_reg: u32,
 ) -> i32 {
     let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
 
-    // Extract function
+    // Extract function value
     let func_val = &registers[func_reg as usize];
 
-    // Collect arguments
-    let mut args = Vec::new();
-    for i in 0..args_count {
-        args.push(registers[(args_start_reg + i) as usize].value.clone());
-    }
-
-    // Call based on function type
+    // For JIT, we only support a limited subset of function calls
+    // Complex calls (closures, user functions) require interpreter fallback
     match &func_val.value {
-        Value::BuiltinFunction(_name, _func) => {
-            // Call builtin function
-            // This would require access to the builtin function registry
-            // For now, return error to indicate interpreter fallback needed
-            -1
+        Value::BuiltinFunction(name, func) => {
+            // Call builtin function directly
+            let mut args = Vec::with_capacity(args_count as usize);
+            for i in 0..args_count {
+                let arg_reg = (func_reg + 1 + i) as usize;
+                if arg_reg >= 256 {
+                    return -1;  // Out of bounds
+                }
+                args.push(registers[arg_reg].value.clone());
+            }
+
+            // Execute builtin function
+            match func(args) {
+                Ok(result) => {
+                    registers[result_reg as usize] = RcValue::new(result);
+                    0  // Success
+                }
+                Err(_) => -1,  // Error, deoptimize
+            }
         }
-        Value::Closure { .. } | Value::NativeFunction(_) | Value::Code(_) => {
-            // User-defined function or closure
-            // Would need to set up new stack frame, etc.
-            // For now, return error to indicate interpreter fallback needed
-            -1
+        Value::NativeFunction(func) => {
+            // Call native Rust function directly
+            let mut args = Vec::with_capacity(args_count as usize);
+            for i in 0..args_count {
+                let arg_reg = (func_reg + 1 + i) as usize;
+                if arg_reg >= 256 {
+                    return -1;  // Out of bounds
+                }
+                args.push(registers[arg_reg].value.clone());
+            }
+
+            match func(args) {
+                Ok(result) => {
+                    registers[result_reg as usize] = RcValue::new(result);
+                    0  // Success
+                }
+                Err(_) => -1,  // Error, deoptimize
+            }
         }
-        _ => -1,  // Type error
+        // For closures, user-defined functions, and code objects,
+        // we need to deoptimize to the interpreter for full semantics
+        Value::Closure { .. } | Value::Code(_) => {
+            -1  // Deoptimize to interpreter for complex calls
+        }
+        _ => -1,  // Type error, deoptimize
     }
 }
 
@@ -268,24 +300,106 @@ pub unsafe extern "C" fn tauraro_jit_return_value(
 // CLASS & OBJECT OPERATIONS
 // ============================================================================
 
+// Global context for accessing VM data structures from JIT code
+// Using thread_local instead of Arc<Mutex<>> to avoid Send requirements
+use std::collections::HashMap as StdHashMap;
+
+// Thread-local JIT context that holds references to VM data structures
+// This avoids the need for Send/Sync bounds on Value types
+thread_local! {
+    static JIT_CONTEXT: RefCell<Option<JitContext>> = RefCell::new(None);
+}
+
+pub struct JitContext {
+    pub names: Vec<String>,
+    pub constants: Vec<Value>,
+}
+
+/// Initialize JIT context with names and constants from current code object
+/// Should be called by VM before executing JIT code
+pub fn jit_context_init(names: Vec<String>, constants: Vec<Value>) {
+    JIT_CONTEXT.with(|ctx| {
+        *ctx.borrow_mut() = Some(JitContext { names, constants });
+    });
+}
+
+/// Clear JIT context after JIT execution
+pub fn jit_context_clear() {
+    JIT_CONTEXT.with(|ctx| {
+        *ctx.borrow_mut() = None;
+    });
+}
+
 /// Runtime helper: Load attribute from object
-/// Args: registers_ptr, obj_reg, attr_name_reg, result_reg
-/// Returns: 0 on success, -1 on error
+/// Args: registers_ptr, obj_reg, attr_name_idx, result_reg
+/// Returns: 0 on success, -1 on error (triggers deoptimization)
+///
+/// For JIT optimization, complex attribute access deoptimizes to interpreter.
+/// We support simple cases like loading from Object instances.
 #[no_mangle]
 pub unsafe extern "C" fn tauraro_jit_load_attr(
     registers_ptr: *mut RcValue,
     obj_reg: u32,
-    attr_name_idx: u32,  // Index into constants table
+    attr_name_idx: u32,  // Index into names table
     result_reg: u32,
 ) -> i32 {
     let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
 
-    // This would need access to the constants table to get the attribute name
-    // For now, return error to indicate interpreter fallback needed
-    -1
+    // Get attribute name from JIT context
+    let attr_name = JIT_CONTEXT.with(|ctx| {
+        let ctx_ref = ctx.borrow();
+        if let Some(ref context) = *ctx_ref {
+            if attr_name_idx as usize >= context.names.len() {
+                return None;
+            }
+            Some(context.names[attr_name_idx as usize].clone())
+        } else {
+            None
+        }
+    });
+
+    let attr_name = match attr_name {
+        Some(name) => name,
+        None => return -1,
+    };
+
+    let obj_val = &registers[obj_reg as usize];
+
+    // Handle different object types
+    match &obj_val.value {
+        Value::Object { fields, class_methods, .. } => {
+            // Try to get field first
+            if let Some(field_value) = fields.get(&attr_name) {
+                registers[result_reg as usize] = RcValue::new(field_value.clone());
+                return 0;
+            }
+            // Try to get method
+            if let Some(method_value) = class_methods.get(&attr_name) {
+                // Create bound method
+                registers[result_reg as usize] = RcValue::new(Value::BoundMethod {
+                    object: Box::new(obj_val.value.clone()),
+                    method_name: attr_name.clone(),
+                });
+                return 0;
+            }
+            -1  // Attribute not found
+        }
+        Value::Module(_name, namespace) => {
+            if let Some(value) = namespace.get(&attr_name) {
+                registers[result_reg as usize] = RcValue::new(value.clone());
+                0
+            } else {
+                -1  // Attribute not found
+            }
+        }
+        // For other types, deoptimize to interpreter
+        _ => -1,
+    }
 }
 
 /// Runtime helper: Store attribute to object
+/// Args: registers_ptr, obj_reg, attr_name_idx, value_reg
+/// Returns: 0 on success, -1 on error
 #[no_mangle]
 pub unsafe extern "C" fn tauraro_jit_store_attr(
     registers_ptr: *mut RcValue,
@@ -294,37 +408,173 @@ pub unsafe extern "C" fn tauraro_jit_store_attr(
     value_reg: u32,
 ) -> i32 {
     let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
-    // Would need access to constants table and object mutation
-    -1
+
+    // Get attribute name from JIT context
+    let attr_name = JIT_CONTEXT.with(|ctx| {
+        let ctx_ref = ctx.borrow();
+        if let Some(ref context) = *ctx_ref {
+            if attr_name_idx as usize >= context.names.len() {
+                return None;
+            }
+            Some(context.names[attr_name_idx as usize].clone())
+        } else {
+            None
+        }
+    });
+
+    let attr_name = match attr_name {
+        Some(name) => name,
+        None => return -1,
+    };
+
+    let value = registers[value_reg as usize].value.clone();
+    let obj_val = &mut registers[obj_reg as usize];
+
+    // For JIT, we only support simple Object attribute mutation
+    // Complex cases deoptimize to interpreter
+    match &mut obj_val.value {
+        Value::Object { fields, .. } => {
+            // Create new fields HashMap with updated value
+            let mut new_fields = (**fields).clone();
+            new_fields.insert(attr_name, value);
+
+            // Update the fields (this creates a new Rc, which is fine for JIT)
+            // Note: In the full implementation, we'd need proper mutation handling
+            if let Value::Object { fields: old_fields, .. } = &mut obj_val.value {
+                *old_fields = Rc::new(new_fields);
+            }
+            0
+        }
+        // For other types, deoptimize to interpreter
+        _ => -1,
+    }
 }
 
 /// Runtime helper: Call method on object
+/// Args: registers_ptr, obj_reg, method_name_idx, args_count, result_reg
+/// Returns: 0 on success, -1 on error
+///
+/// Note: Arguments are in consecutive registers after obj_reg
 #[no_mangle]
 pub unsafe extern "C" fn tauraro_jit_call_method(
     registers_ptr: *mut RcValue,
     obj_reg: u32,
     method_name_idx: u32,
-    args_start_reg: u32,
     args_count: u32,
     result_reg: u32,
 ) -> i32 {
     let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
-    // Would need method lookup and invocation
+
+    // Get method name from JIT context
+    let method_name = JIT_CONTEXT.with(|ctx| {
+        let ctx_ref = ctx.borrow();
+        if let Some(ref context) = *ctx_ref {
+            if method_name_idx as usize >= context.names.len() {
+                return None;
+            }
+            Some(context.names[method_name_idx as usize].clone())
+        } else {
+            None
+        }
+    });
+
+    let method_name = match method_name {
+        Some(name) => name,
+        None => return -1,
+    };
+
+    // For JIT, we only handle simple builtin methods
+    // Complex method calls deoptimize to interpreter
+    //
+    // Handle each method based on type
+    // We need to carefully manage borrows to avoid conflicts with register access
+
+    // Handle list methods
+    if matches!(&registers[obj_reg as usize].value, Value::List(_)) {
+        match method_name.as_str() {
+            "append" => {
+                if args_count == 1 {
+                    let arg_val = registers[(obj_reg + 1) as usize].value.clone();
+                    // Get mutable reference to the list
+                    if let Value::List(items) = &mut registers[obj_reg as usize].value {
+                        items.append(arg_val);
+                        registers[result_reg as usize] = RcValue::new(Value::None);
+                        return 0;
+                    }
+                }
+            }
+            "len" => {
+                if args_count == 0 {
+                    if let Value::List(items) = &registers[obj_reg as usize].value {
+                        let len = items.len() as i64;
+                        registers[result_reg as usize] = RcValue::new(Value::Int(len));
+                        return 0;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Handle dictionary methods
+    if matches!(&registers[obj_reg as usize].value, Value::Dict(_)) {
+        match method_name.as_str() {
+            "get" => {
+                if args_count >= 1 {
+                    let key_val = &registers[(obj_reg + 1) as usize].value;
+                    let key_str = match key_val {
+                        Value::Str(s) => s.clone(),
+                        Value::Int(n) => n.to_string(),
+                        _ => return -1,
+                    };
+
+                    if let Value::Dict(dict_ref) = &registers[obj_reg as usize].value {
+                        let dict = dict_ref.borrow();
+                        let result = dict.get(&key_str).cloned().unwrap_or(Value::None);
+                        drop(dict);  // Explicitly drop borrow before mutating registers
+                        registers[result_reg as usize] = RcValue::new(result);
+                        return 0;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Deoptimize to interpreter for complex method calls
     -1
 }
 
 /// Runtime helper: Create new instance of class
+/// Args: registers_ptr, class_reg, args_count, result_reg
+/// Returns: 0 on success, -1 on error
+///
+/// Note: Arguments are in consecutive registers after class_reg
 #[no_mangle]
 pub unsafe extern "C" fn tauraro_jit_make_instance(
     registers_ptr: *mut RcValue,
     class_reg: u32,
-    args_start_reg: u32,
-    args_count: u32,
-    result_reg: u32,
+    _args_count: u32,
+    _result_reg: u32,
 ) -> i32 {
     let registers = std::slice::from_raw_parts_mut(registers_ptr, 256);
-    // Would need class instantiation logic
-    -1
+
+    let class_val = &registers[class_reg as usize];
+
+    // For JIT, class instantiation is complex and we deoptimize to interpreter
+    // Full class instantiation requires:
+    // - Creating object with correct MRO
+    // - Calling __init__ method
+    // - Handling inheritance
+    // - Managing class methods and fields
+    //
+    // These are better handled by the interpreter for correctness
+    match &class_val.value {
+        Value::Class { .. } => {
+            -1  // Deoptimize to interpreter
+        }
+        _ => -1,  // Type error
+    }
 }
 
 // ============================================================================

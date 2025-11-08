@@ -6,7 +6,10 @@ def run_benchmark(filename, language):
     if language == "python":
         cmd = [sys.executable, filename]
     else:
-        cmd = ["./target/release/tauraro.exe", "run", filename]
+        # Use 'tauraro' on Linux/Mac, 'tauraro.exe' on Windows
+        import os
+        exe_name = "tauraro.exe" if os.name == "nt" else "tauraro"
+        cmd = [f"./target/release/{exe_name}", "run", filename]
 
     start = time.time()
     result = subprocess.run(cmd, capture_output=True, text=True)
