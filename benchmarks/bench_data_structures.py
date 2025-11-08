@@ -36,7 +36,10 @@ def benchmark_dict_operations(iterations):
 
 def benchmark_list_comprehension(iterations):
     start = time.time()
-    lst = [i for i in range(iterations)]
+    # Build list manually instead of comprehension
+    lst = []
+    for i in range(iterations):
+        lst.append(i)
     total = 0
     for x in lst:
         total = total + x
