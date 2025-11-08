@@ -35,6 +35,8 @@ pub struct OptimizedNativeTranspiler {
     ffi_libraries: HashMap<String, String>,
     /// FFI: Defined functions
     ffi_functions: HashMap<String, FFIFunctionInfo>,
+    /// FFI: Maps variable names to FFI function info (for call_function)
+    ffi_variable_map: HashMap<String, String>,  // variable_name -> function_name
     /// FFI: Enable FFI support
     ffi_enabled: bool,
 }
@@ -50,6 +52,7 @@ impl OptimizedNativeTranspiler {
             memory_manager: MemoryCodeGenerator::new(MemoryStrategy::default()),
             ffi_libraries: HashMap::new(),
             ffi_functions: HashMap::new(),
+            ffi_variable_map: HashMap::new(),
             ffi_enabled: false,
         }
     }
@@ -568,8 +571,48 @@ impl OptimizedNativeTranspiler {
                 }
             }
             Statement::VariableDef { name, type_annotation, value } => {
+                // Check if this is an FFI function assignment or FFI call result
+                let mut is_ffi_function = false;
+                let mut ffi_return_type: Option<String> = None;
+
+                if let Some(val) = value {
+                    if let Expr::Call { func, args, .. } = val {
+                        if let Expr::Identifier(func_name) = func.as_ref() {
+                            if func_name == "define_function" {
+                                is_ffi_function = true;
+                                // Extract function name from arguments to track the mapping
+                                if args.len() >= 2 {
+                                    if let Expr::Literal(Literal::String(ffi_func_name)) = &args[1] {
+                                        self.ffi_variable_map.insert(name.clone(), ffi_func_name.clone());
+                                    }
+                                }
+                            } else if func_name == "call_function" {
+                                // This is an FFI call result - infer type from the function
+                                if !args.is_empty() {
+                                    if let Expr::Identifier(var_name) = &args[0] {
+                                        if let Some(func_name) = self.ffi_variable_map.get(var_name) {
+                                            if let Some(func_info) = self.ffi_functions.get(func_name) {
+                                                ffi_return_type = Some(func_info.return_type.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let var_type = if let Some(typ) = type_annotation {
                     self.map_type_to_native(typ)
+                } else if let Some(ffi_ret_type) = &ffi_return_type {
+                    // Use FFI return type
+                    match ffi_ret_type.as_str() {
+                        "double" => NativeType::Float,
+                        "float" => NativeType::Float,
+                        "int" | "int32" => NativeType::Int,
+                        "int64" => NativeType::Int,
+                        _ => NativeType::Dynamic,
+                    }
                 } else if let Some(val) = value {
                     self.infer_expr_type(val)?
                 } else {
@@ -590,7 +633,16 @@ impl OptimizedNativeTranspiler {
                 } else {
                     // First declaration - generate type and declaration
                     self.context.set_variable_type(name.clone(), var_type.clone());
-                    code.push_str(&var_type.to_c_type());
+
+                    // For FFI functions, use void* instead of tauraro_value_t*
+                    // For FFI call results, use the actual FFI return type
+                    if is_ffi_function {
+                        code.push_str("void*");
+                    } else if let Some(ffi_ret_type) = &ffi_return_type {
+                        code.push_str(&self.ffi_type_to_c(ffi_ret_type));
+                    } else {
+                        code.push_str(&var_type.to_c_type());
+                    }
                     code.push(' ');
                     code.push_str(name);
 
@@ -1391,41 +1443,57 @@ impl OptimizedNativeTranspiler {
             return Err("call_function() requires at least 1 argument (function reference)".to_string());
         }
 
-        // The first argument should be a variable holding the function reference
-        // For now, we extract the function name from the variable
-        // In a full implementation, this would need to track which variable holds which function
+        // Extract the variable name holding the function reference
+        let var_name = match &args[0] {
+            Expr::Identifier(name) => name.clone(),
+            _ => return Err("call_function() first argument must be a variable name".to_string()),
+        };
 
-        // Generate FFI call - for simplicity, we look up by the function variable
-        // This is a simplified approach where we directly call the most recently defined function
-        if self.ffi_functions.is_empty() {
-            return Err("No FFI functions defined. Call define_function() first.".to_string());
-        }
+        // Look up which function this variable holds
+        let func_name = self.ffi_variable_map.get(&var_name)
+            .ok_or_else(|| format!("Variable '{}' is not an FFI function. Use define_function() first.", var_name))?
+            .clone();
 
-        // Get the most recent function (in a full impl, we'd track which var holds which function)
-        let func_info = self.ffi_functions.values().last().unwrap().clone();
+        // Get the function info
+        let func_info = self.ffi_functions.get(&func_name)
+            .ok_or_else(|| format!("FFI function '{}' not found.", func_name))?
+            .clone();
 
-        // Transpile the arguments (skip first arg which is the function reference)
-        let call_args: Vec<String> = args.iter().skip(1)
+        // Transpile and convert arguments
+        let mut call_args = Vec::new();
+        let arg_list: Vec<&Expr> = args.iter().skip(1)
             .flat_map(|arg| {
                 // Handle list arguments by unpacking them
                 match arg {
-                    Expr::List(items) => {
-                        items.iter()
-                            .map(|item| self.transpile_expr(item))
-                            .collect::<Result<Vec<_>, _>>()
-                            .unwrap_or_else(|_| vec!["0".to_string()])
-                    }
-                    _ => vec![self.transpile_expr(arg).unwrap_or_else(|_| "0".to_string())],
+                    Expr::List(items) => items.iter().collect(),
+                    _ => vec![arg],
                 }
             })
             .collect();
 
-        // Generate the function call
-        let mut code = String::new();
-        if func_info.func_ptr_var.is_empty() {
-            return Err("Invalid function pointer".to_string());
+        for (i, arg) in arg_list.iter().enumerate() {
+            let mut arg_code = self.transpile_expr(arg)?;
+
+            // Add type conversions if needed
+            if i < func_info.param_types.len() {
+                let expected_type = &func_info.param_types[i];
+                let arg_type = self.infer_expr_type(arg)?;
+
+                // Convert int to double if needed
+                if (expected_type == "double" || expected_type == "float") && arg_type == NativeType::Int {
+                    arg_code = format!("(double)({})", arg_code);
+                }
+                // Convert int to float if needed
+                else if expected_type == "float" && arg_type == NativeType::Int {
+                    arg_code = format!("(float)({})", arg_code);
+                }
+            }
+
+            call_args.push(arg_code);
         }
 
+        // Generate the function call
+        let mut code = String::new();
         code.push_str(&format!("{}(", func_info.func_ptr_var));
         for (i, arg) in call_args.iter().enumerate() {
             if i > 0 {
