@@ -315,26 +315,37 @@ double tauraro_round_to_places(double x, int places) {
 
     fn impl_input() -> String {
         r#"
-// input() - Read line from stdin
+// input() - Read line from stdin (cross-platform)
 char* tauraro_input(const char* prompt) {
     if (prompt) {
         printf("%s", prompt);
         fflush(stdout);
     }
 
-    char* line = NULL;
-    size_t len = 0;
-    ssize_t read = getline(&line, &len, stdin);
+    // Cross-platform implementation using fgets
+    size_t buffer_size = 256;
+    char* line = (char*)malloc(buffer_size);
+    if (!line) return strdup("");
 
-    if (read != -1) {
-        // Remove trailing newline
-        if (line[read - 1] == '\n') {
-            line[read - 1] = '\0';
+    size_t pos = 0;
+    int c;
+
+    while ((c = fgetc(stdin)) != EOF && c != '\n') {
+        // Grow buffer if needed
+        if (pos >= buffer_size - 1) {
+            buffer_size *= 2;
+            char* new_line = (char*)realloc(line, buffer_size);
+            if (!new_line) {
+                free(line);
+                return strdup("");
+            }
+            line = new_line;
         }
-        return line;
+        line[pos++] = (char)c;
     }
 
-    return strdup("");
+    line[pos] = '\0';
+    return line;
 }
 "#.to_string()
     }

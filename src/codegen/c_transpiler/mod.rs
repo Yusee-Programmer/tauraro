@@ -78,6 +78,38 @@ impl CTranspiler {
         headers.push_str("#include <math.h>\n");
         headers.push_str("#include <ctype.h>\n");
         headers.push_str("\n");
+
+        // Add tauraro_value_t struct definition
+        headers.push_str("// Tauraro Runtime Type System\n");
+        headers.push_str("typedef enum {\n");
+        headers.push_str("    TAURARO_NONE,\n");
+        headers.push_str("    TAURARO_INT,\n");
+        headers.push_str("    TAURARO_FLOAT,\n");
+        headers.push_str("    TAURARO_BOOL,\n");
+        headers.push_str("    TAURARO_STRING,\n");
+        headers.push_str("    TAURARO_LIST,\n");
+        headers.push_str("    TAURARO_DICT,\n");
+        headers.push_str("    TAURARO_TUPLE,\n");
+        headers.push_str("    TAURARO_SET,\n");
+        headers.push_str("    TAURARO_FUNCTION,\n");
+        headers.push_str("    TAURARO_CLASS,\n");
+        headers.push_str("    TAURARO_OBJECT,\n");
+        headers.push_str("    TAURARO_MODULE,\n");
+        headers.push_str("} tauraro_type_t;\n\n");
+
+        headers.push_str("typedef struct tauraro_value {\n");
+        headers.push_str("    tauraro_type_t type;\n");
+        headers.push_str("    int ref_count;\n");
+        headers.push_str("    union {\n");
+        headers.push_str("        int64_t int_val;\n");
+        headers.push_str("        double float_val;\n");
+        headers.push_str("        bool bool_val;\n");
+        headers.push_str("        char* str_val;\n");
+        headers.push_str("        void* ptr_val;\n");
+        headers.push_str("        void* obj_val;\n");
+        headers.push_str("    } data;\n");
+        headers.push_str("} tauraro_value_t;\n\n");
+
         headers
     }
 
