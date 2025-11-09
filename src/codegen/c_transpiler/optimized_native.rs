@@ -3,10 +3,15 @@
 //! This module provides high-performance C code generation using native types
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::fs;
 use crate::ast::*;
 use crate::codegen::c_transpiler::native_types::{NativeType, NativeTypeContext};
 use crate::codegen::c_transpiler::optimizer::NativeOptimizer;
 use crate::codegen::c_transpiler::memory_management::{MemoryCodeGenerator, MemoryStrategy};
+use crate::codegen::c_transpiler::imports::{ImportAnalyzer, ModuleInfo, ModuleType};
+use crate::codegen::c_transpiler::module_system::ModuleCompiler;
+use anyhow::{Result, Context};
 
 /// FFI function signature information
 #[derive(Debug, Clone)]
@@ -16,6 +21,13 @@ struct FFIFunctionInfo {
     return_type: String,
     param_types: Vec<String>,
     func_ptr_var: String,  // Name of the function pointer variable
+}
+
+/// User-defined function signature information
+#[derive(Debug, Clone)]
+struct FunctionSignature {
+    param_types: Vec<NativeType>,
+    return_type: NativeType,
 }
 
 pub struct OptimizedNativeTranspiler {
@@ -39,6 +51,14 @@ pub struct OptimizedNativeTranspiler {
     ffi_variable_map: HashMap<String, String>,  // variable_name -> function_name
     /// FFI: Enable FFI support
     ffi_enabled: bool,
+    /// User-defined function signatures for proper type conversion
+    function_signatures: HashMap<String, FunctionSignature>,
+    /// Module import analyzer
+    import_analyzer: ImportAnalyzer,
+    /// Module compiler for handling built-in and user modules
+    module_compiler: Option<ModuleCompiler>,
+    /// Build directory for compiled modules
+    build_dir: Option<PathBuf>,
 }
 
 impl OptimizedNativeTranspiler {
@@ -54,7 +74,31 @@ impl OptimizedNativeTranspiler {
             ffi_functions: HashMap::new(),
             ffi_variable_map: HashMap::new(),
             ffi_enabled: false,
+            function_signatures: HashMap::new(),
+            import_analyzer: ImportAnalyzer::new(),
+            module_compiler: None,
+            build_dir: None,
         }
+    }
+
+    pub fn with_build_dir(mut self, build_dir: PathBuf) -> Self {
+        self.build_dir = Some(build_dir.clone());
+        self.module_compiler = Some(ModuleCompiler::new(build_dir));
+        self
+    }
+
+    /// Get object files that need to be linked (for built-in modules)
+    pub fn get_object_files(&self) -> Vec<PathBuf> {
+        if let Some(ref compiler) = self.module_compiler {
+            compiler.get_object_files().to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get the build directory path
+    pub fn get_build_dir(&self) -> Option<&PathBuf> {
+        self.build_dir.as_ref()
     }
 
     pub fn with_optimizations(mut self, enabled: bool) -> Self {
@@ -79,6 +123,33 @@ impl OptimizedNativeTranspiler {
 
         // First pass: detect FFI usage (BEFORE generating headers)
         self.detect_ffi_usage(program);
+
+        // Second pass: register user-defined function signatures
+        self.register_function_signatures(program)?;
+
+        // Third pass: analyze imports and set up module compilation
+        self.import_analyzer.analyze(program)
+            .map_err(|e| format!("Import analysis failed: {}", e))?;
+
+        // Initialize build directory and compile modules if needed
+        if let Some(ref mut compiler) = self.module_compiler {
+            compiler.init_build_dir()
+                .map_err(|e| format!("Failed to initialize build directory: {}", e))?;
+
+            // Compile built-in modules to object files
+            for module_info in self.import_analyzer.get_builtin_modules() {
+                compiler.compile_builtin_module(&module_info.name)
+                    .map_err(|e| format!("Failed to compile built-in module '{}': {}", module_info.name, e))?;
+            }
+
+            // Compile user-defined modules to header files
+            for module_info in self.import_analyzer.get_user_modules() {
+                if let Some(ref path) = module_info.file_path {
+                    compiler.convert_user_module_to_header(path, &module_info.name)
+                        .map_err(|e| format!("Failed to compile user module '{}': {}", module_info.name, e))?;
+                }
+            }
+        }
 
         let mut code = String::new();
 
@@ -209,7 +280,70 @@ impl OptimizedNativeTranspiler {
         headers.push_str(&crate::codegen::c_transpiler::native_builtins::NativeBuiltins::generate_all_implementations());
         headers.push_str("\n");
 
+        // Include user-defined module headers
+        if let Some(ref compiler) = self.module_compiler {
+            headers.push_str("// User-defined module headers\n");
+            for header_file in compiler.get_header_files() {
+                if let Some(file_name) = header_file.file_name() {
+                    headers.push_str(&format!("#include \"include/{}\"\n", file_name.to_string_lossy()));
+                }
+            }
+            headers.push_str("\n");
+        }
+
+        // Add extern declarations for built-in modules
+        for module_info in self.import_analyzer.get_builtin_modules() {
+            headers.push_str(&format!("// Built-in module: {}\n", module_info.name));
+            headers.push_str(&self.generate_builtin_module_externs(&module_info.name));
+            headers.push_str("\n");
+        }
+
         headers
+    }
+
+    /// Generate extern declarations for built-in module symbols
+    fn generate_builtin_module_externs(&self, module_name: &str) -> String {
+        let mut externs = String::new();
+
+        match module_name {
+            "math" => {
+                externs.push_str("extern double tauraro_math_pi;\n");
+                externs.push_str("extern double tauraro_math_e;\n");
+                externs.push_str("extern double tauraro_math_sqrt_native(double);\n");
+                externs.push_str("extern double tauraro_math_pow_native(double, double);\n");
+                externs.push_str("extern double tauraro_math_sin_native(double);\n");
+                externs.push_str("extern double tauraro_math_cos_native(double);\n");
+                externs.push_str("extern double tauraro_math_tan_native(double);\n");
+                externs.push_str("extern double tauraro_math_log_native(double);\n");
+                externs.push_str("extern double tauraro_math_exp_native(double);\n");
+                externs.push_str("extern double tauraro_math_floor_native(double);\n");
+                externs.push_str("extern double tauraro_math_ceil_native(double);\n");
+            }
+            "sys" => {
+                externs.push_str("extern const char* tauraro_sys_platform;\n");
+                externs.push_str("extern const char* tauraro_sys_version;\n");
+                externs.push_str("extern void tauraro_sys_exit_native(int);\n");
+            }
+            "os" => {
+                externs.push_str("extern char* tauraro_os_getcwd_native();\n");
+            }
+            "time" => {
+                externs.push_str("extern double tauraro_time_time_native();\n");
+                externs.push_str("extern void tauraro_time_sleep_native(double);\n");
+            }
+            "random" => {
+                externs.push_str("extern double tauraro_random_random_native();\n");
+                externs.push_str("extern int64_t tauraro_random_randint_native(int64_t, int64_t);\n");
+                externs.push_str("extern void tauraro_random_seed_native(int64_t);\n");
+            }
+            "json" => {
+                externs.push_str("extern char* tauraro_json_dumps_native(const char*);\n");
+                externs.push_str("extern void* tauraro_json_loads_native(const char*);\n");
+            }
+            _ => {}
+        }
+
+        externs
     }
 
     /// Generate runtime operator implementations for dynamic types
@@ -217,12 +351,48 @@ impl OptimizedNativeTranspiler {
         let mut code = String::new();
         code.push_str("// Runtime operator implementations for dynamic types\n\n");
 
-        // Helper function to create tauraro_value_t from int
+        // String concatenation helper for native strings
+        code.push_str("char* tauraro_string_concat(const char* s1, const char* s2) {\n");
+        code.push_str("    if (!s1 || !s2) return NULL;\n");
+        code.push_str("    size_t len1 = strlen(s1);\n");
+        code.push_str("    size_t len2 = strlen(s2);\n");
+        code.push_str("    char* result = (char*)malloc(len1 + len2 + 1);\n");
+        code.push_str("    if (!result) return NULL;\n");
+        code.push_str("    strcpy(result, s1);\n");
+        code.push_str("    strcat(result, s2);\n");
+        code.push_str("    return result;\n");
+        code.push_str("}\n\n");
+
+        // Helper functions to create tauraro_value_t from native types
         code.push_str("tauraro_value_t* tauraro_value_new_int(int64_t val) {\n");
         code.push_str("    tauraro_value_t* v = (tauraro_value_t*)malloc(sizeof(tauraro_value_t));\n");
         code.push_str("    v->type = TAURARO_INT;\n");
         code.push_str("    v->ref_count = 1;\n");
         code.push_str("    v->data.int_val = val;\n");
+        code.push_str("    return v;\n");
+        code.push_str("}\n\n");
+
+        code.push_str("tauraro_value_t* tauraro_value_new_float(double val) {\n");
+        code.push_str("    tauraro_value_t* v = (tauraro_value_t*)malloc(sizeof(tauraro_value_t));\n");
+        code.push_str("    v->type = TAURARO_FLOAT;\n");
+        code.push_str("    v->ref_count = 1;\n");
+        code.push_str("    v->data.float_val = val;\n");
+        code.push_str("    return v;\n");
+        code.push_str("}\n\n");
+
+        code.push_str("tauraro_value_t* tauraro_value_new_bool(bool val) {\n");
+        code.push_str("    tauraro_value_t* v = (tauraro_value_t*)malloc(sizeof(tauraro_value_t));\n");
+        code.push_str("    v->type = TAURARO_BOOL;\n");
+        code.push_str("    v->ref_count = 1;\n");
+        code.push_str("    v->data.bool_val = val;\n");
+        code.push_str("    return v;\n");
+        code.push_str("}\n\n");
+
+        code.push_str("tauraro_value_t* tauraro_value_new_string(const char* val) {\n");
+        code.push_str("    tauraro_value_t* v = (tauraro_value_t*)malloc(sizeof(tauraro_value_t));\n");
+        code.push_str("    v->type = TAURARO_STRING;\n");
+        code.push_str("    v->ref_count = 1;\n");
+        code.push_str("    v->data.str_val = strdup(val);\n");
         code.push_str("    return v;\n");
         code.push_str("}\n\n");
 
@@ -422,6 +592,37 @@ impl OptimizedNativeTranspiler {
             }
             _ => {}
         }
+    }
+
+    /// Register function signatures for proper type conversion in function calls
+    fn register_function_signatures(&mut self, program: &Program) -> Result<(), String> {
+        for stmt in &program.statements {
+            if let Statement::FunctionDef { name, params, return_type, .. } = stmt {
+                // Determine parameter types
+                let param_types: Vec<NativeType> = params.iter()
+                    .map(|param| {
+                        param.type_annotation.as_ref()
+                            .map(|t| self.map_type_to_native(t))
+                            .unwrap_or(NativeType::Dynamic)
+                    })
+                    .collect();
+
+                // Determine return type
+                let ret_type = return_type.as_ref()
+                    .map(|t| self.map_type_to_native(t))
+                    .unwrap_or(NativeType::Dynamic);
+
+                // Register the signature
+                self.function_signatures.insert(
+                    name.clone(),
+                    FunctionSignature {
+                        param_types,
+                        return_type: ret_type,
+                    }
+                );
+            }
+        }
+        Ok(())
     }
 
     fn transpile_class(&mut self, stmt: &Statement) -> Result<String, String> {
@@ -836,16 +1037,30 @@ impl OptimizedNativeTranspiler {
                     Ok(format!("{}({}, {})", runtime_func, left_code, right_code))
                 } else {
                     // Both are native types, use direct operators
-                    let op_str = match op {
-                        BinaryOp::Add => "+",
-                        BinaryOp::Sub => "-",
-                        BinaryOp::Mul => "*",
-                        BinaryOp::Div => "/",
-                        BinaryOp::Mod => "%",
-                        BinaryOp::Pow => "pow", // Would need function call
-                        _ => "?",
-                    };
-                    Ok(format!("({} {} {})", left_code, op_str, right_code))
+                    match op {
+                        BinaryOp::Add => {
+                            // Check if string concatenation
+                            if matches!(left_type, NativeType::String) && matches!(right_type, NativeType::String) {
+                                // Use string concatenation helper
+                                Ok(format!("tauraro_string_concat({}, {})", left_code, right_code))
+                            } else {
+                                Ok(format!("({} + {})", left_code, right_code))
+                            }
+                        }
+                        BinaryOp::Sub => Ok(format!("({} - {})", left_code, right_code)),
+                        BinaryOp::Mul => Ok(format!("({} * {})", left_code, right_code)),
+                        BinaryOp::Div => Ok(format!("({} / {})", left_code, right_code)),
+                        BinaryOp::Mod => Ok(format!("({} % {})", left_code, right_code)),
+                        BinaryOp::Pow => Ok(format!("pow({}, {})", left_code, right_code)),
+                        BinaryOp::And => Ok(format!("({} && {})", left_code, right_code)),
+                        BinaryOp::Or => Ok(format!("({} || {})", left_code, right_code)),
+                        BinaryOp::BitAnd => Ok(format!("({} & {})", left_code, right_code)),
+                        BinaryOp::BitOr => Ok(format!("({} | {})", left_code, right_code)),
+                        BinaryOp::BitXor => Ok(format!("({} ^ {})", left_code, right_code)),
+                        BinaryOp::LShift => Ok(format!("({} << {})", left_code, right_code)),
+                        BinaryOp::RShift => Ok(format!("({} >> {})", left_code, right_code)),
+                        _ => Err(format!("Unsupported binary operation: {:?}", op)),
+                    }
                 }
             }
             Expr::UnaryOp { op, operand } => {
@@ -878,6 +1093,15 @@ impl OptimizedNativeTranspiler {
                     self.transpile_expr(index)?))
             }
             Expr::Attribute { object, name } => {
+                // Check if this is a module attribute access (e.g., math.pi)
+                if let Expr::Identifier(module_name) = object.as_ref() {
+                    // Check if this is an imported module
+                    if self.import_analyzer.modules.contains_key(module_name) {
+                        // Translate to module-prefixed name (e.g., math.pi -> tauraro_math_pi)
+                        return Ok(format!("tauraro_{}_{}", module_name, name));
+                    }
+                }
+                // Regular attribute access (e.g., self.x or obj.field)
                 Ok(format!("{}.{}", self.transpile_expr(object)?, name))
             }
             Expr::Compare { left, ops, comparators } => {
@@ -1026,7 +1250,19 @@ impl OptimizedNativeTranspiler {
     }
 
     fn transpile_function_call(&mut self, func: &Expr, args: &[Expr]) -> Result<String, String> {
-        let func_name = if let Expr::Identifier(name) = func {
+        // Check if this is a module function call (e.g., math.sqrt(x))
+        let func_name = if let Expr::Attribute { object, name } = func {
+            if let Expr::Identifier(module_name) = object.as_ref() {
+                if self.import_analyzer.modules.contains_key(module_name) {
+                    // Translate to module-prefixed function name
+                    format!("tauraro_{}_{}_native", module_name, name)
+                } else {
+                    return Err(format!("Method calls not yet supported: {}.{}", module_name, name));
+                }
+            } else {
+                return Err("Complex method calls not supported yet".to_string());
+            }
+        } else if let Expr::Identifier(name) = func {
             name.clone()
         } else {
             return Err("Complex function calls not supported yet".to_string());
@@ -1120,13 +1356,40 @@ impl OptimizedNativeTranspiler {
             _ => {}
         }
 
-        // Regular function call
+        // Regular function call - check if we need to wrap arguments for dynamic types
         let mut code = format!("{}(", func_name);
+
+        // Check if this is a user-defined function with known signature
+        let func_signature = self.function_signatures.get(&func_name).cloned();
+
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
                 code.push_str(", ");
             }
-            code.push_str(&self.transpile_expr(arg)?);
+
+            let arg_code = self.transpile_expr(arg)?;
+
+            // Check if we need to wrap this argument for dynamic type
+            if let Some(ref sig) = func_signature {
+                if i < sig.param_types.len() && sig.param_types[i] == NativeType::Dynamic {
+                    // Parameter expects tauraro_value_t*, but we might be passing a native type
+                    let arg_type = self.infer_expr_type(arg)?;
+                    let wrapped_arg = match arg_type {
+                        NativeType::Int => format!("tauraro_value_new_int({})", arg_code),
+                        NativeType::Float => format!("tauraro_value_new_float({})", arg_code),
+                        NativeType::Bool => format!("tauraro_value_new_bool({})", arg_code),
+                        NativeType::String => format!("tauraro_value_new_string({})", arg_code),
+                        NativeType::Dynamic => arg_code.clone(), // Already wrapped
+                        _ => arg_code.clone(), // Other types, use as-is
+                    };
+                    code.push_str(&wrapped_arg);
+                } else {
+                    code.push_str(&arg_code);
+                }
+            } else {
+                // No signature info, use argument as-is
+                code.push_str(&arg_code);
+            }
         }
         code.push(')');
 
@@ -1425,6 +1688,22 @@ impl OptimizedNativeTranspiler {
                     .cloned()
                     .unwrap_or(NativeType::Dynamic)
             }
+            Expr::Attribute { object, name } => {
+                // Check if this is a module attribute (e.g., math.pi)
+                if let Expr::Identifier(module_name) = object.as_ref() {
+                    if self.import_analyzer.modules.contains_key(module_name) {
+                        // Infer type based on module and attribute name
+                        match (module_name.as_str(), name.as_str()) {
+                            ("math", "pi" | "e") => NativeType::Float,
+                            _ => NativeType::Dynamic,
+                        }
+                    } else {
+                        NativeType::Dynamic
+                    }
+                } else {
+                    NativeType::Dynamic
+                }
+            }
             Expr::BinaryOp { left, op, .. } => {
                 match op {
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
@@ -1434,6 +1713,15 @@ impl OptimizedNativeTranspiler {
                 }
             }
             Expr::Compare { .. } => NativeType::Bool,
+            Expr::Call { func, .. } => {
+                // Check if it's a user-defined function with known return type
+                if let Expr::Identifier(func_name) = func.as_ref() {
+                    if let Some(sig) = self.function_signatures.get(func_name) {
+                        return Ok(sig.return_type.clone());
+                    }
+                }
+                NativeType::Dynamic
+            }
             _ => NativeType::Dynamic,
         })
     }

@@ -1,7 +1,10 @@
-import serveit
+# import serveit
+import math
 
 print("Hello, world!")
-def add(a: int, b: int) -> int:
+def add(a, b):
     return a + b
 
 print(add(1, 2))
+print(dir(math))
+print(math.pi)
