@@ -105,3 +105,16 @@ test_ffi_*.c
 test_ffi_simple
 test_ffi_v*
 test_ffi_fixed
+
+# C transpiler test artifacts
+ser
+ser.c
+ser.exe.c
+ser_*
+test_*.c
+test_import_math
+test_user_import
+test_user_import2.c
+mymodule.h
+*.exe.c
+*..c
