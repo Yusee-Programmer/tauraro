@@ -270,6 +270,8 @@ fn compile_file(
             }
         }
         "c" => {
+            let mut object_files_to_link: Vec<PathBuf> = Vec::new();
+
             let c_code_bytes = if use_native_transpiler {
                 // Parse memory strategy
                 use tauraro::codegen::c_transpiler::memory_management::MemoryStrategy;
@@ -283,11 +285,20 @@ fn compile_file(
                     }
                 };
 
+                // Create build directory for module compilation
+                let build_dir = PathBuf::from("build");
+                std::fs::create_dir_all(&build_dir)?;
+
                 // Use native type transpiler (works directly from AST)
                 let mut native_transpiler = tauraro::codegen::c_transpiler::optimized_native::OptimizedNativeTranspiler::new()
                     .with_optimizations(optimization > 0)
-                    .with_memory_strategy(mem_strategy);
+                    .with_memory_strategy(mem_strategy)
+                    .with_build_dir(build_dir.clone());
                 let c_code = native_transpiler.transpile_program(&semantic_ast)?;
+
+                // Store object files for linking later
+                object_files_to_link = native_transpiler.get_object_files();
+
                 c_code.into_bytes()
             } else {
                 // Use traditional IR-based C transpiler
@@ -342,11 +353,24 @@ fn compile_file(
                 };
                 
                 // Use our compiler detection module for better error handling
-                if let Err(e) = tauraro::codegen::c_transpiler::compiler::compile_to_executable(
-                    &std::fs::read_to_string(&output_path)?, 
-                    exe_path.to_str().unwrap(), 
-                    optimization
-                ) {
+                let compile_result = if !object_files_to_link.is_empty() {
+                    // Use version with object files
+                    tauraro::codegen::c_transpiler::compiler::compile_to_executable_with_objects(
+                        &std::fs::read_to_string(&output_path)?,
+                        exe_path.to_str().unwrap(),
+                        optimization,
+                        &object_files_to_link
+                    )
+                } else {
+                    // Use standard version
+                    tauraro::codegen::c_transpiler::compiler::compile_to_executable(
+                        &std::fs::read_to_string(&output_path)?,
+                        exe_path.to_str().unwrap(),
+                        optimization
+                    )
+                };
+
+                if let Err(e) = compile_result {
                     eprintln!("Warning: Could not compile to executable: {}", e);
                     println!("Please compile manually with one of the following:");
                     

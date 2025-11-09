@@ -72,6 +72,106 @@ fn compile_rust_ffi_to_object(module_name: &str, output_dir: &str) -> Result<Str
     }
 }
 
+/// Compile C code to executable with additional object files
+pub fn compile_to_executable_with_objects(c_code: &str, output_path: &str, opt_level: u8, object_files: &[std::path::PathBuf]) -> Result<()> {
+    // Write C code to temporary file (keep it for inspection)
+    let temp_file = format!("{}.c", output_path);
+    std::fs::write(&temp_file, c_code)?;
+    println!("C source code written to: {}", temp_file);
+
+    // Detect available compilers
+    let compilers = detect_compilers();
+    if compilers.is_empty() {
+        return Err(anyhow::anyhow!("No C compiler found. Please install GCC, Clang, or MSVC."));
+    }
+
+    // Determine optimization flags
+    let opt_flag = match opt_level {
+        0 => "-O0",
+        1 => "-O1",
+        2 => "-O2",
+        3 => "-O3",
+        _ => "-O2",
+    };
+
+    // Try each compiler in order
+    let mut last_error = String::new();
+    for compiler in &compilers {
+        let output = match compiler.as_str() {
+            "gcc" | "clang" => {
+                let mut args = vec![temp_file.as_str()];
+                // Add additional object files
+                args.extend(object_files.iter().map(|p| p.to_str().unwrap_or("")));
+                args.extend(&["-o", output_path, opt_flag, "-lm"]);
+
+                Command::new(compiler)
+                    .args(&args)
+                    .output()
+            }
+            "clang-cl" => {
+                let opt_flag_clang = format!("-O{}", opt_level);
+
+                let mut args = vec![temp_file.as_str()];
+                // Add additional object files
+                args.extend(object_files.iter().map(|p| p.to_str().unwrap_or("")));
+                args.push("-o");
+                args.push(output_path);
+                args.push(&opt_flag_clang);
+
+                Command::new(compiler)
+                    .args(&args)
+                    .output()
+            }
+            "cl" => {
+                // MSVC compilation
+                let fe_flag = format!("/Fe:{}", output_path);
+                let opt_flag_msvc = format!("/O{}", opt_level);
+
+                let mut args = vec![temp_file.as_str()];
+                // Add additional object files
+                args.extend(object_files.iter().map(|p| p.to_str().unwrap_or("")));
+                args.push(&fe_flag);
+                args.push(&opt_flag_msvc);
+
+                Command::new(compiler)
+                    .args(&args)
+                    .output()
+            }
+            _ => {
+                // Fallback to basic compilation
+                let mut args = vec![temp_file.as_str()];
+                // Add additional object files
+                args.extend(object_files.iter().map(|p| p.to_str().unwrap_or("")));
+                args.extend(&["-o", output_path]);
+
+                Command::new(compiler)
+                    .args(&args)
+                    .output()
+            }
+        };
+
+        match output {
+            Ok(output) => {
+                if output.status.success() {
+                    println!("Successfully compiled with {} {}", compiler, opt_flag);
+                    println!("Executable created: {}", output_path);
+                    return Ok(());
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    last_error = format!("{} compilation failed: {}", compiler, stderr);
+                    eprintln!("{}", last_error);
+                }
+            }
+            Err(e) => {
+                last_error = format!("Failed to run {}: {}", compiler, e);
+                eprintln!("{}", last_error);
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!("Compilation failed with all available compilers. Last error: {}", last_error))
+}
+
 /// Compile C code to executable using available compilers
 pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> Result<()> {
     // Write C code to temporary file (keep it for inspection)

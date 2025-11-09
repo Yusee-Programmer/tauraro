@@ -1,0 +1,8 @@
+import math
+
+def calculate_circle_area(radius):
+    return math.pi * radius * radius
+
+print("Testing math module import:")
+area = calculate_circle_area(5.0)
+print(area)

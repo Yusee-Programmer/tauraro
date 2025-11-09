@@ -120,7 +120,17 @@
       "Bash(timeout 20 ./target/release/tauraro.exe run:*)",
       "Bash(timeout 120 cargo build:*)",
       "Bash(timeout 90 cargo build:*)",
-      "Bash(./benchmark_manual_optimized.exe)"
+      "Bash(./benchmark_manual_optimized.exe)",
+      "Bash(./test_dynamic_types.exe:*)",
+      "Bash(./build/test_01.exe:*)",
+      "Bash(./build/test_02.exe:*)",
+      "Bash(./build/test_03.exe)",
+      "Bash(./build/test_04.exe)",
+      "Bash(./build/test_06.exe:*)",
+      "Bash(./build/test_07.exe)",
+      "Bash(for:*)",
+      "Bash(do echo \"\")",
+      "Bash(./build/$test.exe)"
     ],
     "deny": [],
     "ask": []

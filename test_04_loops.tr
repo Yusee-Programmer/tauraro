@@ -1,0 +1,42 @@
+# Test 4: Loops with Type Annotations
+
+def sum_range(start: int, end: int) -> int:
+    total: int = 0
+    i: int = start
+    while i <= end:
+        total = total + i
+        i = i + 1
+    return total
+
+def count_digits(n: int) -> int:
+    if n == 0:
+        return 1
+
+    count: int = 0
+    temp: int = n
+
+    while temp > 0:
+        count = count + 1
+        temp = temp / 10
+
+    return count
+
+def reverse_number(n: int) -> int:
+    reversed_num: int = 0
+    temp: int = n
+
+    while temp > 0:
+        digit: int = temp % 10
+        reversed_num = reversed_num * 10 + digit
+        temp = temp / 10
+
+    return reversed_num
+
+# Test sum of range
+print(sum_range(1, 100))
+
+# Test digit counting
+print(count_digits(12345))
+
+# Test number reversal
+print(reverse_number(12345))

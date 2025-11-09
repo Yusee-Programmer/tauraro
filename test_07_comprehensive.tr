@@ -1,0 +1,64 @@
+# Test 7: Comprehensive Test with Mixed Features
+
+def gcd(a: int, b: int) -> int:
+    while b != 0:
+        temp: int = b
+        b = a % b
+        a = temp
+    return a
+
+def lcm(a: int, b: int) -> int:
+    return (a * b) / gcd(a, b)
+
+def sum_of_squares(n: int) -> int:
+    total: int = 0
+    i: int = 1
+    while i <= n:
+        total = total + (i * i)
+        i = i + 1
+    return total
+
+def is_perfect_square(n: int) -> bool:
+    if n < 0:
+        return False
+
+    i: int = 0
+    while i * i <= n:
+        if i * i == n:
+            return True
+        i = i + 1
+    return False
+
+def count_primes_up_to(limit: int) -> int:
+    count: int = 0
+    n: int = 2
+
+    while n <= limit:
+        is_prime: bool = True
+        i: int = 2
+
+        while i * i <= n:
+            if n % i == 0:
+                is_prime = False
+            i = i + 1
+
+        if is_prime:
+            count = count + 1
+
+        n = n + 1
+
+    return count
+
+# Test GCD and LCM
+print(gcd(48, 18))
+print(lcm(12, 18))
+
+# Test sum of squares
+print(sum_of_squares(5))
+
+# Test perfect square
+print(is_perfect_square(16))
+print(is_perfect_square(15))
+
+# Test counting primes
+print(count_primes_up_to(20))
