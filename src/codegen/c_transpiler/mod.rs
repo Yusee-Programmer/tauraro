@@ -28,6 +28,7 @@ pub mod module_system;
 pub mod class_to_struct;
 pub mod native_builtins;
 pub mod optimized_native;
+pub mod usage_analyzer;
 pub mod optimizer;
 pub mod memory_management;
 
@@ -1988,36 +1989,16 @@ impl CTranspiler {
     }
 
     /// Analyze which builtin functions are used in the module
+    /// Uses the comprehensive UsageInfo analyzer to track all usage
     fn analyze_used_builtins(&self, module: &IRModule) -> HashSet<String> {
-        let mut used = HashSet::new();
+        let mut usage = usage_analyzer::UsageInfo::new();
+        usage.analyze(module);
 
         // Always include essential builtins
-        used.insert("print".to_string());
-        used.insert("isinstance".to_string());
+        usage.used_builtins.insert("print".to_string());
+        usage.used_builtins.insert("isinstance".to_string());
 
-        // Check global instructions
-        for instruction in &module.globals {
-            if let IRInstruction::Call { func, .. } = instruction {
-                if builtins::is_builtin_function(func) {
-                    used.insert(func.clone());
-                }
-            }
-        }
-
-        // Check function instructions
-        for (_name, function) in &module.functions {
-            for block in &function.blocks {
-                for instruction in &block.instructions {
-                    if let IRInstruction::Call { func, .. } = instruction {
-                        if builtins::is_builtin_function(func) {
-                            used.insert(func.clone());
-                        }
-                    }
-                }
-            }
-        }
-
-        used
+        usage.used_builtins
     }
 
     /// Check if the module uses FFI features

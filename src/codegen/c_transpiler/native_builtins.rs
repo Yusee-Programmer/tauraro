@@ -70,6 +70,46 @@ impl NativeBuiltins {
         code
     }
 
+    /// Generate implementations for only the used built-in functions (OPTIMIZED - no redundant code)
+    pub fn generate_used_implementations(used_builtins: &std::collections::HashSet<String>) -> String {
+        if used_builtins.is_empty() {
+            return String::new();
+        }
+
+        let mut code = String::new();
+        code.push_str("// Native built-in function implementations (only used functions)\n\n");
+
+        // Generate only the functions that are actually used
+        for builtin in used_builtins {
+            match builtin.as_str() {
+                "int" => code.push_str(&Self::impl_int()),
+                "float" => code.push_str(&Self::impl_float()),
+                "str" => code.push_str(&Self::impl_str()),
+                "bool" => code.push_str(&Self::impl_bool()),
+                "len" => code.push_str(&Self::impl_len()),
+                "min" => code.push_str(&Self::impl_min()),
+                "max" => code.push_str(&Self::impl_max()),
+                "sum" => code.push_str(&Self::impl_sum()),
+                "abs" => code.push_str(&Self::impl_abs()),
+                "pow" => code.push_str(&Self::impl_pow()),
+                "round" => code.push_str(&Self::impl_round()),
+                "input" => code.push_str(&Self::impl_input()),
+                "isinstance" => code.push_str(&Self::impl_isinstance()),
+                "type" => code.push_str(&Self::impl_type()),
+                "enumerate" => code.push_str(&Self::impl_enumerate()),
+                "zip" => code.push_str(&Self::impl_zip()),
+                "sorted" => code.push_str(&Self::impl_sorted()),
+                "reversed" => code.push_str(&Self::impl_reversed()),
+                _ => {
+                    // Unknown builtin, skip
+                    eprintln!("Warning: Unknown builtin function '{}' requested", builtin);
+                }
+            }
+        }
+
+        code
+    }
+
     fn impl_int() -> String {
         r#"
 // int() - Convert to integer
