@@ -100,6 +100,9 @@ impl OptimizedNativeTranspiler {
         // Generate FFI globals
         code.push_str(&self.generate_ffi_globals());
 
+        // Generate runtime operator implementations
+        code.push_str(&Self::generate_runtime_operators());
+
         // Generate classes
         for stmt in &program.statements {
             if let Statement::ClassDef { .. } = stmt {
@@ -131,11 +134,53 @@ impl OptimizedNativeTranspiler {
         headers.push_str("#include <stdbool.h>\n");
         headers.push_str("#include <string.h>\n");
         headers.push_str("#include <math.h>\n");
-        headers.push_str("#include <setjmp.h>\n");
+        headers.push_str("#include <setjmp.h>\n\n");
+
+        // Add Tauraro Runtime Type System (always needed for function parameters)
+        headers.push_str("// Tauraro Runtime Type System\n");
+        headers.push_str("typedef enum {\n");
+        headers.push_str("    TAURARO_NONE,\n");
+        headers.push_str("    TAURARO_INT,\n");
+        headers.push_str("    TAURARO_FLOAT,\n");
+        headers.push_str("    TAURARO_BOOL,\n");
+        headers.push_str("    TAURARO_STRING,\n");
+        headers.push_str("    TAURARO_LIST,\n");
+        headers.push_str("    TAURARO_DICT,\n");
+        headers.push_str("    TAURARO_TUPLE,\n");
+        headers.push_str("    TAURARO_SET,\n");
+        headers.push_str("    TAURARO_FUNCTION,\n");
+        headers.push_str("    TAURARO_OBJECT,\n");
+        headers.push_str("    TAURARO_BYTES,\n");
+        headers.push_str("    TAURARO_COMPLEX,\n");
+        headers.push_str("    TAURARO_RANGE,\n");
+        headers.push_str("    TAURARO_FROZENSET\n");
+        headers.push_str("} tauraro_type_t;\n\n");
+
+        headers.push_str("typedef struct tauraro_value {\n");
+        headers.push_str("    tauraro_type_t type;\n");
+        headers.push_str("    int ref_count;\n");
+        headers.push_str("    union {\n");
+        headers.push_str("        int64_t int_val;\n");
+        headers.push_str("        double float_val;\n");
+        headers.push_str("        bool bool_val;\n");
+        headers.push_str("        char* str_val;\n");
+        headers.push_str("        void* ptr_val;\n");
+        headers.push_str("        void* obj_val;\n");
+        headers.push_str("    } data;\n");
+        headers.push_str("} tauraro_value_t;\n\n");
+
+        // Add runtime operator functions for dynamic types
+        headers.push_str("// Runtime operators for dynamic types\n");
+        headers.push_str("tauraro_value_t* tauraro_add(tauraro_value_t* left, tauraro_value_t* right);\n");
+        headers.push_str("tauraro_value_t* tauraro_sub(tauraro_value_t* left, tauraro_value_t* right);\n");
+        headers.push_str("tauraro_value_t* tauraro_mul(tauraro_value_t* left, tauraro_value_t* right);\n");
+        headers.push_str("tauraro_value_t* tauraro_div(tauraro_value_t* left, tauraro_value_t* right);\n");
+        headers.push_str("tauraro_value_t* tauraro_mod(tauraro_value_t* left, tauraro_value_t* right);\n");
+        headers.push_str("tauraro_value_t* tauraro_pow(tauraro_value_t* left, tauraro_value_t* right);\n\n");
 
         // Add FFI support if needed
         if self.ffi_enabled {
-            headers.push_str("\n// FFI Support\n");
+            headers.push_str("// FFI Support\n");
             headers.push_str("#ifdef _WIN32\n");
             headers.push_str("    #include <windows.h>\n");
             headers.push_str("    typedef HMODULE ffi_lib_handle;\n");
@@ -149,8 +194,6 @@ impl OptimizedNativeTranspiler {
             headers.push_str("    #define FFI_DLSYM(handle, name) dlsym(handle, name)\n");
             headers.push_str("    #define FFI_DLCLOSE(handle) dlclose(handle)\n");
             headers.push_str("#endif\n");
-            headers.push_str("// Compatibility typedef for FFI references\n");
-            headers.push_str("typedef void* tauraro_value_t;\n");
         }
         headers.push_str("\n");
 
@@ -167,6 +210,80 @@ impl OptimizedNativeTranspiler {
         headers.push_str("\n");
 
         headers
+    }
+
+    /// Generate runtime operator implementations for dynamic types
+    fn generate_runtime_operators() -> String {
+        let mut code = String::new();
+        code.push_str("// Runtime operator implementations for dynamic types\n\n");
+
+        // Helper function to create tauraro_value_t from int
+        code.push_str("tauraro_value_t* tauraro_value_new_int(int64_t val) {\n");
+        code.push_str("    tauraro_value_t* v = (tauraro_value_t*)malloc(sizeof(tauraro_value_t));\n");
+        code.push_str("    v->type = TAURARO_INT;\n");
+        code.push_str("    v->ref_count = 1;\n");
+        code.push_str("    v->data.int_val = val;\n");
+        code.push_str("    return v;\n");
+        code.push_str("}\n\n");
+
+        // tauraro_add implementation
+        code.push_str("tauraro_value_t* tauraro_add(tauraro_value_t* left, tauraro_value_t* right) {\n");
+        code.push_str("    if (left->type == TAURARO_INT && right->type == TAURARO_INT) {\n");
+        code.push_str("        return tauraro_value_new_int(left->data.int_val + right->data.int_val);\n");
+        code.push_str("    }\n");
+        code.push_str("    // TODO: Handle other type combinations\n");
+        code.push_str("    return tauraro_value_new_int(0);\n");
+        code.push_str("}\n\n");
+
+        // tauraro_sub implementation
+        code.push_str("tauraro_value_t* tauraro_sub(tauraro_value_t* left, tauraro_value_t* right) {\n");
+        code.push_str("    if (left->type == TAURARO_INT && right->type == TAURARO_INT) {\n");
+        code.push_str("        return tauraro_value_new_int(left->data.int_val - right->data.int_val);\n");
+        code.push_str("    }\n");
+        code.push_str("    return tauraro_value_new_int(0);\n");
+        code.push_str("}\n\n");
+
+        // tauraro_mul implementation
+        code.push_str("tauraro_value_t* tauraro_mul(tauraro_value_t* left, tauraro_value_t* right) {\n");
+        code.push_str("    if (left->type == TAURARO_INT && right->type == TAURARO_INT) {\n");
+        code.push_str("        return tauraro_value_new_int(left->data.int_val * right->data.int_val);\n");
+        code.push_str("    }\n");
+        code.push_str("    return tauraro_value_new_int(0);\n");
+        code.push_str("}\n\n");
+
+        // tauraro_div implementation
+        code.push_str("tauraro_value_t* tauraro_div(tauraro_value_t* left, tauraro_value_t* right) {\n");
+        code.push_str("    if (left->type == TAURARO_INT && right->type == TAURARO_INT) {\n");
+        code.push_str("        if (right->data.int_val != 0) {\n");
+        code.push_str("            return tauraro_value_new_int(left->data.int_val / right->data.int_val);\n");
+        code.push_str("        }\n");
+        code.push_str("    }\n");
+        code.push_str("    return tauraro_value_new_int(0);\n");
+        code.push_str("}\n\n");
+
+        // tauraro_mod implementation
+        code.push_str("tauraro_value_t* tauraro_mod(tauraro_value_t* left, tauraro_value_t* right) {\n");
+        code.push_str("    if (left->type == TAURARO_INT && right->type == TAURARO_INT) {\n");
+        code.push_str("        if (right->data.int_val != 0) {\n");
+        code.push_str("            return tauraro_value_new_int(left->data.int_val % right->data.int_val);\n");
+        code.push_str("        }\n");
+        code.push_str("    }\n");
+        code.push_str("    return tauraro_value_new_int(0);\n");
+        code.push_str("}\n\n");
+
+        // tauraro_pow implementation
+        code.push_str("tauraro_value_t* tauraro_pow(tauraro_value_t* left, tauraro_value_t* right) {\n");
+        code.push_str("    if (left->type == TAURARO_INT && right->type == TAURARO_INT) {\n");
+        code.push_str("        int64_t result = 1;\n");
+        code.push_str("        for (int64_t i = 0; i < right->data.int_val; i++) {\n");
+        code.push_str("            result *= left->data.int_val;\n");
+        code.push_str("        }\n");
+        code.push_str("        return tauraro_value_new_int(result);\n");
+        code.push_str("    }\n");
+        code.push_str("    return tauraro_value_new_int(0);\n");
+        code.push_str("}\n\n");
+
+        code
     }
 
     /// Generate FFI global variables and function pointers
@@ -365,9 +482,10 @@ impl OptimizedNativeTranspiler {
             };
 
             // Determine return type
+            // If no return type annotation, use Dynamic (tauraro_value_t*) to allow dynamic returns
             let ret_type = return_type.as_ref()
                 .map(|t| self.map_type_to_native(t))
-                .unwrap_or(NativeType::Void);
+                .unwrap_or(NativeType::Dynamic);
 
             // Clear local variables from previous function scope
             self.context.clear_local_variables();
@@ -699,16 +817,36 @@ impl OptimizedNativeTranspiler {
             Expr::BinaryOp { left, op, right } => {
                 let left_code = self.transpile_expr(left)?;
                 let right_code = self.transpile_expr(right)?;
-                let op_str = match op {
-                    BinaryOp::Add => "+",
-                    BinaryOp::Sub => "-",
-                    BinaryOp::Mul => "*",
-                    BinaryOp::Div => "/",
-                    BinaryOp::Mod => "%",
-                    BinaryOp::Pow => "pow", // Would need function call
-                    _ => "?",
-                };
-                Ok(format!("({} {} {})", left_code, op_str, right_code))
+
+                // Check if operands are dynamic types
+                let left_type = self.infer_expr_type(left).unwrap_or(NativeType::Dynamic);
+                let right_type = self.infer_expr_type(right).unwrap_or(NativeType::Dynamic);
+
+                // If either operand is dynamic, use runtime functions
+                if matches!(left_type, NativeType::Dynamic) || matches!(right_type, NativeType::Dynamic) {
+                    let runtime_func = match op {
+                        BinaryOp::Add => "tauraro_add",
+                        BinaryOp::Sub => "tauraro_sub",
+                        BinaryOp::Mul => "tauraro_mul",
+                        BinaryOp::Div => "tauraro_div",
+                        BinaryOp::Mod => "tauraro_mod",
+                        BinaryOp::Pow => "tauraro_pow",
+                        _ => return Err(format!("Unsupported binary operation for dynamic types: {:?}", op)),
+                    };
+                    Ok(format!("{}({}, {})", runtime_func, left_code, right_code))
+                } else {
+                    // Both are native types, use direct operators
+                    let op_str = match op {
+                        BinaryOp::Add => "+",
+                        BinaryOp::Sub => "-",
+                        BinaryOp::Mul => "*",
+                        BinaryOp::Div => "/",
+                        BinaryOp::Mod => "%",
+                        BinaryOp::Pow => "pow", // Would need function call
+                        _ => "?",
+                    };
+                    Ok(format!("({} {} {})", left_code, op_str, right_code))
+                }
             }
             Expr::UnaryOp { op, operand } => {
                 let operand_code = self.transpile_expr(operand)?;
