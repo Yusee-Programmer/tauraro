@@ -1,11 +1,11 @@
 [package]
 name = "tauraro"
-version = "0.2.0"
+version = "0.0.1"
 edition = "2021"
 description = "Tauraro Programming Language - A modern, high-performance programming language with 100% Python syntax compatibility and multilingual support"
 license = "MIT OR Apache-2.0"
 authors = ["TauraroLang Team"]
-repository = "https://github.com/taurarolang/tauraro"
+repository = "https://github.com/Yusee-Programmer/tauraro"
 
 [dependencies]
 logos = "0.14"
@@ -123,7 +123,3 @@ crate-type = ["rlib"]
 [[bin]]
 name = "tauraro"
 path = "src/main.rs"
-
-[[bin]]
-name = "test_oop"
-path = "src/bin/test_oop.rs"
