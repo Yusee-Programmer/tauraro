@@ -69,7 +69,7 @@ Run with the VM:
 
 Compile to native executable:
 ```bash
-./target/release/tauraro compile hello.py -o hello
+./target/release/tauraro compile --use-native-transpiler --backend c hello.tr -o hello.exe
 ./hello  # Runs at native C speed!
 ```
 
