@@ -41,7 +41,7 @@ All modules available by default - no feature flags needed!
 
 ```bash
 # Clone the repository
-git clone https://github.com/Yusee-Programmer/tauraro.git
+git clone https://github.com/tauraro/tauraro.git
 cd tauraro
 
 # Build Tauraro
