@@ -11,7 +11,7 @@ use crate::codegen::c_transpiler::optimizer::NativeOptimizer;
 use crate::codegen::c_transpiler::memory_management::{MemoryCodeGenerator, MemoryStrategy};
 use crate::codegen::c_transpiler::imports::{ImportAnalyzer, ModuleInfo, ModuleType};
 use crate::codegen::c_transpiler::module_system::ModuleCompiler;
-use anyhow::{Result, Context};
+use anyhow::Result;
 
 /// FFI function signature information
 #[derive(Debug, Clone)]
@@ -59,6 +59,8 @@ pub struct OptimizedNativeTranspiler {
     module_compiler: Option<ModuleCompiler>,
     /// Build directory for compiled modules
     build_dir: Option<PathBuf>,
+    /// Struct field types (class_name -> field_name -> type)
+    struct_fields: HashMap<String, HashMap<String, NativeType>>,
 }
 
 impl OptimizedNativeTranspiler {
@@ -78,6 +80,7 @@ impl OptimizedNativeTranspiler {
             import_analyzer: ImportAnalyzer::new(),
             module_compiler: None,
             build_dir: None,
+            struct_fields: HashMap::new(),
         }
     }
 
@@ -629,30 +632,226 @@ impl OptimizedNativeTranspiler {
         if let Statement::ClassDef { name, bases, body, .. } = stmt {
             let mut code = String::new();
 
+            // Extract fields and methods from class body
+            let mut init_method = None;
+            let mut class_methods = Vec::new();
+            let mut class_fields = Vec::new();
+
+            for item in body {
+                if let Statement::FunctionDef { name: method_name, params, return_type, body: method_body, .. } = item {
+                    if method_name == "__init__" {
+                        init_method = Some((params, method_body));
+                        // Extract fields from __init__ method
+                        for stmt in method_body {
+                            if let Statement::AttributeAssignment { object, name: field_name, value } = stmt {
+                                if let Expr::Identifier(obj_name) = object {
+                                    if obj_name == "self" {
+                                        // Infer field type from the value or params
+                                        let field_type = self.infer_field_type(field_name, params, value)?;
+                                        class_fields.push((field_name.clone(), field_type));
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        class_methods.push((method_name.clone(), params.clone(), return_type.clone(), method_body.clone()));
+                    }
+                }
+            }
+
+            // Generate struct definition
             code.push_str(&format!("// Class: {}\n", name));
-            code.push_str(&format!("struct {}_t {{\n", name));
+            code.push_str(&format!("struct {} {{\n", name));
 
             // Add base class field if inheritance
             if !bases.is_empty() {
                 if let Expr::Identifier(base_name) = &bases[0] {
-                    code.push_str(&format!("    struct {}_t base;\n", base_name));
+                    code.push_str(&format!("    struct {} base;\n", base_name));
                 }
             }
 
             // Add reference counting
             code.push_str("    int ref_count;\n");
 
-            // Extract fields from body (simplified)
-            code.push_str("    // Fields would be extracted from body\n");
+            // Add class fields with native types
+            let mut field_map = HashMap::new();
+            for (field_name, field_type) in &class_fields {
+                code.push_str(&format!("    {} {};\n", field_type.to_c_type(), field_name));
+                field_map.insert(field_name.clone(), field_type.clone());
+            }
+
+            // Store field types for type inference
+            self.struct_fields.insert(name.clone(), field_map);
 
             code.push_str("};\n\n");
 
-            // Constructor and destructor would be generated here
+            // Generate constructor function
+            if let Some((init_params, init_body)) = init_method {
+                code.push_str(&self.generate_constructor(name, init_params, &class_fields, init_body)?);
+                code.push_str("\n");
+            }
+
+            // Generate methods
+            for (method_name, params, return_type, method_body) in &class_methods {
+                code.push_str(&self.generate_method(name, method_name, params, return_type, method_body)?);
+                code.push_str("\n");
+            }
 
             Ok(code)
         } else {
             Err("Expected ClassDef statement".to_string())
         }
+    }
+
+    fn infer_field_type(&self, field_name: &str, init_params: &[Param], value: &Expr) -> Result<NativeType, String> {
+        // First, check if the field is assigned from a parameter
+        for param in init_params {
+            if let Expr::Identifier(param_name) = value {
+                if &param.name == param_name {
+                    // Field is assigned from parameter, use parameter's type
+                    if let Some(ref typ) = param.type_annotation {
+                        return Ok(self.map_type_to_native(typ));
+                    }
+                }
+            }
+        }
+
+        // Otherwise, infer from the value expression
+        self.infer_expr_type(value)
+    }
+
+    fn infer_struct_field_type(&self, class_name: &str, field_name: &str) -> Result<NativeType, String> {
+        if let Some(fields) = self.struct_fields.get(class_name) {
+            if let Some(field_type) = fields.get(field_name) {
+                return Ok(field_type.clone());
+            }
+        }
+        Ok(NativeType::Dynamic)
+    }
+
+    fn generate_constructor(&mut self, class_name: &str, params: &[Param], fields: &[(String, NativeType)], body: &[Statement]) -> Result<String, String> {
+        let mut code = String::new();
+
+        // Constructor function signature: ClassName(param1, param2, ...) -> ClassName*
+        code.push_str(&format!("struct {}* {}(", class_name, class_name));
+
+        // Skip 'self' parameter in constructor signature
+        let mut first = true;
+        for param in params {
+            if param.name == "self" {
+                continue;
+            }
+            if !first {
+                code.push_str(", ");
+            }
+            first = false;
+
+            let param_type = param.type_annotation.as_ref()
+                .map(|t| self.map_type_to_native(t))
+                .unwrap_or(NativeType::Dynamic);
+            code.push_str(&format!("{} {}", param_type.to_c_type(), param.name));
+        }
+
+        if first {
+            code.push_str("void");
+        }
+
+        code.push_str(") {\n");
+
+        // Allocate struct
+        code.push_str(&format!("    struct {}* self = (struct {}*)malloc(sizeof(struct {}));\n",
+            class_name, class_name, class_name));
+        code.push_str("    if (!self) return NULL;\n");
+        code.push_str("    self->ref_count = 1;\n");
+
+        // Initialize fields from constructor body
+        self.indent_level += 1;
+        self.context.set_variable_type("self".to_string(), NativeType::Struct(class_name.to_string()));
+
+        for stmt in body {
+            code.push_str(&self.transpile_statement(stmt)?);
+        }
+
+        self.indent_level -= 1;
+
+        code.push_str("    return self;\n");
+        code.push_str("}\n");
+
+        Ok(code)
+    }
+
+    fn generate_method(&mut self, class_name: &str, method_name: &str, params: &[Param], return_type: &Option<Type>, body: &[Statement]) -> Result<String, String> {
+        let mut code = String::new();
+
+        // Method signature: ClassName_method_name(self, param1, param2, ...)
+        let method_c_name = format!("{}_{}", class_name, method_name);
+
+        let ret_type = return_type.as_ref()
+            .map(|t| self.map_type_to_native(t))
+            .unwrap_or(NativeType::Void);
+
+        // Build parameter types vector for function signature
+        let mut param_types = Vec::new();
+
+        code.push_str(&format!("{} {}(", ret_type.to_c_type(), method_c_name));
+
+        // Clear local scope
+        self.context.clear_local_variables();
+
+        // Add parameters
+        for (i, param) in params.iter().enumerate() {
+            if i > 0 {
+                code.push_str(", ");
+            }
+
+            let param_type = if param.name == "self" {
+                NativeType::Struct(class_name.to_string())
+            } else {
+                param.type_annotation.as_ref()
+                    .map(|t| self.map_type_to_native(t))
+                    .unwrap_or(NativeType::Dynamic)
+            };
+
+            // Store parameter type in context
+            self.context.set_variable_type(param.name.clone(), param_type.clone());
+
+            // Add to param_types for function signature
+            param_types.push(param_type.clone());
+
+            // For self, use struct pointer type
+            if param.name == "self" {
+                code.push_str(&format!("struct {}* {}", class_name, param.name));
+            } else {
+                code.push_str(&format!("{} {}", param_type.to_c_type(), param.name));
+            }
+        }
+
+        if params.is_empty() {
+            code.push_str("void");
+        }
+
+        code.push_str(") {\n");
+
+        // Register method signature for type inference
+        use crate::codegen::c_transpiler::optimized_native::FunctionSignature;
+        self.function_signatures.insert(
+            method_c_name.clone(),
+            FunctionSignature {
+                param_types,
+                return_type: ret_type.clone(),
+            }
+        );
+
+        // Method body
+        self.indent_level += 1;
+        for stmt in body {
+            code.push_str(&self.transpile_statement(stmt)?);
+        }
+        self.indent_level -= 1;
+
+        code.push_str("}\n");
+
+        Ok(code)
     }
 
     fn transpile_function(&mut self, stmt: &Statement) -> Result<String, String> {
@@ -973,8 +1172,26 @@ impl OptimizedNativeTranspiler {
                 }
             }
             Statement::AttributeAssignment { object, name, value } => {
-                code.push_str(&self.transpile_expr(object)?);
-                code.push_str(".");
+                // Check if object is a struct pointer (use -> instead of .)
+                let obj_code = self.transpile_expr(object)?;
+
+                // Check if it's a simple identifier that's a struct pointer
+                let use_arrow = if let Expr::Identifier(obj_name) = object {
+                    if let Some(obj_type) = self.context.get_variable_type(obj_name) {
+                        matches!(obj_type, NativeType::Struct(_))
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                code.push_str(&obj_code);
+                if use_arrow {
+                    code.push_str("->");
+                } else {
+                    code.push_str(".");
+                }
                 code.push_str(name);
                 code.push_str(" = ");
                 code.push_str(&self.transpile_expr(value)?);
@@ -1100,9 +1317,19 @@ impl OptimizedNativeTranspiler {
                         // Translate to module-prefixed name (e.g., math.pi -> tauraro_math_pi)
                         return Ok(format!("tauraro_{}_{}", module_name, name));
                     }
+
+                    // Check if it's a struct pointer (self or other object)
+                    if let Some(obj_type) = self.context.get_variable_type(module_name) {
+                        if matches!(obj_type, NativeType::Struct(_)) {
+                            // Use pointer dereference -> for struct pointers
+                            return Ok(format!("{}->{}", module_name, name));
+                        }
+                    }
                 }
-                // Regular attribute access (e.g., self.x or obj.field)
-                Ok(format!("{}.{}", self.transpile_expr(object)?, name))
+
+                // Regular attribute access (e.g., obj.field for non-pointer)
+                let obj_code = self.transpile_expr(object)?;
+                Ok(format!("{}.{}", obj_code, name))
             }
             Expr::Compare { left, ops, comparators } => {
                 // Simplified comparison
@@ -1138,6 +1365,29 @@ impl OptimizedNativeTranspiler {
             }
             Expr::FormatString { parts } => {
                 self.transpile_format_string(parts)
+            }
+            Expr::MethodCall { object, method, args, .. } => {
+                // Convert method call to C function call: obj.method(args) -> ClassName_method(obj, args)
+                // First, get the object's type
+                if let Expr::Identifier(obj_name) = object.as_ref() {
+                    if let Some(NativeType::Struct(class_name)) = self.context.get_variable_type(obj_name) {
+                        // Generate method call: ClassName_method(obj, args)
+                        let func_name = format!("{}_{}", class_name, method);
+                        let mut code = format!("{}({}", func_name, obj_name);
+
+                        for arg in args {
+                            code.push_str(", ");
+                            code.push_str(&self.transpile_expr(arg)?);
+                        }
+
+                        code.push(')');
+                        Ok(code)
+                    } else {
+                        Err(format!("Method call on non-struct object: {}.{}", obj_name, method))
+                    }
+                } else {
+                    Err("Complex method calls not yet supported".to_string())
+                }
             }
             _ => Ok("/* unsupported expr */".to_string()),
         }
@@ -1250,20 +1500,27 @@ impl OptimizedNativeTranspiler {
     }
 
     fn transpile_function_call(&mut self, func: &Expr, args: &[Expr]) -> Result<String, String> {
-        // Check if this is a module function call (e.g., math.sqrt(x))
-        let func_name = if let Expr::Attribute { object, name } = func {
-            if let Expr::Identifier(module_name) = object.as_ref() {
-                if self.import_analyzer.modules.contains_key(module_name) {
-                    // Translate to module-prefixed function name
-                    format!("tauraro_{}_{}_native", module_name, name)
+        // Check if this is a method call or module function call
+        let (func_name, is_method_call, method_object) = if let Expr::Attribute { object, name } = func {
+            if let Expr::Identifier(module_or_obj_name) = object.as_ref() {
+                if self.import_analyzer.modules.contains_key(module_or_obj_name) {
+                    // Module function call (e.g., math.sqrt(x))
+                    (format!("tauraro_{}_{}_native", module_or_obj_name, name), false, None)
                 } else {
-                    return Err(format!("Method calls not yet supported: {}.{}", module_name, name));
+                    // Check if it's a method call on an object
+                    let obj_type = self.context.get_variable_type(module_or_obj_name);
+                    if let Some(NativeType::Struct(class_name)) = obj_type {
+                        // Method call (e.g., p.get_x())
+                        (format!("{}_{}", class_name, name), true, Some(object.as_ref().clone()))
+                    } else {
+                        return Err(format!("Unknown method call: {}.{}", module_or_obj_name, name));
+                    }
                 }
             } else {
                 return Err("Complex method calls not supported yet".to_string());
             }
         } else if let Expr::Identifier(name) = func {
-            name.clone()
+            (name.clone(), false, None)
         } else {
             return Err("Complex function calls not supported yet".to_string());
         };
@@ -1362,10 +1619,20 @@ impl OptimizedNativeTranspiler {
         // Check if this is a user-defined function with known signature
         let func_signature = self.function_signatures.get(&func_name).cloned();
 
+        // For method calls, inject object as first parameter (self)
+        let mut arg_index = 0;
+        if is_method_call {
+            if let Some(obj) = method_object {
+                code.push_str(&self.transpile_expr(&obj)?);
+                arg_index = 1;
+            }
+        }
+
         for (i, arg) in args.iter().enumerate() {
-            if i > 0 {
+            if arg_index > 0 {
                 code.push_str(", ");
             }
+            arg_index += 1;
 
             let arg_code = self.transpile_expr(arg)?;
 
@@ -1391,6 +1658,12 @@ impl OptimizedNativeTranspiler {
                 code.push_str(&arg_code);
             }
         }
+
+        // If method call with no args, still need to close after self
+        if is_method_call && args.is_empty() && arg_index == 1 {
+            // Already added self, just close
+        }
+
         code.push(')');
 
         Ok(code)
@@ -1690,14 +1963,23 @@ impl OptimizedNativeTranspiler {
             }
             Expr::Attribute { object, name } => {
                 // Check if this is a module attribute (e.g., math.pi)
-                if let Expr::Identifier(module_name) = object.as_ref() {
-                    if self.import_analyzer.modules.contains_key(module_name) {
+                if let Expr::Identifier(obj_name) = object.as_ref() {
+                    if self.import_analyzer.modules.contains_key(obj_name) {
                         // Infer type based on module and attribute name
-                        match (module_name.as_str(), name.as_str()) {
+                        match (obj_name.as_str(), name.as_str()) {
                             ("math", "pi" | "e") => NativeType::Float,
                             _ => NativeType::Dynamic,
                         }
                     } else {
+                        // Check if it's a struct field access (e.g., self.x, p.x)
+                        if let Some(obj_type) = self.context.get_variable_type(obj_name) {
+                            if let NativeType::Struct(class_name) = obj_type {
+                                // Look up field type in the struct definition
+                                // For now, we'll need to track struct field types
+                                // This requires storing class field info during transpile_class
+                                return self.infer_struct_field_type(&class_name, name);
+                            }
+                        }
                         NativeType::Dynamic
                     }
                 } else {
@@ -1714,10 +1996,41 @@ impl OptimizedNativeTranspiler {
             }
             Expr::Compare { .. } => NativeType::Bool,
             Expr::Call { func, .. } => {
-                // Check if it's a user-defined function with known return type
+                // Check if it's a constructor call (class name)
                 if let Expr::Identifier(func_name) = func.as_ref() {
+                    // Check if this is a class constructor
+                    if self.struct_fields.contains_key(func_name) {
+                        return Ok(NativeType::Struct(func_name.clone()));
+                    }
+                    // Check if it's a user-defined function with known return type
                     if let Some(sig) = self.function_signatures.get(func_name) {
                         return Ok(sig.return_type.clone());
+                    }
+                }
+                // Check if it's a method call
+                if let Expr::Attribute { object, name } = func.as_ref() {
+                    if let Expr::Identifier(obj_name) = object.as_ref() {
+                        if let Some(NativeType::Struct(class_name)) = self.context.get_variable_type(obj_name) {
+                            // Look up method return type
+                            // For now, check if method is registered in function_signatures
+                            let method_name = format!("{}_{}", class_name, name);
+                            if let Some(sig) = self.function_signatures.get(&method_name) {
+                                return Ok(sig.return_type.clone());
+                            }
+                        }
+                    }
+                }
+                NativeType::Dynamic
+            }
+            Expr::MethodCall { object, method, .. } => {
+                // Infer return type of method call
+                if let Expr::Identifier(obj_name) = object.as_ref() {
+                    if let Some(NativeType::Struct(class_name)) = self.context.get_variable_type(obj_name) {
+                        // Look up method return type
+                        let method_name = format!("{}_{}", class_name, method);
+                        if let Some(sig) = self.function_signatures.get(&method_name) {
+                            return Ok(sig.return_type.clone());
+                        }
                     }
                 }
                 NativeType::Dynamic
