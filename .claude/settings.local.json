@@ -131,7 +131,10 @@
       "Bash(for:*)",
       "Bash(do echo \"\")",
       "Bash(./build/$test.exe)",
-      "Bash(./build/test_oop.exe)"
+      "Bash(./build/test_oop.exe)",
+      "Bash(./target/debug/tauraro.exe:*)",
+      "Bash(./test_oop_simple.exe:*)",
+      "Bash(./test_oop_print.exe:*)"
     ],
     "deny": [],
     "ask": []

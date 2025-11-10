@@ -1,0 +1,15 @@
+# Test method calls in print statements
+
+class Calculator:
+    def __init__(self, value: int):
+        self.value = value
+
+    def add(self, x: int) -> int:
+        return self.value + x
+
+    def multiply(self, x: int) -> int:
+        return self.value * x
+
+calc: Calculator = Calculator(10)
+print(calc.add(5))
+print(calc.multiply(3))
