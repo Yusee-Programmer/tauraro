@@ -130,7 +130,8 @@
       "Bash(./build/test_07.exe)",
       "Bash(for:*)",
       "Bash(do echo \"\")",
-      "Bash(./build/$test.exe)"
+      "Bash(./build/$test.exe)",
+      "Bash(./build/test_oop.exe)"
     ],
     "deny": [],
     "ask": []
