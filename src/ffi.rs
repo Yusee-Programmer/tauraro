@@ -135,14 +135,40 @@ impl FFIManager {
     fn add_default_search_paths(&mut self) {
         #[cfg(target_os = "windows")]
         {
+            // Current directory (highest priority)
+            if let Ok(current_dir) = std::env::current_dir() {
+                self.search_paths.push(current_dir);
+            }
+
             // Windows system directories
             if let Ok(sys_dir) = std::env::var("SystemRoot") {
                 self.search_paths.push(PathBuf::from(format!("{}\\System32", sys_dir)));
                 self.search_paths.push(PathBuf::from(format!("{}\\SysWOW64", sys_dir)));
             }
-            // Current directory
-            if let Ok(current_dir) = std::env::current_dir() {
-                self.search_paths.push(current_dir);
+
+            // Common MSYS2/MinGW paths
+            let common_paths = vec![
+                "C:\\msys64\\mingw64\\bin",
+                "C:\\msys64\\mingw32\\bin",
+                "C:\\msys64\\usr\\bin",
+                "C:\\mingw64\\bin",
+                "C:\\mingw32\\bin",
+            ];
+            for path in common_paths {
+                let path_buf = PathBuf::from(path);
+                if path_buf.exists() {
+                    self.search_paths.push(path_buf);
+                }
+            }
+
+            // Check PATH environment variable
+            if let Ok(path_var) = std::env::var("PATH") {
+                for path in path_var.split(';') {
+                    let path_buf = PathBuf::from(path);
+                    if path_buf.exists() && !self.search_paths.contains(&path_buf) {
+                        self.search_paths.push(path_buf);
+                    }
+                }
             }
         }
 
@@ -203,39 +229,66 @@ impl FFIManager {
 
     /// Find a library in the search paths with platform-specific extensions
     fn find_library(&self, library_name: &str) -> Result<PathBuf> {
-        // Check if it's already a full path
+        // Check if it's already a full path (absolute)
         let path = Path::new(library_name);
-        if path.is_absolute() && path.exists() {
-            return Ok(path.to_path_buf());
+        if path.is_absolute() {
+            if path.exists() {
+                return Ok(path.to_path_buf());
+            } else {
+                return Err(anyhow!("Absolute path does not exist: {}", library_name));
+            }
         }
 
-        // Get platform-specific extensions
+        // Check if it's a relative path with directory components
+        if library_name.contains('/') || library_name.contains('\\') {
+            if path.exists() {
+                return Ok(path.to_path_buf());
+            } else {
+                return Err(anyhow!("Relative path does not exist: {}", library_name));
+            }
+        }
+
+        // Check if the library name already has a known extension
+        let has_extension = path.extension().is_some();
         let extensions = self.get_platform_extensions();
+
+        // First, try the library name as-is in all search paths
+        if has_extension {
+            for search_path in &self.search_paths {
+                let candidate = search_path.join(library_name);
+                if candidate.exists() {
+                    return Ok(candidate);
+                }
+            }
+        }
 
         // Try with different extensions and prefixes
         for search_path in &self.search_paths {
             for ext in &extensions {
-                // Try with extension
-                let mut candidate = search_path.join(library_name);
-                candidate.set_extension(ext);
-                if candidate.exists() {
-                    return Ok(candidate);
-                }
-
-                // Try with lib prefix (Unix-like systems)
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let lib_name = format!("lib{}", library_name);
-                    candidate = search_path.join(&lib_name);
+                // If no extension, try adding one
+                if !has_extension {
+                    let mut candidate = search_path.join(library_name);
                     candidate.set_extension(ext);
                     if candidate.exists() {
                         return Ok(candidate);
+                    }
+
+                    // Try with lib prefix (Unix-like systems)
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        let lib_name = format!("lib{}", library_name);
+                        candidate = search_path.join(&lib_name);
+                        candidate.set_extension(ext);
+                        if candidate.exists() {
+                            return Ok(candidate);
+                        }
                     }
                 }
             }
         }
 
-        // Try loading directly (system might find it)
+        // Last resort: try loading directly (system might find it via DLL search order)
+        // But only if we haven't found it in our search paths
         Ok(PathBuf::from(library_name))
     }
 
@@ -294,10 +347,28 @@ impl FFIManager {
         let library_path = self.find_library(library_name)
             .context(format!("Failed to find library: {}", library_name))?;
 
+        // On Windows, add the library's directory to the DLL search path
+        // so that dependency DLLs can be found
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(parent_dir) = library_path.parent() {
+                if let Some(dir_str) = parent_dir.to_str() {
+                    // Temporarily add to PATH so Windows can find dependency DLLs
+                    if let Ok(current_path) = std::env::var("PATH") {
+                        if !current_path.contains(dir_str) {
+                            let new_path = format!("{};{}", dir_str, current_path);
+                            std::env::set_var("PATH", new_path);
+                        }
+                    }
+                }
+            }
+        }
+
         // Load the library
         let library = unsafe {
             Library::new(&library_path)
-                .context(format!("Failed to load library from path: {:?}", library_path))?
+                .map_err(|e| anyhow!("Failed to load library from path: {:?}\nReason: {}\n\nThis usually means the DLL has missing dependencies. Try running:\n  - On Windows: Use 'Dependencies.exe' or 'dumpbin /dependents {}' to see missing DLLs\n  - Make sure all dependency DLLs are in the same directory or in your PATH",
+                    library_path, e, library_path.display()))?
         };
 
         println!("Successfully loaded library: {} from {:?}", library_name, library_path);

@@ -76,7 +76,7 @@ if _is_windows:
     print("  Platform: " + _platform_lib)
 elif _is_macos:
     global _cairo_lib, _platform_lib
-    _cairo_lib = "libcairo.2.dylib"
+    _cairo_lib = r"C:\msys64\mingw64\bin\libcairo.2.dylib"
     _platform_lib = "libcocoa"
     print("  Cairo: " + _cairo_lib)
     print("  Platform: Cocoa framework")
@@ -185,9 +185,9 @@ class Size:
         self.width = width
         self.height = height
 
-# Button class
-class Button:
-    # Represents a clickable button widget
+# Legacy Button class (kept for backward compatibility with old examples)
+class ButtonLegacy:
+    # Represents a clickable button widget (legacy version)
     def __init__(self, x, y, width, height, text, callback=None):
         self.rect = Rect(x, y, width, height)
         self.text = text
@@ -239,9 +239,9 @@ class Button:
         print("    Size: " + str(self.rect.width) + "x" + str(self.rect.height))
         print("    Text: " + self.text)
 
-# Window class
-class Window:
-    # Represents a GUI window
+# Window class (legacy, for backward compatibility)
+class WindowLegacy:
+    # Represents a GUI window (legacy version)
     def __init__(self, title, width, height):
         self.title = title
         self.width = width
@@ -355,6 +355,8 @@ def init():
     try:
         if _is_windows:
             load_library(_platform_lib)
+            # Also load kernel32 for GetModuleHandleA (needed for window creation)
+            load_library("kernel32.dll")
         # For Linux and macOS, libraries are typically pre-loaded
         _platform_loaded = True
         print("  [OK] Platform library loaded")
@@ -366,6 +368,409 @@ def init():
     print("  [OK] GuiDesktop initialized successfully!")
     print("")
     return True
+
+# Global Cairo and Win32 function handles
+_cairo_funcs = {}
+_win32_funcs = {}
+
+# Define Win32 FFI functions
+def define_win32_functions():
+    # Define Win32 functions for actual window creation
+    global _win32_funcs, _platform_lib
+
+    print("\n[Win32 FFI] Defining Win32 functions...")
+
+    try:
+        # Window class and creation
+        _win32_funcs["RegisterClassExA"] = define_function(_platform_lib, "RegisterClassExA", "int32", ["pointer"])
+        _win32_funcs["CreateWindowExA"] = define_function(_platform_lib, "CreateWindowExA", "pointer", ["int32", "pointer", "pointer", "int32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
+        _win32_funcs["ShowWindow"] = define_function(_platform_lib, "ShowWindow", "int32", ["pointer", "int32"])
+        _win32_funcs["UpdateWindow"] = define_function(_platform_lib, "UpdateWindow", "int32", ["pointer"])
+
+        # Message loop
+        _win32_funcs["GetMessageA"] = define_function(_platform_lib, "GetMessageA", "int32", ["pointer", "pointer", "int32", "int32"])
+        _win32_funcs["TranslateMessage"] = define_function(_platform_lib, "TranslateMessage", "int32", ["pointer"])
+        _win32_funcs["DispatchMessageA"] = define_function(_platform_lib, "DispatchMessageA", "pointer", ["pointer"])
+        _win32_funcs["DefWindowProcA"] = define_function(_platform_lib, "DefWindowProcA", "pointer", ["pointer", "int32", "pointer", "pointer"])
+        _win32_funcs["PostQuitMessage"] = define_function(_platform_lib, "PostQuitMessage", "void", ["int32"])
+
+        # Device context and painting
+        _win32_funcs["BeginPaint"] = define_function(_platform_lib, "BeginPaint", "pointer", ["pointer", "pointer"])
+        _win32_funcs["EndPaint"] = define_function(_platform_lib, "EndPaint", "int32", ["pointer", "pointer"])
+        _win32_funcs["GetDC"] = define_function(_platform_lib, "GetDC", "pointer", ["pointer"])
+        _win32_funcs["ReleaseDC"] = define_function(_platform_lib, "ReleaseDC", "int32", ["pointer", "pointer"])
+
+        print("  [OK] Win32 functions defined successfully")
+        return True
+
+    except Exception as e:
+        print("  [!] Failed to define Win32 functions: " + str(e))
+        return False
+
+# Define Cairo FFI functions
+def define_cairo_functions():
+    # Define all Cairo functions we need for rendering
+    global _cairo_funcs, _cairo_lib
+
+    print("\n[Cairo FFI] Defining Cairo functions...")
+
+    try:
+        # Image surface functions
+        _cairo_funcs["image_surface_create"] = define_function(_cairo_lib, "cairo_image_surface_create", "pointer", ["int32", "int32", "int32"])
+        _cairo_funcs["surface_write_to_png"] = define_function(_cairo_lib, "cairo_surface_write_to_png", "int32", ["pointer", "pointer"])
+        _cairo_funcs["surface_destroy"] = define_function(_cairo_lib, "cairo_surface_destroy", "void", ["pointer"])
+        _cairo_funcs["surface_flush"] = define_function(_cairo_lib, "cairo_surface_flush", "void", ["pointer"])
+
+        # Context functions
+        _cairo_funcs["create"] = define_function(_cairo_lib, "cairo_create", "pointer", ["pointer"])
+        _cairo_funcs["destroy"] = define_function(_cairo_lib, "cairo_destroy", "void", ["pointer"])
+
+        # Drawing functions
+        _cairo_funcs["set_source_rgba"] = define_function(_cairo_lib, "cairo_set_source_rgba", "void", ["pointer", "double", "double", "double", "double"])
+        _cairo_funcs["rectangle"] = define_function(_cairo_lib, "cairo_rectangle", "void", ["pointer", "double", "double", "double", "double"])
+        _cairo_funcs["fill"] = define_function(_cairo_lib, "cairo_fill", "void", ["pointer"])
+        _cairo_funcs["stroke"] = define_function(_cairo_lib, "cairo_stroke", "void", ["pointer"])
+        _cairo_funcs["paint"] = define_function(_cairo_lib, "cairo_paint", "void", ["pointer"])
+
+        # Path functions
+        _cairo_funcs["move_to"] = define_function(_cairo_lib, "cairo_move_to", "void", ["pointer", "double", "double"])
+        _cairo_funcs["line_to"] = define_function(_cairo_lib, "cairo_line_to", "void", ["pointer", "double", "double"])
+
+        # Line properties
+        _cairo_funcs["set_line_width"] = define_function(_cairo_lib, "cairo_set_line_width", "void", ["pointer", "double"])
+
+        # Text functions
+        _cairo_funcs["select_font_face"] = define_function(_cairo_lib, "cairo_select_font_face", "void", ["pointer", "pointer", "int32", "int32"])
+        _cairo_funcs["set_font_size"] = define_function(_cairo_lib, "cairo_set_font_size", "void", ["pointer", "double"])
+        _cairo_funcs["show_text"] = define_function(_cairo_lib, "cairo_show_text", "void", ["pointer", "pointer"])
+        _cairo_funcs["text_extents"] = define_function(_cairo_lib, "cairo_text_extents", "void", ["pointer", "pointer", "pointer"])
+
+        # Win32 surface (for rendering to Windows HDC)
+        _cairo_funcs["win32_surface_create"] = define_function(_cairo_lib, "cairo_win32_surface_create", "pointer", ["pointer"])
+        _cairo_funcs["win32_surface_create_with_dib"] = define_function(_cairo_lib, "cairo_win32_surface_create_with_dib", "pointer", ["int32", "int32", "int32"])
+
+        # Advanced drawing
+        _cairo_funcs["arc"] = define_function(_cairo_lib, "cairo_arc", "void", ["pointer", "double", "double", "double", "double", "double"])
+        _cairo_funcs["curve_to"] = define_function(_cairo_lib, "cairo_curve_to", "void", ["pointer", "double", "double", "double", "double", "double", "double"])
+        _cairo_funcs["close_path"] = define_function(_cairo_lib, "cairo_close_path", "void", ["pointer"])
+        _cairo_funcs["clip"] = define_function(_cairo_lib, "cairo_clip", "void", ["pointer"])
+        _cairo_funcs["save"] = define_function(_cairo_lib, "cairo_save", "void", ["pointer"])
+        _cairo_funcs["restore"] = define_function(_cairo_lib, "cairo_restore", "void", ["pointer"])
+
+        print("  [OK] Cairo functions defined successfully")
+        return True
+
+    except Exception as e:
+        print("  [!] Failed to define Cairo functions: " + str(e))
+        return False
+
+# Label widget
+class Label:
+    # A text label widget
+    def __init__(self, text):
+        self.text = text
+        self.rect = Rect(0, 0, 100, 30)
+        self.text_color = Colors.FOREGROUND
+        self.bg_color = None
+        self.font_family = "Sans"
+        self.font_size = 12.0
+        self.align_x = 0.0  # 0=left, 0.5=center, 1=right
+        self.align_y = 0.5  # vertical alignment
+
+    def set_bounds(self, x, y, width, height):
+        # Set the position and size
+        # Workaround: Create new Rect to avoid Tauraro self confusion
+        self.rect = Rect(x, y, width, height)
+
+    def set_font(self, family, size):
+        # Set the font
+        self.font_family = family
+        self.font_size = float(size)
+
+    def set_alignment(self, align_x, align_y):
+        # Set text alignment (0.0 to 1.0)
+        self.align_x = align_x
+        self.align_y = align_y
+
+    def draw(self, ctx):
+        # Draw the label
+        if self.bg_color:
+            # Draw background if set
+            print("  Drawing label background at (" + str(self.rect.x) + ", " + str(self.rect.y) + ")")
+
+        print("  Drawing label: '" + self.text + "' at (" + str(self.rect.x) + ", " + str(self.rect.y) + ")")
+        print("    Font: " + self.font_family + " " + str(self.font_size) + "pt")
+
+# Button class (enhanced version for new examples)
+class Button:
+    # Button widget with set_bounds method
+    def __init__(self, text, callback=None):
+        self.text = text
+        self.callback = callback
+        self.rect = Rect(0, 0, 100, 35)
+        self.bg_color = Colors.BUTTON_BG
+        self.text_color = Colors.FOREGROUND
+        self.border_color = Colors.BORDER
+        self.is_hovered = False
+        self.is_pressed = False
+
+    def set_bounds(self, x, y, width, height):
+        # Set the position and size
+        # Workaround: Create new Rect to avoid Tauraro self confusion
+        self.rect = Rect(x, y, width, height)
+
+    def contains(self, px, py):
+        # Check if point is inside button
+        return self.rect.contains(px, py)
+
+    def on_mouse_move(self, x, y):
+        # Handle mouse movement
+        self.is_hovered = self.contains(x, y)
+
+    def on_mouse_down(self, x, y):
+        # Handle mouse down
+        if self.contains(x, y):
+            self.is_pressed = True
+            return True
+        return False
+
+    def on_mouse_up(self, x, y):
+        # Handle mouse up
+        was_pressed = self.is_pressed
+        self.is_pressed = False
+        if was_pressed and self.contains(x, y):
+            if self.callback:
+                self.callback()
+            return True
+        return False
+
+    def draw(self, ctx):
+        # Draw the button
+        if self.is_pressed:
+            bg = Colors.BUTTON_ACTIVE
+        elif self.is_hovered:
+            bg = Colors.BUTTON_HOVER
+        else:
+            bg = self.bg_color
+
+        print("  Drawing button: '" + self.text + "' at (" + str(self.rect.x) + ", " + str(self.rect.y) + ")")
+        print("    Size: " + str(self.rect.width) + "x" + str(self.rect.height))
+
+# Global dict to track current window (workaround for Tauraro list assignment bug)
+_window_holder = {"window": None}
+
+# Global dict to track widgets for current window (workaround for widget list issues)
+# Using dict with integer keys instead of list (Tauraro list assignment bug)
+_window_widgets = {}
+_widget_count = {"count": 0}
+
+# Helper functions for Application (workaround to avoid self issues)
+def _create_app_window(title, width, height):
+    # Helper to create window without needing self
+    global _window_holder, _window_widgets, _widget_count
+    w = Window(title, width, height)
+    # Store in dict (works better than list assignment in Tauraro)
+    _window_holder["window"] = w
+    # Reset widget dict and count
+    _window_widgets = {}
+    _widget_count["count"] = 0
+    return w
+
+def _render_app_window(output_filename):
+    # Helper to render window without needing self
+    global _window_holder
+
+    print("\n[Mock Render] Rendering application to: " + output_filename)
+
+    if _window_holder["window"] == None:
+        print("  [!] No windows to render")
+        return False
+
+    # Draw the window
+    window = _window_holder["window"]
+    window.draw()
+
+    print("\n  [OK] Mock render complete")
+    print("  Note: Full Cairo rendering will be implemented in next version")
+
+    return True
+
+# Application class
+class Application:
+    # Main application class
+    def __init__(self, name):
+        self.name = name
+
+    def create_window(self, title, width, height):
+        # Use helper function to avoid self issues
+        return _create_app_window(title, width, height)
+
+    def run_mock_render(self, output_filename):
+        # Use helper function to avoid self issues
+        return _render_app_window(output_filename)
+
+# Window class
+class Window:
+    # Window with full feature set
+    def __init__(self, title, width, height):
+        self.title = title
+        self.width = width
+        self.height = height
+        self.x = 0
+        self.y = 0
+        self.background_color = Colors.BACKGROUND
+        self.widgets = []
+        self.is_running = False
+
+    def set_position(self, x, y):
+        # Set window position
+        self.x = x
+        self.y = y
+
+    def add_widget(self, widget):
+        # Add a widget to the window
+        # Use global dict with integer keys (avoids Tauraro list bug)
+        global _window_widgets, _widget_count
+        # Get current count
+        count = _widget_count["count"]
+        # Add widget with integer key
+        _window_widgets[count] = widget
+        # Increment count
+        _widget_count["count"] = count + 1
+
+    def handle_mouse_move(self, x, y):
+        # Handle mouse movement events
+        for widget in self.widgets:
+            if hasattr(widget, "on_mouse_move"):
+                widget.on_mouse_move(x, y)
+
+    def handle_mouse_down(self, x, y):
+        # Handle mouse down events
+        for widget in self.widgets:
+            if hasattr(widget, "on_mouse_down"):
+                if widget.on_mouse_down(x, y):
+                    return True
+        return False
+
+    def handle_mouse_up(self, x, y):
+        # Handle mouse up events
+        for widget in self.widgets:
+            if hasattr(widget, "on_mouse_up"):
+                if widget.on_mouse_up(x, y):
+                    return True
+        return False
+
+    def draw(self):
+        # Draw the window and all widgets
+        # Store in local variables to avoid Tauraro self confusion
+        global _window_widgets, _widget_count
+        win_title = self.title
+        win_x = self.x
+        win_y = self.y
+        win_width = self.width
+        win_height = self.height
+        win_bg = self.background_color
+
+        # Get widget count
+        widget_count = _widget_count["count"]
+
+        print("\n[Rendering Window: " + win_title + "]")
+        print("  Position: (" + str(win_x) + ", " + str(win_y) + ")")
+        print("  Size: " + str(win_width) + "x" + str(win_height))
+        print("  Background: " + win_bg.to_hex())
+        print("  Widgets: " + str(widget_count))
+
+        # Iterate through widgets by integer key
+        i = 0
+        while i < widget_count:
+            if i in _window_widgets:
+                widget = _window_widgets[i]
+                if hasattr(widget, "draw"):
+                    widget.draw(None)
+            i = i + 1
+
+    def show(self):
+        # Display the window (mock - prints to console)
+        print("\n[Showing Window: " + self.title + "]")
+        self.is_running = True
+        self.draw()
+        print("\n[Window displayed]")
+        return True
+
+    def show_native(self):
+        # Display actual native window using Win32 API
+        global _is_windows
+        print("\n[Creating Native Win32 Window: " + self.title + "]")
+
+        # Store window properties in local vars (avoid Tauraro self bugs)
+        win_title = self.title
+        win_width = self.width
+        win_height = self.height
+        win_x = self.x
+        win_y = self.y
+
+        # Check if we're on Windows
+        if not _is_windows:
+            print("  [!] Native windows only supported on Windows currently")
+            return False
+
+        try:
+            # Define Win32 functions (if not already defined)
+            print("  Defining Win32 functions...")
+            GetModuleHandleA = define_function("kernel32.dll", "GetModuleHandleA", "pointer", ["pointer"])
+            CreateWindowExA = define_function("user32.dll", "CreateWindowExA", "pointer", ["int32", "pointer", "pointer", "int32", "int32", "int32", "int32", "int32", "pointer", "pointer", "pointer", "pointer"])
+            ShowWindow = define_function("user32.dll", "ShowWindow", "int32", ["pointer", "int32"])
+            UpdateWindow = define_function("user32.dll", "UpdateWindow", "int32", ["pointer"])
+            MessageBoxA = define_function("user32.dll", "MessageBoxA", "int32", ["pointer", "pointer", "pointer", "int32"])
+            DestroyWindow = define_function("user32.dll", "DestroyWindow", "int32", ["pointer"])
+
+            # Get module handle
+            hInstance = call_function("kernel32.dll", "GetModuleHandleA", [0])
+
+            # Window styles
+            WS_OVERLAPPEDWINDOW = 13565952
+            WS_VISIBLE = 268435456
+
+            # Create window using BUTTON class (doesn't require custom WindowProc)
+            # Note: This creates a button-style window. Full custom windows require
+            # implementing WindowProc callbacks which is complex with FFI.
+            hwnd = call_function("user32.dll", "CreateWindowExA", [0, "BUTTON", win_title, WS_VISIBLE | WS_OVERLAPPEDWINDOW, win_x, win_y, win_width, win_height, 0, 0, hInstance, 0])
+
+            if hwnd != 0:
+                print("  [OK] Native window created! HWND: " + str(hwnd))
+
+                # Show the window
+                call_function("user32.dll", "ShowWindow", [hwnd, 5])
+                call_function("user32.dll", "UpdateWindow", [hwnd])
+
+                print("  [OK] Window visible on screen!")
+                print("")
+                print("  Note: This is a simplified window using the BUTTON class.")
+                print("  Full custom rendering and event handling requires WindowProc")
+                print("  callbacks, which will be implemented in a future version.")
+                print("")
+
+                # Show a message box to keep window visible
+                call_function("user32.dll", "MessageBoxA", [hwnd, "GuiDesktop window is now visible!\n\nClick OK to close.", win_title, 64])
+
+                # Destroy window
+                call_function("user32.dll", "DestroyWindow", [hwnd])
+                print("  [OK] Window closed")
+
+                return True
+            else:
+                print("  [!] Failed to create native window")
+                return False
+
+        except Exception as e:
+            print("  [!] Error creating native window: " + str(e))
+            return False
+
+    def run(self):
+        # Run the event loop
+        print("\n[Starting event loop for: " + self.title + "]")
+        self.show()
+        print("[Event loop complete]")
 
 print("\n[Status] GuiDesktop core module loaded")
 print("         Call guidesktop.init() to initialize the framework")
