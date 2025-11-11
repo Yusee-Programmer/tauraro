@@ -1,66 +1,131 @@
-# GTK Calculator Example
-# Demonstrates a simple calculator UI with grid layout
-
 print("GTK Calculator Example")
 print("======================")
+print("Simple calculator using GTK Grid layout")
+print("")
 
-# Import the GTK package
 import gtk
 
-# Initialize GTK and create application
+# Initialize GTK
 gtk.init_gtk()
-app = gtk.Application("Calculator")
 
 # Create main window
-window = app.create_window("Tauraro Calculator", 300, 400)
-window.set_border_width(10)
-window.set_resizable(False)
+window = gtk.Window("Tauraro Calculator", 400, 500)
 
-# Create main vertical box
-vbox = gtk.VBox(spacing=10)
-window.add(vbox)
+# Main vertical box
+main_vbox = gtk.Box(gtk.GTK_ORIENTATION_VERTICAL, 5)
 
-# Display (read-only entry)
+# Title
+title = gtk.Label("GTK Calculator")
+main_vbox.pack_start(title, False, False, 10)
+
+# Display Entry
 display = gtk.Entry()
 display.set_text("0")
-display.set_size(280, 50)
-vbox.pack_start(display, False, False, 0)
+main_vbox.pack_start(display, False, False, 10)
 
-# Create grid for buttons
-grid = gtk.Grid(row_spacing=5, column_spacing=5)
-vbox.pack_start(grid, True, True, 0)
+# Calculator buttons frame
+calc_frame = gtk.Frame("Calculator")
+grid = gtk.Grid()
+grid.set_row_spacing(5)
+grid.set_column_spacing(5)
 
-# Button labels in calculator layout
-buttons = [
-    ["7", "8", "9", "/"],
-    ["4", "5", "6", "*"],
-    ["1", "2", "3", "-"],
-    ["0", ".", "=", "+"],
-    ["C", "CE", "←", ""]
-]
+# Create calculator buttons
+btn_7 = gtk.Button("7")
+grid.attach(btn_7, 0, 0, 1, 1)
 
-# Create and add buttons to grid
-row = 0
-for button_row in buttons:
-    col = 0
-    for label in button_row:
-        if label:
-            btn = gtk.Button(label)
-            btn.set_size(65, 50)
-            grid.attach(btn, col, row, 1, 1)
-        col = col + 1
-    row = row + 1
+btn_8 = gtk.Button("8")
+grid.attach(btn_8, 1, 0, 1, 1)
 
-# Show everything
+btn_9 = gtk.Button("9")
+grid.attach(btn_9, 2, 0, 1, 1)
+
+btn_div = gtk.Button("/")
+grid.attach(btn_div, 3, 0, 1, 1)
+
+# Row 2
+btn_4 = gtk.Button("4")
+grid.attach(btn_4, 0, 1, 1, 1)
+
+btn_5 = gtk.Button("5")
+grid.attach(btn_5, 1, 1, 1, 1)
+
+btn_6 = gtk.Button("6")
+grid.attach(btn_6, 2, 1, 1, 1)
+
+btn_mul = gtk.Button("*")
+grid.attach(btn_mul, 3, 1, 1, 1)
+
+# Row 3
+btn_1 = gtk.Button("1")
+grid.attach(btn_1, 0, 2, 1, 1)
+
+btn_2 = gtk.Button("2")
+grid.attach(btn_2, 1, 2, 1, 1)
+
+btn_3 = gtk.Button("3")
+grid.attach(btn_3, 2, 2, 1, 1)
+
+btn_sub = gtk.Button("-")
+grid.attach(btn_sub, 3, 2, 1, 1)
+
+# Row 4
+btn_0 = gtk.Button("0")
+grid.attach(btn_0, 0, 3, 2, 1)
+
+btn_dot = gtk.Button(".")
+grid.attach(btn_dot, 2, 3, 1, 1)
+
+btn_add = gtk.Button("+")
+grid.attach(btn_add, 3, 3, 1, 1)
+
+# Row 5 - Special buttons
+btn_clear = gtk.Button("C")
+grid.attach(btn_clear, 0, 4, 1, 1)
+
+btn_del = gtk.Button("DEL")
+grid.attach(btn_del, 1, 4, 1, 1)
+
+btn_equals = gtk.Button("=")
+grid.attach(btn_equals, 2, 4, 2, 1)
+
+calc_frame.add(grid)
+main_vbox.pack_start(calc_frame, True, True, 5)
+
+# Operation indicators frame
+ops_frame = gtk.Frame("Current Operation")
+ops_vbox = gtk.Box(gtk.GTK_ORIENTATION_VERTICAL, 5)
+
+operation_label = gtk.Label("Ready")
+ops_vbox.pack_start(operation_label, False, False, 5)
+
+memory_label = gtk.Label("Memory: Empty")
+ops_vbox.pack_start(memory_label, False, False, 5)
+
+ops_frame.add(ops_vbox)
+main_vbox.pack_start(ops_frame, False, False, 5)
+
+# Information
+info_label = gtk.Label("Calculator Demo - UI Only (Event handling not implemented)")
+main_vbox.pack_start(info_label, False, False, 5)
+
+# Add main box to window
+window.add(main_vbox)
+
+# Show all widgets
 window.show_all()
 
-print("\nCalculator UI is now visible!")
-print("This demonstrates:")
-print("  - Grid layout for button arrangement")
-print("  - Custom widget sizing")
-print("  - Fixed window size (non-resizable)")
-print("\nNote: Button event handlers will be implemented in the next version.")
-print("Close the window to exit.")
+print("\n[OK] Calculator window is now visible!")
+print("      Features demonstrated:")
+print("      - Grid layout with precise widget positioning")
+print("      - Multiple buttons in grid arrangement")
+print("      - Entry widget for display")
+print("      - Frames for organization")
+print("      - Mix of single and multi-cell grid placements")
+print("      - 4x5 button grid (0-9, operators, functions)")
+print("\nNote: This is a UI demo. Event handling requires signal connections.")
+print("Close the window to exit the program.")
+print("")
 
-# Run the application
+# Run the GTK main loop
+app = gtk.Application("Calculator Example")
 app.run()

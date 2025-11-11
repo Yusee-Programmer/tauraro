@@ -271,13 +271,13 @@ pub enum Token {
     #[regex(r#"'{3}(?:[^']|'{1}[^']|'{2}[^'])*'{3}"#, |lex| lex.slice()[3..lex.slice().len()-3].to_string())]
     DocString(String),
 
-    // Comments (Python-style)
+    // Comments (Python-style) - tokenize but will be filtered out in lexer iterator
     #[regex(r"#[^\n]*", |lex| lex.slice()[1..].trim().to_string())]
     Comment(String),
 
-    // Whitespace
+    // Whitespace - skip all horizontal whitespace and line continuations
     #[regex(r"[ \t\r]+", logos::skip)]
-    #[regex(r"\\\n", logos::skip)]  // Line continuation (backslash followed by newline)
+    #[regex(r"\\\r?\n", logos::skip)]  // Line continuation (backslash followed by newline)
 
     #[regex(r"\n", |_| Token::Newline)]
     Newline,
@@ -401,7 +401,15 @@ impl<'a> Iterator for Lexer<'a> {
         match self.inner.next() {
             Some(Ok(token)) => {
                 let span = self.inner.span();
-                
+
+                // Filter out comments - skip them entirely like Python does
+                if matches!(token, Token::Comment(_)) {
+                    // Update column position for the comment
+                    self.column += span.end - span.start;
+                    // Recursively get the next token
+                    return self.next();
+                }
+
                 // Handle indentation at the start of a line (only after newlines)
                 if self.at_line_start && !matches!(token, Token::Newline | Token::Eof) {
                     // Get the line content to check indentation

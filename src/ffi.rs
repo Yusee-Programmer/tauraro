@@ -553,6 +553,27 @@ impl FFIManager {
                 }
             }
 
+            // No arguments, pointer return (e.g., gtk_entry_new)
+            (FFIType::Pointer | FFIType::ConstPointer, &[]) => {
+                unsafe {
+                    let func: unsafe extern "C" fn() -> *const c_void = std::mem::transmute(function.symbol_ptr);
+                    let result = func();
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
+            // Two pointer arguments, pointer return (e.g., gtk_scrolled_window_new)
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void) -> *const c_void =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2);
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
             // One int argument, int return
             (FFIType::Int | FFIType::Int32, &[FFIType::Int | FFIType::Int32]) => {
                 let arg = self.value_to_int(&args[0])?;
@@ -886,6 +907,137 @@ impl FFIManager {
                 Ok(Value::None)
             }
 
+            // GTK: gtk_init: (pointer, pointer) -> void
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void) = std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2);
+                }
+                Ok(Value::None)
+            }
+
+            // GTK: gtk_window_new, gtk_button_new_with_label, gtk_label_new: (pointer) -> pointer
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer | FFIType::String]) => {
+                let arg = if matches!(args[0], Value::Str(_)) {
+                    self.value_to_string(&args[0])
+                        .and_then(|s| CString::new(s).map_err(|e| anyhow!("{}", e)))
+                        .map(|cs| cs.as_ptr() as *const c_void)?
+                } else {
+                    self.value_to_pointer(&args[0])?
+                };
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> *const c_void = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
+            // GTK: gtk_window_new: (int32) -> pointer
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Int | FFIType::Int32]) => {
+                let arg = self.value_to_int(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int) -> *const c_void = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
+            // GTK: gtk_widget_show, gtk_widget_hide, gtk_widget_destroy: (pointer) -> void
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) = std::mem::transmute(function.symbol_ptr);
+                    func(arg);
+                }
+                Ok(Value::None)
+            }
+
+            // GTK: gtk_window_set_position: (pointer, int32) -> void
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_int) = std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2);
+                }
+                Ok(Value::None)
+            }
+
+            // GTK: gtk_progress_bar_set_fraction: (pointer, double) -> void
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Double | FFIType::Float]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_float(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_double) = std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2);
+                }
+                Ok(Value::None)
+            }
+
+            // GTK: gtk_window_set_title: (pointer, string) -> void
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::String | FFIType::Pointer | FFIType::ConstPointer]) => {
+                let widget_ptr = self.value_to_pointer(&args[0])?;
+                let text = self.value_to_string(&args[1])?;
+                let text_cstring = CString::new(text)?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_char) = std::mem::transmute(function.symbol_ptr);
+                    func(widget_ptr, text_cstring.as_ptr());
+                }
+                Ok(Value::None)
+            }
+
+            // GTK: gtk_window_set_default_size: (pointer, int32, int32) -> void
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_int, c_int) = std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2, arg3);
+                }
+                Ok(Value::None)
+            }
+
+            // GTK: gtk_box_new: (int32, int32) -> pointer
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_int(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int, c_int) -> *const c_void = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2);
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
+            // GTK: gtk_container_set_border_width: (pointer, uint32) -> void
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::UInt32 | FFIType::UInt]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, u32) = std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2 as u32);
+                }
+                Ok(Value::None)
+            }
+
+            // GTK: gtk_box_pack_start: (pointer, pointer, int32, int32, uint32) -> void
+            (FFIType::Void, params) if params.len() == 5 &&
+                matches!(params[0], FFIType::Pointer | FFIType::ConstPointer) &&
+                matches!(params[1], FFIType::Pointer | FFIType::ConstPointer) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                let arg4 = self.value_to_int(&args[3])?;
+                let arg5 = self.value_to_int(&args[4])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, c_int, c_int, u32) = std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2, arg3, arg4, arg5 as u32);
+                }
+                Ok(Value::None)
+            }
+
             // DefWindowProcA: (pointer, int, int, int) -> long
             (FFIType::Long | FFIType::Int | FFIType::Int32 | FFIType::Int64, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32 | FFIType::UInt | FFIType::UInt32, FFIType::Int | FFIType::Int32 | FFIType::Int64 | FFIType::UInt64, FFIType::Int | FFIType::Int32 | FFIType::Int64]) => {
                 let hwnd = self.value_to_pointer(&args[0])?;
@@ -991,9 +1143,8 @@ impl FFIManager {
                 },
                 FFIType::Pointer | FFIType::ConstPointer => {
                     let result: *mut c_void = cif.call(code_ptr, &ffi_args);
-                    // For now, we'll just return None for pointer results
-                    // In a more complete implementation, we might want to wrap pointers in a special type
-                    Value::None
+                    // Return pointer as integer (like the fallback implementation)
+                    Value::Int(result as usize as i64)
                 },
                 _ => {
                     return Err(anyhow!("Unsupported return type for libffi: {:?}", function.signature.return_type));

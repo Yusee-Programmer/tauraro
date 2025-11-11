@@ -2264,6 +2264,41 @@ impl SuperCompiler {
                 // TODO: Implement proper generator expressions
                 self.compile_list_comprehension(*element, generators)
             }
+            Expr::IfExp { condition, then_expr, else_expr } => {
+                // Compile ternary expression: condition ? then_expr : else_expr
+                // Python syntax: then_expr if condition else else_expr
+
+                // Compile the condition
+                let cond_reg = self.compile_expression(*condition)?;
+
+                // Allocate result register
+                let result_reg = self.allocate_register();
+
+                // Emit conditional jump to else branch if condition is false
+                // We'll update arg2 later to point to the else branch
+                let else_jump_idx = self.emit(OpCode::JumpIfFalse, cond_reg, 0, 0, self.current_line);
+
+                // Compile then branch
+                let then_reg = self.compile_expression(*then_expr)?;
+                self.emit(OpCode::MoveReg, then_reg, result_reg, 0, self.current_line);
+
+                // Jump to end after then branch
+                let end_jump_idx = self.emit(OpCode::Jump, 0, 0, 0, self.current_line);
+
+                // Else branch starts here
+                let else_pos = self.code.instructions.len();
+                let else_reg = self.compile_expression(*else_expr)?;
+                self.emit(OpCode::MoveReg, else_reg, result_reg, 0, self.current_line);
+
+                // End of if expression
+                let end_pos = self.code.instructions.len();
+
+                // Fix the jump targets
+                self.code.instructions[else_jump_idx].arg2 = else_pos as u32;
+                self.code.instructions[end_jump_idx].arg1 = end_pos as u32;
+
+                Ok(result_reg)
+            }
             _ => Err(anyhow!("Unsupported expression type: {:?}", expr)),
         }
     }

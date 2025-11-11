@@ -1,0 +1,79 @@
+# Example: Python-style comments work everywhere in Tauraro!
+# This demonstrates inline comments, whitespace handling, and more
+
+# 1. Variable declarations with inline comments
+name = "Tauraro"  # This is the language name
+version = 1.0  # Current version
+
+# 2. Function with comments everywhere
+def greet(person):  # Function to greet someone
+    """This is a docstring"""  # Docstring with inline comment
+    message = "Hello, " + person  # Build greeting message
+    return message  # Return the greeting
+
+# 3. Class with extensive comments
+class Person:  # Simple Person class
+    def __init__(self, name, age):  # Constructor
+        self.name = name  # Store name
+        self.age = age  # Store age
+    
+    def introduce(self):  # Introduction method
+        return "I am " + self.name  # Return introduction
+
+# 4. Control structures with comments
+if version >= 1.0:  # Check version
+    print("Stable release!")  # Print status
+else:  # If not stable
+    print("Beta version")  # Print beta message
+
+# 5. Loops with inline comments
+for i in range(3):  # Loop 3 times
+    print("Count:", i)  # Print iteration
+
+# 6. List and dict with comments
+colors = ["red", "green", "blue"]  # Color list
+config = {  # Configuration dictionary
+    "debug": True,  # Debug mode
+    "timeout": 30  # Timeout in seconds
+}  # End config
+
+# 7. Multiple statements with various comment styles
+x = 1; y = 2  # Multiple statements on one line
+z = x + y  #No space before hash still works
+result = z * 2    ###Multiple hashes###
+
+# 8. Empty lines and comment-only lines
+#
+# More documentation
+#
+######################
+
+# 9. Nested structures with comments
+class Outer:  # Outer class definition
+    class Inner:  # Inner class (nested)
+        value = 42  # Class variable with comment
+        
+        def method(self):  # Inner method
+            return self.value  # Return value
+
+# 10. Complex expressions with comments
+calculation = 10 * 5 + 20 - 5  # Complex calculation: (10*5) + 20 - 5 = 65
+
+print("Calculation result:", calculation)  # Should be 65
+
+# Test all features
+print("=" * 50)  # Separator
+print("Python-Style Comments Test")  # Title
+print("=" * 50)  # Separator
+print("Name:", name)  # Print name
+print("Version:", version)  # Print version
+print(greet("World"))  # Call function with inline comment
+person = Person("Alice", 30)  # Create person
+print(person.introduce())  # Call method
+print("Colors:", colors)  # Print list
+print("Config:", config)  # Print dict
+print("Result:", result)  # Print result
+
+# Final message
+print("All Python-style comments working perfectly!")  # Success!
+# End of script

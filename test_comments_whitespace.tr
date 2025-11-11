@@ -1,0 +1,82 @@
+# This is a comment at the start of the file
+# Multiple comments should work
+
+# Test 1: Comments after statements (inline comments)
+x = 5  # This is an inline comment
+y = 10   #Another inline comment without space
+z = x + y    # Math operation with comment
+
+print("x =", x)  # Print with comment
+print("y =", y)    # More printing
+print("z =", z)  # Result
+
+# Test 2: Comments in function definitions
+def add(a, b):  # Function to add two numbers
+    result = a + b  # Calculate sum
+    return result  # Return the result
+
+result = add(3, 7)  # Call function
+print("add(3, 7) =", result)  # Should print 10
+
+# Test 3: Comments in class definitions
+class Calculator:  # A simple calculator class
+    def __init__(self):  # Constructor
+        self.value = 0  # Initial value
+    
+    def add(self, n):  # Add method
+        self.value = self.value + n  # Update value
+        return self.value  # Return new value
+    
+    def multiply(self, n):  # Multiply method
+        self.value = self.value * n  # Multiply
+        return self.value  # Return result
+
+# Test 4: Create instance with comments
+calc = Calculator()  # Create calculator
+calc.add(5)  # Add 5
+calc.multiply(3)  # Multiply by 3
+print("Calculator result:", calc.value)  # Should be 15
+
+# Test 5: Multiple whitespace types
+a    =    1      # Many spaces
+b	=	2    # Tabs (if they work)
+c        =        a    +    b  # Lots of spaces everywhere
+
+print("a + b =", c)  # Result
+
+# Test 6: Empty lines with just comments
+#
+# More comments
+#
+###Multiple hashes###
+
+# Test 7: Comments in control structures
+if x > 0:  # Check if positive
+    print("x is positive")  # Print message
+else:  # Otherwise
+    print("x is not positive")  # Other message
+
+# Test 8: Comments in loops
+for i in range(3):  # Loop 3 times
+    print("Iteration:", i)  # Print iteration number
+
+# Test 9: Comments in list/dict definitions
+numbers = [1, 2, 3]  # Simple list
+data = {  # Dictionary with comments
+    "name": "Test",  # Name field
+    "value": 42  # Value field
+}  # End of dict
+
+print("Numbers:", numbers)  # Print list
+print("Data:", data)  # Print dict
+
+# Test 10: Nested structures with comments
+class Outer:  # Outer class
+    class Inner:  # Inner class
+        def method(self):  # Inner method
+            return "Inner"  # Return string
+
+# Final test
+print("All comment and whitespace tests passed!")  # Success message
+
+# End of file comment
