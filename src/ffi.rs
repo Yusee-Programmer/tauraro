@@ -563,9 +563,26 @@ impl FFIManager {
             }
 
             // Two pointer arguments, pointer return (e.g., gtk_scrolled_window_new)
-            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer]) => {
-                let arg1 = self.value_to_pointer(&args[0])?;
-                let arg2 = self.value_to_pointer(&args[1])?;
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer | FFIType::String, FFIType::Pointer | FFIType::ConstPointer | FFIType::String]) => {
+                // Handle the case where parameters might be strings
+                let arg1 = if matches!(args[0], Value::Str(_)) {
+                    // Convert string to pointer via CString
+                    self.value_to_string(&args[0])
+                        .and_then(|s| CString::new(s).map_err(|e| anyhow!("{}", e)))
+                        .map(|cs| cs.as_ptr() as *const c_void)?
+                } else {
+                    self.value_to_pointer(&args[0])?
+                };
+                
+                let arg2 = if matches!(args[1], Value::Str(_)) {
+                    // Convert string to pointer via CString
+                    self.value_to_string(&args[1])
+                        .and_then(|s| CString::new(s).map_err(|e| anyhow!("{}", e)))
+                        .map(|cs| cs.as_ptr() as *const c_void)?
+                } else {
+                    self.value_to_pointer(&args[1])?
+                };
+                
                 unsafe {
                     let func: unsafe extern "C" fn(*const c_void, *const c_void) -> *const c_void =
                         std::mem::transmute(function.symbol_ptr);
@@ -1038,6 +1055,23 @@ impl FFIManager {
                 Ok(Value::None)
             }
 
+            // Generic void function with 6 parameters (for GTK functions)
+            (FFIType::Void, params) if params.len() == 6 &&
+                matches!(params[0], FFIType::Pointer | FFIType::ConstPointer) &&
+                matches!(params[1], FFIType::Pointer | FFIType::ConstPointer) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                let arg4 = self.value_to_int(&args[3])?;
+                let arg5 = self.value_to_int(&args[4])?;
+                let arg6 = self.value_to_int(&args[5])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, c_int, c_int, c_int, c_int) = std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2, arg3, arg4, arg5, arg6);
+                }
+                Ok(Value::None)
+            }
+
             // DefWindowProcA: (pointer, int, int, int) -> long
             (FFIType::Long | FFIType::Int | FFIType::Int32 | FFIType::Int64, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32 | FFIType::UInt | FFIType::UInt32, FFIType::Int | FFIType::Int32 | FFIType::Int64 | FFIType::UInt64, FFIType::Int | FFIType::Int32 | FFIType::Int64]) => {
                 let hwnd = self.value_to_pointer(&args[0])?;
@@ -1050,6 +1084,36 @@ impl FFIManager {
                         std::mem::transmute(function.symbol_ptr);
                     let result = func(hwnd, msg, wparam as isize, lparam as isize);
                     Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Generic pointer return with 2 parameters (catch-all for GTK functions)
+            (FFIType::Pointer | FFIType::ConstPointer, params) if params.len() == 2 => {
+                // Handle the case where parameters might be strings
+                let arg1 = if matches!(args[0], Value::Str(_)) && 
+                          (matches!(params[0], FFIType::String | FFIType::Pointer | FFIType::ConstPointer)) {
+                    // Convert string to pointer via CString
+                    self.value_to_string(&args[0])
+                        .and_then(|s| CString::new(s).map_err(|e| anyhow!("{}", e)))
+                        .map(|cs| cs.as_ptr() as *const c_void)?
+                } else {
+                    self.value_to_pointer(&args[0])?
+                };
+                
+                let arg2 = if matches!(args[1], Value::Str(_)) && 
+                          (matches!(params[1], FFIType::String | FFIType::Pointer | FFIType::ConstPointer)) {
+                    // Convert string to pointer via CString
+                    self.value_to_string(&args[1])
+                        .and_then(|s| CString::new(s).map_err(|e| anyhow!("{}", e)))
+                        .map(|cs| cs.as_ptr() as *const c_void)?
+                } else {
+                    self.value_to_pointer(&args[1])?
+                };
+                
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void) -> *const c_void = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2);
+                    Ok(Value::Int(result as usize as i64))
                 }
             }
 
@@ -1215,11 +1279,17 @@ impl FFIManager {
         }
     }
 
-    /// Convert Tauraro Value to pointer (for NULL or integer pointers)
+    /// Convert Tauraro Value to pointer (for NULL, integer, or string pointers)
     fn value_to_pointer(&self, value: &Value) -> Result<*const c_void> {
         match value {
             Value::None => Ok(std::ptr::null()),
             Value::Int(i) => Ok(*i as usize as *const c_void),
+            Value::Str(s) => {
+                // For string values, we need to store the CString somewhere to keep it alive
+                // In a more complete implementation, we would need to manage the lifetime of these strings
+                // For now, we'll return an error indicating this is not supported in this context
+                Err(anyhow!("Cannot convert string {:?} to pointer directly - strings need to be handled as parameters", s))
+            },
             _ => Err(anyhow!("Cannot convert {:?} to pointer", value)),
         }
     }
