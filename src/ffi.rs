@@ -562,27 +562,36 @@ impl FFIManager {
                 }
             }
 
-            // Two pointer arguments, pointer return (e.g., gtk_scrolled_window_new)
+            // Two pointer arguments, pointer return (e.g., gtk_scrolled_window_new, gtk_radio_button_new_with_label)
             (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer | FFIType::String, FFIType::Pointer | FFIType::ConstPointer | FFIType::String]) => {
                 // Handle the case where parameters might be strings
-                let arg1 = if matches!(args[0], Value::Str(_)) {
-                    // Convert string to pointer via CString
-                    self.value_to_string(&args[0])
-                        .and_then(|s| CString::new(s).map_err(|e| anyhow!("{}", e)))
-                        .map(|cs| cs.as_ptr() as *const c_void)?
+                // Keep CStrings alive for the duration of the call
+                let c_string1 = if matches!(args[0], Value::Str(_)) {
+                    let s = self.value_to_string(&args[0])?;
+                    Some(CString::new(s)?)
+                } else {
+                    None
+                };
+
+                let c_string2 = if matches!(args[1], Value::Str(_)) {
+                    let s = self.value_to_string(&args[1])?;
+                    Some(CString::new(s)?)
+                } else {
+                    None
+                };
+
+                let arg1 = if let Some(ref cs) = c_string1 {
+                    cs.as_ptr() as *const c_void
                 } else {
                     self.value_to_pointer(&args[0])?
                 };
-                
-                let arg2 = if matches!(args[1], Value::Str(_)) {
-                    // Convert string to pointer via CString
-                    self.value_to_string(&args[1])
-                        .and_then(|s| CString::new(s).map_err(|e| anyhow!("{}", e)))
-                        .map(|cs| cs.as_ptr() as *const c_void)?
+
+                let arg2 = if let Some(ref cs) = c_string2 {
+                    cs.as_ptr() as *const c_void
                 } else {
                     self.value_to_pointer(&args[1])?
                 };
-                
+
                 unsafe {
                     let func: unsafe extern "C" fn(*const c_void, *const c_void) -> *const c_void =
                         std::mem::transmute(function.symbol_ptr);
@@ -937,17 +946,22 @@ impl FFIManager {
 
             // GTK: gtk_window_new, gtk_button_new_with_label, gtk_label_new: (pointer) -> pointer
             (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer | FFIType::String]) => {
-                let arg = if matches!(args[0], Value::Str(_)) {
-                    self.value_to_string(&args[0])
-                        .and_then(|s| CString::new(s).map_err(|e| anyhow!("{}", e)))
-                        .map(|cs| cs.as_ptr() as *const c_void)?
+                if matches!(args[0], Value::Str(_)) {
+                    // Keep CString alive for the duration of the call
+                    let s = self.value_to_string(&args[0])?;
+                    let c_string = CString::new(s)?;
+                    unsafe {
+                        let func: unsafe extern "C" fn(*const c_char) -> *const c_void = std::mem::transmute(function.symbol_ptr);
+                        let result = func(c_string.as_ptr());
+                        Ok(Value::Int(result as usize as i64))
+                    }
                 } else {
-                    self.value_to_pointer(&args[0])?
-                };
-                unsafe {
-                    let func: unsafe extern "C" fn(*const c_void) -> *const c_void = std::mem::transmute(function.symbol_ptr);
-                    let result = func(arg);
-                    Ok(Value::Int(result as usize as i64))
+                    let arg = self.value_to_pointer(&args[0])?;
+                    unsafe {
+                        let func: unsafe extern "C" fn(*const c_void) -> *const c_void = std::mem::transmute(function.symbol_ptr);
+                        let result = func(arg);
+                        Ok(Value::Int(result as usize as i64))
+                    }
                 }
             }
 
@@ -1039,6 +1053,21 @@ impl FFIManager {
                 Ok(Value::None)
             }
 
+            // GTK: gtk_widget_set_sensitive, gtk_progress_bar_set_show_text: (pointer, bool) -> void
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Bool]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = match &args[1] {
+                    Value::Bool(b) => *b,
+                    Value::Int(i) => *i != 0,
+                    _ => return Err(anyhow!("Cannot convert {:?} to bool", args[1])),
+                };
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, bool) = std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2);
+                }
+                Ok(Value::None)
+            }
+
             // GTK: gtk_box_pack_start: (pointer, pointer, int32, int32, uint32) -> void
             (FFIType::Void, params) if params.len() == 5 &&
                 matches!(params[0], FFIType::Pointer | FFIType::ConstPointer) &&
@@ -1090,26 +1119,35 @@ impl FFIManager {
             // Generic pointer return with 2 parameters (catch-all for GTK functions)
             (FFIType::Pointer | FFIType::ConstPointer, params) if params.len() == 2 => {
                 // Handle the case where parameters might be strings
-                let arg1 = if matches!(args[0], Value::Str(_)) && 
+                // Keep CStrings alive for the duration of the call
+                let c_string1 = if matches!(args[0], Value::Str(_)) &&
                           (matches!(params[0], FFIType::String | FFIType::Pointer | FFIType::ConstPointer)) {
-                    // Convert string to pointer via CString
-                    self.value_to_string(&args[0])
-                        .and_then(|s| CString::new(s).map_err(|e| anyhow!("{}", e)))
-                        .map(|cs| cs.as_ptr() as *const c_void)?
+                    let s = self.value_to_string(&args[0])?;
+                    Some(CString::new(s)?)
+                } else {
+                    None
+                };
+
+                let c_string2 = if matches!(args[1], Value::Str(_)) &&
+                          (matches!(params[1], FFIType::String | FFIType::Pointer | FFIType::ConstPointer)) {
+                    let s = self.value_to_string(&args[1])?;
+                    Some(CString::new(s)?)
+                } else {
+                    None
+                };
+
+                let arg1 = if let Some(ref cs) = c_string1 {
+                    cs.as_ptr() as *const c_void
                 } else {
                     self.value_to_pointer(&args[0])?
                 };
-                
-                let arg2 = if matches!(args[1], Value::Str(_)) && 
-                          (matches!(params[1], FFIType::String | FFIType::Pointer | FFIType::ConstPointer)) {
-                    // Convert string to pointer via CString
-                    self.value_to_string(&args[1])
-                        .and_then(|s| CString::new(s).map_err(|e| anyhow!("{}", e)))
-                        .map(|cs| cs.as_ptr() as *const c_void)?
+
+                let arg2 = if let Some(ref cs) = c_string2 {
+                    cs.as_ptr() as *const c_void
                 } else {
                     self.value_to_pointer(&args[1])?
                 };
-                
+
                 unsafe {
                     let func: unsafe extern "C" fn(*const c_void, *const c_void) -> *const c_void = std::mem::transmute(function.symbol_ptr);
                     let result = func(arg1, arg2);
@@ -1292,6 +1330,19 @@ impl FFIManager {
             },
             _ => Err(anyhow!("Cannot convert {:?} to pointer", value)),
         }
+    }
+
+    /// Get the address of a function in a loaded library
+    /// This is useful for passing function pointers to callbacks
+    pub fn get_function_address(&self, library_name: &str, function_name: &str) -> Result<usize> {
+        let library = self.libraries.get(library_name)
+            .ok_or_else(|| anyhow!("Library not loaded: {}", library_name))?;
+
+        let lib = library.lock().unwrap();
+        let function = lib.functions.get(function_name)
+            .ok_or_else(|| anyhow!("Function not defined: {}", function_name))?;
+
+        Ok(function.symbol_ptr as usize)
     }
 
     /// Get information about a loaded library
