@@ -375,6 +375,97 @@ pub fn free_buffer_builtin(args: Vec<Value>) -> Result<Value> {
     Ok(Value::None)
 }
 
+/// Get the address of a function in a loaded library
+/// This is useful for passing function pointers to callbacks
+///
+/// Usage:
+/// ```python
+/// # Get the address of gtk_main_quit
+/// quit_addr = get_function_address("libgtk-3-0.dll", "gtk_main_quit")
+/// # Use it as a callback function pointer
+/// g_signal_connect_swapped(window, "destroy", quit_addr, 0)
+/// ```
+pub fn get_function_address_builtin(args: Vec<Value>) -> Result<Value> {
+    #[cfg(not(feature = "ffi"))]
+    {
+        return Err(anyhow!("FFI feature is not enabled"));
+    }
+
+    #[cfg(feature = "ffi")]
+    {
+        if args.len() < 2 {
+            return Err(anyhow!("get_function_address() requires 2 arguments (library_name, function_name)"));
+        }
+
+        let library_name = match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(anyhow!("Library name must be a string")),
+        };
+
+        let function_name = match &args[1] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(anyhow!("Function name must be a string")),
+        };
+
+        let manager = GLOBAL_FFI_MANAGER.lock().unwrap();
+        let address = manager.get_function_address(&library_name, &function_name)?;
+
+        Ok(Value::Int(address as i64))
+    }
+}
+
+/// Connect GTK window destroy signal to gtk_main_quit
+/// This is a convenience function for GTK applications
+pub fn gtk_connect_destroy_builtin(args: Vec<Value>) -> Result<Value> {
+    #[cfg(not(feature = "ffi"))]
+    {
+        return Err(anyhow!("FFI feature is not enabled"));
+    }
+
+    #[cfg(feature = "ffi")]
+    {
+        if args.len() < 3 {
+            return Err(anyhow!("gtk_connect_destroy() requires 3 arguments (widget_ptr, gtk_lib_name, gobject_lib_name)"));
+        }
+
+        let widget_ptr = match &args[0] {
+            Value::Int(i) => *i,
+            _ => return Err(anyhow!("Widget pointer must be an integer")),
+        };
+
+        let gtk_lib_name = match &args[1] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(anyhow!("GTK library name must be a string")),
+        };
+
+        let gobject_lib_name = match &args[2] {
+            Value::Str(s) => s.clone(),
+            _ => return Err(anyhow!("GObject library name must be a string")),
+        };
+
+        // Get the address of gtk_main_quit
+        let manager = GLOBAL_FFI_MANAGER.lock().unwrap();
+        let quit_addr = manager.get_function_address(&gtk_lib_name, "gtk_main_quit")?;
+
+        // Call g_signal_connect_data to connect the destroy signal
+        let signal_name = "destroy";
+        let result = manager.call_external_function(
+            &gobject_lib_name,
+            "g_signal_connect_data",
+            vec![
+                Value::Int(widget_ptr),
+                Value::Str(signal_name.to_string()),
+                Value::Int(quit_addr as i64),
+                Value::Int(0), // data
+                Value::Int(0), // destroy_data
+                Value::Int(0), // connect_flags
+            ],
+        )?;
+
+        Ok(result)
+    }
+}
+
 /// Initialize FFI builtins and return a HashMap of function names to Value::BuiltinFunction
 pub fn init_ffi_builtins() -> HashMap<String, Value> {
     let mut builtins = HashMap::new();
@@ -422,6 +513,16 @@ pub fn init_ffi_builtins() -> HashMap<String, Value> {
     builtins.insert(
         "free_buffer".to_string(),
         Value::BuiltinFunction("free_buffer".to_string(), free_buffer_builtin),
+    );
+
+    builtins.insert(
+        "get_function_address".to_string(),
+        Value::BuiltinFunction("get_function_address".to_string(), get_function_address_builtin),
+    );
+
+    builtins.insert(
+        "gtk_connect_destroy".to_string(),
+        Value::BuiltinFunction("gtk_connect_destroy".to_string(), gtk_connect_destroy_builtin),
     );
 
     builtins

@@ -142,7 +142,9 @@
       "Bash(taskkill:*)",
       "Bash(nul)",
       "Bash(timeout /T 2 /NOBREAK)",
-      "Bash(timeout 10 tail:*)"
+      "Bash(timeout 10 tail:*)",
+      "Bash(findstr:*)",
+      "Bash(timeout 60 ./target/release/tauraro.exe run:*)"
     ],
     "deny": [],
     "ask": []

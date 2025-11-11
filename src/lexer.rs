@@ -402,15 +402,8 @@ impl<'a> Iterator for Lexer<'a> {
             Some(Ok(token)) => {
                 let span = self.inner.span();
 
-                // Filter out comments - skip them entirely like Python does
-                if matches!(token, Token::Comment(_)) {
-                    // Update column position for the comment
-                    self.column += span.end - span.start;
-                    // Recursively get the next token
-                    return self.next();
-                }
-
                 // Handle indentation at the start of a line (only after newlines)
+                // Do this BEFORE skipping comments so that comments on indented lines work correctly
                 if self.at_line_start && !matches!(token, Token::Newline | Token::Eof) {
                     // Get the line content to check indentation
                     let source = self.inner.source();
@@ -475,6 +468,15 @@ impl<'a> Iterator for Lexer<'a> {
                         }
                     }
                     self.at_line_start = false;
+                }
+
+                // Filter out comments - skip them entirely like Python does
+                // This happens AFTER indentation handling so comments on indented lines work correctly
+                if matches!(token, Token::Comment(_)) {
+                    // Update column position for the comment
+                    self.column += span.end - span.start;
+                    // Recursively get the next token
+                    return self.next();
                 }
 
                 let token_info = TokenInfo {
