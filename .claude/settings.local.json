@@ -137,7 +137,12 @@
       "Bash(./test_oop_print.exe:*)",
       "Bash(./test_win32_window.exe)",
       "Bash(./test_win32_full_window.exe:*)",
-      "Bash(./test_win32_clean.exe)"
+      "Bash(./test_win32_clean.exe)",
+      "Bash(timeout 5 echo:*)",
+      "Bash(taskkill:*)",
+      "Bash(nul)",
+      "Bash(timeout /T 2 /NOBREAK)",
+      "Bash(timeout 10 tail:*)"
     ],
     "deny": [],
     "ask": []

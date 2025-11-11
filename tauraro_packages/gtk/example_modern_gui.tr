@@ -1,0 +1,76 @@
+print("GTK Modern GUI Demo")
+print("===================")
+print("Demonstrating Tauraro's GTK integration with modern widgets")
+print("")
+
+import gtk
+
+# Initialize GTK
+gtk.init_gtk()
+
+# Create main window
+window = gtk.Window("Tauraro GTK - Modern GUI Demo", 500, 350)
+
+# Create a vertical box layout
+vbox = gtk.Box(gtk.GTK_ORIENTATION_VERTICAL, 10)
+
+# Add welcome label
+title_label = gtk.Label("Welcome to Tauraro GTK!")
+vbox.pack_start(title_label, False, False, 10)
+
+# Add description label
+desc_label = gtk.Label("This is a modern GUI built with GTK3 and Tauraro")
+vbox.pack_start(desc_label, False, False, 5)
+
+# Add text input field
+entry = gtk.Entry()
+entry.set_text("Type something here...")
+vbox.pack_start(entry, False, False, 10)
+
+# Add some buttons in a horizontal box
+hbox = gtk.Box(gtk.GTK_ORIENTATION_HORIZONTAL, 5)
+
+button1 = gtk.Button("Button 1")
+hbox.pack_start(button1, True, True, 0)
+
+button2 = gtk.Button("Button 2")
+hbox.pack_start(button2, True, True, 0)
+
+button3 = gtk.Button("Button 3")
+hbox.pack_start(button3, True, True, 0)
+
+vbox.pack_start(hbox, False, False, 10)
+
+# Add info labels
+info_label1 = gtk.Label("Features:")
+vbox.pack_start(info_label1, False, False, 5)
+
+info_label2 = gtk.Label("✓ Native GTK3 widgets")
+vbox.pack_start(info_label2, False, False, 2)
+
+info_label3 = gtk.Label("✓ Cross-platform GUI (Windows, Linux, macOS)")
+vbox.pack_start(info_label3, False, False, 2)
+
+info_label4 = gtk.Label("✓ Modern and responsive design")
+vbox.pack_start(info_label4, False, False, 2)
+
+info_label5 = gtk.Label("✓ Built with Tauraro FFI")
+vbox.pack_start(info_label5, False, False, 2)
+
+# Add the box to the window
+window.add(vbox)
+
+# Show all widgets
+window.show_all()
+
+print("\n[OK] Modern GUI window is now visible!")
+print("      - Window title: Tauraro GTK - Modern GUI Demo")
+print("      - Window size: 500x350")
+print("      - Widgets: Labels, Entry field, 3 Buttons")
+print("      - Layout: Vertical and Horizontal Box containers")
+print("\nClose the window to exit the program.")
+print("")
+
+# Run the GTK main loop
+app = gtk.Application("Modern GUI Demo")
+app.run()
