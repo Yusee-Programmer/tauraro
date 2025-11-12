@@ -41,6 +41,7 @@ pub mod time;
 pub mod unittest;
 pub mod urllib;
 pub mod websockets;
+pub mod webviewtk;
 
 // Re-export commonly used items
 pub use crate::modules::hplist::HPList;
@@ -92,7 +93,10 @@ pub fn init_builtin_modules() -> HashMap<String, Value> {
 
     // Add exceptions module
     modules.insert("exceptions".to_string(), exceptions::create_exceptions_module());
-    
+
+    // Add GUI framework (window.run() requires webviewtk feature, but HTML generation works without it)
+    modules.insert("webviewtk".to_string(), webviewtk::create_webviewtk_module());
+
     modules
 }
 
@@ -135,13 +139,14 @@ pub fn get_builtin_module(name: &str) -> Option<Value> {
         "memory" => Some(memory::create_memory_module()),
         "gc" => Some(gc::create_gc_module()),
         "exceptions" => Some(exceptions::create_exceptions_module()),
+        "webviewtk" => Some(webviewtk::create_webviewtk_module()),
         _ => None,
     }
 }
 
 /// Check if a module name is a built-in module
 pub fn is_builtin_module(name: &str) -> bool {
-    matches!(name, "abc" | "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx" | "importlib" | "serveit" | "templa" | "orm" | "subprocess" | "multiprocessing" | "memory" | "gc" | "exceptions")
+    matches!(name, "abc" | "os" | "sys" | "threading" | "time" | "datetime" | "io" | "math" | "random" | "re" | "json" | "functools" | "itertools" | "collections" | "copy" | "pickle" | "base64" | "hashlib" | "urllib" | "csv" | "logging" | "unittest" | "socket" | "asyncio" | "httptools" | "websockets" | "httpx" | "importlib" | "serveit" | "templa" | "orm" | "subprocess" | "multiprocessing" | "memory" | "gc" | "exceptions" | "webviewtk")
 }
 
 /// Get list of all built-in module names
@@ -183,5 +188,6 @@ pub fn get_builtin_module_names() -> Vec<String> {
         "memory".to_string(),
         "gc".to_string(),
         "exceptions".to_string(),
+        "webviewtk".to_string(),
     ]
 }

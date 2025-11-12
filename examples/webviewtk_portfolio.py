@@ -1,0 +1,581 @@
+"""
+Modern Portfolio/Landing Page with Smooth Animations
+Features: Hero section, Projects gallery, Skills showcase, Contact form, Smooth scrolling
+"""
+
+import webviewtk as wv
+
+def create_portfolio():
+    tailwind = wv.cdn_tailwind()
+    alpine = wv.cdn_alpine()
+
+    # Custom animations and styles
+    custom_css = """
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+        }
+
+        @keyframes slideInLeft {
+            from {
+                opacity: 0;
+                transform: translateX(-100px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(100px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(50px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes scaleIn {
+            from {
+                opacity: 0;
+                transform: scale(0.8);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .float-animation {
+            animation: float 3s ease-in-out infinite;
+        }
+
+        .slide-in-left {
+            animation: slideInLeft 1s ease-out;
+        }
+
+        .slide-in-right {
+            animation: slideInRight 1s ease-out;
+        }
+
+        .fade-in-up {
+            animation: fadeInUp 1s ease-out;
+        }
+
+        .scale-in {
+            animation: scaleIn 0.8s ease-out;
+        }
+
+        .gradient-animated {
+            background: linear-gradient(-45deg, #667eea, #764ba2, #f093fb, #4facfe);
+            background-size: 400% 400%;
+            animation: gradientShift 15s ease infinite;
+        }
+
+        .skill-bar {
+            transition: width 2s ease-out;
+        }
+
+        .project-card {
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .project-card:hover {
+            transform: translateY(-15px) scale(1.02);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.3);
+        }
+
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        .nav-link {
+            position: relative;
+        }
+
+        .nav-link::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: currentColor;
+            transition: width 0.3s ease;
+        }
+
+        .nav-link:hover::after {
+            width: 100%;
+        }
+    """
+
+    # Alpine.js portfolio logic
+    alpine_script = """
+        <script>
+            function portfolio() {
+                return {
+                    activeSection: 'home',
+                    formData: {
+                        name: '',
+                        email: '',
+                        message: ''
+                    },
+                    skills: [
+                        { name: 'Python', level: 95, color: 'from-blue-500 to-blue-600' },
+                        { name: 'JavaScript', level: 90, color: 'from-yellow-400 to-yellow-500' },
+                        { name: 'Rust', level: 85, color: 'from-orange-500 to-red-600' },
+                        { name: 'Web Design', level: 88, color: 'from-purple-500 to-pink-500' },
+                        { name: 'DevOps', level: 80, color: 'from-green-500 to-green-600' }
+                    ],
+                    projects: [
+                        {
+                            id: 1,
+                            title: 'Tauraro Language',
+                            description: 'A modern programming language with Python syntax and Rust performance',
+                            icon: '🦀',
+                            tags: ['Rust', 'Compiler', 'VM'],
+                            color: 'from-orange-400 to-red-500'
+                        },
+                        {
+                            id: 2,
+                            title: 'WebViewTK Framework',
+                            description: 'Cross-platform GUI framework using HTML, CSS, and JavaScript',
+                            icon: '🖼️',
+                            tags: ['GUI', 'Web', 'Cross-platform'],
+                            color: 'from-blue-400 to-purple-500'
+                        },
+                        {
+                            id: 3,
+                            title: 'AI Assistant',
+                            description: 'Intelligent chatbot with natural language understanding',
+                            icon: '🤖',
+                            tags: ['AI', 'NLP', 'Python'],
+                            color: 'from-green-400 to-cyan-500'
+                        },
+                        {
+                            id: 4,
+                            title: 'E-Commerce Platform',
+                            description: 'Full-stack online store with payment integration',
+                            icon: '🛒',
+                            tags: ['Full-stack', 'Payment', 'API'],
+                            color: 'from-pink-400 to-rose-500'
+                        },
+                        {
+                            id: 5,
+                            title: 'Data Visualizer',
+                            description: 'Interactive dashboards for business intelligence',
+                            icon: '📊',
+                            tags: ['Analytics', 'Charts', 'Dashboard'],
+                            color: 'from-indigo-400 to-blue-500'
+                        },
+                        {
+                            id: 6,
+                            title: 'Mobile App',
+                            description: 'Cross-platform mobile application for productivity',
+                            icon: '📱',
+                            tags: ['Mobile', 'React Native', 'UX'],
+                            color: 'from-purple-400 to-purple-600'
+                        }
+                    ],
+                    submitForm() {
+                        if (this.formData.name && this.formData.email && this.formData.message) {
+                            alert('Thank you for your message! I will get back to you soon.');
+                            this.formData = { name: '', email: '', message: '' };
+                        } else {
+                            alert('Please fill in all fields.');
+                        }
+                    },
+                    scrollToSection(section) {
+                        this.activeSection = section;
+                        document.getElementById(section).scrollIntoView({ behavior: 'smooth' });
+                    }
+                }
+            }
+        </script>
+    """
+
+    # Navigation
+    navigation = wv.nav(
+        wv.div(
+            wv.render(
+                # Logo
+                wv.div(
+                    wv.render(
+                        wv.span("👨‍💻", "text-3xl"),
+                        wv.span("Portfolio", "text-2xl font-bold text-white ml-2")
+                    ),
+                    "flex items-center"
+                ),
+                # Nav links
+                wv.div(
+                    wv.render(
+                        wv.button("Home", "nav-link text-white hover:text-blue-300 px-4 py-2 transition", "", "", {"@click": "scrollToSection('home')"}),
+                        wv.button("About", "nav-link text-white hover:text-blue-300 px-4 py-2 transition", "", "", {"@click": "scrollToSection('about')"}),
+                        wv.button("Projects", "nav-link text-white hover:text-blue-300 px-4 py-2 transition", "", "", {"@click": "scrollToSection('projects')"}),
+                        wv.button("Skills", "nav-link text-white hover:text-blue-300 px-4 py-2 transition", "", "", {"@click": "scrollToSection('skills')"}),
+                        wv.button("Contact", "nav-link text-white hover:text-blue-300 px-4 py-2 transition", "", "", {"@click": "scrollToSection('contact')"})
+                    ),
+                    "hidden md:flex items-center space-x-2"
+                ),
+                # Mobile menu button
+                wv.button("☰", "md:hidden text-white text-2xl", "", "", {"@click": "mobileMenuOpen = !mobileMenuOpen"})
+            ),
+            "container mx-auto px-6 py-4 flex items-center justify-between"
+        ),
+        "glass-effect fixed top-0 left-0 right-0 z-50 shadow-lg"
+    )
+
+    # Hero section
+    hero_section = wv.section(
+        wv.div(
+            wv.render(
+                wv.div(
+                    wv.render(
+                        wv.h1("Hi, I'm a Full Stack Developer", "text-5xl md:text-7xl font-bold text-white mb-6 slide-in-left"),
+                        wv.p(
+                            "I build amazing web applications with modern technologies",
+                            "text-xl md:text-2xl text-white text-opacity-90 mb-8 slide-in-left",
+                            "",
+                            "style='animation-delay: 0.2s'"
+                        ),
+                        wv.div(
+                            wv.render(
+                                wv.button(
+                                    "View My Work",
+                                    "bg-white text-purple-600 px-8 py-4 rounded-full font-semibold hover:bg-opacity-90 transition transform hover:scale-105 shadow-lg",
+                                    "",
+                                    "",
+                                    {"@click": "scrollToSection('projects')"}
+                                ),
+                                wv.button(
+                                    "Contact Me",
+                                    "bg-transparent border-2 border-white text-white px-8 py-4 rounded-full font-semibold hover:bg-white hover:text-purple-600 transition transform hover:scale-105 ml-4",
+                                    "",
+                                    "",
+                                    {"@click": "scrollToSection('contact')"}
+                                )
+                            ),
+                            "slide-in-left",
+                            "",
+                            "style='animation-delay: 0.4s'"
+                        )
+                    ),
+                    "max-w-3xl"
+                ),
+                # Floating emoji
+                wv.div(
+                    "💻🚀✨",
+                    "hidden lg:block text-9xl float-animation",
+                    "",
+                    "style='animation-delay: 0.5s'"
+                )
+            ),
+            "container mx-auto px-6 flex items-center justify-between min-h-screen"
+        ),
+        "gradient-animated relative",
+        "home"
+    )
+
+    # About section
+    about_section = wv.section(
+        wv.div(
+            wv.render(
+                wv.h2("About Me", "text-4xl md:text-5xl font-bold text-gray-800 text-center mb-12 fade-in-up"),
+                wv.div(
+                    wv.render(
+                        wv.div(
+                            "👨‍💻",
+                            "text-9xl scale-in mb-6"
+                        ),
+                        wv.div(
+                            wv.render(
+                                wv.h3("Passionate Developer", "text-3xl font-bold text-gray-800 mb-4"),
+                                wv.p(
+                                    "I'm a full-stack developer with a passion for creating beautiful, functional, and user-friendly applications. With expertise in modern web technologies and a keen eye for design, I bring ideas to life through code.",
+                                    "text-lg text-gray-600 mb-4"
+                                ),
+                                wv.p(
+                                    "When I'm not coding, you can find me exploring new technologies, contributing to open-source projects, or sharing my knowledge through blog posts and tutorials.",
+                                    "text-lg text-gray-600"
+                                )
+                            ),
+                            ""
+                        )
+                    ),
+                    "flex flex-col md:flex-row items-center gap-12"
+                )
+            ),
+            "container mx-auto px-6 py-20"
+        ),
+        "bg-gray-50",
+        "about"
+    )
+
+    # Projects section
+    projects_section = wv.section(
+        wv.div(
+            wv.render(
+                wv.h2("Featured Projects", "text-4xl md:text-5xl font-bold text-gray-800 text-center mb-12 fade-in-up"),
+                wv.div(
+                    """
+                    <template x-for="(project, index) in projects" :key="project.id">
+                        <div class="project-card bg-white rounded-2xl shadow-xl overflow-hidden scale-in"
+                             :style="'animation-delay: ' + (index * 0.1) + 's'">
+                            <div :class="'bg-gradient-to-br ' + project.color + ' h-48 flex items-center justify-center'">
+                                <span class="text-8xl" x-text="project.icon"></span>
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-2xl font-bold text-gray-800 mb-2" x-text="project.title"></h3>
+                                <p class="text-gray-600 mb-4" x-text="project.description"></p>
+                                <div class="flex flex-wrap gap-2 mb-4">
+                                    <template x-for="tag in project.tags" :key="tag">
+                                        <span class="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm font-medium"
+                                              x-text="tag"></span>
+                                    </template>
+                                </div>
+                                <button class="text-purple-600 hover:text-purple-700 font-semibold flex items-center">
+                                    View Project →
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                    """,
+                    "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
+                )
+            ),
+            "container mx-auto px-6 py-20"
+        ),
+        "bg-white",
+        "projects"
+    )
+
+    # Skills section
+    skills_section = wv.section(
+        wv.div(
+            wv.render(
+                wv.h2("Skills & Expertise", "text-4xl md:text-5xl font-bold text-gray-800 text-center mb-12 fade-in-up"),
+                wv.div(
+                    """
+                    <template x-for="(skill, index) in skills" :key="skill.name">
+                        <div class="fade-in-up" :style="'animation-delay: ' + (index * 0.1) + 's'">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-xl font-semibold text-gray-800" x-text="skill.name"></span>
+                                <span class="text-lg font-medium text-gray-600" x-text="skill.level + '%'"></span>
+                            </div>
+                            <div class="w-full h-4 bg-gray-200 rounded-full overflow-hidden">
+                                <div class="skill-bar h-full bg-gradient-to-r rounded-full"
+                                     :class="skill.color"
+                                     :style="'width: ' + skill.level + '%'">
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                    """,
+                    "space-y-6 max-w-3xl mx-auto"
+                )
+            ),
+            "container mx-auto px-6 py-20"
+        ),
+        "bg-gray-50",
+        "skills"
+    )
+
+    # Contact section
+    contact_section = wv.section(
+        wv.div(
+            wv.render(
+                wv.h2("Get In Touch", "text-4xl md:text-5xl font-bold text-gray-800 text-center mb-12 fade-in-up"),
+                wv.div(
+                    wv.render(
+                        # Contact info
+                        wv.div(
+                            wv.render(
+                                wv.div(
+                                    wv.render(
+                                        wv.span("📧", "text-5xl mb-4"),
+                                        wv.h3("Email", "text-xl font-semibold text-gray-800 mb-2"),
+                                        wv.p("contact@example.com", "text-gray-600")
+                                    ),
+                                    "bg-white rounded-xl shadow-lg p-8 text-center scale-in"
+                                ),
+                                wv.div(
+                                    wv.render(
+                                        wv.span("📱", "text-5xl mb-4"),
+                                        wv.h3("Phone", "text-xl font-semibold text-gray-800 mb-2"),
+                                        wv.p("+1 (555) 123-4567", "text-gray-600")
+                                    ),
+                                    "bg-white rounded-xl shadow-lg p-8 text-center scale-in",
+                                    "",
+                                    "style='animation-delay: 0.1s'"
+                                ),
+                                wv.div(
+                                    wv.render(
+                                        wv.span("📍", "text-5xl mb-4"),
+                                        wv.h3("Location", "text-xl font-semibold text-gray-800 mb-2"),
+                                        wv.p("San Francisco, CA", "text-gray-600")
+                                    ),
+                                    "bg-white rounded-xl shadow-lg p-8 text-center scale-in",
+                                    "",
+                                    "style='animation-delay: 0.2s'"
+                                )
+                            ),
+                            "grid grid-cols-1 md:grid-cols-3 gap-6 mb-12"
+                        ),
+                        # Contact form
+                        wv.div(
+                            wv.render(
+                                wv.h3("Send Me a Message", "text-2xl font-bold text-gray-800 mb-6"),
+                                wv.form(
+                                    wv.render(
+                                        wv.div(
+                                            wv.render(
+                                                wv.label("Name", "", "block text-gray-700 font-medium mb-2"),
+                                                wv.input(
+                                                    "text",
+                                                    "Your name",
+                                                    "w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500",
+                                                    "",
+                                                    "",
+                                                    {"x-model": "formData.name"}
+                                                )
+                                            ),
+                                            "mb-4"
+                                        ),
+                                        wv.div(
+                                            wv.render(
+                                                wv.label("Email", "", "block text-gray-700 font-medium mb-2"),
+                                                wv.input(
+                                                    "email",
+                                                    "your.email@example.com",
+                                                    "w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500",
+                                                    "",
+                                                    "",
+                                                    {"x-model": "formData.email"}
+                                                )
+                                            ),
+                                            "mb-4"
+                                        ),
+                                        wv.div(
+                                            wv.render(
+                                                wv.label("Message", "", "block text-gray-700 font-medium mb-2"),
+                                                wv.textarea(
+                                                    "",
+                                                    "w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500 h-32",
+                                                    "",
+                                                    "",
+                                                    {"x-model": "formData.message", "placeholder": "Your message..."}
+                                                )
+                                            ),
+                                            "mb-6"
+                                        ),
+                                        wv.button(
+                                            "Send Message",
+                                            "w-full bg-gradient-to-r from-purple-600 to-blue-600 text-white py-3 rounded-lg font-semibold hover:from-purple-700 hover:to-blue-700 transition transform hover:scale-105",
+                                            "",
+                                            "",
+                                            {"@click.prevent": "submitForm()"}
+                                        )
+                                    ),
+                                    "",
+                                    ""
+                                )
+                            ),
+                            "bg-white rounded-2xl shadow-xl p-8 max-w-2xl mx-auto scale-in",
+                            "",
+                            "style='animation-delay: 0.3s'"
+                        )
+                    ),
+                    ""
+                )
+            ),
+            "container mx-auto px-6 py-20"
+        ),
+        "bg-white",
+        "contact"
+    )
+
+    # Footer
+    footer = wv.footer(
+        wv.div(
+            wv.render(
+                wv.p("© 2025 Portfolio. Built with Tauraro WebViewTK", "text-white text-center mb-4"),
+                wv.div(
+                    wv.render(
+                        wv.button("🐙 GitHub", "text-white hover:text-blue-300 px-4 py-2"),
+                        wv.button("💼 LinkedIn", "text-white hover:text-blue-300 px-4 py-2"),
+                        wv.button("🐦 Twitter", "text-white hover:text-blue-300 px-4 py-2")
+                    ),
+                    "flex justify-center space-x-4"
+                )
+            ),
+            "container mx-auto px-6 py-8"
+        ),
+        "bg-gray-900"
+    )
+
+    # Main layout
+    main_layout = wv.div(
+        wv.render(
+            navigation,
+            hero_section,
+            about_section,
+            projects_section,
+            skills_section,
+            contact_section,
+            footer
+        ),
+        "", "", "", {"x-data": "portfolio()"}
+    )
+
+    # Build complete HTML
+    head_content = wv.render(
+        wv.title("Portfolio - Modern Developer"),
+        wv.meta({"charset": "utf-8"}),
+        wv.meta({"name": "viewport", "content": "width=device-width, initial-scale=1, maximum-scale=1"}),
+        wv.style(custom_css),
+        tailwind,
+        alpine,
+        alpine_script
+    )
+
+    full_html = "<!DOCTYPE html>" + wv.html(
+        wv.render(
+            wv.head(head_content),
+            wv.body(main_layout, "bg-white")
+        )
+    )
+
+    return full_html
+
+# Create and display the portfolio
+print("Creating modern portfolio with animations...")
+window = wv.Window("Portfolio - Modern Developer", 1400, 900)
+window.set_html(create_portfolio())
+print("Portfolio created! Launching window...")
+window.run()

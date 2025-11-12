@@ -2055,10 +2055,39 @@ impl Parser {
                     }
                     
                     // Parse expression inside braces
+                    // Track braces {}, brackets [], and parentheses () for proper nesting
                     let mut expr_content = String::new();
                     let mut brace_count = 1;
-                    
+                    let mut bracket_count = 0;  // Track [ ]
+                    let mut paren_count = 0;    // Track ( )
+                    let mut in_string = false;  // Track if we're inside a string literal
+                    let mut string_char = ' ';  // The quote character used (' or ")
+
                     while let Some(inner_ch) = chars.next() {
+                        // Handle string literals - don't count braces/brackets inside strings
+                        if (inner_ch == '\'' || inner_ch == '"') && !in_string {
+                            in_string = true;
+                            string_char = inner_ch;
+                            expr_content.push(inner_ch);
+                            continue;
+                        } else if in_string && inner_ch == string_char {
+                            // Check if it's escaped
+                            if expr_content.ends_with('\\') {
+                                expr_content.push(inner_ch);
+                                continue;
+                            }
+                            in_string = false;
+                            expr_content.push(inner_ch);
+                            continue;
+                        }
+
+                        // If we're inside a string, don't process special characters
+                        if in_string {
+                            expr_content.push(inner_ch);
+                            continue;
+                        }
+
+                        // Track nesting of braces, brackets, and parentheses
                         match inner_ch {
                             '{' => {
                                 brace_count += 1;
@@ -2066,9 +2095,26 @@ impl Parser {
                             }
                             '}' => {
                                 brace_count -= 1;
-                                if brace_count == 0 {
+                                // Only exit if we're at the top level (not inside brackets or parens)
+                                if brace_count == 0 && bracket_count == 0 && paren_count == 0 {
                                     break;
                                 }
+                                expr_content.push(inner_ch);
+                            }
+                            '[' => {
+                                bracket_count += 1;
+                                expr_content.push(inner_ch);
+                            }
+                            ']' => {
+                                bracket_count -= 1;
+                                expr_content.push(inner_ch);
+                            }
+                            '(' => {
+                                paren_count += 1;
+                                expr_content.push(inner_ch);
+                            }
+                            ')' => {
+                                paren_count -= 1;
                                 expr_content.push(inner_ch);
                             }
                             _ => {
