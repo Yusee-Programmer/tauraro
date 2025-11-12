@@ -485,7 +485,7 @@ impl Value {
             Value::NotImplemented => "NotImplemented".to_string(),
             Value::Starred(value) => format!("*{}", value.debug_string()),
             Value::List(items) => {
-                let items_str: Vec<String> = items.iter()
+                let items_str: Vec<String> = items.as_vec().iter()
                     .take(5) // Limit to prevent deep recursion
                     .map(|v| match v {
                         Value::Str(s) => format!("\"{}\"", s),
@@ -959,7 +959,7 @@ impl Value {
                 // Remove duplicates (simple implementation)
                 let mut unique_items = Vec::new();
                 for item in items.as_vec() {
-                    if !unique_items.contains(item) {
+                    if !unique_items.contains(&item) {
                         unique_items.push(item.clone());
                     }
                 }
@@ -1181,7 +1181,7 @@ impl Value {
                 }
                 match &args[0] {
                     Value::List(items) => {
-                        let strings: Result<Vec<String>, _> = items.iter().map(|item| {
+                        let strings: Result<Vec<String>, _> = items.as_vec().iter().map(|item| {
                             match item {
                                 Value::Str(s) => Ok(s.clone()),
                                 _ => Err(anyhow::anyhow!("sequence item {}: expected str instance, {} found", 0, item.type_name())),
@@ -1601,7 +1601,7 @@ impl Value {
                         Ok(Value::None)
                     }
                     Value::List(items) => {
-                        for item in items.iter() {
+                        for item in items.as_vec().iter() {
                             match item {
                                 Value::Tuple(pair) if pair.len() == 2 => {
                                     if let (Value::Str(key), value) = (&pair[0], &pair[1]) {
@@ -1730,7 +1730,7 @@ impl Value {
                         Ok(Value::None)
                     }
                     Value::List(items) => {
-                        for item in items.iter() {
+                        for item in items.as_vec().iter() {
                             match item {
                                 Value::Tuple(pair) if pair.len() == 2 => {
                                     if let (Value::Str(key), value) = (&pair[0], &pair[1]) {
@@ -2063,7 +2063,7 @@ impl Value {
                         Ok(Value::None)
                     }
                     Value::List(items) => {
-                        for item in items.iter() {
+                        for item in items.as_vec().iter() {
                             match item {
                                 Value::Int(n) if *n >= 0 && *n <= 255 => ba.push(*n as u8),
                                 _ => return Err(anyhow::anyhow!("extend() argument must be iterable of integers between 0 and 255")),
@@ -2115,7 +2115,7 @@ impl fmt::Display for Value {
             Value::NotImplemented => write!(f, "NotImplemented"),
             Value::Starred(value) => write!(f, "*{}", value),
             Value::List(items) => {
-                let items_str: Vec<String> = items.iter().map(|v| format!("{}", v)).collect();
+                let items_str: Vec<String> = items.as_vec().iter().map(|v| format!("{}", v)).collect();
                 write!(f, "[{}]", items_str.join(", "))
             }
             Value::Dict(dict) => {

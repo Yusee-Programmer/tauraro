@@ -2037,11 +2037,18 @@ impl SuperCompiler {
                 Ok(result_reg)
             }
             Expr::MethodCall { object, method, args, .. } => {
-                // Check if object is an identifier (variable) so we can update it after mutating method calls
-                let object_var_name = if let Expr::Identifier(ref name) = *object {
-                    Some(name.clone())
-                } else {
-                    None
+                // Track the object info for mutation handling
+                let object_info = match *object {
+                    Expr::Identifier(ref name) => Some((None, name.clone())),
+                    Expr::Attribute { ref object, ref name } => {
+                        // For self.data, track both self and data
+                        if let Expr::Identifier(ref base_name) = **object {
+                            Some((Some(base_name.clone()), name.clone()))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
                 };
 
                 let object_reg = self.compile_expression(*object)?;
@@ -2080,13 +2087,45 @@ impl SuperCompiler {
                 let packed_arg2 = (arg_count << 16) | cache_idx;
                 self.emit(OpCode::CallMethod, object_reg, packed_arg2, method_name_idx, self.current_line);
 
-                // CRITICAL FIX: For mutating methods, store the modified object back to the variable
+                // CRITICAL FIX: For mutating methods, store the modified object back
                 // This ensures that mutations persist (e.g., list.append modifies the list)
-                if let Some(var_name) = object_var_name {
-                    let mutating_methods = vec!["append", "extend", "insert", "remove", "pop", "clear", "sort", "reverse"];
-                    if mutating_methods.contains(&method.as_str()) {
-                        let name_idx = self.code.add_name(var_name);
-                        self.emit(OpCode::StoreGlobal, object_reg, name_idx, 0, self.current_line);
+                let mutating_methods = vec!["append", "extend", "insert", "remove", "pop", "clear", "sort", "reverse"];
+                if mutating_methods.contains(&method.as_str()) {
+                    if let Some((base_obj, attr_name)) = object_info {
+                        if let Some(base_name) = base_obj {
+                            // This is an attribute like self.data - need to store it back
+                            // First, load the base object (self)
+                            let base_reg = self.allocate_register();
+                            if self.is_in_function_scope() {
+                                if let Some(local_idx) = self.code.varnames.iter().position(|n| n == &base_name) {
+                                    self.emit(OpCode::LoadFast, local_idx as u32, base_reg, 0, self.current_line);
+                                } else {
+                                    let name_idx = self.code.add_name(base_name.clone());
+                                    let cache_idx = self.code.add_inline_cache();
+                                    self.emit(OpCode::LoadGlobal, name_idx, base_reg, cache_idx, self.current_line);
+                                }
+                            } else {
+                                let name_idx = self.code.add_name(base_name);
+                                let cache_idx = self.code.add_inline_cache();
+                                self.emit(OpCode::LoadGlobal, name_idx, base_reg, cache_idx, self.current_line);
+                            }
+
+                            // Now store the modified object back to the attribute
+                            let attr_idx = self.code.add_name(attr_name);
+                            self.emit(OpCode::StoreAttr, base_reg, attr_idx, object_reg, self.current_line);
+                        } else {
+                            // This is a simple variable like mylist
+                            let name_idx = self.code.add_name(attr_name.clone());
+                            if self.is_in_function_scope() {
+                                if let Some(local_idx) = self.code.varnames.iter().position(|n| n == &attr_name) {
+                                    self.emit(OpCode::StoreFast, object_reg, local_idx as u32, 0, self.current_line);
+                                } else {
+                                    self.emit(OpCode::StoreGlobal, object_reg, name_idx, 0, self.current_line);
+                                }
+                            } else {
+                                self.emit(OpCode::StoreGlobal, object_reg, name_idx, 0, self.current_line);
+                            }
+                        }
                     }
                 }
 
@@ -2318,6 +2357,64 @@ impl SuperCompiler {
                 self.code.instructions[end_jump_idx].arg1 = end_pos as u32;
 
                 Ok(result_reg)
+            }
+            Expr::Lambda { params, body } => {
+                // Compile lambda expression: lambda x, y: x + y
+                // Lambda functions are anonymous functions with a single expression body
+
+                // Create a new compiler for the lambda body
+                let mut lambda_compiler = SuperCompiler::new("<lambda>".to_string());
+
+                // CRITICAL: Set code.name so is_in_function_scope() works correctly
+                lambda_compiler.code.name = "<lambda>".to_string();
+
+                // Add parameters to the lambda's varnames
+                for param in &params {
+                    match param.kind {
+                        ParamKind::VarArgs | ParamKind::VarKwargs => {
+                            // For *args and **kwargs, we still add them to varnames
+                            lambda_compiler.code.add_varname(param.name.clone());
+                        }
+                        _ => {
+                            lambda_compiler.code.argcount = lambda_compiler.code.argcount + 1;
+                            lambda_compiler.code.add_varname(param.name.clone());
+                        }
+                    }
+                }
+
+                // Compile the lambda body (which is a single expression)
+                let body_reg = lambda_compiler.compile_expression(*body)?;
+
+                // Emit return instruction with the body result
+                lambda_compiler.emit(OpCode::ReturnValue, body_reg, 0, 0, 0);
+
+                // Set the number of registers needed for the lambda
+                lambda_compiler.code.registers = lambda_compiler.next_register;
+                lambda_compiler.code.nlocals = lambda_compiler.code.varnames.len() as u32;
+
+                // Get the compiled lambda code
+                let mut lambda_code = lambda_compiler.code;
+                lambda_code.params = params.clone(); // Set the params field
+
+                // Create a closure value for the lambda with the compiled code
+                let closure_value = Value::Closure {
+                    name: "<lambda>".to_string(),
+                    params: params.clone(),
+                    body: vec![], // Body is encoded in the bytecode, not stored as AST
+                    captured_scope: HashMap::new(),
+                    docstring: None,
+                    compiled_code: Some(Box::new(lambda_code)),
+                    module_globals: None, // Will be set when lambda is used in a module
+                };
+
+                // Add the lambda to constants and create a LoadConst instruction
+                let closure_const_idx = self.code.add_constant(closure_value.clone());
+
+                // Load the closure into a register
+                let lambda_reg = self.allocate_register();
+                self.emit(OpCode::LoadConst, closure_const_idx, lambda_reg, 0, self.current_line);
+
+                Ok(lambda_reg)
             }
             _ => Err(anyhow!("Unsupported expression type: {:?}", expr)),
         }

@@ -1250,11 +1250,11 @@ impl Parser {
         } else if self.match_token(&[Token::KwLambda]) {
             // Parse lambda expression
             let mut params = Vec::new();
-            
+
             // Lambda parameters (optional)
             if !self.check(&Token::Colon) {
                 if self.match_token(&[Token::LParen]) {
-                    // Lambda with parentheses
+                    // Lambda with parentheses: lambda (x, y): x + y
                     if !self.check(&Token::RParen) {
                         loop {
                             let param_name = self.consume_identifier()?;
@@ -1264,7 +1264,7 @@ impl Parser {
                                 default: None,
                                 kind: ParamKind::Positional,
                             });
-                            
+
                             if !self.match_token(&[Token::Comma]) {
                                 break;
                             }
@@ -1272,20 +1272,28 @@ impl Parser {
                     }
                     self.consume(Token::RParen, "Expected ')' after lambda parameters")?;
                 } else {
-                    // Simple lambda with single parameter
-                    let param_name = self.consume_identifier()?;
-                    params.push(Param {
-                        name: param_name,
-                        type_annotation: None,
-                        default: None,
-                        kind: ParamKind::Positional,
-                    });
+                    // Lambda without parentheses: lambda x, y: x + y
+                    // Parse multiple parameters separated by commas
+                    loop {
+                        let param_name = self.consume_identifier()?;
+                        params.push(Param {
+                            name: param_name,
+                            type_annotation: None,
+                            default: None,
+                            kind: ParamKind::Positional,
+                        });
+
+                        // Check if there's a comma (more parameters) or colon (end of params)
+                        if !self.match_token(&[Token::Comma]) {
+                            break;
+                        }
+                    }
                 }
             }
-            
+
             self.consume(Token::Colon, "Expected ':' after lambda parameters")?;
             let body = Box::new(self.expression()?);
-            
+
             Ok(Expr::Lambda { params, body })
         } else if self.is_number_token() {
             // Consume the number token first

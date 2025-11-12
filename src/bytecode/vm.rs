@@ -3512,7 +3512,7 @@ impl SuperBytecodeVM {
                     (Value::Str(item), Value::Str(container)) => Value::Bool(!container.contains(item)),
                     // List non-membership
                     (item, Value::List(container)) => {
-                        let found = container.iter().any(|list_item| list_item == item);
+                        let found = container.iter().any(|list_item| &list_item == item);
                         Value::Bool(!found)
                     },
                     // Tuple non-membership
@@ -4272,7 +4272,7 @@ impl SuperBytecodeVM {
                     (Value::Str(item), Value::Str(container)) => Value::Bool(container.contains(item)),
                     // List membership
                     (item, Value::List(container)) => {
-                        let found = container.iter().any(|list_item| list_item == item);
+                        let found = container.iter().any(|list_item| &list_item == item);
                         Value::Bool(found)
                     },
                     // Tuple membership
@@ -4326,7 +4326,7 @@ impl SuperBytecodeVM {
                     (Value::Str(item), Value::Str(container)) => Value::Bool(!container.contains(item)),
                     // List non-membership
                     (item, Value::List(container)) => {
-                        let found = container.iter().any(|list_item| list_item == item);
+                        let found = container.iter().any(|list_item| &list_item == item);
                         Value::Bool(!found)
                     },
                     // Tuple non-membership

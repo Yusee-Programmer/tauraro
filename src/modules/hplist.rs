@@ -6,86 +6,91 @@ use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
+use std::cell::RefCell;
 
 /// High-performance list that wraps Vec for optimal performance
-/// while maintaining Python list semantics
-#[derive(Debug)]
+/// while maintaining Python list semantics with reference semantics like Python
+#[derive(Debug, Clone)]
 pub struct HPList {
-    /// Internal storage using Vec for maximum performance
-    data: Vec<Value>,
+    /// Internal storage using Rc<RefCell<Vec>> for Python-like reference semantics
+    data: Rc<RefCell<Vec<Value>>>,
 }
 
 impl HPList {
     /// Create a new empty high-performance list
     pub fn new() -> Self {
         Self {
-            data: Vec::new(),
+            data: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
     /// Create a new high-performance list with initial capacity
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            data: Vec::with_capacity(capacity),
+            data: Rc::new(RefCell::new(Vec::with_capacity(capacity))),
         }
     }
 
     /// Create a new high-performance list from existing values
     pub fn from_values(values: Vec<Value>) -> Self {
         Self {
-            data: values,
+            data: Rc::new(RefCell::new(values)),
         }
     }
 
     /// Get the length of the list
     pub fn len(&self) -> usize {
-        self.data.len()
+        self.data.borrow().len()
     }
 
     /// Check if the list is empty
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.data.borrow().is_empty()
     }
 
     /// Get an element at the specified index (Python-style negative indexing supported)
-    pub fn get(&self, index: isize) -> Option<&Value> {
-        self.normalize_index(index).and_then(|idx| self.data.get(idx))
+    pub fn get(&self, index: isize) -> Option<Value> {
+        let data = self.data.borrow();
+        self.normalize_index_with_len(index, data.len()).and_then(|idx| data.get(idx).cloned())
     }
 
     /// Get a mutable reference to an element at the specified index
-    pub fn get_mut(&mut self, index: isize) -> Option<&mut Value> {
-        self.normalize_index(index).and_then(|idx| self.data.get_mut(idx))
+    pub fn get_mut(&self, index: isize) -> Option<Value> {
+        self.get(index)
     }
 
     /// Set an element at the specified index
-    pub fn set(&mut self, index: isize, value: Value) -> Result<()> {
-        let idx = self.normalize_index(index)
+    pub fn set(&self, index: isize, value: Value) -> Result<()> {
+        let mut data = self.data.borrow_mut();
+        let idx = self.normalize_index_with_len(index, data.len())
             .ok_or_else(|| anyhow!("list assignment index out of range"))?;
-        self.data[idx] = value;
+        data[idx] = value;
         Ok(())
     }
 
     /// Append an element to the end of the list (O(1) amortized)
-    pub fn append(&mut self, value: Value) {
-        self.data.push(value);
+    pub fn append(&self, value: Value) {
+        self.data.borrow_mut().push(value);
     }
-    
+
     /// Alias for append to maintain compatibility with Vec interface
-    pub fn push(&mut self, value: Value) {
-        self.data.push(value);
+    pub fn push(&self, value: Value) {
+        self.data.borrow_mut().push(value);
     }
 
     /// Extend the list with elements from an iterator
-    pub fn extend<I>(&mut self, iter: I) 
+    pub fn extend<I>(&self, iter: I)
     where
         I: IntoIterator<Item = Value>,
     {
-        self.data.extend(iter);
+        self.data.borrow_mut().extend(iter);
     }
 
     /// Insert an element at the specified index (O(n) in worst case)
-    pub fn insert(&mut self, index: isize, value: Value) -> Result<()> {
-        let len = self.data.len() as isize;
+    pub fn insert(&self, index: isize, value: Value) -> Result<()> {
+        let mut data = self.data.borrow_mut();
+        let len = data.len() as isize;
         let idx = if index < 0 {
             let normalized = len + index;
             if normalized < 0 { 0 } else { normalized as usize }
@@ -94,89 +99,93 @@ impl HPList {
         } else {
             index as usize
         };
-        
-        self.data.insert(idx, value);
+
+        data.insert(idx, value);
         Ok(())
     }
 
     /// Remove and return the last element (O(1))
-    pub fn pop(&mut self) -> Option<Value> {
-        self.data.pop()
+    pub fn pop(&self) -> Option<Value> {
+        self.data.borrow_mut().pop()
     }
 
     /// Remove and return the element at the specified index
-    pub fn pop_at(&mut self, index: isize) -> Result<Value> {
-        let idx = self.normalize_index(index)
+    pub fn pop_at(&self, index: isize) -> Result<Value> {
+        let mut data = self.data.borrow_mut();
+        let len = data.len();
+        let idx = self.normalize_index_with_len(index, len)
             .ok_or_else(|| anyhow!("pop index out of range"))?;
-        Ok(self.data.remove(idx))
+        Ok(data.remove(idx))
     }
 
     /// Remove the first occurrence of a value
-    pub fn remove(&mut self, value: &Value) -> Result<()> {
-        let pos = self.data.iter().position(|x| x == value)
+    pub fn remove(&self, value: &Value) -> Result<()> {
+        let mut data = self.data.borrow_mut();
+        let pos = data.iter().position(|x| x == value)
             .ok_or_else(|| anyhow!("list.remove(x): x not in list"))?;
-        self.data.remove(pos);
+        data.remove(pos);
         Ok(())
     }
 
     /// Get the index of the first occurrence of a value
     pub fn index(&self, value: &Value, start: Option<usize>, stop: Option<usize>) -> Result<usize> {
+        let data = self.data.borrow();
         let start_idx = start.unwrap_or(0);
-        let stop_idx = stop.unwrap_or(self.data.len()).min(self.data.len());
-        
-        if start_idx >= self.data.len() {
+        let stop_idx = stop.unwrap_or(data.len()).min(data.len());
+
+        if start_idx >= data.len() {
             return Err(anyhow!("list.index(x): x not in list"));
         }
-        
-        for (i, item) in self.data[start_idx..stop_idx].iter().enumerate() {
+
+        for (i, item) in data[start_idx..stop_idx].iter().enumerate() {
             if item == value {
                 return Ok(start_idx + i);
             }
         }
-        
+
         Err(anyhow!("list.index(x): x not in list"))
     }
 
     /// Count the occurrences of a value
     pub fn count(&self, value: &Value) -> usize {
-        self.data.iter().filter(|&x| x == value).count()
+        self.data.borrow().iter().filter(|&x| x == value).count()
     }
 
     /// Reverse the list in place
-    pub fn reverse(&mut self) {
-        self.data.reverse();
+    pub fn reverse(&self) {
+        self.data.borrow_mut().reverse();
     }
 
     /// Clear all elements from the list
-    pub fn clear(&mut self) {
-        self.data.clear();
+    pub fn clear(&self) {
+        self.data.borrow_mut().clear();
     }
 
     /// Sort the list in place using Python-style comparison
-    pub fn sort(&mut self) {
-        self.data.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    pub fn sort(&self) {
+        self.data.borrow_mut().sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     }
 
     /// Create a shallow copy of the list
     pub fn copy(&self) -> Self {
         Self {
-            data: self.data.clone(),
+            data: Rc::new(RefCell::new(self.data.borrow().clone())),
         }
     }
 
-    /// Normalize a Python-style index to a Rust usize index
-    fn normalize_index(&self, index: isize) -> Option<usize> {
-        let len = self.data.len() as isize;
+    /// Normalize a Python-style index to a Rust usize index (helper without borrowing)
+    fn normalize_index_with_len(&self, index: isize, len: usize) -> Option<usize> {
+        let len = len as isize;
         if len == 0 {
             return None;
         }
-        
+
         let idx = if index < 0 {
             len + index
         } else {
             index
         };
-        
+
         if idx < 0 || idx >= len {
             None
         } else {
@@ -184,29 +193,25 @@ impl HPList {
         }
     }
 
-    /// Get an iterator over the list elements
-    pub fn iter(&self) -> impl Iterator<Item = &Value> {
-        self.data.iter()
-    }
-
-    /// Get a mutable iterator over the list elements
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Value> {
-        self.data.iter_mut()
+    /// Get an iterator over cloned values (necessary due to RefCell borrowing)
+    pub fn iter(&self) -> std::vec::IntoIter<Value> {
+        self.data.borrow().clone().into_iter()
     }
 
     /// Convert to a regular Vec<Value>
-    pub fn to_vec(self) -> Vec<Value> {
-        self.data
+    pub fn to_vec(&self) -> Vec<Value> {
+        self.data.borrow().clone()
     }
 
-    /// Convert to a reference Vec<Value>
-    pub fn as_vec(&self) -> &Vec<Value> {
-        &self.data
+    /// Get a copy of the internal Vec
+    pub fn as_vec(&self) -> Vec<Value> {
+        self.data.borrow().clone()
     }
 
     /// Get slice of the list
     pub fn slice(&self, start: Option<isize>, stop: Option<isize>, step: Option<isize>) -> Result<Vec<Value>> {
-        let len = self.data.len() as isize;
+        let data = self.data.borrow();
+        let len = data.len() as isize;
         
         // Normalize start
         let start_idx = match start {
@@ -237,36 +242,36 @@ impl HPList {
         }
         
         let mut result = Vec::new();
-        
+
         if step_val > 0 {
             let mut idx = start_idx;
-            while idx < stop_idx && idx < self.data.len() {
-                result.push(self.data[idx].clone());
+            while idx < stop_idx && idx < data.len() {
+                result.push(data[idx].clone());
                 idx += step_val as usize;
             }
         } else {
             // Negative step
-            let mut idx = if start_idx >= self.data.len() {
-                self.data.len().saturating_sub(1)
+            let mut idx = if start_idx >= data.len() {
+                data.len().saturating_sub(1)
             } else {
                 start_idx
             };
-            
-            let stop_idx = if stop_idx > self.data.len() {
+
+            let stop_idx = if stop_idx > data.len() {
                 0
             } else {
                 stop_idx
             };
-            
-            while idx >= stop_idx && idx < self.data.len() {
-                result.push(self.data[idx].clone());
+
+            while idx >= stop_idx && idx < data.len() {
+                result.push(data[idx].clone());
                 if idx < (-step_val) as usize {
                     break;
                 }
                 idx -= (-step_val) as usize;
             }
         }
-        
+
         Ok(result)
     }
 }
@@ -274,7 +279,12 @@ impl HPList {
 // Implement Hash trait for HPList
 impl Hash for HPList {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.data.hash(state);
+        // Hash based on contents
+        for item in self.data.borrow().iter() {
+            // Note: Value must implement Hash for this to work properly
+            // For now we'll just hash the type_name
+            item.type_name().hash(state);
+        }
     }
 }
 
@@ -282,28 +292,14 @@ impl Hash for HPList {
 impl IntoIterator for HPList {
     type Item = Value;
     type IntoIter = std::vec::IntoIter<Value>;
-    
-    fn into_iter(self) -> Self::IntoIter {
-        self.data.into_iter()
-    }
-}
 
-// Implement IntoIterator for &HPList
-impl<'a> IntoIterator for &'a HPList {
-    type Item = &'a Value;
-    type IntoIter = std::slice::Iter<'a, Value>;
-    
     fn into_iter(self) -> Self::IntoIter {
-        self.data.iter()
-    }
-}
-
-// Implement Clone for HPList
-impl Clone for HPList {
-    fn clone(&self) -> Self {
-        HPList {
-            data: self.data.clone(),
-        }
+        // Get ownership of the inner Vec
+        let vec = match Rc::try_unwrap(self.data) {
+            Ok(refcell) => refcell.into_inner(),
+            Err(rc) => rc.borrow().clone(),
+        };
+        vec.into_iter()
     }
 }
 
@@ -316,7 +312,7 @@ impl PartialEq for HPList {
 
 impl std::fmt::Display for HPList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let items: Vec<String> = self.data.iter().map(|v| format!("{}", v)).collect();
+        let items: Vec<String> = self.data.borrow().iter().map(|v| format!("{}", v)).collect();
         write!(f, "[{}]", items.join(", "))
     }
 }

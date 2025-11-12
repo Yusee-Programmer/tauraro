@@ -140,8 +140,8 @@ fn serialize_object(obj: &Value, protocol: i64) -> Result<String> {
         Value::Str(s) => Ok(format!("S'{}'\n", s)),
         Value::List(items) => {
             let mut result = String::from("(l");
-            for item in items {
-                result.push_str(&serialize_object(item, protocol)?);
+            for item in items.iter() {
+                result.push_str(&serialize_object(&item, protocol)?);
             }
             result.push_str("t");
             Ok(result)
