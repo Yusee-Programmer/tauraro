@@ -45,7 +45,7 @@ pub enum Statement {
     },
     For {
         variable: String,  // Primary variable (for backwards compatibility)
-        variables: Vec<String>,  // Multiple variables for tuple unpacking
+        variables: Vec<AssignTarget>,  // Multiple variables for tuple unpacking (supports nested targets)
         iterable: Expr,
         body: Vec<Statement>,
         else_branch: Option<Vec<Statement>>,

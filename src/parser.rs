@@ -602,13 +602,15 @@ impl Parser {
     fn for_statement(&mut self) -> Result<Statement, ParseError> {
         self.consume(Token::KwFor, "Expected 'for' or 'duk'")?;
 
-        // Parse variable(s) - can be a single variable or tuple unpacking
-        let mut variables = Vec::new();
-        variables.push(self.consume_identifier()?);
+        // Parse variable(s) - can be a single variable, tuple/list unpacking, or nested targets
+        let mut variables: Vec<AssignTarget> = Vec::new();
 
-        // Check for tuple unpacking (comma-separated variables)
+        // Parse first target
+        variables.push(self.parse_assign_target()?);
+
+        // Check for comma-separated additional targets
         while self.match_token(&[Token::Comma]) {
-            variables.push(self.consume_identifier()?);
+            variables.push(self.parse_assign_target()?);
         }
 
         self.consume(Token::KwIn, "Expected 'in' or 'cikin' after for variable")?;
@@ -616,8 +618,13 @@ impl Parser {
         self.consume(Token::Colon, "Expected ':' after for clause")?;
         let body = self.block()?;
 
-        // For backwards compatibility, store first variable as 'variable'
-        let variable = variables.get(0).unwrap_or(&String::new()).clone();
+        // For backwards compatibility, store first variable name (if it's an identifier) as 'variable'
+        let variable = match variables.get(0) {
+            Some(crate::ast::AssignTarget::Identifier(name, _)) => name.clone(),
+            Some(crate::ast::AssignTarget::Tuple(_)) | Some(crate::ast::AssignTarget::List(_)) 
+            | Some(crate::ast::AssignTarget::Attribute { .. }) | Some(crate::ast::AssignTarget::Subscript { .. }) 
+            | None => String::new(),
+        };
 
         Ok(Statement::For {
             variable,
@@ -626,6 +633,44 @@ impl Parser {
             body,
             else_branch: None,
         })
+    }
+
+    /// Parse an assignment target used in assignments and for-loop targets.
+    /// Supports identifiers and parenthesized tuple/list of targets (nested).
+    fn parse_assign_target(&mut self) -> Result<crate::ast::AssignTarget, ParseError> {
+        // If it's a parenthesized tuple/list target
+        if self.match_token(&[Token::LParen]) {
+            let mut items = Vec::new();
+            // Empty tuple
+            if self.match_token(&[Token::RParen]) {
+                return Ok(crate::ast::AssignTarget::Tuple(items));
+            }
+
+            loop {
+                // Allow nested parenthesized targets
+                if self.check(&Token::LParen) {
+                    let nested = self.parse_assign_target()?;
+                    items.push(nested);
+                } else if matches!(self.peek().token, Token::Identifier(_)) {
+                    let name = self.consume_identifier()?;
+                    items.push(crate::ast::AssignTarget::Identifier(name, None));
+                } else {
+                    return Err(ParseError::InvalidSyntax { message: "Invalid target in tuple/list unpacking".to_string() });
+                }
+
+                if !self.match_token(&[Token::Comma]) {
+                    break;
+                }
+            }
+
+            self.consume(Token::RParen, "Expected ')' after tuple target")?;
+            Ok(crate::ast::AssignTarget::Tuple(items))
+        } else if matches!(self.peek().token, Token::Identifier(_)) {
+            let name = self.consume_identifier()?;
+            Ok(crate::ast::AssignTarget::Identifier(name, None))
+        } else {
+            Err(ParseError::UnexpectedToken { expected: "identifier or tuple target".to_string(), found: format!("{:?}", self.peek().token) })
+        }
     }
 
     fn while_statement(&mut self) -> Result<Statement, ParseError> {

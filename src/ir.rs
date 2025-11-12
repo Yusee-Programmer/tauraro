@@ -75,6 +75,7 @@ pub enum IRInstruction {
     },
     For {
         variable: String,
+        variables: Vec<crate::ast::AssignTarget>,
         iterable: String,
         body: Vec<IRInstruction>,
     },
@@ -570,7 +571,7 @@ impl Generator {
                     body: body_instructions,
                 });
             },
-            Statement::For { variable, iterable, body, else_branch: _, .. } => {
+            Statement::For { variable, variables, iterable, body, else_branch: _, .. } => {
                 self.process_expression(module, &iterable)?;
                 // Get the result variable from the last instruction
                 let iterable_var = module.globals.last()
@@ -589,6 +590,7 @@ impl Generator {
 
                 module.globals.push(IRInstruction::For {
                     variable,
+                    variables: variables.clone(),
                     iterable: iterable_var,
                     body: body_instructions,
                 });
@@ -710,7 +712,7 @@ impl Generator {
                     body: body_instructions,
                 });
             },
-            Statement::For { variable, iterable, body, else_branch: _, .. } => {
+            Statement::For { variable, variables, iterable, body, else_branch: _, .. } => {
                 self.process_expression_for_instructions(instructions, &iterable)?;
                 // Get the result variable from the last instruction
                 let iterable_var = instructions.last()
@@ -729,6 +731,7 @@ impl Generator {
 
                 instructions.push(IRInstruction::For {
                     variable,
+                    variables: variables.clone(),
                     iterable: iterable_var,
                     body: body_instructions,
                 });

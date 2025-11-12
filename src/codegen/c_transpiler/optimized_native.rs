@@ -1063,11 +1063,15 @@ impl OptimizedNativeTranspiler {
                 }
             }
             Statement::For { variable, variables, iterable, body, else_branch } => {
-                // Use primary variable or first of variables
+                // Use primary variable or first of variables (extract identifier from AssignTarget)
                 let loop_var = if !variable.is_empty() {
                     variable.clone()
                 } else if !variables.is_empty() {
-                    variables[0].clone()
+                    // variables is Vec<AssignTarget> now; support simple Identifier targets here
+                    match &variables[0] {
+                        crate::ast::AssignTarget::Identifier(name, _ty) => name.clone(),
+                        _ => return Err("For loop target is not a simple identifier; complex targets not supported in C transpiler".to_string()),
+                    }
                 } else {
                     return Err("For loop has no target variable".to_string());
                 };

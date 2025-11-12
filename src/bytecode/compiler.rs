@@ -256,6 +256,50 @@ impl SuperCompiler {
         self.next_register += 1;
         reg
     }
+
+    /// Recursively emit instructions to unpack a source register into an AssignTarget.
+    fn emit_unpack_target(&mut self, target: &crate::ast::AssignTarget, source_reg: u32) -> Result<()> {
+        use crate::ast::AssignTarget;
+        match target {
+            AssignTarget::Identifier(name, _type_opt) => {
+                if self.is_in_function_scope() {
+                    let local_idx = self.get_local_index(name);
+                    self.emit(OpCode::StoreFast, source_reg, local_idx, 0, self.current_line);
+                } else {
+                    let name_idx = self.code.add_name(name.clone());
+                    self.emit(OpCode::StoreGlobal, source_reg, name_idx, 0, self.current_line);
+                }
+                Ok(())
+            }
+            AssignTarget::Tuple(items) | AssignTarget::List(items) => {
+                // For each element in the tuple/list, extract by index and recursively unpack
+                let index_reg = self.allocate_register();
+                for (i, subtarget) in items.iter().enumerate() {
+                    let idx_const = self.code.add_constant(value_pool::create_int(i as i64));
+                    self.emit(OpCode::LoadConst, idx_const, index_reg, 0, self.current_line);
+
+                    let item_reg = self.allocate_register();
+                    self.emit(OpCode::SubscrLoad, source_reg, index_reg, item_reg, self.current_line);
+
+                    // Recurse into the subtarget using the extracted item_reg
+                    self.emit_unpack_target(subtarget, item_reg)?;
+                }
+                Ok(())
+            }
+            // Attribute and Subscript targets aren't produced by the for-loop parser currently;
+            // if encountered, fall back to evaluating a store via simple global/local store of the source register.
+            AssignTarget::Attribute { object: _, name } => {
+                // Not implemented fully here; store source_reg into a global variable named as attribute for now
+                let name_idx = self.code.add_name(name.clone());
+                self.emit(OpCode::StoreGlobal, source_reg, name_idx, 0, self.current_line);
+                Ok(())
+            }
+            AssignTarget::Subscript { .. } => {
+                // Not implementing subscript assignment as a for target for now
+                Err(anyhow!("Subscript assignment targets in for-loops not supported"))
+            }
+        }
+    }
     
     pub fn compile_statement(&mut self, stmt: Statement) -> Result<()> {
         // eprintln!("DEBUG: Compiling statement: {:?}", stmt); // Debug output
@@ -482,7 +526,7 @@ impl SuperCompiler {
 
                 Ok(())
             }
-            Statement::For { variable, variables, iterable, body, .. } => {
+            Statement::For { variable: _variable, variables, iterable, body, .. } => {
                 // Compile for loop: for variable(s) in iterable:
 
                 // 1. Compile the iterable expression
@@ -504,54 +548,30 @@ impl SuperCompiler {
                 let value_reg = self.allocate_register();
                 let for_iter_pos = self.emit(OpCode::ForIter, iter_reg, value_reg, 0, self.current_line); // arg3 will be updated later
 
-                // 6. Handle tuple unpacking if we have multiple variables
+                // 6. Handle unpacking for targets (supports nested targets)
                 if variables.len() > 1 {
                     // Tuple unpacking: for a, b, c in iterable
-                    // Allocate temporary registers for index and element (reuse for all variables)
+                    // Allocate a register for the index constant (can be reused)
                     let index_reg = self.allocate_register();
-                    let elem_reg = self.allocate_register();
 
-                    for (idx, var_name) in variables.iter().enumerate() {
+                    for (idx, target) in variables.iter().enumerate() {
                         // Load the index constant (using pool for small integers)
                         let idx_const = self.code.add_constant(value_pool::create_int(idx as i64));
                         self.emit(OpCode::LoadConst, idx_const, index_reg, 0, self.current_line);
 
-                        // Extract element by index
+                        // Extract element by index into a temp register
+                        let elem_reg = self.allocate_register();
                         self.emit(OpCode::SubscrLoad, value_reg, index_reg, elem_reg, self.current_line);
 
-                        // Store the element in the variable
-                        let var_idx = if self.is_in_function_scope() {
-                            self.get_local_index(var_name)
-                        } else {
-                            self.code.add_name(var_name.clone())
-                        };
-
-                        if self.is_in_function_scope() {
-                            // FIX: VM expects (value_reg, local_idx) not (local_idx, value_reg)
-                            self.emit(OpCode::StoreFast, elem_reg, var_idx, 0, self.current_line);
-                        } else {
-                            self.emit(OpCode::StoreGlobal, elem_reg, var_idx, 0, self.current_line);
-                        }
+                        // Recursively unpack the element into the target(s)
+                        self.emit_unpack_target(target, elem_reg)?;
                     }
+                } else if variables.len() == 1 {
+                    // Single (possibly nested) target: unpack the iterated value into the single target
+                    let target = &variables[0];
+                    self.emit_unpack_target(target, value_reg)?;
                 } else {
-                    // Single variable: for x in iterable
-                    let loop_var_idx = if self.is_in_function_scope() {
-                        // In function scope, use fast local access
-                        self.get_local_index(&variable)
-                    } else {
-                        // In global scope, we don't add to varnames, just get the name index
-                        self.code.add_name(variable.clone())
-                    };
-
-                    // Store the iterated value in the loop variable
-                    if self.is_in_function_scope() {
-                        // In function scope, use fast local access
-                        // FIX: VM expects (value_reg, local_idx) not (local_idx, value_reg)
-                        self.emit(OpCode::StoreFast, value_reg, loop_var_idx, 0, self.current_line);
-                    } else {
-                        // In global scope, use StoreGlobal
-                        self.emit(OpCode::StoreGlobal, value_reg, loop_var_idx, 0, self.current_line);
-                    }
+                    // Fallback: no targets parsed - ignore value
                 }
 
                 // 7. Compile the loop body
