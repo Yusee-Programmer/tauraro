@@ -83,6 +83,10 @@ md5 = { package = "md-5", version = "0.10" }
 # Database ORM
 rusqlite = { version = "0.31", features = ["bundled"] }
 
+# WebViewTK - Cross-platform GUI framework
+wry = { version = "0.24", optional = true }
+tao = { version = "0.16", optional = true }
+
 [features]
 default = ["interpreter", "clang", "ffi", "async", "http"]
 interpreter = []  # VM-based execution
@@ -98,6 +102,7 @@ http = []  # HTTP and WebSocket support (now always available)
 jit = ["dep:cranelift", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module"]  # JIT compilation with Cranelift
 test-llvm = []  # Feature for testing LLVM backend
 type_checking = []  # Runtime type checking support
+webviewtk = ["dep:wry", "dep:tao"]  # Cross-platform GUI framework using HTML/CSS/JS
 
 [dev-dependencies]
 pretty_assertions = "1.4"

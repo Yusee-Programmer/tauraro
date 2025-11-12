@@ -2737,7 +2737,17 @@ impl SuperBytecodeVM {
                 }
                 // Otherwise treat keys as attributes
                 else if let Some(value) = dict.borrow().get(&attr_name) {
-                    value.clone()
+                    // If the value is a callable (Closure or NativeFunction),
+                    // wrap it in a BoundMethod so the dict is passed as 'self'
+                    match &value {
+                        Value::Closure { .. } | Value::NativeFunction(_) | Value::BuiltinFunction(_, _) => {
+                            Value::BoundMethod {
+                                object: Box::new(object_value.clone()),
+                                method_name: attr_name.clone(),
+                            }
+                        }
+                        _ => value.clone()
+                    }
                 } else {
                     return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
                 }
@@ -5209,7 +5219,25 @@ impl SuperBytecodeVM {
                                     return Err(anyhow!("Method '{}' not found in class methods", method_name));
                                 }
                             },
-                            Value::Dict(_) | Value::List(_) | Value::Str(_) | Value::Set(_) | Value::Tuple(_) => {
+                            Value::Dict(dict) => {
+                                // For dicts, first check if the method is stored as a key in the dict
+                                if let Some(method) = dict.borrow().get(&method_name) {
+                                    // Found a custom method stored in the dict
+                                    // Call it with the dict as the first argument (self)
+                                    let mut method_args = vec![*object.clone()];
+                                    method_args.extend(args);
+                                    self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?
+                                }
+                                // Otherwise check for built-in dict methods
+                                else if let Some(method) = object.as_ref().get_method(&method_name) {
+                                    let mut method_args = vec![Value::Str(method_name.clone()), *object.clone()];
+                                    method_args.extend(args);
+                                    self.call_function_fast(method, method_args, HashMap::new(), Some(frame_idx), Some(result_reg as u32))?
+                                } else {
+                                    return Err(anyhow!("Method '{}' not found for type 'dict'", method_name));
+                                }
+                            },
+                            Value::List(_) | Value::Str(_) | Value::Set(_) | Value::Tuple(_) => {
                                 // For builtin types, get the method and call it
                                 if let Some(method) = object.as_ref().get_method(&method_name) {
                                     // Create arguments: method_name, self, then the actual args
@@ -6424,8 +6452,26 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("Method '{}' not found in class methods", bound_method_name));
                         }
                     },
-                    Value::Dict(_) | Value::List(_) | Value::Str(_) | Value::Set(_) | Value::Tuple(_) => {
-                        // For builtin types (dict, list, str, set, tuple), get the method and call it
+                    Value::Dict(dict) => {
+                        // For dicts, first check if the method is stored as a key in the dict
+                        if let Some(method) = dict.borrow().get(&bound_method_name) {
+                            // Found a custom method stored in the dict
+                            // Call it with the dict as the first argument (self)
+                            let mut method_args = vec![*object.clone()];
+                            method_args.extend(args);
+                            self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                        }
+                        // Otherwise check for built-in dict methods
+                        else if let Some(method) = object.as_ref().get_method(&bound_method_name) {
+                            let mut method_args = vec![Value::Str(bound_method_name.clone()), *object.clone()];
+                            method_args.extend(args);
+                            self.call_function_fast(method, method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                        } else {
+                            return Err(anyhow!("Method '{}' not found for type 'dict'", bound_method_name));
+                        }
+                    },
+                    Value::List(_) | Value::Str(_) | Value::Set(_) | Value::Tuple(_) => {
+                        // For builtin types (list, str, set, tuple), get the method and call it
                         if let Some(method) = object.as_ref().get_method(&bound_method_name) {
                             // Create arguments: method_name, self, then the actual args
                             let mut method_args = vec![Value::Str(bound_method_name.clone()), *object.clone()];
@@ -7035,11 +7081,27 @@ impl SuperBytecodeVM {
                     }
                 }
             }
-            Value::Dict(_) => {
+            Value::Dict(dict) => {
                 // Handle dict methods by calling them directly and storing the result immediately
                 // We need to bypass the None-preservation logic because dict.get() can return None as a valid result
                 let dict_object_value = self.frames[frame_idx].registers[object_reg].value.clone();
-                if let Some(method) = dict_object_value.get_method(method_name) {
+
+                // First check if the method is stored as a key in the dict
+                // Clone the method to release the borrow before calling it
+                let method_opt = dict.borrow().get(method_name).cloned();
+                if let Some(method) = method_opt {
+                    // Call the custom method with the dict as the first argument (self)
+                    let mut method_args = vec![dict_object_value.clone()];
+                    method_args.extend(args);
+
+                    let result = self.call_function_fast(method, method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+
+                    // Store the result directly in object_reg and return special marker
+                    self.frames[frame_idx].registers[object_reg] = RcValue::new(result);
+                    return Ok(Value::None);
+                }
+                // Otherwise check for built-in dict methods
+                else if let Some(method) = dict_object_value.get_method(method_name) {
                     // Create arguments: method_name, self, then the actual args
                     let mut method_args = vec![Value::Str(method_name.to_string()), dict_object_value.clone()];
                     method_args.extend(args);
@@ -7691,7 +7753,25 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("Method '{}' not found in class methods", method_name));
                         }
                     }
-                    Value::Dict(_) | Value::List(_) | Value::Str(_) | Value::Set(_) | Value::Tuple(_) => {
+                    Value::Dict(dict) => {
+                        // For dicts, first check if the method is stored as a key in the dict
+                        if let Some(method) = dict.borrow().get(&method_name) {
+                            // Found a custom method stored in the dict
+                            // Call it with the dict as the first argument (self)
+                            let mut method_args = vec![*object.clone()];
+                            method_args.extend(args);
+                            return self.call_function_fast(method.clone(), method_args, kwargs, frame_idx, result_reg);
+                        }
+                        // Otherwise check for built-in dict methods
+                        else if let Some(method) = object.as_ref().get_method(&method_name) {
+                            let mut method_args = vec![Value::Str(method_name.clone()), *object.clone()];
+                            method_args.extend(args);
+                            return self.call_function_fast(method, method_args, kwargs, frame_idx, result_reg);
+                        } else {
+                            return Err(anyhow!("Method '{}' not found for type 'dict'", method_name));
+                        }
+                    }
+                    Value::List(_) | Value::Str(_) | Value::Set(_) | Value::Tuple(_) => {
                         // For builtin types, get the method and call it
                         if let Some(method) = object.as_ref().get_method(&method_name) {
                             // Create arguments: method_name, self, then the actual args

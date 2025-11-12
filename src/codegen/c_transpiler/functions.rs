@@ -161,8 +161,13 @@ pub fn generate_instruction(
         IRInstruction::While { condition, condition_instructions, body } => {
             generate_while(condition, condition_instructions, body, local_vars, param_types, class_names)
         }
-        IRInstruction::For { variable, iterable, body } => {
-            generate_for(variable, iterable, body, local_vars, param_types, class_names)
+        IRInstruction::For { variable, variables, iterable, body } => {
+            // The C generator currently supports simple loop variable cases.
+            // For complex nested targets, fall back to using the primary variable name
+            // (the first identifier) when generating C code. Proper handling of
+            // nested assigns requires more advanced codegen which is out of scope
+            // for the quick patch.
+            generate_for(variable, &variables, iterable, body, local_vars, param_types, class_names)
         }
         IRInstruction::Break => {
             Ok("break;".to_string())
@@ -625,6 +630,7 @@ fn generate_while(
 /// Generate C code for a for loop
 fn generate_for(
     variable: &str,
+    variables: &Vec<crate::ast::AssignTarget>,
     iterable: &str,
     body: &[IRInstruction],
     local_vars: &mut HashMap<String, String>,
@@ -647,6 +653,11 @@ fn generate_for(
     code.push_str(&format!("        for ({} = 0; {} < iter_len; {}++) {{\n", index_var, index_var, index_var));
 
     // Get current element
+    // If the loop target is a simple identifier, use it directly. For complex
+    // nested targets we still store the element into the primary variable name
+    // (variable) and the bytecode compiler will be responsible for unpacking
+    // into nested targets at runtime. Here we ensure the C code has a variable
+    // to reference.
     local_vars.insert(variable.to_string(), "tauraro_value_t*".to_string());
     code.push_str(&format!("            tauraro_value_t* {} = {}->data.list_val[{}];\n", variable, iterator_var, index_var));
 

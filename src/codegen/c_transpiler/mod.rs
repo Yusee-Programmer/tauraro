@@ -774,7 +774,7 @@ impl CTranspiler {
                     vars.insert(object.clone());
                     vars.insert(value.clone());
                 }
-                IRInstruction::For { variable, iterable, body } => {
+                IRInstruction::For { variable, iterable, body, .. } => {
                     vars.insert(variable.clone());
                     vars.insert(iterable.clone());
                     for body_instr in body {
@@ -1159,7 +1159,7 @@ impl CTranspiler {
 
                 return Ok(code_lines.join(" "));
             }
-            IRInstruction::For { variable, iterable, body } if type_ctx.is_optimizable_int(variable) => {
+            IRInstruction::For { variable, iterable, body, .. } if type_ctx.is_optimizable_int(variable) => {
                 // Generate optimized For loop for integer variables
                 let mut code = String::new();
                 let iterator_var = format!("{}_iter", variable);
@@ -1910,7 +1910,7 @@ impl CTranspiler {
 
                 Ok(code)
             }
-            IRInstruction::For { variable, iterable, body } => {
+            IRInstruction::For { variable, iterable, body, .. } => {
                 let mut code = String::new();
 
                 // Generate iterator setup
