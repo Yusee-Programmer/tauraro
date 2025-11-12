@@ -1,5 +1,5 @@
 """
-Modern Portfolio/Landing Page with Smooth Animations
+Modern Portfolio Desktop app with Smooth Animations
 Features: Hero section, Projects gallery, Skills showcase, Contact form, Smooth scrolling
 """
 
@@ -259,7 +259,7 @@ def create_portfolio():
                     wv.render(
                         wv.h1("Hi, I'm a Full Stack Developer", "text-5xl md:text-7xl font-bold text-white mb-6 slide-in-left"),
                         wv.p(
-                            "I build amazing web applications with modern technologies",
+                            "I build amazing softwares with modern technologies",
                             "text-xl md:text-2xl text-white text-opacity-90 mb-8 slide-in-left",
                             "",
                             "style='animation-delay: 0.2s'"
