@@ -243,7 +243,7 @@ fn counter_builtin(args: Vec<Value>) -> Result<Value> {
         match &args[0] {
             Value::List(items) => {
                 // Count items in list
-                for item in items {
+                for item in items.iter() {
                     let key = format!("{}", item);
                     let count = counts.entry(key.clone()).or_insert(Value::Int(0));
                     if let Value::Int(n) = count {
@@ -509,7 +509,7 @@ fn deque_builtin(args: Vec<Value>) -> Result<Value> {
     if !args.is_empty() {
         match &args[0] {
             Value::List(list) => {
-                items.extend(list.iter().cloned());
+                items.extend(list.iter());
             }
             _ => {}
         }

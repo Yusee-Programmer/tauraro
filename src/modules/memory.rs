@@ -158,7 +158,7 @@ fn builtin_memory_sizeof(args: Vec<Value>) -> Result<Value> {
                     Value::Float(_) => std::mem::size_of::<f64>(),
                     Value::Bool(_) => std::mem::size_of::<bool>(),
                     Value::Str(s) => s.len(),
-                    _ => std::mem::size_of_val(v),
+                    _ => std::mem::size_of_val(&v),
                 }
             }).sum::<usize>()
         },
@@ -170,7 +170,7 @@ fn builtin_memory_sizeof(args: Vec<Value>) -> Result<Value> {
                     Value::Float(_) => std::mem::size_of::<f64>(),
                     Value::Bool(_) => std::mem::size_of::<bool>(),
                     Value::Str(s) => s.len(),
-                    _ => std::mem::size_of_val(v),
+                    _ => std::mem::size_of_val(&v),
                 }
             }).sum::<usize>()
         },
@@ -182,7 +182,7 @@ fn builtin_memory_sizeof(args: Vec<Value>) -> Result<Value> {
                     Value::Float(_) => std::mem::size_of::<f64>(),
                     Value::Bool(_) => std::mem::size_of::<bool>(),
                     Value::Str(s) => s.len(),
-                    _ => std::mem::size_of_val(v),
+                    _ => std::mem::size_of_val(&v),
                 }
             }).sum::<usize>()
         },
@@ -194,7 +194,7 @@ fn builtin_memory_sizeof(args: Vec<Value>) -> Result<Value> {
                     Value::Float(_) => std::mem::size_of::<f64>(),
                     Value::Bool(_) => std::mem::size_of::<bool>(),
                     Value::Str(s) => s.len(),
-                    _ => std::mem::size_of_val(v),
+                    _ => std::mem::size_of_val(&v),
                 }
             }).sum::<usize>()
         },

@@ -254,7 +254,7 @@ fn dict_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
             Value::Dict(dict) => Ok(Value::Dict(dict.clone())),
             Value::List(items) => {
                 let mut dict = HashMap::new();
-                for item in items.iter() {
+                for item in items.as_vec().iter() {
                     match item {
                         Value::Tuple(pair) if pair.len() == 2 => {
                             if let (Value::Str(key), value) = (&pair[0], &pair[1]) {
@@ -452,23 +452,23 @@ fn sum_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     match iterable {
         Value::List(items) => {
             for item in items.iter() {
-                sum = match (&sum, item) {
+                sum = match (&sum, &item) {
                     (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
                     (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
                     (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 + b),
-                    (Value::Float(a), Value::Int(b)) => Value::Float(a + *b as f64),
-                    _ => return Err(anyhow::anyhow!("unsupportedsupported operand type(s) for +: '{}' and '{}'", sum.type_name(), item.type_name())),
+                    (Value::Float(a), Value::Int(b)) => Value::Float(a + (*b) as f64),
+                    _ => return Err(anyhow::anyhow!("unsupported operand type(s) for +: '{}' and '{}'", sum.type_name(), item.type_name())),
                 };
             }
             Ok(sum)
         }
         Value::Tuple(items) => {
             for item in items {
-                sum = match (&sum, item) {
+                sum = match (&sum, &item) {
                     (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
                     (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
                     (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 + b),
-                    (Value::Float(a), Value::Int(b)) => Value::Float(a + *b as f64),
+                    (Value::Float(a), Value::Int(b)) => Value::Float(a + (*b) as f64),
                     _ => return Err(anyhow::anyhow!("unsupported operand type(s) for +: '{}' and '{}'", sum.type_name(), item.type_name())),
                 };
             }
@@ -1474,7 +1474,7 @@ fn file_writelines(args: Vec<Value>) -> anyhow::Result<Value> {
             let mut result = String::new();
             for item in items.iter() {
                 if let Value::Str(s) = item {
-                    result.push_str(s);
+                    result.push_str(&s);
                 } else {
                     return Err(anyhow::anyhow!("writelines() requires list of strings"));
                 }

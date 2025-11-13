@@ -443,7 +443,7 @@ fn serialize_to_json(value: &Value, indent: Option<usize>, current_depth: usize)
                         result.push_str(&" ".repeat((current_depth + 1) * indent_size));
                     }
                     
-                    let item_json = serialize_to_json(item, indent, current_depth + 1)?;
+                    let item_json = serialize_to_json(&item, indent, current_depth + 1)?;
                     if let Value::Str(s) = item_json {
                         result.push_str(&s);
                     }

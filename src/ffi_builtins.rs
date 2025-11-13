@@ -102,10 +102,10 @@ pub fn define_function_builtin(args: Vec<Value>) -> Result<Value> {
             match &args[3] {
                 Value::List(list) => {
                     let mut types = Vec::new();
-                    for item in list {
+                    for item in list.iter() {
                         match item {
                             Value::Str(s) => {
-                                types.push(parse_ffi_type(s)?);
+                                types.push(parse_ffi_type(&s)?);
                             }
                             _ => return Err(anyhow!("Parameter types must be strings")),
                         }

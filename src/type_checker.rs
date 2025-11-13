@@ -249,7 +249,7 @@ impl TypeChecker {
                     return true; // List without type parameter
                 }
                 if let Some(element_type) = args.first() {
-                    items.iter().all(|v| self.value_matches_type(v, element_type))
+                    items.iter().all(|v| self.value_matches_type(&v, element_type))
                 } else {
                     true
                 }
@@ -290,7 +290,7 @@ impl TypeChecker {
                     return true; // Set without type parameter
                 }
                 if let Some(element_type) = args.first() {
-                    items.iter().all(|v| self.value_matches_type(v, element_type))
+                    items.iter().all(|v| self.value_matches_type(&v, element_type))
                 } else {
                     true
                 }
@@ -477,7 +477,7 @@ pub fn infer_type_from_value(value: &Value) -> Type {
                 }
             } else {
                 // Infer from first element
-                let elem_type = infer_type_from_value(&items.get(0).unwrap_or(&Value::None));
+                let elem_type = infer_type_from_value(&items.get(0).unwrap_or(Value::None));
                 Type::Generic {
                     name: "List".to_string(),
                     args: vec![elem_type],

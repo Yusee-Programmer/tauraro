@@ -174,7 +174,7 @@ fn test_suite_add_tests(args: Vec<Value>) -> Result<Value> {
         let mut suite_ref = suite.borrow_mut();
         if let Some(Value::List(mut suite_tests)) = suite_ref.get("tests").cloned() {
             if let Value::List(new_tests) = &args[1] {
-                for test in new_tests {
+                for test in new_tests.iter() {
                     suite_tests.push(test.clone());
                 }
                 suite_ref.insert("tests".to_string(), Value::List(suite_tests));

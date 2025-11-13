@@ -123,8 +123,8 @@ fn deepcopy_recursive(obj: &Value, memo: &mut HashMap<String, Value>) -> Result<
         Value::None => Ok(Value::None),
         Value::List(items) => {
             let mut new_items = Vec::new();
-            for item in items {
-                new_items.push(deepcopy_recursive(item, memo)?);
+            for item in items.iter() {
+                new_items.push(deepcopy_recursive(&item, memo)?);
             }
             Ok(Value::List(HPList::from_values(new_items)))
         },
