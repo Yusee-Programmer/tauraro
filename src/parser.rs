@@ -2188,7 +2188,7 @@ impl Parser {
                         // Use the lexer to tokenize the expression
                         use crate::lexer::Lexer;
 
-                        let lexer = Lexer::new(expr_content);
+                        let lexer = Lexer::new(expr_content, "<string>".to_string());
                         match lexer.collect::<Result<Vec<_>, String>>() {
                             Ok(tokens) => {
                                 // Create a temporary parser for the expression

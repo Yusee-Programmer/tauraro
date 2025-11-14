@@ -178,6 +178,9 @@ pub enum Token {
     #[regex(r#"r'[^']*'"#, |lex| lex.slice()[2..lex.slice().len()-1].to_string())]
     StringLit(String),
 
+    // Docstring literals - handled manually in lexer iterator
+    DocString(String),
+
     // F-string literals (formatted strings)
     #[regex(r#"f"([^"\\]|\\.)*""#, |lex| lex.slice()[2..lex.slice().len()-1].to_string())]
     #[regex(r#"f'([^'\\]|\\.)*'"#, |lex| lex.slice()[2..lex.slice().len()-1].to_string())]
@@ -264,22 +267,20 @@ pub enum Token {
     Indent,
     Dedent,
 
-    // Docstring literals (triple-quoted strings) - must come before regular strings
-    // Pattern: opening triple quote, then any chars that aren't three consecutive quotes, then closing triple quote
-    // [^"] matches any char including newlines except ", plus ""+non-quote and "+non-quote patterns
-    #[regex(r#""{3}(?:[^"]|"{1}[^"]|"{2}[^"])*"{3}"#, |lex| lex.slice()[3..lex.slice().len()-3].to_string())]
-    #[regex(r#"'{3}(?:[^']|'{1}[^']|'{2}[^'])*'{3}"#, |lex| lex.slice()[3..lex.slice().len()-3].to_string())]
-    DocString(String),
+    // Docstring literals (triple-quoted strings) - handled by string literal patterns below
+    // Note: For now, triple-quoted strings are treated as regular string literals
+    // The regex engine limitations in Logos make it difficult to implement true docstrings
+    // TODO: Implement proper multi-line docstring support
 
     // Comments (Python-style) - tokenize but will be filtered out in lexer iterator
-    #[regex(r"#[^\n]*", |lex| lex.slice()[1..].trim().to_string())]
+    #[regex(r"#.*", |lex| lex.slice()[1..].trim().to_string())]
     Comment(String),
 
     // Whitespace - skip all horizontal whitespace and line continuations
     #[regex(r"[ \t\r]+", logos::skip)]
-    #[regex(r"\\\r?\n", logos::skip)]  // Line continuation (backslash followed by newline)
+    #[regex(r"\\\r?", logos::skip)]  // Line continuation (backslash followed by newline)
 
-    #[regex(r"\n", |_| Token::Newline)]
+    #[regex(r"", |_| Token::Newline)]
     Newline,
 
     // End of file
@@ -322,6 +323,7 @@ pub struct TokenInfo {
 
 pub struct Lexer<'a> {
     inner: logos::Lexer<'a, Token>,
+    filename: String,
     line: usize,
     column: usize,
     indent_stack: Vec<usize>,
@@ -332,16 +334,17 @@ pub struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(source: &'a str) -> Self {
+    pub fn new(source: &'a str, filename: String) -> Self {
         Self {
             inner: Token::lexer(source),
+            filename,
             line: 1,
             column: 1,
             indent_stack: vec![0],
             pending_dedents: 0,
             at_line_start: true,
-            paren_depth: 0,
-            buffered_token: None,
+            paren_depth: 0,buffered_token: None,
+
         }
     }
 
@@ -511,7 +514,21 @@ impl<'a> Iterator for Lexer<'a> {
 
                 Some(Ok(token_info))
             }
-            Some(Err(_)) => Some(Err("Lexical error".to_string())),
+            Some(Err(_)) => {
+                let span = self.inner.span();
+                let source_up_to_error = &self.inner.source()[..span.start];
+                let mut line = 1;
+                let mut column = 1;
+                for ch in source_up_to_error.chars() {
+                    if ch == '\n' {
+                        line += 1;
+                        column = 1;
+                    } else {
+                        column += 1;
+                    }
+                }
+                Some(Err(format!("Lexical error at {}:{}, {}", self.filename, line, column)))
+            }
             None => {
                 // Handle remaining dedents at EOF
                 if !self.indent_stack.is_empty() && self.indent_stack.len() > 1 {

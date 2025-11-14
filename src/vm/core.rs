@@ -65,7 +65,7 @@ impl VM {
         use crate::bytecode::SuperCompiler;
         use anyhow::anyhow;
 
-        let tokens = Lexer::new(source).collect::<Result<Vec<_>, String>>()
+        let tokens = Lexer::new(source, "<stdin>".to_string()).collect::<Result<Vec<_>, String>>()
             .map_err(|e| anyhow!("Lexer error: {}", e))?;
         let mut parser = Parser::new(tokens);
 
@@ -116,7 +116,7 @@ impl VM {
     /// Execute TauraroLang source code with mode specification
     fn execute_source(&mut self, source: &str, args: Vec<String>, _is_repl: bool) -> Result<Value> {
         // Parse the source code
-        let tokens = Lexer::new(source).collect::<Result<Vec<_>, String>>()
+        let tokens = Lexer::new(source, "<main>".to_string()).collect::<Result<Vec<_>, String>>()
             .map_err(|e| anyhow!("Lexer error: {}", e))?;
         let mut parser = Parser::new(tokens);
 

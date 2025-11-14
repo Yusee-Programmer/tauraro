@@ -266,7 +266,7 @@ impl ModuleCompiler {
 
         // Lexical analysis
         use crate::lexer::Lexer;
-        let tokens: Vec<_> = Lexer::new(&source)
+        let tokens: Vec<_> = Lexer::new(&source, module_info.name.clone())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow!("Lexer error in module '{}': {}", module_info.name, e))?;
 
