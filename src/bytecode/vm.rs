@@ -2561,10 +2561,6 @@ impl SuperBytecodeVM {
             Value::Object { fields, class_methods, mro, .. } => {
                 // First check fields (instance attributes)
                 let result = if let Some(value) = fields.as_ref().get(&attr_name) {
-                    // Debug: trace loads of attribute 'data' from fields when fast path missed
-                    if attr_name == "data" {
-                        eprintln!("DEBUG LoadAttr(match): frame={} attr='data' value={:?}", frame_idx, value);
-                    }
                     // Check if this is a descriptor (has __get__ method)
                     if let Some(getter) = value.get_method("__get__") {
                         // Call the descriptor's __get__ method
@@ -2793,9 +2789,6 @@ impl SuperBytecodeVM {
         let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
         let object_type_name = object_value.type_name();
 
-    // Broad debug: log every StoreAttr invocation (temporary)
-    eprintln!("DEBUG StoreAttr called: frame={} object_reg={} attr='{}' value_reg={} value={:?}", frame_idx, object_reg, attr_name, value_reg, value_to_store);
-
         // CRITICAL FIX: Track which variables reference this object before modification
         // so we can update them after modification to see the changes
         let mut vars_to_update: Vec<String> = Vec::new();
@@ -2978,10 +2971,6 @@ impl SuperBytecodeVM {
             },
             Value::Object { fields, .. } => {
                 // Store in fields using Rc::make_mut to get a mutable reference
-                // Debug: when storing attribute 'data', log the value being stored
-                if attr_name == "data" {
-                    eprintln!("DEBUG StoreAttr: frame={} setting 'data' = {:?}", frame_idx, value_to_store);
-                }
                 Rc::make_mut(fields).insert(attr_name.clone(), value_to_store.clone());
 
                 // CRITICAL FIX: Update locals[0] (self) with the modified object
@@ -3000,8 +2989,6 @@ impl SuperBytecodeVM {
                         // Update the instance in the caller frame's register with all modified fields
                         // Clone the entire modified object from current frame to caller frame
                         let modified_object = self.frames[frame_idx].registers[object_reg].clone();
-                        // Debug trace when storing modified object back to caller frame
-                        eprintln!("DEBUG StoreAttr: updating caller_frame={} reg={} with modified object fields={:?}", caller_frame_idx, result_reg, modified_object);
                         self.frames[caller_frame_idx].registers[result_reg as usize] = modified_object;
                     }
                 }
