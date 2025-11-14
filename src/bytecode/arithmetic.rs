@@ -2,6 +2,8 @@
 
 use crate::value::Value;
 use crate::modules::hplist::HPList;
+use std::rc::Rc;
+use std::cell::RefCell;
 use super::vm::SuperBytecodeVM;
 use anyhow::{Result, anyhow};
 
@@ -139,13 +141,14 @@ impl SuperBytecodeVM {
                     Ok(Value::List(result))
                 }
             },
+            (Value::Dict(a), Value::Dict(b)) => {
+                let mut result = a.borrow().clone();
+                for (k, v) in b.borrow().iter() {
+                    result.insert(k.clone(), v.clone());
+                }
+                Ok(Value::Dict(Rc::new(RefCell::new(result))))
+            },
             // Handle None values - multiplying None should raise a clear error
-            (Value::None, ref r) => {
-                Err(anyhow!("unsupported operand type(s) for *: 'NoneType' and '{}'", r.type_name()))
-            },
-            (ref l, Value::None) => {
-                Err(anyhow!("unsupported operand type(s) for *: '{}' and 'NoneType'", l.type_name()))
-            },
             (ref l, ref r) => {
                 // Provide more detailed error message for debugging - only compute type names in error path
                 Err(anyhow!("unsupported operand type(s) for *: '{}' and '{}'", l.type_name(), r.type_name()))
@@ -338,3 +341,10 @@ impl SuperBytecodeVM {
         }
     }
 }
+
+
+
+
+
+
+

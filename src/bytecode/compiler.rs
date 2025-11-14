@@ -1801,10 +1801,8 @@ impl SuperCompiler {
                         CompareOp::GtE => OpCode::CompareGreaterEqualRR,
                         CompareOp::In => OpCode::CompareInRR,
                         CompareOp::NotIn => OpCode::CompareNotInRR,
-                        CompareOp::Is | CompareOp::IsNot => {
-                            // is/is not comparisons not supported in simple case yet
-                            return Err(anyhow!("'is' and 'is not' comparisons not yet fully supported"));
-                        }
+                        CompareOp::Is => OpCode::CompareIsRR,
+                        CompareOp::IsNot => OpCode::CompareIsNotRR,
                     };
 
                     self.emit(opcode, left_reg, right_reg, result_reg, self.current_line);

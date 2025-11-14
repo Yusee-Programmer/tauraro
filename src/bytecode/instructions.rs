@@ -97,7 +97,9 @@ pub enum OpCode {
     CompareGreaterEqualRR, // Register-Register greater than or equal comparison
     CompareInRR,        // Register-Register membership test (in)
     CompareNotInRR,     // Register-Register non-membership test (not in)
-    
+    CompareIsRR,        // Register-Register identity test (is)
+    CompareIsNotRR,     // Register-Register non-identity test (is not)
+
     // Exception handling
     SetupExcept,    // Setup exception handler block
     SetupFinally,   // Setup finally block

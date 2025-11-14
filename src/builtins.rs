@@ -744,25 +744,71 @@ fn filter_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
 }
 
 fn sorted_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
-    if args.is_empty() || args.len() > 1 {
-        return Err(anyhow::anyhow!("sorted() takes exactly 1 argument ({} given)", args.len()));
+    if args.is_empty() || args.len() > 3 {
+        return Err(anyhow::anyhow!("sorted() takes 1 to 3 arguments ({} given)", args.len()));
     }
-    
+
     let iterable = &args[0];
-    
-    match iterable {
-        Value::List(items) => {
-            let mut sorted_items = items.as_vec().clone();
-            sorted_items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            Ok(Value::List(HPList::from_values(sorted_items)))
+    let key_fn = if args.len() > 1 { Some(&args[1]) } else { None };
+    let reverse = if args.len() > 2 {
+        match &args[2] {
+            Value::Bool(b) => *b,
+            _ => false,
         }
-        Value::Tuple(items) => {
-            let mut sorted_items = items.clone();
-            sorted_items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            Ok(Value::List(HPList::from_values(sorted_items)))
-        }
-        _ => Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
+    } else {
+        false
+    };
+
+    // Get the items to sort
+    let items = match iterable {
+        Value::List(items) => items.as_vec().clone(),
+        Value::Tuple(items) => items.clone(),
+        _ => return Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
+    };
+
+    let mut sorted_items = items;
+
+    // Sort with or without key function
+    if let Some(key_func) = key_fn {
+        // Sort using key function
+        sorted_items.sort_by(|a, b| {
+            // Call the key function on both values
+            let key_a = match key_func {
+                Value::BuiltinFunction(_, f) => match f(vec![a.clone()]) {
+                    Ok(v) => v,
+                    Err(_) => return std::cmp::Ordering::Equal,
+                },
+                Value::NativeFunction(f) => match f(vec![a.clone()]) {
+                    Ok(v) => v,
+                    Err(_) => return std::cmp::Ordering::Equal,
+                },
+                _ => return std::cmp::Ordering::Equal, // Can't handle closures in builtins yet
+            };
+            let key_b = match key_func {
+                Value::BuiltinFunction(_, f) => match f(vec![b.clone()]) {
+                    Ok(v) => v,
+                    Err(_) => return std::cmp::Ordering::Equal,
+                },
+                Value::NativeFunction(f) => match f(vec![b.clone()]) {
+                    Ok(v) => v,
+                    Err(_) => return std::cmp::Ordering::Equal,
+                },
+                _ => return std::cmp::Ordering::Equal,
+            };
+
+            key_a.partial_cmp(&key_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        // Sort using natural ordering
+        sorted_items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     }
+
+    // Reverse if requested
+    if reverse {
+        sorted_items.reverse();
+    }
+
+    Ok(Value::List(HPList::from_values(sorted_items)))
 }
 
 fn reversed_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
