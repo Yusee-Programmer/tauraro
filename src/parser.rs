@@ -1323,10 +1323,10 @@ impl Parser {
                 }
                 _ => unreachable!(),
             }
-        } else if matches!(self.peek().token, Token::DocString(_)) {
+        } else if matches!(self.peek().token, Token::StringLit(_)) {
             // Consume the docstring token first
             match self.advance().token.clone() {
-                Token::DocString(s) => Ok(Expr::DocString(s)),
+                
                 _ => unreachable!(),
             }
         } else if matches!(self.peek().token, Token::Identifier(_)) {
@@ -1725,7 +1725,7 @@ impl Parser {
 
     /// Check if the current token is a docstring
     fn is_docstring_token(&self) -> bool {
-        matches!(self.peek().token, Token::DocString(_))
+        matches!(self.peek().token, Token::StringLit(_))
     }
 
     /// Check if the current token is an identifier
@@ -2256,7 +2256,7 @@ impl Parser {
     }
 
     fn extract_docstring(&self, body: &[Statement]) -> Option<String> {
-        if let Some(Statement::Expression(Expr::DocString(doc))) = body.first() {
+        if let Some(Statement::Expression(Expr::Literal(Literal::String(doc)))) = body.first() {
             Some(doc.clone())
         } else {
             None

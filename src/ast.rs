@@ -184,7 +184,7 @@ pub enum UnpackTarget {
 pub enum Expr {
     Literal(Literal),
     Identifier(String),
-    DocString(String),
+    
     BinaryOp {
         left: Box<Expr>,
         op: BinaryOp,

@@ -1,7 +1,4 @@
-"""
-Full-Stack Analytics Dashboard with Backend Logic in Tauraro
-Demonstrates complete application with data management, business logic, and UI
-"""
+
 
 import webviewtk as wv
 import datetime
@@ -155,6 +152,8 @@ class AnalyticsBackend:
             "total_orders": total_orders,
             "avg_order_value": round(avg_order_value, 2),
             "revenue_by_category": revenue_by_category,
+            # Also store an items list as a fallback for VMs that don't iterate nested dicts correctly
+            "revenue_by_category_items": list(revenue_by_category.items()),
             "recent_activity": recent_activity
         }
 
@@ -270,9 +269,18 @@ class AnalyticsBackend:
 def create_dashboard_ui(backend):
     """Create the dashboard UI using analytics data from backend"""
 
+    # backend.initialize_data()
+    backend.refresh_analytics()
     analytics = backend.get_analytics()
     top_products = backend.get_top_products(5)
     user_stats = backend.get_user_statistics()
+
+    # Safe local copies with defaults to avoid KeyError if analytics dict is missing keys
+    total_revenue = analytics.get("total_revenue", 0)
+    active_users = analytics.get("active_users", 0)
+    total_orders = analytics.get("total_orders", 0)
+    avg_order_value = analytics.get("avg_order_value", 0.0)
+    recent_activity = analytics.get("recent_activity", [])
 
     # Note: For future IPC implementation, we could use Alpine.js for dynamic state
     # alpine_data = {
@@ -285,19 +293,23 @@ def create_dashboard_ui(backend):
     # }
 
     # Category revenue chart data
-    revenue_by_category = analytics["revenue_by_category"]
+    # Use a precomputed items list when available to avoid iterating nested dicts in some VM backends
+    revenue_items = analytics.get("revenue_by_category_items")
+    if revenue_items is None:
+        if "revenue_by_category" in analytics:
+            revenue_items = list(analytics["revenue_by_category"].items())
+        else:
+            revenue_items = []
 
     # Find max revenue manually
     max_revenue = 1
-    for category in revenue_by_category:
-        revenue = revenue_by_category[category]
+    for category, revenue in revenue_items:
         if revenue > max_revenue:
             max_revenue = revenue
 
     chart_bars = ""
     i = 0
-    for category in revenue_by_category:
-        revenue = revenue_by_category[category]
+    for category, revenue in revenue_items:
         height_percent = (revenue / max_revenue) * 100
         delay = i * 0.1
         chart_bars += wv.div(
@@ -316,7 +328,7 @@ def create_dashboard_ui(backend):
     # Recent activity feed
     activity_items = ""
     i = 0
-    for activity in analytics["recent_activity"]:
+    for activity in recent_activity:
         delay = i * 0.05
         activity_items += wv.div(
             wv.render(
@@ -389,7 +401,7 @@ def create_dashboard_ui(backend):
                     wv.div(
                         wv.render(
                             wv.p("Total Revenue", "text-gray-600 text-sm font-medium"),
-                            wv.h2(f"${analytics['total_revenue']:,.2f}", "text-3xl font-bold text-gray-800 mt-1"),
+                            wv.h2(f"${total_revenue:,.2f}", "text-3xl font-bold text-gray-800 mt-1"),
                             wv.p("+12.5% from last month", "text-green-600 text-sm mt-2 font-semibold")
                         ),
                         "flex-1"
@@ -408,7 +420,7 @@ def create_dashboard_ui(backend):
                     wv.div(
                         wv.render(
                             wv.p("Active Users", "text-gray-600 text-sm font-medium"),
-                            wv.h2(f"{analytics['active_users']:,}", "text-3xl font-bold text-gray-800 mt-1"),
+                            wv.h2(f"{active_users:,}", "text-3xl font-bold text-gray-800 mt-1"),
                             wv.p("+8.2% from last month", "text-blue-600 text-sm mt-2 font-semibold")
                         ),
                         "flex-1"
@@ -427,7 +439,7 @@ def create_dashboard_ui(backend):
                     wv.div(
                         wv.render(
                             wv.p("Total Orders", "text-gray-600 text-sm font-medium"),
-                            wv.h2(f"{analytics['total_orders']:,}", "text-3xl font-bold text-gray-800 mt-1"),
+                            wv.h2(f"{total_orders:,}", "text-3xl font-bold text-gray-800 mt-1"),
                             wv.p("+15.3% from last month", "text-purple-600 text-sm mt-2 font-semibold")
                         ),
                         "flex-1"
@@ -446,7 +458,7 @@ def create_dashboard_ui(backend):
                     wv.div(
                         wv.render(
                             wv.p("Avg Order Value", "text-gray-600 text-sm font-medium"),
-                            wv.h2(f"${analytics['avg_order_value']:.2f}", "text-3xl font-bold text-gray-800 mt-1"),
+                            wv.h2(f"${avg_order_value:.2f}", "text-3xl font-bold text-gray-800 mt-1"),
                             wv.p("+3.7% from last month", "text-orange-600 text-sm mt-2 font-semibold")
                         ),
                         "flex-1"
@@ -630,6 +642,7 @@ def main():
 
     # Initialize backend
     backend = AnalyticsBackend()
+    # backend.initialize_data()
 
     print()
     print("[Frontend] Generating UI...")

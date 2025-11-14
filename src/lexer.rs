@@ -1,5 +1,51 @@
+    // Disabled: Triple-quote pre-computation disabled; use error-based approach instead
+    // triple_quote_regions: Vec<(usize, usize, String)>,
+    // next_triple_quote_idx: usize,
 use logos::Logos;
 use std::fmt;
+
+// Helper function to find all triple-quoted strings in the source
+fn find_triple_quote_regions(source: &str) -> Vec<(usize, usize, String)> {
+    let mut regions = Vec::new();
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    
+    while i < bytes.len() {
+        // Check for triple quotes starting at position i
+        if i + 3 <= bytes.len() {
+            if (bytes[i] == b'"' && bytes[i + 1] == b'"' && bytes[i + 2] == b'"') ||
+               (bytes[i] == b'\'' && bytes[i + 1] == b'\'' && bytes[i + 2] == b'\'') {
+                let quote_byte = bytes[i];
+                let quote_char = bytes[i] as char;
+                let search_start = i + 3;
+                
+                // Look for closing triple quotes
+                let mut j = search_start;
+                while j + 3 <= bytes.len() {
+                    if bytes[j] == quote_byte && bytes[j + 1] == quote_byte && bytes[j + 2] == quote_byte {
+                        // Found closing triple quotes
+                        let content = source[search_start..j].to_string();
+
+                        regions.push((i, j + 3, content));
+                        i = j + 3;
+                        break;
+                    }
+                    j += 1;
+                }
+                
+                // If we didn't find closing, move forward
+                if j + 3 > bytes.len() {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        i += 1;
+    }
+    
+
+    regions
+}
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 pub enum Token {
@@ -171,15 +217,18 @@ pub enum Token {
     #[regex(r#"b'([^'\\]|\\.)*'"#, |lex| unescape_string(&lex.slice()[1..]))]
     BytesLit(String),
 
-    // String literals with various formats
+    // String literals - NOTE: Triple-quoted strings must be handled in the lexer iterator
+    // because regex cannot properly match multi-line patterns
+    // We detect and parse them manually when we see """ or '''
     #[regex(r#""([^"\\]|\\.)*""#, |lex| unescape_string(lex.slice()))]
     #[regex(r#"'([^'\\]|\\.)*'"#, |lex| unescape_string(lex.slice()))]
     #[regex(r#"r"[^"]*""#, |lex| lex.slice()[2..lex.slice().len()-1].to_string())]
     #[regex(r#"r'[^']*'"#, |lex| lex.slice()[2..lex.slice().len()-1].to_string())]
     StringLit(String),
 
-    // Docstring literals - handled manually in lexer iterator
-    DocString(String),
+    // Docstring literals - triple-quoted strings
+    // Note: These are handled specially in the lexer iterator due to logos limitations
+    
 
     // F-string literals (formatted strings)
     #[regex(r#"f"([^"\\]|\\.)*""#, |lex| lex.slice()[2..lex.slice().len()-1].to_string())]
@@ -280,7 +329,7 @@ pub enum Token {
     #[regex(r"[ \t\r]+", logos::skip)]
     #[regex(r"\\\r?", logos::skip)]  // Line continuation (backslash followed by newline)
 
-    #[regex(r"", |_| Token::Newline)]
+    #[regex(r"\n", |_| Token::Newline)]
     Newline,
 
     // End of file
@@ -331,10 +380,15 @@ pub struct Lexer<'a> {
     at_line_start: bool,
     paren_depth: usize,
     buffered_token: Option<TokenInfo>,
+    source: &'a str,
+    byte_pos: usize,
+    triple_quote_regions: Vec<(usize, usize, String)>,
+    next_triple_quote_idx: usize,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str, filename: String) -> Self {
+        let triple_quote_regions = find_triple_quote_regions(source);
         Self {
             inner: Token::lexer(source),
             filename,
@@ -343,8 +397,12 @@ impl<'a> Lexer<'a> {
             indent_stack: vec![0],
             pending_dedents: 0,
             at_line_start: true,
-            paren_depth: 0,buffered_token: None,
-
+            paren_depth: 0,
+            buffered_token: None,
+            source,
+            byte_pos: 0,
+            triple_quote_regions,
+            next_triple_quote_idx: 0,
         }
     }
 
@@ -379,6 +437,27 @@ impl<'a> Lexer<'a> {
             None
         }
     }
+
+    // Try to parse a triple-quoted string starting at the current position
+    fn try_parse_triple_quote(&self, pos: usize) -> Option<(String, usize)> {
+        let remaining = &self.source[pos..];
+
+        // Check for triple-quoted strings ("""...""" or '''...''')
+        if remaining.starts_with("\"\"\"") {
+            if let Some(end_pos) = remaining[3..].find("\"\"\"") {
+                let content = remaining[3..3 + end_pos].to_string();
+                let total_len = 6 + end_pos; // 3 quotes + content + 3 quotes
+                return Some((content, total_len));
+            }
+        } else if remaining.starts_with("'''") {
+            if let Some(end_pos) = remaining[3..].find("'''") {
+                let content = remaining[3..3 + end_pos].to_string();
+                let total_len = 6 + end_pos; // 3 quotes + content + 3 quotes
+                return Some((content, total_len));
+            }
+        }
+        None
+    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
@@ -401,9 +480,69 @@ impl<'a> Iterator for Lexer<'a> {
             return Some(Ok(buffered));
         }
 
-        match self.inner.next() {
-            Some(Ok(token)) => {
-                let span = self.inner.span();
+        loop {
+            // We'll consume the next logos token first, then check whether its span
+            // falls inside a triple-quote region. If it does, replace the logos token
+            // with a single StringLit containing the full triple-quoted content.
+
+            match self.inner.next() {
+                Some(Ok(orig_token)) => {
+                    // Get the current logos span for this token
+                    let span = self.inner.span();
+
+                    // Precomputed triple-quote interception: if this token starts inside
+                    // a known triple-quote region, replace the token with a single
+                    // StringLit containing the full triple-quoted content and adjust
+                    // the span accordingly.
+                    let mut token = orig_token.clone();
+                    let mut token_span_tuple = (span.start, span.end);
+
+                    for idx in self.next_triple_quote_idx..self.triple_quote_regions.len() {
+                        let (start, end, content) = self.triple_quote_regions[idx].clone();
+                        // If the current logos token starts inside this triple-quote region
+                        if span.start >= start && span.start < end {
+                            // Advance logos until we've consumed tokens that end before
+                            // the triple-quote region end. This avoids consuming the
+                            // first token that starts at or after `end` (e.g. the
+                            // closing parenthesis) which must remain available for
+                            // normal parsing.
+                            while self.inner.span().end < end {
+                                if self.inner.next().is_none() {
+                                    break;
+                                }
+                            }
+                            // Update the next_triple_quote_idx to skip processed regions
+                            self.next_triple_quote_idx = idx + 1;
+
+                            // Replace token and span with the triple-quoted StringLit
+                            token = Token::StringLit(content.clone());
+                            token_span_tuple = (start, end);
+
+                            // Update line/column tracking for the triple-quoted content
+                            let newline_count = content.matches('\n').count();
+                            if newline_count > 0 {
+                                self.line += newline_count;
+                                self.column = 1;
+                                if let Some(last_line) = content.split('\n').last() {
+                                    self.column = last_line.len() + 1;
+                                }
+                            } else {
+                                self.column += end - start;
+                            }
+
+                            break;
+                        } else if span.start >= end {
+                            // We've passed this region; advance the index
+                            self.next_triple_quote_idx = idx + 1;
+                            continue;
+                        } else {
+                            // This and following regions start after current token
+                            break;
+                        }
+                    }
+
+                    // Use the possibly-updated token and span for further processing
+                    let span = token_span_tuple.0..token_span_tuple.1;
 
                 // Handle indentation at the start of a line (only after newlines)
                 // Do this BEFORE skipping comments so that comments on indented lines work correctly
@@ -512,11 +651,56 @@ impl<'a> Iterator for Lexer<'a> {
                     }
                 }
 
-                Some(Ok(token_info))
+                return Some(Ok(token_info));
             }
             Some(Err(_)) => {
                 let span = self.inner.span();
-                let source_up_to_error = &self.inner.source()[..span.start];
+                let pos = span.start;
+                let source = self.inner.source();
+                
+                // Check if this is a triple-quoted string error
+                // Triple quotes would cause an error because logos tries to parse """ as an empty string ""
+                // followed by an unclosed quote "
+                if let Some((content, length)) = self.try_parse_triple_quote(pos) {
+                    // Count newlines in the content to update line tracking
+                    let newline_count = content.matches('\n').count();
+                    
+                    let content_len = content.len();
+                    let token_info = TokenInfo {
+                        token: Token::StringLit(content),
+                        span: (pos, pos + length),
+                        line: self.line,
+                        column: self.column,
+                    };
+                    
+                    if newline_count > 0 {
+                        self.line += newline_count;
+                        self.column = 1;
+                        if let Some(last_line) = source[pos..pos + length].split('\n').last() {
+                            self.column = last_line.len() + 1;
+                        }
+                    } else {
+                        self.column += length;
+                    }
+                    self.at_line_start = false;
+                    
+                    // Consume the error from logos and advance past the triple-quoted string
+                    // Skip one character at a time to let logos skip the erroneous tokens
+                    let target_end = pos + length;
+                    while self.inner.span().start < target_end {
+                        match self.inner.next() {
+                            Some(_) => {
+                                // Continue advancing
+                            }
+                            None => break,
+                        }
+                    }
+                    
+                    return Some(Ok(token_info));
+                }
+                
+                // Not a triple-quoted string, report the error
+                let source_up_to_error = &source[..span.start];
                 let mut line = 1;
                 let mut column = 1;
                 for ch in source_up_to_error.chars() {
@@ -527,22 +711,23 @@ impl<'a> Iterator for Lexer<'a> {
                         column += 1;
                     }
                 }
-                Some(Err(format!("Lexical error at {}:{}, {}", self.filename, line, column)))
+                return Some(Err(format!("Lexical error at {}:{}, {}", self.filename, line, column)));
             }
             None => {
                 // Handle remaining dedents at EOF
                 if !self.indent_stack.is_empty() && self.indent_stack.len() > 1 {
                     self.indent_stack.pop();
-                    Some(Ok(TokenInfo {
+                    return Some(Ok(TokenInfo {
                         token: Token::Dedent,
                         span: (0, 0),
                         line: self.line,
                         column: self.column,
-                    }))
+                    }));
                 } else {
-                    None
+                    return None;
                 }
             }
+        }
         }
     }
 }

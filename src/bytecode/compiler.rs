@@ -302,7 +302,6 @@ impl SuperCompiler {
     }
     
     pub fn compile_statement(&mut self, stmt: Statement) -> Result<()> {
-        // eprintln!("DEBUG: Compiling statement: {:?}", stmt); // Debug output
         match stmt {
             Statement::Expression(expr) => {
                 let reg = self.compile_expression(expr)?;
@@ -2297,11 +2296,11 @@ impl SuperCompiler {
 
                 Ok(result_reg)
             }
-            Expr::DocString(s) => {
+            Expr::Literal(Literal::String(s)) => {
                 // Handle docstrings - treat them as string constants
                 // In Python, docstrings are just string literals that are typically ignored
                 // We'll load it as a constant but it's usually discarded
-                let str_const = self.code.add_constant(Value::Str(s));
+                let str_const = self.code.add_constant(Value::Str(s.clone()));
                 let reg = self.allocate_register();
                 self.emit(OpCode::LoadConst, str_const, reg, 0, self.current_line);
                 Ok(reg)

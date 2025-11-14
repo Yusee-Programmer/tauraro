@@ -846,9 +846,6 @@ impl SuperBytecodeVM {
         let value = self.frames[frame_idx].registers[value_reg].clone();
         let name = self.frames[frame_idx].code.names[name_idx].clone();
 
-        // Debug output
-        // eprintln!("DEBUG StoreGlobal: storing '{}' = {:?}", name, value.value);
-
         // Strong static typing: check if variable has a declared type
         if let Some(declared_type) = self.typed_variables.get(&name) {
             if !self.check_type_match(&value.value, declared_type) {
@@ -864,8 +861,6 @@ impl SuperBytecodeVM {
         // Store in frame globals (which is shared with self.globals via Rc<RefCell>)
         self.frames[frame_idx].globals.borrow_mut().insert(name.clone(), value.clone());
 
-        // Debug output
-        // eprintln!("DEBUG StoreGlobal: stored '{}' in globals", name);
         Ok(None)
     }
 
@@ -1611,6 +1606,17 @@ impl SuperBytecodeVM {
                     stop: s.len() as i64,
                     step: 1,
                     current: 0,
+                }
+            },
+            Value::Dict(dict_ref) => {
+                // For dictionaries, create an Iterator with the keys
+                let dict = dict_ref.borrow();
+                let keys: Vec<Value> = dict.keys()
+                    .map(|k| Value::Str(k.clone()))
+                    .collect();
+                Value::Iterator {
+                    items: keys,
+                    current_index: 0,
                 }
             },
             _ => {
@@ -2396,10 +2402,10 @@ impl SuperBytecodeVM {
                 _ => return Err(anyhow!("BuildDict: unhashable type: '{}'", key.type_name())),
             };
 
-            dict.insert(key_str, self.frames[frame_idx].registers[value_reg].value.clone());
+            let v = self.frames[frame_idx].registers[value_reg].value.clone();
+            dict.insert(key_str, v);
         }
 
-        // eprintln!("DEBUG BuildDict: created dict with {} entries", dict.len());
         let dict_value = Value::Dict(Rc::new(RefCell::new(dict)));
         self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(dict_value));
         Ok(None)
@@ -2470,9 +2476,7 @@ impl SuperBytecodeVM {
 
         // Clone values to avoid borrowing issues
         let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
-        let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();
-
-        // OPTIMIZATION: Fast path for common Object attribute access
+        let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();        // OPTIMIZATION: Fast path for common Object attribute access
         // This bypasses the expensive match statements below for hot paths
         if let Value::Object { fields, .. } = &object_value {
             if let Some(attr_value) = fields.get(&attr_name) {
@@ -2557,6 +2561,10 @@ impl SuperBytecodeVM {
             Value::Object { fields, class_methods, mro, .. } => {
                 // First check fields (instance attributes)
                 let result = if let Some(value) = fields.as_ref().get(&attr_name) {
+                    // Debug: trace loads of attribute 'data' from fields when fast path missed
+                    if attr_name == "data" {
+                        eprintln!("DEBUG LoadAttr(match): frame={} attr='data' value={:?}", frame_idx, value);
+                    }
                     // Check if this is a descriptor (has __get__ method)
                     if let Some(getter) = value.get_method("__get__") {
                         // Call the descriptor's __get__ method
@@ -2785,6 +2793,9 @@ impl SuperBytecodeVM {
         let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
         let object_type_name = object_value.type_name();
 
+    // Broad debug: log every StoreAttr invocation (temporary)
+    eprintln!("DEBUG StoreAttr called: frame={} object_reg={} attr='{}' value_reg={} value={:?}", frame_idx, object_reg, attr_name, value_reg, value_to_store);
+
         // CRITICAL FIX: Track which variables reference this object before modification
         // so we can update them after modification to see the changes
         let mut vars_to_update: Vec<String> = Vec::new();
@@ -2967,6 +2978,10 @@ impl SuperBytecodeVM {
             },
             Value::Object { fields, .. } => {
                 // Store in fields using Rc::make_mut to get a mutable reference
+                // Debug: when storing attribute 'data', log the value being stored
+                if attr_name == "data" {
+                    eprintln!("DEBUG StoreAttr: frame={} setting 'data' = {:?}", frame_idx, value_to_store);
+                }
                 Rc::make_mut(fields).insert(attr_name.clone(), value_to_store.clone());
 
                 // CRITICAL FIX: Update locals[0] (self) with the modified object
@@ -2985,6 +3000,8 @@ impl SuperBytecodeVM {
                         // Update the instance in the caller frame's register with all modified fields
                         // Clone the entire modified object from current frame to caller frame
                         let modified_object = self.frames[frame_idx].registers[object_reg].clone();
+                        // Debug trace when storing modified object back to caller frame
+                        eprintln!("DEBUG StoreAttr: updating caller_frame={} reg={} with modified object fields={:?}", caller_frame_idx, result_reg, modified_object);
                         self.frames[caller_frame_idx].registers[result_reg as usize] = modified_object;
                     }
                 }
