@@ -65,7 +65,7 @@ impl VM {
         use crate::bytecode::SuperCompiler;
         use anyhow::anyhow;
 
-        let tokens = Lexer::new(source).collect::<Result<Vec<_>, String>>()
+        let tokens = Lexer::new(source, "<stdin>".to_string()).collect::<Result<Vec<_>, String>>()
             .map_err(|e| anyhow!("Lexer error: {}", e))?;
         let mut parser = Parser::new(tokens);
 
@@ -113,10 +113,17 @@ impl VM {
         Ok(())
     }
     
+    /// Call a function/closure value with arguments
+    /// This is a simple wrapper around the bytecode VM's call_function_fast
+    pub fn call_function(&mut self, func_value: Value, args: Vec<Value>) -> Result<Value> {
+        use std::collections::HashMap;
+        self.bytecode_vm.call_function_fast(func_value, args, HashMap::new(), None, None)
+    }
+    
     /// Execute TauraroLang source code with mode specification
     fn execute_source(&mut self, source: &str, args: Vec<String>, _is_repl: bool) -> Result<Value> {
         // Parse the source code
-        let tokens = Lexer::new(source).collect::<Result<Vec<_>, String>>()
+        let tokens = Lexer::new(source, "<main>".to_string()).collect::<Result<Vec<_>, String>>()
             .map_err(|e| anyhow!("Lexer error: {}", e))?;
         let mut parser = Parser::new(tokens);
 

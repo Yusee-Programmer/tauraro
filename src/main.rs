@@ -194,10 +194,10 @@ fn compile_file(
     let source = std::fs::read_to_string(file)?;
     
     // Lexical analysis
-    let tokens = tauraro::lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+    let tokens = tauraro::lexer::Lexer::new(&source, file.to_string_lossy().to_string()).collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             eprintln!("Error in lexer:");
-            eprintln!("  File \"{}\", line 1", file.display());
+            eprintln!("  File \"{}\"", file.display());
             e
         })?;
     
@@ -426,10 +426,10 @@ fn debug_ast(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     
     // Lexical analysis with debug output
     println!("=== TOKENS ===");
-    let tokens: Vec<_> = tauraro::lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+    let tokens: Vec<_> = tauraro::lexer::Lexer::new(&source, file.to_string_lossy().to_string()).collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             eprintln!("Error in lexer:");
-            eprintln!("  File \"{}\", line 1", file.display());
+            eprintln!("  File \"{}\"", file.display());
             e
         })?;
     
@@ -473,10 +473,10 @@ fn debug_ir(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
     
     // Lexical analysis
-    let tokens = tauraro::lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+    let tokens = tauraro::lexer::Lexer::new(&source, file.to_string_lossy().to_string()).collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             eprintln!("Error in lexer:");
-            eprintln!("  File \"{}\", line 1", file.display());
+            eprintln!("  File \"{}\"", file.display());
             e
         })?;
     
@@ -509,10 +509,10 @@ fn debug_bytecode(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
     
     // Lexical analysis
-    let tokens = tauraro::lexer::Lexer::new(&source).collect::<Result<Vec<_>, _>>()
+    let tokens = tauraro::lexer::Lexer::new(&source, file.to_string_lossy().to_string()).collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             eprintln!("Error in lexer:");
-            eprintln!("  File \"{}\", line 1", file.display());
+            eprintln!("  File \"{}\"", file.display());
             e
         })?;
     

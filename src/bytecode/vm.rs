@@ -211,7 +211,7 @@ impl SuperBytecodeVM {
 
         // Compile the module
         // eprintln!("DEBUG compile_and_execute_module_inner: lexing module '{}'", module_name);
-        let tokens = crate::lexer::Lexer::new(source)
+        let tokens = crate::lexer::Lexer::new(source, module_name.to_string())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow!("Lexer error in module '{}': {}", module_name, e))?;
 
@@ -846,9 +846,6 @@ impl SuperBytecodeVM {
         let value = self.frames[frame_idx].registers[value_reg].clone();
         let name = self.frames[frame_idx].code.names[name_idx].clone();
 
-        // Debug output
-        // eprintln!("DEBUG StoreGlobal: storing '{}' = {:?}", name, value.value);
-
         // Strong static typing: check if variable has a declared type
         if let Some(declared_type) = self.typed_variables.get(&name) {
             if !self.check_type_match(&value.value, declared_type) {
@@ -864,8 +861,6 @@ impl SuperBytecodeVM {
         // Store in frame globals (which is shared with self.globals via Rc<RefCell>)
         self.frames[frame_idx].globals.borrow_mut().insert(name.clone(), value.clone());
 
-        // Debug output
-        // eprintln!("DEBUG StoreGlobal: stored '{}' in globals", name);
         Ok(None)
     }
 
@@ -1077,15 +1072,13 @@ impl SuperBytecodeVM {
             // But only process it for user-defined functions that accept **kwargs
             // Only exclude KwargsMarker values, not regular Dict values
             if let Value::KwargsMarker(dict) = &args[args.len() - 1] {
-                // Debug info removed
                 // For builtin functions, we don't pass the kwargs dictionary
                 // Only user-defined functions with **kwargs parameters should receive it
                 match &func_value {
                     Value::BuiltinFunction(_, _) | Value::NativeFunction(_) => {
-                        // For builtin functions, don't pass the kwargs dictionary
-                        // The kwargs dictionary was added as the last argument, so we exclude it
+                        // For builtin functions, save the kwargs dictionary for later use
+                        kwargs_dict = Some(dict.clone());
                         processed_arg_count = args.len() - 1;
-                        // Debug info removed
                     }
                     Value::Closure { name: _, params: _, body: _, captured_scope: _, docstring: _, compiled_code, .. } => {
                         // For user-defined functions, check if they have **kwargs parameter
@@ -1099,22 +1092,18 @@ impl SuperBytecodeVM {
                                 // This function accepts **kwargs, so pass the dictionary
                                 kwargs_dict = Some(dict.clone());
                                 processed_arg_count = args.len() - 1; // Exclude the kwargs dictionary from regular arguments
-                                // Debug info removed
                             } else {
                                 // This function doesn't accept **kwargs, so don't pass the dictionary
                                 processed_arg_count = args.len() - 1;
-                                // Debug info removed
                             }
                         } else {
                             // No compiled code, don't pass the kwargs dictionary
                             processed_arg_count = args.len() - 1;
-                            // Debug info removed
                         }
                     }
                     _ => {
                         // For other callable objects, don't pass the kwargs dictionary
                         processed_arg_count = args.len() - 1;
-                        // Debug info removed
                     }
                 }
             }
@@ -1122,18 +1111,14 @@ impl SuperBytecodeVM {
 
         // Take only the regular arguments (excluding the kwargs dictionary if present)
         let regular_args = args[..processed_arg_count].to_vec();
-        // Debug info removed
 
         // Process starred arguments in the args vector
         let processed_args = self.process_starred_arguments(regular_args)?;
-        // Debug info removed
 
         // Create kwargs HashMap from the kwargs dictionary if present
         let kwargs = if let Some(dict) = kwargs_dict {
-            // Debug info removed
             dict.clone()
         } else {
-            // Debug info removed
             HashMap::new()
         };
 
@@ -1621,6 +1606,17 @@ impl SuperBytecodeVM {
                     stop: s.len() as i64,
                     step: 1,
                     current: 0,
+                }
+            },
+            Value::Dict(dict_ref) => {
+                // For dictionaries, create an Iterator with the keys
+                let dict = dict_ref.borrow();
+                let keys: Vec<Value> = dict.keys()
+                    .map(|k| Value::Str(k.clone()))
+                    .collect();
+                Value::Iterator {
+                    items: keys,
+                    current_index: 0,
                 }
             },
             _ => {
@@ -2395,17 +2391,21 @@ impl SuperBytecodeVM {
                 return Err(anyhow!("BuildDict: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
             }
 
-            // Keys must be strings - convert them or error
+            // Keys must be hashable - convert to strings for internal representation
             let key = &self.frames[frame_idx].registers[key_reg].value;
             let key_str = match key {
                 Value::Str(s) => s.clone(),
-                _ => return Err(anyhow!("BuildDict: dictionary keys must be strings, got {}", key.type_name())),
+                Value::Int(i) => i.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::Bool(b) => b.to_string(),
+                Value::None => "None".to_string(),
+                _ => return Err(anyhow!("BuildDict: unhashable type: '{}'", key.type_name())),
             };
 
-            dict.insert(key_str, self.frames[frame_idx].registers[value_reg].value.clone());
+            let v = self.frames[frame_idx].registers[value_reg].value.clone();
+            dict.insert(key_str, v);
         }
 
-        // eprintln!("DEBUG BuildDict: created dict with {} entries", dict.len());
         let dict_value = Value::Dict(Rc::new(RefCell::new(dict)));
         self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(dict_value));
         Ok(None)
@@ -2476,9 +2476,7 @@ impl SuperBytecodeVM {
 
         // Clone values to avoid borrowing issues
         let object_value = self.frames[frame_idx].registers[object_reg].value.clone();
-        let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();
-
-        // OPTIMIZATION: Fast path for common Object attribute access
+        let attr_name = self.frames[frame_idx].code.names[attr_name_idx].clone();        // OPTIMIZATION: Fast path for common Object attribute access
         // This bypasses the expensive match statements below for hot paths
         if let Value::Object { fields, .. } = &object_value {
             if let Some(attr_value) = fields.get(&attr_name) {
@@ -4361,6 +4359,85 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
                 Ok(None)
             }
+            OpCode::CompareIsRR => {
+                // Register-Register identity test (is)
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("CompareIsRR: register index out of bounds"));
+                }
+
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+
+                // Identity comparison - check if two values are the same object
+                let result = match (&left.value, &right.value) {
+                    // None is always the same object
+                    (Value::None, Value::None) => Value::Bool(true),
+                    // For reference types, compare pointer addresses
+                    (Value::List(l), Value::List(r)) => {
+                        Value::Bool(Rc::ptr_eq(l.data_ptr(), r.data_ptr()))
+                    },
+                    (Value::Dict(l), Value::Dict(r)) => {
+                        Value::Bool(Rc::ptr_eq(l, r))
+                    },
+                    (Value::Set(l), Value::Set(r)) => {
+                        Value::Bool(l.as_ptr() == r.as_ptr())
+                    },
+                    // For primitive types, Python interns small integers and strings
+                    // For simplicity, we'll use value equality for primitives
+                    (Value::Int(l), Value::Int(r)) => Value::Bool(l == r),
+                    (Value::Bool(l), Value::Bool(r)) => Value::Bool(l == r),
+                    // Strings are interned in Python, so same string value = same object
+                    (Value::Str(l), Value::Str(r)) => Value::Bool(l == r),
+                    // For different types or other cases, they're not the same object
+                    _ => Value::Bool(false),
+                };
+
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
+            OpCode::CompareIsNotRR => {
+                // Register-Register non-identity test (is not)
+                let left_reg = arg1 as usize;
+                let right_reg = arg2 as usize;
+                let result_reg = arg3 as usize;
+
+                if left_reg >= self.frames[frame_idx].registers.len() || right_reg >= self.frames[frame_idx].registers.len() {
+                    return Err(anyhow!("CompareIsNotRR: register index out of bounds"));
+                }
+
+                let left = &self.frames[frame_idx].registers[left_reg];
+                let right = &self.frames[frame_idx].registers[right_reg];
+
+                // Non-identity comparison (opposite of identity test)
+                let result = match (&left.value, &right.value) {
+                    // None is always the same object
+                    (Value::None, Value::None) => Value::Bool(false),
+                    // For reference types, compare pointer addresses
+                    (Value::List(l), Value::List(r)) => {
+                        Value::Bool(!Rc::ptr_eq(l.data_ptr(), r.data_ptr()))
+                    },
+                    (Value::Dict(l), Value::Dict(r)) => {
+                        Value::Bool(!Rc::ptr_eq(l, r))
+                    },
+                    (Value::Set(l), Value::Set(r)) => {
+                        Value::Bool(l.as_ptr() != r.as_ptr())
+                    },
+                    // For primitive types, use value inequality
+                    (Value::Int(l), Value::Int(r)) => Value::Bool(l != r),
+                    (Value::Bool(l), Value::Bool(r)) => Value::Bool(l != r),
+                    // Strings are interned in Python
+                    (Value::Str(l), Value::Str(r)) => Value::Bool(l != r),
+                    // For different types or other cases, they're not the same object
+                    _ => Value::Bool(true),
+                };
+
+                self.frames[frame_idx].registers[result_reg] = RcValue::new(result);
+                Ok(None)
+            }
             OpCode::LoadClosure => {
                 // Load from closure variable
                 let closure_idx = arg1 as usize;
@@ -5890,11 +5967,38 @@ impl SuperBytecodeVM {
                     return Err(anyhow!("Await: register index out of bounds"));
                 }
                 
-                // For now, we'll just return the value as-is (no actual async support yet)
-                // In a full implementation, we would suspend execution until the future completes
                 let value = self.frames[frame_idx].registers[value_reg].value.clone();
-                self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(value));
-                Ok(None)
+                
+                match value {
+                    Value::Coroutine { name, code, frame, finished, awaiting: _ } => {
+                        if finished {
+                            // Coroutine already finished, return None
+                            self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(Value::None));
+                        } else {
+                            // Execute the coroutine to completion
+                            // Use the pre-initialized frame from the coroutine if available
+                            let mut coro_frame = if let Some(f) = frame {
+                                *f
+                            } else {
+                                // Fallback: create a new frame without args (shouldn't happen)
+                                let globals_rc = Rc::clone(&self.globals);
+                                let builtins_rc = Rc::clone(&self.builtins);
+                                Frame::new_function_frame(*code, globals_rc, builtins_rc, vec![], HashMap::new())
+                            };
+                            
+                            coro_frame.return_register = Some((frame_idx, result_reg as u32));
+                            self.frames.push(coro_frame);
+                            
+                            // The coroutine will execute and store its result in result_reg
+                        }
+                        Ok(None)
+                    }
+                    _ => {
+                        // Not a coroutine, just pass through
+                        self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(value));
+                        Ok(None)
+                    }
+                }
             }
             OpCode::DeleteAttr => {
                 // Delete attribute from object (del obj.attr)
@@ -7487,9 +7591,14 @@ impl SuperBytecodeVM {
                     return Ok(Value::None);
                 }
 
-                // For builtin functions, we should not pass kwargs as they don't expect them
-                // Concatenate args and kwargs values if needed, or handle them appropriately
-                // For now, let's just pass the args to builtin functions
+                // For builtin functions, handle kwargs specially for functions that need them
+                // Some builtins like sorted(), min(), max() accept keyword arguments
+                if name == "sorted" {
+                    // sorted() accepts: iterable, key=None, reverse=False
+                    return self.handle_sorted_with_vm(args, kwargs);
+                }
+
+                // For other builtin functions, just pass the args
                 func(args.clone())
             }
             Value::NativeFunction(func) => {
@@ -7513,6 +7622,31 @@ impl SuperBytecodeVM {
 
                 // Call user-defined function
                 if let Some(code_obj) = compiled_code {
+                    // Check if this is an async function
+                    if code_obj.is_async {
+                        // For async functions, create a coroutine object with a pre-initialized frame
+                        // Use module_globals if available, otherwise use the current VM globals
+                        let globals_rc = if let Some(ref mod_globals) = module_globals {
+                            Rc::clone(mod_globals)
+                        } else {
+                            Rc::clone(&self.globals)
+                        };
+                        let builtins_rc = Rc::clone(&self.builtins);
+                        
+                        // Create the frame with arguments
+                        let frame = Frame::new_function_frame(*code_obj.clone(), globals_rc, builtins_rc, args.clone(), kwargs.clone());
+                        
+                        let coroutine_value = Value::Coroutine {
+                            name: name.clone(),
+                            code: Box::new(*code_obj),
+                            frame: Some(Box::new(frame)),
+                            finished: false,
+                            awaiting: None,
+                        };
+
+                        return Ok(coroutine_value);
+                    }
+                    
                     // Check if this is a generator function by looking at the instructions
                     let is_generator = code_obj.instructions.iter().any(|instr| {
                         matches!(instr.opcode, OpCode::YieldValue | OpCode::YieldFrom)
@@ -7876,7 +8010,7 @@ impl SuperBytecodeVM {
         let wrapped_source = format!("__eval_result__ = ({})", source);
 
         // Parse the wrapped expression
-        let tokens = crate::lexer::Lexer::new(&wrapped_source)
+        let tokens = crate::lexer::Lexer::new(&wrapped_source, "<eval>".to_string())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow!("Lexer error in eval(): {}", e))?;
 
@@ -7934,7 +8068,7 @@ impl SuperBytecodeVM {
     /// Implement exec() - execute Python statements
     pub fn exec_impl(&mut self, source: &str, globals: Option<HashMap<String, Value>>, locals: Option<HashMap<String, Value>>) -> Result<Value> {
         // Parse the source as statements
-        let tokens = crate::lexer::Lexer::new(source)
+        let tokens = crate::lexer::Lexer::new(source, "<exec>".to_string())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow!("Lexer error in exec(): {}", e))?;
 
@@ -7981,7 +8115,7 @@ impl SuperBytecodeVM {
         };
 
         // Parse the source based on mode
-        let tokens = crate::lexer::Lexer::new(source_to_parse)
+        let tokens = crate::lexer::Lexer::new(source_to_parse, "<compile>".to_string())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow!("Lexer error in compile(): {}", e))?;
 
@@ -8010,5 +8144,103 @@ impl SuperBytecodeVM {
 
         // Return the code object as a Value
         Ok(Value::Code(Box::new(code_object)))
+    }
+
+    /// Execute a closure synchronously and return its value
+    fn execute_closure_sync(&mut self, closure: Value, args: Vec<Value>) -> Result<Value> {
+        // Create a new VM to execute the closure in isolation
+        let mut isolated_vm = SuperBytecodeVM::new();
+        isolated_vm.globals = self.globals.clone();
+        isolated_vm.builtins = self.builtins.clone();
+        isolated_vm.loaded_modules = self.loaded_modules.clone();
+
+        // Call the closure, which will push a frame
+        isolated_vm.call_function_fast(closure, args, HashMap::new(), None, None)?;
+
+        // Now execute the frame
+        let result = isolated_vm.run_frame()?;
+
+        Ok(result)
+    }
+
+    /// Handle sorted() with VM access to execute closures/lambdas
+    fn handle_sorted_with_vm(&mut self, args: Vec<Value>, kwargs: HashMap<String, Value>) -> Result<Value> {
+        if args.is_empty() || args.len() > 3 {
+            return Err(anyhow!("sorted() takes 1 to 3 arguments ({} given)", args.len()));
+        }
+
+        let iterable = &args[0];
+
+        // Get key function from args or kwargs
+        let key_fn = if args.len() > 1 && !matches!(args[1], Value::None) {
+            Some(&args[1])
+        } else if let Some(key_val) = kwargs.get("key") {
+            Some(key_val)
+        } else {
+            None
+        };
+
+        // Get reverse flag from args or kwargs
+        let reverse = if args.len() > 2 {
+            match &args[2] {
+                Value::Bool(b) => *b,
+                _ => false,
+            }
+        } else {
+            kwargs.get("reverse")
+                .and_then(|v| if let Value::Bool(b) = v { Some(*b) } else { None })
+                .unwrap_or(false)
+        };
+
+        // Get the items to sort
+        let items = match iterable {
+            Value::List(items) => items.as_vec().clone(),
+            Value::Tuple(items) => items.clone(),
+            _ => return Err(anyhow!("'{}' object is not iterable", iterable.type_name())),
+        };
+
+        let mut sorted_items = items;
+
+        // Sort with or without key function
+        if let Some(key_func) = key_fn {
+            // Sort using key function - WITH VM support for closures
+            let mut items_with_keys: Vec<(Value, Value)> = Vec::new();
+
+            // Compute keys for all items
+            for item in &sorted_items {
+                let key_result = match key_func {
+                    Value::BuiltinFunction(_, f) => f(vec![item.clone()])?,
+                    Value::NativeFunction(f) => f(vec![item.clone()])?,
+                    Value::Closure { .. } => {
+                        // Execute the closure synchronously using the VM!
+                        let result = self.execute_closure_sync(
+                            key_func.clone(),
+                            vec![item.clone()]
+                        )?;
+                        result
+                    },
+                    _ => return Err(anyhow!("'{}' object is not callable", key_func.type_name())),
+                };
+                items_with_keys.push((item.clone(), key_result));
+            }
+
+            // Sort by the keys
+            items_with_keys.sort_by(|(_, key_a), (_, key_b)| {
+                key_a.partial_cmp(key_b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            // Extract the sorted items
+            sorted_items = items_with_keys.into_iter().map(|(item, _)| item).collect();
+        } else {
+            // Sort using natural ordering
+            sorted_items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        // Reverse if requested
+        if reverse {
+            sorted_items.reverse();
+        }
+
+        Ok(Value::List(crate::modules::hplist::HPList::from_values(sorted_items)))
     }
 }

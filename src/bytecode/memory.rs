@@ -33,6 +33,7 @@ pub struct CodeObject {
     pub params: Vec<Param>,     // Parameter information with type annotations
     pub var_types: HashMap<String, Type>,  // Variable type annotations
     pub return_type: Option<Type>,         // Function return type annotation
+    pub is_async: bool,                    // Whether this is an async function
 }
 
 impl PartialEq for CodeObject {
@@ -62,6 +63,7 @@ impl CodeObject {
             stacksize: 0,
             flags: 0,
             registers: 0,
+            is_async: false,
             inline_caches: Vec::new(),
             inline_method_cache: Vec::new(),
             params: Vec::new(),  // Initialize the params field

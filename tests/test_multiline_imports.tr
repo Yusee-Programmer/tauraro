@@ -1,0 +1,50 @@
+# Test multiline import support in Tauraro
+
+# Style 1: Single line without parentheses
+from os import path, getcwd, listdir
+
+# Style 2: Single line with parentheses
+from sys import (argv, exit, version)
+
+# Style 3: Multiline with parentheses
+from collections import (
+    defaultdict,
+    Counter,
+    OrderedDict
+)
+
+# Style 4: Multiline with parentheses and aliases
+from typing import (
+    List as L,
+    Dict as D,
+    Tuple as T,
+    Optional
+)
+
+# Style 5: Mixed - some with aliases, some without
+from itertools import (
+    chain,
+    combinations as combo,
+    permutations,
+    product as prod
+)
+
+# Style 6: Trailing comma (Python style)
+from functools import (
+    reduce,
+    partial,
+    lru_cache,
+)
+
+# Style 7: Single line with multiple aliases
+from datetime import datetime as dt, timedelta as td, date
+
+# Test that imports work
+print("All import styles parsed successfully!")
+print("path:", path)
+print("argv:", argv)
+print("Counter:", Counter)
+print("List alias (L):", L)
+print("combo (combinations alias):", combo)
+print("reduce:", reduce)
+print("dt (datetime alias):", dt)

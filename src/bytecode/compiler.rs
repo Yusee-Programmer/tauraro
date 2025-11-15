@@ -302,7 +302,6 @@ impl SuperCompiler {
     }
     
     pub fn compile_statement(&mut self, stmt: Statement) -> Result<()> {
-        // eprintln!("DEBUG: Compiling statement: {:?}", stmt); // Debug output
         match stmt {
             Statement::Expression(expr) => {
                 let reg = self.compile_expression(expr)?;
@@ -415,7 +414,7 @@ impl SuperCompiler {
                 }
                 Ok(())
             }
-            Statement::FunctionDef { name, params, return_type, body, decorators, .. } => {
+            Statement::FunctionDef { name, params, return_type, body, decorators, is_async, .. } => {
                 // Create a new compiler for the function
                 let mut func_compiler = SuperCompiler::new(format!("<fn:{}>", name));
 
@@ -473,6 +472,7 @@ impl SuperCompiler {
                 // Get the compiled function code
                 let mut func_code = func_compiler.code;
                 func_code.params = params.clone(); // Set the params field
+                func_code.is_async = is_async;     // Set the async flag
                 
                 // Debug output to see the compiled code
         // eprintln!("DEBUG: Compiled function '{}' with {} instructions", name, func_code.instructions.len());
@@ -1801,10 +1801,8 @@ impl SuperCompiler {
                         CompareOp::GtE => OpCode::CompareGreaterEqualRR,
                         CompareOp::In => OpCode::CompareInRR,
                         CompareOp::NotIn => OpCode::CompareNotInRR,
-                        CompareOp::Is | CompareOp::IsNot => {
-                            // is/is not comparisons not supported in simple case yet
-                            return Err(anyhow!("'is' and 'is not' comparisons not yet fully supported"));
-                        }
+                        CompareOp::Is => OpCode::CompareIsRR,
+                        CompareOp::IsNot => OpCode::CompareIsNotRR,
                     };
 
                     self.emit(opcode, left_reg, right_reg, result_reg, self.current_line);
@@ -2299,11 +2297,11 @@ impl SuperCompiler {
 
                 Ok(result_reg)
             }
-            Expr::DocString(s) => {
+            Expr::Literal(Literal::String(s)) => {
                 // Handle docstrings - treat them as string constants
                 // In Python, docstrings are just string literals that are typically ignored
                 // We'll load it as a constant but it's usually discarded
-                let str_const = self.code.add_constant(Value::Str(s));
+                let str_const = self.code.add_constant(Value::Str(s.clone()));
                 let reg = self.allocate_register();
                 self.emit(OpCode::LoadConst, str_const, reg, 0, self.current_line);
                 Ok(reg)

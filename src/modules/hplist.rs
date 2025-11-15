@@ -14,7 +14,7 @@ use std::cell::RefCell;
 #[derive(Debug, Clone)]
 pub struct HPList {
     /// Internal storage using Rc<RefCell<Vec>> for Python-like reference semantics
-    data: Rc<RefCell<Vec<Value>>>,
+    pub(crate) data: Rc<RefCell<Vec<Value>>>, 
 }
 
 impl HPList {
@@ -206,6 +206,11 @@ impl HPList {
     /// Get a copy of the internal Vec
     pub fn as_vec(&self) -> Vec<Value> {
         self.data.borrow().clone()
+    }
+
+    /// Get a reference to the internal Rc for identity comparison
+    pub fn data_ptr(&self) -> &Rc<RefCell<Vec<Value>>> {
+        &self.data
     }
 
     /// Get slice of the list
