@@ -1,0 +1,466 @@
+# Code Editor UI with Custom Title Bar
+# Modern code editor interface inspired by VS Code
+
+from webviewtk import Window
+import time
+
+# Create frameless window
+win = Window("Code Editor", 1200, 800)
+win.disable_decorations()
+
+# Editor state
+current_file = "untitled.tr"
+is_modified = False
+
+# Handlers
+func handleFileNew(data):
+    global current_file, is_modified
+    current_file = "untitled.tr"
+    is_modified = False
+    print("📄 New file")
+
+func handleFileOpen(data):
+    print("📂 Open file:", data)
+
+func handleFileSave(data):
+    global is_modified
+    is_modified = False
+    print("💾 Save file:", current_file)
+
+func handleCodeChange(data):
+    global is_modified
+    is_modified = True
+    print("✏️ Code modified")
+
+func handleRun(data):
+    print("▶️ Running code...")
+
+# Register handlers
+win.on_message("file_new", handleFileNew)
+win.on_message("file_open", handleFileOpen)
+win.on_message("file_save", handleFileSave)
+win.on_message("code_change", handleCodeChange)
+win.on_message("run", handleRun)
+
+html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Consolas', 'Monaco', monospace;
+            background: #1e1e1e;
+            height: 100vh;
+            overflow: hidden;
+            color: #d4d4d4;
+        }
+        
+        /* Custom Title Bar */
+        .titlebar {
+            -webkit-app-region: drag;
+            background: #323233;
+            height: 35px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 10px;
+            border-bottom: 1px solid #000;
+        }
+        
+        .titlebar-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .titlebar-title {
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .titlebar-menu {
+            -webkit-app-region: no-drag;
+            display: flex;
+            gap: 2px;
+        }
+        
+        .menu-item {
+            padding: 5px 10px;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: background 0.2s;
+        }
+        
+        .menu-item:hover {
+            background: #3e3e42;
+        }
+        
+        .titlebar-controls {
+            -webkit-app-region: no-drag;
+            display: flex;
+        }
+        
+        .titlebar-btn {
+            width: 45px;
+            height: 35px;
+            border: none;
+            background: transparent;
+            color: #d4d4d4;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 16px;
+        }
+        
+        .titlebar-btn:hover {
+            background: #3e3e42;
+        }
+        
+        .titlebar-btn.close:hover {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        /* Main Layout */
+        .main-container {
+            display: flex;
+            height: calc(100vh - 35px);
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            width: 250px;
+            background: #252526;
+            border-right: 1px solid #000;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .sidebar-header {
+            padding: 10px 15px;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #858585;
+            font-weight: bold;
+        }
+        
+        .file-tree {
+            flex: 1;
+            overflow-y: auto;
+        }
+        
+        .file-item {
+            padding: 6px 20px;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .file-item:hover {
+            background: #2a2d2e;
+        }
+        
+        .file-item.active {
+            background: #37373d;
+        }
+        
+        /* Editor Area */
+        .editor-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #1e1e1e;
+        }
+        
+        .tabs-bar {
+            display: flex;
+            background: #252526;
+            border-bottom: 1px solid #000;
+            overflow-x: auto;
+        }
+        
+        .tab {
+            padding: 10px 20px;
+            font-size: 13px;
+            background: #2d2d2d;
+            border-right: 1px solid #000;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 120px;
+        }
+        
+        .tab.active {
+            background: #1e1e1e;
+        }
+        
+        .tab-close {
+            margin-left: auto;
+            opacity: 0.6;
+        }
+        
+        .tab-close:hover {
+            opacity: 1;
+        }
+        
+        .editor {
+            flex: 1;
+            padding: 20px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            overflow: auto;
+        }
+        
+        .code-area {
+            width: 100%;
+            height: 100%;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border: none;
+            outline: none;
+            font-family: inherit;
+            font-size: inherit;
+            line-height: inherit;
+            resize: none;
+        }
+        
+        /* Status Bar */
+        .status-bar {
+            height: 25px;
+            background: #007acc;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 15px;
+            font-size: 12px;
+        }
+        
+        .status-left {
+            display: flex;
+            gap: 20px;
+        }
+        
+        .status-right {
+            display: flex;
+            gap: 20px;
+        }
+        
+        /* Toolbar */
+        .toolbar {
+            background: #252526;
+            padding: 8px 15px;
+            display: flex;
+            gap: 10px;
+            border-bottom: 1px solid #000;
+        }
+        
+        .toolbar-btn {
+            padding: 6px 12px;
+            background: #0e639c;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+        
+        .toolbar-btn:hover {
+            background: #1177bb;
+        }
+        
+        .toolbar-btn.success {
+            background: #16825d;
+        }
+        
+        .toolbar-btn.success:hover {
+            background: #1a9e71;
+        }
+    </style>
+</head>
+<body>
+    <!-- Custom Title Bar -->
+    <div class="titlebar" data-tauri-drag-region>
+        <div class="titlebar-left">
+            <div class="titlebar-title">
+                <span>⚡</span>
+                <span>Code Editor</span>
+            </div>
+            <div class="titlebar-menu" data-tauri-drag-no-region>
+                <div class="menu-item" onclick="fileNew()">File</div>
+                <div class="menu-item">Edit</div>
+                <div class="menu-item">View</div>
+                <div class="menu-item">Run</div>
+                <div class="menu-item">Help</div>
+            </div>
+        </div>
+        <div class="titlebar-controls" data-tauri-drag-no-region>
+            <button class="titlebar-btn" onclick="minimize()">−</button>
+            <button class="titlebar-btn" onclick="maximize()">□</button>
+            <button class="titlebar-btn close" onclick="closeApp()">×</button>
+        </div>
+    </div>
+    
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">Explorer</div>
+            <div class="file-tree">
+                <div class="file-item active">
+                    <span>📄</span>
+                    <span>main.tr</span>
+                </div>
+                <div class="file-item">
+                    <span>📄</span>
+                    <span>utils.tr</span>
+                </div>
+                <div class="file-item">
+                    <span>📄</span>
+                    <span>config.tr</span>
+                </div>
+                <div class="file-item">
+                    <span>📁</span>
+                    <span>modules</span>
+                </div>
+                <div class="file-item" style="padding-left: 40px">
+                    <span>📄</span>
+                    <span>parser.tr</span>
+                </div>
+                <div class="file-item" style="padding-left: 40px">
+                    <span>📄</span>
+                    <span>lexer.tr</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Editor Container -->
+        <div class="editor-container">
+            <div class="tabs-bar">
+                <div class="tab active">
+                    <span>📄</span>
+                    <span>main.tr</span>
+                    <span class="tab-close">×</span>
+                </div>
+                <div class="tab">
+                    <span>📄</span>
+                    <span>utils.tr</span>
+                    <span class="tab-close">×</span>
+                </div>
+            </div>
+            
+            <div class="toolbar">
+                <button class="toolbar-btn" onclick="fileSave()">💾 Save</button>
+                <button class="toolbar-btn success" onclick="runCode()">▶️ Run</button>
+                <button class="toolbar-btn" onclick="fileOpen()">📂 Open</button>
+            </div>
+            
+            <div class="editor">
+                <textarea class="code-area" oninput="codeChanged()" spellcheck="false"># Welcome to Tauraro Code Editor
+# Write your code here
+
+from webviewtk import Window
+import time
+
+# Create a simple window
+win = Window("Hello World", 800, 600)
+
+html = """
+<!DOCTYPE html>
+<html>
+<body>
+    <h1>Hello from Tauraro!</h1>
+    <button onclick="alert('Clicked!')">Click Me</button>
+</body>
+</html>
+"""
+
+win.set_html(html)
+win.run_async()
+
+# Keep window open
+for i in range(300):
+    win.process_events()
+    time.sleep(0.1)
+
+print("Done")</textarea>
+            </div>
+            
+            <div class="status-bar">
+                <div class="status-left">
+                    <span>Ln 1, Col 1</span>
+                    <span>Spaces: 4</span>
+                    <span>UTF-8</span>
+                </div>
+                <div class="status-right">
+                    <span>Tauraro</span>
+                    <span>▶️ Ready</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function fileNew() {
+            window.ipc.postMessage('file_new', '');
+        }
+        
+        function fileOpen() {
+            window.ipc.postMessage('file_open', 'example.tr');
+        }
+        
+        function fileSave() {
+            const code = document.querySelector('.code-area').value;
+            window.ipc.postMessage('file_save', code);
+        }
+        
+        function codeChanged() {
+            window.ipc.postMessage('code_change', '');
+        }
+        
+        function runCode() {
+            window.ipc.postMessage('run', '');
+        }
+        
+        // Window controls
+        function minimize() {
+            window.tauraro.minimize();
+        }
+        
+        function maximize() {
+            window.tauraro.maximize();
+        }
+        
+        function closeApp() {
+            window.tauraro.close();
+        }
+    </script>
+</body>
+</html>
+"""
+
+win.set_html(html)
+
+print("⚡ Starting Code Editor...")
+print("Modern IDE with custom title bar")
+win.run_async()
+
+# Event loop
+for i in range(600):
+    win.process_events()
+    time.sleep(0.1)
+
+print("Editor closed")

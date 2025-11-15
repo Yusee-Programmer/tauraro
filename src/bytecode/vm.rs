@@ -5967,11 +5967,38 @@ impl SuperBytecodeVM {
                     return Err(anyhow!("Await: register index out of bounds"));
                 }
                 
-                // For now, we'll just return the value as-is (no actual async support yet)
-                // In a full implementation, we would suspend execution until the future completes
                 let value = self.frames[frame_idx].registers[value_reg].value.clone();
-                self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(value));
-                Ok(None)
+                
+                match value {
+                    Value::Coroutine { name, code, frame, finished, awaiting: _ } => {
+                        if finished {
+                            // Coroutine already finished, return None
+                            self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(Value::None));
+                        } else {
+                            // Execute the coroutine to completion
+                            // Use the pre-initialized frame from the coroutine if available
+                            let mut coro_frame = if let Some(f) = frame {
+                                *f
+                            } else {
+                                // Fallback: create a new frame without args (shouldn't happen)
+                                let globals_rc = Rc::clone(&self.globals);
+                                let builtins_rc = Rc::clone(&self.builtins);
+                                Frame::new_function_frame(*code, globals_rc, builtins_rc, vec![], HashMap::new())
+                            };
+                            
+                            coro_frame.return_register = Some((frame_idx, result_reg as u32));
+                            self.frames.push(coro_frame);
+                            
+                            // The coroutine will execute and store its result in result_reg
+                        }
+                        Ok(None)
+                    }
+                    _ => {
+                        // Not a coroutine, just pass through
+                        self.frames[frame_idx].set_register(result_reg as u32, RcValue::new(value));
+                        Ok(None)
+                    }
+                }
             }
             OpCode::DeleteAttr => {
                 // Delete attribute from object (del obj.attr)
@@ -7595,6 +7622,31 @@ impl SuperBytecodeVM {
 
                 // Call user-defined function
                 if let Some(code_obj) = compiled_code {
+                    // Check if this is an async function
+                    if code_obj.is_async {
+                        // For async functions, create a coroutine object with a pre-initialized frame
+                        // Use module_globals if available, otherwise use the current VM globals
+                        let globals_rc = if let Some(ref mod_globals) = module_globals {
+                            Rc::clone(mod_globals)
+                        } else {
+                            Rc::clone(&self.globals)
+                        };
+                        let builtins_rc = Rc::clone(&self.builtins);
+                        
+                        // Create the frame with arguments
+                        let frame = Frame::new_function_frame(*code_obj.clone(), globals_rc, builtins_rc, args.clone(), kwargs.clone());
+                        
+                        let coroutine_value = Value::Coroutine {
+                            name: name.clone(),
+                            code: Box::new(*code_obj),
+                            frame: Some(Box::new(frame)),
+                            finished: false,
+                            awaiting: None,
+                        };
+
+                        return Ok(coroutine_value);
+                    }
+                    
                     // Check if this is a generator function by looking at the instructions
                     let is_generator = code_obj.instructions.iter().any(|instr| {
                         matches!(instr.opcode, OpCode::YieldValue | OpCode::YieldFrom)

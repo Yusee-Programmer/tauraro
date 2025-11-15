@@ -16,7 +16,6 @@ mod drag;
 mod menu;
 mod titlebar;
 mod window;
-mod helpers;
 
 // Re-export utility functions
 pub use utils::{build_element, escape_html, extract_string_arg, extract_dict_arg, render_html, escape_html_func};
@@ -40,11 +39,8 @@ pub use titlebar::create_titlebar;
 pub use window::{
     create_window_class, window_set_html, window_set_menu, window_set_titlebar,
     window_set_icon, window_set_resizable, window_disable_decorations,
-    window_run, window_run_async, window_on_message
+    window_run, window_run_async
 };
-
-// Re-export helper functions
-pub use helpers::*;
 
 /// Create the webviewtk module object with all its functions and classes
 pub fn create_webviewtk_module() -> Value {
@@ -125,15 +121,8 @@ pub fn create_webviewtk_module() -> Value {
     // Window class
     namespace.insert("Window".to_string(), Value::NativeFunction(window::create_window_class));
 
-    // Helper functions for common UI patterns
-    namespace.insert("window_controls".to_string(), Value::NativeFunction(helpers::create_window_controls));
-    namespace.insert("menu_bar".to_string(), Value::NativeFunction(helpers::create_menu_bar));
-    namespace.insert("search_bar".to_string(), Value::NativeFunction(helpers::create_search_bar));
-    namespace.insert("titlebar_custom".to_string(), Value::NativeFunction(helpers::create_titlebar));
-
     // Utility functions
     namespace.insert("render".to_string(), Value::NativeFunction(utils::render_html));
     namespace.insert("escape_html".to_string(), Value::NativeFunction(utils::escape_html_func));
 
-    Value::Module("webviewtk".to_string(), namespace)
-}
+

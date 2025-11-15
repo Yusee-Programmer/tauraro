@@ -2265,12 +2265,22 @@ impl Parser {
 
     fn import_statement(&mut self) -> Result<Statement, ParseError> {
         self.consume(Token::KwImport, "Expected 'import' or 'shigoda'")?;
+        
+        // Handle parenthesis-wrapped imports: import ( ... )
+        let has_parens = self.match_token(&[Token::LParen]);
+        
         let module = self.consume_module_path()?;
         let alias = if self.match_token(&[Token::KwAs]) {
             Some(self.consume_identifier()?)
         } else {
             None
         };
+        
+        // If parentheses were used, consume the closing paren
+        if has_parens {
+            self.consume(Token::RParen, "Expected ')' to close import")?;
+        }
+        
         self.match_token(&[Token::Semicolon, Token::Newline]);
         Ok(Statement::Import { module, alias })
     }
@@ -2280,12 +2290,24 @@ impl Parser {
         let module = self.consume_module_path()?;
         self.consume(Token::KwImport, "Expected 'import' or 'shigoda'")?;
         
+        // Handle parenthesis-wrapped imports: from module import ( ... )
+        let has_parens = self.match_token(&[Token::LParen]);
+        
         let mut names = Vec::new();
         if self.match_token(&[Token::Star]) {
             // from module import *
             names.push(("*".to_string(), None));
         } else {
             loop {
+                // Skip newlines inside parentheses or after commas
+                if has_parens {
+                    while self.match_token(&[Token::Newline]) {}
+                    // Check if we hit the closing paren (trailing comma case)
+                    if self.check(&Token::RParen) {
+                        break;
+                    }
+                }
+                
                 let name = self.consume_identifier()?;
                 let alias = if self.match_token(&[Token::KwAs]) {
                     Some(self.consume_identifier()?)
@@ -2294,10 +2316,23 @@ impl Parser {
                 };
                 names.push((name, alias));
                 
+                // Check for comma to continue or end
                 if !self.match_token(&[Token::Comma]) {
                     break;
                 }
+                
+                // Skip newlines after comma (works with or without parentheses)
+                // In Python-style, trailing commas allow continuation on next line
+                if has_parens {
+                    while self.match_token(&[Token::Newline]) {}
+                }
             }
+        }
+        
+        // If parentheses were used, consume the closing paren and optional newline
+        if has_parens {
+            while self.match_token(&[Token::Newline]) {}
+            self.consume(Token::RParen, "Expected ')' to close import")?;
         }
         
         self.match_token(&[Token::Semicolon, Token::Newline]);

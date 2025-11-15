@@ -414,7 +414,7 @@ impl SuperCompiler {
                 }
                 Ok(())
             }
-            Statement::FunctionDef { name, params, return_type, body, decorators, .. } => {
+            Statement::FunctionDef { name, params, return_type, body, decorators, is_async, .. } => {
                 // Create a new compiler for the function
                 let mut func_compiler = SuperCompiler::new(format!("<fn:{}>", name));
 
@@ -472,6 +472,7 @@ impl SuperCompiler {
                 // Get the compiled function code
                 let mut func_code = func_compiler.code;
                 func_code.params = params.clone(); // Set the params field
+                func_code.is_async = is_async;     // Set the async flag
                 
                 // Debug output to see the compiled code
         // eprintln!("DEBUG: Compiled function '{}' with {} instructions", name, func_code.instructions.len());

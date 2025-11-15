@@ -1,0 +1,581 @@
+# Settings App with Custom Title Bar
+# Modern settings interface with multiple panels
+
+from webviewtk import Window
+import time
+
+# Create frameless window
+win = Window("Settings", 1100, 750)
+win.disable_decorations()
+
+# Settings state
+theme = "dark"
+notifications_enabled = True
+auto_update = True
+
+# Handlers
+func handleThemeChange(data):
+    global theme
+    theme = data
+    print("🎨 Theme changed to:", theme)
+
+func handleNotificationToggle(data):
+    global notifications_enabled
+    notifications_enabled = not notifications_enabled
+    print("🔔 Notifications:", notifications_enabled)
+
+func handleAutoUpdateToggle(data):
+    global auto_update
+    auto_update = not auto_update
+    print("🔄 Auto-update:", auto_update)
+
+func handleSave(data):
+    print("💾 Settings saved")
+
+func handleReset(data):
+    print("🔄 Settings reset to default")
+
+# Register handlers
+win.on_message("theme_change", handleThemeChange)
+win.on_message("notification_toggle", handleNotificationToggle)
+win.on_message("auto_update_toggle", handleAutoUpdateToggle)
+win.on_message("save", handleSave)
+win.on_message("reset", handleReset)
+
+html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #1a1a1a;
+            height: 100vh;
+            overflow: hidden;
+            color: #e0e0e0;
+        }
+        
+        /* Custom Title Bar */
+        .titlebar {
+            -webkit-app-region: drag;
+            background: #2a2a2a;
+            height: 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 15px;
+            border-bottom: 1px solid #3a3a3a;
+        }
+        
+        .titlebar-title {
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .titlebar-controls {
+            -webkit-app-region: no-drag;
+            display: flex;
+            gap: 5px;
+        }
+        
+        .titlebar-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: #b0b0b0;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .titlebar-btn:hover {
+            background: #3a3a3a;
+            color: white;
+        }
+        
+        .titlebar-btn.close:hover {
+            background: #d32f2f;
+            color: white;
+        }
+        
+        /* Main Layout */
+        .main-container {
+            display: flex;
+            height: calc(100vh - 40px);
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            width: 250px;
+            background: #252525;
+            border-right: 1px solid #3a3a3a;
+            padding: 20px 0;
+        }
+        
+        .sidebar-section {
+            margin-bottom: 30px;
+        }
+        
+        .sidebar-label {
+            padding: 0 20px;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #808080;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        
+        .sidebar-item {
+            padding: 12px 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 14px;
+            transition: all 0.2s;
+            color: #b0b0b0;
+        }
+        
+        .sidebar-item:hover {
+            background: #2a2a2a;
+            color: white;
+        }
+        
+        .sidebar-item.active {
+            background: #3a3a3a;
+            color: white;
+            border-left: 3px solid #6366f1;
+        }
+        
+        .sidebar-icon {
+            font-size: 18px;
+        }
+        
+        /* Content Area */
+        .content {
+            flex: 1;
+            padding: 40px;
+            overflow-y: auto;
+        }
+        
+        .content-header {
+            margin-bottom: 30px;
+        }
+        
+        .content-header h1 {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+        
+        .content-header p {
+            color: #808080;
+            font-size: 15px;
+        }
+        
+        /* Settings Sections */
+        .settings-section {
+            background: #252525;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border: 1px solid #3a3a3a;
+        }
+        
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: white;
+        }
+        
+        .setting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid #3a3a3a;
+        }
+        
+        .setting-item:last-child {
+            border-bottom: none;
+        }
+        
+        .setting-info {
+            flex: 1;
+        }
+        
+        .setting-label {
+            font-size: 15px;
+            font-weight: 500;
+            margin-bottom: 5px;
+            color: white;
+        }
+        
+        .setting-description {
+            font-size: 13px;
+            color: #808080;
+        }
+        
+        /* Toggle Switch */
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 26px;
+        }
+        
+        .toggle-input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #3a3a3a;
+            transition: 0.3s;
+            border-radius: 26px;
+        }
+        
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        
+        .toggle-input:checked + .toggle-slider {
+            background-color: #6366f1;
+        }
+        
+        .toggle-input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+        
+        /* Select Dropdown */
+        .select-dropdown {
+            padding: 10px 15px;
+            background: #3a3a3a;
+            border: 1px solid #4a4a4a;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            cursor: pointer;
+            min-width: 150px;
+        }
+        
+        .select-dropdown:focus {
+            outline: none;
+            border-color: #6366f1;
+        }
+        
+        /* Buttons */
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: #6366f1;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5558e3;
+            transform: translateY(-1px);
+        }
+        
+        .btn-secondary {
+            background: #3a3a3a;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #4a4a4a;
+        }
+        
+        /* Input Fields */
+        .input-field {
+            width: 100%;
+            padding: 10px 15px;
+            background: #3a3a3a;
+            border: 1px solid #4a4a4a;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+        
+        .input-field:focus {
+            outline: none;
+            border-color: #6366f1;
+        }
+    </style>
+</head>
+<body>
+    <!-- Custom Title Bar -->
+    <div class="titlebar" data-tauri-drag-region>
+        <div class="titlebar-title">
+            <span>⚙️</span>
+            <span>Settings</span>
+        </div>
+        <div class="titlebar-controls" data-tauri-drag-no-region>
+            <button class="titlebar-btn" onclick="minimize()">−</button>
+            <button class="titlebar-btn" onclick="maximize()">□</button>
+            <button class="titlebar-btn close" onclick="closeApp()">×</button>
+        </div>
+    </div>
+    
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-label">Personal</div>
+                <div class="sidebar-item active">
+                    <span class="sidebar-icon">👤</span>
+                    <span>Account</span>
+                </div>
+                <div class="sidebar-item">
+                    <span class="sidebar-icon">🔒</span>
+                    <span>Privacy</span>
+                </div>
+                <div class="sidebar-item">
+                    <span class="sidebar-icon">🔔</span>
+                    <span>Notifications</span>
+                </div>
+            </div>
+            
+            <div class="sidebar-section">
+                <div class="sidebar-label">Application</div>
+                <div class="sidebar-item">
+                    <span class="sidebar-icon">🎨</span>
+                    <span>Appearance</span>
+                </div>
+                <div class="sidebar-item">
+                    <span class="sidebar-icon">🌐</span>
+                    <span>Language</span>
+                </div>
+                <div class="sidebar-item">
+                    <span class="sidebar-icon">🔄</span>
+                    <span>Updates</span>
+                </div>
+            </div>
+            
+            <div class="sidebar-section">
+                <div class="sidebar-label">Advanced</div>
+                <div class="sidebar-item">
+                    <span class="sidebar-icon">🛠️</span>
+                    <span>Developer</span>
+                </div>
+                <div class="sidebar-item">
+                    <span class="sidebar-icon">ℹ️</span>
+                    <span>About</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Content -->
+        <div class="content">
+            <div class="content-header">
+                <h1>Account Settings</h1>
+                <p>Manage your account preferences and settings</p>
+            </div>
+            
+            <!-- Profile Section -->
+            <div class="settings-section">
+                <h3 class="section-title">Profile Information</h3>
+                
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-label">Username</div>
+                        <input type="text" class="input-field" value="john_doe" placeholder="Enter username">
+                    </div>
+                </div>
+                
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-label">Email</div>
+                        <input type="email" class="input-field" value="john@example.com" placeholder="Enter email">
+                    </div>
+                </div>
+                
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-label">Bio</div>
+                        <input type="text" class="input-field" value="Software Developer" placeholder="Tell us about yourself">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Appearance Section -->
+            <div class="settings-section">
+                <h3 class="section-title">Appearance</h3>
+                
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-label">Theme</div>
+                        <div class="setting-description">Choose your preferred color theme</div>
+                    </div>
+                    <select class="select-dropdown" onchange="changeTheme(this.value)">
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                        <option value="auto">Auto</option>
+                    </select>
+                </div>
+                
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-label">Font Size</div>
+                        <div class="setting-description">Adjust text size across the app</div>
+                    </div>
+                    <select class="select-dropdown">
+                        <option value="small">Small</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="large">Large</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Notifications Section -->
+            <div class="settings-section">
+                <h3 class="section-title">Notifications</h3>
+                
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-label">Push Notifications</div>
+                        <div class="setting-description">Receive notifications for important updates</div>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" class="toggle-input" checked onclick="toggleNotifications()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-label">Email Notifications</div>
+                        <div class="setting-description">Get notified via email</div>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" class="toggle-input" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-label">Sound</div>
+                        <div class="setting-description">Play sound for notifications</div>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" class="toggle-input">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Updates Section -->
+            <div class="settings-section">
+                <h3 class="section-title">Updates</h3>
+                
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <div class="setting-label">Automatic Updates</div>
+                        <div class="setting-description">Download and install updates automatically</div>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" class="toggle-input" checked onclick="toggleAutoUpdate()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Action Buttons -->
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+                <button class="btn btn-secondary" onclick="resetSettings()">Reset to Default</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function changeTheme(theme) {
+            window.ipc.postMessage('theme_change', theme);
+        }
+        
+        function toggleNotifications() {
+            window.ipc.postMessage('notification_toggle', '');
+        }
+        
+        function toggleAutoUpdate() {
+            window.ipc.postMessage('auto_update_toggle', '');
+        }
+        
+        function saveSettings() {
+            window.ipc.postMessage('save', '');
+        }
+        
+        function resetSettings() {
+            window.ipc.postMessage('reset', '');
+        }
+        
+        // Window controls
+        function minimize() {
+            window.tauraro.minimize();
+        }
+        
+        function maximize() {
+            window.tauraro.maximize();
+        }
+        
+        function closeApp() {
+            window.tauraro.close();
+        }
+    </script>
+</body>
+</html>
+"""
+
+win.set_html(html)
+
+print("⚙️ Starting Settings Application...")
+print("Modern settings UI with custom title bar")
+win.run_async()
+
+# Event loop
+for i in range(600):
+    win.process_events()
+    time.sleep(0.1)
+
+print("Settings closed")

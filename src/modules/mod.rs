@@ -6,6 +6,7 @@ use std::collections::HashMap;
 // Re-export all submodules
 pub mod abc;
 pub mod asyncio;
+pub mod asyncio_compat;
 pub mod base64;
 pub mod collections;
 pub mod copy;

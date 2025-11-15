@@ -83,6 +83,13 @@ pub enum Value {
         frame: Option<Box<crate::bytecode::memory::Frame>>,
         finished: bool,
     },
+    Coroutine {
+        name: String,
+        code: Box<CodeObject>,
+        frame: Option<Box<crate::bytecode::memory::Frame>>,
+        finished: bool,
+        awaiting: Option<Box<Value>>,
+    },
     Iterator {
         // Simple iterator for lists, tuples, etc.
         items: Vec<Value>,
@@ -133,6 +140,10 @@ impl Hash for Value {
                 }
                 current_index.hash(state);
             },
+            Value::Coroutine { name, finished, .. } => {
+                name.hash(state);
+                finished.hash(state);
+            },
             // For complex types, we'll use a simple approach
             _ => {
                 // For complex types that can't easily be hashed, we'll hash their debug representation
@@ -181,6 +192,7 @@ impl PartialEq for Value {
             (Value::KwargsMarker(a), Value::KwargsMarker(b)) => a == b,
             (Value::Exception { class_name: class_name_a, message: message_a, .. }, Value::Exception { class_name: class_name_b, message: message_b, .. }) => class_name_a == class_name_b && message_a == message_b,
             (Value::Iterator { items: items_a, current_index: current_index_a }, Value::Iterator { items: items_b, current_index: current_index_b }) => items_a == items_b && current_index_a == current_index_b,
+            (Value::Coroutine { name: name_a, finished: finished_a, .. }, Value::Coroutine { name: name_b, finished: finished_b, .. }) => name_a == name_b && finished_a == finished_b,
             _ => false, // Different variants are not equal
         }
     }
@@ -275,6 +287,9 @@ impl fmt::Debug for Value {
                     .finish()
             },
             Value::Generator { .. } => write!(f, "Generator"),
+            Value::Coroutine { name, finished, .. } => {
+                write!(f, "Coroutine({}, finished={})", name, finished)
+            },
             Value::Iterator { items, current_index } => {
                 write!(f, "Iterator {{ items: {:?}, current_index: {} }}", items, current_index)
             },
@@ -645,6 +660,13 @@ impl Value {
                  format!("<bound method '{}' of {}>", method_name, object.debug_string())
              },
              Value::Generator { .. } => "<generator object>".to_string(),
+             Value::Coroutine { name, finished, .. } => {
+                 if *finished {
+                     format!("<coroutine {} finished>", name)
+                 } else {
+                     format!("<coroutine {}>", name)
+                 }
+             },
              Value::Iterator { .. } => "<iterator object>".to_string(),
              Value::Exception { class_name, message, .. } => format!("{}: {}", class_name, message)
         }
@@ -686,6 +708,7 @@ impl Value {
             Value::Code(_) => "code",
             Value::KwargsMarker(_) => "dict",
             Value::Generator { .. } => "generator",
+            Value::Coroutine { .. } => "coroutine",
             Value::Iterator { .. } => "iterator",
             Value::Exception { class_name, .. } => class_name,
         }
@@ -764,6 +787,7 @@ impl Value {
             Value::Code(_) => Type::Simple("code".to_string()),
             Value::KwargsMarker(_) => Type::Simple("dict".to_string()),
             Value::Generator { .. } => Type::Simple("generator".to_string()),
+            Value::Coroutine { .. } => Type::Simple("coroutine".to_string()),
             Value::Iterator { .. } => Type::Simple("iterator".to_string()),
             Value::Exception { class_name, .. } => Type::Simple(class_name.clone()),
         }
@@ -1041,6 +1065,7 @@ impl Value {
             Value::BoundMethod { .. } => true,
             Value::Code(_) => true,
             Value::Generator { .. } => true,
+            Value::Coroutine { .. } => true,
             Value::Iterator { .. } => true,
             Value::Exception { .. } => true,
         }
@@ -2203,6 +2228,13 @@ impl fmt::Display for Value {
                 write!(f, "<code object {}>", code_obj.name)
             },
             Value::Generator { .. } => write!(f, "<generator object>"),
+            Value::Coroutine { name, finished, .. } => {
+                if *finished {
+                    write!(f, "<coroutine {} finished>", name)
+                } else {
+                    write!(f, "<coroutine {}>", name)
+                }
+            },
             Value::Iterator { .. } => write!(f, "<iterator object>"),
             Value::Exception { message, .. } => {
                 // When displaying an exception object (like in print(e)), just show the message

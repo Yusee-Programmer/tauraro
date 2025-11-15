@@ -1,0 +1,404 @@
+# Modern Todo App with Custom Title Bar
+# A beautiful task management app with custom window controls
+
+from webviewtk import Window
+import time
+
+# Create frameless window
+win = Window("Modern Todo App", 900, 700)
+win.disable_decorations()
+
+# App state
+tasks = []
+task_id_counter = 0
+
+# Handler: Add new task
+func handleAddTask(data):
+    global task_id_counter, tasks
+    task_id_counter = task_id_counter + 1
+    task = {
+        "id": task_id_counter,
+        "text": data,
+        "completed": False
+    }
+    tasks.append(task)
+    print("Added task:", data)
+
+# Handler: Toggle task completion
+func handleToggleTask(data):
+    global tasks
+    task_id = int(data)
+    for task in tasks:
+        if task["id"] == task_id:
+            task["completed"] = not task["completed"]
+            print("Toggled task", task_id)
+            break
+
+# Handler: Delete task
+func handleDeleteTask(data):
+    global tasks
+    task_id = int(data)
+    tasks = [t for t in tasks if t["id"] != task_id]
+    print("Deleted task", task_id)
+
+# Register handlers
+win.on_message("add_task", handleAddTask)
+win.on_message("toggle_task", handleToggleTask)
+win.on_message("delete_task", handleDeleteTask)
+
+# HTML with custom title bar and todo interface
+html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        /* Custom Title Bar */
+        .titlebar {
+            -webkit-app-region: drag;
+            background: rgba(0, 0, 0, 0.3);
+            height: 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 15px;
+            color: white;
+            backdrop-filter: blur(10px);
+        }
+        
+        .titlebar-title {
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .titlebar-controls {
+            -webkit-app-region: no-drag;
+            display: flex;
+            gap: 8px;
+        }
+        
+        .titlebar-btn {
+            width: 30px;
+            height: 30px;
+            border: none;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .titlebar-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .titlebar-btn.close:hover {
+            background: #e74c3c;
+        }
+        
+        /* Main Content */
+        .container {
+            height: calc(100vh - 40px);
+            display: flex;
+            flex-direction: column;
+            padding: 30px;
+            overflow-y: auto;
+        }
+        
+        .app-header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .app-header h1 {
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .app-header p {
+            font-size: 16px;
+            opacity: 0.9;
+        }
+        
+        /* Add Task Section */
+        .add-task {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+        
+        #taskInput {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 15px;
+            transition: border-color 0.2s;
+        }
+        
+        #taskInput:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .btn-add {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .btn-add:hover {
+            transform: translateY(-2px);
+        }
+        
+        /* Tasks List */
+        .tasks-container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            padding: 20px;
+            flex: 1;
+            overflow-y: auto;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        
+        .task-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            transition: all 0.2s;
+        }
+        
+        .task-item:hover {
+            background: #e9ecef;
+            transform: translateX(5px);
+        }
+        
+        .task-checkbox {
+            width: 24px;
+            height: 24px;
+            cursor: pointer;
+        }
+        
+        .task-text {
+            flex: 1;
+            font-size: 15px;
+            color: #2c3e50;
+        }
+        
+        .task-text.completed {
+            text-decoration: line-through;
+            opacity: 0.5;
+        }
+        
+        .btn-delete {
+            padding: 8px 16px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+        
+        .btn-delete:hover {
+            background: #c0392b;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #95a5a6;
+        }
+        
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Custom Title Bar -->
+    <div class="titlebar" data-tauri-drag-region>
+        <div class="titlebar-title">
+            <span>✓</span>
+            <span>Modern Todo App</span>
+        </div>
+        <div class="titlebar-controls" data-tauri-drag-no-region>
+            <button class="titlebar-btn" onclick="minimize()">−</button>
+            <button class="titlebar-btn" onclick="maximize()">□</button>
+            <button class="titlebar-btn close" onclick="closeApp()">×</button>
+        </div>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="container">
+        <div class="app-header">
+            <h1>📝 My Tasks</h1>
+            <p>Stay organized and productive</p>
+        </div>
+        
+        <div class="add-task">
+            <div class="input-group">
+                <input 
+                    type="text" 
+                    id="taskInput" 
+                    placeholder="What needs to be done?"
+                    onkeypress="if(event.key==='Enter') addTask()"
+                >
+                <button class="btn-add" onclick="addTask()">Add Task</button>
+            </div>
+        </div>
+        
+        <div class="tasks-container" id="tasksContainer">
+            <div class="empty-state">
+                <div class="empty-state-icon">📋</div>
+                <h3>No tasks yet</h3>
+                <p>Add your first task to get started!</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let tasks = [];
+        
+        function addTask() {
+            const input = document.getElementById('taskInput');
+            const text = input.value.trim();
+            
+            if (text) {
+                window.ipc.postMessage('add_task', text);
+                tasks.push({ id: Date.now(), text, completed: false });
+                input.value = '';
+                renderTasks();
+            }
+        }
+        
+        function toggleTask(id) {
+            window.ipc.postMessage('toggle_task', id.toString());
+            const task = tasks.find(t => t.id === id);
+            if (task) {
+                task.completed = !task.completed;
+                renderTasks();
+            }
+        }
+        
+        function deleteTask(id) {
+            window.ipc.postMessage('delete_task', id.toString());
+            tasks = tasks.filter(t => t.id !== id);
+            renderTasks();
+        }
+        
+        function renderTasks() {
+            const container = document.getElementById('tasksContainer');
+            
+            if (tasks.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📋</div>
+                        <h3>No tasks yet</h3>
+                        <p>Add your first task to get started!</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = tasks.map(task => `
+                <div class="task-item">
+                    <input 
+                        type="checkbox" 
+                        class="task-checkbox"
+                        ${task.completed ? 'checked' : ''}
+                        onchange="toggleTask(${task.id})"
+                    >
+                    <span class="task-text ${task.completed ? 'completed' : ''}">
+                        ${task.text}
+                    </span>
+                    <button class="btn-delete" onclick="deleteTask(${task.id})">
+                        Delete
+                    </button>
+                </div>
+            `).join('');
+        }
+        
+        // Window controls - use built-in window.tauraro API
+        function minimize() {
+            console.log('Minimize clicked, window.tauraro:', window.tauraro);
+            if (window.tauraro && window.tauraro.minimize) {
+                window.tauraro.minimize();
+            } else {
+                console.error('window.tauraro.minimize not available');
+            }
+        }
+        
+        function maximize() {
+            console.log('Maximize clicked, window.tauraro:', window.tauraro);
+            if (window.tauraro && window.tauraro.maximize) {
+                window.tauraro.maximize();
+            } else {
+                console.error('window.tauraro.maximize not available');
+            }
+        }
+        
+        function closeApp() {
+            console.log('Close clicked, window.tauraro:', window.tauraro);
+            if (window.tauraro && window.tauraro.close) {
+                window.tauraro.close();
+            } else {
+                console.error('window.tauraro.close not available');
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+win.set_html(html)
+
+print("🚀 Starting Modern Todo App...")
+print("Features: Custom title bar, task management, drag to move")
+win.run_async()
+
+# Event loop
+for i in range(600):
+    win.process_events()
+    time.sleep(0.1)
+
+print("App closed")

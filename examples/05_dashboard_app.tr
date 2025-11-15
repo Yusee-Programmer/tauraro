@@ -1,0 +1,548 @@
+# Dashboard App with Custom Title Bar
+# Modern analytics dashboard with charts and widgets
+
+from webviewtk import Window
+import time
+
+# Create frameless window
+win = Window("Dashboard", 1400, 900)
+win.disable_decorations()
+
+# Dashboard state
+total_users = 1234
+revenue = 45678
+orders = 892
+
+# Handlers
+func handleRefresh(data):
+    print("🔄 Refreshing dashboard data...")
+
+func handleExport(data):
+    print("📊 Exporting data to CSV...")
+
+func handleSettings(data):
+    print("⚙️ Opening settings...")
+
+func handleNotifications(data):
+    print("🔔 Viewing notifications...")
+
+# Register handlers
+win.on_message("refresh", handleRefresh)
+win.on_message("export", handleExport)
+win.on_message("settings", handleSettings)
+win.on_message("notifications", handleNotifications)
+
+html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f5f7fa;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        /* Custom Title Bar */
+        .titlebar {
+            -webkit-app-region: drag;
+            background: white;
+            height: 45px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 20px;
+            border-bottom: 1px solid #e5e7eb;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        
+        .titlebar-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .titlebar-logo {
+            font-size: 20px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .titlebar-nav {
+            -webkit-app-region: no-drag;
+            display: flex;
+            gap: 5px;
+        }
+        
+        .nav-btn {
+            padding: 8px 16px;
+            border: none;
+            background: transparent;
+            color: #6b7280;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        
+        .nav-btn:hover {
+            background: #f3f4f6;
+            color: #111827;
+        }
+        
+        .nav-btn.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .titlebar-right {
+            -webkit-app-region: no-drag;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .icon-btn {
+            width: 35px;
+            height: 35px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: #6b7280;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.2s;
+        }
+        
+        .icon-btn:hover {
+            background: #f3f4f6;
+            color: #111827;
+        }
+        
+        .titlebar-controls {
+            display: flex;
+            gap: 2px;
+            margin-left: 10px;
+        }
+        
+        .titlebar-btn {
+            width: 35px;
+            height: 35px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: #6b7280;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+        
+        .titlebar-btn:hover {
+            background: #f3f4f6;
+        }
+        
+        .titlebar-btn.close:hover {
+            background: #ef4444;
+            color: white;
+        }
+        
+        /* Main Content */
+        .main-content {
+            height: calc(100vh - 45px);
+            padding: 30px;
+            overflow-y: auto;
+        }
+        
+        .dashboard-header {
+            margin-bottom: 30px;
+        }
+        
+        .dashboard-header h1 {
+            font-size: 32px;
+            color: #111827;
+            margin-bottom: 8px;
+        }
+        
+        .dashboard-header p {
+            color: #6b7280;
+            font-size: 15px;
+        }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border: 1px solid #e5e7eb;
+        }
+        
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .stat-title {
+            font-size: 14px;
+            color: #6b7280;
+            font-weight: 500;
+        }
+        
+        .stat-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        
+        .stat-icon.blue {
+            background: #dbeafe;
+        }
+        
+        .stat-icon.green {
+            background: #d1fae5;
+        }
+        
+        .stat-icon.purple {
+            background: #e9d5ff;
+        }
+        
+        .stat-icon.orange {
+            background: #fed7aa;
+        }
+        
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: #111827;
+            margin-bottom: 8px;
+        }
+        
+        .stat-change {
+            font-size: 13px;
+            color: #10b981;
+            font-weight: 500;
+        }
+        
+        .stat-change.negative {
+            color: #ef4444;
+        }
+        
+        /* Charts Grid */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .chart-card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border: 1px solid #e5e7eb;
+        }
+        
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .chart-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #111827;
+        }
+        
+        .chart-placeholder {
+            height: 250px;
+            background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #6b7280;
+            font-size: 48px;
+        }
+        
+        /* Table */
+        .table-card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border: 1px solid #e5e7eb;
+        }
+        
+        .table-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .table-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #111827;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 2px solid #e5e7eb;
+            color: #6b7280;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+            color: #111827;
+            font-size: 14px;
+        }
+        
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-badge.success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        
+        .status-badge.pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        
+        .status-badge.failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+    </style>
+</head>
+<body>
+    <!-- Custom Title Bar -->
+    <div class="titlebar" data-tauri-drag-region>
+        <div class="titlebar-left">
+            <div class="titlebar-logo">
+                <span>📊</span>
+                <span>Dashboard</span>
+            </div>
+            <div class="titlebar-nav" data-tauri-drag-no-region>
+                <button class="nav-btn active">Overview</button>
+                <button class="nav-btn">Analytics</button>
+                <button class="nav-btn">Reports</button>
+                <button class="nav-btn">Users</button>
+            </div>
+        </div>
+        <div class="titlebar-right" data-tauri-drag-no-region>
+            <button class="icon-btn" onclick="refresh()">🔄</button>
+            <button class="icon-btn" onclick="notifications()">🔔</button>
+            <button class="icon-btn" onclick="settings()">⚙️</button>
+            <div class="titlebar-controls">
+                <button class="titlebar-btn" onclick="minimize()">−</button>
+                <button class="titlebar-btn" onclick="maximize()">□</button>
+                <button class="titlebar-btn close" onclick="closeApp()">×</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="dashboard-header">
+            <h1>Welcome back, User! 👋</h1>
+            <p>Here's what's happening with your business today.</p>
+        </div>
+        
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-title">Total Users</span>
+                    <div class="stat-icon blue">👥</div>
+                </div>
+                <div class="stat-value">12,345</div>
+                <div class="stat-change">↑ 12% from last month</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-title">Revenue</span>
+                    <div class="stat-icon green">💰</div>
+                </div>
+                <div class="stat-value">$45,678</div>
+                <div class="stat-change">↑ 8% from last month</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-title">Orders</span>
+                    <div class="stat-icon purple">📦</div>
+                </div>
+                <div class="stat-value">892</div>
+                <div class="stat-change">↑ 23% from last month</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-title">Conversion</span>
+                    <div class="stat-icon orange">📈</div>
+                </div>
+                <div class="stat-value">3.24%</div>
+                <div class="stat-change negative">↓ 2% from last month</div>
+            </div>
+        </div>
+        
+        <!-- Charts Grid -->
+        <div class="charts-grid">
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h3 class="chart-title">Revenue Overview</h3>
+                    <button class="nav-btn" onclick="exportData()">Export</button>
+                </div>
+                <div class="chart-placeholder">📊 Chart Area</div>
+            </div>
+            
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h3 class="chart-title">Traffic Sources</h3>
+                </div>
+                <div class="chart-placeholder">📈 Pie Chart</div>
+            </div>
+        </div>
+        
+        <!-- Recent Orders Table -->
+        <div class="table-card">
+            <div class="table-header">
+                <h3 class="table-title">Recent Orders</h3>
+                <button class="nav-btn">View All</button>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Order ID</th>
+                        <th>Customer</th>
+                        <th>Product</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>#ORD-001</td>
+                        <td>John Doe</td>
+                        <td>Premium Package</td>
+                        <td>$299.00</td>
+                        <td><span class="status-badge success">Completed</span></td>
+                    </tr>
+                    <tr>
+                        <td>#ORD-002</td>
+                        <td>Sarah Smith</td>
+                        <td>Starter Plan</td>
+                        <td>$99.00</td>
+                        <td><span class="status-badge pending">Pending</span></td>
+                    </tr>
+                    <tr>
+                        <td>#ORD-003</td>
+                        <td>Mike Johnson</td>
+                        <td>Enterprise</td>
+                        <td>$999.00</td>
+                        <td><span class="status-badge success">Completed</span></td>
+                    </tr>
+                    <tr>
+                        <td>#ORD-004</td>
+                        <td>Emily Brown</td>
+                        <td>Basic Package</td>
+                        <td>$49.00</td>
+                        <td><span class="status-badge failed">Failed</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <script>
+        function refresh() {
+            window.ipc.postMessage('refresh', '');
+        }
+        
+        function exportData() {
+            window.ipc.postMessage('export', '');
+        }
+        
+        function settings() {
+            window.ipc.postMessage('settings', '');
+        }
+        
+        function notifications() {
+            window.ipc.postMessage('notifications', '');
+        }
+        
+        // Window controls
+        function minimize() {
+            window.tauraro.minimize();
+        }
+        
+        function maximize() {
+            window.tauraro.maximize();
+        }
+        
+        function closeApp() {
+            window.tauraro.close();
+        }
+    </script>
+</body>
+</html>
+"""
+
+win.set_html(html)
+
+print("📊 Starting Analytics Dashboard...")
+print("Business intelligence UI with custom title bar")
+win.run_async()
+
+# Event loop
+for i in range(600):
+    win.process_events()
+    time.sleep(0.1)
+
+print("Dashboard closed")
