@@ -7603,7 +7603,12 @@ impl SuperBytecodeVM {
             }
             Value::NativeFunction(func) => {
                 // Call native function directly
-                func(args.clone())
+                // If kwargs exist, append them as KwargsMarker to args
+                let mut final_args = args.clone();
+                if !kwargs.is_empty() {
+                    final_args.push(Value::KwargsMarker(kwargs.clone()));
+                }
+                func(final_args)
             }
             Value::Closure { name, params, body: _, captured_scope: _, docstring: _, compiled_code, module_globals } => {
                 // Validate argument types if type checking is enabled

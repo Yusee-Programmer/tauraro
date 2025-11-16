@@ -1,0 +1,75 @@
+"""
+WebViewTK Test 10: Padding Widget
+Test Padding widget separately from Container
+"""
+
+from webviewtk import Window, Column, Padding, Container, Text, Center, EdgeInsets, mount_and_run
+
+# Test Padding widget
+ui = Center(
+    child=Column(
+        children=[
+            Text("Padding Widget Tests", font_size=24.0, font_weight="bold"),
+            
+            Container(height=20.0),
+            
+            # Padding with all sides
+            Container(
+                child=Padding(
+                    child=Text("Padded text", font_size=18.0),
+                    padding="20px"
+                ),
+                background_color="#f3f4f6",
+                border="2px solid #e5e7eb"
+            ),
+            
+            Container(height=15.0),
+            
+            # Padding with symmetric
+            Container(
+                child=Padding(
+                    child=Text("Symmetric padding", font_size=18.0),
+                    padding="15px 40px"
+                ),
+                background_color="#dbeafe",
+                border="2px solid #93c5fd"
+            ),
+            
+            Container(height=15.0),
+            
+            # Padding with only left
+            Container(
+                child=Padding(
+                    child=Text("Left padding only", font_size=18.0),
+                    padding="0 0 0 60px"
+                ),
+                background_color="#fef3c7",
+                border="2px solid #fbbf24"
+            ),
+            
+            Container(height=15.0),
+            
+            # Nested Padding
+            Container(
+                child=Padding(
+                    child=Padding(
+                        child=Text("Double padded", font_size=18.0, color="#ffffff"),
+                        padding="15px"
+                    ),
+                    padding="20px"
+                ),
+                background_color="#8b5cf6"
+            )
+        ],
+        spacing=5.0,
+        cross_axis_alignment="stretch"
+    )
+)
+
+window = Window(
+    title="Test 10: Padding Widget",
+    width=800,
+    height=700
+)
+
+mount_and_run(window, ui)

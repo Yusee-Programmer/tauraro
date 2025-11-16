@@ -1,6 +1,5 @@
-/// WebViewTK - Cross-platform GUI framework for Tauraro
-/// Uses HTML, CSS, and JavaScript for UI rendering with Tauraro handling the logic
-/// Similar to Tauri and Electron.js
+/// WebViewTK - Flutter-style UI framework for Tauraro
+/// Complete rewrite with proper Flutter architecture
 
 use crate::value::Value;
 use anyhow::Result;
@@ -8,132 +7,93 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
 
-// Submodules
-mod utils;
-mod widgets;
-mod resources;
-mod drag;
-mod menu;
-mod titlebar;
-mod window;
-mod helpers;
+// Core modules
+pub mod widgets;
+pub mod window;
+pub mod rendering;
+pub mod utils;
+pub mod cdn;
+pub mod command_registry;
 
-// Re-export utility functions
-pub use utils::{build_element, escape_html, extract_string_arg, extract_dict_arg, render_html, escape_html_func};
+#[cfg(feature = "webviewtk")]
+pub mod ipc;
 
-// Re-export widget functions
+// Re-exports
 pub use widgets::*;
+pub use window::Window;
 
-// Re-export resource functions
-pub use resources::*;
-
-// Re-export drag/titlebar control functions
-pub use drag::{
-    create_draggable_titlebar, inject_drag_css, inject_drag_js,
-    inject_window_control_api, get_drag_region_css, get_drag_region_js,
-    get_window_control_api_js
-};
-
-// Re-export menu, titlebar, and window functions
-pub use menu::{create_menu, create_menu_item, create_menu_separator, menu_add_item};
-pub use titlebar::create_titlebar;
-pub use window::{
-    create_window_class, window_set_html, window_set_menu, window_set_titlebar,
-    window_set_icon, window_set_resizable, window_disable_decorations,
-    window_run, window_run_async, window_on_message
-};
-
-// Re-export helper functions
-pub use helpers::*;
-
-/// Create the webviewtk module object with all its functions and classes
+/// Create the webviewtk module for Tauraro VM
 pub fn create_webviewtk_module() -> Value {
     let mut namespace = HashMap::new();
 
-    // Widget creation functions
-    namespace.insert("div".to_string(), Value::NativeFunction(widgets::create_div));
-    namespace.insert("button".to_string(), Value::NativeFunction(widgets::create_button));
-    namespace.insert("paragraph".to_string(), Value::NativeFunction(widgets::create_paragraph));
-    namespace.insert("p".to_string(), Value::NativeFunction(widgets::create_paragraph)); // Alias
-    namespace.insert("heading".to_string(), Value::NativeFunction(widgets::create_heading));
-    namespace.insert("h1".to_string(), Value::NativeFunction(widgets::create_h1));
-    namespace.insert("h2".to_string(), Value::NativeFunction(widgets::create_h2));
-    namespace.insert("h3".to_string(), Value::NativeFunction(widgets::create_h3));
-    namespace.insert("h4".to_string(), Value::NativeFunction(widgets::create_h4));
-    namespace.insert("h5".to_string(), Value::NativeFunction(widgets::create_h5));
-    namespace.insert("h6".to_string(), Value::NativeFunction(widgets::create_h6));
-    namespace.insert("span".to_string(), Value::NativeFunction(widgets::create_span));
-    namespace.insert("input".to_string(), Value::NativeFunction(widgets::create_input));
-    namespace.insert("textarea".to_string(), Value::NativeFunction(widgets::create_textarea));
-    namespace.insert("label".to_string(), Value::NativeFunction(widgets::create_label));
-    namespace.insert("form".to_string(), Value::NativeFunction(widgets::create_form));
-    namespace.insert("img".to_string(), Value::NativeFunction(widgets::create_img));
-    namespace.insert("link".to_string(), Value::NativeFunction(widgets::create_link));
-    namespace.insert("a".to_string(), Value::NativeFunction(widgets::create_link)); // Alias
-    namespace.insert("ul".to_string(), Value::NativeFunction(widgets::create_ul));
-    namespace.insert("ol".to_string(), Value::NativeFunction(widgets::create_ol));
-    namespace.insert("li".to_string(), Value::NativeFunction(widgets::create_li));
-    namespace.insert("table".to_string(), Value::NativeFunction(widgets::create_table));
-    namespace.insert("tr".to_string(), Value::NativeFunction(widgets::create_tr));
-    namespace.insert("td".to_string(), Value::NativeFunction(widgets::create_td));
-    namespace.insert("th".to_string(), Value::NativeFunction(widgets::create_th));
-    namespace.insert("nav".to_string(), Value::NativeFunction(widgets::create_nav));
-    namespace.insert("header".to_string(), Value::NativeFunction(widgets::create_header));
-    namespace.insert("footer".to_string(), Value::NativeFunction(widgets::create_footer));
-    namespace.insert("section".to_string(), Value::NativeFunction(widgets::create_section));
-    namespace.insert("article".to_string(), Value::NativeFunction(widgets::create_article));
-    namespace.insert("aside".to_string(), Value::NativeFunction(widgets::create_aside));
-    namespace.insert("main".to_string(), Value::NativeFunction(widgets::create_main));
-    namespace.insert("select".to_string(), Value::NativeFunction(widgets::create_select));
-    namespace.insert("option".to_string(), Value::NativeFunction(widgets::create_option));
-    namespace.insert("checkbox".to_string(), Value::NativeFunction(widgets::create_checkbox));
-    namespace.insert("radio".to_string(), Value::NativeFunction(widgets::create_radio));
+    // Window class and functions
+    namespace.insert("Window".to_string(), Value::NativeFunction(window::create));
+    namespace.insert("mount_and_run".to_string(), Value::NativeFunction(window::mount_and_run_wrapper));
 
-    // HTML structure functions
-    namespace.insert("html".to_string(), Value::NativeFunction(widgets::create_html));
-    namespace.insert("head".to_string(), Value::NativeFunction(widgets::create_head));
-    namespace.insert("body".to_string(), Value::NativeFunction(widgets::create_body));
-    namespace.insert("title".to_string(), Value::NativeFunction(widgets::create_title));
-    namespace.insert("meta".to_string(), Value::NativeFunction(widgets::create_meta));
-    namespace.insert("style".to_string(), Value::NativeFunction(widgets::create_style));
-    namespace.insert("script".to_string(), Value::NativeFunction(widgets::create_script));
+    #[cfg(feature = "webviewtk")]
+    {
+        // IPC functions
+        namespace.insert("ipc_call".to_string(), Value::NativeFunction(ipc::ipc_call_handler));
+        namespace.insert("ipc_register".to_string(), Value::NativeFunction(ipc::ipc_register_handler));
 
-    // CDN and external resource functions
-    namespace.insert("cdn_tailwind".to_string(), Value::NativeFunction(resources::cdn_tailwind));
-    namespace.insert("cdn_bootstrap".to_string(), Value::NativeFunction(resources::cdn_bootstrap));
-    namespace.insert("cdn_jquery".to_string(), Value::NativeFunction(resources::cdn_jquery));
-    namespace.insert("cdn_vue".to_string(), Value::NativeFunction(resources::cdn_vue));
-    namespace.insert("cdn_react".to_string(), Value::NativeFunction(resources::cdn_react));
-    namespace.insert("cdn_alpine".to_string(), Value::NativeFunction(resources::cdn_alpine));
-    namespace.insert("cdn_custom".to_string(), Value::NativeFunction(resources::cdn_custom));
-    namespace.insert("style_link".to_string(), Value::NativeFunction(resources::style_link));
-    namespace.insert("script_link".to_string(), Value::NativeFunction(resources::script_link));
-
-    // Draggable titlebar and window control functions
-    namespace.insert("draggable_titlebar".to_string(), Value::NativeFunction(drag::create_draggable_titlebar));
-    namespace.insert("inject_drag_css".to_string(), Value::NativeFunction(drag::inject_drag_css));
-    namespace.insert("inject_drag_js".to_string(), Value::NativeFunction(drag::inject_drag_js));
-    namespace.insert("inject_window_api".to_string(), Value::NativeFunction(drag::inject_window_control_api));
-
-    // Menu and title bar functions
-    namespace.insert("menu".to_string(), Value::NativeFunction(menu::create_menu));
-    namespace.insert("menu_item".to_string(), Value::NativeFunction(menu::create_menu_item));
-    namespace.insert("menu_separator".to_string(), Value::NativeFunction(menu::create_menu_separator));
-    namespace.insert("menu_add_item".to_string(), Value::NativeFunction(menu::menu_add_item));
-    namespace.insert("titlebar".to_string(), Value::NativeFunction(titlebar::create_titlebar));
-
-    // Window class
-    namespace.insert("Window".to_string(), Value::NativeFunction(window::create_window_class));
-
-    // Helper functions for common UI patterns
-    namespace.insert("window_controls".to_string(), Value::NativeFunction(helpers::create_window_controls));
-    namespace.insert("menu_bar".to_string(), Value::NativeFunction(helpers::create_menu_bar));
-    namespace.insert("search_bar".to_string(), Value::NativeFunction(helpers::create_search_bar));
-    namespace.insert("titlebar_custom".to_string(), Value::NativeFunction(helpers::create_titlebar));
-
-    // Utility functions
-    namespace.insert("render".to_string(), Value::NativeFunction(utils::render_html));
-    namespace.insert("escape_html".to_string(), Value::NativeFunction(utils::escape_html_func));
+        // Basic widgets
+        namespace.insert("Text".to_string(), Value::NativeFunction(widgets::text::create));
+        namespace.insert("Container".to_string(), Value::NativeFunction(widgets::container::create));
+        namespace.insert("Center".to_string(), Value::NativeFunction(widgets::center::create));
+        namespace.insert("Padding".to_string(), Value::NativeFunction(widgets::padding::create));
+        namespace.insert("SizedBox".to_string(), Value::NativeFunction(widgets::sized_box::create));
+        
+        // Layout widgets
+        namespace.insert("Column".to_string(), Value::NativeFunction(widgets::column::create));
+        namespace.insert("Row".to_string(), Value::NativeFunction(widgets::row::create));
+        namespace.insert("Stack".to_string(), Value::NativeFunction(widgets::stack::create));
+        namespace.insert("Expanded".to_string(), Value::NativeFunction(widgets::expanded::create));
+        namespace.insert("Flexible".to_string(), Value::NativeFunction(widgets::flexible::create));
+        namespace.insert("Spacer".to_string(), Value::NativeFunction(widgets::spacer::create));
+        namespace.insert("Positioned".to_string(), Value::NativeFunction(widgets::positioned::create));
+        
+        // Material widgets
+        namespace.insert("Button".to_string(), Value::NativeFunction(widgets::button::create));
+        namespace.insert("TextField".to_string(), Value::NativeFunction(widgets::textfield::create));
+        namespace.insert("Card".to_string(), Value::NativeFunction(widgets::card::create));
+        namespace.insert("Scaffold".to_string(), Value::NativeFunction(widgets::scaffold::create));
+        namespace.insert("AppBar".to_string(), Value::NativeFunction(widgets::appbar::create));
+        namespace.insert("FloatingActionButton".to_string(), Value::NativeFunction(widgets::fab::create));
+        namespace.insert("Divider".to_string(), Value::NativeFunction(widgets::divider::create));
+        namespace.insert("ListTile".to_string(), Value::NativeFunction(widgets::list_tile::create));
+        namespace.insert("CustomTitleBar".to_string(), Value::NativeFunction(widgets::custom_titlebar::create));
+        
+        // Gesture widgets
+        namespace.insert("GestureDetector".to_string(), Value::NativeFunction(widgets::gesture_detector::create));
+        namespace.insert("InkWell".to_string(), Value::NativeFunction(widgets::ink_well::create));
+        
+        // EdgeInsets helper
+        let mut edge_insets = HashMap::new();
+        edge_insets.insert("all".to_string(), Value::NativeFunction(utils::edgeinsets_all));
+        edge_insets.insert("symmetric".to_string(), Value::NativeFunction(utils::edgeinsets_symmetric));
+        edge_insets.insert("only".to_string(), Value::NativeFunction(utils::edgeinsets_only));
+        edge_insets.insert("zero".to_string(), Value::NativeFunction(utils::edgeinsets_zero));
+        namespace.insert("EdgeInsets".to_string(), Value::Dict(Rc::new(RefCell::new(edge_insets))));
+        
+        // CDN Management
+        let cdns = cdn::CDN::all_cdns();
+        let mut cdn_dict = HashMap::new();
+        for (name, url) in cdns {
+            cdn_dict.insert(name, Value::Str(url));
+        }
+        namespace.insert("CDN".to_string(), Value::Dict(Rc::new(RefCell::new(cdn_dict))));
+        
+        // Resource loading functions
+        namespace.insert("include_cdn".to_string(), Value::NativeFunction(window::include_cdn_wrapper));
+        namespace.insert("include_css_file".to_string(), Value::NativeFunction(window::include_css_file_wrapper));
+        namespace.insert("include_js_file".to_string(), Value::NativeFunction(window::include_js_file_wrapper));
+        namespace.insert("include_html_file".to_string(), Value::NativeFunction(window::include_html_file_wrapper));
+        namespace.insert("add_custom_css".to_string(), Value::NativeFunction(window::add_custom_css_wrapper));
+        namespace.insert("add_custom_js".to_string(), Value::NativeFunction(window::add_custom_js_wrapper));
+        
+        // Command registration
+        namespace.insert("register_command".to_string(), Value::NativeFunction(window::register_command_wrapper));
+    }
 
     Value::Module("webviewtk".to_string(), namespace)
 }

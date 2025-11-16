@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 // Import from the tauraro library crate instead of redeclaring modules
+#[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
 use tauraro::codegen::c_transpiler::CTranspiler;
+
 use tauraro::codegen::CodeGenerator;
 
 
@@ -134,6 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
+        #[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
         Commands::Compile {
             file,
             output,
@@ -178,6 +181,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
 fn compile_file(
     file: &PathBuf,
     output: Option<&PathBuf>,

@@ -91,7 +91,7 @@ wry = { version = "0.24", optional = true }
 tao = { version = "0.16", optional = true }
 
 [features]
-default = ["interpreter", "clang", "ffi", "async", "http"]
+default = ["interpreter", "clang", "ffi", "async", "http", "webviewtk"]
 interpreter = []  # VM-based execution
 llvm = ["dep:llvm-sys", "dep:inkwell"]  # LLVM backend
 wasm = ["dep:wasmer", "dep:object"]  # WebAssembly backend

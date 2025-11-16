@@ -1,0 +1,53 @@
+"""
+WebViewTK Test 08: Text Styles
+Test various Text widget styling options
+"""
+
+from webviewtk import Window, Column, Text, Center, Container, EdgeInsets, mount_and_run
+
+# Different text styles
+ui = Center(
+    child=Column(
+        children=[
+            Text("Default Text"),
+            
+            Text("Large Text", font_size=32.0),
+            
+            Text("Bold Text", font_weight="bold"),
+            
+            Text("Colored Text", color="#ef4444"),
+            
+            Text("Large Bold Blue", 
+                 font_size=28.0, 
+                 font_weight="bold", 
+                 color="#3b82f6"),
+            
+            Text("Center Aligned", 
+                 text_align="center",
+                 style="width: 300px; background-color: #f3f4f6; padding: 10px;"),
+            
+            Text("Right Aligned", 
+                 text_align="right",
+                 style="width: 300px; background-color: #f3f4f6; padding: 10px;"),
+            
+            Container(
+                child=Text("Text in Container", 
+                          font_size=20.0, 
+                          color="#ffffff"),
+                padding="15px",
+                background_color="#8b5cf6",
+                border_radius="8px"
+            )
+        ],
+        spacing=15.0,
+        cross_axis_alignment="center"
+    )
+)
+
+window = Window(
+    title="Test 08: Text Styles",
+    width=800,
+    height=700
+)
+
+mount_and_run(window, ui)

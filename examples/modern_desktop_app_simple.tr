@@ -1,0 +1,135 @@
+# Simplified Modern Desktop App Example
+# - Custom titlebar
+# - Tailwind CSS
+# - Basic interactivity
+
+from webviewtk import (
+    Window, Container, Column, Text, Center,
+    mount_and_run, include_cdn, add_custom_js, CDN,
+    CustomTitleBar
+)
+
+# Create window without native titlebar
+window = Window(
+    title="Modern Desktop App",
+    width=1200,
+    height=800,
+    native_titlebar=False,
+    resizable=True
+)
+
+# Include Tailwind CSS CDN
+include_cdn(window, CDN.TAILWIND_CSS)
+
+# Add custom JavaScript
+custom_js = """
+function showAlert(message) {
+    alert(message);
+}
+"""
+
+add_custom_js(window, custom_js)
+
+# Create main application HTML
+app_html = """
+<div class="flex flex-col bg-gray-50" style="padding-top: 40px; min-height: 100vh;">
+    <div class="flex-1 p-8">
+        <div class="max-w-4xl mx-auto">
+            <h1 class="text-4xl font-bold text-gray-900 mb-6">Modern Desktop App</h1>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-sm font-medium text-gray-600">Total Users</h3>
+                        <div class="w-12 h-12 rounded-lg bg-blue-100 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <p class="text-3xl font-bold text-gray-900">1,234</p>
+                    <p class="text-sm text-green-600 mt-2">↑ 12% from last month</p>
+                </div>
+                
+                <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-sm font-medium text-gray-600">Revenue</h3>
+                        <div class="w-12 h-12 rounded-lg bg-green-100 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <p class="text-3xl font-bold text-gray-900">$45,678</p>
+                    <p class="text-sm text-green-600 mt-2">↑ 8% from last month</p>
+                </div>
+                
+                <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-sm font-medium text-gray-600">Active Sessions</h3>
+                        <div class="w-12 h-12 rounded-lg bg-purple-100 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <p class="text-3xl font-bold text-gray-900">567</p>
+                    <p class="text-sm text-green-600 mt-2">↑ 3% from last hour</p>
+                </div>
+            </div>
+            
+            <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h3>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <button onclick="showAlert('Create User clicked!')" class="flex flex-col items-center gap-2 p-4 rounded-lg hover:bg-gray-50 transition-colors">
+                        <svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path>
+                        </svg>
+                        <span class="text-sm font-medium text-gray-700">Create User</span>
+                    </button>
+                    
+                    <button onclick="showAlert('Generate Report clicked!')" class="flex flex-col items-center gap-2 p-4 rounded-lg hover:bg-gray-50 transition-colors">
+                        <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                        <span class="text-sm font-medium text-gray-700">Generate Report</span>
+                    </button>
+                    
+                    <button onclick="showAlert('Settings clicked!')" class="flex flex-col items-center gap-2 p-4 rounded-lg hover:bg-gray-50 transition-colors">
+                        <svg class="w-8 h-8 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                        </svg>
+                        <span class="text-sm font-medium text-gray-700">Settings</span>
+                    </button>
+                    
+                    <button onclick="showAlert('Help clicked!')" class="flex flex-col items-center gap-2 p-4 rounded-lg hover:bg-gray-50 transition-colors">
+                        <svg class="w-8 h-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <span class="text-sm font-medium text-gray-700">Help</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+"""
+
+# Create the UI with CustomTitleBar
+# All window control buttons are now functional!
+ui = Column(children=[
+    CustomTitleBar(
+        title="Modern Desktop App",
+        height=40,
+        background_color="#690f74ff",  # Green titlebar
+        text_color="#ffffff",         # White text
+        show_minimize=True,  # ✅ Now functional!
+        show_maximize=True,  # ✅ Now functional!
+        show_close=True      # ✅ Functional
+    ),
+    Text(text=app_html, raw_html=True)
+])
+
+# Mount and run
+mount_and_run(window, ui)

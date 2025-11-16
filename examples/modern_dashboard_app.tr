@@ -1,0 +1,222 @@
+from webviewtk import Window, Container, Column, Row, Text, Center, mount_and_run
+
+# Modern Analytics Dashboard
+
+# Header Component
+header = Container(
+    child=Row(
+        children=[
+            Text(
+                "📊 Analytics Dashboard",
+                font_size="24px",
+                font_weight="700",
+                color="#1e293b"
+            ),
+            Container(
+                child=Text(
+                    "Last updated: 2 min ago",
+                    font_size="13px",
+                    color="#64748b"
+                ),
+                margin="0 0 0 auto"
+            )
+        ],
+        cross_axis_alignment="center"
+    ),
+    padding="30px 40px",
+    background_color="#ffffff",
+    border_bottom="1px solid #e2e8f0"
+)
+
+# Metric Card Component
+def metric_card(title, value, change, icon, color):
+    return Container(
+        child=Column(
+            children=[
+                Row(
+                    children=[
+                        Text(
+                            icon,
+                            font_size="32px"
+                        ),
+                        Container(
+                            child=Text(
+                                change,
+                                font_size="12px",
+                                font_weight="600",
+                                color="#10b981" if "+" in change else "#ef4444"
+                            ),
+                            padding="4px 8px",
+                            background_color="#d1fae5" if "+" in change else "#fee2e2",
+                            border_radius="6px",
+                            margin="0 0 0 auto"
+                        )
+                    ],
+                    cross_axis_alignment="center",
+                    margin="0 0 16px 0"
+                ),
+                Text(
+                    value,
+                    font_size="32px",
+                    font_weight="700",
+                    color=color
+                ),
+                Text(
+                    title,
+                    font_size="14px",
+                    color="#64748b",
+                    margin="8px 0 0 0"
+                )
+            ],
+            cross_axis_alignment="start"
+        ),
+        padding="24px",
+        background_color="#ffffff",
+        border_radius="16px",
+        box_shadow="0 1px 3px rgba(0,0,0,0.1)",
+        flex="1"
+    )
+
+# Stats Grid
+stats = Row(
+    children=[
+        metric_card("Total Revenue", "$45,231", "+12.5%", "💰", "#6366f1"),
+        metric_card("Active Users", "8,492", "+23.1%", "👥", "#10b981"),
+        metric_card("New Orders", "1,234", "+8.2%", "🛒", "#f59e0b"),
+        metric_card("Conversion", "3.2%", "-2.4%", "📈", "#ef4444")
+    ],
+    gap="20px",
+    margin="0 0 30px 0"
+)
+
+# Chart Placeholder
+chart = Container(
+    child=Center(
+        child=Column(
+            children=[
+                Text(
+                    "📊",
+                    font_size="48px",
+                    margin="0 0 12px 0"
+                ),
+                Text(
+                    "Revenue Overview",
+                    font_size="20px",
+                    font_weight="700",
+                    color="#1e293b"
+                ),
+                Text(
+                    "Interactive chart visualization",
+                    font_size="14px",
+                    color="#64748b",
+                    margin="8px 0 0 0"
+                )
+            ],
+            cross_axis_alignment="center"
+        )
+    ),
+    padding="40px",
+    background_color="#ffffff",
+    border_radius="16px",
+    box_shadow="0 1px 3px rgba(0,0,0,0.1)",
+    margin="0 0 30px 0",
+    min_height="300px"
+)
+
+# Recent Activity
+def activity_item(title, time, type_icon):
+    return Container(
+        child=Row(
+            children=[
+                Container(
+                    child=Text(
+                        type_icon,
+                        font_size="20px"
+                    ),
+                    width="40px",
+                    height="40px",
+                    background_color="#f8fafc",
+                    border_radius="10px",
+                    display="flex",
+                    justify_content="center",
+                    align_items="center",
+                    margin="0 16px 0 0"
+                ),
+                Column(
+                    children=[
+                        Text(
+                            title,
+                            font_size="14px",
+                            font_weight="600",
+                            color="#1e293b"
+                        ),
+                        Text(
+                            time,
+                            font_size="12px",
+                            color="#94a3b8",
+                            margin="4px 0 0 0"
+                        )
+                    ],
+                    cross_axis_alignment="start",
+                    flex="1"
+                )
+            ],
+            cross_axis_alignment="center"
+        ),
+        padding="16px 0",
+        border_bottom="1px solid #f1f5f9"
+    )
+
+recent_activity = Container(
+    child=Column(
+        children=[
+            Text(
+                "Recent Activity",
+                font_size="18px",
+                font_weight="700",
+                color="#1e293b",
+                margin="0 0 20px 0"
+            ),
+            activity_item("New order received", "2 minutes ago", "🛍️"),
+            activity_item("Payment processed", "15 minutes ago", "💳"),
+            activity_item("User registration", "1 hour ago", "👤"),
+            activity_item("Product updated", "2 hours ago", "📦"),
+            activity_item("Review submitted", "3 hours ago", "⭐")
+        ],
+        cross_axis_alignment="stretch"
+    ),
+    padding="24px",
+    background_color="#ffffff",
+    border_radius="16px",
+    box_shadow="0 1px 3px rgba(0,0,0,0.1)"
+)
+
+# Main Layout
+ui = Column(
+    children=[
+        header,
+        Container(
+            child=Column(
+                children=[
+                    stats,
+                    chart,
+                    recent_activity
+                ],
+                cross_axis_alignment="stretch"
+            ),
+            padding="40px",
+            background_color="#f8fafc",
+            flex="1"
+        )
+    ],
+    cross_axis_alignment="stretch"
+)
+
+window = Window(
+    title="Analytics Dashboard",
+    width=1400,
+    height=900,
+    resizable=True
+)
+
+mount_and_run(window, ui)

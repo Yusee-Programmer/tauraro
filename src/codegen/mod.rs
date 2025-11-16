@@ -1,10 +1,14 @@
 //! Code generation module
 
 pub mod interpreter;
+
+#[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
 pub mod c_transpiler;
 
 // Re-export commonly used items
 pub use crate::codegen::interpreter::{Interpreter, InterpreterCodeGenerator};
+
+#[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
 pub use crate::codegen::c_transpiler::CTranspiler;
 
 use crate::ir::IRModule;

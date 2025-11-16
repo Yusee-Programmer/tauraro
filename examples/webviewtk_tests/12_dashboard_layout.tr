@@ -1,0 +1,154 @@
+"""
+WebViewTK Test 12: Dashboard Layout
+Complex dashboard-style layout
+"""
+
+from webviewtk import Window, Column, Row, Container, Text, Center, EdgeInsets, SizedBox, mount_and_run
+
+# Stat card component
+def stat_card(title, value, color):
+    return Container(
+        child=Column(
+            children=[
+                Text(title, font_size=14.0, color="#6b7280"),
+                SizedBox(height=8.0),
+                Text(value, font_size=32.0, font_weight="bold", color=color)
+            ],
+            spacing=5.0,
+            cross_axis_alignment="center"
+        ),
+        padding="20px",
+        background_color="#ffffff",
+        border_radius="10px",
+        border="1px solid #e5e7eb",
+        style="box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);"
+    )
+
+# Build dashboard
+ui = Column(
+    children=[
+        # Header
+        Container(
+            child=Text("Dashboard Overview", 
+                      font_size=28.0, 
+                      font_weight="bold",
+                      color="#111827"),
+            padding="20px",
+            background_color="#f9fafb"
+        ),
+        
+        # Stats row
+        Container(
+            child=Row(
+                children=[
+                    stat_card("Total Users", "1,234", "#3b82f6"),
+                    stat_card("Revenue", "$45.6K", "#10b981"),
+                    stat_card("Orders", "892", "#f59e0b"),
+                    stat_card("Growth", "+12%", "#8b5cf6")
+                ],
+                spacing=15.0
+            ),
+            padding="20px"
+        ),
+        
+        # Content area
+        Container(
+            child=Row(
+                children=[
+                    # Main content
+                    Container(
+                        child=Column(
+                            children=[
+                                Text("Recent Activity", 
+                                    font_size=20.0, 
+                                    font_weight="bold"),
+                                SizedBox(height=15.0),
+                                Container(
+                                    child=Text("• New user registered", 
+                                              font_size=14.0),
+                                    padding="10px 15px",
+                                    background_color="#f3f4f6",
+                                    border_radius="6px"
+                                ),
+                                SizedBox(height=10.0),
+                                Container(
+                                    child=Text("• Order #123 completed", 
+                                              font_size=14.0),
+                                    padding="10px 15px",
+                                    background_color="#f3f4f6",
+                                    border_radius="6px"
+                                ),
+                                SizedBox(height=10.0),
+                                Container(
+                                    child=Text("• Payment received", 
+                                              font_size=14.0),
+                                    padding="10px 15px",
+                                    background_color="#f3f4f6",
+                                    border_radius="6px"
+                                )
+                            ],
+                            cross_axis_alignment="stretch"
+                        ),
+                        padding="20px",
+                        background_color="#ffffff",
+                        border_radius="10px",
+                        border="1px solid #e5e7eb"
+                    ),
+                    
+                    SizedBox(width=20.0),
+                    
+                    # Sidebar
+                    Container(
+                        child=Column(
+                            children=[
+                                Text("Quick Actions", 
+                                    font_size=18.0, 
+                                    font_weight="bold"),
+                                SizedBox(height=15.0),
+                                Container(
+                                    child=Text("+ New Order", 
+                                              color="#ffffff"),
+                                    padding="12px",
+                                    background_color="#3b82f6",
+                                    border_radius="6px"
+                                ),
+                                SizedBox(height=10.0),
+                                Container(
+                                    child=Text("+ Add User", 
+                                              color="#ffffff"),
+                                    padding="12px",
+                                    background_color="#10b981",
+                                    border_radius="6px"
+                                ),
+                                SizedBox(height=10.0),
+                                Container(
+                                    child=Text("📊 Reports", 
+                                              color="#ffffff"),
+                                    padding="12px",
+                                    background_color="#8b5cf6",
+                                    border_radius="6px"
+                                )
+                            ],
+                            cross_axis_alignment="stretch"
+                        ),
+                        padding="20px",
+                        width=200.0,
+                        background_color="#ffffff",
+                        border_radius="10px",
+                        border="1px solid #e5e7eb"
+                    )
+                ]
+            ),
+            padding="20px"
+        )
+    ],
+    cross_axis_alignment="stretch"
+)
+
+window = Window(
+    title="Test 12: Dashboard Layout",
+    width=1200,
+    height=800
+)
+
+mount_and_run(window, ui)
