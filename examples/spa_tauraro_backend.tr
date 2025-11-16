@@ -1,0 +1,271 @@
+# Tauraro SPA with Backend Functions in Tauraro
+# This example shows how to define backend logic in Tauraro code
+
+from webviewtk import (
+    Window, mount_and_run, register_command,
+    CustomTitleBar, include_cdn, CDN
+)
+
+# Define backend functions in Tauraro!
+def greet(args):
+    """Greeting function - backend logic in Tauraro"""
+    name = args.get("name", "Guest")
+    return f"Hello, {name}! Welcome to Tauraro SPA 🎉"
+
+def calculate_area(args):
+    """Calculate rectangle area - backend logic in Tauraro"""
+    width = args.get("width", 0)
+    height = args.get("height", 0)
+    area = width * height
+    return {
+        "width": width,
+        "height": height,
+        "area": area,
+        "perimeter": 2 * (width + height)
+    }
+
+def process_text(args):
+    """Text processing - backend logic in Tauraro"""
+    text = args.get("text", "")
+    operation = args.get("operation", "upper")
+    
+    if operation == "upper":
+        return text.upper()
+    elif operation == "lower":
+        return text.lower()
+    elif operation == "reverse":
+        return text[::-1]
+    elif operation == "count":
+        return {
+            "length": len(text),
+            "words": len(text.split()),
+            "chars": len(text.replace(" ", ""))
+        }
+    else:
+        return text
+
+# Create window
+window = Window(
+    title="Tauraro Backend SPA",
+    width=900,
+    height=650,
+    native_titlebar=False,
+    resizable=True
+)
+
+# Register Tauraro functions as backend commands
+register_command(window, "greet", greet)
+register_command(window, "calculateArea", calculate_area)
+register_command(window, "processText", process_text)
+
+# Include Tailwind CSS
+include_cdn(window, CDN.TAILWIND_CSS)
+
+# Frontend HTML
+app_html = """
+<div class="flex flex-col bg-gradient-to-br from-indigo-50 to-purple-50" style="padding-top: 40px; min-height: 100vh;">
+    <div class="flex-1 p-6">
+        <div class="max-w-4xl mx-auto">
+            <!-- Header -->
+            <div class="text-center mb-8">
+                <h1 class="text-4xl font-bold text-gray-900 mb-2">Tauraro Backend Functions</h1>
+                <p class="text-gray-600">Backend logic written in <span class="text-indigo-600 font-semibold">Tauraro code</span>, not JavaScript!</p>
+            </div>
+            
+            <!-- Status Badge -->
+            <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-4 mb-6 flex items-center gap-3">
+                <div class="w-3 h-3 bg-indigo-500 rounded-full animate-pulse"></div>
+                <div>
+                    <h3 class="font-semibold text-indigo-900">Tauraro Backend Active</h3>
+                    <p class="text-sm text-indigo-700">Functions: greet • calculateArea • processText</p>
+                </div>
+            </div>
+            
+            <!-- Demo Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Greeting Card -->
+                <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
+                    <h3 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5"></path>
+                        </svg>
+                        Greeting
+                    </h3>
+                    
+                    <input id="nameInput" type="text" placeholder="Enter your name" value="World" 
+                           class="w-full px-3 py-2 border rounded-lg mb-3 focus:ring-2 focus:ring-indigo-500">
+                    
+                    <button onclick="doGreet()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg">
+                        Say Hello
+                    </button>
+                    
+                    <div id="greetResult" class="mt-4 p-3 bg-indigo-50 rounded-lg text-center text-indigo-900" style="display:none;"></div>
+                </div>
+                
+                <!-- Area Calculator Card -->
+                <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
+                    <h3 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
+                        </svg>
+                        Area Calculator
+                    </h3>
+                    
+                    <div class="space-y-2 mb-3">
+                        <input id="widthInput" type="number" placeholder="Width" value="10" 
+                               class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500">
+                        <input id="heightInput" type="number" placeholder="Height" value="5" 
+                               class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500">
+                    </div>
+                    
+                    <button onclick="calcArea()" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg">
+                        Calculate
+                    </button>
+                    
+                    <div id="areaResult" class="mt-4 space-y-1 text-sm" style="display:none;"></div>
+                </div>
+                
+                <!-- Text Processor Card -->
+                <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-200 md:col-span-2">
+                    <h3 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"></path>
+                        </svg>
+                        Text Processor
+                    </h3>
+                    
+                    <textarea id="textInput" placeholder="Enter text to process" 
+                              class="w-full px-3 py-2 border rounded-lg mb-3 focus:ring-2 focus:ring-pink-500 h-20">Hello Tauraro Backend!</textarea>
+                    
+                    <div class="flex gap-2 flex-wrap">
+                        <button onclick="processText('upper')" class="flex-1 bg-pink-600 hover:bg-pink-700 text-white font-medium py-2 px-4 rounded-lg">
+                            UPPERCASE
+                        </button>
+                        <button onclick="processText('lower')" class="flex-1 bg-pink-600 hover:bg-pink-700 text-white font-medium py-2 px-4 rounded-lg">
+                            lowercase
+                        </button>
+                        <button onclick="processText('reverse')" class="flex-1 bg-pink-600 hover:bg-pink-700 text-white font-medium py-2 px-4 rounded-lg">
+                            Reverse
+                        </button>
+                        <button onclick="processText('count')" class="flex-1 bg-pink-600 hover:bg-pink-700 text-white font-medium py-2 px-4 rounded-lg">
+                            Count
+                        </button>
+                    </div>
+                    
+                    <div id="textResult" class="mt-4 p-3 bg-pink-50 rounded-lg" style="display:none;"></div>
+                </div>
+            </div>
+            
+            <!-- Activity Log -->
+            <div class="mt-6 bg-white rounded-xl shadow-sm p-6 border border-gray-200">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Backend Call Log</h3>
+                <div id="activityLog" class="space-y-2 max-h-48 overflow-y-auto font-mono text-sm"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Logger
+function addLog(message, type = 'info') {
+    const log = document.getElementById('activityLog');
+    const timestamp = new Date().toLocaleTimeString();
+    const colors = {
+        info: 'text-gray-600',
+        success: 'text-green-600',
+        error: 'text-red-600',
+        invoke: 'text-indigo-600'
+    };
+    
+    const entry = document.createElement('div');
+    entry.className = `flex gap-2 ${colors[type]}`;
+    entry.innerHTML = `
+        <span class="text-gray-400">${timestamp}</span>
+        <span>${message}</span>
+    `;
+    log.insertBefore(entry, log.firstChild);
+    
+    while (log.children.length > 30) {
+        log.removeChild(log.lastChild);
+    }
+}
+
+// Greeting
+async function doGreet() {
+    const name = document.getElementById('nameInput').value;
+    addLog(`invoke('greet', {name: '${name}'})`, 'invoke');
+    
+    try {
+        const result = await window.invoke('greet', { name });
+        document.getElementById('greetResult').textContent = result;
+        document.getElementById('greetResult').style.display = 'block';
+        addLog(`✓ ${result}`, 'success');
+    } catch (error) {
+        addLog(`✗ ${error.message}`, 'error');
+    }
+}
+
+// Area calculator
+async function calcArea() {
+    const width = parseFloat(document.getElementById('widthInput').value) || 0;
+    const height = parseFloat(document.getElementById('heightInput').value) || 0;
+    addLog(`invoke('calculateArea', {width: ${width}, height: ${height}})`, 'invoke');
+    
+    try {
+        const result = await window.invoke('calculateArea', { width, height });
+        const resultDiv = document.getElementById('areaResult');
+        resultDiv.innerHTML = `
+            <div class="bg-purple-50 p-2 rounded"><strong>Area:</strong> ${result.area} sq units</div>
+            <div class="bg-purple-50 p-2 rounded"><strong>Perimeter:</strong> ${result.perimeter} units</div>
+        `;
+        resultDiv.style.display = 'block';
+        addLog(`✓ Area: ${result.area}, Perimeter: ${result.perimeter}`, 'success');
+    } catch (error) {
+        addLog(`✗ ${error.message}`, 'error');
+    }
+}
+
+// Text processor
+async function processText(operation) {
+    const text = document.getElementById('textInput').value;
+    addLog(`invoke('processText', {text: '${text.substring(0,20)}...', operation: '${operation}'})`, 'invoke');
+    
+    try {
+        const result = await window.invoke('processText', { text, operation });
+        const resultDiv = document.getElementById('textResult');
+        
+        if (typeof result === 'object') {
+            // Count operation returns object
+            resultDiv.innerHTML = `
+                <strong>Statistics:</strong><br>
+                Length: ${result.length} chars<br>
+                Words: ${result.words}<br>
+                Non-space chars: ${result.chars}
+            `;
+        } else {
+            resultDiv.textContent = result;
+        }
+        
+        resultDiv.style.display = 'block';
+        addLog(`✓ Processed with '${operation}'`, 'success');
+    } catch (error) {
+        addLog(`✗ ${error.message}`, 'error');
+    }
+}
+
+addLog('✨ Tauraro backend ready!', 'success');
+</script>
+"""
+
+# Inject HTML
+window._custom_html = app_html
+
+# Create UI with custom titlebar
+ui = CustomTitleBar(
+    title="Tauraro Backend SPA",
+    background_color="#6366f1",
+    height=40
+)
+
+# Run application
+mount_and_run(window, ui)

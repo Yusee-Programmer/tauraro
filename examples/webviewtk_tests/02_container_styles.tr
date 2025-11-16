@@ -1,0 +1,29 @@
+"""
+WebViewTK Test 02: Container Styles
+Test Container widget with various styling options
+"""
+
+from webviewtk import Window, Container, Text, Center, EdgeInsets, mount_and_run
+
+# Container with styling (max 4 kwargs due to VM limitation)
+ui = Center(
+    child=Container(
+        child=Text(
+            "Styled Container",
+            font_size=24.0,
+            color="#ffffff"
+        ),
+        padding="32px",
+        width=300.0,
+        height=200.0,
+        background_color="#3b82f6"
+    )
+)
+
+window = Window(
+    title="Test 02: Container Styles",
+    width=800,
+    height=600
+)
+
+mount_and_run(window, ui)

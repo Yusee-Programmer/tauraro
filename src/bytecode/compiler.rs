@@ -1698,17 +1698,35 @@ impl SuperCompiler {
                     
                     // Build the dictionary
                     if !dict_pairs.is_empty() {
-                        // We need to interleave the keys and values
-                        let mut dict_items = Vec::new();
-                        for (key_reg, value_reg) in dict_pairs {
-                            dict_items.push(key_reg);
-                            dict_items.push(value_reg);
+                        // CRITICAL FIX: BuildDict expects key-value pairs in CONSECUTIVE registers
+                        // We need to copy all items into consecutive registers first
+                        let pair_count = dict_pairs.len();
+                        let first_dict_item_reg = self.allocate_register();
+                        
+                        // Allocate consecutive registers for all dict items (keys and values interleaved)
+                        let mut consecutive_regs = vec![first_dict_item_reg];
+                        for _ in 1..(pair_count * 2) {
+                            consecutive_regs.push(self.allocate_register());
                         }
                         
-                        // Use BuildDict to create the dictionary
-                        let first_reg = dict_items[0];
+                        // Copy key-value pairs into consecutive registers using MoveReg
+                        let mut idx = 0;
+                        for (key_reg, value_reg) in dict_pairs {
+                            // Copy key to consecutive position
+                            if key_reg != consecutive_regs[idx] {
+                                self.emit(OpCode::MoveReg, key_reg, consecutive_regs[idx], 0, self.current_line);
+                            }
+                            idx += 1;
+                            // Copy value to consecutive position
+                            if value_reg != consecutive_regs[idx] {
+                                self.emit(OpCode::MoveReg, value_reg, consecutive_regs[idx], 0, self.current_line);
+                            }
+                            idx += 1;
+                        }
+                        
+                        // Now BuildDict can work with consecutive registers
                         let dict_reg = self.allocate_register();
-                        self.emit(OpCode::BuildDict, (dict_items.len() / 2) as u32, first_reg, dict_reg, self.current_line);
+                        self.emit(OpCode::BuildDict, pair_count as u32, first_dict_item_reg, dict_reg, self.current_line);
                         
                         // Wrap the dictionary in a KwargsMarker
                         let kwargs_marker_reg = self.allocate_register();

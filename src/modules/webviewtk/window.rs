@@ -1,1014 +1,1226 @@
-/// Window management and event loop for WebViewTK
-/// Handles native window creation, menu attachment (Windows), and event dispatching
+// Window module - cross-platform window management
 
 use crate::value::Value;
-use crate::modules::asyncio::runtime::AsyncRuntime;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::path::Path;
+use std::fs;
 use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
-
-#[cfg(feature = "webviewtk")]
+use std::thread;
 use crossbeam::channel::{unbounded, Sender, Receiver};
-
-#[cfg(feature = "webviewtk")]
-use serde_json;
 
 #[cfg(feature = "webviewtk")]
 use wry::{
     application::{
         event::{Event, WindowEvent},
         event_loop::{ControlFlow, EventLoop},
-        window::WindowBuilder,
+        window::{WindowBuilder, Window as WryWindow},
     },
     webview::WebViewBuilder,
 };
 
-#[cfg(all(feature = "webviewtk", target_os = "windows"))]
-use wry::application::platform::windows::EventLoopExtWindows;
+pub struct Window {
+    pub title: String,
+    pub width: f64,
+    pub height: f64,
+    pub decorations: bool,
+    pub resizable: bool,
+    pub html_content: String,
+}
 
-/// Helper: Serialize handler information to pass across thread boundary
-/// We store function names that can be looked up and called later
 #[cfg(feature = "webviewtk")]
-fn serialize_handler_info(value: &Value) -> Option<String> {
-    match value {
-        Value::NativeFunction(_) => Some("native_function".to_string()),
-        Value::Closure { .. } => Some("closure".to_string()),
-        Value::Str(s) => Some(s.clone()),  // Function name as string
-        _ => None,
+pub fn create(args: Vec<Value>) -> Result<Value> {
+    use crate::modules::webviewtk::utils::extract_kwargs;
+    
+    let mut title = "WebViewTK App".to_string();
+    let mut width = 800.0;
+    let mut height = 600.0;
+    let mut decorations = true;
+    let mut resizable = true;
+    let mut native_titlebar = true;
+    
+    if let Some(kwargs) = extract_kwargs(&args) {
+        if let Some(Value::Str(t)) = kwargs.get("title") {
+            title = t.clone();
+        }
+        if let Some(val) = kwargs.get("width") {
+            width = match val {
+                Value::Float(f) => *f,
+                Value::Int(i) => *i as f64,
+                _ => 800.0,
+            };
+        }
+        if let Some(val) = kwargs.get("height") {
+            height = match val {
+                Value::Float(f) => *f,
+                Value::Int(i) => *i as f64,
+                _ => 600.0,
+            };
+        }
+        if let Some(Value::Bool(d)) = kwargs.get("decorations") {
+            decorations = *d;
+        }
+        if let Some(Value::Bool(r)) = kwargs.get("resizable") {
+            resizable = *r;
+        }
+        if let Some(Value::Bool(nt)) = kwargs.get("native_titlebar") {
+            native_titlebar = *nt;
+            // If native_titlebar is False, disable decorations
+            if !native_titlebar {
+                decorations = false;
+            }
+        }
+    }
+    
+    let mut window_dict = HashMap::new();
+    window_dict.insert("title".to_string(), Value::Str(title.clone()));
+    window_dict.insert("width".to_string(), Value::Float(width));
+    window_dict.insert("height".to_string(), Value::Float(height));
+    window_dict.insert("decorations".to_string(), Value::Bool(decorations));
+    window_dict.insert("resizable".to_string(), Value::Bool(resizable));
+    window_dict.insert("native_titlebar".to_string(), Value::Bool(native_titlebar));
+    window_dict.insert("_widget_type".to_string(), Value::Str("Window".to_string()));
+    
+    // Initialize resource collections using HPList
+    use crate::modules::hplist::HPList;
+    window_dict.insert("_cdns".to_string(), Value::List(HPList::new()));
+    window_dict.insert("_custom_css".to_string(), Value::List(HPList::new()));
+    window_dict.insert("_custom_js".to_string(), Value::List(HPList::new()));
+    window_dict.insert("_custom_html".to_string(), Value::Str(String::new()));
+    
+    Ok(Value::Dict(Rc::new(RefCell::new(window_dict))))
+}
+
+#[cfg(not(feature = "webviewtk"))]
+pub fn create(_args: Vec<Value>) -> Result<Value> {
+    Err(anyhow::anyhow!("webviewtk feature not enabled"))
+}
+
+// IPC message structures
+#[cfg(feature = "webviewtk")]
+#[derive(serde::Deserialize)]
+struct IpcMessage {
+    #[serde(rename = "type")]
+    msg_type: Option<String>,
+    id: Option<u32>,
+    action: Option<String>,
+    command: Option<String>,
+    args: Option<serde_json::Value>,
+    data: Option<serde_json::Value>,
+    timestamp: Option<String>,
+}
+
+#[cfg(feature = "webviewtk")]
+#[derive(serde::Serialize)]
+struct IpcResponse {
+    id: Option<u32>,
+    action: Option<String>,
+    command: Option<String>,
+    success: bool,
+    data: Option<serde_json::Value>,
+    error: Option<String>,
+}
+
+/// Handle custom IPC messages from frontend
+#[cfg(feature = "webviewtk")]
+fn handle_ipc_message(tx: &Sender<String>, message: &str, commands: &super::command_registry::CommandRegistry) {
+    // Try to parse as JSON
+    match serde_json::from_str::<IpcMessage>(message) {
+        Ok(ipc_msg) => {
+            // Check message type
+            let msg_type = ipc_msg.msg_type.as_deref().unwrap_or("action");
+            
+            match msg_type {
+                "invoke" => {
+                    // Command invocation (SPA API style)
+                    if let Some(command) = &ipc_msg.command {
+                        println!("🔧 Invoking command: {}, id={:?}", command, ipc_msg.id);
+                        
+                        let args = ipc_msg.args.clone().unwrap_or(serde_json::json!({}));
+                        match commands.invoke(command, args) {
+                            Ok(result) => send_command_response(tx, &ipc_msg, result),
+                            Err(e) => send_command_error(tx, &ipc_msg, &e.to_string()),
+                        }
+                    } else {
+                        send_command_error(tx, &ipc_msg, "Missing command name");
+                    }
+                }
+                "action" | _ => {
+                    // Legacy action-based IPC
+                    if let Some(action) = &ipc_msg.action {
+                        println!("📨 Received IPC action: {}, id={:?}", action, ipc_msg.id);
+                        
+                        match action.as_str() {
+                            "system_info" => handle_system_info(tx, &ipc_msg),
+                            "file_check" => handle_file_check(tx, &ipc_msg),
+                            "calculate" => handle_calculate(tx, &ipc_msg),
+                            "process_data" => handle_process_data(tx, &ipc_msg),
+                            "save_settings" => handle_save_settings(tx, &ipc_msg),
+                            _ => {
+                                eprintln!("⚠️  Unknown IPC action: {}", action);
+                                send_error_response(tx, &ipc_msg, "Unknown action");
+                            }
+                        }
+                    } else {
+                        send_error_response(tx, &ipc_msg, "Missing action or command");
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to parse IPC message as JSON: {}", e);
+            eprintln!("   Raw message: {}", message);
+        }
     }
 }
 
-/// IPC event that gets sent from the window thread to main thread
-#[derive(Debug, Clone)]
-struct IpcEvent {
-    event_name: String,
-    data: String,  // JSON data as string
+/// Send response back to frontend
+#[cfg(feature = "webviewtk")]
+fn send_response(tx: &Sender<String>, msg: &IpcMessage, data: serde_json::Value) {
+    let response = IpcResponse {
+        id: msg.id,
+        action: msg.action.clone(),
+        command: None,
+        success: true,
+        data: Some(data),
+        error: None,
+    };
+    
+    if let Ok(json) = serde_json::to_string(&response) {
+        let script = format!("if (window.handleBackendResponse) {{ window.handleBackendResponse({}); }}", json);
+        let _ = tx.send(script);
+        if let Some(action) = &msg.action {
+            println!("✅ Sent response for action: {}", action);
+        }
+    }
 }
 
-/// Global registry for IPC event channels
-/// Each window gets a unique ID and its own channel
-static IPC_CHANNELS: Lazy<Arc<Mutex<HashMap<u64, Sender<IpcEvent>>>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(HashMap::new()))
-});
+/// Send error response back to frontend
+#[cfg(feature = "webviewtk")]
+fn send_error_response(tx: &Sender<String>, msg: &IpcMessage, error: &str) {
+    let response = IpcResponse {
+        id: msg.id,
+        action: msg.action.clone(),
+        command: None,
+        success: false,
+        data: None,
+        error: Some(error.to_string()),
+    };
+    
+    if let Ok(json) = serde_json::to_string(&response) {
+        let script = format!("if (window.handleBackendResponse) {{ window.handleBackendResponse({}); }}", json);
+        let _ = tx.send(script);
+        if let Some(action) = &msg.action {
+            println!("❌ Sent error response for action: {} - {}", action, error);
+        }
+    }
+}
 
-/// Counter for generating unique window IDs
-static WINDOW_ID_COUNTER: Lazy<Arc<Mutex<u64>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(0))
-});
+/// Send command response back to frontend (for invoke API)
+#[cfg(feature = "webviewtk")]
+fn send_command_response(tx: &Sender<String>, msg: &IpcMessage, data: serde_json::Value) {
+    let response = IpcResponse {
+        id: msg.id,
+        action: None,
+        command: msg.command.clone(),
+        success: true,
+        data: Some(data),
+        error: None,
+    };
+    
+    if let Ok(json) = serde_json::to_string(&response) {
+        let script = format!("if (window.handleInvokeResponse) {{ window.handleInvokeResponse({}); }}", json);
+        let _ = tx.send(script);
+        if let Some(command) = &msg.command {
+            println!("✅ Sent response for command: {}", command);
+        }
+    }
+}
 
-/// Create a Window class instance
-pub fn create_window_class(args: Vec<Value>) -> Result<Value> {
-    let title = extract_string_arg(&args, 0).unwrap_or_else(|| "Tauraro App".to_string());
-    let width = if args.len() > 1 {
-        match &args[1] {
-            Value::Int(n) => *n as u32,
-            _ => 800,
+/// Send command error back to frontend (for invoke API)
+#[cfg(feature = "webviewtk")]
+fn send_command_error(tx: &Sender<String>, msg: &IpcMessage, error: &str) {
+    let response = IpcResponse {
+        id: msg.id,
+        action: None,
+        command: msg.command.clone(),
+        success: false,
+        data: None,
+        error: Some(error.to_string()),
+    };
+    
+    if let Ok(json) = serde_json::to_string(&response) {
+        let script = format!("if (window.handleInvokeResponse) {{ window.handleInvokeResponse({}); }}", json);
+        let _ = tx.send(script);
+        if let Some(command) = &msg.command {
+            println!("❌ Sent error response for command: {} - {}", command, error);
+        }
+    }
+}
+
+/// Register built-in commands available to all applications
+#[cfg(feature = "webviewtk")]
+fn register_builtin_commands(commands: &super::command_registry::CommandRegistry) {
+    // Math operations
+    commands.register("add", |args| {
+        let a = args.get("a").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let b = args.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        Ok(serde_json::json!(a + b))
+    });
+    
+    commands.register("multiply", |args| {
+        let a = args.get("a").and_then(|v| v.as_f64()).unwrap_or(1.0);
+        let b = args.get("b").and_then(|v| v.as_f64()).unwrap_or(1.0);
+        Ok(serde_json::json!(a * b))
+    });
+    
+    // String operations
+    commands.register("toUpperCase", |args| {
+        let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        Ok(serde_json::json!(text.to_uppercase()))
+    });
+    
+    commands.register("toLowerCase", |args| {
+        let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        Ok(serde_json::json!(text.to_lowercase()))
+    });
+    
+    // Array operations
+    commands.register("reverseArray", |args| {
+        if let Some(arr) = args.get("array").and_then(|v| v.as_array()) {
+            let mut reversed = arr.clone();
+            reversed.reverse();
+            Ok(serde_json::json!(reversed))
+        } else {
+            Err(anyhow::anyhow!("Missing or invalid array parameter"))
+        }
+    });
+    
+    // System info
+    commands.register("getSystemInfo", |_args| {
+        use std::env;
+        Ok(serde_json::json!({
+            "os": env::consts::OS,
+            "arch": env::consts::ARCH,
+            "family": env::consts::FAMILY,
+        }))
+    });
+    
+    // Echo command for testing
+    commands.register("echo", |args| {
+        Ok(args)
+    });
+}
+
+// IPC Action Handlers
+
+#[cfg(feature = "webviewtk")]
+fn handle_system_info(tx: &Sender<String>, msg: &IpcMessage) {
+    use std::env;
+    
+    let mut info = serde_json::Map::new();
+    info.insert("os".to_string(), serde_json::json!(env::consts::OS));
+    info.insert("arch".to_string(), serde_json::json!(env::consts::ARCH));
+    info.insert("family".to_string(), serde_json::json!(env::consts::FAMILY));
+    
+    if let Ok(hostname) = hostname::get() {
+        info.insert("hostname".to_string(), serde_json::json!(hostname.to_string_lossy()));
+    }
+    
+    send_response(tx, msg, serde_json::Value::Object(info));
+}
+
+#[cfg(feature = "webviewtk")]
+fn handle_file_check(tx: &Sender<String>, msg: &IpcMessage) {
+    if let Some(data) = &msg.data {
+        if let Some(filename) = data.get("filename").and_then(|v| v.as_str()) {
+            let exists = std::path::Path::new(filename).exists();
+            let mut result = serde_json::Map::new();
+            result.insert("filename".to_string(), serde_json::json!(filename));
+            result.insert("exists".to_string(), serde_json::json!(exists));
+            
+            if exists {
+                if let Ok(metadata) = std::fs::metadata(filename) {
+                    result.insert("size".to_string(), serde_json::json!(metadata.len()));
+                    result.insert("is_file".to_string(), serde_json::json!(metadata.is_file()));
+                    result.insert("is_dir".to_string(), serde_json::json!(metadata.is_dir()));
+                }
+            }
+            
+            send_response(tx, msg, serde_json::Value::Object(result));
+        } else {
+            send_error_response(tx, msg, "Missing 'filename' field");
         }
     } else {
-        800
-    };
-    let height = if args.len() > 2 {
-        match &args[2] {
-            Value::Int(n) => *n as u32,
-            _ => 600,
-        }
+        send_error_response(tx, msg, "Missing data payload");
+    }
+}
+
+#[cfg(feature = "webviewtk")]
+fn handle_calculate(tx: &Sender<String>, msg: &IpcMessage) {
+    if let Some(data) = &msg.data {
+        let num1 = data.get("num1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let num2 = data.get("num2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let operation = data.get("operation").and_then(|v| v.as_str()).unwrap_or("+");
+        
+        let result = match operation {
+            "+" => num1 + num2,
+            "-" => num1 - num2,
+            "*" => num1 * num2,
+            "/" => {
+                if num2 != 0.0 {
+                    num1 / num2
+                } else {
+                    send_error_response(tx, msg, "Division by zero");
+                    return;
+                }
+            }
+            _ => {
+                send_error_response(tx, msg, "Unknown operation");
+                return;
+            }
+        };
+        
+        let mut response_data = serde_json::Map::new();
+        response_data.insert("result".to_string(), serde_json::json!(result));
+        response_data.insert("operation".to_string(), serde_json::json!(operation));
+        response_data.insert("num1".to_string(), serde_json::json!(num1));
+        response_data.insert("num2".to_string(), serde_json::json!(num2));
+        
+        send_response(tx, msg, serde_json::Value::Object(response_data));
     } else {
-        600
+        send_error_response(tx, msg, "Missing data payload");
+    }
+}
+
+#[cfg(feature = "webviewtk")]
+fn handle_process_data(tx: &Sender<String>, msg: &IpcMessage) {
+    if let Some(data) = &msg.data {
+        let size = data.get("size").and_then(|v| v.as_u64()).unwrap_or(100);
+        
+        // Simulate some data processing
+        let processed: Vec<u64> = (0..size).map(|i| i * 2).collect();
+        let sum: u64 = processed.iter().sum();
+        let avg = sum as f64 / processed.len() as f64;
+        
+        let mut result = serde_json::Map::new();
+        result.insert("count".to_string(), serde_json::json!(processed.len()));
+        result.insert("sum".to_string(), serde_json::json!(sum));
+        result.insert("average".to_string(), serde_json::json!(avg));
+        result.insert("sample".to_string(), serde_json::json!(&processed[..std::cmp::min(10, processed.len())]));
+        
+        send_response(tx, msg, serde_json::Value::Object(result));
+    } else {
+        send_error_response(tx, msg, "Missing data payload");
+    }
+}
+
+#[cfg(feature = "webviewtk")]
+fn handle_save_settings(tx: &Sender<String>, msg: &IpcMessage) {
+    if let Some(data) = &msg.data {
+        // In a real app, you'd save to a config file or database
+        println!("💾 Saving settings: {:?}", data);
+        
+        let mut result = serde_json::Map::new();
+        result.insert("saved".to_string(), serde_json::json!(true));
+        result.insert("settings".to_string(), data.clone());
+        
+        send_response(tx, msg, serde_json::Value::Object(result));
+    } else {
+        send_error_response(tx, msg, "Missing data payload");
+    }
+}
+
+/// Execute a Tauraro closure with arguments
+#[cfg(feature = "webviewtk")]
+fn execute_tauraro_closure(closure: Value, args: Vec<Value>) -> Result<Value> {
+    use crate::vm::VM;
+    use std::collections::HashMap;
+    
+    // Create a new VM instance for execution
+    let mut vm = VM::new();
+    
+    // Call the closure with args using VM's call_function
+    vm.call_function(closure, args)
+}
+
+/// Mount UI to window and run
+#[cfg(feature = "webviewtk")]
+pub fn mount_and_run(window: &HashMap<String, Value>, ui: &HashMap<String, Value>) -> Result<()> {
+    let title = match window.get("title") {
+        Some(Value::Str(s)) => s.clone(),
+        _ => "WebViewTK App".to_string(),
     };
-
-    // Generate unique window ID and create IPC event channel
-    #[cfg(feature = "webviewtk")]
-    let window_id = {
-        let mut counter = WINDOW_ID_COUNTER.lock().unwrap();
-        *counter += 1;
-        *counter
+    
+    let width = match window.get("width") {
+        Some(Value::Float(f)) => *f as u32,
+        Some(Value::Int(i)) => *i as u32,
+        _ => 800,
     };
     
-    #[cfg(feature = "webviewtk")]
-    let (tx, rx) = unbounded::<IpcEvent>();
+    let height = match window.get("height") {
+        Some(Value::Float(f)) => *f as u32,
+        Some(Value::Int(i)) => *i as u32,
+        _ => 600,
+    };
     
-    #[cfg(feature = "webviewtk")]
-    {
-        // Register the sender in the global registry
-        IPC_CHANNELS.lock().unwrap().insert(window_id, tx);
-    }
-    
-    // Create window object
-    let mut window_obj = HashMap::new();
-    window_obj.insert("title".to_string(), Value::Str(title));
-    window_obj.insert("width".to_string(), Value::Int(width as i64));
-    window_obj.insert("height".to_string(), Value::Int(height as i64));
-    window_obj.insert("html".to_string(), Value::Str(String::new()));
-    window_obj.insert("menu".to_string(), Value::None);
-    window_obj.insert("titlebar".to_string(), Value::None);
-    window_obj.insert("icon".to_string(), Value::Str(String::new()));
-    window_obj.insert("resizable".to_string(), Value::Bool(true));
-    window_obj.insert("decorations".to_string(), Value::Bool(true));
-    window_obj.insert("message_handlers".to_string(), Value::Dict(Rc::new(RefCell::new(HashMap::new()))));
-    
-    // Store window ID and receiver for process_events
-    #[cfg(feature = "webviewtk")]
-    window_obj.insert("_window_id".to_string(), Value::Int(window_id as i64));
-    
-    #[cfg(feature = "webviewtk")]
-    window_obj.insert("_ipc_receiver".to_string(), Value::Str(format!("{:p}", Box::into_raw(Box::new(rx)) as *const _)));
-
-    // Add methods
-    window_obj.insert("set_html".to_string(), Value::NativeFunction(window_set_html));
-    window_obj.insert("set_menu".to_string(), Value::NativeFunction(window_set_menu));
-    window_obj.insert("set_titlebar".to_string(), Value::NativeFunction(window_set_titlebar));
-    window_obj.insert("set_icon".to_string(), Value::NativeFunction(window_set_icon));
-    window_obj.insert("set_resizable".to_string(), Value::NativeFunction(window_set_resizable));
-    window_obj.insert("disable_decorations".to_string(), Value::NativeFunction(window_disable_decorations));
-    window_obj.insert("on_message".to_string(), Value::NativeFunction(window_on_message));
-    window_obj.insert("run".to_string(), Value::NativeFunction(window_run));
-    window_obj.insert("run_async".to_string(), Value::NativeFunction(window_run_async));
-    window_obj.insert("process_events".to_string(), Value::NativeFunction(window_process_events));
-
-    Ok(Value::Dict(Rc::new(RefCell::new(window_obj))))
-}
-
-/// Set HTML content for the window
-pub fn window_set_html(args: Vec<Value>) -> Result<Value> {
-    if args.len() < 2 {
-        return Err(anyhow::anyhow!("set_html() requires self and html arguments"));
-    }
-
-    let html = extract_string_arg(&args, 1).unwrap_or_default();
-
-    // Update the window object's html field
-    if let Value::Dict(dict) = &args[0] {
-        dict.borrow_mut().insert("html".to_string(), Value::Str(html));
-    }
-
-    Ok(Value::None)
-}
-
-/// Set menu for the window
-pub fn window_set_menu(args: Vec<Value>) -> Result<Value> {
-    if args.len() < 2 {
-        return Err(anyhow::anyhow!("set_menu() requires self and menu arguments"));
-    }
-
-    let menu = args[1].clone();
-
-    // Update the window object's menu field
-    if let Value::Dict(dict) = &args[0] {
-        dict.borrow_mut().insert("menu".to_string(), menu);
-    }
-
-    Ok(Value::None)
-}
-
-/// Set title bar configuration for the window
-pub fn window_set_titlebar(args: Vec<Value>) -> Result<Value> {
-    if args.len() < 2 {
-        return Err(anyhow::anyhow!("set_titlebar() requires self and titlebar arguments"));
-    }
-
-    let titlebar = args[1].clone();
-
-    // Update the window object's titlebar field
-    if let Value::Dict(dict) = &args[0] {
-        dict.borrow_mut().insert("titlebar".to_string(), titlebar);
-    }
-
-    Ok(Value::None)
-}
-
-/// Set window icon
-pub fn window_set_icon(args: Vec<Value>) -> Result<Value> {
-    if args.len() < 2 {
-        return Err(anyhow::anyhow!("set_icon() requires self and icon_path arguments"));
-    }
-
-    let icon_path = extract_string_arg(&args, 1).unwrap_or_default();
-
-    // Update the window object's icon field
-    if let Value::Dict(dict) = &args[0] {
-        dict.borrow_mut().insert("icon".to_string(), Value::Str(icon_path));
-    }
-
-    Ok(Value::None)
-}
-
-/// Set whether window is resizable
-pub fn window_set_resizable(args: Vec<Value>) -> Result<Value> {
-    if args.len() < 2 {
-        return Err(anyhow::anyhow!("set_resizable() requires self and resizable (bool) arguments"));
-    }
-
-    let resizable = match &args[1] {
-        Value::Bool(b) => *b,
+    let decorations = match window.get("decorations") {
+        Some(Value::Bool(b)) => *b,
         _ => true,
     };
-
-    // Update the window object's resizable field
-    if let Value::Dict(dict) = &args[0] {
-        dict.borrow_mut().insert("resizable".to_string(), Value::Bool(resizable));
-    }
-
-    Ok(Value::None)
-}
-
-/// Disable window decorations (title bar, borders, etc.)
-pub fn window_disable_decorations(args: Vec<Value>) -> Result<Value> {
-    if args.is_empty() {
-        return Err(anyhow::anyhow!("disable_decorations() requires self argument"));
-    }
-
-    // Update the window object's decorations field
-    if let Value::Dict(dict) = &args[0] {
-        dict.borrow_mut().insert("decorations".to_string(), Value::Bool(false));
-    }
-
-    Ok(Value::None)
-}
-
-/// Register a message handler for IPC communication from frontend
-/// Usage: window.on_message("event_name", lambda msg: print(msg))
-pub fn window_on_message(args: Vec<Value>) -> Result<Value> {
-    if args.len() < 3 {
-        return Err(anyhow::anyhow!("on_message() requires self, event_name, and handler arguments"));
-    }
-
-    let event_name = extract_string_arg(&args, 1)
-        .ok_or_else(|| anyhow::anyhow!("on_message() requires event_name as string"))?;
-    let handler = args[2].clone();
-
-    // Store handler in window object's message_handlers dict
-    if let Value::Dict(dict) = &args[0] {
-        let mut borrowed = dict.borrow_mut();
-        if let Some(Value::Dict(handlers)) = borrowed.get("message_handlers") {
-            handlers.borrow_mut().insert(event_name, handler);
-        }
-    }
-
-    Ok(Value::None)
-}
-
-/// Run the window event loop (blocking - waits until window closes)
-pub fn window_run(args: Vec<Value>) -> Result<Value> {
-    #[cfg(not(feature = "webviewtk"))]
-    {
-        return Err(anyhow::anyhow!(
-            "WebViewTK feature is not enabled. Please compile with --features webviewtk"
-        ));
-    }
-
-    #[cfg(feature = "webviewtk")]
-    {
-        if args.is_empty() {
-            return Err(anyhow::anyhow!("run() requires self argument"));
-        }
-
-        // Extract window data, window_id, and message handlers before thread spawn
-        let (title, width, height, html, decorations, handlers_map, win_id) = if let Value::Dict(dict) = &args[0] {
-            let d = dict.borrow();
-            let title = match d.get("title") {
-                Some(Value::Str(s)) => s.clone(),
-                _ => "Tauraro App".to_string(),
-            };
-            let width = match d.get("width") {
-                Some(Value::Int(n)) => *n as u32,
-                _ => 800,
-            };
-            let height = match d.get("height") {
-                Some(Value::Int(n)) => *n as u32,
-                _ => 600,
-            };
-            let html = match d.get("html") {
-                Some(Value::Str(s)) => s.clone(),
-                _ => String::new(),
-            };
-            let decorations = match d.get("decorations") {
-                Some(Value::Bool(b)) => *b,
-                _ => true,  // Default to showing decorations
-            };
-            
-            // Extract window ID
-            let win_id = match d.get("_window_id") {
-                Some(Value::Int(id)) => *id as u64,
-                _ => 0,  // Fallback (should not happen)
-            };
-            
-            // Extract message handlers (serialize to strings for thread safety)
-            let mut handlers = HashMap::new();
-            if let Some(Value::Dict(handlers_dict)) = d.get("message_handlers") {
-                let h = handlers_dict.borrow();
-                for (key, value) in h.iter() {
-                    if let Some(handler_info) = serialize_handler_info(value) {
-                        handlers.insert(key.clone(), handler_info);
-                    }
+    
+    let resizable = match window.get("resizable") {
+        Some(Value::Bool(b)) => *b,
+        _ => true,
+    };
+    
+    let html = match ui.get("_html") {
+        Some(Value::Str(s)) => s.clone(),
+        _ => "<div>No content</div>".to_string(),
+    };
+    
+    // Collect CDN links
+    let mut cdn_tags = String::new();
+    if let Some(Value::List(cdns)) = window.get("_cdns") {
+        for cdn in cdns.data.borrow().iter() {
+            if let Value::Str(url) = cdn {
+                if url.ends_with(".css") {
+                    cdn_tags.push_str(&format!("    <link rel=\"stylesheet\" href=\"{}\">\n", url));
+                } else if url.contains("cdn.tailwindcss.com") {
+                    // Tailwind Play CDN must load without defer to process classes immediately
+                    cdn_tags.push_str(&format!("    <script src=\"{}\"></script>\n", url));
+                } else if url.ends_with(".js") {
+                    // Other JS files can use defer
+                    cdn_tags.push_str(&format!("    <script src=\"{}\" defer></script>\n", url));
                 }
             }
-            
-            (title, width, height, html, decorations, handlers, win_id)
-        } else {
-            return Err(anyhow::anyhow!("run() requires a Window object"));
-        };
-
-        // Validate HTML is not empty
-        if html.is_empty() {
-            return Err(anyhow::anyhow!("Window HTML content is empty. Call set_html() first."));
         }
-
-        // Spawn window in a separate thread to allow multiple processes
-        let handle = std::thread::spawn(move || {
-            // Create event loop (use new_any_thread on Windows for thread safety)
-            #[cfg(target_os = "windows")]
-            let event_loop = EventLoop::<()>::new_any_thread();
-
-            #[cfg(not(target_os = "windows"))]
-            let event_loop = EventLoop::<()>::new();
-
-            let window = WindowBuilder::new()
-                .with_title(&title)
-                .with_inner_size(tao::dpi::LogicalSize::new(width, height))
-                .with_decorations(decorations)  // Apply decorations setting (cross-platform)
-                .build(&event_loop)
-                .expect("Failed to create window");
+    }
+    
+    // Collect custom CSS
+    let mut custom_css = String::new();
+    if let Some(Value::List(css_list)) = window.get("_custom_css") {
+        for css in css_list.data.borrow().iter() {
+            if let Value::Str(content) = css {
+                custom_css.push_str(content);
+                custom_css.push('\n');
+            }
+        }
+    }
+    
+    // Inject SPA API (window.invoke for calling Tauraro functions)
+    let spa_api = r#"
+// Tauraro SPA API - Bidirectional communication between frontend and backend
+(function() {
+    let messageId = 0;
+    const pendingInvocations = {};
+    
+    // Main API: Invoke Tauraro backend functions
+    window.invoke = function(command, args = {}) {
+        return new Promise((resolve, reject) => {
+            const id = ++messageId;
+            const message = JSON.stringify({
+                type: 'invoke',
+                id: id,
+                command: command,
+                args: args
+            });
             
-            // Store window ID for event loop access (tao window ID, not our tracking ID)
-            let window_id = window.id();
+            // Store promise callbacks
+            pendingInvocations[id] = { resolve, reject, command };
             
-            // Create webview with IPC handler
-            let webview = WebViewBuilder::new(window)
-                .expect("Failed to create webview")
-                .with_html(&html)
-                .expect("Failed to set HTML")
-                .with_initialization_script(r#"
-                    // Polyfill for -webkit-app-region drag support and window controls
-                    (function() {
-                        // Initialize window.tauraro API
-                        window.tauraro = window.tauraro || {};
+            // Send to backend
+            window.ipc.postMessage(message);
+            
+            // Timeout after 30 seconds
+            setTimeout(() => {
+                if (pendingInvocations[id]) {
+                    delete pendingInvocations[id];
+                    reject(new Error(`Command '${command}' timed out after 30s`));
+                }
+            }, 30000);
+        });
+    };
+    
+    // Handle command responses from backend
+    window.handleInvokeResponse = function(response) {
+        if (pendingInvocations[response.id]) {
+            const { resolve, reject } = pendingInvocations[response.id];
+            delete pendingInvocations[response.id];
+            
+            if (response.success) {
+                resolve(response.data);
+            } else {
+                reject(new Error(response.error || 'Unknown error'));
+            }
+        }
+    };
+    
+    // Console logging helper
+    window.log = console.log.bind(console);
+    window.error = console.error.bind(console);
+    
+    console.log('✅ Tauraro SPA API ready - use window.invoke(command, args)');
+})();
+"#;
+    
+    // Collect custom JS
+    let mut custom_js = String::new();
+    custom_js.push_str(spa_api);
+    custom_js.push('\n');
+    
+    if let Some(Value::List(js_list)) = window.get("_custom_js") {
+        for js in js_list.data.borrow().iter() {
+            if let Value::Str(content) = js {
+                custom_js.push_str(content);
+                custom_js.push('\n');
+            }
+        }
+    }
+    
+    // Get custom HTML
+    let custom_html = match window.get("_custom_html") {
+        Some(Value::Str(s)) => s.clone(),
+        _ => String::new(),
+    };
+    
+    let full_html = format!(r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{}</title>
+{}    <style>
+        * {{ 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }}
+        html, body {{
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }}
+        body {{ 
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }}
+        #root {{
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }}
+        /* Responsive utilities */
+        .responsive-text {{
+            font-size: clamp(0.875rem, 2vw, 1rem);
+        }}
+        .responsive-heading {{
+            font-size: clamp(1.5rem, 4vw, 2.5rem);
+        }}
+        /* Smooth transitions */
+        * {{
+            transition: all 0.2s ease;
+        }}
+        /* Better scrollbars on Windows */
+        ::-webkit-scrollbar {{
+            width: 8px;
+            height: 8px;
+        }}
+        ::-webkit-scrollbar-track {{
+            background: #f1f1f1;
+        }}
+        ::-webkit-scrollbar-thumb {{
+            background: #888;
+            border-radius: 4px;
+        }}
+        ::-webkit-scrollbar-thumb:hover {{
+            background: #555;
+        }}
+        {}
+    </style>
+    <script>
+        {}
+    </script>
+</head>
+<body>
+{}    <div id="root">{}</div>
+</body>
+</html>
+"#, title, cdn_tags, custom_css, custom_js, custom_html, html);
+    
+    // Extract user commands BEFORE creating WRY window (which will shadow the window parameter)
+    let user_commands_opt = window.get("_commands").cloned();
+    
+    let event_loop = EventLoop::new();
+    let wry_window = WindowBuilder::new()
+        .with_title(&title)
+        .with_inner_size(wry::application::dpi::LogicalSize::new(width, height))
+        .with_decorations(decorations)
+        .with_resizable(resizable)
+        .build(&event_loop)?;
+    
+    let window_id = wry_window.id();
+    
+    // Create a shared reference to track window state
+    let is_maximized = Arc::new(Mutex::new(false));
+    let is_maximized_clone = is_maximized.clone();
+    
+    // Create channel for sending responses from IPC handlers to webview (using crossbeam for better performance)
+    let (tx, rx) = unbounded::<String>();
+    
+    // Create command registry for exposing Tauraro functions to frontend
+    let commands = super::command_registry::CommandRegistry::new();
+    
+    // Register built-in commands
+    register_builtin_commands(&commands);
+    
+    // Create a crossbeam channel for executing Tauraro closures
+    // Commands run in IPC thread, but closures need to run in main thread with VM access
+    // crossbeam is thread-safe and doesn't require Arc<Mutex<>>
+    let (closure_tx, closure_rx) = unbounded::<(String, serde_json::Value, Sender<Result<serde_json::Value, String>>)>();
+    
+    // Clone user commands for closure storage
+    let user_commands_for_executor = user_commands_opt.clone();
+    
+    // Register user-defined Tauraro commands
+    if let Some(Value::Dict(user_commands)) = user_commands_opt {
+        for (name, func) in user_commands.borrow().iter() {
+            match func {
+                Value::NativeFunction(f) => {
+                    let func_ptr = *f; // Copy the function pointer (which is thread-safe)
+                    
+                    commands.register(&name, move |args| {
+                        // Convert JSON args to Tauraro Values
+                        use super::command_registry::{json_to_tauraro_values, tauraro_value_to_json};
                         
-                        window.tauraro.minimize = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'minimize_window' }));
-                            }
-                        };
+                        let tauraro_args = json_to_tauraro_values(&args)?;
                         
-                        window.tauraro.maximize = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'maximize_window' }));
-                            }
-                        };
+                        // Call the Tauraro native function
+                        let result = func_ptr(tauraro_args)?;
                         
-                        window.tauraro.restore = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'restore_window' }));
-                            }
-                        };
+                        // Convert result back to JSON
+                        tauraro_value_to_json(&result)
+                    });
+                    
+                    println!("📡 Mounted native function command: {}", name);
+                }
+                Value::Closure { .. } => {
+                    // For closures, register a handler that sends execution request to main thread
+                    let name_clone = name.clone();
+                    let closure_tx_clone = closure_tx.clone(); // crossbeam Sender is Clone!
+                    
+                    commands.register(&name, move |args| {
+                        println!("🔵 IPC thread: Received invoke for closure '{}'", name_clone);
                         
-                        window.tauraro.close = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'close_window' }));
-                            }
-                        };
+                        // Send execution request to main thread
+                        let (result_tx, result_rx) = unbounded();
                         
-                        window.tauraro.fullscreen = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'fullscreen_window' }));
+                        println!("🔵 IPC thread: Attempting to send execution request via channel...");
+                        match closure_tx_clone.send((name_clone.clone(), args.clone(), result_tx)) {
+                            Ok(_) => println!("✅ IPC thread: Successfully sent execution request to event loop"),
+                            Err(e) => {
+                                println!("❌ IPC thread: Failed to send: {}", e);
+                                return Err(anyhow::anyhow!("Failed to send closure execution request: {}", e));
                             }
-                        };
+                        }
                         
-                        window.tauraro.dragWindow = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'drag_window' }));
-                            }
-                        };
+                        // Return immediately - don't block!
+                        // The event loop will send the result back asynchronously via JavaScript
+                        use std::time::Duration;
+                        use std::thread;
                         
-                        let isDragging = false;
-                        document.addEventListener('mousedown', function(e) {
-                            const element = e.target.closest('[data-tauri-drag-region], .titlebar-drag, [style*="webkit-app-region: drag"]');
-                            if (element) {
-                                const computedStyle = window.getComputedStyle(element);
-                                if (computedStyle.webkitAppRegion === 'drag' || element.style.webkitAppRegion === 'drag' || 
-                                    element.hasAttribute('data-tauri-drag-region') || element.classList.contains('titlebar-drag')) {
-                                    // Check if clicking on no-drag child
-                                    const noDragChild = e.target.closest('[data-tauri-drag-no-region], .titlebar-no-drag, button, a, input, select, textarea');
-                                    if (noDragChild) {
-                                        const noDragStyle = window.getComputedStyle(noDragChild);
-                                        if (noDragStyle.webkitAppRegion === 'no-drag' || noDragChild.style.webkitAppRegion === 'no-drag' ||
-                                            noDragChild.hasAttribute('data-tauri-drag-no-region') || noDragChild.classList.contains('titlebar-no-drag') ||
-                                            ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(noDragChild.tagName)) {
-                                            return;
-                                        }
-                                    }
-                                    isDragging = true;
-                                    if (window.ipc && window.ipc.postMessage) {
-                                        window.ipc.postMessage(JSON.stringify({ cmd: 'drag_window' }));
-                                    }
-                                    e.preventDefault();
+                        // Try to get result quickly (non-blocking attempt)
+                        for _ in 0..50 {
+                            match result_rx.try_recv() {
+                                Ok(Ok(result)) => return Ok(result),
+                                Ok(Err(e)) => return Err(anyhow::anyhow!("Closure execution error: {}", e)),
+                                Err(crossbeam::channel::TryRecvError::Disconnected) => {
+                                    return Err(anyhow::anyhow!("Channel disconnected"));
                                 }
-                            }
-                        }, true);
-                        document.addEventListener('mouseup', function() {
-                            isDragging = false;
-                        }, true);
-                    })();
-                "#)
-                .with_ipc_handler(move |webview, msg| {
-                    // Parse JSON message
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&msg) {
-                        if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()) {
-                            // Check registered custom handlers first
-                            if let Some(handler_info) = handlers_map.get(cmd) {
-                                eprintln!("[IPC] Custom event '{}' registered (handler: {})", cmd, handler_info);
-                                
-                                // Extract event data
-                                let data = json.get("value")
-                                    .map(|v| v.to_string())
-                                    .unwrap_or_else(|| "null".to_string());
-                                
-                                eprintln!("[IPC] Event data: {}", data);
-                                
-                                // Send event to main thread via channel
-                                let event = IpcEvent {
-                                    event_name: cmd.to_string(),
-                                    data,
-                                };
-                                
-                                if let Ok(channels) = IPC_CHANNELS.lock() {
-                                    if let Some(sender) = channels.get(&win_id) {
-                                        if let Err(e) = sender.send(event) {
-                                            eprintln!("[IPC] Failed to send event to main thread: {}", e);
-                                        } else {
-                                            eprintln!("[IPC] Event sent to main thread for execution");
-                                        }
-                                    } else {
-                                        eprintln!("[IPC] No channel found for window ID {}", win_id);
-                                    }
-                                } else {
-                                    eprintln!("[IPC] Failed to lock IPC channels");
-                                }
-                                return;
-                            }
-                            
-                            // Built-in window commands
-                            match cmd {
-                                "drag_window" => {
-                                    #[cfg(target_os = "windows")]
-                                    {
-                                        use wry::application::platform::windows::WindowExtWindows;
-                                        let _ = webview.drag_window();
-                                    }
-                                    #[cfg(target_os = "macos")]
-                                    {
-                                        use wry::application::platform::macos::WindowExtMacOS;
-                                        let _ = webview.drag_window();
-                                    }
-                                    #[cfg(target_os = "linux")]
-                                    {
-                                        use wry::application::platform::unix::WindowExtUnix;
-                                        let _ = webview.drag_window();
-                                    }
-                                }
-                                "minimize_window" => {
-                                    webview.set_minimized(true);
-                                }
-                                "maximize_window" => {
-                                    let is_maximized = webview.is_maximized();
-                                    webview.set_maximized(!is_maximized);
-                                }
-                                "restore_window" => {
-                                    webview.set_maximized(false);
-                                }
-                                "fullscreen_window" => {
-                                    if webview.fullscreen().is_some() {
-                                        webview.set_fullscreen(None);
-                                    } else {
-                                        use wry::application::window::Fullscreen;
-                                        webview.set_fullscreen(Some(Fullscreen::Borderless(None)));
-                                    }
-                                }
-                                "close_window" => {
-                                    std::process::exit(0);
-                                }
-                                // Menu commands
-                                cmd if cmd.starts_with("menu_") => {
-                                    eprintln!("[IPC] Menu action: {}", cmd);
-                                }
-                                // Search commands
-                                "search" | "search_query" => {
-                                    if let Some(value) = json.get("value") {
-                                        eprintln!("[IPC] Search query: {}", value);
-                                    }
-                                }
-                                _ => {
-                                    eprintln!("[IPC] Unhandled event: {}", cmd);
+                                Err(crossbeam::channel::TryRecvError::Empty) => {
+                                    thread::sleep(Duration::from_millis(1));
                                 }
                             }
                         }
+                        
+                        // If not ready after 50ms, return pending status
+                        // JavaScript will need to poll or we need to implement callbacks
+                        Err(anyhow::anyhow!("Closure execution pending (check console for completion)"))
+                    });
+                    
+                    println!("📡 Mounted Tauraro closure command: {}", name);
+                }
+                _ => {
+                    println!("⚠️  Warning: '{}' is not a function, skipping registration", name);
+                }
+            }
+        }
+    }
+    
+    let tx_clone = tx.clone();
+    let webview = WebViewBuilder::new(wry_window)?
+        .with_html(&full_html)?
+        .with_ipc_handler(move |window, message| {
+            // Handle custom titlebar button clicks and drag
+            if message.starts_with("window:drag_start") {
+                // Initiate window drag
+                let _ = window.drag_window();
+            } else if message.starts_with("window:drag_move") || message.starts_with("window:drag_end") {
+                // These are handled by the drag_window() call
+            } else if message.starts_with("window:") {
+                // Window control messages
+                match message.as_str() {
+                    "window:close" => {
+                        std::process::exit(0);
                     }
-                })
-                .build()
-                .expect("Failed to build webview");
-
-            eprintln!("[DEBUG] Window created with IPC handler, starting event loop...");
-
-            // Run event loop - this blocks until window is closed
-            event_loop.run(move |event, _, control_flow| {
-                *control_flow = ControlFlow::Wait;
-
-                match event {
-                    Event::WindowEvent {
-                        event: WindowEvent::CloseRequested,
-                        ..
-                    } => {
-                        eprintln!("[DEBUG] Window close requested");
-                        *control_flow = ControlFlow::Exit;
+                    "window:minimize" => {
+                        window.set_minimized(true);
+                    }
+                    "window:maximize" => {
+                        let mut maximized = is_maximized_clone.lock().unwrap();
+                        *maximized = !*maximized;
+                        window.set_maximized(*maximized);
                     }
                     _ => {}
                 }
-            });
-
-            eprintln!("[DEBUG] Event loop exited");
-        });
-
-        // Block until window closes
-        match handle.join() {
-            Ok(_) => {
-                // Window closed normally
+            } else {
+                // Custom IPC messages - parse JSON and handle
+                handle_ipc_message(&tx_clone, &message, &commands);
             }
-            Err(e) => {
-                eprintln!("Error: Window thread panicked: {:?}", e);
-                return Err(anyhow::anyhow!("Window thread panicked"));
-            }
-        }
-
-        Ok(Value::None)
-    }
-}
-
-/// Run the window event loop (non-blocking - returns immediately)
-pub fn window_run_async(args: Vec<Value>) -> Result<Value> {
-    #[cfg(not(feature = "webviewtk"))]
-    {
-        return Err(anyhow::anyhow!(
-            "WebViewTK feature is not enabled. Please compile with --features webviewtk"
-        ));
-    }
-
-    #[cfg(feature = "webviewtk")]
-    {
-        if args.is_empty() {
-            return Err(anyhow::anyhow!("run_async() requires self argument"));
-        }
-
-        let (title, width, height, html, decorations, handlers_map, win_id) = if let Value::Dict(dict) = &args[0] {
-            let d = dict.borrow();
-            let title = match d.get("title") {
-                Some(Value::Str(s)) => s.clone(),
-                _ => "Tauraro App".to_string(),
-            };
-            let width = match d.get("width") {
-                Some(Value::Int(n)) => *n as u32,
-                _ => 800,
-            };
-            let height = match d.get("height") {
-                Some(Value::Int(n)) => *n as u32,
-                _ => 600,
-            };
-            let html = match d.get("html") {
-                Some(Value::Str(s)) => s.clone(),
-                _ => String::new(),
-            };
-            let decorations = match d.get("decorations") {
-                Some(Value::Bool(b)) => *b,
-                _ => true,  // Default to showing decorations
-            };
-            
-            // Extract window ID
-            let win_id = match d.get("_window_id") {
-                Some(Value::Int(id)) => *id as u64,
-                _ => 0,  // Fallback (should not happen)
-            };
-            
-            // Extract message handlers (serialize to strings for thread safety)
-            let mut handlers = HashMap::new();
-            if let Some(Value::Dict(handlers_dict)) = d.get("message_handlers") {
-                let h = handlers_dict.borrow();
-                for (key, value) in h.iter() {
-                    if let Some(handler_info) = serialize_handler_info(value) {
-                        handlers.insert(key.clone(), handler_info);
-                    }
-                }
-            }
-            
-            (title, width, height, html, decorations, handlers, win_id)
-        } else {
-            return Err(anyhow::anyhow!("run_async() requires a Window object"));
-        };
-
-        // Validate HTML is not empty
-        if html.is_empty() {
-            return Err(anyhow::anyhow!("Window HTML content is empty. Call set_html() first."));
-        }
-
-        // Spawn window in background thread (don't wait for it)
-        std::thread::spawn(move || {
-            #[cfg(target_os = "windows")]
-            let event_loop = EventLoop::<()>::new_any_thread();
-
-            #[cfg(not(target_os = "windows"))]
-            let event_loop = EventLoop::<()>::new();
-
-            let window = WindowBuilder::new()
-                .with_title(&title)
-                .with_inner_size(tao::dpi::LogicalSize::new(width, height))
-                .with_decorations(decorations)  // Apply decorations setting
-                .build(&event_loop)
-                .expect("Failed to create window");
-
-            let window_id = window.id();
-
-            let webview = WebViewBuilder::new(window)
-                .expect("Failed to create webview")
-                .with_html(&html)
-                .expect("Failed to set HTML")
-                .with_initialization_script(r#"
-                    // Polyfill for -webkit-app-region drag support and window controls
-                    (function() {
-                        // Initialize window.tauraro API
-                        window.tauraro = window.tauraro || {};
-                        
-                        window.tauraro.minimize = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'minimize_window' }));
-                            }
-                        };
-                        
-                        window.tauraro.maximize = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'maximize_window' }));
-                            }
-                        };
-                        
-                        window.tauraro.restore = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'restore_window' }));
-                            }
-                        };
-                        
-                        window.tauraro.close = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'close_window' }));
-                            }
-                        };
-                        
-                        window.tauraro.fullscreen = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'fullscreen_window' }));
-                            }
-                        };
-                        
-                        window.tauraro.dragWindow = function() {
-                            if (window.ipc && window.ipc.postMessage) {
-                                window.ipc.postMessage(JSON.stringify({ cmd: 'drag_window' }));
-                            }
-                        };
-                        
-                        let isDragging = false;
-                        document.addEventListener('mousedown', function(e) {
-                            const element = e.target.closest('[data-tauri-drag-region], .titlebar-drag, [style*="webkit-app-region: drag"]');
-                            if (element) {
-                                const computedStyle = window.getComputedStyle(element);
-                                if (computedStyle.webkitAppRegion === 'drag' || element.style.webkitAppRegion === 'drag' || 
-                                    element.hasAttribute('data-tauri-drag-region') || element.classList.contains('titlebar-drag')) {
-                                    // Check if clicking on no-drag child
-                                    const noDragChild = e.target.closest('[data-tauri-drag-no-region], .titlebar-no-drag, button, a, input, select, textarea');
-                                    if (noDragChild) {
-                                        const noDragStyle = window.getComputedStyle(noDragChild);
-                                        if (noDragStyle.webkitAppRegion === 'no-drag' || noDragChild.style.webkitAppRegion === 'no-drag' ||
-                                            noDragChild.hasAttribute('data-tauri-drag-no-region') || noDragChild.classList.contains('titlebar-no-drag') ||
-                                            ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(noDragChild.tagName)) {
-                                            return;
-                                        }
-                                    }
-                                    isDragging = true;
-                                    if (window.ipc && window.ipc.postMessage) {
-                                        window.ipc.postMessage(JSON.stringify({ cmd: 'drag_window' }));
-                                    }
-                                    e.preventDefault();
-                                }
-                            }
-                        }, true);
-                        document.addEventListener('mouseup', function() {
-                            isDragging = false;
-                        }, true);
-                    })();
-                "#)
-                .with_ipc_handler(move |webview, msg| {
-                    // Parse JSON message
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&msg) {
-                        if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()) {
-                            // Check registered custom handlers first
-                            if let Some(handler_info) = handlers_map.get(cmd) {
-                                eprintln!("[IPC] Custom event '{}' registered (handler: {})", cmd, handler_info);
-                                
-                                // Extract event data
-                                let data = json.get("value")
-                                    .map(|v| v.to_string())
-                                    .unwrap_or_else(|| "null".to_string());
-                                
-                                eprintln!("[IPC] Event data: {}", data);
-                                
-                                // Send event to main thread via channel
-                                let event = IpcEvent {
-                                    event_name: cmd.to_string(),
-                                    data,
-                                };
-                                
-                                if let Ok(channels) = IPC_CHANNELS.lock() {
-                                    if let Some(sender) = channels.get(&win_id) {
-                                        if let Err(e) = sender.send(event) {
-                                            eprintln!("[IPC] Failed to send event to main thread: {}", e);
-                                        } else {
-                                            eprintln!("[IPC] Event sent to main thread for execution");
-                                        }
-                                    } else {
-                                        eprintln!("[IPC] No channel found for window ID {}", win_id);
-                                    }
-                                } else {
-                                    eprintln!("[IPC] Failed to lock IPC channels");
-                                }
-                                return;
-                            }
-                            
-                            // Built-in window commands
-                            match cmd {
-                                "drag_window" => {
-                                    #[cfg(target_os = "windows")]
-                                    {
-                                        use wry::application::platform::windows::WindowExtWindows;
-                                        let _ = webview.drag_window();
-                                    }
-                                    #[cfg(target_os = "macos")]
-                                    {
-                                        use wry::application::platform::macos::WindowExtMacOS;
-                                        let _ = webview.drag_window();
-                                    }
-                                    #[cfg(target_os = "linux")]
-                                    {
-                                        use wry::application::platform::unix::WindowExtUnix;
-                                        let _ = webview.drag_window();
-                                    }
-                                }
-                                "minimize_window" => {
-                                    webview.set_minimized(true);
-                                }
-                                "maximize_window" => {
-                                    let is_maximized = webview.is_maximized();
-                                    webview.set_maximized(!is_maximized);
-                                }
-                                "restore_window" => {
-                                    webview.set_maximized(false);
-                                }
-                                "fullscreen_window" => {
-                                    if webview.fullscreen().is_some() {
-                                        webview.set_fullscreen(None);
-                                    } else {
-                                        use wry::application::window::Fullscreen;
-                                        webview.set_fullscreen(Some(Fullscreen::Borderless(None)));
-                                    }
-                                }
-                                "close_window" => {
-                                    std::process::exit(0);
-                                }
-                                // Menu commands
-                                cmd if cmd.starts_with("menu_") => {
-                                    eprintln!("[IPC] Menu action: {}", cmd);
-                                }
-                                // Search commands
-                                "search" | "search_query" => {
-                                    if let Some(value) = json.get("value") {
-                                        eprintln!("[IPC] Search query: {}", value);
-                                    }
-                                }
-                                _ => {
-                                    eprintln!("[IPC] Unhandled event: {}", cmd);
-                                }
-                            }
-                        }
-                    }
-                })
-                .build()
-                .expect("Failed to build webview");
-
-            eprintln!("[DEBUG] Async window created with IPC handler, starting event loop...");
-
-            event_loop.run(move |event, _, control_flow| {
-                *control_flow = ControlFlow::Wait;
-
-                match event {
-                    Event::WindowEvent {
-                        event: WindowEvent::CloseRequested,
-                        ..
-                    } => {
-                        *control_flow = ControlFlow::Exit;
-                    }
-                    _ => {}
-                }
-            });
-        });
-
-        Ok(Value::None)
-    }
-}
-
-/// Process pending IPC events from the window thread
-/// This should be called periodically (e.g., in an event loop or after operations)
-/// to execute handlers for events sent from the JavaScript side
-/// 
-/// The function executes handlers directly if they are native functions.
-/// For Tauraro closures (including async functions), it calls them with the event data.
-/// For async handlers, the returned coroutine should be awaited by the caller.
-pub fn window_process_events(args: Vec<Value>) -> Result<Value> {
-    #[cfg(not(feature = "webviewtk"))]
-    {
-        return Err(anyhow::anyhow!(
-            "WebViewTK feature is not enabled. Please compile with --features webviewtk"
-        ));
-    }
-
-    #[cfg(feature = "webviewtk")]
-    {
-        use crate::vm::VM;
+        })
+        .build()?;
+    
+    // Debug: Add a flag to log only once
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let logged_event_loop_start = Arc::new(AtomicBool::new(false));
+    let logged_event_loop_start_clone = Arc::clone(&logged_event_loop_start);
+    let loop_iteration_count = Arc::new(AtomicUsize::new(0));
+    let loop_iteration_count_clone = Arc::clone(&loop_iteration_count);
+    
+    println!("🔁 Starting event loop...");
+    println!("🔁 closure_rx channel ready for receiving");
+    
+    let iteration_count = Arc::new(AtomicUsize::new(0));
+    let iteration_count_clone = iteration_count.clone();
+    
+    event_loop.run(move |event, _, control_flow| {
+        // Count iterations
+        let count = iteration_count_clone.fetch_add(1, Ordering::Relaxed);
         
-        if args.is_empty() {
-            return Err(anyhow::anyhow!("process_events() requires self argument"));
-        }
-
-        // Get window object
-        let window_dict = match &args[0] {
-            Value::Dict(dict) => dict,
-            _ => return Err(anyhow::anyhow!("process_events() requires a Window object")),
-        };
-
-        // Extract receiver pointer
-        let receiver_ptr = {
-            let d = window_dict.borrow();
-            match d.get("_ipc_receiver") {
-                Some(Value::Str(s)) => {
-                    // Parse pointer from string
-                    let ptr_str = s.trim_start_matches("0x");
-                    usize::from_str_radix(ptr_str, 16)
-                        .map_err(|e| anyhow::anyhow!("Failed to parse receiver pointer: {}", e))?
+        // Log closure_rx status once
+        static mut LOGGED_RX: bool = false;
+        unsafe {
+            if !LOGGED_RX {
+                println!("🔍 Event loop has closure_rx: checking if disconnected...");
+                // Try to peek at the channel status
+                match closure_rx.try_recv() {
+                    Err(crossbeam::channel::TryRecvError::Disconnected) => {
+                        println!("❌ CRITICAL: closure_rx is DISCONNECTED at event loop start!");
+                    }
+                    Err(crossbeam::channel::TryRecvError::Empty) => {
+                        println!("✅ closure_rx is connected and empty (normal)");
+                    }
+                    Ok(_) => {
+                        println!("✅ closure_rx already has messages");
+                    }
                 }
-                _ => return Err(anyhow::anyhow!("Window object missing _ipc_receiver")),
+                LOGGED_RX = true;
             }
-        };
-
-        // SAFETY: The receiver was allocated with Box::into_raw in create_window_class
-        // and is valid for the lifetime of the window object
-        let receiver = unsafe { &*(receiver_ptr as *const Receiver<IpcEvent>) };
-
-        // Get message handlers
-        let handlers_dict = {
-            let d = window_dict.borrow();
-            match d.get("message_handlers") {
-                Some(Value::Dict(dict)) => dict.clone(),
-                _ => return Ok(Value::Int(0)),  // No handlers registered
-            }
-        };
-
-        // Process all pending events (non-blocking)
-        let mut processed = 0;
-        while let Ok(event) = receiver.try_recv() {
-            eprintln!("[process_events] Processing event: {}", event.event_name);
+        }
+        
+        // Log iterations periodically to debug timing
+        if count % 10000 == 0 && count > 0 {
+            println!("🔁 Event loop at iteration: {}", count);
+        }
+        
+        // Use Poll for immediate message processing (responsive backend at cost of CPU)
+        *control_flow = ControlFlow::Poll;
+        
+        // Check for pending scripts to evaluate
+        if let Ok(script) = rx.try_recv() {
+            let _ = webview.evaluate_script(&script);
+        }
+        
+        // Check closure channel multiple times per iteration for better responsiveness
+        // This compensates for slow event loop iterations
+        for _ in 0..10 {
+            if let Ok((command_name, args, result_tx)) = closure_rx.try_recv() {
+                println!("🔄 Event loop (iteration {}): Received closure execution request: {}", count, command_name);
             
-            // Look up handler
-            let handler = {
-                let h = handlers_dict.borrow();
-                h.get(&event.event_name).cloned()
-            };
-
-            if let Some(handler_value) = handler {
-                // Parse JSON data to Value
-                let event_data = parse_json_to_value(&event.data)?;
-                
-                // Execute handler with event data
-                match &handler_value {
-                    Value::Closure { .. } => {
-                        // Create a VM instance to call the closure
-                        let mut vm = VM::new();
-                        
-                        // Call the closure with event data as argument
-                        match vm.call_function(handler_value.clone(), vec![event_data]) {
-                            Ok(result) => {
-                                // Check if result is a coroutine (async handler)
-                                if let Value::Coroutine { .. } = result {
-                                    eprintln!("[process_events] Handler returned coroutine - running async");
-                                    // For async handlers, run the coroutine using AsyncRuntime
-                                    let runtime = crate::modules::asyncio::runtime::AsyncRuntime::global();
-                                    match runtime.run_until_complete(result) {
-                                        Ok(async_result) => {
-                                            eprintln!("[process_events] Async handler completed: {:?}", async_result);
+                // Execute the closure and send result back
+            let result = if let Some(Value::Dict(ref cmds)) = user_commands_for_executor {
+                if let Some(func) = cmds.borrow().get(&command_name) {
+                    println!("✓ Found closure function: {}", command_name);
+                    
+                    // Execute the closure
+                    use super::command_registry::{json_to_tauraro_values, tauraro_value_to_json};
+                    
+                    match json_to_tauraro_values(&args) {
+                        Ok(tauraro_args) => {
+                            println!("✓ Converted args, executing closure with VM...");
+                            
+                            // Call the closure
+                            match func {
+                                Value::Closure { .. } => {
+                                    // Create a VM to execute the closure
+                                    match execute_tauraro_closure(func.clone(), tauraro_args) {
+                                        Ok(result_value) => {
+                                            println!("✓ Closure executed successfully: {:?}", result_value);
+                                            
+                                            match tauraro_value_to_json(&result_value) {
+                                                Ok(json) => {
+                                                    println!("✓ Converted result to JSON");
+                                                    Ok(json)
+                                                }
+                                                Err(e) => {
+                                                    println!("✗ Failed to convert result to JSON: {}", e);
+                                                    Err(format!("Failed to convert result to JSON: {}", e))
+                                                }
+                                            }
                                         }
                                         Err(e) => {
-                                            eprintln!("[process_events] Async handler failed: {}", e);
+                                            println!("✗ Closure execution failed: {}", e);
+                                            Err(format!("Closure execution failed: {}", e))
                                         }
                                     }
-                                } else {
-                                    eprintln!("[process_events] Sync handler returned: {:?}", result);
+                                }
+                                _ => {
+                                    println!("✗ Not a closure");
+                                    Err(format!("'{}' is not a closure", command_name))
                                 }
                             }
-                            Err(e) => {
-                                eprintln!("[process_events] Handler error: {}", e);
-                            }
+                        }
+                        Err(e) => {
+                            println!("✗ Failed to convert args: {}", e);
+                            Err(format!("Failed to convert args: {}", e))
                         }
                     }
-                    Value::NativeFunction(func) => {
-                        // Call native function directly
-                        eprintln!("[process_events] Calling native function handler");
-                        match func(vec![event_data]) {
-                            Ok(result) => {
-                                eprintln!("[process_events] Native handler returned: {:?}", result);
-                            }
-                            Err(e) => {
-                                eprintln!("[process_events] Native handler error: {}", e);
-                            }
-                        }
-                    }
-                    _ => {
-                        eprintln!("[process_events] Handler is not callable: {:?}", handler_value);
-                    }
+                } else {
+                    println!("✗ Command not found: {}", command_name);
+                    Err(format!("Command '{}' not found", command_name))
                 }
-                
-                processed += 1;
             } else {
-                eprintln!("[process_events] No handler found for event: {}", event.event_name);
-            }
-        }
-
-        Ok(Value::Int(processed))
-    }
-}
-
-/// Helper: Parse JSON string to Tauraro Value
-#[cfg(feature = "webviewtk")]
-fn parse_json_to_value(json_str: &str) -> Result<Value> {
-    let json: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
-    
-    Ok(json_to_tauraro_value(&json))
-}
-
-/// Helper: Convert serde_json::Value to Tauraro Value
-#[cfg(feature = "webviewtk")]
-fn json_to_tauraro_value(json: &serde_json::Value) -> Value {
-    match json {
-        serde_json::Value::Null => Value::None,
-        serde_json::Value::Bool(b) => Value::Bool(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::Float(f)
+                println!("✗ No commands registered");
+                Err("No commands registered".to_string())
+            };
+            
+                println!("📤 Sending result back to IPC thread...");
+                // Send result back (ignore send errors if receiver dropped)
+                let _ = result_tx.send(result);
             } else {
-                Value::None
+                // No message available, break out of check loop
+                break;
             }
         }
-        serde_json::Value::String(s) => Value::Str(s.clone()),
-        serde_json::Value::Array(arr) => {
-            let values: Vec<Value> = arr.iter().map(json_to_tauraro_value).collect();
-            Value::new_list(values)
+        
+        match event {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                window_id: id,
+                ..
+            } if id == window_id => *control_flow = ControlFlow::Exit,
+            _ => {}
         }
-        serde_json::Value::Object(obj) => {
-            let mut map = HashMap::new();
-            for (k, v) in obj.iter() {
-                map.insert(k.clone(), json_to_tauraro_value(v));
-            }
-            Value::Dict(Rc::new(RefCell::new(map)))
-        }
-    }
+    });
 }
 
-// Helper function to convert String to wide (UTF-16) for Windows API
-#[cfg(target_os = "windows")]
-fn to_wide(s: &str) -> Vec<u16> {
-    use std::os::windows::ffi::OsStrExt;
-    use std::ffi::OsStr;
+#[cfg(not(feature = "webviewtk"))]
+pub fn mount_and_run(_window: &HashMap<String, Value>, _ui: &HashMap<String, Value>) -> Result<()> {
+    Err(anyhow::anyhow!("webviewtk feature not enabled"))
+}
+
+/// Wrapper function for calling from Tauraro
+#[cfg(feature = "webviewtk")]
+pub fn mount_and_run_wrapper(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("mount_and_run requires 2 arguments: window and ui"));
+    }
     
-    let wide: Vec<u16> = OsStr::new(s)
-        .encode_wide()
-        .collect();
-    wide
+    let window_dict = match &args[0] {
+        Value::Dict(d) => d.borrow().clone(),
+        _ => return Err(anyhow::anyhow!("First argument must be a Window dict")),
+    };
+    
+    let ui_dict = match &args[1] {
+        Value::Dict(d) => d.borrow().clone(),
+        _ => return Err(anyhow::anyhow!("Second argument must be a UI dict")),
+    };
+    
+    mount_and_run(&window_dict, &ui_dict)?;
+    Ok(Value::None)
 }
 
-/// Extract a string argument from a Value vector
-fn extract_string_arg(args: &[Value], index: usize) -> Option<String> {
-    if index < args.len() {
-        match &args[index] {
-            Value::Str(s) => Some(s.clone()),
-            _ => None,
-        }
-    } else {
-        None
-    }
+#[cfg(not(feature = "webviewtk"))]
+pub fn mount_and_run_wrapper(_args: Vec<Value>) -> Result<Value> {
+    Err(anyhow::anyhow!("webviewtk feature not enabled"))
 }
+
+/// Add CDN links to window
+#[cfg(feature = "webviewtk")]
+pub fn include_cdn_wrapper(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("include_cdn requires 2 arguments: window and cdn_url(s)"));
+    }
+    
+    let window_dict = match &args[0] {
+        Value::Dict(d) => d.clone(),
+        _ => return Err(anyhow::anyhow!("First argument must be a Window dict")),
+    };
+    
+    let mut dict = window_dict.borrow_mut();
+    let cdns = match dict.get_mut("_cdns") {
+        Some(Value::List(l)) => l.data.clone(),
+        _ => return Err(anyhow::anyhow!("Window dict missing _cdns")),
+    };
+    
+    // Support single CDN or list of CDNs
+    if let Value::List(cdn_list) = &args[1] {
+        for cdn in cdn_list.data.borrow().iter() {
+            if let Value::Str(url) = cdn {
+                cdns.borrow_mut().push(Value::Str(url.clone()));
+            }
+        }
+    } else if let Value::Str(url) = &args[1] {
+        cdns.borrow_mut().push(Value::Str(url.clone()));
+    }
+    
+    Ok(Value::None)
+}
+
+#[cfg(not(feature = "webviewtk"))]
+pub fn include_cdn_wrapper(_args: Vec<Value>) -> Result<Value> {
+    Err(anyhow::anyhow!("webviewtk feature not enabled"))
+}
+
+/// Include CSS file
+#[cfg(feature = "webviewtk")]
+pub fn include_css_file_wrapper(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("include_css_file requires 2 arguments: window and file_path"));
+    }
+    
+    let window_dict = match &args[0] {
+        Value::Dict(d) => d.clone(),
+        _ => return Err(anyhow::anyhow!("First argument must be a Window dict")),
+    };
+    
+    let file_path = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(anyhow::anyhow!("Second argument must be a file path string")),
+    };
+    
+    // Read file content
+    let path = Path::new(file_path);
+    let content = fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("Failed to read CSS file '{}': {}", file_path, e))?;
+    
+    let mut dict = window_dict.borrow_mut();
+    let css_list = match dict.get_mut("_custom_css") {
+        Some(Value::List(l)) => l.data.clone(),
+        _ => return Err(anyhow::anyhow!("Window dict missing _custom_css")),
+    };
+    
+    css_list.borrow_mut().push(Value::Str(content));
+    
+    Ok(Value::None)
+}
+
+#[cfg(not(feature = "webviewtk"))]
+pub fn include_css_file_wrapper(_args: Vec<Value>) -> Result<Value> {
+    Err(anyhow::anyhow!("webviewtk feature not enabled"))
+}
+
+/// Include JavaScript file
+#[cfg(feature = "webviewtk")]
+pub fn include_js_file_wrapper(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("include_js_file requires 2 arguments: window and file_path"));
+    }
+    
+    let window_dict = match &args[0] {
+        Value::Dict(d) => d.clone(),
+        _ => return Err(anyhow::anyhow!("First argument must be a Window dict")),
+    };
+    
+    let file_path = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(anyhow::anyhow!("Second argument must be a file path string")),
+    };
+    
+    // Read file content
+    let path = Path::new(file_path);
+    let content = fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("Failed to read JS file '{}': {}", file_path, e))?;
+    
+    let mut dict = window_dict.borrow_mut();
+    let js_list = match dict.get_mut("_custom_js") {
+        Some(Value::List(l)) => l.data.clone(),
+        _ => return Err(anyhow::anyhow!("Window dict missing _custom_js")),
+    };
+    
+    js_list.borrow_mut().push(Value::Str(content));
+    
+    Ok(Value::None)
+}
+
+#[cfg(not(feature = "webviewtk"))]
+pub fn include_js_file_wrapper(_args: Vec<Value>) -> Result<Value> {
+    Err(anyhow::anyhow!("webviewtk feature not enabled"))
+}
+
+/// Include HTML file (inserted at top of body)
+#[cfg(feature = "webviewtk")]
+pub fn include_html_file_wrapper(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("include_html_file requires 2 arguments: window and file_path"));
+    }
+    
+    let window_dict = match &args[0] {
+        Value::Dict(d) => d.clone(),
+        _ => return Err(anyhow::anyhow!("First argument must be a Window dict")),
+    };
+    
+    let file_path = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(anyhow::anyhow!("Second argument must be a file path string")),
+    };
+    
+    // Read file content
+    let path = Path::new(file_path);
+    let content = fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("Failed to read HTML file '{}': {}", file_path, e))?;
+    
+    let mut dict = window_dict.borrow_mut();
+    if let Some(Value::Str(existing)) = dict.get_mut("_custom_html") {
+        existing.push_str(&content);
+    }
+    
+    Ok(Value::None)
+}
+
+#[cfg(not(feature = "webviewtk"))]
+pub fn include_html_file_wrapper(_args: Vec<Value>) -> Result<Value> {
+    Err(anyhow::anyhow!("webviewtk feature not enabled"))
+}
+
+/// Add custom CSS code
+#[cfg(feature = "webviewtk")]
+pub fn add_custom_css_wrapper(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("add_custom_css requires 2 arguments: window and css_code"));
+    }
+    
+    let window_dict = match &args[0] {
+        Value::Dict(d) => d.clone(),
+        _ => return Err(anyhow::anyhow!("First argument must be a Window dict")),
+    };
+    
+    let css_code = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(anyhow::anyhow!("Second argument must be a CSS code string")),
+    };
+    
+    let mut dict = window_dict.borrow_mut();
+    let css_list = match dict.get_mut("_custom_css") {
+        Some(Value::List(l)) => l.data.clone(),
+        _ => return Err(anyhow::anyhow!("Window dict missing _custom_css")),
+    };
+    
+    css_list.borrow_mut().push(Value::Str(css_code.clone()));
+    
+    Ok(Value::None)
+}
+
+#[cfg(not(feature = "webviewtk"))]
+pub fn add_custom_css_wrapper(_args: Vec<Value>) -> Result<Value> {
+    Err(anyhow::anyhow!("webviewtk feature not enabled"))
+}
+
+/// Add custom JavaScript code
+#[cfg(feature = "webviewtk")]
+pub fn add_custom_js_wrapper(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 2 {
+        return Err(anyhow::anyhow!("add_custom_js requires 2 arguments: window and js_code"));
+    }
+    
+    let window_dict = match &args[0] {
+        Value::Dict(d) => d.clone(),
+        _ => return Err(anyhow::anyhow!("First argument must be a Window dict")),
+    };
+    
+    let js_code = match &args[1] {
+        Value::Str(s) => s,
+        _ => return Err(anyhow::anyhow!("Second argument must be a JS code string")),
+    };
+    
+    let mut dict = window_dict.borrow_mut();
+    let js_list = match dict.get_mut("_custom_js") {
+        Some(Value::List(l)) => l.data.clone(),
+        _ => return Err(anyhow::anyhow!("Window dict missing _custom_js")),
+    };
+    
+    js_list.borrow_mut().push(Value::Str(js_code.clone()));
+    
+    Ok(Value::None)
+}
+
+#[cfg(not(feature = "webviewtk"))]
+pub fn add_custom_js_wrapper(_args: Vec<Value>) -> Result<Value> {
+    Err(anyhow::anyhow!("webviewtk feature not enabled"))
+}
+
+/// Register a Tauraro function as a backend command
+/// Usage: register_command(window, "command_name", tauraro_function)
+#[cfg(feature = "webviewtk")]
+pub fn register_command_wrapper(args: Vec<Value>) -> Result<Value> {
+    if args.len() < 3 {
+        return Err(anyhow::anyhow!("register_command requires 3 arguments: window, command_name, and function"));
+    }
+    
+    let window_dict = match &args[0] {
+        Value::Dict(d) => d.clone(),
+        _ => return Err(anyhow::anyhow!("First argument must be a Window dict")),
+    };
+    
+    let command_name = match &args[1] {
+        Value::Str(s) => s.clone(),
+        _ => return Err(anyhow::anyhow!("Second argument must be a command name string")),
+    };
+    
+    let function = args[2].clone();
+    
+    // Validate that it's a callable
+    match &function {
+        Value::Closure { .. } | Value::NativeFunction(_) => {},
+        _ => return Err(anyhow::anyhow!("Third argument must be a function or closure")),
+    }
+    
+    // Store the command in the window's command registry
+    let mut dict = window_dict.borrow_mut();
+    let commands_map = match dict.get_mut("_commands") {
+        Some(Value::Dict(d)) => d.clone(),
+        _ => {
+            // Create commands map if it doesn't exist
+            let new_map = Rc::new(RefCell::new(HashMap::new()));
+            dict.insert("_commands".to_string(), Value::Dict(new_map.clone()));
+            new_map
+        }
+    };
+    
+    commands_map.borrow_mut().insert(command_name.clone(), function);
+    
+    println!("✅ Registered Tauraro command: {}", command_name);
+    
+    Ok(Value::None)
+}
+
+#[cfg(not(feature = "webviewtk"))]
+pub fn register_command_wrapper(_args: Vec<Value>) -> Result<Value> {
+    Err(anyhow::anyhow!("webviewtk feature not enabled"))
+}
+

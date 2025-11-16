@@ -1,0 +1,216 @@
+# Test Tauraro closures as backend handlers
+from webviewtk import Window, register_command
+
+# Simple backend function
+def add_numbers(args):
+    a = args.get("a", 0)
+    b = args.get("b", 0)
+    result = a + b
+    print(f"Backend: Adding {a} + {b} = {result}")
+    return {"result": result, "operation": "addition"}
+
+# Create window with custom titlebar
+window = Window(
+    title="Closure Test",
+    width=600,
+    height=400,
+    native_titlebar=False
+)
+
+# Register backend command
+register_command(window, "addNumbers", add_numbers)
+
+# Simple HTML UI
+html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            margin: 0;
+        }
+        .titlebar {
+            -webkit-app-region: drag;
+            background: rgba(0, 0, 0, 0.3);
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .titlebar-title {
+            font-size: 14px;
+            font-weight: 500;
+            margin-left: 10px;
+        }
+        .titlebar-buttons {
+            -webkit-app-region: no-drag;
+            display: flex;
+            gap: 8px;
+        }
+        .titlebar-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .titlebar-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        .titlebar-btn.close:hover {
+            background: #e81123;
+        }
+        .content {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+            width: 100%;
+        }
+        h1 {
+            margin: 0 0 20px 0;
+            font-size: 28px;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            background: white;
+            color: #667eea;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            min-height: 50px;
+            display: none;
+        }
+        .success {
+            color: #4ade80;
+        }
+        .error {
+            color: #f87171;
+        }
+    </style>
+</head>
+<body>
+    <div class="titlebar">
+        <span class="titlebar-title">🧮 Closure Backend Test</span>
+        <div class="titlebar-buttons">
+            <button class="titlebar-btn minimize" onclick="window.ipc.postMessage('window:minimize')" title="Minimize">−</button>
+            <button class="titlebar-btn maximize" onclick="window.ipc.postMessage('window:maximize')" title="Maximize">□</button>
+            <button class="titlebar-btn close" onclick="window.ipc.postMessage('window:close')" title="Close">×</button>
+        </div>
+    </div>
+    
+    <div class="content">
+        <div class="container">
+            <h1>🧮 Tauraro Backend</h1>
+            <p>Testing Tauraro closures as backend handlers</p>
+            
+            <input type="number" id="numA" placeholder="Enter number A" value="5">
+            <input type="number" id="numB" placeholder="Enter number B" value="3">
+            
+            <button onclick="testBackend()">Calculate in Backend</button>
+            
+            <div id="result"></div>
+        </div>
+    </div>
+
+    <script>
+        async function testBackend() {
+            const numA = parseInt(document.getElementById('numA').value) || 0;
+            const numB = parseInt(document.getElementById('numB').value) || 0;
+            const resultDiv = document.getElementById('result');
+            
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '⏳ Calling Tauraro backend...';
+            
+            try {
+                console.log('Calling addNumbers with:', { a: numA, b: numB });
+                
+                const result = await window.invoke('addNumbers', { a: numA, b: numB });
+                
+                console.log('Result from backend:', result);
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        ✅ Success!<br>
+                        ${numA} + ${numB} = ${result.result}<br>
+                        Operation: ${result.operation}
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Backend error:', error);
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        ❌ Error: ${error}
+                    </div>
+                `;
+            }
+        }
+        
+        // Log when page loads
+        console.log('Page loaded! Click the button to test backend.');
+    </script>
+</body>
+</html>
+"""
+
+window._custom_html = html
+
+# Run the window
+from webviewtk import mount_and_run, CustomTitleBar
+
+ui = CustomTitleBar()
+mount_and_run(window, ui)

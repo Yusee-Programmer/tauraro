@@ -1,0 +1,41 @@
+"""
+WebViewTK Test 04: Row Layout
+Test horizontal layout with spacing
+"""
+
+from webviewtk import Window, Row, Container, Text, Center, EdgeInsets, mount_and_run
+
+# Create colored boxes in a row (max 4 kwargs per Container)
+ui = Center(
+    child=Row(
+        children=[
+            Container(
+                child=Text("Red", color="#ffffff"),
+                padding="20px",
+                background_color="#ef4444",
+                width=100.0
+            ),
+            Container(
+                child=Text("Green", color="#ffffff"),
+                padding="20px",
+                background_color="#10b981",
+                width=100.0
+            ),
+            Container(
+                child=Text("Blue", color="#ffffff"),
+                padding="20px",
+                background_color="#3b82f6",
+                width=100.0
+            )
+        ],
+        spacing=20.0
+    )
+)
+
+window = Window(
+    title="Test 04: Row Layout",
+    width=800,
+    height=600
+)
+
+mount_and_run(window, ui)

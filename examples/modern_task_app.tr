@@ -1,0 +1,296 @@
+from webviewtk import Window, Container, Column, Row, Text, Center, mount_and_run
+
+# Modern Task Management App with Clean UI
+
+def create_header():
+    return Container(
+        child=Row(
+            children=[
+                Container(
+                    child=Text(
+                        "📋",
+                        font_size="32px"
+                    ),
+                    margin="0 15px 0 0"
+                ),
+                Column(
+                    children=[
+                        Text(
+                            "TaskFlow",
+                            font_size="28px",
+                            font_weight="700",
+                            color="#1e293b"
+                        ),
+                        Text(
+                            "Organize your day efficiently",
+                            font_size="13px",
+                            color="#64748b",
+                            margin="4px 0 0 0"
+                        )
+                    ],
+                    cross_axis_alignment="start"
+                )
+            ],
+            cross_axis_alignment="center"
+        ),
+        padding="30px",
+        background_color="#ffffff",
+        border_bottom="1px solid #e2e8f0"
+    )
+
+def create_stats_card(title, count, color, icon):
+    return Container(
+        child=Column(
+            children=[
+                Text(
+                    icon,
+                    font_size="28px",
+                    margin="0 0 12px 0"
+                ),
+                Text(
+                    str(count),
+                    font_size="36px",
+                    font_weight="700",
+                    color=color
+                ),
+                Text(
+                    title,
+                    font_size="13px",
+                    color="#64748b",
+                    margin="8px 0 0 0"
+                )
+            ],
+            cross_axis_alignment="center"
+        ),
+        padding="25px",
+        background_color="#ffffff",
+        border_radius="16px",
+        box_shadow="0 1px 3px rgba(0,0,0,0.1)",
+        flex="1"
+    )
+
+def create_task_item(title, status, priority):
+    status_colors = {
+        "completed": "#10b981",
+        "in_progress": "#f59e0b",
+        "pending": "#6366f1"
+    }
+    
+    priority_badges = {
+        "high": "🔴 High",
+        "medium": "🟡 Medium",
+        "low": "🟢 Low"
+    }
+    
+    return Container(
+        child=Row(
+            children=[
+                Container(
+                    child=Container(
+                        width="6px",
+                        height="100%",
+                        background_color=status_colors.get(status, "#6366f1"),
+                        border_radius="3px"
+                    ),
+                    margin="0 20px 0 0"
+                ),
+                Column(
+                    children=[
+                        Text(
+                            title,
+                            font_size="16px",
+                            font_weight="600",
+                            color="#1e293b"
+                        ),
+                        Row(
+                            children=[
+                                Container(
+                                    child=Text(
+                                        priority_badges.get(priority, "Medium"),
+                                        font_size="11px",
+                                        color="#64748b",
+                                        font_weight="500"
+                                    ),
+                                    padding="4px 10px",
+                                    background_color="#f1f5f9",
+                                    border_radius="12px",
+                                    margin="0 10px 0 0"
+                                ),
+                                Text(
+                                    status.replace("_", " ").title(),
+                                    font_size="12px",
+                                    color=status_colors.get(status, "#6366f1"),
+                                    font_weight="500"
+                                )
+                            ],
+                            cross_axis_alignment="center",
+                            margin="8px 0 0 0"
+                        )
+                    ],
+                    cross_axis_alignment="start",
+                    flex="1"
+                )
+            ],
+            cross_axis_alignment="center"
+        ),
+        padding="20px",
+        background_color="#ffffff",
+        border_radius="12px",
+        margin="0 0 12px 0",
+        box_shadow="0 1px 2px rgba(0,0,0,0.05)"
+    )
+
+def create_sidebar():
+    menu_items = [
+        ("📊", "Dashboard", True),
+        ("✅", "My Tasks", False),
+        ("📅", "Calendar", False),
+        ("👥", "Team", False),
+        ("⚙️", "Settings", False)
+    ]
+    
+    items = []
+    for icon, label, active in menu_items:
+        items.append(
+            Container(
+                child=Row(
+                    children=[
+                        Text(
+                            icon,
+                            font_size="20px",
+                            margin="0 12px 0 0"
+                        ),
+                        Text(
+                            label,
+                            font_size="15px",
+                            font_weight="600" if active else "500",
+                            color="#ffffff" if active else "#cbd5e1"
+                        )
+                    ],
+                    cross_axis_alignment="center"
+                ),
+                padding="14px 20px",
+                background_color="#6366f1" if active else "transparent",
+                border_radius="10px",
+                margin="0 0 8px 0"
+            )
+        )
+    
+    return Container(
+        child=Column(
+            children=items,
+            cross_axis_alignment="stretch"
+        ),
+        width="240px",
+        padding="20px",
+        background_color="#1e293b",
+        border_right="1px solid #334155"
+    )
+
+# Main UI Layout
+ui = Column(
+    children=[
+        create_header(),
+        Row(
+            children=[
+                create_sidebar(),
+                Container(
+                    child=Column(
+                        children=[
+                            # Stats Section
+                            Container(
+                                child=Row(
+                                    children=[
+                                        create_stats_card("Total Tasks", 24, "#6366f1", "📝"),
+                                        create_stats_card("Completed", 18, "#10b981", "✅"),
+                                        create_stats_card("In Progress", 4, "#f59e0b", "⏳"),
+                                        create_stats_card("Pending", 2, "#ef4444", "⏸️")
+                                    ],
+                                    gap="20px"
+                                ),
+                                margin="0 0 30px 0"
+                            ),
+                            # Tasks Section
+                            Container(
+                                child=Column(
+                                    children=[
+                                        Row(
+                                            children=[
+                                                Text(
+                                                    "Recent Tasks",
+                                                    font_size="20px",
+                                                    font_weight="700",
+                                                    color="#1e293b"
+                                                ),
+                                                Container(
+                                                    child=Text(
+                                                        "+ New Task",
+                                                        font_size="14px",
+                                                        font_weight="600",
+                                                        color="#ffffff"
+                                                    ),
+                                                    padding="10px 20px",
+                                                    background_color="#6366f1",
+                                                    border_radius="8px"
+                                                )
+                                            ],
+                                            main_axis_alignment="space-between",
+                                            cross_axis_alignment="center",
+                                            margin="0 0 20px 0"
+                                        ),
+                                        create_task_item(
+                                            "Design new landing page",
+                                            "in_progress",
+                                            "high"
+                                        ),
+                                        create_task_item(
+                                            "Review pull requests",
+                                            "completed",
+                                            "medium"
+                                        ),
+                                        create_task_item(
+                                            "Update documentation",
+                                            "pending",
+                                            "low"
+                                        ),
+                                        create_task_item(
+                                            "Fix navigation bug",
+                                            "in_progress",
+                                            "high"
+                                        ),
+                                        create_task_item(
+                                            "Team meeting preparation",
+                                            "completed",
+                                            "medium"
+                                        )
+                                    ],
+                                    cross_axis_alignment="stretch"
+                                ),
+                                padding="25px",
+                                background_color="#ffffff",
+                                border_radius="16px",
+                                box_shadow="0 1px 3px rgba(0,0,0,0.1)"
+                            )
+                        ],
+                        cross_axis_alignment="stretch"
+                    ),
+                    padding="30px",
+                    background_color="#f8fafc",
+                    flex="1"
+                )
+            ],
+            cross_axis_alignment="stretch",
+            flex="1"
+        )
+    ],
+    cross_axis_alignment="stretch"
+)
+
+window = Window(
+    title="TaskFlow - Modern Task Manager",
+    width=1200,
+    height=800,
+    resizable=True
+)
+
+mount_and_run(window, ui)

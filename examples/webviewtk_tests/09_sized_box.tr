@@ -1,0 +1,71 @@
+"""
+WebViewTK Test 09: SizedBox
+Test SizedBox widget for fixed dimensions and spacing
+"""
+
+from webviewtk import Window, Column, Row, SizedBox, Container, Text, Center, EdgeInsets, mount_and_run
+
+# Use SizedBox for fixed sizes and spacing
+ui = Center(
+    child=Column(
+        children=[
+            Text("SizedBox Tests", font_size=24.0, font_weight="bold"),
+            
+            SizedBox(height=30.0),  # Vertical spacing
+            
+            Text("Fixed Size Boxes:"),
+            
+            SizedBox(height=10.0),
+            
+            Row(
+                children=[
+                    SizedBox(
+                        width=100.0,
+                        height=100.0,
+                        child=Container(
+                            child=Text("100x100", color="#ffffff"),
+                            background_color="#ef4444"
+                        )
+                    ),
+                    
+                    SizedBox(width=20.0),  # Horizontal spacing
+                    
+                    SizedBox(
+                        width=150.0,
+                        height=100.0,
+                        child=Container(
+                            child=Text("150x100", color="#ffffff"),
+                            background_color="#10b981"
+                        )
+                    ),
+                    
+                    SizedBox(width=20.0),
+                    
+                    SizedBox(
+                        width=100.0,
+                        height=150.0,
+                        child=Container(
+                            child=Text("100x150", color="#ffffff"),
+                            background_color="#3b82f6"
+                        )
+                    )
+                ]
+            ),
+            
+            SizedBox(height=30.0),
+            
+            Text("Empty SizedBox for spacing:"),
+            SizedBox(height=50.0),
+            Text("50px gap above this text")
+        ],
+        cross_axis_alignment="center"
+    )
+)
+
+window = Window(
+    title="Test 09: SizedBox",
+    width=800,
+    height=600
+)
+
+mount_and_run(window, ui)
