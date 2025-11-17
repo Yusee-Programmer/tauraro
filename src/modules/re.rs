@@ -140,7 +140,7 @@ fn re_compile(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "Pattern".to_string(),
-        fields: Rc::new(pattern_obj), // Wrap with Rc::new
+        fields: Rc::new(RefCell::new(pattern_obj)), // Wrap with Rc::new
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Pattern".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Pattern".to_string(), "object".to_string()]),
@@ -516,7 +516,7 @@ fn create_match_object_from_match(_regex: &Regex, _string: &str, _mat: Match) ->
     
     Ok(Value::Object {
         class_name: "Match".to_string(),
-        fields: Rc::new(match_obj), // Wrap with Rc::new
+        fields: Rc::new(RefCell::new(match_obj)), // Wrap with Rc::new
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Match".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Match".to_string(), "object".to_string()]),
@@ -539,7 +539,7 @@ fn create_match_object(pattern: &str, string: &str, start: usize) -> Result<Valu
     
     Ok(Value::Object {
         class_name: "Match".to_string(),
-        fields: Rc::new(match_obj),
+        fields: Rc::new(RefCell::new(match_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Match".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Match".to_string(), "object".to_string()]),

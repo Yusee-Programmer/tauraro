@@ -66,7 +66,7 @@ fn abstractmethod_builtin(args: Vec<Value>) -> Result<Value> {
 
             Ok(Value::Object {
                 class_name: "abstractmethod".to_string(),
-                fields: std::rc::Rc::new(fields),
+                fields: std::rc::Rc::new(RefCell::new(fields)),
                 class_methods: HashMap::new(),
                 base_object: crate::base_object::BaseObject::new("abstractmethod".to_string(), vec!["object".to_string()]),
                 mro: crate::base_object::MRO::from_linearization(vec!["abstractmethod".to_string(), "object".to_string()]),

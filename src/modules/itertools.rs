@@ -74,7 +74,7 @@ fn itertools_count(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "count".to_string(),
-        fields: Rc::new(count_obj),
+        fields: Rc::new(RefCell::new(count_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("count".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["count".to_string(), "object".to_string()]),
@@ -131,7 +131,7 @@ fn itertools_cycle(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "cycle".to_string(),
-        fields: Rc::new(cycle_obj),
+        fields: Rc::new(RefCell::new(cycle_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("cycle".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["cycle".to_string(), "object".to_string()]),
@@ -204,7 +204,7 @@ fn itertools_repeat(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "repeat".to_string(),
-        fields: Rc::new(repeat_obj),
+        fields: Rc::new(RefCell::new(repeat_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("repeat".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["repeat".to_string(), "object".to_string()]),

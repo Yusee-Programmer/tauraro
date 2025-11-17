@@ -6,6 +6,7 @@ use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::fs::OpenOptions;
+use std::cell::RefCell;
 
 // Import HPList
 use crate::modules::hplist::HPList;
@@ -109,7 +110,7 @@ fn io_open(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "TextIOWrapper".to_string(),
-        fields: Rc::new(file_obj),
+        fields: Rc::new(RefCell::new(file_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("TextIOWrapper".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["TextIOWrapper".to_string(), "object".to_string()]),
@@ -327,7 +328,7 @@ fn create_string_io(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "StringIO".to_string(),
-        fields: Rc::new(string_io),
+        fields: Rc::new(RefCell::new(string_io)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("StringIO".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["StringIO".to_string(), "object".to_string()]),
@@ -408,7 +409,7 @@ fn create_bytes_io(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "BytesIO".to_string(),
-        fields: Rc::new(bytes_io),
+        fields: Rc::new(RefCell::new(bytes_io)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("BytesIO".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["BytesIO".to_string(), "object".to_string()]),

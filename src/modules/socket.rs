@@ -3,6 +3,7 @@ use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::net::Ipv4Addr;
+use std::cell::RefCell;
 
 /// Create the socket module
 pub fn create_socket_module() -> Value {
@@ -125,7 +126,7 @@ fn socket_socket(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "socket".to_string(),
-        fields: Rc::new(socket_obj),
+        fields: Rc::new(RefCell::new(socket_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("socket".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["socket".to_string(), "object".to_string()]),
@@ -452,7 +453,7 @@ fn socket_error(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "error".to_string(),
-        fields: Rc::new(error),
+        fields: Rc::new(RefCell::new(error)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("error".to_string(), vec!["Exception".to_string(), "BaseException".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["error".to_string(), "Exception".to_string(), "BaseException".to_string(), "object".to_string()]),
@@ -476,7 +477,7 @@ fn socket_gaierror(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "gaierror".to_string(),
-        fields: Rc::new(error),
+        fields: Rc::new(RefCell::new(error)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("gaierror".to_string(), vec!["error".to_string(), "Exception".to_string(), "BaseException".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["gaierror".to_string(), "error".to_string(), "Exception".to_string(), "BaseException".to_string(), "object".to_string()]),
@@ -500,7 +501,7 @@ fn socket_herror(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "herror".to_string(),
-        fields: Rc::new(error),
+        fields: Rc::new(RefCell::new(error)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("herror".to_string(), vec!["error".to_string(), "Exception".to_string(), "BaseException".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["herror".to_string(), "error".to_string(), "Exception".to_string(), "BaseException".to_string(), "object".to_string()]),
@@ -524,7 +525,7 @@ fn socket_timeout(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "timeout".to_string(),
-        fields: Rc::new(error),
+        fields: Rc::new(RefCell::new(error)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("timeout".to_string(), vec!["error".to_string(), "Exception".to_string(), "BaseException".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["timeout".to_string(), "error".to_string(), "Exception".to_string(), "BaseException".to_string(), "object".to_string()]),

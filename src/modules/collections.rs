@@ -211,7 +211,7 @@ pub fn create_collections_module() -> Value {
         if args.is_empty() {
             Ok(Value::Object {
                 class_name: "HighPerfList".to_string(),
-                fields: Rc::new(HashMap::new()),
+                fields: Rc::new(RefCell::new(HashMap::new())),
                 class_methods: HashMap::new(),
                 base_object: crate::base_object::BaseObject::new("HighPerfList".to_string(), vec!["object".to_string()]),
                 mro: crate::base_object::MRO::from_linearization(vec!["HighPerfList".to_string(), "object".to_string()]),
@@ -284,7 +284,7 @@ fn counter_builtin(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "Counter".to_string(),
-        fields: Rc::new(counts),
+        fields: Rc::new(RefCell::new(counts)),
         class_methods,
         base_object: crate::base_object::BaseObject::new("Counter".to_string(), vec!["dict".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Counter".to_string(), "dict".to_string(), "object".to_string()]),
@@ -319,7 +319,7 @@ fn counter_most_common(args: Vec<Value>) -> Result<Value> {
 
     // Convert to vector of (key, count) pairs
     let mut items: Vec<(String, i64)> = Vec::new();
-    for (key, value) in fields.iter() {
+    for (key, value) in fields.borrow().iter() {
         if let Value::Int(count) = value {
             items.push((key.clone(), *count));
         }
@@ -361,7 +361,7 @@ fn counter_elements(args: Vec<Value>) -> Result<Value> {
 
     // Create a list with elements repeated according to their counts
     let mut result = Vec::new();
-    for (key, value) in fields.iter() {
+    for (key, value) in fields.borrow().iter() {
         if let Value::Int(count) = value {
             for _ in 0..*count {
                 result.push(Value::Str(key.clone()));
@@ -493,7 +493,7 @@ fn defaultdict_builtin(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "defaultdict".to_string(),
-        fields: Rc::new(fields),
+        fields: Rc::new(RefCell::new(fields)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("defaultdict".to_string(), vec!["dict".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["defaultdict".to_string(), "dict".to_string(), "object".to_string()]),
@@ -546,7 +546,7 @@ fn deque_builtin(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "deque".to_string(),
-        fields: Rc::new(fields),
+        fields: Rc::new(RefCell::new(fields)),
         class_methods,
         base_object: crate::base_object::BaseObject::new("deque".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["deque".to_string(), "object".to_string()]),
@@ -569,7 +569,7 @@ fn deque_append(args: Vec<Value>) -> Result<Value> {
     };
 
     // Get the items list
-    let items = match fields.get("items") {
+    let items = match fields.borrow().get("items") {
         Some(Value::List(list)) => list,
         _ => return Err(anyhow::anyhow!("Invalid deque items")),
     };
@@ -614,7 +614,7 @@ fn deque_appendleft(args: Vec<Value>) -> Result<Value> {
     };
 
     // Get the items list
-    let items = match fields.get("items") {
+    let items = match fields.borrow().get("items") {
         Some(Value::List(list)) => list,
         _ => return Err(anyhow::anyhow!("Invalid deque items")),
     };
@@ -658,7 +658,7 @@ fn deque_pop(args: Vec<Value>) -> Result<Value> {
     };
 
     // Get the items list
-    let items = match fields.get("items") {
+    let items = match fields.borrow().get("items") {
         Some(Value::List(list)) => list,
         _ => return Err(anyhow::anyhow!("Invalid deque items")),
     };
@@ -694,7 +694,7 @@ fn deque_popleft(args: Vec<Value>) -> Result<Value> {
     };
 
     // Get the items list
-    let items = match fields.get("items") {
+    let items = match fields.borrow().get("items") {
         Some(Value::List(list)) => list,
         _ => return Err(anyhow::anyhow!("Invalid deque items")),
     };
@@ -752,7 +752,7 @@ fn deque_extend(args: Vec<Value>) -> Result<Value> {
     };
 
     // Get the items list
-    let items = match fields.get("items") {
+    let items = match fields.borrow().get("items") {
         Some(Value::List(list)) => list,
         _ => return Err(anyhow::anyhow!("Invalid deque items")),
     };
@@ -811,7 +811,7 @@ fn deque_extendleft(args: Vec<Value>) -> Result<Value> {
     };
 
     // Get the items list
-    let items = match fields.get("items") {
+    let items = match fields.borrow().get("items") {
         Some(Value::List(list)) => list,
         _ => return Err(anyhow::anyhow!("Invalid deque items")),
     };
@@ -891,7 +891,7 @@ fn deque_rotate(args: Vec<Value>) -> Result<Value> {
     };
 
     // Get the items list
-    let items = match fields.get("items") {
+    let items = match fields.borrow().get("items") {
         Some(Value::List(list)) => list,
         _ => return Err(anyhow::anyhow!("Invalid deque items")),
     };
@@ -980,19 +980,19 @@ fn deque_iter(args: Vec<Value>) -> Result<Value> {
     };
 
     // Get the items list
-    let items = match fields.get("items") {
+    let items = match fields.borrow().get("items") {
         Some(Value::List(list)) => list,
         _ => return Err(anyhow::anyhow!("Invalid deque items")),
     };
 
     // Create an iterator object with the items and starting index
     let mut iterator_fields = HashMap::new();
-    iterator_fields.insert("items".to_string(), Value::List(items.clone()));
-    iterator_fields.insert("index".to_string(), Value::Int(0));
+    iterator_fields.borrow_mut().insert("items".to_string(), Value::List(items.clone()));
+    iterator_fields.borrow_mut().insert("index".to_string(), Value::Int(0));
 
     Ok(Value::Object {
         class_name: "deque_iterator".to_string(),
-        fields: Rc::new(iterator_fields),
+        fields: Rc::new(RefCell::new(iterator_fields)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("deque_iterator".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["deque_iterator".to_string(), "object".to_string()]),
@@ -1014,7 +1014,7 @@ fn deque_next(args: Vec<Value>) -> Result<Value> {
     };
 
     // Get the items list
-    let items = match fields.get("items") {
+    let items = match fields.borrow().get("items") {
         Some(Value::List(list)) => list,
         _ => return Err(anyhow::anyhow!("Invalid iterator items")),
     };

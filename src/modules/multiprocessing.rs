@@ -6,6 +6,7 @@ use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::cell::RefCell;
 
 /// Create the multiprocessing module object
 pub fn create_multiprocessing_module() -> Value {

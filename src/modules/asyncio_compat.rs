@@ -1,6 +1,7 @@
 use crate::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use crate::modules::hplist::HPList;
 // use std::sync::{Arc, Mutex};
 
@@ -262,7 +263,7 @@ extern "C" fn get_event_loop(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "EventLoop".to_string(),
-        fields: Rc::new(loop_obj),
+        fields: Rc::new(RefCell::new(loop_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("EventLoop".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["EventLoop".to_string(), "object".to_string()])
@@ -344,7 +345,7 @@ extern "C" fn create_task(_args: *const Value, _argc: usize) -> Value {
         
         Value::Object {
             class_name: "Task".to_string(),
-            fields: Rc::new(task_obj),
+            fields: Rc::new(RefCell::new(task_obj)),
             class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new("Task".to_string(), vec!["object".to_string()]),
             mro: crate::base_object::MRO::from_linearization(vec!["Task".to_string(), "object".to_string()])
@@ -387,7 +388,7 @@ extern "C" fn asyncio_sleep(_args: *const Value, _argc: usize) -> Value {
             sleep_obj.insert("__await__".to_string(), Value::NativeFunction(sleep_await_wrapper));
             Value::Object {
                 class_name: "Sleep".to_string(),
-                fields: Rc::new(sleep_obj),
+                fields: Rc::new(RefCell::new(sleep_obj)),
                 class_methods: HashMap::new(),
                 base_object: crate::base_object::BaseObject::new("Sleep".to_string(), vec!["object".to_string()]),
                 mro: crate::base_object::MRO::from_linearization(vec!["Sleep".to_string(), "object".to_string()])
@@ -449,7 +450,7 @@ extern "C" fn create_lock(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "Lock".to_string(),
-        fields: Rc::new(lock_obj),
+        fields: Rc::new(RefCell::new(lock_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Lock".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Lock".to_string(), "object".to_string()])
@@ -465,7 +466,7 @@ extern "C" fn create_event(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "Event".to_string(),
-        fields: Rc::new(event_obj),
+        fields: Rc::new(RefCell::new(event_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Event".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Event".to_string(), "object".to_string()])
@@ -479,7 +480,7 @@ extern "C" fn create_semaphore(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "Semaphore".to_string(),
-        fields: Rc::new(semaphore_obj),
+        fields: Rc::new(RefCell::new(semaphore_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Semaphore".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Semaphore".to_string(), "object".to_string()])
@@ -496,7 +497,7 @@ extern "C" fn create_queue(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
         class_name: "Queue".to_string(),
-        fields: Rc::new(queue_obj),
+        fields: Rc::new(RefCell::new(queue_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Queue".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Queue".to_string(), "object".to_string()])
@@ -592,7 +593,7 @@ extern "C" fn cancelled_error(_args: *const Value, _argc: usize) -> Value {
     
     Value::Object {
             class_name: "CancelledError".to_string(),
-            fields: Rc::new(error_obj),
+            fields: Rc::new(RefCell::new(error_obj)),
             class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new("CancelledError".to_string(), vec!["Exception".to_string(), "object".to_string()]),
             mro: crate::base_object::MRO::from_linearization(vec!["CancelledError".to_string(), "Exception".to_string(), "object".to_string()])

@@ -70,25 +70,21 @@ fn test_arithmetic_operations() {
 #[test]
 fn test_for_loop_with_range() {
     let program = Program {
-        statements: vec![
-            Statement::For {
-                variable: "i".to_string(),
-                variables: vec![],
-                iterable: Expr::Call {
-                    func: Box::new(Expr::Identifier("range".to_string())),
-                    args: vec![Expr::Literal(Literal::Int(10))],
-                    kwargs: vec![],
-                },
-                body: vec![
-                    Statement::Expression(Expr::Call {
-                        func: Box::new(Expr::Identifier("print".to_string())),
-                        args: vec![Expr::Identifier("i".to_string())],
-                        kwargs: vec![],
-                    }),
-                ],
-                else_branch: None,
+        statements: vec![Statement::For {
+            variable: "i".to_string(),
+            variables: vec![],
+            iterable: Expr::Call {
+                func: Box::new(Expr::Identifier("range".to_string())),
+                args: vec![Expr::Literal(Literal::Int(10))],
+                kwargs: vec![],
             },
-        ],
+            body: vec![Statement::Expression(Expr::Call {
+                func: Box::new(Expr::Identifier("print".to_string())),
+                args: vec![Expr::Identifier("i".to_string())],
+                kwargs: vec![],
+            })],
+            else_branch: None,
+        }],
     };
 
     let mut transpiler = OptimizedNativeTranspiler::new();
@@ -116,21 +112,17 @@ fn test_if_statement() {
                     ops: vec![CompareOp::Gt],
                     comparators: vec![Expr::Literal(Literal::Int(0))],
                 },
-                then_branch: vec![
-                    Statement::Expression(Expr::Call {
-                        func: Box::new(Expr::Identifier("print".to_string())),
-                        args: vec![Expr::Literal(Literal::String("positive".to_string()))],
-                        kwargs: vec![],
-                    }),
-                ],
+                then_branch: vec![Statement::Expression(Expr::Call {
+                    func: Box::new(Expr::Identifier("print".to_string())),
+                    args: vec![Expr::Literal(Literal::String("positive".to_string()))],
+                    kwargs: vec![],
+                })],
                 elif_branches: vec![],
-                else_branch: Some(vec![
-                    Statement::Expression(Expr::Call {
-                        func: Box::new(Expr::Identifier("print".to_string())),
-                        args: vec![Expr::Literal(Literal::String("negative".to_string()))],
-                        kwargs: vec![],
-                    }),
-                ]),
+                else_branch: Some(vec![Statement::Expression(Expr::Call {
+                    func: Box::new(Expr::Identifier("print".to_string())),
+                    args: vec![Expr::Literal(Literal::String("negative".to_string()))],
+                    kwargs: vec![],
+                })]),
             },
         ],
     };
@@ -160,17 +152,15 @@ fn test_while_loop() {
                     ops: vec![CompareOp::Lt],
                     comparators: vec![Expr::Literal(Literal::Int(5))],
                 },
-                body: vec![
-                    Statement::SubscriptAssignment {
-                        object: Expr::Identifier("count".to_string()),
-                        index: Expr::Literal(Literal::Int(0)),
-                        value: Expr::BinaryOp {
-                            left: Box::new(Expr::Identifier("count".to_string())),
-                            op: BinaryOp::Add,
-                            right: Box::new(Expr::Literal(Literal::Int(1))),
-                        },
+                body: vec![Statement::SubscriptAssignment {
+                    object: Expr::Identifier("count".to_string()),
+                    index: Expr::Literal(Literal::Int(0)),
+                    value: Expr::BinaryOp {
+                        left: Box::new(Expr::Identifier("count".to_string())),
+                        op: BinaryOp::Add,
+                        right: Box::new(Expr::Literal(Literal::Int(1))),
                     },
-                ],
+                }],
                 else_branch: None,
             },
         ],
@@ -188,36 +178,32 @@ fn test_while_loop() {
 #[test]
 fn test_function_definition() {
     let program = Program {
-        statements: vec![
-            Statement::FunctionDef {
-                name: "add".to_string(),
-                params: vec![
-                    Param {
-                        name: "a".to_string(),
-                        type_annotation: Some(Type::Simple("int".to_string())),
-                        default: None,
-                        kind: ParamKind::Positional,
-                    },
-                    Param {
-                        name: "b".to_string(),
-                        type_annotation: Some(Type::Simple("int".to_string())),
-                        default: None,
-                        kind: ParamKind::Positional,
-                    },
-                ],
-                return_type: Some(Type::Simple("int".to_string())),
-                body: vec![
-                    Statement::Return(Some(Expr::BinaryOp {
-                        left: Box::new(Expr::Identifier("a".to_string())),
-                        op: BinaryOp::Add,
-                        right: Box::new(Expr::Identifier("b".to_string())),
-                    })),
-                ],
-                is_async: false,
-                decorators: vec![],
-                docstring: None,
-            },
-        ],
+        statements: vec![Statement::FunctionDef {
+            name: "add".to_string(),
+            params: vec![
+                Param {
+                    name: "a".to_string(),
+                    type_annotation: Some(Type::Simple("int".to_string())),
+                    default: None,
+                    kind: ParamKind::Positional,
+                },
+                Param {
+                    name: "b".to_string(),
+                    type_annotation: Some(Type::Simple("int".to_string())),
+                    default: None,
+                    kind: ParamKind::Positional,
+                },
+            ],
+            return_type: Some(Type::Simple("int".to_string())),
+            body: vec![Statement::Return(Some(Expr::BinaryOp {
+                left: Box::new(Expr::Identifier("a".to_string())),
+                op: BinaryOp::Add,
+                right: Box::new(Expr::Identifier("b".to_string())),
+            }))],
+            is_async: false,
+            decorators: vec![],
+            docstring: None,
+        }],
     };
 
     let mut transpiler = OptimizedNativeTranspiler::new();
@@ -268,45 +254,41 @@ fn test_type_conversions() {
 #[test]
 fn test_class_definition() {
     let program = Program {
-        statements: vec![
-            Statement::ClassDef {
-                name: "Point".to_string(),
-                bases: vec![],
-                body: vec![
-                    Statement::FunctionDef {
-                        name: "__init__".to_string(),
-                        params: vec![
-                            Param {
-                                name: "self".to_string(),
-                                type_annotation: None,
-                                default: None,
-                                kind: ParamKind::Positional,
-                            },
-                            Param {
-                                name: "x".to_string(),
-                                type_annotation: Some(Type::Simple("int".to_string())),
-                                default: None,
-                                kind: ParamKind::Positional,
-                            },
-                            Param {
-                                name: "y".to_string(),
-                                type_annotation: Some(Type::Simple("int".to_string())),
-                                default: None,
-                                kind: ParamKind::Positional,
-                            },
-                        ],
-                        return_type: None,
-                        body: vec![Statement::Pass],
-                        is_async: false,
-                        decorators: vec![],
-                        docstring: None,
+        statements: vec![Statement::ClassDef {
+            name: "Point".to_string(),
+            bases: vec![],
+            body: vec![Statement::FunctionDef {
+                name: "__init__".to_string(),
+                params: vec![
+                    Param {
+                        name: "self".to_string(),
+                        type_annotation: None,
+                        default: None,
+                        kind: ParamKind::Positional,
+                    },
+                    Param {
+                        name: "x".to_string(),
+                        type_annotation: Some(Type::Simple("int".to_string())),
+                        default: None,
+                        kind: ParamKind::Positional,
+                    },
+                    Param {
+                        name: "y".to_string(),
+                        type_annotation: Some(Type::Simple("int".to_string())),
+                        default: None,
+                        kind: ParamKind::Positional,
                     },
                 ],
+                return_type: None,
+                body: vec![Statement::Pass],
+                is_async: false,
                 decorators: vec![],
-                metaclass: None,
                 docstring: None,
-            },
-        ],
+            }],
+            decorators: vec![],
+            metaclass: None,
+            docstring: None,
+        }],
     };
 
     let mut transpiler = OptimizedNativeTranspiler::new();
@@ -397,13 +379,11 @@ fn test_boolean_operations() {
             },
             Statement::If {
                 condition: Expr::Identifier("flag".to_string()),
-                then_branch: vec![
-                    Statement::Expression(Expr::Call {
-                        func: Box::new(Expr::Identifier("print".to_string())),
-                        args: vec![Expr::Literal(Literal::String("flag is true".to_string()))],
-                        kwargs: vec![],
-                    }),
-                ],
+                then_branch: vec![Statement::Expression(Expr::Call {
+                    func: Box::new(Expr::Identifier("print".to_string())),
+                    args: vec![Expr::Literal(Literal::String("flag is true".to_string()))],
+                    kwargs: vec![],
+                })],
                 elif_branches: vec![],
                 else_branch: None,
             },
@@ -423,31 +403,27 @@ fn test_boolean_operations() {
 #[test]
 fn test_list_comprehension() {
     let program = Program {
-        statements: vec![
-            Statement::VariableDef {
-                name: "squares".to_string(),
-                type_annotation: None,
-                value: Some(Expr::ListComp {
-                    element: Box::new(Expr::BinaryOp {
-                        left: Box::new(Expr::Identifier("x".to_string())),
-                        op: BinaryOp::Mul,
-                        right: Box::new(Expr::Identifier("x".to_string())),
-                    }),
-                    generators: vec![
-                        Comprehension {
-                            target: "x".to_string(),
-                            iter: Expr::Call {
-                                func: Box::new(Expr::Identifier("range".to_string())),
-                                args: vec![Expr::Literal(Literal::Int(5))],
-                                kwargs: vec![],
-                            },
-                            ifs: vec![],
-                            is_async: false,
-                        },
-                    ],
+        statements: vec![Statement::VariableDef {
+            name: "squares".to_string(),
+            type_annotation: None,
+            value: Some(Expr::ListComp {
+                element: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Identifier("x".to_string())),
+                    op: BinaryOp::Mul,
+                    right: Box::new(Expr::Identifier("x".to_string())),
                 }),
-            },
-        ],
+                generators: vec![Comprehension {
+                    target: "x".to_string(),
+                    iter: Expr::Call {
+                        func: Box::new(Expr::Identifier("range".to_string())),
+                        args: vec![Expr::Literal(Literal::Int(5))],
+                        kwargs: vec![],
+                    },
+                    ifs: vec![],
+                    is_async: false,
+                }],
+            }),
+        }],
     };
 
     let mut transpiler = OptimizedNativeTranspiler::new();
@@ -465,37 +441,31 @@ fn test_list_comprehension() {
 #[test]
 fn test_list_comprehension_with_filter() {
     let program = Program {
-        statements: vec![
-            Statement::VariableDef {
-                name: "evens".to_string(),
-                type_annotation: None,
-                value: Some(Expr::ListComp {
-                    element: Box::new(Expr::Identifier("n".to_string())),
-                    generators: vec![
-                        Comprehension {
-                            target: "n".to_string(),
-                            iter: Expr::Call {
-                                func: Box::new(Expr::Identifier("range".to_string())),
-                                args: vec![Expr::Literal(Literal::Int(10))],
-                                kwargs: vec![],
-                            },
-                            ifs: vec![
-                                Expr::Compare {
-                                    left: Box::new(Expr::BinaryOp {
-                                        left: Box::new(Expr::Identifier("n".to_string())),
-                                        op: BinaryOp::Mod,
-                                        right: Box::new(Expr::Literal(Literal::Int(2))),
-                                    }),
-                                    ops: vec![CompareOp::Eq],
-                                    comparators: vec![Expr::Literal(Literal::Int(0))],
-                                },
-                            ],
-                            is_async: false,
-                        },
-                    ],
-                }),
-            },
-        ],
+        statements: vec![Statement::VariableDef {
+            name: "evens".to_string(),
+            type_annotation: None,
+            value: Some(Expr::ListComp {
+                element: Box::new(Expr::Identifier("n".to_string())),
+                generators: vec![Comprehension {
+                    target: "n".to_string(),
+                    iter: Expr::Call {
+                        func: Box::new(Expr::Identifier("range".to_string())),
+                        args: vec![Expr::Literal(Literal::Int(10))],
+                        kwargs: vec![],
+                    },
+                    ifs: vec![Expr::Compare {
+                        left: Box::new(Expr::BinaryOp {
+                            left: Box::new(Expr::Identifier("n".to_string())),
+                            op: BinaryOp::Mod,
+                            right: Box::new(Expr::Literal(Literal::Int(2))),
+                        }),
+                        ops: vec![CompareOp::Eq],
+                        comparators: vec![Expr::Literal(Literal::Int(0))],
+                    }],
+                    is_async: false,
+                }],
+            }),
+        }],
     };
 
     let mut transpiler = OptimizedNativeTranspiler::new();
@@ -513,40 +483,34 @@ fn test_list_comprehension_with_filter() {
 #[test]
 fn test_nested_control_flow() {
     let program = Program {
-        statements: vec![
-            Statement::For {
-                variable: "i".to_string(),
+        statements: vec![Statement::For {
+            variable: "i".to_string(),
+            variables: vec![],
+            iterable: Expr::Call {
+                func: Box::new(Expr::Identifier("range".to_string())),
+                args: vec![Expr::Literal(Literal::Int(3))],
+                kwargs: vec![],
+            },
+            body: vec![Statement::For {
+                variable: "j".to_string(),
                 variables: vec![],
                 iterable: Expr::Call {
                     func: Box::new(Expr::Identifier("range".to_string())),
                     args: vec![Expr::Literal(Literal::Int(3))],
                     kwargs: vec![],
                 },
-                body: vec![
-                    Statement::For {
-                        variable: "j".to_string(),
-                        variables: vec![],
-                        iterable: Expr::Call {
-                            func: Box::new(Expr::Identifier("range".to_string())),
-                            args: vec![Expr::Literal(Literal::Int(3))],
-                            kwargs: vec![],
-                        },
-                        body: vec![
-                            Statement::Expression(Expr::Call {
-                                func: Box::new(Expr::Identifier("print".to_string())),
-                                args: vec![
-                                    Expr::Identifier("i".to_string()),
-                                    Expr::Identifier("j".to_string()),
-                                ],
-                                kwargs: vec![],
-                            }),
-                        ],
-                        else_branch: None,
-                    },
-                ],
+                body: vec![Statement::Expression(Expr::Call {
+                    func: Box::new(Expr::Identifier("print".to_string())),
+                    args: vec![
+                        Expr::Identifier("i".to_string()),
+                        Expr::Identifier("j".to_string()),
+                    ],
+                    kwargs: vec![],
+                })],
                 else_branch: None,
-            },
-        ],
+            }],
+            else_branch: None,
+        }],
     };
 
     let mut transpiler = OptimizedNativeTranspiler::new();

@@ -27,10 +27,12 @@ pub mod cranelift_jit;
 pub mod int_cache;
 pub mod inline_cache;
 pub mod fast_ops;
+pub mod register_value;
 
 // Re-export commonly used items
 pub use crate::bytecode::instructions::{OpCode, Instruction};
 pub use crate::bytecode::objects::RcValue;
+pub use crate::bytecode::register_value::RegisterValue;
 pub use crate::bytecode::memory::{CodeObject, Frame};
 pub use crate::bytecode::vm::SuperBytecodeVM;
 pub use crate::bytecode::compiler::SuperCompiler;

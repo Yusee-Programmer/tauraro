@@ -251,7 +251,9 @@ impl Parser {
                     // Treat as expression/assignment
                     let expr = self.expression()?;
                     if self.match_token(&[Token::Assign]) {
-                        self.variable_def(expr)
+                        let value = self.expression()?;
+                        self.match_token(&[Token::Semicolon, Token::Newline]);
+                        self.create_single_assignment(expr, value)
                     } else {
                         // Optional semicolon or newline for expression statements
                         self.match_token(&[Token::Semicolon, Token::Newline]);
@@ -280,7 +282,9 @@ impl Parser {
                     // Treat as expression/assignment
                     let expr = self.expression()?;
                     if self.match_token(&[Token::Assign]) {
-                        self.variable_def(expr)
+                        let value = self.expression()?;
+                        self.match_token(&[Token::Semicolon, Token::Newline]);
+                        self.create_single_assignment(expr, value)
                     } else {
                         // Optional semicolon or newline for expression statements
                         self.match_token(&[Token::Semicolon, Token::Newline]);
@@ -402,7 +406,21 @@ impl Parser {
 
                     // Now expect an assignment
                     if self.match_token(&[Token::Assign]) {
-                        let value = self.expression()?;
+                        // Parse the value - might be a tuple without parentheses
+                        let mut value = self.expression()?;
+                        
+                        // Check if there's a comma - if so, this is a tuple on RHS
+                        if self.match_token(&[Token::Comma]) {
+                            let mut rhs_items = vec![value];
+                            loop {
+                                rhs_items.push(self.expression()?);
+                                if !self.match_token(&[Token::Comma]) {
+                                    break;
+                                }
+                            }
+                            value = Expr::Tuple(rhs_items);
+                        }
+                        
                         self.match_token(&[Token::Semicolon, Token::Newline]);
 
                         // If we have starred expressions, use ExtendedUnpack
@@ -430,7 +448,42 @@ impl Parser {
 
                 // Not a tuple, check for regular assignment
                 if self.match_token(&[Token::Assign]) {
-                    self.variable_def(first_expr)
+                    // Check for chained assignment: x = y = z = value
+                    let mut targets = vec![first_expr];
+                    
+                    // Keep parsing additional assignments
+                    loop {
+                        let next_expr = self.expression()?;
+                        
+                        // Check if there's another assignment
+                        if self.match_token(&[Token::Assign]) {
+                            targets.push(next_expr);
+                        } else {
+                            // This is the final value
+                            // Check for tuple on right side
+                            let mut value = next_expr;
+                            if self.match_token(&[Token::Comma]) {
+                                let mut items = vec![value];
+                                loop {
+                                    items.push(self.expression()?);
+                                    if !self.match_token(&[Token::Comma]) {
+                                        break;
+                                    }
+                                }
+                                value = Expr::Tuple(items);
+                            }
+                            
+                            self.match_token(&[Token::Semicolon, Token::Newline]);
+                            
+                            // If multiple targets, create multiple assignments
+                            if targets.len() == 1 {
+                                return self.create_single_assignment(targets.into_iter().next().unwrap(), value);
+                            } else {
+                                // Multiple assignment: x = y = z = value
+                                return self.create_chained_assignment(targets, value);
+                            }
+                        }
+                    }
                 } else if self.check_compound_assignment() {
                     self.advance(); // Advance past the compound assignment operator
                     self.compound_assignment(first_expr)
@@ -1808,10 +1861,7 @@ impl Parser {
         }
     }
 
-    fn variable_def(&mut self, target: Expr) -> Result<Statement, ParseError> {
-        let value = self.expression()?;
-        self.match_token(&[Token::Semicolon, Token::Newline]);
-
+    fn create_single_assignment(&mut self, target: Expr, value: Expr) -> Result<Statement, ParseError> {
         match target {
             Expr::Identifier(name) => Ok(Statement::VariableDef {
                 name,
@@ -1845,6 +1895,28 @@ impl Parser {
                 message: "Invalid target for assignment".to_string(),
             }),
         }
+    }
+    
+    fn create_chained_assignment(&mut self, targets: Vec<Expr>, value: Expr) -> Result<Statement, ParseError> {
+        // Create a series of assignments: x = y = z = value
+        // This should assign value to z, then z to y, then y to x
+        // We'll use Statement::MultipleAssignment if it exists, or chain them
+        
+        let mut target_names = Vec::new();
+        for target in targets {
+            match target {
+                Expr::Identifier(name) => target_names.push(name),
+                _ => return Err(ParseError::InvalidSyntax {
+                    message: "Multiple assignment targets must be simple identifiers".to_string(),
+                }),
+            }
+        }
+        
+        // Check if MultipleAssignment exists in AST
+        Ok(Statement::MultipleAssignment {
+            targets: target_names,
+            value,
+        })
     }
 
     fn block(&mut self) -> Result<Vec<Statement>, ParseError> {

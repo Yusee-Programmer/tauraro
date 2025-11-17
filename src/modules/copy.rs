@@ -28,7 +28,7 @@ fn copy_error_str(args: Vec<Value>) -> Result<Value> {
     }
     
     if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(message)) = fields.as_ref().get("message") {
+        if let Some(Value::Str(message)) = fields.borrow().get("message") {
             return Ok(Value::Str(message.clone()));
         }
     }
@@ -151,7 +151,7 @@ fn deepcopy_recursive(obj: &Value, memo: &mut HashMap<String, Value>) -> Result<
         },
         Value::Object { class_name, fields, base_object, mro, .. } => {
             let mut new_fields = HashMap::new();
-            for (key, value) in fields.as_ref() {
+            for (key, value) in fields.borrow() {
                 new_fields.insert(key.clone(), deepcopy_recursive(value, memo)?);
             }
             Ok(Value::Object {

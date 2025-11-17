@@ -4,6 +4,7 @@
 use crate::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 
 /// Create the exceptions module with all built-in exception classes
 pub fn create_exceptions_module() -> Value {
@@ -214,7 +215,7 @@ fn create_exception_class_with_inheritance(class_name: &str, base_classes: Vec<S
     
     Value::Object {
         class_name: class_name.to_string(),
-        fields: Rc::new(fields),
+        fields: Rc::new(RefCell::new(fields)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new(class_name.to_string(), base_classes),
         mro: crate::base_object::MRO::from_linearization(
@@ -624,7 +625,7 @@ pub fn create_exception(class_name: &str, message: &str, args: Vec<Value>) -> Va
     
     Value::Object {
         class_name: class_name.to_string(),
-        fields: Rc::new(fields),
+        fields: Rc::new(RefCell::new(fields)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new(class_name.to_string(), base_classes),
         mro: crate::base_object::MRO::from_linearization(

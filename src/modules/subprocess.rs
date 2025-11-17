@@ -5,6 +5,7 @@ use crate::value::Value;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
+use std::cell::RefCell;
 
 /// Create the subprocess module object with all its functions and constants
 pub fn create_subprocess_module() -> Value {

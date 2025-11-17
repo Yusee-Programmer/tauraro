@@ -1212,7 +1212,7 @@ pub fn register_command_wrapper(args: Vec<Value>) -> Result<Value> {
         }
     };
     
-    commands_map.borrow_mut().insert(command_name.clone(), function);
+    commands_map.insert(command_name.clone(), function);
     
     println!("✅ Registered Tauraro command: {}", command_name);
     

@@ -6,6 +6,7 @@ pub mod runtime;
 use crate::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use crate::modules::hplist::HPList;
 use std::time::Duration;
 use anyhow::Result;
@@ -80,7 +81,7 @@ fn get_event_loop(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "EventLoop".to_string(),
-        fields: Rc::new(loop_fields),
+        fields: Rc::new(RefCell::new(loop_fields)),
         class_methods: loop_methods,
         base_object: crate::base_object::BaseObject::new("EventLoop".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["EventLoop".to_string(), "object".to_string()])
@@ -147,7 +148,7 @@ fn create_task(args: Vec<Value>) -> Result<Value> {
     
     // Store task ID in fields
     let mut task_fields = HashMap::new();
-    task_fields.insert("_task_id".to_string(), Value::Int(task_id as i64));
+    task_fields.borrow_mut().insert("_task_id".to_string(), Value::Int(task_id as i64));
     
     // Store methods in class_methods (not fields)
     let mut task_methods = HashMap::new();
@@ -158,7 +159,7 @@ fn create_task(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "Task".to_string(),
-        fields: Rc::new(task_fields),
+        fields: Rc::new(RefCell::new(task_fields)),
         class_methods: task_methods,
         base_object: crate::base_object::BaseObject::new("Task".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Task".to_string(), "object".to_string()])
@@ -176,7 +177,7 @@ fn gather(args: Vec<Value>) -> Result<Value> {
     // Extract task IDs from task objects
     for arg in args {
         if let Value::Object { fields, .. } = arg {
-            if let Some(Value::Int(id)) = fields.get("_task_id") {
+            if let Some(Value::Int(id)) = fields.borrow().get("_task_id") {
                 task_ids.push(*id as usize);
             }
         }
@@ -252,7 +253,7 @@ fn cancel_task(args: Vec<Value>) -> Result<Value> {
     }
 
     if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Int(task_id)) = fields.get("_task_id") {
+        if let Some(Value::Int(task_id)) = fields.borrow().get("_task_id") {
             let runtime = AsyncRuntime::global();
             runtime.cancel_task(*task_id as usize)?;
         }
@@ -271,7 +272,7 @@ fn task_done(args: Vec<Value>) -> Result<Value> {
     }
 
     if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Int(task_id)) = fields.get("_task_id") {
+        if let Some(Value::Int(task_id)) = fields.borrow().get("_task_id") {
             let runtime = AsyncRuntime::global();
             return Ok(Value::Bool(runtime.is_task_done(*task_id as usize)));
         }
@@ -286,7 +287,7 @@ fn task_result(args: Vec<Value>) -> Result<Value> {
     }
 
     if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Int(task_id)) = fields.get("_task_id") {
+        if let Some(Value::Int(task_id)) = fields.borrow().get("_task_id") {
             let runtime = AsyncRuntime::global();
             if let Some(result) = runtime.get_task_result(*task_id as usize) {
                 return result;

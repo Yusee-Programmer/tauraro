@@ -1,7 +1,0 @@
-# Pure loop test without any imports
-print("Starting pure loop test...")
-total = 0
-for i in range(1000000):
-    total = total + 1
-print("Loop completed!")
-print("Total: " + str(total))

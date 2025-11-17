@@ -118,6 +118,10 @@ pub enum Statement {
         targets: Vec<UnpackTarget>,
         value: Expr,
     },
+    MultipleAssignment {
+        targets: Vec<String>,
+        value: Expr,
+    },
     TypeAlias {
         name: String,
         type_def: Type,
