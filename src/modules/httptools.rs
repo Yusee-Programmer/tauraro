@@ -1,6 +1,7 @@
 use crate::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use crate::modules::hplist::HPList;
 
 #[cfg(feature = "http")]
@@ -248,7 +249,7 @@ extern "C" fn parse_url(args: *const Value, argc: usize) -> Value {
 
     Value::Object {
         class_name: "URLParts".to_string(),
-        fields: Rc::new(url_parts),
+        fields: Rc::new(RefCell::new(url_parts)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("URLParts".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["URLParts".to_string(), "object".to_string()])
@@ -279,7 +280,7 @@ extern "C" fn parse_headers(args: *const Value, argc: usize) -> Value {
 
     Value::Object {
         class_name: "Headers".to_string(),
-        fields: Rc::new(headers),
+        fields: Rc::new(RefCell::new(headers)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("Headers".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Headers".to_string(), "object".to_string()])
@@ -321,7 +322,7 @@ extern "C" fn parse_request(args: *const Value, argc: usize) -> Value {
                 }
                 result.insert("headers".to_string(), Value::Object {
                     class_name: "Headers".to_string(),
-                    fields: Rc::new(headers_map),  // Wrap with Rc::new
+                    fields: Rc::new(RefCell::new(headers_map)),  // Wrap with Rc::new
                     class_methods: HashMap::new(),
                     base_object: crate::base_object::BaseObject::new("Headers".to_string(), vec!["object".to_string()]),
                     mro: crate::base_object::MRO::from_linearization(vec!["Headers".to_string(), "object".to_string()])
@@ -329,7 +330,7 @@ extern "C" fn parse_request(args: *const Value, argc: usize) -> Value {
                 
                 Value::Object {
                     class_name: "ParsedRequest".to_string(),
-                    fields: Rc::new(result),
+                    fields: Rc::new(RefCell::new(result)),
                     class_methods: HashMap::new(),
                     base_object: crate::base_object::BaseObject::new("ParsedRequest".to_string(), vec!["object".to_string()]),
                     mro: crate::base_object::MRO::from_linearization(vec!["ParsedRequest".to_string(), "object".to_string()])
@@ -379,7 +380,7 @@ extern "C" fn parse_response(args: *const Value, argc: usize) -> Value {
                 }
                 result.insert("headers".to_string(), Value::Object {
                     class_name: "Headers".to_string(),
-                    fields: Rc::new(headers_map),  // Wrap with Rc::new
+                    fields: Rc::new(RefCell::new(headers_map)),  // Wrap with Rc::new
                     class_methods: HashMap::new(),
                     base_object: crate::base_object::BaseObject::new("Headers".to_string(), vec!["object".to_string()]),
                     mro: crate::base_object::MRO::from_linearization(vec!["Headers".to_string(), "object".to_string()])
@@ -387,7 +388,7 @@ extern "C" fn parse_response(args: *const Value, argc: usize) -> Value {
                 
                 Value::Object {
                     class_name: "ParsedResponse".to_string(),
-                    fields: Rc::new(result),
+                    fields: Rc::new(RefCell::new(result)),
                     class_methods: HashMap::new(),
                     base_object: crate::base_object::BaseObject::new("ParsedResponse".to_string(), vec!["object".to_string()]),
                     mro: crate::base_object::MRO::from_linearization(vec!["ParsedResponse".to_string(), "object".to_string()])
@@ -431,7 +432,7 @@ extern "C" fn build_request(args: *const Value, argc: usize) -> Value {
 
     let mut request = format!("{} {} HTTP/1.1\r\n", method, path);
     
-    for (name, value) in headers.iter() {  // Use .iter()
+    for (name, value) in headers.borrow().iter() {
         if let Value::Str(val) = value {
             request.push_str(&format!("{}: {}\r\n", name, val));
         }
@@ -464,7 +465,7 @@ extern "C" fn build_response(args: *const Value, argc: usize) -> Value {
     let reason = get_status_reason(status);
     let mut response = format!("HTTP/1.1 {} {}\r\n", status, reason);
     
-    for (name, value) in headers.iter() {  // Use .iter()
+    for (name, value) in headers.borrow().iter() {
         if let Value::Str(val) = value {
             response.push_str(&format!("{}: {}\r\n", name, val));
         }
@@ -489,7 +490,7 @@ extern "C" fn build_headers(args: *const Value, argc: usize) -> Value {
 
     let mut header_string = String::new();
     
-    for (name, value) in headers.iter() {  // Use .iter()
+    for (name, value) in headers.borrow().iter() {
         if let Value::Str(val) = value {
             header_string.push_str(&format!("{}: {}\r\n", name, val));
         }
@@ -756,7 +757,7 @@ extern "C" fn create_request_parser(_args: *const Value, _argc: usize) -> Value 
 
     Value::Object {
         class_name: "RequestParser".to_string(),
-        fields: Rc::new(parser_obj),
+        fields: Rc::new(RefCell::new(parser_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("RequestParser".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["RequestParser".to_string(), "object".to_string()])
@@ -770,7 +771,7 @@ extern "C" fn create_response_parser(_args: *const Value, _argc: usize) -> Value
 
     Value::Object {
         class_name: "ResponseParser".to_string(),
-        fields: Rc::new(parser_obj),
+        fields: Rc::new(RefCell::new(parser_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("ResponseParser".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["ResponseParser".to_string(), "object".to_string()])

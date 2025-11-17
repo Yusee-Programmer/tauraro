@@ -11,10 +11,16 @@ use anyhow::{Result, anyhow};
 
 use crate::bytecode::instructions::{Instruction, OpCode};
 use crate::bytecode::objects::RcValue;
+use crate::bytecode::register_value::RegisterValue;
 use crate::value::Value as TauraroValue;
 
 /// JIT-compiled function type: takes register array pointer, returns error code
-pub type JitFunction = unsafe extern "C" fn(*mut RcValue, usize) -> i32;
+/// 
+/// NEW: Now uses RegisterValue instead of RcValue for zero-copy register access
+pub type JitFunction = unsafe extern "C" fn(*mut RegisterValue, usize) -> i32;
+
+/// Legacy JIT function type (for compatibility with old RcValue-based code)
+pub type LegacyJitFunction = unsafe extern "C" fn(*mut RcValue, usize) -> i32;
 
 /// Cranelift JIT compiler for hot loops
 pub struct CraneliftJIT {
@@ -40,7 +46,7 @@ pub struct CraneliftJIT {
 impl CraneliftJIT {
     /// Create a new Cranelift JIT compiler
     pub fn new() -> Result<Self> {
-        // Create JIT builder with default settings
+        // Create JIT builder with default settings (optimization handled in Context)
         let mut builder = JITBuilder::new(cranelift_module::default_libcall_names())?;
 
         // Declare runtime helper symbols
@@ -64,7 +70,19 @@ impl CraneliftJIT {
 
     /// Declare all runtime helper functions as external symbols
     fn declare_runtime_helpers(builder: &mut JITBuilder) {
-        // List operations
+        // FAST PATH: Direct RegisterValue operations (no allocation!)
+        #[cfg(feature = "jit")]
+        {
+            builder.symbol("tauraro_jit_fast_int_add", crate::bytecode::register_value::jit_interface::tauraro_jit_fast_int_add as *const u8);
+            builder.symbol("tauraro_jit_fast_int_sub", crate::bytecode::register_value::jit_interface::tauraro_jit_fast_int_sub as *const u8);
+            builder.symbol("tauraro_jit_fast_int_mul", crate::bytecode::register_value::jit_interface::tauraro_jit_fast_int_mul as *const u8);
+            builder.symbol("tauraro_jit_get_int", crate::bytecode::register_value::jit_interface::tauraro_jit_get_int as *const u8);
+            builder.symbol("tauraro_jit_set_int", crate::bytecode::register_value::jit_interface::tauraro_jit_set_int as *const u8);
+            builder.symbol("tauraro_jit_get_float", crate::bytecode::register_value::jit_interface::tauraro_jit_get_float as *const u8);
+            builder.symbol("tauraro_jit_set_float", crate::bytecode::register_value::jit_interface::tauraro_jit_set_float as *const u8);
+        }
+        
+        // SLOW PATH: List operations (require RcValue for now)
         builder.symbol("tauraro_jit_subscr_load_list", crate::bytecode::jit_runtime::tauraro_jit_subscr_load_list as *const u8);
         builder.symbol("tauraro_jit_subscr_store_list", crate::bytecode::jit_runtime::tauraro_jit_subscr_store_list as *const u8);
         builder.symbol("tauraro_jit_list_append", crate::bytecode::jit_runtime::tauraro_jit_list_append as *const u8);
@@ -135,7 +153,8 @@ impl CraneliftJIT {
         // Note: FunctionBuilderContext doesn't need clearing, we create a new one each time
         self.builder_ctx = FunctionBuilderContext::new();
 
-        // Set function signature: fn(registers_ptr: *mut RcValue, reg_count: usize) -> i32
+        // Set function signature: fn(registers_ptr: *mut RegisterValue, reg_count: usize) -> i32
+        // OPTIMIZED: Now uses RegisterValue directly instead of RcValue (zero-copy!)
         let ptr_type = self.module.target_config().pointer_type();
         self.ctx.func.signature.params.push(AbiParam::new(ptr_type)); // registers_ptr
         self.ctx.func.signature.params.push(AbiParam::new(types::I64)); // reg_count
@@ -184,9 +203,9 @@ impl CraneliftJIT {
         // Loop body: execute instructions
         builder.switch_to_block(loop_body);
 
-        // Store current iteration value in result_reg using runtime helper
-        // Get or declare store_int helper
-        let store_helper_id = if let Some(&id) = self.helpers.get("tauraro_jit_store_int") {
+        // Store current iteration value in result_reg using FAST direct helper
+        // OPTIMIZED: Use tauraro_jit_set_int which directly sets RegisterValue::Int
+        let store_helper_id = if let Some(&id) = self.helpers.get("tauraro_jit_set_int") {
             id
         } else {
             let mut sig = self.module.make_signature();
@@ -194,10 +213,9 @@ impl CraneliftJIT {
             sig.params.push(AbiParam::new(ptr_type)); // registers_ptr
             sig.params.push(AbiParam::new(types::I32)); // reg_index
             sig.params.push(AbiParam::new(types::I64)); // value
-            sig.returns.push(AbiParam::new(types::I32)); // return code
 
-            let id = self.module.declare_function("tauraro_jit_store_int", Linkage::Import, &sig)?;
-            self.helpers.insert("tauraro_jit_store_int".to_string(), id);
+            let id = self.module.declare_function("tauraro_jit_set_int", Linkage::Import, &sig)?;
+            self.helpers.insert("tauraro_jit_set_int".to_string(), id);
             id
         };
 
@@ -279,15 +297,30 @@ impl CraneliftJIT {
                 Self::compile_helper_call_static(builder, "tauraro_jit_build_tuple", inst, registers_ptr, module, helpers)?;
             }
 
-            // Binary arithmetic operations
+            // Binary arithmetic operations - USE STABLE RUNTIME HELPERS
+            // These are proven to work correctly with RegisterValue
             OpCode::BinaryAddRR | OpCode::FastIntAdd => {
-                Self::compile_helper_call_static(builder, "tauraro_jit_binary_add_rr", inst, registers_ptr, module, helpers)?;
+                Self::compile_helper_call_static(builder, "tauraro_jit_fast_int_add", inst, registers_ptr, module, helpers)?;
             }
-            OpCode::BinarySubRR => {
-                Self::compile_helper_call_static(builder, "tauraro_jit_binary_sub_rr", inst, registers_ptr, module, helpers)?;
+            OpCode::BinarySubRR | OpCode::FastIntSub => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_fast_int_sub", inst, registers_ptr, module, helpers)?;
             }
-            OpCode::BinaryMulRR => {
-                Self::compile_helper_call_static(builder, "tauraro_jit_binary_mul_rr", inst, registers_ptr, module, helpers)?;
+            OpCode::BinaryMulRR | OpCode::FastIntMul => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_fast_int_mul", inst, registers_ptr, module, helpers)?;
+            }
+            
+            // Variable operations
+            OpCode::LoadFast => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_load_fast", inst, registers_ptr, module, helpers)?;
+            }
+            OpCode::StoreFast => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_store_fast", inst, registers_ptr, module, helpers)?;
+            }
+            OpCode::LoadGlobal => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_load_global", inst, registers_ptr, module, helpers)?;
+            }
+            OpCode::StoreGlobal => {
+                Self::compile_helper_call_static(builder, "tauraro_jit_store_global", inst, registers_ptr, module, helpers)?;
             }
 
             // Variable load/store operations
@@ -334,6 +367,116 @@ impl CraneliftJIT {
         Ok(())
     }
 
+    /// Compile inlined integer addition (FULLY OPTIMIZED - no function calls!)
+    fn compile_inlined_int_add(
+        builder: &mut FunctionBuilder,
+        inst: &Instruction,
+        registers_ptr: ClifValue,
+        module: &mut JITModule,
+        helpers: &mut HashMap<String, FuncId>,
+    ) -> Result<()> {
+        let left_idx = inst.arg1;
+        let right_idx = inst.arg2;
+        let result_idx = inst.arg3;
+        
+        // Get register pointers (RegisterValue is 16 bytes)
+        let ptr_type = module.target_config().pointer_type();
+        let reg_size = 16; // sizeof(RegisterValue)
+        
+        // Load left value
+        let left_offset = builder.ins().iconst(types::I64, (left_idx as i64) * reg_size);
+        let left_ptr = builder.ins().iadd(registers_ptr, left_offset);
+        // RegisterValue discriminant is first byte, then 8 bytes for Int value at offset 8
+        let left_val = builder.ins().load(types::I64, MemFlags::trusted(), left_ptr, 8);
+        
+        // Load right value
+        let right_offset = builder.ins().iconst(types::I64, (right_idx as i64) * reg_size);
+        let right_ptr = builder.ins().iadd(registers_ptr, right_offset);
+        let right_val = builder.ins().load(types::I64, MemFlags::trusted(), right_ptr, 8);
+        
+        // Add (wrapping)
+        let result = builder.ins().iadd(left_val, right_val);
+        
+        // Store result
+        let result_offset = builder.ins().iconst(types::I64, (result_idx as i64) * reg_size);
+        let result_ptr = builder.ins().iadd(registers_ptr, result_offset);
+        // Set discriminant to 0 (Int variant) - MUST BE 8 BYTES!
+        let zero_disc = builder.ins().iconst(types::I64, 0);
+        builder.ins().store(MemFlags::trusted(), zero_disc, result_ptr, 0);
+        // Store value at offset 8
+        builder.ins().store(MemFlags::trusted(), result, result_ptr, 8);
+        
+        Ok(())
+    }
+    
+    /// Compile inlined integer subtraction
+    fn compile_inlined_int_sub(
+        builder: &mut FunctionBuilder,
+        inst: &Instruction,
+        registers_ptr: ClifValue,
+        module: &mut JITModule,
+        _helpers: &mut HashMap<String, FuncId>,
+    ) -> Result<()> {
+        let left_idx = inst.arg1;
+        let right_idx = inst.arg2;
+        let result_idx = inst.arg3;
+        
+        let ptr_type = module.target_config().pointer_type();
+        let reg_size = 16;
+        
+        let left_offset = builder.ins().iconst(types::I64, (left_idx as i64) * reg_size);
+        let left_ptr = builder.ins().iadd(registers_ptr, left_offset);
+        let left_val = builder.ins().load(types::I64, MemFlags::trusted(), left_ptr, 8);
+        
+        let right_offset = builder.ins().iconst(types::I64, (right_idx as i64) * reg_size);
+        let right_ptr = builder.ins().iadd(registers_ptr, right_offset);
+        let right_val = builder.ins().load(types::I64, MemFlags::trusted(), right_ptr, 8);
+        
+        let result = builder.ins().isub(left_val, right_val);
+        
+        let result_offset = builder.ins().iconst(types::I64, (result_idx as i64) * reg_size);
+        let result_ptr = builder.ins().iadd(registers_ptr, result_offset);
+        let zero_disc = builder.ins().iconst(types::I64, 0);
+        builder.ins().store(MemFlags::trusted(), zero_disc, result_ptr, 0);
+        builder.ins().store(MemFlags::trusted(), result, result_ptr, 8);
+        
+        Ok(())
+    }
+    
+    /// Compile inlined integer multiplication
+    fn compile_inlined_int_mul(
+        builder: &mut FunctionBuilder,
+        inst: &Instruction,
+        registers_ptr: ClifValue,
+        module: &mut JITModule,
+        _helpers: &mut HashMap<String, FuncId>,
+    ) -> Result<()> {
+        let left_idx = inst.arg1;
+        let right_idx = inst.arg2;
+        let result_idx = inst.arg3;
+        
+        let ptr_type = module.target_config().pointer_type();
+        let reg_size = 16;
+        
+        let left_offset = builder.ins().iconst(types::I64, (left_idx as i64) * reg_size);
+        let left_ptr = builder.ins().iadd(registers_ptr, left_offset);
+        let left_val = builder.ins().load(types::I64, MemFlags::trusted(), left_ptr, 8);
+        
+        let right_offset = builder.ins().iconst(types::I64, (right_idx as i64) * reg_size);
+        let right_ptr = builder.ins().iadd(registers_ptr, right_offset);
+        let right_val = builder.ins().load(types::I64, MemFlags::trusted(), right_ptr, 8);
+        
+        let result = builder.ins().imul(left_val, right_val);
+        
+        let result_offset = builder.ins().iconst(types::I64, (result_idx as i64) * reg_size);
+        let result_ptr = builder.ins().iadd(registers_ptr, result_offset);
+        let zero_disc = builder.ins().iconst(types::I64, 0);
+        builder.ins().store(MemFlags::trusted(), zero_disc, result_ptr, 0);
+        builder.ins().store(MemFlags::trusted(), result, result_ptr, 8);
+        
+        Ok(())
+    }
+    
     /// Compile a call to a runtime helper function (static to avoid borrow checker issues)
     fn compile_helper_call_static(
         builder: &mut FunctionBuilder,

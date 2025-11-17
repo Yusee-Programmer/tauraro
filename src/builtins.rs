@@ -1048,7 +1048,7 @@ fn hasattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     let has_attr = match obj {
         Value::Object { fields, class_methods, .. } => {
             // First check fields
-            fields.as_ref().contains_key(attr_name) || class_methods.contains_key(attr_name)
+            fields.borrow().contains_key(attr_name) || class_methods.contains_key(attr_name)
         },
         Value::Class { methods, .. } => {
             methods.contains_key(attr_name)
@@ -1082,7 +1082,7 @@ fn getattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     match obj {
         Value::Object { fields, class_methods, .. } => {
             // First check fields
-            if let Some(value) = fields.as_ref().get(attr_name) {
+            if let Some(value) = fields.borrow().get(attr_name) {
                 Ok(value.clone())
             }
             // Then check methods
@@ -1306,7 +1306,7 @@ pub fn property_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     // In a full implementation, this would be a proper property object
     Ok(Value::Object {
         class_name: "property".to_string(),
-        fields: Rc::new(fields),
+        fields: Rc::new(RefCell::new(fields)),
         class_methods: HashMap::new(),
         base_object: BaseObject::new("property".to_string(), vec!["object".to_string()]),
         mro: MRO::from_linearization(vec!["property".to_string(), "object".to_string()]),
@@ -1363,7 +1363,7 @@ fn open_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
 
     Ok(Value::Object {
         class_name: "file".to_string(),
-        fields: Rc::new(file_fields),
+        fields: Rc::new(RefCell::new(file_fields)),
         class_methods: HashMap::new(),
         base_object: BaseObject::new("file".to_string(), vec!["object".to_string()]),
         mro: MRO::from_linearization(vec!["file".to_string(), "object".to_string()]),
@@ -1378,7 +1378,7 @@ fn file_read(args: Vec<Value>) -> anyhow::Result<Value> {
 
     // Extract filename from file object
     let filename = if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(name)) = fields.get("filename") {
+        if let Some(Value::Str(name)) = fields.borrow().get("filename") {
             name.clone()
         } else {
             return Err(anyhow::anyhow!("File object missing filename"));
@@ -1401,7 +1401,7 @@ fn file_write(args: Vec<Value>) -> anyhow::Result<Value> {
 
     // Extract filename from file object
     let filename = if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(name)) = fields.get("filename") {
+        if let Some(Value::Str(name)) = fields.borrow().get("filename") {
             name.clone()
         } else {
             return Err(anyhow::anyhow!("File object missing filename"));
@@ -1457,7 +1457,7 @@ fn file_readline(args: Vec<Value>) -> anyhow::Result<Value> {
 
     // Extract filename
     let filename = if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(name)) = fields.get("filename") {
+        if let Some(Value::Str(name)) = fields.borrow().get("filename") {
             name.clone()
         } else {
             return Err(anyhow::anyhow!("File object missing filename"));
@@ -1481,7 +1481,7 @@ fn file_readlines(args: Vec<Value>) -> anyhow::Result<Value> {
 
     // Extract filename
     let filename = if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(name)) = fields.get("filename") {
+        if let Some(Value::Str(name)) = fields.borrow().get("filename") {
             name.clone()
         } else {
             return Err(anyhow::anyhow!("File object missing filename"));
@@ -1505,7 +1505,7 @@ fn file_writelines(args: Vec<Value>) -> anyhow::Result<Value> {
 
     // Extract filename
     let filename = if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(name)) = fields.get("filename") {
+        if let Some(Value::Str(name)) = fields.borrow().get("filename") {
             name.clone()
         } else {
             return Err(anyhow::anyhow!("File object missing filename"));
@@ -1679,7 +1679,7 @@ fn dir_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         match obj {
             Value::Object { fields, class_methods, .. } => {
                 // Add field names
-                for field_name in fields.as_ref().keys() {
+                for field_name in fields.borrow().keys() {
                     attrs.push(Value::Str(field_name.clone()));
                 }
                 // Add method names

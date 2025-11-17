@@ -37,7 +37,7 @@ pub enum Value {
     KwargsMarker(HashMap<String, Value>), // Special marker for **kwargs in function calls
     Object {
         class_name: String,
-        fields: Rc<HashMap<String, Value>>,
+        fields: Rc<RefCell<HashMap<String, Value>>>,
         class_methods: HashMap<String, Value>,
         base_object: BaseObject,
         mro: MRO,
@@ -310,7 +310,7 @@ impl Value {
 
         Value::Object {
             class_name: class_name.clone(),
-            fields: Rc::new(fields),
+            fields: Rc::new(RefCell::new(fields)),
             class_methods: HashMap::new(),
             base_object: BaseObject::new(class_name, parents),
             mro,

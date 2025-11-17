@@ -4,6 +4,7 @@
 use crate::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512, Digest};
 use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
@@ -104,7 +105,7 @@ fn create_hash_object(algorithm: &str, data: Option<&[u8]>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: format!("{}Hash", algorithm),
-        fields: Rc::new(hash_obj),
+        fields: Rc::new(RefCell::new(hash_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new(format!("{}Hash", algorithm), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec![format!("{}Hash", algorithm), "object".to_string()]),
@@ -486,7 +487,7 @@ fn hash_update(args: Vec<Value>) -> Result<Value> {
     // Get current raw data from hash object
     let mut current_data = Vec::new();
     if let Value::Object { fields, .. } = hash_obj {
-        if let Some(Value::Str(existing_data)) = fields.as_ref().get("_raw_data") {
+        if let Some(Value::Str(existing_data)) = fields.borrow().get("_raw_data") {
             current_data.extend_from_slice(existing_data.as_bytes());
         }
     }
@@ -496,23 +497,26 @@ fn hash_update(args: Vec<Value>) -> Result<Value> {
     
     // Update the hash object with new data
     if let Value::Object { fields, .. } = hash_obj {
-        let algorithm = match fields.as_ref().get("algorithm") {
-            Some(Value::Str(algo)) => algo,
-            _ => return Err(anyhow::anyhow!("Hash object missing algorithm")),
+        let algorithm = {
+            let binding = fields.borrow();
+            match binding.get("algorithm") {
+                Some(Value::Str(algo)) => algo.clone(),
+                _ => return Err(anyhow::anyhow!("Hash object missing algorithm")),
+            }
         };
         
         // Compute new hash
-        let hash_result = compute_hash(algorithm, &current_data);
+        let hash_result = compute_hash(&algorithm, &current_data);
         let hex_hash = hex_encode(&hash_result);
         
         // Update the object fields
         let mut updated_fields = (**fields).clone();
-        updated_fields.insert("_hash_state".to_string(), Value::Str(hex_hash));
-        updated_fields.insert("_raw_data".to_string(), Value::Str(String::from_utf8_lossy(&current_data).to_string()));
+        updated_fields.borrow_mut().insert("_hash_state".to_string(), Value::Str(hex_hash));
+        updated_fields.borrow_mut().insert("_raw_data".to_string(), Value::Str(String::from_utf8_lossy(&current_data).to_string()));
         
         // Create new hash object with updated fields
         return Ok(Value::Object {
-            class_name: algorithm.to_string() + "Hash",
+            class_name: algorithm.clone() + "Hash",
             fields: std::rc::Rc::new(updated_fields),
             class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new(algorithm.to_string() + "Hash", vec!["object".to_string()]),
@@ -532,7 +536,7 @@ fn hash_digest(args: Vec<Value>) -> Result<Value> {
     let hash_obj = &args[0];
     
     if let Value::Object { fields, .. } = hash_obj {
-        if let Some(Value::Str(hash_state)) = fields.as_ref().get("_hash_state") {
+        if let Some(Value::Str(hash_state)) = fields.borrow().get("_hash_state") {
             // Convert hex string back to bytes
             let bytes = hex_decode(hash_state)?;
             return Ok(Value::Str(String::from_utf8_lossy(&bytes).to_string()));
@@ -551,7 +555,7 @@ fn hash_hexdigest(args: Vec<Value>) -> Result<Value> {
     let hash_obj = &args[0];
     
     if let Value::Object { fields, .. } = hash_obj {
-        if let Some(Value::Str(hash_state)) = fields.as_ref().get("_hash_state") {
+        if let Some(Value::Str(hash_state)) = fields.borrow().get("_hash_state") {
             return Ok(Value::Str(hash_state.clone()));
         }
     }

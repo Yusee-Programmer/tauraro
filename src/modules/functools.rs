@@ -94,7 +94,7 @@ fn functools_partial(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "partial".to_string(),
-        fields: Rc::new(partial_obj),
+        fields: Rc::new(RefCell::new(partial_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("partial".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["partial".to_string(), "object".to_string()]),
@@ -113,8 +113,9 @@ fn partial_call(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid partial object")),
     };
     
-    let func = partial_obj.get("func").ok_or_else(|| anyhow::anyhow!("Partial object missing func"))?;
-    let partial_args = match partial_obj.get("args") {
+    let binding = partial_obj.borrow();
+    let func = binding.get("func").ok_or_else(|| anyhow::anyhow!("Partial object missing func"))?;
+    let partial_args = match binding.get("args") {
         Some(Value::Tuple(args)) => args.clone(),
         _ => vec![],
     };
@@ -142,7 +143,7 @@ fn functools_partialmethod(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "partialmethod".to_string(),
-        fields: Rc::new(partial_method),
+        fields: Rc::new(RefCell::new(partial_method)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("partialmethod".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["partialmethod".to_string(), "object".to_string()]),
@@ -160,8 +161,9 @@ fn partialmethod_get(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid partialmethod object")),
     };
     
-    let func = partialmethod_obj.get("func").ok_or_else(|| anyhow::anyhow!("Partialmethod missing func"))?;
-    let partial_args = match partialmethod_obj.get("args") {
+    let binding = partialmethod_obj.borrow();
+    let func = binding.get("func").ok_or_else(|| anyhow::anyhow!("Partialmethod missing func"))?;
+    let partial_args = match binding.get("args") {
         Some(Value::Tuple(args)) => args.clone(),
         _ => vec![],
     };
@@ -175,7 +177,7 @@ fn partialmethod_get(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "bound_partialmethod".to_string(),
-        fields: Rc::new(bound_method),
+        fields: Rc::new(RefCell::new(bound_method)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("bound_partialmethod".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["bound_partialmethod".to_string(), "object".to_string()]),
@@ -193,12 +195,13 @@ fn partialmethod_call(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid bound partialmethod object")),
     };
     
-    let func = bound_obj.get("func").ok_or_else(|| anyhow::anyhow!("Bound partialmethod missing func"))?;
-    let partial_args = match bound_obj.get("args") {
+    let binding = bound_obj.borrow();
+    let func = binding.get("func").ok_or_else(|| anyhow::anyhow!("Bound partialmethod missing func"))?;
+    let partial_args = match binding.get("args") {
         Some(Value::Tuple(args)) => args.clone(),
         _ => vec![],
     };
-    let instance = bound_obj.get("instance").ok_or_else(|| anyhow::anyhow!("Bound partialmethod missing instance"))?;
+    let instance = binding.get("instance").ok_or_else(|| anyhow::anyhow!("Bound partialmethod missing instance"))?;
     
     // Combine instance, partial args, and new args
     let mut combined_args = vec![instance.clone()];
@@ -223,7 +226,7 @@ fn functools_wraps(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "wraps_decorator".to_string(),
-        fields: Rc::new(decorator),
+        fields: Rc::new(RefCell::new(decorator)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("wraps_decorator".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["wraps_decorator".to_string(), "object".to_string()]),
@@ -282,7 +285,7 @@ fn functools_lru_cache(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "lru_cache_decorator".to_string(),
-        fields: Rc::new(cache_decorator),
+        fields: Rc::new(RefCell::new(cache_decorator)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("lru_cache_decorator".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["lru_cache_decorator".to_string(), "object".to_string()]),
@@ -307,7 +310,7 @@ fn lru_cache_decorator(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "cached_function".to_string(),
-        fields: Rc::new(cached_func),
+        fields: Rc::new(RefCell::new(cached_func)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("cached_function".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["cached_function".to_string(), "object".to_string()]),
@@ -325,8 +328,9 @@ fn cached_function_call(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid cached function object")),
     };
     
-    let func = cached_obj.get("func").ok_or_else(|| anyhow::anyhow!("Cached function missing func"))?;
-    let cache = match cached_obj.get("cache") {
+    let binding = cached_obj.borrow();
+    let func = binding.get("func").ok_or_else(|| anyhow::anyhow!("Cached function missing func"))?;
+    let cache = match binding.get("cache") {
         Some(Value::Dict(cache)) => cache,
         _ => return Err(anyhow::anyhow!("Cached function missing cache")),
     };
@@ -361,23 +365,25 @@ fn cache_info(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid cached function object")),
     };
     
-    let cache: &HashMap<String, Value> = match cached_obj.get("cache") {
-        Some(Value::Dict(cache)) => &cache.borrow(),
-        _ => &HashMap::new(), // Return empty cache if not found
+    let binding = cached_obj.borrow();
+    let cache_size = if let Some(Value::Dict(cache)) = binding.get("cache") {
+        cache.borrow().len()
+    } else {
+        0
     };
     
     // Get hits and misses counters
-    let hits = match cached_obj.get("hits") {
+    let hits = match binding.get("hits") {
         Some(Value::Int(n)) => *n,
         _ => 0,
     };
     
-    let misses = match cached_obj.get("misses") {
+    let misses = match binding.get("misses") {
         Some(Value::Int(n)) => *n,
         _ => 0,
     };
     
-    let maxsize = match cached_obj.get("maxsize") {
+    let maxsize = match binding.get("maxsize") {
         Some(Value::Int(n)) => Some(*n),
         Some(Value::None) => None,
         _ => Some(128), // Default maxsize
@@ -387,12 +393,12 @@ fn cache_info(args: Vec<Value>) -> Result<Value> {
     info.insert("hits".to_string(), Value::Int(hits));
     info.insert("misses".to_string(), Value::Int(misses));
     info.insert("maxsize".to_string(), maxsize.map_or(Value::None, |n| Value::Int(n)));
-    info.insert("currsize".to_string(), Value::Int(cache.len() as i64));
+    info.insert("currsize".to_string(), Value::Int(cache_size as i64));
     
     // Create a simple object to represent the cache info
     Ok(Value::Object {
         class_name: "cache_info".to_string(),
-        fields: Rc::new(info),
+        fields: Rc::new(RefCell::new(info)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("cache_info".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["cache_info".to_string(), "object".to_string()]),
@@ -441,7 +447,7 @@ fn functools_cached_property(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "cached_property".to_string(),
-        fields: Rc::new(cached_prop),
+        fields: Rc::new(RefCell::new(cached_prop)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("cached_property".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["cached_property".to_string(), "object".to_string()]),
@@ -459,8 +465,9 @@ fn cached_property_get(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid cached_property object")),
     };
     
-    let func = cached_prop_obj.get("func").ok_or_else(|| anyhow::anyhow!("Cached property missing func"))?;
-    let cache_name = match cached_prop_obj.get("cache_name") {
+    let binding = cached_prop_obj.borrow();
+    let func = binding.get("func").ok_or_else(|| anyhow::anyhow!("Cached property missing func"))?;
+    let cache_name = match binding.get("cache_name") {
         Some(Value::Str(name)) => name,
         _ => return Err(anyhow::anyhow!("Cached property missing cache_name")),
     };
@@ -468,7 +475,7 @@ fn cached_property_get(args: Vec<Value>) -> Result<Value> {
     
     // Check if cached value exists
     if let Value::Object { fields, .. } = instance {
-        if let Some(cached_value) = fields.as_ref().get(cache_name) {
+        if let Some(cached_value) = fields.borrow().get(cache_name) {
             return Ok(cached_value.clone());
         }
     }
@@ -497,7 +504,7 @@ fn functools_cmp_to_key(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "cmp_to_key".to_string(),
-        fields: Rc::new(key_obj),
+        fields: Rc::new(RefCell::new(key_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("cmp_to_key".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["cmp_to_key".to_string(), "object".to_string()]),
@@ -515,7 +522,8 @@ fn cmp_to_key_call(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid cmp_to_key object")),
     };
     
-    let cmp_func = key_obj.get("cmp_func").ok_or_else(|| anyhow::anyhow!("cmp_to_key missing cmp_func"))?;
+    let binding = key_obj.borrow();
+    let cmp_func = binding.get("cmp_func").ok_or_else(|| anyhow::anyhow!("cmp_to_key missing cmp_func"))?;
     let other = &args[1];
     
     // Call comparison function with self and other
@@ -551,7 +559,7 @@ fn functools_singledispatch(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "singledispatch".to_string(),
-        fields: Rc::new(registry),
+        fields: Rc::new(RefCell::new(registry)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("singledispatch".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["singledispatch".to_string(), "object".to_string()]),
@@ -569,7 +577,8 @@ fn singledispatch_call(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid singledispatch object")),
     };
     
-    let dispatch_func = dispatch_obj.get("dispatch").ok_or_else(|| anyhow::anyhow!("singledispatch missing dispatch function"))?;
+    let binding = dispatch_obj.borrow();
+    let dispatch_func = binding.get("dispatch").ok_or_else(|| anyhow::anyhow!("singledispatch missing dispatch function"))?;
     
     // Call the original function
     call_function(dispatch_func, args[1..].to_vec())
@@ -597,7 +606,7 @@ fn functools_singledispatchmethod(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "singledispatchmethod".to_string(),
-        fields: Rc::new(registry),
+        fields: Rc::new(RefCell::new(registry)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("singledispatchmethod".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["singledispatchmethod".to_string(), "object".to_string()]),
@@ -615,7 +624,8 @@ fn singledispatchmethod_call(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid singledispatchmethod object")),
     };
     
-    let dispatch_func = dispatch_obj.get("dispatch").ok_or_else(|| anyhow::anyhow!("singledispatchmethod missing dispatch function"))?;
+    let binding = dispatch_obj.borrow();
+    let dispatch_func = binding.get("dispatch").ok_or_else(|| anyhow::anyhow!("singledispatchmethod missing dispatch function"))?;
     
     // Call the original function
     call_function(dispatch_func, args[1..].to_vec())

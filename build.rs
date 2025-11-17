@@ -1,6 +1,6 @@
 use std::env;
-use std::process::Command;
 use std::path::Path;
+use std::process::Command;
 
 fn main() {
     // Check if webviewtk feature is enabled using environment variable
@@ -39,7 +39,10 @@ fn install_webview2_windows() {
 
     for path in &install_paths {
         if Path::new(path).exists() {
-            println!("cargo:warning=WebView2 Runtime is already installed at {}!", path);
+            println!(
+                "cargo:warning=WebView2 Runtime is already installed at {}!",
+                path
+            );
             return;
         }
     }
@@ -51,7 +54,9 @@ fn install_webview2_windows() {
 
     if let Ok(output) = check_installed {
         if output.status.success() {
-            println!("cargo:warning=WebView2 Runtime is already installed (detected via registry)!");
+            println!(
+                "cargo:warning=WebView2 Runtime is already installed (detected via registry)!"
+            );
             return;
         }
     }
@@ -72,7 +77,7 @@ fn install_webview2_windows() {
                 "Invoke-WebRequest -Uri '{}' -OutFile '{}'",
                 url,
                 installer_path.display()
-            )
+            ),
         ])
         .status();
 
@@ -93,19 +98,29 @@ fn install_webview2_windows() {
                     let _ = std::fs::remove_file(&installer_path);
                 }
                 Ok(install_status) => {
-                    println!("cargo:warning=WebView2 installer exited with code: {:?}", install_status.code());
+                    println!(
+                        "cargo:warning=WebView2 installer exited with code: {:?}",
+                        install_status.code()
+                    );
                     println!("cargo:warning=Installation may have failed. You may need to install manually from:");
-                    println!("cargo:warning=https://developer.microsoft.com/microsoft-edge/webview2/");
+                    println!(
+                        "cargo:warning=https://developer.microsoft.com/microsoft-edge/webview2/"
+                    );
                 }
                 Err(e) => {
                     println!("cargo:warning=Failed to run WebView2 installer: {}", e);
                     println!("cargo:warning=Please install WebView2 Runtime manually from:");
-                    println!("cargo:warning=https://developer.microsoft.com/microsoft-edge/webview2/");
+                    println!(
+                        "cargo:warning=https://developer.microsoft.com/microsoft-edge/webview2/"
+                    );
                 }
             }
         }
         Ok(status) => {
-            println!("cargo:warning=Failed to download WebView2 Runtime (exit code: {:?})", status.code());
+            println!(
+                "cargo:warning=Failed to download WebView2 Runtime (exit code: {:?})",
+                status.code()
+            );
             println!("cargo:warning=Please install manually from:");
             println!("cargo:warning=https://developer.microsoft.com/microsoft-edge/webview2/");
         }

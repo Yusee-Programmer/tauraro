@@ -1,6 +1,6 @@
-    // Disabled: Triple-quote pre-computation disabled; use error-based approach instead
-    // triple_quote_regions: Vec<(usize, usize, String)>,
-    // next_triple_quote_idx: usize,
+// Disabled: Triple-quote pre-computation disabled; use error-based approach instead
+// triple_quote_regions: Vec<(usize, usize, String)>,
+// next_triple_quote_idx: usize,
 use logos::Logos;
 use std::fmt;
 

@@ -369,7 +369,7 @@ pub unsafe extern "C" fn tauraro_jit_load_attr(
     match &obj_val.value {
         Value::Object { fields, class_methods, .. } => {
             // Try to get field first
-            if let Some(field_value) = fields.get(&attr_name) {
+            if let Some(field_value) = fields.borrow().get(&attr_name) {
                 registers[result_reg as usize] = RcValue::new(field_value.clone());
                 return 0;
             }

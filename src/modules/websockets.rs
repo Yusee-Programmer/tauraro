@@ -1,6 +1,7 @@
 use crate::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use crate::modules::hplist::HPList;
 
 #[cfg(feature = "http")]
@@ -171,7 +172,7 @@ extern "C" fn ws_connect(args: *const Value, argc: usize) -> Value {
         
         Value::Object {
             class_name: "WebSocket".to_string(),
-            fields: Rc::new(ws_obj),
+            fields: Rc::new(RefCell::new(ws_obj)),
             class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new("WebSocket".to_string(), vec!["object".to_string()]),
             mro: crate::base_object::MRO::from_linearization(vec!["WebSocket".to_string(), "object".to_string()]),
@@ -214,7 +215,7 @@ extern "C" fn ws_serve(args: *const Value, argc: usize) -> Value {
         
         Value::Object {
         class_name: "WebSocketServer".to_string(),
-        fields: Rc::new(server_obj),
+        fields: Rc::new(RefCell::new(server_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("WebSocketServer".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["WebSocketServer".to_string(), "object".to_string()]),

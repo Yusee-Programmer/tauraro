@@ -211,7 +211,7 @@ pub fn create_collections_module() -> Value {
         if args.is_empty() {
             Ok(Value::Object {
                 class_name: "HighPerfList".to_string(),
-                fields: Rc::new(HashMap::new()),
+                fields: Rc::new(RefCell::new(HashMap::new())),
                 class_methods: HashMap::new(),
                 base_object: crate::base_object::BaseObject::new("HighPerfList".to_string(), vec!["object".to_string()]),
                 mro: crate::base_object::MRO::from_linearization(vec!["HighPerfList".to_string(), "object".to_string()]),
@@ -284,7 +284,7 @@ fn counter_builtin(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "Counter".to_string(),
-        fields: Rc::new(counts),
+        fields: Rc::new(RefCell::new(counts)),
         class_methods,
         base_object: crate::base_object::BaseObject::new("Counter".to_string(), vec!["dict".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["Counter".to_string(), "dict".to_string(), "object".to_string()]),
@@ -319,7 +319,7 @@ fn counter_most_common(args: Vec<Value>) -> Result<Value> {
 
     // Convert to vector of (key, count) pairs
     let mut items: Vec<(String, i64)> = Vec::new();
-    for (key, value) in fields.iter() {
+    for (key, value) in fields.borrow().iter() {
         if let Value::Int(count) = value {
             items.push((key.clone(), *count));
         }
@@ -361,7 +361,7 @@ fn counter_elements(args: Vec<Value>) -> Result<Value> {
 
     // Create a list with elements repeated according to their counts
     let mut result = Vec::new();
-    for (key, value) in fields.iter() {
+    for (key, value) in fields.borrow().iter() {
         if let Value::Int(count) = value {
             for _ in 0..*count {
                 result.push(Value::Str(key.clone()));
@@ -493,7 +493,7 @@ fn defaultdict_builtin(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "defaultdict".to_string(),
-        fields: Rc::new(fields),
+        fields: Rc::new(RefCell::new(fields)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("defaultdict".to_string(), vec!["dict".to_string(), "object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["defaultdict".to_string(), "dict".to_string(), "object".to_string()]),
@@ -546,7 +546,7 @@ fn deque_builtin(args: Vec<Value>) -> Result<Value> {
 
     Ok(Value::Object {
         class_name: "deque".to_string(),
-        fields: Rc::new(fields),
+        fields: Rc::new(RefCell::new(fields)),
         class_methods,
         base_object: crate::base_object::BaseObject::new("deque".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["deque".to_string(), "object".to_string()]),
@@ -568,32 +568,36 @@ fn deque_append(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid deque object")),
     };
 
-    // Get the items list
-    let items = match fields.get("items") {
-        Some(Value::List(list)) => list,
-        _ => return Err(anyhow::anyhow!("Invalid deque items")),
-    };
+    // Mutate fields directly
+    {
+        let mut fields_mut = fields.borrow_mut();
+        
+        // Get the items list
+        let items = match fields_mut.get("items") {
+            Some(Value::List(list)) => list.clone(),
+            _ => return Err(anyhow::anyhow!("Invalid deque items")),
+        };
 
-    // Get maxlen if it exists
-    let maxlen = match fields.get("maxlen") {
-        Some(Value::Int(n)) => Some(*n as usize),
-        _ => None,
-    };
+        // Get maxlen if it exists
+        let maxlen = match fields_mut.get("maxlen") {
+            Some(Value::Int(n)) => Some(*n as usize),
+            _ => None,
+        };
 
-    // Clone the list to modify it
-    let mut new_items = items.clone();
-    new_items.append(value.clone());
+        // Clone the list to modify it
+        let mut new_items = items.clone();
+        new_items.append(value.clone());
 
-    // Apply maxlen constraint if needed
-    if let Some(max) = maxlen {
-        while new_items.len() > max {
-            new_items.pop_at(0)?; // Remove from left when exceeding maxlen
+        // Apply maxlen constraint if needed
+        if let Some(max) = maxlen {
+            while new_items.len() > max {
+                new_items.pop_at(0)?; // Remove from left when exceeding maxlen
+            }
         }
-    }
 
-    // Update the items in the fields
-    let mut new_fields = (**fields).clone();
-    new_fields.insert("items".to_string(), Value::List(new_items));
+        // Update the items in the fields
+        fields_mut.insert("items".to_string(), Value::List(new_items));
+    }
 
     Ok(Value::None)
 }
@@ -613,32 +617,36 @@ fn deque_appendleft(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid deque object")),
     };
 
-    // Get the items list
-    let items = match fields.get("items") {
-        Some(Value::List(list)) => list,
-        _ => return Err(anyhow::anyhow!("Invalid deque items")),
-    };
+    // Mutate fields directly
+    {
+        let mut fields_mut = fields.borrow_mut();
+        
+        // Get the items list
+        let items = match fields_mut.get("items") {
+            Some(Value::List(list)) => list.clone(),
+            _ => return Err(anyhow::anyhow!("Invalid deque items")),
+        };
 
-    // Get maxlen if it exists
-    let maxlen = match fields.get("maxlen") {
-        Some(Value::Int(n)) => Some(*n as usize),
-        _ => None,
-    };
+        // Get maxlen if it exists
+        let maxlen = match fields_mut.get("maxlen") {
+            Some(Value::Int(n)) => Some(*n as usize),
+            _ => None,
+        };
 
-    // Clone the list to modify it
-    let mut new_items = items.clone();
-    new_items.insert(0, value.clone())?;
+        // Clone the list to modify it
+        let mut new_items = items.clone();
+        new_items.insert(0, value.clone())?;
 
-    // Apply maxlen constraint if needed
-    if let Some(max) = maxlen {
-        while new_items.len() > max {
-            new_items.pop(); // Remove from right when exceeding maxlen
+        // Apply maxlen constraint if needed
+        if let Some(max) = maxlen {
+            while new_items.len() > max {
+                new_items.pop(); // Remove from right when exceeding maxlen
+            }
         }
-    }
 
-    // Update the items in the fields
-    let mut new_fields = (**fields).clone();
-    new_fields.insert("items".to_string(), Value::List(new_items));
+        // Update the items in the fields
+        fields_mut.insert("items".to_string(), Value::List(new_items));
+    }
 
     Ok(Value::None)
 }
@@ -657,24 +665,30 @@ fn deque_pop(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid deque object")),
     };
 
-    // Get the items list
-    let items = match fields.get("items") {
-        Some(Value::List(list)) => list,
-        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    // Get items and pop
+    let popped = {
+        let mut fields_mut = fields.borrow_mut();
+        
+        // Get the items list
+        let items = match fields_mut.get("items") {
+            Some(Value::List(list)) => list.clone(),
+            _ => return Err(anyhow::anyhow!("Invalid deque items")),
+        };
+
+        // Check if deque is empty
+        if items.is_empty() {
+            return Err(anyhow::anyhow!("pop from an empty deque"));
+        }
+
+        // Clone the list to modify it
+        let mut new_items = items.clone();
+        let popped_val = new_items.pop().unwrap();
+
+        // Update the items in the fields
+        fields_mut.insert("items".to_string(), Value::List(new_items));
+        
+        popped_val
     };
-
-    // Check if deque is empty
-    if items.is_empty() {
-        return Err(anyhow::anyhow!("pop from an empty deque"));
-    }
-
-    // Clone the list to modify it
-    let mut new_items = items.clone();
-    let popped = new_items.pop().unwrap();
-
-    // Update the items in the fields
-    let mut new_fields = (**fields).clone();
-    new_fields.insert("items".to_string(), Value::List(new_items));
 
     Ok(popped)
 }
@@ -693,24 +707,30 @@ fn deque_popleft(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid deque object")),
     };
 
-    // Get the items list
-    let items = match fields.get("items") {
-        Some(Value::List(list)) => list,
-        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    // Get items and pop
+    let popped = {
+        let mut fields_mut = fields.borrow_mut();
+        
+        // Get the items list
+        let items = match fields_mut.get("items") {
+            Some(Value::List(list)) => list.clone(),
+            _ => return Err(anyhow::anyhow!("Invalid deque items")),
+        };
+
+        // Check if deque is empty
+        if items.is_empty() {
+            return Err(anyhow::anyhow!("pop from an empty deque"));
+        }
+
+        // Clone the list to modify it
+        let mut new_items = items.clone();
+        let popped_val = new_items.pop_at(0)?;
+
+        // Update the items in the fields
+        fields_mut.insert("items".to_string(), Value::List(new_items));
+        
+        popped_val
     };
-
-    // Check if deque is empty
-    if items.is_empty() {
-        return Err(anyhow::anyhow!("pop from an empty deque"));
-    }
-
-    // Clone the list to modify it
-    let mut new_items = items.clone();
-    let popped = new_items.pop_at(0)?;
-
-    // Update the items in the fields
-    let mut new_fields = (**fields).clone();
-    new_fields.insert("items".to_string(), Value::List(new_items));
 
     Ok(popped)
 }
@@ -730,8 +750,10 @@ fn deque_clear(args: Vec<Value>) -> Result<Value> {
     };
 
     // Update the items in the fields with an empty list
-    let mut new_fields = (**fields).clone();
-    new_fields.insert("items".to_string(), Value::List(HPList::new()));
+    {
+        let mut fields_mut = fields.borrow_mut();
+        fields_mut.insert("items".to_string(), Value::List(HPList::new()));
+    }
 
     Ok(Value::None)
 }
@@ -751,46 +773,50 @@ fn deque_extend(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid deque object")),
     };
 
-    // Get the items list
-    let items = match fields.get("items") {
-        Some(Value::List(list)) => list,
-        _ => return Err(anyhow::anyhow!("Invalid deque items")),
-    };
+    // Mutate fields directly
+    {
+        let mut fields_mut = fields.borrow_mut();
+        
+        // Get the items list
+        let items = match fields_mut.get("items") {
+            Some(Value::List(list)) => list.clone(),
+            _ => return Err(anyhow::anyhow!("Invalid deque items")),
+        };
 
-    // Get maxlen if it exists
-    let maxlen = match fields.get("maxlen") {
-        Some(Value::Int(n)) => Some(*n as usize),
-        _ => None,
-    };
+        // Get maxlen if it exists
+        let maxlen = match fields_mut.get("maxlen") {
+            Some(Value::Int(n)) => Some(*n as usize),
+            _ => None,
+        };
 
-    // Clone the list to modify it
-    let mut new_items = items.clone();
+        // Clone the list to modify it
+        let mut new_items = items.clone();
 
-    // Extend with items from iterable
-    match iterable {
-        Value::List(list) => {
-            for item in list.iter() {
-                new_items.append(item.clone());
+        // Extend with items from iterable
+        match iterable {
+            Value::List(list) => {
+                for item in list.iter() {
+                    new_items.append(item.clone());
+                }
+            }
+            Value::Tuple(tuple) => {
+                for item in tuple.iter() {
+                    new_items.append(item.clone());
+                }
+            }
+            _ => return Err(anyhow::anyhow!("extend() argument must be iterable")),
+        }
+
+        // Apply maxlen constraint if needed
+        if let Some(max) = maxlen {
+            while new_items.len() > max {
+                new_items.pop_at(0)?; // Remove from left when exceeding maxlen
             }
         }
-        Value::Tuple(tuple) => {
-            for item in tuple.iter() {
-                new_items.append(item.clone());
-            }
-        }
-        _ => return Err(anyhow::anyhow!("extend() argument must be iterable")),
-    }
 
-    // Apply maxlen constraint if needed
-    if let Some(max) = maxlen {
-        while new_items.len() > max {
-            new_items.pop_at(0)?; // Remove from left when exceeding maxlen
-        }
+        // Update the items in the fields
+        fields_mut.insert("items".to_string(), Value::List(new_items));
     }
-
-    // Update the items in the fields
-    let mut new_fields = (**fields).clone();
-    new_fields.insert("items".to_string(), Value::List(new_items));
 
     Ok(Value::None)
 }
@@ -810,60 +836,64 @@ fn deque_extendleft(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid deque object")),
     };
 
-    // Get the items list
-    let items = match fields.get("items") {
-        Some(Value::List(list)) => list,
-        _ => return Err(anyhow::anyhow!("Invalid deque items")),
-    };
+    // Mutate fields directly
+    {
+        let mut fields_mut = fields.borrow_mut();
+        
+        // Get the items list
+        let items = match fields_mut.get("items") {
+            Some(Value::List(list)) => list.clone(),
+            _ => return Err(anyhow::anyhow!("Invalid deque items")),
+        };
 
-    // Get maxlen if it exists
-    let maxlen = match fields.get("maxlen") {
-        Some(Value::Int(n)) => Some(*n as usize),
-        _ => None,
-    };
+        // Get maxlen if it exists
+        let maxlen = match fields_mut.get("maxlen") {
+            Some(Value::Int(n)) => Some(*n as usize),
+            _ => None,
+        };
 
-    // Clone the list to modify it
-    let mut new_items = items.clone();
+        // Clone the list to modify it
+        let mut new_items = items.clone();
 
-    // Extend with items from iterable (in reverse order to match Python behavior)
-    match iterable {
-        Value::List(list) => {
-            // Collect items and then insert them in reverse order
-            let mut items_to_insert = Vec::new();
-            for item in list.iter() {
-                items_to_insert.push(item.clone());
+        // Extend with items from iterable (in reverse order to match Python behavior)
+        match iterable {
+            Value::List(list) => {
+                // Collect items and then insert them in reverse order
+                let mut items_to_insert = Vec::new();
+                for item in list.iter() {
+                    items_to_insert.push(item.clone());
+                }
+                
+                // Insert items in reverse order (last item first)
+                for item in items_to_insert.iter().rev() {
+                    new_items.insert(0, item.clone())?;
+                }
             }
-            
-            // Insert items in reverse order (last item first)
-            for item in items_to_insert.iter().rev() {
-                new_items.insert(0, item.clone())?;
+            Value::Tuple(tuple) => {
+                // Collect items and then insert them in reverse order
+                let mut items_to_insert = Vec::new();
+                for item in tuple.iter() {
+                    items_to_insert.push(item.clone());
+                }
+                
+                // Insert items in reverse order (last item first)
+                for item in items_to_insert.iter().rev() {
+                    new_items.insert(0, item.clone())?;
+                }
+            }
+            _ => return Err(anyhow::anyhow!("extendleft() argument must be iterable")),
+        }
+
+        // Apply maxlen constraint if needed
+        if let Some(max) = maxlen {
+            while new_items.len() > max {
+                new_items.pop(); // Remove from right when exceeding maxlen
             }
         }
-        Value::Tuple(tuple) => {
-            // Collect items and then insert them in reverse order
-            let mut items_to_insert = Vec::new();
-            for item in tuple.iter() {
-                items_to_insert.push(item.clone());
-            }
-            
-            // Insert items in reverse order (last item first)
-            for item in items_to_insert.iter().rev() {
-                new_items.insert(0, item.clone())?;
-            }
-        }
-        _ => return Err(anyhow::anyhow!("extendleft() argument must be iterable")),
+
+        // Update the items in the fields
+        fields_mut.insert("items".to_string(), Value::List(new_items));
     }
-
-    // Apply maxlen constraint if needed
-    if let Some(max) = maxlen {
-        while new_items.len() > max {
-            new_items.pop(); // Remove from right when exceeding maxlen
-        }
-    }
-
-    // Update the items in the fields
-    let mut new_fields = (**fields).clone();
-    new_fields.insert("items".to_string(), Value::List(new_items));
 
     Ok(Value::None)
 }
@@ -890,77 +920,81 @@ fn deque_rotate(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid deque object")),
     };
 
-    // Get the items list
-    let items = match fields.get("items") {
-        Some(Value::List(list)) => list,
-        _ => return Err(anyhow::anyhow!("Invalid deque items")),
-    };
+    // Rotate items
+    {
+        let mut fields_mut = fields.borrow_mut();
+        
+        // Get the items list
+        let items = match fields_mut.get("items") {
+            Some(Value::List(list)) => list.clone(),
+            _ => return Err(anyhow::anyhow!("Invalid deque items")),
+        };
 
-    if items.is_empty() || n == 0 {
-        return Ok(Value::None);
-    }
+        if items.is_empty() || n == 0 {
+            return Ok(Value::None);
+        }
 
-    // Clone the list to modify it
-    let mut new_items = items.clone();
-    let len = new_items.len() as i64;
-    
-    // Normalize rotation steps to be within list length
-    let steps = if n >= 0 {
-        n % len
-    } else {
-        (n % len + len) % len
-    };
-
-    if steps != 0 {
-        // Perform rotation
-        if steps > 0 {
-            // Rotate right: move last 'steps' elements to the front
-            let split_point = (len - steps) as usize;
-            let mut elements_to_move = Vec::new();
-            
-            // Collect elements to move from the end
-            for i in split_point..new_items.len() {
-                if let Some(item) = new_items.get(i as isize) {
-                    elements_to_move.push(item.clone());
-                }
-            }
-            
-            // Remove elements from the end
-            for _ in split_point..new_items.len() {
-                new_items.pop();
-            }
-            
-            // Insert elements at the beginning (in reverse order to maintain sequence)
-            for item in elements_to_move.iter().rev() {
-                new_items.insert(0, item.clone())?;
-            }
+        // Clone the list to modify it
+        let mut new_items = items.clone();
+        let len = new_items.len() as i64;
+        
+        // Normalize rotation steps to be within list length
+        let steps = if n >= 0 {
+            n % len
         } else {
-            // Rotate left: move first 'steps' elements to the end
-            let steps_abs = (-steps) as usize;
-            let mut elements_to_move = Vec::new();
-            
-            // Collect elements to move from the beginning
-            for i in 0..steps_abs {
-                if let Some(item) = new_items.get(i as isize) {
-                    elements_to_move.push(item.clone());
+            (n % len + len) % len
+        };
+
+        if steps != 0 {
+            // Perform rotation
+            if steps > 0 {
+                // Rotate right: move last 'steps' elements to the front
+                let split_point = (len - steps) as usize;
+                let mut elements_to_move = Vec::new();
+                
+                // Collect elements to move from the end
+                for i in split_point..new_items.len() {
+                    if let Some(item) = new_items.get(i as isize) {
+                        elements_to_move.push(item.clone());
+                    }
                 }
-            }
-            
-            // Remove elements from the beginning
-            for _ in 0..steps_abs {
-                let _ = new_items.pop_at(0)?; // Ignore the returned value
-            }
-            
-            // Append elements to the end
-            for item in elements_to_move {
-                new_items.append(item);
+                
+                // Remove elements from the end
+                for _ in split_point..new_items.len() {
+                    new_items.pop();
+                }
+                
+                // Insert elements at the beginning (in reverse order to maintain sequence)
+                for item in elements_to_move.iter().rev() {
+                    new_items.insert(0, item.clone())?;
+                }
+            } else {
+                // Rotate left: move first 'steps' elements to the end
+                let steps_abs = (-steps) as usize;
+                let mut elements_to_move = Vec::new();
+                
+                // Collect elements to move from the beginning
+                for i in 0..steps_abs {
+                    if let Some(item) = new_items.get(i as isize) {
+                        elements_to_move.push(item.clone());
+                    }
+                }
+                
+                // Remove elements from the beginning
+                for _ in 0..steps_abs {
+                    let _ = new_items.pop_at(0)?; // Ignore the returned value
+                }
+                
+                // Append elements to the end
+                for item in elements_to_move {
+                    new_items.append(item);
+                }
             }
         }
-    }
 
-    // Update the items in the fields
-    let mut new_fields = (**fields).clone();
-    new_fields.insert("items".to_string(), Value::List(new_items));
+        // Update the items in the fields
+        fields_mut.insert("items".to_string(), Value::List(new_items));
+    }
 
     Ok(Value::None)
 }
@@ -980,19 +1014,22 @@ fn deque_iter(args: Vec<Value>) -> Result<Value> {
     };
 
     // Get the items list
-    let items = match fields.get("items") {
-        Some(Value::List(list)) => list,
-        _ => return Err(anyhow::anyhow!("Invalid deque items")),
+    let items = {
+        let fields_ref = fields.borrow();
+        match fields_ref.get("items") {
+            Some(Value::List(list)) => list.clone(),
+            _ => return Err(anyhow::anyhow!("Invalid deque items")),
+        }
     };
 
     // Create an iterator object with the items and starting index
     let mut iterator_fields = HashMap::new();
-    iterator_fields.insert("items".to_string(), Value::List(items.clone()));
+    iterator_fields.insert("items".to_string(), Value::List(items));
     iterator_fields.insert("index".to_string(), Value::Int(0));
 
     Ok(Value::Object {
         class_name: "deque_iterator".to_string(),
-        fields: Rc::new(iterator_fields),
+        fields: Rc::new(RefCell::new(iterator_fields)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("deque_iterator".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["deque_iterator".to_string(), "object".to_string()]),
@@ -1013,29 +1050,35 @@ fn deque_next(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid iterator object")),
     };
 
-    // Get the items list
-    let items = match fields.get("items") {
-        Some(Value::List(list)) => list,
-        _ => return Err(anyhow::anyhow!("Invalid iterator items")),
+    // Get next item and update index
+    let item = {
+        let mut fields_mut = fields.borrow_mut();
+        
+        // Get the items list
+        let items = match fields_mut.get("items") {
+            Some(Value::List(list)) => list.clone(),
+            _ => return Err(anyhow::anyhow!("Invalid iterator items")),
+        };
+
+        // Get the current index
+        let index = match fields_mut.get("index") {
+            Some(Value::Int(i)) => *i,
+            _ => return Err(anyhow::anyhow!("Invalid iterator index")),
+        };
+
+        // Check if we've reached the end
+        if index as usize >= items.len() {
+            return Err(anyhow::anyhow!("StopIteration"));
+        }
+
+        // Get the current item
+        let current_item = items.get(index as isize).unwrap().clone();
+
+        // Update the index
+        fields_mut.insert("index".to_string(), Value::Int(index + 1));
+        
+        current_item
     };
-
-    // Get the current index
-    let index = match fields.get("index") {
-        Some(Value::Int(i)) => *i,
-        _ => return Err(anyhow::anyhow!("Invalid iterator index")),
-    };
-
-    // Check if we've reached the end
-    if index as usize >= items.len() {
-        return Err(anyhow::anyhow!("StopIteration"));
-    }
-
-    // Get the current item
-    let item = items.get(index as isize).unwrap().clone();
-
-    // Update the index in the fields
-    let mut new_fields = (**fields).clone();
-    new_fields.insert("index".to_string(), Value::Int(index + 1));
 
     Ok(item)
 }

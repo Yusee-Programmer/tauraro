@@ -74,7 +74,7 @@ fn itertools_count(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "count".to_string(),
-        fields: Rc::new(count_obj),
+        fields: Rc::new(RefCell::new(count_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("count".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["count".to_string(), "object".to_string()]),
@@ -98,12 +98,12 @@ fn count_next(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid count object")),
     };
     
-    let current = match count_obj.get("current") {
+    let current = match count_obj.borrow().get("current") {
         Some(Value::Int(n)) => *n,
         _ => return Err(anyhow::anyhow!("Invalid count current value")),
     };
     
-    let step = match count_obj.get("step") {
+    let step = match count_obj.borrow().get("step") {
         Some(Value::Int(n)) => *n,
         _ => return Err(anyhow::anyhow!("Invalid count step value")),
     };
@@ -131,7 +131,7 @@ fn itertools_cycle(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "cycle".to_string(),
-        fields: Rc::new(cycle_obj),
+        fields: Rc::new(RefCell::new(cycle_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("cycle".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["cycle".to_string(), "object".to_string()]),
@@ -155,7 +155,8 @@ fn cycle_next(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid cycle object")),
     };
     
-    let iterable = match cycle_obj.get("iterable") {
+    let binding = cycle_obj.borrow();
+    let iterable = match binding.get("iterable") {
         Some(Value::List(items)) => items,
         _ => return Err(anyhow::anyhow!("Invalid cycle iterable")),
     };
@@ -164,7 +165,7 @@ fn cycle_next(args: Vec<Value>) -> Result<Value> {
         return Err(anyhow::anyhow!("StopIteration"));
     }
     
-    let index = match cycle_obj.get("index") {
+    let index = match binding.get("index") {
         Some(Value::Int(i)) => *i as usize,
         _ => return Err(anyhow::anyhow!("Invalid cycle index")),
     };
@@ -204,7 +205,7 @@ fn itertools_repeat(args: Vec<Value>) -> Result<Value> {
     
     Ok(Value::Object {
         class_name: "repeat".to_string(),
-        fields: Rc::new(repeat_obj),
+        fields: Rc::new(RefCell::new(repeat_obj)),
         class_methods: HashMap::new(),
         base_object: crate::base_object::BaseObject::new("repeat".to_string(), vec!["object".to_string()]),
         mro: crate::base_object::MRO::from_linearization(vec!["repeat".to_string(), "object".to_string()]),
@@ -228,18 +229,18 @@ fn repeat_next(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid repeat object")),
     };
     
-    let object = match repeat_obj.get("object") {
+    let object = match repeat_obj.borrow().get("object") {
         Some(obj) => obj.clone(),
         None => return Err(anyhow::anyhow!("Invalid repeat object")),
     };
     
-    let times = match repeat_obj.get("times") {
+    let times = match repeat_obj.borrow().get("times") {
         Some(Value::Int(n)) => Some(*n),
         Some(Value::None) => None,
         _ => return Err(anyhow::anyhow!("Invalid repeat times")),
     };
     
-    let count = match repeat_obj.get("count") {
+    let count = match repeat_obj.borrow().get("count") {
         Some(Value::Int(n)) => *n,
         _ => return Err(anyhow::anyhow!("Invalid repeat count")),
     };

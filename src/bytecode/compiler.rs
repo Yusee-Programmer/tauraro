@@ -733,7 +733,7 @@ impl SuperCompiler {
                                                     if let Value::Object { class_name, fields, .. } = existing_property {
                                                         if class_name == "property" {
                                                             // Create a new property object with the updated setter/deleter/getter
-                                                            let mut new_fields = fields.as_ref().clone();
+                                                            let mut new_fields = fields.borrow().clone();
 
                                                             match name.as_str() {
                                                                 "setter" => {
@@ -751,7 +751,7 @@ impl SuperCompiler {
                                                             // Create updated property object
                                                             final_method_value = Value::Object {
                                                                 class_name: "property".to_string(),
-                                                                fields: std::rc::Rc::new(new_fields),
+                                                                fields: std::rc::Rc::new(std::cell::RefCell::new(new_fields)),
                                                                 class_methods: std::collections::HashMap::new(),
                                                                 mro: crate::base_object::MRO::new(),
                                                                 base_object: crate::base_object::BaseObject::new("property".to_string(), vec![]),
@@ -1133,6 +1133,22 @@ impl SuperCompiler {
                         // Global scope - use StoreGlobal
                         let name_idx = self.code.add_name(target.clone());
                         self.emit(OpCode::StoreGlobal, item_reg, name_idx, 0, self.current_line);
+                    }
+                }
+                Ok(())
+            }
+            Statement::MultipleAssignment { targets, value } => {
+                // Compile multiple assignment: x = y = z = value
+                // Evaluate value once and assign to all targets
+                let value_reg = self.compile_expression(value)?;
+
+                for target in targets {
+                    if self.is_in_function_scope() {
+                        let local_idx = self.get_local_index(&target);
+                        self.emit(OpCode::StoreFast, value_reg, local_idx, 0, self.current_line);
+                    } else {
+                        let name_idx = self.code.add_name(target.clone());
+                        self.emit(OpCode::StoreGlobal, value_reg, name_idx, 0, self.current_line);
                     }
                 }
                 Ok(())

@@ -421,10 +421,7 @@ fn execute_closure(app: &Value, scope: Value) -> Result<Value> {
 
 /// Helper to convert Value to RcValue for VM execution
 fn value_to_rc_value(value: Value) -> crate::bytecode::objects::RcValue {
-    crate::bytecode::objects::RcValue {
-        value,
-        ref_count: 1,
-    }
+    crate::bytecode::objects::RcValue::new(value)
 }
 
 /// Convert Tauraro value to Hyper response
