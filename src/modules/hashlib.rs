@@ -497,13 +497,16 @@ fn hash_update(args: Vec<Value>) -> Result<Value> {
     
     // Update the hash object with new data
     if let Value::Object { fields, .. } = hash_obj {
-        let algorithm = match fields.borrow().get("algorithm") {
-            Some(Value::Str(algo)) => algo,
-            _ => return Err(anyhow::anyhow!("Hash object missing algorithm")),
+        let algorithm = {
+            let binding = fields.borrow();
+            match binding.get("algorithm") {
+                Some(Value::Str(algo)) => algo.clone(),
+                _ => return Err(anyhow::anyhow!("Hash object missing algorithm")),
+            }
         };
         
         // Compute new hash
-        let hash_result = compute_hash(algorithm, &current_data);
+        let hash_result = compute_hash(&algorithm, &current_data);
         let hex_hash = hex_encode(&hash_result);
         
         // Update the object fields
@@ -513,7 +516,7 @@ fn hash_update(args: Vec<Value>) -> Result<Value> {
         
         // Create new hash object with updated fields
         return Ok(Value::Object {
-            class_name: algorithm.to_string() + "Hash",
+            class_name: algorithm.clone() + "Hash",
             fields: std::rc::Rc::new(updated_fields),
             class_methods: HashMap::new(),
             base_object: crate::base_object::BaseObject::new(algorithm.to_string() + "Hash", vec!["object".to_string()]),

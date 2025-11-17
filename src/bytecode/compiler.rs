@@ -751,7 +751,7 @@ impl SuperCompiler {
                                                             // Create updated property object
                                                             final_method_value = Value::Object {
                                                                 class_name: "property".to_string(),
-                                                                fields: std::rc::Rc::new(new_fields),
+                                                                fields: std::rc::Rc::new(std::cell::RefCell::new(new_fields)),
                                                                 class_methods: std::collections::HashMap::new(),
                                                                 mro: crate::base_object::MRO::new(),
                                                                 base_object: crate::base_object::BaseObject::new("property".to_string(), vec![]),

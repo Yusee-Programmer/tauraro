@@ -722,7 +722,7 @@ impl OptimizedNativeTranspiler {
 
     fn infer_struct_field_type(&self, class_name: &str, field_name: &str) -> Result<NativeType, String> {
         if let Some(fields) = self.struct_fields.get(class_name) {
-            if let Some(field_type) = fields.borrow().get(field_name) {
+            if let Some(field_type) = fields.get(field_name) {
                 return Ok(field_type.clone());
             }
         }
@@ -2003,7 +2003,7 @@ impl OptimizedNativeTranspiler {
                 // Check if it's a constructor call (class name)
                 if let Expr::Identifier(func_name) = func.as_ref() {
                     // Check if this is a class constructor
-                    if self.struct_fields.borrow().contains_key(func_name) {
+                    if self.struct_fields.contains_key(func_name) {
                         return Ok(NativeType::Struct(func_name.clone()));
                     }
                     // Check if it's a user-defined function with known return type

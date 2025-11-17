@@ -1038,7 +1038,7 @@ impl SuperBytecodeVM {
             else if self.frames[frame_idx].builtins.borrow().contains_key(&name) {
                 // DEBUG: Print if found in builtins
                 // eprintln!("DEBUG: Found '{}' in builtins", name);
-                self.frames[frame_idx].builtins.get(&name).cloned()
+                self.frames[frame_idx].builtins.borrow().get(&name).cloned()
             }
             // Then check VM globals
             else if self.globals.borrow().contains_key(&name) {
@@ -4976,7 +4976,7 @@ impl SuperBytecodeVM {
                     }
                     // Then check builtins
                     else if self.frames[frame_idx].builtins.borrow().contains_key(&name) {
-                        self.frames[frame_idx].builtins.get(&name).cloned()
+                        self.frames[frame_idx].builtins.borrow().get(&name).cloned()
                     }
                     // Then check VM globals
                     else if self.globals.borrow().contains_key(&name) {

@@ -1048,7 +1048,7 @@ fn hasattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     let has_attr = match obj {
         Value::Object { fields, class_methods, .. } => {
             // First check fields
-            fields.contains_key(attr_name) || class_methods.contains_key(attr_name)
+            fields.borrow().contains_key(attr_name) || class_methods.contains_key(attr_name)
         },
         Value::Class { methods, .. } => {
             methods.contains_key(attr_name)
@@ -1082,7 +1082,7 @@ fn getattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     match obj {
         Value::Object { fields, class_methods, .. } => {
             // First check fields
-            if let Some(value) = fields.get(attr_name) {
+            if let Some(value) = fields.borrow().get(attr_name) {
                 Ok(value.clone())
             }
             // Then check methods
@@ -1378,7 +1378,7 @@ fn file_read(args: Vec<Value>) -> anyhow::Result<Value> {
 
     // Extract filename from file object
     let filename = if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(name)) = fields.get("filename") {
+        if let Some(Value::Str(name)) = fields.borrow().get("filename") {
             name.clone()
         } else {
             return Err(anyhow::anyhow!("File object missing filename"));
@@ -1401,7 +1401,7 @@ fn file_write(args: Vec<Value>) -> anyhow::Result<Value> {
 
     // Extract filename from file object
     let filename = if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(name)) = fields.get("filename") {
+        if let Some(Value::Str(name)) = fields.borrow().get("filename") {
             name.clone()
         } else {
             return Err(anyhow::anyhow!("File object missing filename"));
@@ -1457,7 +1457,7 @@ fn file_readline(args: Vec<Value>) -> anyhow::Result<Value> {
 
     // Extract filename
     let filename = if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(name)) = fields.get("filename") {
+        if let Some(Value::Str(name)) = fields.borrow().get("filename") {
             name.clone()
         } else {
             return Err(anyhow::anyhow!("File object missing filename"));
@@ -1481,7 +1481,7 @@ fn file_readlines(args: Vec<Value>) -> anyhow::Result<Value> {
 
     // Extract filename
     let filename = if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(name)) = fields.get("filename") {
+        if let Some(Value::Str(name)) = fields.borrow().get("filename") {
             name.clone()
         } else {
             return Err(anyhow::anyhow!("File object missing filename"));
@@ -1505,7 +1505,7 @@ fn file_writelines(args: Vec<Value>) -> anyhow::Result<Value> {
 
     // Extract filename
     let filename = if let Value::Object { fields, .. } = &args[0] {
-        if let Some(Value::Str(name)) = fields.get("filename") {
+        if let Some(Value::Str(name)) = fields.borrow().get("filename") {
             name.clone()
         } else {
             return Err(anyhow::anyhow!("File object missing filename"));

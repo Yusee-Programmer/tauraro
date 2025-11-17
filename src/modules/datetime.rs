@@ -449,7 +449,7 @@ pub fn time_replace(_args: Vec<Value>) -> Result<Value> {
 
 pub fn timedelta_total_seconds(args: Vec<Value>) -> Result<Value> {
     if let Some(Value::Object { fields, .. }) = args.get(0) {
-        let days = match fields.get("_days") {
+        let days = match fields.borrow().get("_days") {
             Some(Value::Int(d)) => *d as f64,
             _ => 0.0,
         };
@@ -457,7 +457,7 @@ pub fn timedelta_total_seconds(args: Vec<Value>) -> Result<Value> {
             Some(Value::Int(s)) => *s as f64,
             _ => 0.0,
         };
-        let microseconds = match fields.get("_microseconds") {
+        let microseconds = match fields.borrow().get("_microseconds") {
             Some(Value::Int(us)) => *us as f64 / 1_000_000.0,
             _ => 0.0,
         };

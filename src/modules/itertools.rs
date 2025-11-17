@@ -98,12 +98,12 @@ fn count_next(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid count object")),
     };
     
-    let current = match count_obj.get("current") {
+    let current = match count_obj.borrow().get("current") {
         Some(Value::Int(n)) => *n,
         _ => return Err(anyhow::anyhow!("Invalid count current value")),
     };
     
-    let step = match count_obj.get("step") {
+    let step = match count_obj.borrow().get("step") {
         Some(Value::Int(n)) => *n,
         _ => return Err(anyhow::anyhow!("Invalid count step value")),
     };
@@ -155,7 +155,8 @@ fn cycle_next(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid cycle object")),
     };
     
-    let iterable = match cycle_obj.get("iterable") {
+    let binding = cycle_obj.borrow();
+    let iterable = match binding.get("iterable") {
         Some(Value::List(items)) => items,
         _ => return Err(anyhow::anyhow!("Invalid cycle iterable")),
     };
@@ -164,7 +165,7 @@ fn cycle_next(args: Vec<Value>) -> Result<Value> {
         return Err(anyhow::anyhow!("StopIteration"));
     }
     
-    let index = match cycle_obj.get("index") {
+    let index = match binding.get("index") {
         Some(Value::Int(i)) => *i as usize,
         _ => return Err(anyhow::anyhow!("Invalid cycle index")),
     };
@@ -228,18 +229,18 @@ fn repeat_next(args: Vec<Value>) -> Result<Value> {
         _ => return Err(anyhow::anyhow!("Invalid repeat object")),
     };
     
-    let object = match repeat_obj.get("object") {
+    let object = match repeat_obj.borrow().get("object") {
         Some(obj) => obj.clone(),
         None => return Err(anyhow::anyhow!("Invalid repeat object")),
     };
     
-    let times = match repeat_obj.get("times") {
+    let times = match repeat_obj.borrow().get("times") {
         Some(Value::Int(n)) => Some(*n),
         Some(Value::None) => None,
         _ => return Err(anyhow::anyhow!("Invalid repeat times")),
     };
     
-    let count = match repeat_obj.get("count") {
+    let count = match repeat_obj.borrow().get("count") {
         Some(Value::Int(n)) => *n,
         _ => return Err(anyhow::anyhow!("Invalid repeat count")),
     };

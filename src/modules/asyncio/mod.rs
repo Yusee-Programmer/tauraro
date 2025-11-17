@@ -148,7 +148,7 @@ fn create_task(args: Vec<Value>) -> Result<Value> {
     
     // Store task ID in fields
     let mut task_fields = HashMap::new();
-    task_fields.borrow_mut().insert("_task_id".to_string(), Value::Int(task_id as i64));
+    task_fields.insert("_task_id".to_string(), Value::Int(task_id as i64));
     
     // Store methods in class_methods (not fields)
     let mut task_methods = HashMap::new();

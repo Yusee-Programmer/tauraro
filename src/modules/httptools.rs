@@ -432,7 +432,7 @@ extern "C" fn build_request(args: *const Value, argc: usize) -> Value {
 
     let mut request = format!("{} {} HTTP/1.1\r\n", method, path);
     
-    for (name, value) in headers.iter() {  // Use .iter()
+    for (name, value) in headers.borrow().iter() {
         if let Value::Str(val) = value {
             request.push_str(&format!("{}: {}\r\n", name, val));
         }
@@ -465,7 +465,7 @@ extern "C" fn build_response(args: *const Value, argc: usize) -> Value {
     let reason = get_status_reason(status);
     let mut response = format!("HTTP/1.1 {} {}\r\n", status, reason);
     
-    for (name, value) in headers.iter() {  // Use .iter()
+    for (name, value) in headers.borrow().iter() {
         if let Value::Str(val) = value {
             response.push_str(&format!("{}: {}\r\n", name, val));
         }
@@ -490,7 +490,7 @@ extern "C" fn build_headers(args: *const Value, argc: usize) -> Value {
 
     let mut header_string = String::new();
     
-    for (name, value) in headers.iter() {  // Use .iter()
+    for (name, value) in headers.borrow().iter() {
         if let Value::Str(val) = value {
             header_string.push_str(&format!("{}: {}\r\n", name, val));
         }
