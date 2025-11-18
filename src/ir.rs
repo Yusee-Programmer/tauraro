@@ -1655,15 +1655,23 @@ impl Generator {
             Expr::Dict(pairs) => {
                 // Handle dict literal: {key1: value1, key2: value2, ...}
                 let mut pair_names = Vec::new();
-                for (i, (key, value)) in pairs.iter().enumerate() {
-                    let key_result = format!("temp_key_{}", i);
-                    let value_result = format!("temp_value_{}", i);
+                for (i, item) in pairs.iter().enumerate() {
+                    match item {
+                        crate::ast::DictItem::KeyValue(key, value) => {
+                            let key_result = format!("temp_key_{}", i);
+                            let value_result = format!("temp_value_{}", i);
 
-                    // Recursively process key and value to handle nested structures
-                    self.process_expression_to_result(module, key, &key_result)?;
-                    self.process_expression_to_result(module, value, &value_result)?;
+                            // Recursively process key and value to handle nested structures
+                            self.process_expression_to_result(module, key, &key_result)?;
+                            self.process_expression_to_result(module, value, &value_result)?;
 
-                    pair_names.push((key_result, value_result));
+                            pair_names.push((key_result, value_result));
+                        },
+                        crate::ast::DictItem::Unpacking(_expr) => {
+                            // For now, skip unpacking - would need special handling
+                            // This would require merging dicts at runtime
+                        }
+                    }
                 }
 
                 // Create dict from key-value pairs
@@ -1971,15 +1979,23 @@ impl Generator {
             Expr::Dict(pairs) => {
                 // Handle dict literal: {key1: value1, key2: value2, ...}
                 let mut pair_names = Vec::new();
-                for (i, (key, value)) in pairs.iter().enumerate() {
-                    let key_result = format!("{}_key_{}", result_var, i);
-                    let value_result = format!("{}_value_{}", result_var, i);
+                for (i, item) in pairs.iter().enumerate() {
+                    match item {
+                        crate::ast::DictItem::KeyValue(key, value) => {
+                            let key_result = format!("{}_key_{}", result_var, i);
+                            let value_result = format!("{}_value_{}", result_var, i);
 
-                    // Recursively process key and value to handle nested structures
-                    self.process_expression_to_result(module, key, &key_result)?;
-                    self.process_expression_to_result(module, value, &value_result)?;
+                            // Recursively process key and value to handle nested structures
+                            self.process_expression_to_result(module, key, &key_result)?;
+                            self.process_expression_to_result(module, value, &value_result)?;
 
-                    pair_names.push((key_result, value_result));
+                            pair_names.push((key_result, value_result));
+                        },
+                        crate::ast::DictItem::Unpacking(_expr) => {
+                            // For now, skip unpacking - would need special handling
+                            // This would require merging dicts at runtime
+                        }
+                    }
                 }
 
                 // Create dict from key-value pairs

@@ -43,6 +43,7 @@ fn create_abc_class() -> Value {
         name: "ABC".to_string(),
         bases: vec!["object".to_string()],
         methods,
+        attributes: Rc::new(RefCell::new(HashMap::new())),
         metaclass: None,
         mro: crate::base_object::MRO::from_linearization(vec!["ABC".to_string(), "object".to_string()]),
         base_object: crate::base_object::BaseObject::new("ABC".to_string(), vec!["object".to_string()]),

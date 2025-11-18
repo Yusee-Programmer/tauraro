@@ -683,6 +683,24 @@ fn map_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         match iterable {
             Value::List(items) => iterable_vecs.push(items.as_vec().clone()),
             Value::Tuple(items) => iterable_vecs.push(items.clone()),
+            Value::Set(items) => iterable_vecs.push(items.clone()),
+            Value::Str(s) => iterable_vecs.push(s.chars().map(|c| Value::Str(c.to_string())).collect()),
+            Value::Range { start, stop, step } => {
+                let mut range_items = Vec::new();
+                let mut current = *start;
+                if *step > 0 {
+                    while current < *stop {
+                        range_items.push(Value::Int(current));
+                        current += *step;
+                    }
+                } else if *step < 0 {
+                    while current > *stop {
+                        range_items.push(Value::Int(current));
+                        current += *step;
+                    }
+                }
+                iterable_vecs.push(range_items);
+            }
             _ => return Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
         }
     }
@@ -698,6 +716,12 @@ fn map_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         let func_result = match func {
             Value::BuiltinFunction(_, f) => f(func_args)?,
             Value::NativeFunction(f) => f(func_args)?,
+            Value::Closure { .. } | Value::Code(_) => {
+                // For closures and user-defined functions, we need to return an iterator that will be evaluated by the VM
+                // For now, we'll create a lazy map iterator using a special marker
+                // Since we can't call closures from here, we return the function and iterable for later evaluation
+                return Err(anyhow::anyhow!("map() with user-defined functions requires VM evaluation - not yet supported in builtin"));
+            }
             _ => return Err(anyhow::anyhow!("'{}' object is not callable", func.type_name())),
         };
         
@@ -1050,8 +1074,8 @@ fn hasattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
             // First check fields
             fields.borrow().contains_key(attr_name) || class_methods.contains_key(attr_name)
         },
-        Value::Class { methods, .. } => {
-            methods.contains_key(attr_name)
+        Value::Class { methods, attributes, .. } => {
+            methods.contains_key(attr_name) || attributes.borrow().contains_key(attr_name)
         },
         Value::Module(_, namespace) => {
             namespace.contains_key(attr_name)
@@ -1096,9 +1120,12 @@ fn getattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
                 Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
             }
         },
-        Value::Class { methods, .. } => {
-            // Check class methods
-            if let Some(method) = methods.get(attr_name) {
+        Value::Class { methods, attributes, .. } => {
+            // Check class attributes first, then methods
+            if let Some(value) = attributes.borrow().get(attr_name) {
+                Ok(value.clone())
+            }
+            else if let Some(method) = methods.get(attr_name) {
                 Ok(method.clone())
             }
             // If not found and default provided, return default
@@ -1231,22 +1258,28 @@ pub fn super_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     }
 }
 
-fn staticmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+pub fn staticmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow::anyhow!("staticmethod() takes exactly 1 argument ({} given)", args.len()));
     }
     
-    // For now, we'll just return the function as-is
-    Ok(args[0].clone())
+    // Wrap the function in a StaticMethod descriptor
+    Ok(Value::StaticMethod {
+        method: Box::new(args[0].clone()),
+    })
 }
 
-fn classmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+pub fn classmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow::anyhow!("classmethod() takes exactly 1 argument ({} given)", args.len()));
     }
     
-    // For now, we'll just return the function as-is
-    Ok(args[0].clone())
+    // We wrap the function in a special marker. The class will be added when accessed.
+    // For now, we create a placeholder class - this will be set when accessed from a class
+    Ok(Value::ClassMethod {
+        method: Box::new(args[0].clone()),
+        class: Box::new(Value::None), // Placeholder, will be set during access
+    })
 }
 
 fn dataclass_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -1617,7 +1650,11 @@ fn next_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
                 // Iterator exhausted, raise StopIteration
                 Err(anyhow::anyhow!("StopIteration"))
             }
-        }, 
+        },
+        Value::ClassMethod { .. } | Value::StaticMethod { .. } => {
+            // These are descriptors, not iterators
+            Err(anyhow::anyhow!("ClassMethod and StaticMethod objects are not iterators"))
+        },
         _ => {
             // For other iterators, return None for now
             Ok(Value::None)

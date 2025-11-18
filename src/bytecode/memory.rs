@@ -35,6 +35,7 @@ pub struct CodeObject {
     pub var_types: HashMap<String, Type>,  // Variable type annotations
     pub return_type: Option<Type>,         // Function return type annotation
     pub is_async: bool,                    // Whether this is an async function
+    pub defaults: HashMap<String, Value>, // Default values for parameters
 }
 
 impl PartialEq for CodeObject {
@@ -70,6 +71,7 @@ impl CodeObject {
             params: Vec::new(),  // Initialize the params field
             var_types: HashMap::new(),  // Initialize variable type annotations
             return_type: None,           // Initialize return type annotation
+            defaults: HashMap::new(),    // Initialize defaults
         }
     }
     
@@ -430,7 +432,14 @@ impl Frame {
                                 locals[param_index] = rc_arg;
                             }
                             arg_index += 1;
+                        } else if let Some(default_value) = code.defaults.get(param_name) {
+                            // Use default value if no argument provided
+                            let rc_arg = RcValue::new(default_value.clone());
+                            if param_index < locals.len() {
+                                locals[param_index] = rc_arg;
+                            }
                         }
+                        // Otherwise leave as None (already initialized)
                     }
                 }
             } else {
@@ -448,7 +457,14 @@ impl Frame {
                         locals[param_index] = rc_arg;
                     }
                     arg_index += 1;
+                } else if let Some(default_value) = code.defaults.get(param_name) {
+                    // Use default value if no argument provided
+                    let rc_arg = RcValue::new(default_value.clone());
+                    if param_index < locals.len() {
+                        locals[param_index] = rc_arg;
+                    }
                 }
+                // Otherwise leave as None (already initialized)
             }
         }
 

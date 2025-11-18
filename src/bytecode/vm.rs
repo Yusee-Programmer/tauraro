@@ -1348,25 +1348,9 @@ impl SuperBytecodeVM {
                         processed_arg_count = args.len() - 1;
                     }
                     Value::Closure { name: _, params: _, body: _, captured_scope: _, docstring: _, compiled_code, .. } => {
-                        // For user-defined functions, check if they have **kwargs parameter
-                        if let Some(code_obj) = compiled_code {
-                            // Check if any parameter is of kind VarKwargs
-                            let has_kwargs_param = code_obj.params.iter().any(|param| {
-                                matches!(param.kind, crate::ast::ParamKind::VarKwargs)
-                            });
-
-                            if has_kwargs_param {
-                                // This function accepts **kwargs, so pass the dictionary
-                                kwargs_dict = Some(dict.clone());
-                                processed_arg_count = args.len() - 1; // Exclude the kwargs dictionary from regular arguments
-                            } else {
-                                // This function doesn't accept **kwargs, so don't pass the dictionary
-                                processed_arg_count = args.len() - 1;
-                            }
-                        } else {
-                            // No compiled code, don't pass the kwargs dictionary
-                            processed_arg_count = args.len() - 1;
-                        }
+                        // For user-defined functions, always extract kwargs for keyword argument binding
+                        kwargs_dict = Some(dict.clone());
+                        processed_arg_count = args.len() - 1; // Exclude the kwargs dictionary from regular arguments
                     }
                     _ => {
                         // For other callable objects, don't pass the kwargs dictionary
@@ -1945,6 +1929,7 @@ impl SuperBytecodeVM {
 
         let iterable_value = &self.frames[frame_idx].registers[iterable_reg];
 
+
         // Convert iterable to iterator based on its type
         let iter_val = iterable_value.to_value();
         let iterator = match &iter_val {
@@ -1974,6 +1959,7 @@ impl SuperBytecodeVM {
             },
             Value::Tuple(items) => {
                 // For tuple, create an Iterator object
+
                 Value::Iterator {
                     items: items.clone(),
                     current_index: 0,
@@ -1996,6 +1982,23 @@ impl SuperBytecodeVM {
                     .collect();
                 Value::Iterator {
                     items: keys,
+                    current_index: 0,
+                }
+            },
+            Value::Set(items) => {
+                // For sets, create an Iterator object
+                Value::Iterator {
+                    items: items.clone(),
+                    current_index: 0,
+                }
+            },
+            Value::Bytes(bytes) => {
+                // For bytes, create an Iterator with byte values (as integers)
+                let byte_values: Vec<Value> = bytes.iter()
+                    .map(|b| Value::Int(*b as i64))
+                    .collect();
+                Value::Iterator {
+                    items: byte_values,
                     current_index: 0,
                 }
             },
@@ -2140,12 +2143,19 @@ impl SuperBytecodeVM {
                     Ok(None)
                 }
             },
+            Value::ClassMethod { .. } | Value::StaticMethod { .. } => {
+                // These are descriptors, not iterable
+                Err(anyhow::anyhow!("Cannot iterate over ClassMethod or StaticMethod"))
+            },
             Value::Iterator { ref items, ref current_index } => {
                 // For Iterator objects, check if we've reached the end
                 if *current_index < items.len() {
                     // Store the current value in the result register
+
                     let value = RcValue::new(items[*current_index].clone());
-                    self.frames[frame_idx].set_register(result_reg as u32, RegisterValue::from_value(value.get_value()));
+                    let reg_value = RegisterValue::from_value(value.get_value());
+
+                    self.frames[frame_idx].set_register(result_reg as u32, reg_value);
 
                     // Update the iterator's current position
                     let updated_iterator = Value::Iterator {
@@ -2158,6 +2168,7 @@ impl SuperBytecodeVM {
                     Ok(None)
                 } else {
                     // End of iteration - jump to the target (after the loop)
+
                     self.frames[frame_idx].pc = target;
                     // Return Ok(None) to indicate that PC has changed
                     Ok(None)
@@ -2829,10 +2840,29 @@ impl SuperBytecodeVM {
                 self.frames[frame_idx].registers[result_reg] = RegisterValue::from_value(result);
                 return Ok(None);
             },
-            Value::Class { methods, mro, .. } => {
-                // Check class methods
-                if let Some(method) = methods.get(&attr_name) {
-                    method.clone()
+            Value::Class { methods, attributes, mro, .. } => {
+                // First check class attributes
+                if let Some(attribute) = attributes.borrow().get(&attr_name) {
+                    attribute.clone()
+                }
+                // Then check class methods
+                else if let Some(method) = methods.get(&attr_name) {
+                    // Handle ClassMethod and StaticMethod descriptors
+                    match method {
+                        Value::ClassMethod { method: inner_method, class: _ } => {
+                            // For classmethod, inject the class as first argument (wrapped in a special way)
+                            // Create a new ClassMethod with the correct class
+                            Value::ClassMethod {
+                                method: inner_method.clone(),
+                                class: Box::new(object_value.clone()),
+                            }
+                        }
+                        Value::StaticMethod { method: inner_method } => {
+                            // For staticmethod, just return the underlying method (it's not bound to anything)
+                            inner_method.as_ref().clone()
+                        }
+                        _ => method.clone()
+                    }
                 }
                 // Then check MRO for inherited methods
                 else {
@@ -2847,7 +2877,7 @@ impl SuperBytecodeVM {
                         return Err(anyhow!("'{}' object has no attribute '{}'", object_value.type_name(), attr_name));
                     }
                 }
-            },
+            }
             Value::Module(_, namespace) => {
                 // Check module attributes
                 if let Some(value) = namespace.get(&attr_name) {
@@ -3082,24 +3112,11 @@ impl SuperBytecodeVM {
         }
 
         // Normal assignment for all other cases
-        match &mut self.frames[frame_idx].registers[object_reg].to_value() {
-            Value::Class { methods, .. } => {
-                // Store class attribute in methods HashMap
-                methods.insert(attr_name.clone(), value_to_store.clone());
-
-                // Update the class in globals to reflect the change
-                // Find the class in globals and update it
-                let updated_class_val = self.frames[frame_idx].registers[object_reg].to_value();
-                if let Value::Class { name: updated_class_name, .. } = &updated_class_val {
-                    for (var_name, var_value) in self.globals.borrow_mut().iter_mut() {
-                        if let Value::Class { name: class_name, .. } = &var_value.get_value() {
-                            if class_name == updated_class_name {
-                                *var_value = RcValue::new(updated_class_val.clone());
-                                break;
-                            }
-                        }
-                    }
-                }
+        match object_value {
+            Value::Class { attributes, .. } => {
+                // Store class attribute in attributes HashMap (for class variables)
+                // Since attributes is Rc<RefCell<>>, modifications are shared across all references!
+                attributes.borrow_mut().insert(attr_name.clone(), value_to_store.clone());
             },
             Value::Object { fields, .. } => {
                 // Store in fields using Rc::make_mut to get a mutable reference
@@ -3138,9 +3155,23 @@ impl SuperBytecodeVM {
                 // For dictionaries, treat keys as attributes
                 dict.borrow_mut().insert(attr_name, value_to_store);
             },
-            Value::Module(_, namespace) => {
-                // For modules, store in namespace
-                namespace.insert(attr_name, value_to_store);
+            Value::Module(name, namespace) => {
+                // For modules, we need to create a new module with the attribute added
+                let mut new_namespace = namespace.clone();
+                new_namespace.insert(attr_name, value_to_store);
+                let updated_module = Value::Module(name.clone(), new_namespace);
+                self.frames[frame_idx].registers[object_reg] = RegisterValue::from_value(updated_module);
+                
+                // Also update the module in globals if it's stored there
+                for (var_name, var_value) in self.globals.borrow_mut().iter_mut() {
+                    if let Value::Module(mod_name, _) = &var_value.get_value() {
+                        if mod_name == &name {
+                            let updated = RegisterValue::from_value(self.frames[frame_idx].registers[object_reg].to_value());
+                            *var_value = RcValue::new(updated.to_value());
+                            break;
+                        }
+                    }
+                }
             },
             _ => {
                 return Err(anyhow!("'{}' object does not support attribute assignment", object_type_name));
@@ -3307,7 +3338,9 @@ impl SuperBytecodeVM {
             }
 
             let value = self.frames[frame_idx].registers[value_reg].to_value();
-            self.frames[frame_idx].locals[local_idx].set_value(value);
+
+            self.frames[frame_idx].locals[local_idx].set_value(value.clone());
+
             return Ok(None);
         }
     }
@@ -4877,8 +4910,7 @@ impl SuperBytecodeVM {
                 let local_idx = arg1 as usize;
                 let result_reg = arg2 as u32;
 
-                // eprintln!("DEBUG LoadLocal: local_idx={}, result_reg={}", local_idx, result_reg);
-                // eprintln!("DEBUG LoadLocal: locals.len()={}", self.frames[frame_idx].locals.len());
+
 
                 if local_idx >= self.frames[frame_idx].locals.len() {
                     return Err(anyhow!("LoadLocal: local variable index {} out of bounds (len: {})", local_idx, self.frames[frame_idx].locals.len()));
@@ -4886,9 +4918,7 @@ impl SuperBytecodeVM {
 
                 // Clone the value to avoid borrowing conflicts
                 let value = self.frames[frame_idx].locals[local_idx].clone();
-                // eprintln!("DEBUG LoadLocal: Loading locals[{}] = {:?} into register {}", local_idx, value.to_value(), result_reg);
                 self.frames[frame_idx].set_register(result_reg, RegisterValue::from_value(value.get_value()));
-                // eprintln!("DEBUG LoadLocal: Loaded! registers[{}] = {:?}", result_reg, value.to_value());
                 Ok(None)
             }
             OpCode::StoreLocal => {
@@ -4896,9 +4926,9 @@ impl SuperBytecodeVM {
                 let value_reg = arg1 as usize;
                 let local_idx = arg2 as usize;
 
-                // eprintln!("DEBUG StoreLocal: value_reg={}, local_idx={}", value_reg, local_idx);
-                // eprintln!("DEBUG StoreLocal: registers.len()={}, locals.len()={}",
-                //     self.frames[frame_idx].registers.len(), self.frames[frame_idx].locals.len());
+                eprintln!("DEBUG StoreLocal: value_reg={}, local_idx={}", value_reg, local_idx);
+                eprintln!("DEBUG StoreLocal: registers.len()={}, locals.len()={}",
+                    self.frames[frame_idx].registers.len(), self.frames[frame_idx].locals.len());
 
                 if value_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("StoreLocal: value register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
@@ -4906,16 +4936,16 @@ impl SuperBytecodeVM {
 
                 // Clone the value to avoid borrowing conflicts
                 let value = self.frames[frame_idx].registers[value_reg].clone();
-                // eprintln!("DEBUG StoreLocal: Storing value {:?} from register {} to local {}", value.to_value(), value_reg, local_idx);
+                eprintln!("DEBUG StoreLocal: Storing value {:?} from register {} to local {}", value.to_value(), value_reg, local_idx);
 
                 if local_idx >= self.frames[frame_idx].locals.len() {
                     // Extend locals if needed
-                    // eprintln!("DEBUG StoreLocal: Extending locals from {} to {}", self.frames[frame_idx].locals.len(), local_idx + 1);
+                    eprintln!("DEBUG StoreLocal: Extending locals from {} to {}", self.frames[frame_idx].locals.len(), local_idx + 1);
                     self.frames[frame_idx].locals.resize(local_idx + 1, RcValue::new(Value::None));
                 }
 
                 self.frames[frame_idx].locals[local_idx] = RcValue::new(value.to_value());
-                // eprintln!("DEBUG StoreLocal: Stored! Verifying locals[{}] = {:?}", local_idx, self.frames[frame_idx].locals[local_idx].value);
+                eprintln!("DEBUG StoreLocal: Stored! locals[{}] = {:?}", local_idx, self.frames[frame_idx].locals[local_idx].get_value());
                 Ok(None)
             }
             OpCode::MoveReg => {
@@ -6994,7 +7024,7 @@ impl SuperBytecodeVM {
                     _ => return Err(anyhow!("Bound method called on non-object type '{}'", object.as_ref().type_name())),
                 }
             },
-            Value::Object { class_methods, mro, .. } => {
+            Value::Object { ref class_methods, ref mro, .. } => {
                 // For regular objects, we need to handle method calls through the VM
                 // First, try to find the method in class_methods
                 let method = if let Some(method) = class_methods.get(method_name) {
@@ -7018,56 +7048,94 @@ impl SuperBytecodeVM {
                             .update(class_name.clone(), method.clone(), self.method_cache_version);
                     }
 
-                    // Create arguments with self as the first argument
-                    let mut method_args = vec![self.frames[frame_idx].registers[object_reg].to_value()];
-                    method_args.extend(args.clone());
+                    // Check if this is a ClassMethod or StaticMethod
+                    match &method {
+                        Value::ClassMethod { method: inner_method, class: _ } => {
+                            // For classmethod, pass the class (not instance) as the first argument
+                            // Get the class from globals
+                            let class_name = object_value.type_name().to_string();
+                            let class_value = self.globals.borrow().get(&class_name).map(|v| v.get_value().clone());
+                            let mut method_args = if let Some(cls) = class_value {
+                                vec![cls]
+                            } else {
+                                // Fallback: create a placeholder class
+                                vec![Value::Str(class_name)]
+                            };
+                            method_args.extend(args.clone());
+                            self.call_function_fast(inner_method.as_ref().clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                        }
+                        Value::StaticMethod { method: inner_method } => {
+                            // For staticmethod, don't pass instance as first arg, just the provided args
+                            self.call_function_fast(inner_method.as_ref().clone(), args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                        }
+                        _ => {
+                            // Create arguments with self as the first argument
+                            let mut method_args = vec![self.frames[frame_idx].registers[object_reg].to_value()];
+                            method_args.extend(args.clone());
 
-                    // Call the method through the VM and capture the return value
-                    // Pass object_reg as the result register so the return value is stored correctly
-                    let method_result = self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
-                    method_result
+                            // Call the method through the VM and capture the return value
+                            // Pass object_reg as the result register so the return value is stored correctly
+                            let method_result = self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+                            method_result
+                        }
+                    }
                 } else {
                     return Err(anyhow!("Method '{}' not found in class or parent classes", method_name));
                 }
             },
-            Value::Class { name, methods, .. } => {
+            Value::Class { name: _, ref methods, .. } => {
                 // For Class objects, we need to handle method calls by looking up the method in the class
 
                 if let Some(method) = methods.get(method_name) {
-                    // For class methods, the first argument should be the instance
-                    // This is the correct Python semantics for calling class methods on instances
-                    if args.is_empty() {
-                        return Err(anyhow!("Method '{}' requires at least one argument (self)", method_name));
-                    }
+                    // Check if this is a ClassMethod or StaticMethod
+                    match method {
+                        Value::ClassMethod { method: inner_method, class: _ } => {
+                            // For classmethod, pass the class itself as the first argument
+                            let mut method_args = vec![object_value.clone()];
+                            method_args.extend(args);
+                            self.call_function_fast(inner_method.as_ref().clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                        }
+                        Value::StaticMethod { method: inner_method } => {
+                            // For staticmethod, don't pass anything (not self, not cls)
+                            self.call_function_fast(inner_method.as_ref().clone(), args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?
+                        }
+                        _ => {
+                            // For regular methods, the first argument should be the instance
+                            // This is the correct Python semantics for calling class methods on instances
+                            if args.is_empty() {
+                                return Err(anyhow!("Method '{}' requires at least one argument (self)", method_name));
+                            }
 
-                    // The first argument is the instance (self)
-                    let instance = args[0].clone();
-                    let remaining_args = args[1..].to_vec();
+                            // The first argument is the instance (self)
+                            let instance = args[0].clone();
+                            let remaining_args = args[1..].to_vec();
 
-                    // Create arguments with instance as self
-                    let mut method_args = vec![instance];
-                    method_args.extend(remaining_args);
+                            // Create arguments with instance as self
+                            let mut method_args = vec![instance];
+                            method_args.extend(remaining_args);
 
-                    // Store the original object register value
-                    let original_object_reg_value = self.frames[frame_idx].registers[object_reg].clone();
+                            // Store the original object register value
+                            let original_object_reg_value = self.frames[frame_idx].registers[object_reg].clone();
 
-                    // Call the method through the VM
-                    // Pass object_reg as the result register so the return value is stored correctly
-                    let method_result = self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
+                            // Call the method through the VM
+                            // Pass object_reg as the result register so the return value is stored correctly
+                            let method_result = self.call_function_fast(method.clone(), method_args, HashMap::new(), Some(frame_idx), Some(object_reg as u32))?;
 
-                    // CRITICAL FIX: For object field persistence during inheritance
-                    // When calling parent class constructors, we need to ensure that any modifications
-                    // to the object are properly propagated back to the current frame's object register
-                    // Check if the object was modified during the method call and update if necessary
-                    if let Some((caller_frame_idx, result_reg)) = self.frames[frame_idx].return_register {
-                        if caller_frame_idx < self.frames.len() && result_reg as usize == object_reg {
-                            // Update the current frame's object register with the potentially modified object
-                            // from the caller frame (which was updated when the method frame returned)
-                            self.frames[frame_idx].registers[object_reg] = self.frames[caller_frame_idx].registers[object_reg].clone();
+                            // CRITICAL FIX: For object field persistence during inheritance
+                            // When calling parent class constructors, we need to ensure that any modifications
+                            // to the object are properly propagated back to the current frame's object register
+                            // Check if the object was modified during the method call and update if necessary
+                            if let Some((caller_frame_idx, result_reg)) = self.frames[frame_idx].return_register {
+                                if caller_frame_idx < self.frames.len() && result_reg as usize == object_reg {
+                                    // Update the current frame's object register with the potentially modified object
+                                    // from the caller frame (which was updated when the method frame returned)
+                                    self.frames[frame_idx].registers[object_reg] = self.frames[caller_frame_idx].registers[object_reg].clone();
+                                }
+                            }
+
+                            method_result
                         }
                     }
-
-                    method_result
                 } else {
                     return Err(anyhow!("Method '{}' not found in class methods", method_name));
                 }
@@ -7135,6 +7203,67 @@ impl SuperBytecodeVM {
                                 new_list.push(item);
                             }
                             self.frames[frame_idx].registers[object_reg] = RegisterValue::from_value(Value::List(new_list));
+                        }
+                        Value::None
+                    }
+                    "insert" => {
+                        if args.len() != 2 {
+                            return Err(anyhow!("insert() takes exactly 2 arguments ({} given)", args.len()));
+                        }
+                        // Get the index and value to insert
+                        let index = match args[0] {
+                            Value::Int(idx) => idx as usize,
+                            _ => return Err(anyhow!("insert() index must be an integer")),
+                        };
+                        let value_to_insert = args[1].clone();
+                        
+                        // Clone the list, modify it, and replace the register value
+                        if let Value::List(list) = &self.frames[frame_idx].registers[object_reg].to_value() {
+                            let mut new_list = list.clone();
+                            // Convert to vec, insert, and convert back
+                            let mut items = new_list.as_vec().clone();
+                            if index <= items.len() {
+                                items.insert(index, value_to_insert);
+                            } else {
+                                // Insert at end if index is out of bounds
+                                items.push(value_to_insert);
+                            }
+                            let mut result_list = HPList::new();
+                            for item in items {
+                                result_list.push(item);
+                            }
+                            self.frames[frame_idx].registers[object_reg] = RegisterValue::from_value(Value::List(result_list));
+                        }
+                        Value::None
+                    }
+                    "remove" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("remove() takes exactly one argument ({} given)", args.len()));
+                        }
+                        let value_to_remove = args[0].clone();
+                        
+                        // Clone the list, modify it, and replace the register value
+                        if let Value::List(list) = &self.frames[frame_idx].registers[object_reg].to_value() {
+                            let mut items = list.as_vec().clone();
+                            // Find and remove the first occurrence of the value
+                            if let Some(pos) = items.iter().position(|v| {
+                                match (v, &value_to_remove) {
+                                    (Value::Int(a), Value::Int(b)) => a == b,
+                                    (Value::Float(a), Value::Float(b)) => a == b,
+                                    (Value::Str(a), Value::Str(b)) => a == b,
+                                    (Value::Bool(a), Value::Bool(b)) => a == b,
+                                    _ => false,
+                                }
+                            }) {
+                                items.remove(pos);
+                                let mut new_list = HPList::new();
+                                for item in items {
+                                    new_list.push(item);
+                                }
+                                self.frames[frame_idx].registers[object_reg] = RegisterValue::from_value(Value::List(new_list));
+                            } else {
+                                return Err(anyhow!("list.remove(x): x not in list"));
+                            }
                         }
                         Value::None
                     }
@@ -7558,6 +7687,23 @@ impl SuperBytecodeVM {
                             return Err(anyhow!("count() argument must be a string"));
                         }
                     }
+                    "title" => {
+                        // Convert to title case (first letter of each word capitalized)
+                        let mut result = String::new();
+                        let mut capitalize_next = true;
+                        for ch in s_clone.chars() {
+                            if ch.is_whitespace() {
+                                result.push(ch);
+                                capitalize_next = true;
+                            } else if capitalize_next {
+                                result.push_str(&ch.to_uppercase().to_string());
+                                capitalize_next = false;
+                            } else {
+                                result.push_str(&ch.to_lowercase().to_string());
+                            }
+                        }
+                        Value::Str(result)
+                    }
                     _ => {
                         return Err(anyhow!("String has no method '{}'", method_name));
                     }
@@ -7586,6 +7732,168 @@ impl SuperBytecodeVM {
                     }
                     _ => {
                         return Err(anyhow!("Bytes has no method '{}'", method_name));
+                    }
+                }
+            }
+            Value::Set(mut set) => {
+                // Handle set methods directly in the VM
+                match method_name {
+                    "add" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("add() takes exactly one argument ({} given)", args.len()));
+                        }
+                        // Add if not already present
+                        if !set.contains(&args[0]) {
+                            set.push(args[0].clone());
+                        }
+                        self.frames[frame_idx].registers[object_reg] = RegisterValue::from_value(Value::Set(set));
+                        Value::None
+                    }
+                    "remove" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("remove() takes exactly one argument ({} given)", args.len()));
+                        }
+                        if let Some(pos) = set.iter().position(|x| x == &args[0]) {
+                            set.remove(pos);
+                            self.frames[frame_idx].registers[object_reg] = RegisterValue::from_value(Value::Set(set));
+                            Value::None
+                        } else {
+                            return Err(anyhow!("KeyError: element not in set"));
+                        }
+                    }
+                    "discard" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("discard() takes exactly one argument ({} given)", args.len()));
+                        }
+                        if let Some(pos) = set.iter().position(|x| x == &args[0]) {
+                            set.remove(pos);
+                        }
+                        self.frames[frame_idx].registers[object_reg] = RegisterValue::from_value(Value::Set(set));
+                        Value::None
+                    }
+                    "pop" => {
+                        if !args.is_empty() {
+                            return Err(anyhow!("pop() takes no arguments ({} given)", args.len()));
+                        }
+                        if set.is_empty() {
+                            return Err(anyhow!("KeyError: pop from an empty set"));
+                        }
+                        let result = set.remove(0);
+                        self.frames[frame_idx].registers[object_reg] = RegisterValue::from_value(Value::Set(set));
+                        result
+                    }
+                    "clear" => {
+                        if !args.is_empty() {
+                            return Err(anyhow!("clear() takes no arguments ({} given)", args.len()));
+                        }
+                        set.clear();
+                        self.frames[frame_idx].registers[object_reg] = RegisterValue::from_value(Value::Set(set));
+                        Value::None
+                    }
+                    "copy" => {
+                        if !args.is_empty() {
+                            return Err(anyhow!("copy() takes no arguments ({} given)", args.len()));
+                        }
+                        Value::Set(set.clone())
+                    }
+                    "union" | "|" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("union() takes exactly one argument ({} given)", args.len()));
+                        }
+                        if let Value::Set(other) = &args[0] {
+                            let mut result = set.clone();
+                            for item in other {
+                                if !result.contains(item) {
+                                    result.push(item.clone());
+                                }
+                            }
+                            Value::Set(result)
+                        } else {
+                            return Err(anyhow!("unsupported operand type(s) for | or union()"));
+                        }
+                    }
+                    "intersection" | "&" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("intersection() takes exactly one argument ({} given)", args.len()));
+                        }
+                        if let Value::Set(other) = &args[0] {
+                            let result: Vec<Value> = set.iter()
+                                .filter(|item| other.contains(item))
+                                .cloned()
+                                .collect();
+                            Value::Set(result)
+                        } else {
+                            return Err(anyhow!("unsupported operand type(s) for & or intersection()"));
+                        }
+                    }
+                    "difference" | "-" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("difference() takes exactly one argument ({} given)", args.len()));
+                        }
+                        if let Value::Set(other) = &args[0] {
+                            let result: Vec<Value> = set.iter()
+                                .filter(|item| !other.contains(item))
+                                .cloned()
+                                .collect();
+                            Value::Set(result)
+                        } else {
+                            return Err(anyhow!("unsupported operand type(s) for - or difference()"));
+                        }
+                    }
+                    "symmetric_difference" | "^" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("symmetric_difference() takes exactly one argument ({} given)", args.len()));
+                        }
+                        if let Value::Set(other) = &args[0] {
+                            let mut result: Vec<Value> = set.iter()
+                                .filter(|item| !other.contains(item))
+                                .cloned()
+                                .collect();
+                            for item in other {
+                                if !set.contains(item) && !result.contains(item) {
+                                    result.push(item.clone());
+                                }
+                            }
+                            Value::Set(result)
+                        } else {
+                            return Err(anyhow!("unsupported operand type(s) for ^ or symmetric_difference()"));
+                        }
+                    }
+                    "issubset" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("issubset() takes exactly one argument ({} given)", args.len()));
+                        }
+                        if let Value::Set(other) = &args[0] {
+                            let is_subset = set.iter().all(|item| other.contains(item));
+                            Value::Bool(is_subset)
+                        } else {
+                            return Err(anyhow!("issubset() argument must be a set"));
+                        }
+                    }
+                    "issuperset" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("issuperset() takes exactly one argument ({} given)", args.len()));
+                        }
+                        if let Value::Set(other) = &args[0] {
+                            let is_superset = other.iter().all(|item| set.contains(item));
+                            Value::Bool(is_superset)
+                        } else {
+                            return Err(anyhow!("issuperset() argument must be a set"));
+                        }
+                    }
+                    "isdisjoint" => {
+                        if args.len() != 1 {
+                            return Err(anyhow!("isdisjoint() takes exactly one argument ({} given)", args.len()));
+                        }
+                        if let Value::Set(other) = &args[0] {
+                            let is_disjoint = !set.iter().any(|item| other.contains(item));
+                            Value::Bool(is_disjoint)
+                        } else {
+                            return Err(anyhow!("isdisjoint() argument must be a set"));
+                        }
+                    }
+                    _ => {
+                        return Err(anyhow!("'set' object has no attribute '{}'", method_name));
                     }
                 }
             }
@@ -8357,6 +8665,16 @@ impl SuperBytecodeVM {
                 let manager = crate::builtins::GLOBAL_FFI_MANAGER.lock().unwrap();
                 let result = manager.call_external_function(&library_name, &name, args.clone())?;
                 Ok(result)
+            }
+            Value::ClassMethod { method: inner_method, class } => {
+                // Handle classmethod calls - inject the class as first argument
+                let mut method_args = vec![class.as_ref().clone()];
+                method_args.extend(args);
+                self.call_function_fast(inner_method.as_ref().clone(), method_args, kwargs, frame_idx, result_reg)
+            }
+            Value::StaticMethod { method: inner_method } => {
+                // Handle staticmethod calls - no self/cls injection
+                self.call_function_fast(inner_method.as_ref().clone(), args, kwargs, frame_idx, result_reg)
             }
             _ => {
                 Err(anyhow!("'{}' object is not callable", func_value.type_name()))

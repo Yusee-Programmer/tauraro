@@ -126,11 +126,11 @@ fn generate_list_expr(elements: &[Expr]) -> String {
     code
 }
 
-fn generate_dict_expr(pairs: &[(Expr, Expr)]) -> String {
+fn generate_dict_expr(items: &[crate::ast::DictItem]) -> String {
     let mut code = "tauraro_dict(0, NULL)".to_string();
 
-    if !pairs.is_empty() {
-        code = format!("/* dict with {} pairs */", pairs.len());
+    if !items.is_empty() {
+        code = format!("/* dict with {} items */", items.len());
     }
 
     code

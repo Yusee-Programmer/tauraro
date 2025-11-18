@@ -46,6 +46,7 @@ pub enum Value {
         name: String,
         bases: Vec<String>,
         methods: HashMap<String, Value>,
+        attributes: Rc<RefCell<HashMap<String, Value>>>,  // Class-level attributes like class variables
         metaclass: Option<Box<Value>>,
         mro: MRO,
         base_object: BaseObject,
@@ -69,6 +70,13 @@ pub enum Value {
     BoundMethod {
         object: Box<Value>,
         method_name: String,
+    },
+    ClassMethod {
+        method: Box<Value>,
+        class: Box<Value>,
+    },
+    StaticMethod {
+        method: Box<Value>,
     },
     #[cfg(feature = "ffi")]
     ExternFunction {
@@ -176,7 +184,7 @@ impl PartialEq for Value {
             (Value::Ellipsis, Value::Ellipsis) => true,
             (Value::NotImplemented, Value::NotImplemented) => true,
             (Value::Object { class_name: class_name_a, fields: fields_a, class_methods: class_methods_a, base_object: base_object_a, mro: mro_a }, Value::Object { class_name: class_name_b, fields: fields_b, class_methods: class_methods_b, base_object: base_object_b, mro: mro_b }) => class_name_a == class_name_b && fields_a == fields_b && class_methods_a == class_methods_b && base_object_a == base_object_b && mro_a == mro_b,
-            (Value::Class { name: name_a, bases: bases_a, methods: methods_a, metaclass: metaclass_a, mro: mro_a, base_object: base_object_a }, Value::Class { name: name_b, bases: bases_b, methods: methods_b, metaclass: metaclass_b, mro: mro_b, base_object: base_object_b }) => name_a == name_b && bases_a == bases_b && methods_a == methods_b && metaclass_a == metaclass_b && mro_a == mro_b && base_object_a == base_object_b,
+            (Value::Class { name: name_a, bases: bases_a, methods: methods_a, attributes: attributes_a, metaclass: metaclass_a, mro: mro_a, base_object: base_object_a }, Value::Class { name: name_b, bases: bases_b, methods: methods_b, attributes: attributes_b, metaclass: metaclass_b, mro: mro_b, base_object: base_object_b }) => name_a == name_b && bases_a == bases_b && methods_a == methods_b && attributes_a == attributes_b && metaclass_a == metaclass_b && mro_a == mro_b && base_object_a == base_object_b,
             (Value::Super(current_class_a, parent_class_a, obj_a, _), Value::Super(current_class_b, parent_class_b, obj_b, _)) => current_class_a == current_class_b && parent_class_a == parent_class_b && obj_a == obj_b,
             // For Closure, we compare name, params, and compiled_code
             (Value::Closure { name: name_a, params: params_a, compiled_code: code_a, .. }, Value::Closure { name: name_b, params: params_b, compiled_code: code_b, .. }) => name_a == name_b && params_a == params_b && code_a == code_b,
@@ -185,6 +193,8 @@ impl PartialEq for Value {
             (Value::BuiltinFunction(name_a, _), Value::BuiltinFunction(name_b, _)) => name_a == name_b,
             (Value::Module(name_a, namespace_a), Value::Module(name_b, namespace_b)) => name_a == name_b && namespace_a == namespace_b,
             (Value::BoundMethod { object: object_a, method_name: method_name_a }, Value::BoundMethod { object: object_b, method_name: method_name_b }) => object_a == object_b && method_name_a == method_name_b,
+            (Value::ClassMethod { method: method_a, class: class_a }, Value::ClassMethod { method: method_b, class: class_b }) => method_a == method_b && class_a == class_b,
+            (Value::StaticMethod { method: method_a }, Value::StaticMethod { method: method_b }) => method_a == method_b,
             #[cfg(feature = "ffi")]
             (Value::ExternFunction { library_name: library_name_a, name: name_a, signature: signature_a, return_type: return_type_a, param_types: param_types_a }, Value::ExternFunction { library_name: library_name_b, name: name_b, signature: signature_b, return_type: return_type_b, param_types: param_types_b }) => library_name_a == library_name_b && name_a == name_b && signature_a == signature_b && return_type_a == return_type_b && param_types_a == param_types_b,
             (Value::None, Value::None) => true,
@@ -232,11 +242,12 @@ impl fmt::Debug for Value {
                     .field("mro", mro)
                     .finish()
             },
-            Value::Class { name, bases, methods, metaclass, mro, base_object } => {
+            Value::Class { name, bases, methods, attributes, metaclass, mro, base_object } => {
                 f.debug_struct("Class")
                     .field("name", name)
                     .field("bases", bases)
                     .field("methods", methods)
+                    .field("attributes", attributes)
                     .field("metaclass", metaclass)
                     .field("mro", mro)
                     .field("base_object", base_object)
@@ -267,6 +278,17 @@ impl fmt::Debug for Value {
                 f.debug_struct("BoundMethod")
                     .field("object", object)
                     .field("method_name", method_name)
+                    .finish()
+            },
+            Value::ClassMethod { method, class } => {
+                f.debug_struct("ClassMethod")
+                    .field("method", method)
+                    .field("class", class)
+                    .finish()
+            },
+            Value::StaticMethod { method } => {
+                f.debug_struct("StaticMethod")
+                    .field("method", method)
                     .finish()
             },
             #[cfg(feature = "ffi")]
@@ -659,6 +681,12 @@ impl Value {
              Value::BoundMethod { object, method_name } => {
                  format!("<bound method '{}' of {}>", method_name, object.debug_string())
              },
+             Value::ClassMethod { .. } => {
+                 "<classmethod descriptor>".to_string()
+             },
+             Value::StaticMethod { .. } => {
+                 "<staticmethod descriptor>".to_string()
+             },
              Value::Generator { .. } => "<generator object>".to_string(),
              Value::Coroutine { name, finished, .. } => {
                  if *finished {
@@ -705,6 +733,8 @@ impl Value {
             Value::None => "None",
             Value::TypedValue { value, .. } => value.type_name(),
             Value::BoundMethod { .. } => "bound method",
+            Value::ClassMethod { .. } => "classmethod",
+            Value::StaticMethod { .. } => "staticmethod",
             Value::Code(_) => "code",
             Value::KwargsMarker(_) => "dict",
             Value::Generator { .. } => "generator",
@@ -784,6 +814,8 @@ impl Value {
             Value::ExternFunction { .. } => Type::Simple("function".to_string()),
             Value::Super(_, _, _, _) => Type::Simple("super".to_string()),
             Value::BoundMethod { .. } => Type::Simple("bound method".to_string()),
+            Value::ClassMethod { .. } => Type::Simple("classmethod".to_string()),
+            Value::StaticMethod { .. } => Type::Simple("staticmethod".to_string()),
             Value::Code(_) => Type::Simple("code".to_string()),
             Value::KwargsMarker(_) => Type::Simple("dict".to_string()),
             Value::Generator { .. } => Type::Simple("generator".to_string()),
@@ -1063,6 +1095,8 @@ impl Value {
             Value::ExternFunction { .. } => true,
             Value::TypedValue { value, .. } => value.is_truthy(),
             Value::BoundMethod { .. } => true,
+            Value::ClassMethod { .. } => true,
+            Value::StaticMethod { .. } => true,
             Value::Code(_) => true,
             Value::Generator { .. } => true,
             Value::Coroutine { .. } => true,
@@ -2223,6 +2257,12 @@ impl fmt::Display for Value {
             }
             Value::BoundMethod { object, method_name } => {
                 write!(f, "<bound method '{}' of {}>", method_name, object)
+            }
+            Value::ClassMethod { .. } => {
+                write!(f, "<classmethod descriptor>")
+            }
+            Value::StaticMethod { .. } => {
+                write!(f, "<staticmethod descriptor>")
             }
             Value::Code(code_obj) => {
                 write!(f, "<code object {}>", code_obj.name)
