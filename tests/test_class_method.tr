@@ -1,8 +1,0 @@
-class A:
-    def __sub__(self, other):
-        print("__sub__ called!")
-        return 42
-
-a = A()
-print(a)
-print(type(a))
