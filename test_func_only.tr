@@ -1,8 +1,0 @@
-#!/usr/bin/env tauraro
-
-def decorated_func():
-    print("Inside")
-    return 42
-
-result = decorated_func()
-print(f"Result: {result}")

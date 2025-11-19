@@ -1,4 +1,0 @@
-print(3)
-x = 1 + 2
-print("x assigned")
-print(x)

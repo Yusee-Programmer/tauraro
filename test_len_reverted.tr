@@ -1,6 +1,0 @@
-s = "hello"
-try:
-    result = s.__len__()
-    print(f"__len__() returned: {result}")
-except AttributeError as e:
-    print(f"AttributeError (expected): {e}")

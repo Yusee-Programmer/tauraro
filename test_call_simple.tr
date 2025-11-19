@@ -1,8 +1,0 @@
-#!/usr/bin/env tauraro
-
-def greet_decorated(name):
-    return f"Hello, {name}!"
-
-print("About to call")
-result = greet_decorated("World")
-print(f"Result: {result}")

@@ -1,8 +1,0 @@
-#!/usr/bin/env tauraro
-
-# Test 1: Simple function call with *args unpacking
-def func1(a, b):
-    print(f"func1: {a}, {b}")
-
-args1 = [1, 2]
-func1(*args1)

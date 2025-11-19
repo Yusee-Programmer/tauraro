@@ -1,8 +1,0 @@
-#!/usr/bin/env tauraro
-
-def outer(x):
-    def inner():
-        print(f"In inner, x = {x}")
-    inner()
-
-outer(42)

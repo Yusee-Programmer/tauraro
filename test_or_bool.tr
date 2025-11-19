@@ -1,7 +1,0 @@
-#!/usr/bin/env tauraro
-
-# Test or with simpler values
-result = True or False
-print(result)
-
-print("Done")
