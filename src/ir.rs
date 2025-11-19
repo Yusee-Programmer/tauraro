@@ -1326,10 +1326,30 @@ impl Generator {
                     arg_names.push(arg_result);
                 }
 
-                // Check if this looks like a class instantiation
-                // For now, we'll add a simple heuristic: if the function name starts with uppercase letter,
-                // treat it as object creation
-                if func_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                // Check if this is a setattr() call - special handling
+                if func_name == "setattr" && arg_names.len() == 3 && args.len() == 3 {
+                    // Check if the second argument is a string literal
+                    if let Expr::Literal(Literal::String(attr_name)) = &args[1] {
+                        // setattr(obj, 'attr_name', value) -> ObjectSetAttr (optimized case)
+                        instructions.push(IRInstruction::ObjectSetAttr {
+                            object: arg_names[0].clone(),
+                            attr: attr_name.clone(),
+                            value: arg_names[2].clone()
+                        });
+                        // setattr returns None
+                        instructions.push(IRInstruction::LoadConst {
+                            value: Value::None,
+                            result: "temp_result".to_string()
+                        });
+                    } else {
+                        // Dynamic attribute name - use regular function call
+                        instructions.push(IRInstruction::Call {
+                            func: func_name,
+                            args: arg_names,
+                            result: Some("temp_result".to_string())
+                        });
+                    }
+                } else if func_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
                     // This looks like object creation
                     let class_name = func_name.clone();
                     instructions.push(IRInstruction::ObjectCreate {
@@ -1605,8 +1625,32 @@ impl Generator {
                     arg_names.push(arg_result);
                 }
 
+                // Check if this is a setattr() call - special handling
+                if func_name == "setattr" && arg_names.len() == 3 && args.len() == 3 {
+                    // Check if the second argument is a string literal
+                    if let Expr::Literal(Literal::String(attr_name)) = &args[1] {
+                        // setattr(obj, 'attr_name', value) -> ObjectSetAttr (optimized case)
+                        module.globals.push(IRInstruction::ObjectSetAttr {
+                            object: arg_names[0].clone(),
+                            attr: attr_name.clone(),
+                            value: arg_names[2].clone()
+                        });
+                        // setattr returns None
+                        module.globals.push(IRInstruction::LoadConst {
+                            value: Value::None,
+                            result: "temp".to_string()
+                        });
+                    } else {
+                        // Dynamic attribute name - use regular function call
+                        module.globals.push(IRInstruction::Call {
+                            func: func_name,
+                            args: arg_names,
+                            result: Some("temp".to_string())
+                        });
+                    }
+                }
                 // Check if this is a super() call
-                if func_name == "super" {
+                else if func_name == "super" {
                     // Handle super() call - for now, we'll generate a special instruction
                     // In a full implementation, this would need more context about the current class
                     module.globals.push(IRInstruction::Call {
@@ -1748,8 +1792,32 @@ impl Generator {
                     arg_names.push(arg_result);
                 }
 
+                // Check if this is a setattr() call - special handling
+                if func_name == "setattr" && arg_names.len() == 3 && args.len() == 3 {
+                    // Check if the second argument is a string literal
+                    if let Expr::Literal(Literal::String(attr_name)) = &args[1] {
+                        // setattr(obj, 'attr_name', value) -> ObjectSetAttr (optimized case)
+                        module.globals.push(IRInstruction::ObjectSetAttr {
+                            object: arg_names[0].clone(),
+                            attr: attr_name.clone(),
+                            value: arg_names[2].clone()
+                        });
+                        // setattr returns None
+                        module.globals.push(IRInstruction::LoadConst {
+                            value: Value::None,
+                            result: result_var.to_string()
+                        });
+                    } else {
+                        // Dynamic attribute name - use regular function call
+                        module.globals.push(IRInstruction::Call {
+                            func: func_name,
+                            args: arg_names,
+                            result: Some(result_var.to_string())
+                        });
+                    }
+                }
                 // Check if this is a class instantiation
-                if func_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                else if func_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
                     // This looks like object creation
                     let class_name = func_name.clone();
                     module.globals.push(IRInstruction::ObjectCreate {

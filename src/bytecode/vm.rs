@@ -9894,7 +9894,10 @@ impl SuperBytecodeVM {
                     return Ok(value);
                 }
                 Ok(None) => {
-                    // Continue executing
+                    // Continue executing - increment PC
+                    if frame_idx < self.frames.len() {
+                        self.frames[frame_idx].pc += 1;
+                    }
                     continue;
                 }
                 Err(e) => return Err(e),
