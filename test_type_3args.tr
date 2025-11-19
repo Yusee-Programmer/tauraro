@@ -1,0 +1,34 @@
+# Test type() 3-argument form to create dynamic classes
+
+# Create a simple class dynamically
+MyClass = type("MyClass", (), {
+    "x": 10,
+    "greet": lambda self: "Hello from MyClass"
+})
+
+print("Created class:", MyClass)
+print("Type:", type(MyClass))
+
+# Create an instance
+obj = MyClass()
+print("Instance:", obj)
+print("Instance x:", obj.x)
+
+# Create a class with a parent
+class Animal:
+    def __init__(self, name):
+        self.name = name
+    
+    def speak(self):
+        return f"{self.name} makes a sound"
+
+Dog = type("Dog", (Animal,), {
+    "species": "Canis",
+    "speak": lambda self: f"{self.name} barks"
+})
+
+print("\nDog class:", Dog)
+dog = Dog("Buddy")
+print("Dog name:", dog.name)
+print("Dog speak:", dog.speak())
+print("Dog species:", dog.species)

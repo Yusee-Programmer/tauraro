@@ -1,0 +1,8 @@
+print("Test: **kwargs without closure")
+
+def wrapper(*args, **kwargs):
+    print(f"wrapper called with args={args}, kwargs={kwargs}")
+    return "done"
+
+result = wrapper("arg1")
+print(f"Result: {result}")

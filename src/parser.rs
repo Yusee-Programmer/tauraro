@@ -1391,6 +1391,8 @@ impl Parser {
         } else if self.is_keyword_as_identifier() {
             // Allow keywords to be used as identifiers (e2.g., match = value)
             let name = match &self.peek().token {
+                Token::KwFunc => "func".to_string(),
+                Token::KwAsync => "async".to_string(),
                 Token::KwMatch => "match".to_string(),
                 Token::KwClass => "class".to_string(),
                 Token::KwIf => "if".to_string(),
@@ -1403,14 +1405,24 @@ impl Parser {
                 Token::KwImport => "import".to_string(),
                 Token::KwFrom => "from".to_string(),
                 Token::KwAs => "as".to_string(),
+                Token::KwExtern => "extern".to_string(),
+                Token::KwExport => "export".to_string(),
+                Token::KwAwait => "await".to_string(),
                 Token::KwTry => "try".to_string(),
                 Token::KwExcept => "except".to_string(),
                 Token::KwFinally => "finally".to_string(),
                 Token::KwRaise => "raise".to_string(),
                 Token::KwWith => "with".to_string(),
+                Token::KwYield => "yield".to_string(),
+                Token::KwLambda => "lambda".to_string(),
+                Token::KwCase => "case".to_string(),
                 Token::KwPass => "pass".to_string(),
                 Token::KwIn => "in".to_string(),
                 Token::KwIs => "is".to_string(),
+                Token::KwDel => "del".to_string(),
+                Token::KwAssert => "assert".to_string(),
+                Token::KwGlobal => "global".to_string(),
+                Token::KwNonlocal => "nonlocal".to_string(),
                 Token::And => "and".to_string(),
                 Token::Or => "or".to_string(),
                 Token::Not => "not".to_string(),
@@ -1846,7 +1858,45 @@ impl Parser {
             }
             // Allow keywords to be used as identifiers in certain contexts
             token if self.is_keyword_as_identifier() => {
-                let name = format!("{:?}", token);
+                // Extract the keyword name properly
+                let name = match token {
+                    Token::KwFunc => "func".to_string(),
+                    Token::KwClass => "class".to_string(),
+                    Token::KwIf => "if".to_string(),
+                    Token::KwElse => "else".to_string(),
+                    Token::KwFor => "for".to_string(),
+                    Token::KwWhile => "while".to_string(),
+                    Token::KwReturn => "return".to_string(),
+                    Token::KwBreak => "break".to_string(),
+                    Token::KwContinue => "continue".to_string(),
+                    Token::KwImport => "import".to_string(),
+                    Token::KwFrom => "from".to_string(),
+                    Token::KwAs => "as".to_string(),
+                    Token::KwExtern => "extern".to_string(),
+                    Token::KwExport => "export".to_string(),
+                    Token::KwAsync => "async".to_string(),
+                    Token::KwAwait => "await".to_string(),
+                    Token::KwTry => "try".to_string(),
+                    Token::KwExcept => "except".to_string(),
+                    Token::KwFinally => "finally".to_string(),
+                    Token::KwRaise => "raise".to_string(),
+                    Token::KwWith => "with".to_string(),
+                    Token::KwYield => "yield".to_string(),
+                    Token::KwLambda => "lambda".to_string(),
+                    Token::KwMatch => "match".to_string(),
+                    Token::KwCase => "case".to_string(),
+                    Token::KwIn => "in".to_string(),
+                    Token::KwIs => "is".to_string(),
+                    Token::KwPass => "pass".to_string(),
+                    Token::KwGlobal => "global".to_string(),
+                    Token::KwNonlocal => "nonlocal".to_string(),
+                    Token::KwDel => "del".to_string(),
+                    Token::KwAssert => "assert".to_string(),
+                    Token::And => "and".to_string(),
+                    Token::Or => "or".to_string(),
+                    Token::Not => "not".to_string(),
+                    _ => format!("{:?}", token),
+                };
                 self.advance();
                 Ok(name)
             }

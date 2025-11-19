@@ -1,0 +1,16 @@
+#!/usr/bin/env tauraro
+
+def inner_func():
+    print("Inner")
+    return 42
+
+def outer_func(func):
+    def wrapper(*args):
+        print("Wrapper")
+        result = func(*args)
+        return result
+    return wrapper
+
+decorated = outer_func(inner_func)
+result = decorated()
+print(f"Result: {result}")

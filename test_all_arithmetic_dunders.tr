@@ -1,0 +1,49 @@
+class Vector:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    
+    def __add__(self, other):
+        print("Vector.__add__ called")
+        if isinstance(other, Vector):
+            return Vector(self.x + other.x, self.y + other.y)
+        return Vector(self.x + other, self.y + other)
+    
+    def __sub__(self, other):
+        print("Vector.__sub__ called")
+        if isinstance(other, Vector):
+            return Vector(self.x - other.x, self.y - other.y)
+        return Vector(self.x - other, self.y - other)
+    
+    def __mul__(self, scalar):
+        print("Vector.__mul__ called")
+        return Vector(self.x * scalar, self.y * scalar)
+    
+    def __truediv__(self, scalar):
+        print("Vector.__truediv__ called")
+        if scalar == 0:
+            return None
+        return Vector(self.x / scalar, self.y / scalar)
+    
+    def __str__(self):
+        return f"Vector({self.x}, {self.y})"
+
+# Test __add__
+v1 = Vector(1, 2)
+v2 = Vector(3, 4)
+v3 = v1 + v2
+print(f"v1 + v2 = {v3}")
+
+# Test __sub__
+v4 = v3 - v1
+print(f"v3 - v1 = {v4}")
+
+# Test __mul__
+v5 = v1 * 2
+print(f"v1 * 2 = {v5}")
+
+# Test __truediv__
+v6 = v5 / 2
+print(f"v5 / 2 = {v6}")
+
+print("All arithmetic dunder methods work!")

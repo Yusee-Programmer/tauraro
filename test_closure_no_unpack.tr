@@ -1,0 +1,16 @@
+#!/usr/bin/env tauraro
+
+# Test calling a closure function WITHOUT *args
+
+def outer(f):
+    def inner(arg):
+        print("About to call f")
+        return f(arg)
+    return inner
+
+def target(x):
+    return x * 2
+
+wrapped = outer(target)
+result = wrapped(5)
+print(result)

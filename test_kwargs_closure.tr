@@ -1,0 +1,14 @@
+print("Test: **kwargs in closure")
+
+def decorator(func):
+    def wrapper(*args, **kwargs):
+        print(f"wrapper called with args={args}, kwargs={kwargs}")
+        return func(*args, **kwargs)
+    return wrapper
+
+@decorator
+def greet(name):
+    return f"Hello, {name}!"
+
+result = greet("World")
+print(f"Result: {result}")

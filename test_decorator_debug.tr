@@ -1,0 +1,16 @@
+#!/usr/bin/env tauraro
+
+print("Before decorator definition")
+
+def my_decorator(func):
+    print("In decorator")
+    return func
+
+print("After decorator definition")
+
+@my_decorator
+def greet_decorated(name):
+    return f"Hello, {name}!"
+
+print("After decorated function definition")
+print(greet_decorated("World"))

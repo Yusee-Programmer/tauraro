@@ -157,6 +157,184 @@ fn contains_yield_in_expr(expr: &Expr) -> bool {
     }
 }
 
+/// Collect all identifiers referenced in an expression
+fn collect_identifiers_in_expr(expr: &Expr, identifiers: &mut std::collections::HashSet<String>) {
+    match expr {
+        Expr::Identifier(name) => {
+            identifiers.insert(name.clone());
+        },
+        Expr::BinaryOp { left, op: _, right } => {
+            collect_identifiers_in_expr(left, identifiers);
+            collect_identifiers_in_expr(right, identifiers);
+        },
+        Expr::UnaryOp { op: _, operand } => {
+            collect_identifiers_in_expr(operand, identifiers);
+        },
+        Expr::Call { func, args, kwargs } => {
+            collect_identifiers_in_expr(func, identifiers);
+            for arg in args {
+                collect_identifiers_in_expr(arg, identifiers);
+            }
+            for (_, expr) in kwargs {
+                collect_identifiers_in_expr(expr, identifiers);
+            }
+        },
+        Expr::MethodCall { object, args, kwargs, .. } => {
+            collect_identifiers_in_expr(object, identifiers);
+            for arg in args {
+                collect_identifiers_in_expr(arg, identifiers);
+            }
+            for (_, expr) in kwargs {
+                collect_identifiers_in_expr(expr, identifiers);
+            }
+        },
+        Expr::Attribute { object, .. } => {
+            collect_identifiers_in_expr(object, identifiers);
+        },
+        Expr::Subscript { object, index } => {
+            collect_identifiers_in_expr(object, identifiers);
+            collect_identifiers_in_expr(index, identifiers);
+        },
+        Expr::Slice { object, start, stop, step } => {
+            collect_identifiers_in_expr(object, identifiers);
+            if let Some(expr) = start {
+                collect_identifiers_in_expr(expr, identifiers);
+            }
+            if let Some(expr) = stop {
+                collect_identifiers_in_expr(expr, identifiers);
+            }
+            if let Some(expr) = step {
+                collect_identifiers_in_expr(expr, identifiers);
+            }
+        },
+        Expr::List(items) | Expr::Tuple(items) => {
+            for item in items {
+                collect_identifiers_in_expr(item, identifiers);
+            }
+        },
+        Expr::Dict(items) => {
+            for item in items {
+                match item {
+                    crate::ast::DictItem::KeyValue(key, value) => {
+                        collect_identifiers_in_expr(key, identifiers);
+                        collect_identifiers_in_expr(value, identifiers);
+                    },
+                    crate::ast::DictItem::Unpacking(expr) => {
+                        collect_identifiers_in_expr(expr, identifiers);
+                    },
+                }
+            }
+        },
+        Expr::Set(items) => {
+            for item in items {
+                collect_identifiers_in_expr(item, identifiers);
+            }
+        },
+        Expr::ListComp { element, generators } | 
+        Expr::SetComp { element, generators } => {
+            collect_identifiers_in_expr(element, identifiers);
+            for gen in generators {
+                collect_identifiers_in_expr(&gen.iter, identifiers);
+                for if_clause in &gen.ifs {
+                    collect_identifiers_in_expr(if_clause, identifiers);
+                }
+            }
+        },
+        Expr::DictComp { key, value, generators } => {
+            collect_identifiers_in_expr(key, identifiers);
+            collect_identifiers_in_expr(value, identifiers);
+            for gen in generators {
+                collect_identifiers_in_expr(&gen.iter, identifiers);
+                for if_clause in &gen.ifs {
+                    collect_identifiers_in_expr(if_clause, identifiers);
+                }
+            }
+        },
+        Expr::GeneratorExp { element, generators } => {
+            collect_identifiers_in_expr(element, identifiers);
+            for gen in generators {
+                collect_identifiers_in_expr(&gen.iter, identifiers);
+                for if_clause in &gen.ifs {
+                    collect_identifiers_in_expr(if_clause, identifiers);
+                }
+            }
+        },
+        Expr::IfExp { condition, then_expr, else_expr } => {
+            collect_identifiers_in_expr(condition, identifiers);
+            collect_identifiers_in_expr(then_expr, identifiers);
+            collect_identifiers_in_expr(else_expr, identifiers);
+        },
+        Expr::Compare { left, comparators, .. } => {
+            collect_identifiers_in_expr(left, identifiers);
+            for comp in comparators {
+                collect_identifiers_in_expr(comp, identifiers);
+            }
+        },
+        Expr::FormatString { parts } => {
+            for part in parts {
+                match part {
+                    crate::ast::FormatPart::String(_) => {},
+                    crate::ast::FormatPart::Expression { expr, .. } => {
+                        collect_identifiers_in_expr(expr, identifiers);
+                    },
+                }
+            }
+        },
+        _ => {},
+    }
+}
+
+/// Collect all identifiers referenced in statements (body of a function)
+fn collect_identifiers_in_statements(statements: &[Statement]) -> std::collections::HashSet<String> {
+    let mut identifiers = std::collections::HashSet::new();
+    for stmt in statements {
+        match stmt {
+            Statement::Expression(expr) => {
+                collect_identifiers_in_expr(expr, &mut identifiers);
+            },
+            Statement::VariableDef { value: Some(expr), .. } => {
+                collect_identifiers_in_expr(expr, &mut identifiers);
+            },
+            Statement::Return(Some(expr)) => {
+                collect_identifiers_in_expr(expr, &mut identifiers);
+            },
+            Statement::If { condition, then_branch, elif_branches, else_branch } => {
+                collect_identifiers_in_expr(condition, &mut identifiers);
+                identifiers.extend(collect_identifiers_in_statements(then_branch));
+                for (cond, body) in elif_branches {
+                    collect_identifiers_in_expr(cond, &mut identifiers);
+                    identifiers.extend(collect_identifiers_in_statements(body));
+                }
+                if let Some(body) = else_branch {
+                    identifiers.extend(collect_identifiers_in_statements(body));
+                }
+            },
+            Statement::While { condition, body, .. } => {
+                collect_identifiers_in_expr(condition, &mut identifiers);
+                identifiers.extend(collect_identifiers_in_statements(body));
+            },
+            Statement::For { iterable, body, .. } => {
+                collect_identifiers_in_expr(iterable, &mut identifiers);
+                identifiers.extend(collect_identifiers_in_statements(body));
+            },
+            Statement::Try { body, except_handlers, else_branch, finally } => {
+                identifiers.extend(collect_identifiers_in_statements(body));
+                for handler in except_handlers {
+                    identifiers.extend(collect_identifiers_in_statements(&handler.body));
+                }
+                if let Some(body) = else_branch {
+                    identifiers.extend(collect_identifiers_in_statements(body));
+                }
+                if let Some(body) = finally {
+                    identifiers.extend(collect_identifiers_in_statements(body));
+                }
+            },
+            _ => {},
+        }
+    }
+    identifiers
+}
+
 impl SuperCompiler {
     pub fn new(filename: String) -> Self {
         Self {
@@ -520,6 +698,18 @@ impl SuperCompiler {
                 func_code.params = params.clone(); // Set the params field
                 func_code.is_async = is_async;     // Set the async flag
                 
+                // DEBUG: Collect all identifiers referenced in the function body
+                let referenced_identifiers = collect_identifiers_in_statements(&body);
+                
+                // Find free variables (referenced but not defined locally)
+                let mut free_variables = Vec::new();
+                for ident in referenced_identifiers {
+                    // Check if this is a parameter (defined in varnames)
+                    if !func_code.varnames.contains(&ident) {
+                        free_variables.push(ident);
+                    }
+                }
+                
                 // Debug output to see the compiled code
         // eprintln!("DEBUG: Compiled function '{}' with {} instructions", name, func_code.instructions.len());
                 
@@ -528,7 +718,7 @@ impl SuperCompiler {
                     name: name.clone(),
                     params: params.clone(),
                     body: vec![], // Body is encoded in the bytecode, not stored as AST
-                    captured_scope: HashMap::new(),
+                    captured_scope: HashMap::new(), // Will be populated at runtime if needed
                     docstring: None,
                     compiled_code: Some(Box::new(func_code)),
                     module_globals: None, // Will be set when function is defined in a module
@@ -540,6 +730,21 @@ impl SuperCompiler {
                 // Load the closure
                 let mut func_reg = self.allocate_register();
                 self.emit(OpCode::LoadConst, closure_const_idx, func_reg, 0, self.current_line);
+                
+                // If we have free variables and we're in a function scope, emit instructions to capture them
+                if !free_variables.is_empty() && self.is_in_function_scope() {
+                    // For each free variable, load it and store it with a special name in the function's globals
+                    // This makes it accessible when the closure is called
+                    for free_var in &free_variables {
+                        // Load the free variable
+                        let var_reg = self.compile_expression(Expr::Identifier(free_var.clone()))?;
+                        
+                        // Store it with a special name that the closure handler can recognize
+                        let capture_name = format!("__closure_captured_{}", free_var);
+                        let capture_idx = self.code.add_name(capture_name);
+                        self.emit(OpCode::StoreGlobal, var_reg, capture_idx, 0, self.current_line);
+                    }
+                }
                 
                 // Apply decorators if any
                 if !decorators.is_empty() {
@@ -571,6 +776,7 @@ impl SuperCompiler {
                 // Debug output to see what's stored in constants
 
                 Ok(())
+
             }
             Statement::For { variable: _variable, variables, iterable, body, .. } => {
                 // Compile for loop: for variable(s) in iterable:
@@ -1383,28 +1589,36 @@ impl SuperCompiler {
 
                 // 1. Compile the context expression
                 let context_reg = self.compile_expression(context)?;
+                
+                // Save the context object in a separate register for later use in __exit__
+                let context_saved_reg = self.allocate_register();
+                self.emit(OpCode::MoveReg, context_reg, context_saved_reg, 0, self.current_line);
 
                 // 2. Call __enter__() method on the context
                 let enter_method_idx = self.code.add_name("__enter__".to_string());
-                let enter_result_reg = self.allocate_register();
-
-                // Load __enter__ method
-                self.emit(OpCode::LoadMethod, context_reg, enter_method_idx, enter_result_reg, self.current_line);
-
+                
                 // Call __enter__() with no arguments
-                let enter_call_result_reg = self.allocate_register();
+                // CallMethod: arg1=object_reg, arg2=(arg_count << 16) | cache_idx, arg3=method_name_idx
                 let enter_cache_idx = self.code.add_inline_method_cache();
                 let enter_packed_arg2 = (0 << 16) | enter_cache_idx; // 0 args
-                self.emit(OpCode::CallMethod, context_reg, enter_packed_arg2, enter_call_result_reg, self.current_line);
+                self.emit(OpCode::CallMethod, context_reg, enter_packed_arg2, enter_method_idx, self.current_line);
+
+                // After CallMethod, the result is in context_reg
+                // Save it to a separate register
+                let enter_result_reg = self.allocate_register();
+                self.emit(OpCode::MoveReg, context_reg, enter_result_reg, 0, self.current_line);
+                
+                // Restore the original context object to context_reg
+                self.emit(OpCode::MoveReg, context_saved_reg, context_reg, 0, self.current_line);
 
                 // 3. Store the result in the alias variable if provided
                 if let Some(var_name) = alias {
                     if self.is_in_function_scope() {
                         let local_idx = self.get_local_index(&var_name);
-                        self.emit(OpCode::StoreFast, local_idx, enter_call_result_reg, 0, self.current_line);
+                        self.emit(OpCode::StoreFast, local_idx, enter_result_reg, 0, self.current_line);
                     } else {
                         let name_idx = self.code.add_name(var_name.clone());
-                        self.emit(OpCode::StoreGlobal, enter_call_result_reg, name_idx, 0, self.current_line);
+                        self.emit(OpCode::StoreGlobal, enter_result_reg, name_idx, 0, self.current_line);
                     }
                 }
 
@@ -1421,25 +1635,32 @@ impl SuperCompiler {
 
                 // 7. Call __exit__(None, None, None) on normal exit
                 let exit_method_idx = self.code.add_name("__exit__".to_string());
-                let exit_result_reg = self.allocate_register();
-
-                // Load __exit__ method
-                self.emit(OpCode::LoadMethod, context_reg, exit_method_idx, exit_result_reg, self.current_line);
 
                 // Load None arguments for __exit__(None, None, None)
                 let none_const = self.code.add_constant(Value::None);
-                let none_reg1 = self.allocate_register();
-                let none_reg2 = self.allocate_register();
-                let none_reg3 = self.allocate_register();
-                self.emit(OpCode::LoadConst, none_const, none_reg1, 0, self.current_line);
-                self.emit(OpCode::LoadConst, none_const, none_reg2, 0, self.current_line);
-                self.emit(OpCode::LoadConst, none_const, none_reg3, 0, self.current_line);
+                
+                // Allocate fresh registers for the arguments
+                let arg_reg1 = self.allocate_register();
+                let arg_reg2 = self.allocate_register();
+                let arg_reg3 = self.allocate_register();
+                
+                self.emit(OpCode::LoadConst, none_const, arg_reg1, 0, self.current_line);
+                self.emit(OpCode::LoadConst, none_const, arg_reg2, 0, self.current_line);
+                self.emit(OpCode::LoadConst, none_const, arg_reg3, 0, self.current_line);
+
+                // Move them to consecutive registers starting from context_reg + 1
+                let arg_start = context_reg + 1;
+                while self.next_register <= arg_start + 2 {
+                    self.allocate_register();
+                }
+                self.emit(OpCode::MoveReg, arg_reg1, arg_start, 0, self.current_line);
+                self.emit(OpCode::MoveReg, arg_reg2, arg_start + 1, 0, self.current_line);
+                self.emit(OpCode::MoveReg, arg_reg3, arg_start + 2, 0, self.current_line);
 
                 // Call __exit__(None, None, None) with 3 arguments
-                let exit_call_result_reg = self.allocate_register();
                 let exit_cache_idx = self.code.add_inline_method_cache();
                 let exit_packed_arg2 = (3 << 16) | exit_cache_idx; // 3 args
-                self.emit(OpCode::CallMethod, context_reg, exit_packed_arg2, exit_call_result_reg, self.current_line);
+                self.emit(OpCode::CallMethod, context_reg, exit_packed_arg2, exit_method_idx, self.current_line);
 
                 // Jump to end
                 let to_end_jump = self.emit(OpCode::Jump, 0, 0, 0, self.current_line);
@@ -1453,23 +1674,31 @@ impl SuperCompiler {
                 let exc_reg = self.allocate_register();
                 self.emit(OpCode::GetExceptionValue, exc_reg, 0, 0, self.current_line);
 
-                // Load __exit__ method again
+                // Load __exit__ method name again
                 let exit_method_idx2 = self.code.add_name("__exit__".to_string());
-                let exit_result_reg2 = self.allocate_register();
-                self.emit(OpCode::LoadMethod, context_reg, exit_method_idx2, exit_result_reg2, self.current_line);
 
                 // For now, pass the exception as the second argument and None for the others
-                // Full implementation would extract type and traceback
-                let none_reg_exc1 = self.allocate_register();
-                let none_reg_exc3 = self.allocate_register();
-                self.emit(OpCode::LoadConst, none_const, none_reg_exc1, 0, self.current_line);
-                self.emit(OpCode::LoadConst, none_const, none_reg_exc3, 0, self.current_line);
+                let exc_arg1 = self.allocate_register();
+                let exc_arg2 = self.allocate_register();
+                let exc_arg3 = self.allocate_register();
+                
+                self.emit(OpCode::LoadConst, none_const, exc_arg1, 0, self.current_line);
+                self.emit(OpCode::MoveReg, exc_reg, exc_arg2, 0, self.current_line);
+                self.emit(OpCode::LoadConst, none_const, exc_arg3, 0, self.current_line);
+                
+                // Move to consecutive registers
+                let exc_arg_start = context_reg + 1;
+                while self.next_register <= exc_arg_start + 2 {
+                    self.allocate_register();
+                }
+                self.emit(OpCode::MoveReg, exc_arg1, exc_arg_start, 0, self.current_line);
+                self.emit(OpCode::MoveReg, exc_arg2, exc_arg_start + 1, 0, self.current_line);
+                self.emit(OpCode::MoveReg, exc_arg3, exc_arg_start + 2, 0, self.current_line);
 
                 // Call __exit__(None, exc, None)
-                let exit_exc_result_reg = self.allocate_register();
                 let exit_exc_cache_idx = self.code.add_inline_method_cache();
                 let exit_exc_packed_arg2 = (3 << 16) | exit_exc_cache_idx; // 3 args
-                self.emit(OpCode::CallMethod, context_reg, exit_exc_packed_arg2, exit_exc_result_reg, self.current_line);
+                self.emit(OpCode::CallMethod, context_reg, exit_exc_packed_arg2, exit_method_idx2, self.current_line);
 
                 // Re-raise the exception after calling __exit__
                 self.emit(OpCode::Raise, exc_reg, 0, 0, self.current_line);
@@ -1670,16 +1899,36 @@ impl SuperCompiler {
                         BinaryOp::RShift => OpCode::BinaryRShiftRR,
                         BinaryOp::And => {
                             // Short-circuit AND: if left is false, return left, otherwise return right
-                            // This is a simplified implementation
-                            // eprintln!("DEBUG COMPILER BinaryOp: Emitting BinaryMulRR for And");
-                            self.emit(OpCode::BinaryMulRR, left_reg, right_reg, result_reg, self.current_line);
+                            // result = left and right
+                            // mov left_reg -> result_reg
+                            // jif_false result_reg -> end_label  (if left is false, we're done)
+                            // mov right_reg -> result_reg  (left was true, use right)
+                            // end_label:
+                            self.emit(OpCode::MoveReg, left_reg, result_reg, 0, self.current_line);
+                            let false_jump_idx = self.code.instructions.len();
+                            self.emit(OpCode::JumpIfFalse, result_reg, 0, 0, self.current_line);
+                            self.emit(OpCode::MoveReg, right_reg, result_reg, 0, self.current_line);
+                            let end_pos = self.code.instructions.len() as u32;
+                            if let Some(instr) = self.code.instructions.get_mut(false_jump_idx) {
+                                instr.arg2 = end_pos;
+                            }
                             return Ok(result_reg);
                         },
                         BinaryOp::Or => {
                             // Short-circuit OR: if left is true, return left, otherwise return right
-                            // This is a simplified implementation
-                            // eprintln!("DEBUG COMPILER BinaryOp: Emitting BinaryAddRR for Or");
-                            self.emit(OpCode::BinaryAddRR, left_reg, right_reg, result_reg, self.current_line);
+                            // result = left or right
+                            // mov left_reg -> result_reg
+                            // jif_true result_reg -> end_label  (if left is true, we're done)
+                            // mov right_reg -> result_reg  (left was false, use right)
+                            // end_label:
+                            self.emit(OpCode::MoveReg, left_reg, result_reg, 0, self.current_line);
+                            let true_jump_idx = self.code.instructions.len();
+                            self.emit(OpCode::JumpIfTrue, result_reg, 0, 0, self.current_line);
+                            self.emit(OpCode::MoveReg, right_reg, result_reg, 0, self.current_line);
+                            let end_pos = self.code.instructions.len() as u32;
+                            if let Some(instr) = self.code.instructions.get_mut(true_jump_idx) {
+                                instr.arg2 = end_pos;
+                            }
                             return Ok(result_reg);
                         },
                         _ => return Err(anyhow!("Unsupported binary operation: {:?}", op)),
@@ -1861,7 +2110,7 @@ impl SuperCompiler {
                         self.emit(OpCode::MoveReg, arg_reg, new_arg_regs[i], 0, self.current_line);
                     }
                     
-                    // Then move from new registers to target positions
+                    // Then move from new registers to target positions, wrapping starred args
                     for (i, &new_reg) in new_arg_regs.iter().enumerate() {
                         let target_reg = start_arg_reg + i as u32;
                         // Allocate the target register if needed
@@ -1870,6 +2119,10 @@ impl SuperCompiler {
                         }
                         if new_reg != target_reg {
                             self.emit(OpCode::MoveReg, new_reg, target_reg, 0, self.current_line);
+                        }
+                        // If this argument is starred, wrap it
+                        if starred_args.iter().any(|(idx, _)| *idx == i) {
+                            self.emit(OpCode::MakeStar, target_reg, target_reg, 0, self.current_line);
                         }
                     }
                 } else {
@@ -1882,6 +2135,10 @@ impl SuperCompiler {
                         }
                         if arg_reg != target_reg {
                             self.emit(OpCode::MoveReg, arg_reg, target_reg, 0, self.current_line);
+                        }
+                        // If this argument is starred, wrap it
+                        if starred_args.iter().any(|(idx, _)| *idx == i) {
+                            self.emit(OpCode::MakeStar, target_reg, target_reg, 0, self.current_line);
                         }
                     }
                 }
@@ -2239,6 +2496,10 @@ impl SuperCompiler {
                 // OPTIMIZATION: Allocate inline method cache for 20-30% speedup
                 let cache_idx = self.code.add_inline_method_cache();
 
+                // For mutating methods that RETURN a value (like pop), we need different handling
+                let mutating_methods = vec!["append", "extend", "insert", "remove", "pop", "clear", "sort", "reverse", "add", "discard", "update"];
+                let mutating_with_return = vec!["pop"];  // Methods that mutate AND return a meaningful value
+
                 // Emit CallMethod instruction with inline caching
                 // arg1: object register (also used for storing result temporarily)
                 // arg2: (arg_count << 16) | cache_idx - packed for inline caching
@@ -2247,10 +2508,69 @@ impl SuperCompiler {
                 let packed_arg2 = (arg_count << 16) | cache_idx;
                 self.emit(OpCode::CallMethod, object_reg, packed_arg2, method_name_idx, self.current_line);
 
-                // CRITICAL FIX: For mutating methods, store the modified object back
-                // This ensures that mutations persist (e.g., list.append modifies the list)
-                let mutating_methods = vec!["append", "extend", "insert", "remove", "pop", "clear", "sort", "reverse", "add", "discard", "update"];
-                if mutating_methods.contains(&method.as_str()) {
+                // CRITICAL FIX: Handle mutating methods correctly
+                // For mutating methods that return a value (like pop):
+                // - The method modifies the object in-place
+                // - The method returns a value via object_reg (after CallMethod)
+                // - We need to reload the modified object back into a temp register
+                // - Then update the variable with this temp register
+                // For mutating methods that return None (like append):
+                // - The method modifies the object in-place
+                // - object_reg should still have the modified object after CallMethod
+                // - We store it back to the variable
+                
+                if mutating_with_return.contains(&method.as_str()) {
+                    // This method both mutates AND returns a value (like pop)
+                    // At this point:
+                    // - object_reg contains the return value (from handle_call_method)
+                    // - The actual modified list is in the variable (updated by call_method_slow_path)
+                    // - We need to reload the modified object from the variable into a temp register
+                    
+                    // First, save the return value in result_reg
+                    self.emit(OpCode::MoveReg, object_reg, result_reg, 0, self.current_line);
+                    
+                    // Now reload the modified object from the variable
+                    if let Some((base_obj, attr_name)) = object_info {
+                        if let Some(base_name) = base_obj {
+                            // For attributes like self.data, load self first then get the attribute
+                            let base_reg = self.allocate_register();
+                            if self.is_in_function_scope() {
+                                if let Some(local_idx) = self.code.varnames.iter().position(|n| n == &base_name) {
+                                    self.emit(OpCode::LoadFast, local_idx as u32, base_reg, 0, self.current_line);
+                                } else {
+                                    let name_idx = self.code.add_name(base_name.clone());
+                                    let cache_idx = self.code.add_inline_cache();
+                                    self.emit(OpCode::LoadGlobal, name_idx, base_reg, cache_idx, self.current_line);
+                                }
+                            } else {
+                                let name_idx = self.code.add_name(base_name);
+                                let cache_idx = self.code.add_inline_cache();
+                                self.emit(OpCode::LoadGlobal, name_idx, base_reg, cache_idx, self.current_line);
+                            }
+                            // Load the attribute
+                            let attr_idx = self.code.add_name(attr_name);
+                            self.emit(OpCode::LoadAttr, base_reg, attr_idx, object_reg, self.current_line);
+                        } else {
+                            // For simple variables like mylist
+                            let name_idx = self.code.add_name(attr_name.clone());
+                            if self.is_in_function_scope() {
+                                if let Some(local_idx) = self.code.varnames.iter().position(|n| n == &attr_name) {
+                                    self.emit(OpCode::LoadFast, local_idx as u32, object_reg, 0, self.current_line);
+                                } else {
+                                    let cache_idx = self.code.add_inline_cache();
+                                    self.emit(OpCode::LoadGlobal, name_idx, object_reg, cache_idx, self.current_line);
+                                }
+                            } else {
+                                let cache_idx = self.code.add_inline_cache();
+                                self.emit(OpCode::LoadGlobal, name_idx, object_reg, cache_idx, self.current_line);
+                            }
+                        }
+                    }
+                    // At this point: result_reg has the return value, object_reg has the modified list
+                    // The return value of the expression is in result_reg
+                    Ok(result_reg)
+                } else if mutating_methods.contains(&method.as_str()) {
+                    // Non-returning mutating methods (append, extend, etc.)
                     if let Some((base_obj, attr_name)) = object_info {
                         if let Some(base_name) = base_obj {
                             // This is an attribute like self.data - need to store it back
@@ -2287,12 +2607,14 @@ impl SuperCompiler {
                             }
                         }
                     }
+                    // For non-returning mutating methods, object_reg has None, move it to result_reg
+                    self.emit(OpCode::MoveReg, object_reg, result_reg, 0, self.current_line);
+                    Ok(result_reg)
+                } else {
+                    // Non-mutating method - just move result to result_reg
+                    self.emit(OpCode::MoveReg, object_reg, result_reg, 0, self.current_line);
+                    Ok(result_reg)
                 }
-
-                // Load the result from the object register (CallMethod stores result there)
-                // We use MoveReg to copy it to the result register
-                self.emit(OpCode::MoveReg, object_reg, result_reg, 0, self.current_line);
-                Ok(result_reg)
             }
             Expr::Attribute { object, name } => {
                 // Attribute access: object.name

@@ -1,0 +1,32 @@
+#!/usr/bin/env tauraro
+
+# Test old-style % formatting
+name = "Alice"
+age = 30
+score = 95.5
+
+# Basic string formatting
+result1 = "Name: %s" % name
+print(f"Result 1: {result1}")
+
+# Tuple formatting
+result2 = "Name: %s, Age: %d" % (name, age)
+print(f"Result 2: {result2}")
+
+# Float formatting
+result3 = "Score: %f" % score
+print(f"Result 3: {result3}")
+
+# Mixed formatting
+result4 = "%s is %d years old with score %f" % (name, age, score)
+print(f"Result 4: {result4}")
+
+# Integer hex formatting
+result5 = "Hex: %x" % 255
+print(f"Result 5: {result5}")
+
+# Integer octal formatting
+result6 = "Octal: %o" % 8
+print(f"Result 6: {result6}")
+
+print("All tests passed!")

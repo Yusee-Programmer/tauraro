@@ -1,0 +1,23 @@
+#!/usr/bin/env tauraro
+
+def test1():
+    print("Test 1: No *args")
+    def inner():
+        return 42
+    def wrapper():
+        x = inner()
+        print(f"Result: {x}")
+    wrapper()
+
+test1()
+
+def test2():
+    print("Test 2: With *args on wrapper")
+    def inner():
+        return 42
+    def wrapper(*args):
+        x = inner()
+        print(f"Result: {x}")
+    wrapper()
+
+test2()

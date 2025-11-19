@@ -1,0 +1,11 @@
+#!/usr/bin/env tauraro
+
+def my_func(x):
+    return x * 2
+
+def wrapper(*args):
+    print("Calling my_func")
+    return my_func(*args)
+
+result = wrapper(5)
+print(result)

@@ -226,6 +226,7 @@ pub enum OpCode {
     FormatValue,
     ExtendedArg,
     WrapKwargs,     // Wrap a dictionary in a KwargsMarker
+    MakeStar,       // Wrap a value in Value::Starred (for *args in function calls)
     NOP,
 }
 

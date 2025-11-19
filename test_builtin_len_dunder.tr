@@ -1,0 +1,34 @@
+# Test built-in type __len__ dunder methods
+print("=== Testing __len__ Dunder Method ===")
+
+# Test string __len__
+s = "hello"
+print(f"str.__len__() test:")
+print(f"  'hello'.__len__() = {s.__len__()}")
+print(f"  len('hello') = {len(s)}")
+
+# Test list __len__
+lst = [1, 2, 3, 4, 5]
+print(f"\nlist.__len__() test:")
+print(f"  [1,2,3,4,5].__len__() = {lst.__len__()}")
+print(f"  len([1,2,3,4,5]) = {len(lst)}")
+
+# Test dict __len__
+d = {"a": 1, "b": 2, "c": 3}
+print(f"\ndict.__len__() test:")
+print(f"  dict.__len__() = {d.__len__()}")
+print(f"  len(dict) = {len(d)}")
+
+# Test tuple __len__
+t = (10, 20, 30)
+print(f"\ntuple.__len__() test:")
+print(f"  (10,20,30).__len__() = {t.__len__()}")
+print(f"  len((10,20,30)) = {len(t)}")
+
+# Test set __len__
+s = {1, 2, 3, 4}
+print(f"\nset.__len__() test:")
+print(f"  set.__len__() = {s.__len__()}")
+print(f"  len(set) = {len(s)}")
+
+print("\n✅ All built-in type __len__ dunder methods work!")

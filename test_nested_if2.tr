@@ -1,0 +1,10 @@
+#!/usr/bin/env tauraro
+
+# For loop with nested if - simplified
+for i in range(3):
+    if i == 2:
+        print(i)
+    else:
+        continue
+
+print("Done")

@@ -1,0 +1,13 @@
+# Debug __call__ issue
+
+class SimpleCall:
+    def __call__(self, x):
+        print(f"__call__ invoked with x={x}")
+        print(f"returning {x + 1}")
+        return x + 1
+
+obj = SimpleCall()
+print("About to call obj(5)")
+result = obj(5)
+print(f"Result type: {type(result)}")
+print(f"Result value: {result}")

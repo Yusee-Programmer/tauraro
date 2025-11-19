@@ -1,0 +1,31 @@
+print("Test 1: Simple nested function")
+
+def outer(x):
+    print(f"outer called with x={x}")
+    
+    def inner():
+        print("inner: About to print x")
+        print(x)  # Should access x from outer
+    
+    inner()
+
+outer(42)
+
+print("Test 2: Decorator with closure")
+
+def decorator(f):
+    print("decorator called")
+    
+    def wrapper():
+        print("wrapper: About to call f")
+        return f()  # Should access f from decorator
+    
+    return wrapper
+
+@decorator
+def hello():
+    return "Hi"
+
+print("About to call hello")
+result = hello()
+print(f"Result: {result}")

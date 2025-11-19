@@ -1,0 +1,8 @@
+#!/usr/bin/env tauraro
+
+def outer(x):
+    def inner():
+        print(x)
+    inner()
+
+outer(42)

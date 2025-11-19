@@ -1,0 +1,10 @@
+#!/usr/bin/env tauraro
+
+# Simpler test - just call a function with *args unpacking
+
+def my_func(a):
+    return a * 2
+
+args = [5]
+result = my_func(*args)
+print(result)

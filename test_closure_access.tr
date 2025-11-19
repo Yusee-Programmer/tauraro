@@ -1,0 +1,14 @@
+#!/usr/bin/env tauraro
+
+def outer(f):
+    def inner():
+        print(f)
+        return f
+    return inner
+
+def target():
+    return 42
+
+wrapped = outer(target)
+result = wrapped()
+print(result())

@@ -1,0 +1,6 @@
+#!/usr/bin/env tauraro
+
+def outer(x):
+    print(f"In outer, x = {x}")
+
+outer(42)

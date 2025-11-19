@@ -1136,6 +1136,12 @@ impl Value {
     /// String method implementations
     fn call_str_method_static(s: String, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
         match method_name {
+            "__len__" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("__len__() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Int(s.len() as i64))
+            }
             "upper" => Ok(Value::Str(s.to_uppercase())),
             "lower" => Ok(Value::Str(s.to_lowercase())),
             "capitalize" => {
@@ -1430,6 +1436,12 @@ impl Value {
     /// List method implementations
     fn call_list_method_static(list: &mut HPList, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
         match method_name {
+            "__len__" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("__len__() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Int(list.len() as i64))
+            }
             "append" => {
                 if args.len() != 1 {
                     return Err(anyhow::anyhow!("append() takes exactly one argument ({} given)", args.len()));
@@ -1559,6 +1571,12 @@ impl Value {
     /// Dict method implementations
     fn call_dict_method_static(dict: Rc<RefCell<HashMap<String, Value>>>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
         match method_name {
+            "__len__" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("__len__() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Int(dict.borrow().len() as i64))
+            }
             "clear" => {
                 if !args.is_empty() {
                     return Err(anyhow::anyhow!("clear() takes no arguments ({} given)", args.len()));
@@ -1684,6 +1702,12 @@ impl Value {
     /// Dict method implementations for KwargsMarker (old style HashMap)
     fn call_dict_method_static_old(dict: &mut HashMap<String, Value>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
         match method_name {
+            "__len__" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("__len__() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Int(dict.len() as i64))
+            }
             "clear" => {
                 if !args.is_empty() {
                     return Err(anyhow::anyhow!("clear() takes no arguments ({} given)", args.len()));
@@ -1813,6 +1837,12 @@ impl Value {
     /// Set method implementations
     fn call_set_method_static(set: &mut Vec<Value>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
         match method_name {
+            "__len__" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("__len__() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Int(set.len() as i64))
+            }
             "add" => {
                 if args.len() != 1 {
                     return Err(anyhow::anyhow!("add() takes exactly one argument ({} given)", args.len()));
@@ -1915,6 +1945,12 @@ impl Value {
     /// Tuple method implementations
     fn call_tuple_method_static(tuple: Vec<Value>, method_name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
         match method_name {
+            "__len__" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("__len__() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Int(tuple.len() as i64))
+            }
             "count" => {
                 if args.len() != 1 {
                     return Err(anyhow::anyhow!("count() takes exactly one argument ({} given)", args.len()));

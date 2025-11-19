@@ -1,0 +1,35 @@
+# Test type(name, bases, dict) - metaclass form
+class Animal:
+    def speak(self):
+        return "Some sound"
+
+# Create a new class using type() with 3 arguments
+Dog = type("Dog", (Animal,), {
+    "breed": "Unknown",
+    "bark": lambda self: "Woof!",
+    "description": "A faithful companion"
+})
+
+# Create an instance of the dynamically created class
+dog = Dog()
+print(f"Type: {type(dog)}")
+print(f"Breed: {dog.breed}")
+print(f"Description: {dog.description}")
+
+# Test calling the lambda method
+result = dog.bark()
+print(f"Dog says: {result}")
+
+# Test inherited method from Animal
+speak_result = dog.speak()
+print(f"Dog speaks: {speak_result}")
+
+# Create another dynamic class with no bases
+Point = type("Point", (), {
+    "x": 0,
+    "y": 0,
+})
+
+p = Point()
+print(f"\nPoint x={p.x}, y={p.y}")
+print(f"Point type: {type(p)}")

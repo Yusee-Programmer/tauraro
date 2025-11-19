@@ -1,0 +1,8 @@
+#!/usr/bin/env tauraro
+
+# Test or outside for loop
+i = 0
+result = i == 0 or i == 1
+print(result)
+
+print("Done")
