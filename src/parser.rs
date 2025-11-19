@@ -768,6 +768,13 @@ impl Parser {
             });
         }
         
+        let else_branch = if self.match_token(&[Token::KwElse]) {
+            self.consume(Token::Colon, "Expected ':' after else")?;
+            Some(self.block()?)
+        } else {
+            None
+        };
+        
         let finally = if self.match_token(&[Token::KwFinally]) {
             self.consume(Token::Colon, "Expected ':' after finally")?;
             Some(self.block()?)
@@ -779,7 +786,7 @@ impl Parser {
             body,
             except_handlers,
             finally,
-            else_branch: None,
+            else_branch,
         })
     }
 

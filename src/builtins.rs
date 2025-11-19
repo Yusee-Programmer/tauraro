@@ -687,11 +687,11 @@ fn map_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     }
     
     let func = &args[0];
-    let iterables: Vec<&Value> = args.iter().skip(1).collect();
+    let iterables: Vec<Value> = args.iter().skip(1).cloned().collect();
     
     // Convert iterables to vectors
     let mut iterable_vecs = Vec::new();
-    for iterable in iterables {
+    for iterable in &iterables {
         match iterable {
             Value::List(items) => iterable_vecs.push(items.as_vec().clone()),
             Value::Tuple(items) => iterable_vecs.push(items.clone()),
@@ -729,10 +729,9 @@ fn map_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
             Value::BuiltinFunction(_, f) => f(func_args)?,
             Value::NativeFunction(f) => f(func_args)?,
             Value::Closure { .. } | Value::Code(_) => {
-                // For closures and user-defined functions, we need to return an iterator that will be evaluated by the VM
-                // For now, we'll create a lazy map iterator using a special marker
-                // Since we can't call closures from here, we return the function and iterable for later evaluation
-                return Err(anyhow::anyhow!("map() with user-defined functions requires VM evaluation - not yet supported in builtin"));
+                // For closures and user-defined functions, we can't evaluate from here
+                // Return a helpful error message
+                return Err(anyhow::anyhow!("map() with user-defined functions not yet supported - use list comprehension instead: [func(x) for x in iterable]"));
             }
             _ => return Err(anyhow::anyhow!("'{}' object is not callable", func.type_name())),
         };
@@ -766,7 +765,10 @@ fn filter_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         let func_result = match func {
             Value::BuiltinFunction(_, f) => f(vec![item.clone()])?,
             Value::NativeFunction(f) => f(vec![item.clone()])?,
-            Value::None => item.clone(), // None means use truthiness
+            Value::None => Value::Bool(item.is_truthy()), // None means use truthiness
+            Value::Closure { .. } | Value::Code(_) => {
+                return Err(anyhow::anyhow!("filter() with user-defined functions not yet supported - use list comprehension instead: [x for x in iterable if func(x)]"));
+            }
             _ => return Err(anyhow::anyhow!("'{}' object is not callable", func.type_name())),
         };
         
