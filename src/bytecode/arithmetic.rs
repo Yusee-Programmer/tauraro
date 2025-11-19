@@ -82,6 +82,14 @@ impl SuperBytecodeVM {
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 - b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a - b as f64)),
+            // Set difference: s1 - s2
+            (Value::Set(a), Value::Set(b)) => {
+                let result: Vec<Value> = a.iter()
+                    .filter(|item| !b.contains(item))
+                    .cloned()
+                    .collect();
+                Ok(Value::Set(result))
+            },
             _ => Err(anyhow!("Unsupported types for subtraction")),
         }
     }
@@ -222,8 +230,98 @@ impl SuperBytecodeVM {
                     Ok(Value::Float(a % b as f64))
                 }
             },
+            // String formatting: "format %s %d" % (value1, value2)
+            (Value::Str(format_str), Value::Tuple(values)) => {
+                self.format_string_old_style(&format_str, values.clone())
+            },
+            // String formatting with single value: "format %s" % value
+            (Value::Str(format_str), right_val) => {
+                self.format_string_old_style(&format_str, vec![right_val])
+            },
             _ => Err(anyhow!("Unsupported types for modulo")),
         }
+    }
+
+    /// Old-style string formatting with % operator
+    /// Supports: %s (string), %d (integer), %f (float), %r (repr)
+    fn format_string_old_style(&self, format_str: &str, values: Vec<Value>) -> Result<Value> {
+        let mut result = format_str.to_string();
+        let mut value_idx = 0;
+        let mut chars = format_str.chars().peekable();
+        let mut pos = 0;
+        let mut replacements = Vec::new();
+
+        while let Some(ch) = chars.next() {
+            if ch == '%' {
+                if let Some(&next_ch) = chars.peek() {
+                    match next_ch {
+                        '%' => {
+                            // %% -> %
+                            chars.next();
+                            pos += 2;
+                        },
+                        's' | 'd' | 'f' | 'r' | 'x' | 'o' => {
+                            // Found a format specifier
+                            if value_idx < values.len() {
+                                let formatted = match next_ch {
+                                    's' => values[value_idx].to_string(),
+                                    'd' => {
+                                        match &values[value_idx] {
+                                            Value::Int(i) => i.to_string(),
+                                            Value::Float(f) => (*f as i64).to_string(),
+                                            _ => return Err(anyhow!("%d format: an integer is required")),
+                                        }
+                                    },
+                                    'f' => {
+                                        match &values[value_idx] {
+                                            Value::Float(f) => f.to_string(),
+                                            Value::Int(i) => (*i as f64).to_string(),
+                                            _ => return Err(anyhow!("%f format: a number is required")),
+                                        }
+                                    },
+                                    'r' => format!("{:?}", values[value_idx]),
+                                    'x' => {
+                                        match &values[value_idx] {
+                                            Value::Int(i) => format!("{:x}", i),
+                                            _ => return Err(anyhow!("%x format: an integer is required")),
+                                        }
+                                    },
+                                    'o' => {
+                                        match &values[value_idx] {
+                                            Value::Int(i) => format!("{:o}", i),
+                                            _ => return Err(anyhow!("%o format: an integer is required")),
+                                        }
+                                    },
+                                    _ => unreachable!(),
+                                };
+                                replacements.push((format!("%{}", next_ch), formatted));
+                                value_idx += 1;
+                            } else {
+                                return Err(anyhow!("not enough arguments for format string"));
+                            }
+                            chars.next();
+                            pos += 2;
+                        },
+                        _ => {
+                            pos += 1;
+                        }
+                    }
+                } else {
+                    pos += 1;
+                }
+            } else {
+                pos += 1;
+            }
+        }
+
+        // Apply replacements in order
+        for (pattern, replacement) in replacements {
+            if let Some(idx) = result.find(&pattern) {
+                result = result[..idx].to_string() + &replacement + &result[idx + pattern.len()..];
+            }
+        }
+
+        Ok(Value::Str(result))
     }
 
     #[inline]
@@ -325,6 +423,14 @@ impl SuperBytecodeVM {
             (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a & b)),
             (Value::Int(a), Value::Bool(b)) => Ok(Value::Int(a & (b as i64))),
             (Value::Bool(a), Value::Int(b)) => Ok(Value::Int((a as i64) & b)),
+            // Set intersection: s1 & s2
+            (Value::Set(a), Value::Set(b)) => {
+                let result: Vec<Value> = a.iter()
+                    .filter(|item| b.contains(item))
+                    .cloned()
+                    .collect();
+                Ok(Value::Set(result))
+            },
             _ => Err(anyhow!("Unsupported types for bitwise AND operation")),
         }
     }
@@ -337,9 +443,34 @@ impl SuperBytecodeVM {
             (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a | b)),
             (Value::Int(a), Value::Bool(b)) => Ok(Value::Int(a | (b as i64))),
             (Value::Bool(a), Value::Int(b)) => Ok(Value::Int((a as i64) | b)),
+            // Set union: s1 | s2
+            (Value::Set(a), Value::Set(b)) => {
+                let mut result = a.clone();
+                for item in b.iter() {
+                    if !result.contains(item) {
+                        result.push(item.clone());
+                    }
+                }
+                Ok(Value::Set(result))
+            },
             _ => Err(anyhow!("Unsupported types for bitwise OR operation")),
         }
     }
+
+    /// Helper to call dunder method on object
+    pub fn call_dunder_method(&self, obj: &Value, dunder_name: &str, args: Vec<Value>) -> Option<Result<Value>> {
+        // Check if this is a custom object with a dunder method
+        if let Value::Object { class_methods, .. } = obj {
+            if let Some(method) = class_methods.get(dunder_name) {
+                // We found a dunder method, but we can't call it from here since we're not in a mutable context
+                // Return the method for the caller to invoke
+                return Some(Ok(method.clone()));
+            }
+        }
+        None
+    }
+
+
 }
 
 

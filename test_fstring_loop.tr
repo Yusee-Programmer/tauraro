@@ -1,0 +1,9 @@
+#!/usr/bin/env tauraro
+
+# Test f-string with loop variable in print
+print("=== Test f-string in loop ===")
+for i in range(3):
+    if i == 2:
+        print(f"For loop: {i}")
+
+print("Done")

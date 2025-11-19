@@ -35,6 +35,7 @@ pub struct CodeObject {
     pub var_types: HashMap<String, Type>,  // Variable type annotations
     pub return_type: Option<Type>,         // Function return type annotation
     pub is_async: bool,                    // Whether this is an async function
+    pub defaults: HashMap<String, Value>, // Default values for parameters
 }
 
 impl PartialEq for CodeObject {
@@ -70,6 +71,7 @@ impl CodeObject {
             params: Vec::new(),  // Initialize the params field
             var_types: HashMap::new(),  // Initialize variable type annotations
             return_type: None,           // Initialize return type annotation
+            defaults: HashMap::new(),    // Initialize defaults
         }
     }
     
@@ -264,6 +266,7 @@ pub struct Frame {
     pub is_property_setter: bool,           // True if this frame is executing a property setter
     pub vars_to_update: Vec<String>,        // Variables to update after property setter completes
     pub last_loaded_attr: Option<String>,   // Track the last loaded attribute name for module class imports
+    pub generator_iterator_reg: Option<u32>, // For generator frames: the register holding the Generator value in the parent frame
 }
 
 // Manual implementation of Debug trait for Frame struct
@@ -324,6 +327,7 @@ impl Frame {
             is_property_setter: false,
             vars_to_update: Vec::new(),
             last_loaded_attr: None,
+            generator_iterator_reg: None,
         }
     }
 
@@ -365,6 +369,7 @@ impl Frame {
         self.is_property_setter = false;
         self.vars_to_update.clear();
         self.last_loaded_attr = None;
+        self.generator_iterator_reg = None;
     }
 
     /// Create a frame optimized for function calls with pre-allocated registers
@@ -430,24 +435,83 @@ impl Frame {
                                 locals[param_index] = rc_arg;
                             }
                             arg_index += 1;
+                        } else if let Some(default_value) = code.defaults.get(param_name) {
+                            // Use default value if no argument provided
+                            let rc_arg = RcValue::new(default_value.clone());
+                            if param_index < locals.len() {
+                                locals[param_index] = rc_arg;
+                            }
                         }
+                        // Otherwise leave as None (already initialized)
                     }
                 }
             } else {
-                // Regular parameter
-                // First check if it's provided as a keyword argument
-                if let Some(value) = kwargs.get(param_name) {
-                    let rc_arg = RcValue::new(value.clone());
+                // Parameter not found in code.params - could be a **kwargs or *args parameter that wasn't properly marked
+                // Check if the name looks like a **kwargs or *args parameter
+                if param_name.starts_with("**") || (code.varnames.len() > param_index && code.varnames.get(param_index).map_or(false, |n| n.starts_with("**"))) {
+                    // Treat as **kwargs - initialize with empty dict or provided kwargs
+                    let dict_value = Value::Dict(Rc::new(RefCell::new(kwargs.clone())));
+                    let rc_arg = RcValue::new(dict_value);
                     if param_index < locals.len() {
                         locals[param_index] = rc_arg;
                     }
-                } else if arg_index < args.len() {
-                    // Use positional argument
-                    let rc_arg = RcValue::new(args[arg_index].clone());
+                } else if param_name.starts_with("*") || (code.varnames.len() > param_index && code.varnames.get(param_index).map_or(false, |n| n.starts_with("*"))) {
+                    // Treat as *args - initialize with remaining args as tuple
+                    let remaining_args: Vec<Value> = args.iter().skip(arg_index).cloned().collect();
+                    let tuple_value = Value::Tuple(remaining_args);
+                    let rc_arg = RcValue::new(tuple_value.clone());
                     if param_index < locals.len() {
                         locals[param_index] = rc_arg;
                     }
-                    arg_index += 1;
+                } else {
+                    // Regular parameter
+                    // First check if it's provided as a keyword argument
+                    if let Some(value) = kwargs.get(param_name) {
+                        let rc_arg = RcValue::new(value.clone());
+                        if param_index < locals.len() {
+                            locals[param_index] = rc_arg;
+                        }
+                    } else if arg_index < args.len() {
+                        // Use positional argument
+                        let rc_arg = RcValue::new(args[arg_index].clone());
+                        if param_index < locals.len() {
+                            locals[param_index] = rc_arg;
+                        }
+                        arg_index += 1;
+                    } else if let Some(default_value) = code.defaults.get(param_name) {
+                        // Use default value if no argument provided
+                        let rc_arg = RcValue::new(default_value.clone());
+                        if param_index < locals.len() {
+                            locals[param_index] = rc_arg;
+                        }
+                    }
+                    // Otherwise leave as None (already initialized)
+                }
+            }
+        }
+        
+        // Fallback: Make sure that if we have varargs or kwargs parameters marked in code.params,
+        // they are properly initialized even if they weren't found above (can happen if code.params is incomplete)
+        for param in &code.params {
+            if let Some(idx) = locals_map.get(&param.name) {
+                if *idx < locals.len() {
+                    match param.kind {
+                        crate::ast::ParamKind::VarArgs => {
+                            // Make sure this is initialized as a tuple
+                            if matches!(locals[*idx].get_value(), Value::None) {
+                                let tuple_value = Value::Tuple(Vec::new());
+                                locals[*idx] = RcValue::new(tuple_value);
+                            }
+                        }
+                        crate::ast::ParamKind::VarKwargs => {
+                            // Make sure this is initialized as a dict (use provided kwargs if available)
+                            if matches!(locals[*idx].get_value(), Value::None) {
+                                let dict_value = Value::Dict(Rc::new(RefCell::new(kwargs.clone())));
+                                locals[*idx] = RcValue::new(dict_value);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
@@ -471,6 +535,7 @@ impl Frame {
             is_property_setter: false,
             vars_to_update: Vec::new(),
             last_loaded_attr: None,
+            generator_iterator_reg: None,
         }
     }
 
@@ -514,6 +579,7 @@ impl Frame {
             is_property_setter: false,
             vars_to_update: Vec::new(),
             last_loaded_attr: None,
+            generator_iterator_reg: None,
         }
     }
 

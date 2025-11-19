@@ -1391,6 +1391,8 @@ impl Parser {
         } else if self.is_keyword_as_identifier() {
             // Allow keywords to be used as identifiers (e2.g., match = value)
             let name = match &self.peek().token {
+                Token::KwFunc => "func".to_string(),
+                Token::KwAsync => "async".to_string(),
                 Token::KwMatch => "match".to_string(),
                 Token::KwClass => "class".to_string(),
                 Token::KwIf => "if".to_string(),
@@ -1403,14 +1405,24 @@ impl Parser {
                 Token::KwImport => "import".to_string(),
                 Token::KwFrom => "from".to_string(),
                 Token::KwAs => "as".to_string(),
+                Token::KwExtern => "extern".to_string(),
+                Token::KwExport => "export".to_string(),
+                Token::KwAwait => "await".to_string(),
                 Token::KwTry => "try".to_string(),
                 Token::KwExcept => "except".to_string(),
                 Token::KwFinally => "finally".to_string(),
                 Token::KwRaise => "raise".to_string(),
                 Token::KwWith => "with".to_string(),
+                Token::KwYield => "yield".to_string(),
+                Token::KwLambda => "lambda".to_string(),
+                Token::KwCase => "case".to_string(),
                 Token::KwPass => "pass".to_string(),
                 Token::KwIn => "in".to_string(),
                 Token::KwIs => "is".to_string(),
+                Token::KwDel => "del".to_string(),
+                Token::KwAssert => "assert".to_string(),
+                Token::KwGlobal => "global".to_string(),
+                Token::KwNonlocal => "nonlocal".to_string(),
                 Token::And => "and".to_string(),
                 Token::Or => "or".to_string(),
                 Token::Not => "not".to_string(),
@@ -1585,42 +1597,29 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Dict(Vec::new()))
             } else {
-                let first_expr = self.expression()?;
+                // Check if it starts with **expr (dict unpacking)
+                if self.check(&Token::Power) {
+                    self.advance();
+                    let expr = self.expression()?;
+                    let mut items = vec![crate::ast::DictItem::Unpacking(expr)];
 
-                // Check if it's a dict
-                if self.match_token(&[Token::Colon]) {
-                    // Skip newlines and comments after colon
-                    while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
-                        self.advance();
-                    }
+                    // Parse remaining items
+                    while self.match_token(&[Token::Comma]) {
+                        // Skip newlines and comments after comma
+                        while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                            self.advance();
+                        }
 
-                    // Dict or dict comprehension
-                    let first_value = self.expression()?;
-                    let mut pairs = vec![(first_expr.clone(), first_value.clone())];
+                        // Check for closing brace (allowing trailing comma)
+                        if self.check(&Token::RBrace) {
+                            break;
+                        }
 
-                    // Check if this is a dict comprehension (don't consume the 'for' token!)
-                    if self.check(&Token::KwFor) {
-                        // Dict comprehension
-                        let generators = self.parse_comprehension()?;
-                        self.consume(Token::RBrace, "Expected '}' after dict comprehension")?;
-                        Ok(Expr::DictComp {
-                            key: Box::new(first_expr.clone()),
-                            value: Box::new(first_value.clone()),
-                            generators,
-                        })
-                    } else {
-                        // Regular dict
-                        while self.match_token(&[Token::Comma]) {
-                            // Skip newlines and comments after comma
-                            while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
-                                self.advance();
-                            }
-
-                            // Check for closing brace (allowing trailing comma)
-                            if self.check(&Token::RBrace) {
-                                break;
-                            }
-
+                        if self.check(&Token::Power) {
+                            self.advance();
+                            let expr = self.expression()?;
+                            items.push(crate::ast::DictItem::Unpacking(expr));
+                        } else {
                             let key = self.expression()?;
                             self.consume(Token::Colon, "Expected ':' in dict")?;
 
@@ -1630,53 +1629,117 @@ impl Parser {
                             }
 
                             let value = self.expression()?;
-                            pairs.push((key, value));
+                            items.push(crate::ast::DictItem::KeyValue(key, value));
                         }
+                    }
 
-                        // Skip newlines and comments before closing brace
+                    // Skip newlines and comments before closing brace
+                    while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                        self.advance();
+                    }
+
+                    self.consume(Token::RBrace, "Expected '}' after dict items")?;
+                    Ok(Expr::Dict(items))
+                } else {
+                    let first_expr = self.expression()?;
+
+                    // Check if it's a dict
+                    if self.match_token(&[Token::Colon]) {
+                        // Skip newlines and comments after colon
                         while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
                             self.advance();
                         }
 
-                        self.consume(Token::RBrace, "Expected '}' after dict items")?;
-                        Ok(Expr::Dict(pairs))
-                    }
-                } else {
-                    // Set or set comprehension
-                    let mut items = vec![first_expr.clone()];
+                        // Dict or dict comprehension
+                        let first_value = self.expression()?;
+                        let mut items = vec![crate::ast::DictItem::KeyValue(first_expr.clone(), first_value.clone())];
 
-                    // Check if this is a set comprehension (don't consume the 'for' token!)
-                    if self.check(&Token::KwFor) {
-                        // Set comprehension
-                        let generators = self.parse_comprehension()?;
-                        self.consume(Token::RBrace, "Expected '}' after set comprehension")?;
-                        Ok(Expr::SetComp {
-                            element: Box::new(first_expr.clone()),
-                            generators,
-                        })
-                    } else {
-                        // Regular set
-                        while self.match_token(&[Token::Comma]) {
-                            // Skip newlines and comments after comma
+                        // Check if this is a dict comprehension (don't consume the 'for' token!)
+                        if self.check(&Token::KwFor) {
+                            // Dict comprehension
+                            let generators = self.parse_comprehension()?;
+                            self.consume(Token::RBrace, "Expected '}' after dict comprehension")?;
+                            Ok(Expr::DictComp {
+                                key: Box::new(first_expr.clone()),
+                                value: Box::new(first_value.clone()),
+                                generators,
+                            })
+                        } else {
+                            // Regular dict
+                            while self.match_token(&[Token::Comma]) {
+                                // Skip newlines and comments after comma
+                                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                                    self.advance();
+                                }
+
+                                // Check for closing brace (allowing trailing comma)
+                                if self.check(&Token::RBrace) {
+                                    break;
+                                }
+
+                                if self.check(&Token::Power) {
+                                    self.advance();
+                                    let expr = self.expression()?;
+                                    items.push(crate::ast::DictItem::Unpacking(expr));
+                                } else {
+                                    let key = self.expression()?;
+                                    self.consume(Token::Colon, "Expected ':' in dict")?;
+
+                                    // Skip newlines and comments after colon
+                                    while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                                        self.advance();
+                                    }
+
+                                    let value = self.expression()?;
+                                    items.push(crate::ast::DictItem::KeyValue(key, value));
+                                }
+                            }
+
+                            // Skip newlines and comments before closing brace
                             while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
                                 self.advance();
                             }
 
-                            // Check for closing brace (allowing trailing comma)
-                            if self.check(&Token::RBrace) {
-                                break;
+                            self.consume(Token::RBrace, "Expected '}' after dict items")?;
+                            Ok(Expr::Dict(items))
+                        }
+                    } else {
+                        // Set or set comprehension
+                        let mut set_items = vec![first_expr.clone()];
+
+                        // Check if this is a set comprehension (don't consume the 'for' token!)
+                        if self.check(&Token::KwFor) {
+                            // Set comprehension
+                            let generators = self.parse_comprehension()?;
+                            self.consume(Token::RBrace, "Expected '}' after set comprehension")?;
+                            Ok(Expr::SetComp {
+                                element: Box::new(first_expr.clone()),
+                                generators,
+                            })
+                        } else {
+                            // Regular set
+                            while self.match_token(&[Token::Comma]) {
+                                // Skip newlines and comments after comma
+                                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                                    self.advance();
+                                }
+
+                                // Check for closing brace (allowing trailing comma)
+                                if self.check(&Token::RBrace) {
+                                    break;
+                                }
+
+                                set_items.push(self.expression()?);
                             }
 
-                            items.push(self.expression()?);
-                        }
+                            // Skip newlines and comments before closing brace
+                            while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                                self.advance();
+                            }
 
-                        // Skip newlines and comments before closing brace
-                        while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
-                            self.advance();
+                            self.consume(Token::RBrace, "Expected '}' after set items")?;
+                            Ok(Expr::Set(set_items))
                         }
-
-                        self.consume(Token::RBrace, "Expected '}' after set items")?;
-                        Ok(Expr::Set(items))
                     }
                 }
             }
@@ -1795,7 +1858,45 @@ impl Parser {
             }
             // Allow keywords to be used as identifiers in certain contexts
             token if self.is_keyword_as_identifier() => {
-                let name = format!("{:?}", token);
+                // Extract the keyword name properly
+                let name = match token {
+                    Token::KwFunc => "func".to_string(),
+                    Token::KwClass => "class".to_string(),
+                    Token::KwIf => "if".to_string(),
+                    Token::KwElse => "else".to_string(),
+                    Token::KwFor => "for".to_string(),
+                    Token::KwWhile => "while".to_string(),
+                    Token::KwReturn => "return".to_string(),
+                    Token::KwBreak => "break".to_string(),
+                    Token::KwContinue => "continue".to_string(),
+                    Token::KwImport => "import".to_string(),
+                    Token::KwFrom => "from".to_string(),
+                    Token::KwAs => "as".to_string(),
+                    Token::KwExtern => "extern".to_string(),
+                    Token::KwExport => "export".to_string(),
+                    Token::KwAsync => "async".to_string(),
+                    Token::KwAwait => "await".to_string(),
+                    Token::KwTry => "try".to_string(),
+                    Token::KwExcept => "except".to_string(),
+                    Token::KwFinally => "finally".to_string(),
+                    Token::KwRaise => "raise".to_string(),
+                    Token::KwWith => "with".to_string(),
+                    Token::KwYield => "yield".to_string(),
+                    Token::KwLambda => "lambda".to_string(),
+                    Token::KwMatch => "match".to_string(),
+                    Token::KwCase => "case".to_string(),
+                    Token::KwIn => "in".to_string(),
+                    Token::KwIs => "is".to_string(),
+                    Token::KwPass => "pass".to_string(),
+                    Token::KwGlobal => "global".to_string(),
+                    Token::KwNonlocal => "nonlocal".to_string(),
+                    Token::KwDel => "del".to_string(),
+                    Token::KwAssert => "assert".to_string(),
+                    Token::And => "and".to_string(),
+                    Token::Or => "or".to_string(),
+                    Token::Not => "not".to_string(),
+                    _ => format!("{:?}", token),
+                };
                 self.advance();
                 Ok(name)
             }
@@ -1973,6 +2074,10 @@ impl Parser {
                         let value = self.expression()?;
                         args.push(Expr::Starred(Box::new(value)));
                     }
+                } else if self.match_token(&[Token::Power]) {
+                    // **kwargs in function call (using Power token)
+                    let value = self.expression()?;
+                    args.push(Expr::StarredKwargs(Box::new(value)));
                 } else if let Token::Identifier(_) = &self.peek().token {
                     let checkpoint = self.current;
                     let name = self.consume_identifier()?;
@@ -2061,6 +2166,10 @@ impl Parser {
                         let value = self.expression()?;
                         args.push(Expr::Starred(Box::new(value)));
                     }
+                } else if self.match_token(&[Token::Power]) {
+                    // **kwargs in function call (using Power token)
+                    let value = self.expression()?;
+                    args.push(Expr::StarredKwargs(Box::new(value)));
                 } else if let Token::Identifier(_) = &self.peek().token {
                     let checkpoint = self.current;
                     let name = self.consume_identifier()?;

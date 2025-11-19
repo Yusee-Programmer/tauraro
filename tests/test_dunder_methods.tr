@@ -1,0 +1,65 @@
+# Test dunder methods implementation
+
+class Vector:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    
+    def __str__(self):
+        return f"Vector({self.x}, {self.y})"
+    
+    def __repr__(self):
+        return f"Vector({self.x}, {self.y})"
+    
+    def __add__(self, other):
+        return Vector(self.x + other.x, self.y + other.y)
+    
+    def __sub__(self, other):
+        return Vector(self.x - other.x, self.y - other.y)
+    
+    def __mul__(self, scalar):
+        return Vector(self.x * scalar, self.y * scalar)
+    
+    def __len__(self):
+        return 2
+    
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y
+    
+    def __lt__(self, other):
+        # Compare by magnitude
+        return (self.x ** 2 + self.y ** 2) < (other.x ** 2 + other.y ** 2)
+
+# Test __str__ and __repr__
+v1 = Vector(1, 2)
+v2 = Vector(3, 4)
+
+print("Testing __str__:")
+print(v1)  # Should print: Vector(1, 2)
+print(v2)  # Should print: Vector(3, 4)
+
+print("\nTesting __add__:")
+v3 = v1 + v2  # Should call __add__
+print(v3)  # Should print: Vector(4, 6)
+
+print("\nTesting __sub__:")
+v4 = v2 - v1  # Should call __sub__
+print(v4)  # Should print: Vector(2, 2)
+
+print("\nTesting __mul__:")
+v5 = v1 * 3  # Should call __mul__
+print(v5)  # Should print: Vector(3, 6)
+
+print("\nTesting __len__:")
+print(len(v1))  # Should print: 2
+
+print("\nTesting __eq__:")
+v6 = Vector(1, 2)
+print(v1 == v6)  # Should print: True
+print(v1 == v2)  # Should print: False
+
+print("\nTesting __lt__:")
+print(v1 < v2)  # Should print: True (because 1^2+2^2=5 < 3^2+4^2=25)
+print(v2 < v1)  # Should print: False
+
+print("\nAll dunder method tests completed!")

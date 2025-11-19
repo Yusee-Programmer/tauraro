@@ -1,0 +1,13 @@
+class A:
+    def __init__(self, val):
+        self.val = val
+    
+    def __sub__(self, other):
+        print("A.__sub__ called!")
+        return A(self.val - other.val)
+
+a1 = A(10)
+a2 = A(20)
+print("a1 - a2...")
+a3 = a1 - a2
+print("Done!")

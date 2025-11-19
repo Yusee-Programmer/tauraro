@@ -120,6 +120,18 @@ pub fn init_builtins() -> HashMap<String, Value> {
     builtins.insert("arena_memory".to_string(), Value::BuiltinFunction("arena_memory".to_string(), decorator_identity));
     builtins.insert("auto_memory".to_string(), Value::BuiltinFunction("auto_memory".to_string(), decorator_identity));
 
+    // Base object class (implicit parent of all classes)
+    let object_class = Value::Class {
+        name: "object".to_string(),
+        bases: vec![],
+        methods: HashMap::new(),
+        attributes: Rc::new(RefCell::new(HashMap::new())),
+        metaclass: Some(Box::new(Value::Str("type".to_string()))),
+        mro: MRO::from_linearization(vec!["object".to_string()]),
+        base_object: BaseObject::new("object".to_string(), vec![]),
+    };
+    builtins.insert("object".to_string(), object_class);
+
     builtins
 }
 
@@ -683,6 +695,24 @@ fn map_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         match iterable {
             Value::List(items) => iterable_vecs.push(items.as_vec().clone()),
             Value::Tuple(items) => iterable_vecs.push(items.clone()),
+            Value::Set(items) => iterable_vecs.push(items.clone()),
+            Value::Str(s) => iterable_vecs.push(s.chars().map(|c| Value::Str(c.to_string())).collect()),
+            Value::Range { start, stop, step } => {
+                let mut range_items = Vec::new();
+                let mut current = *start;
+                if *step > 0 {
+                    while current < *stop {
+                        range_items.push(Value::Int(current));
+                        current += *step;
+                    }
+                } else if *step < 0 {
+                    while current > *stop {
+                        range_items.push(Value::Int(current));
+                        current += *step;
+                    }
+                }
+                iterable_vecs.push(range_items);
+            }
             _ => return Err(anyhow::anyhow!("'{}' object is not iterable", iterable.type_name())),
         }
     }
@@ -698,6 +728,12 @@ fn map_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         let func_result = match func {
             Value::BuiltinFunction(_, f) => f(func_args)?,
             Value::NativeFunction(f) => f(func_args)?,
+            Value::Closure { .. } | Value::Code(_) => {
+                // For closures and user-defined functions, we need to return an iterator that will be evaluated by the VM
+                // For now, we'll create a lazy map iterator using a special marker
+                // Since we can't call closures from here, we return the function and iterable for later evaluation
+                return Err(anyhow::anyhow!("map() with user-defined functions requires VM evaluation - not yet supported in builtin"));
+            }
             _ => return Err(anyhow::anyhow!("'{}' object is not callable", func.type_name())),
         };
         
@@ -965,8 +1001,12 @@ fn isinstance_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     // Handle both string type names and actual class types
     let is_instance = match type_info {
         Value::Str(type_name) => {
-            // Original string-based check
+            // String-based check
             obj.type_name() == type_name
+        },
+        Value::BuiltinFunction(name, _) => {
+            // Check if object type matches builtin function name
+            obj.type_name() == name.as_str()
         },
         Value::Class { name, .. } => {
             // Check if object is instance of this class
@@ -982,6 +1022,7 @@ fn isinstance_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
             items.iter().any(|item| {
                 match item {
                     Value::Str(type_name) => obj.type_name() == type_name,
+                    Value::BuiltinFunction(name, _) => obj.type_name() == name.as_str(),
                     Value::Class { name, .. } => {
                         match obj {
                             Value::Object { class_name, .. } => class_name == name,
@@ -999,22 +1040,132 @@ fn isinstance_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
 }
 
 fn type_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
-    if args.len() != 1 {
-        return Err(anyhow::anyhow!("type() takes exactly 1 argument ({} given)", args.len()));
-    }
-    
-    let obj = &args[0];
-    
-    // Return the type name as a string
-    match obj {
-        Value::Object { class_name, .. } => {
-            Ok(Value::Str(class_name.clone()))
+    match args.len() {
+        1 => {
+            // type(obj) - get the type of an object
+            let obj = &args[0];
+            
+            // Return the type name as a string
+            match obj {
+                Value::Object { class_name, .. } => {
+                    Ok(Value::Str(class_name.clone()))
+                },
+                Value::Class { name, .. } => {
+                    Ok(Value::Str(name.clone()))
+                },
+                _ => {
+                    Ok(Value::Str(obj.type_name().to_string()))
+                }
+            }
         },
-        Value::Class { name, .. } => {
-            Ok(Value::Str(name.clone()))
+        3 => {
+            // type(name, bases, dict) - create a new class (metaclass form)
+            let name = match &args[0] {
+                Value::Str(s) => s.clone(),
+                _ => return Err(anyhow::anyhow!("type() name argument must be a string")),
+            };
+            
+            let bases = match &args[1] {
+                Value::Tuple(bases_vec) => {
+                    // Convert tuple of base classes to Vec<String>
+                    let mut base_names = Vec::new();
+                    for base in bases_vec {
+                        match base {
+                            Value::Class { name: base_name, .. } => {
+                                base_names.push(base_name.clone());
+                            },
+                            Value::Str(base_name) => {
+                                base_names.push(base_name.clone());
+                            },
+                            _ => return Err(anyhow::anyhow!("bases must be a tuple of classes")),
+                        }
+                    }
+                    base_names
+                },
+                Value::List(bases_list) => {
+                    // Also support list of bases
+                    let mut base_names = Vec::new();
+                    for i in 0..bases_list.len() {
+                        if let Some(base) = bases_list.get(i as isize) {
+                            match base {
+                                Value::Class { name: base_name, .. } => {
+                                    base_names.push(base_name.clone());
+                                },
+                                Value::Str(base_name) => {
+                                    base_names.push(base_name.clone());
+                                },
+                                _ => return Err(anyhow::anyhow!("bases must be a tuple of classes")),
+                            }
+                        }
+                    }
+                    base_names
+                },
+                _ => return Err(anyhow::anyhow!("type() bases argument must be a tuple or list")),
+            };
+            
+            let dict = match &args[2] {
+                Value::Dict(dict_rc) => {
+                    // Extract methods and attributes from the dict
+                    let dict_borrow = dict_rc.borrow();
+                    let mut methods = HashMap::new();
+                    let mut attributes = HashMap::new();
+                    
+                    for (key, value) in dict_borrow.iter() {
+                        if key.starts_with("__") && key.ends_with("__") {
+                            // Dunder methods/attributes
+                            if matches!(value, Value::Closure { .. } | Value::NativeFunction(_) | Value::BuiltinFunction(..)) {
+                                methods.insert(key.clone(), value.clone());
+                            } else {
+                                attributes.insert(key.clone(), value.clone());
+                            }
+                        } else {
+                            // Regular methods or class attributes
+                            match value {
+                                Value::Closure { .. } | Value::NativeFunction(_) | Value::BuiltinFunction(..) => {
+                                    methods.insert(key.clone(), value.clone());
+                                },
+                                _ => {
+                                    attributes.insert(key.clone(), value.clone());
+                                }
+                            }
+                        }
+                    }
+                    (methods, attributes)
+                },
+                _ => return Err(anyhow::anyhow!("type() dict argument must be a dictionary")),
+            };
+            
+            // If no bases provided, inherit from object
+            let actual_bases = if bases.is_empty() {
+                vec!["object".to_string()]
+            } else {
+                bases
+            };
+            
+            // Create a simple MRO: [ClassName, BaseName1, BaseName2, ..., object]
+            // For now, we use a simplified linearization without full C3
+            let mut linearization = vec![name.clone()];
+            linearization.extend(actual_bases.clone());
+            if !linearization.contains(&"object".to_string()) {
+                linearization.push("object".to_string());
+            }
+            
+            // Create base object with object base class inheritance
+            let base_object = BaseObject::new(name.clone(), actual_bases.clone());
+            
+            // Create the new class
+            Ok(Value::Class {
+                name,
+                bases: actual_bases,
+                methods: dict.0,
+                attributes: Rc::new(RefCell::new(dict.1)),
+                metaclass: None, // Could be enhanced to support custom metaclasses
+                mro: MRO::from_linearization(linearization),
+                base_object,
+            })
         },
         _ => {
-            Ok(Value::Str(obj.type_name().to_string()))
+            Err(anyhow::anyhow!("type() takes 1 or 3 arguments ({} given)", args.len()))
         }
     }
 }
@@ -1050,8 +1201,8 @@ fn hasattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
             // First check fields
             fields.borrow().contains_key(attr_name) || class_methods.contains_key(attr_name)
         },
-        Value::Class { methods, .. } => {
-            methods.contains_key(attr_name)
+        Value::Class { methods, attributes, .. } => {
+            methods.contains_key(attr_name) || attributes.borrow().contains_key(attr_name)
         },
         Value::Module(_, namespace) => {
             namespace.contains_key(attr_name)
@@ -1096,9 +1247,12 @@ fn getattr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
                 Err(anyhow::anyhow!("'{}' object has no attribute '{}'", obj.type_name(), attr_name))
             }
         },
-        Value::Class { methods, .. } => {
-            // Check class methods
-            if let Some(method) = methods.get(attr_name) {
+        Value::Class { methods, attributes, .. } => {
+            // Check class attributes first, then methods
+            if let Some(value) = attributes.borrow().get(attr_name) {
+                Ok(value.clone())
+            }
+            else if let Some(method) = methods.get(attr_name) {
                 Ok(method.clone())
             }
             // If not found and default provided, return default
@@ -1177,8 +1331,33 @@ fn issubclass_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         return Err(anyhow::anyhow!("issubclass() takes exactly 2 arguments ({} given)", args.len()));
     }
     
-    // For now, we'll just return False as subclass checking is complex
-    Ok(Value::Bool(false))
+    let (subclass, superclass) = (&args[0], &args[1]);
+    
+    // Extract class names from both arguments
+    let sub_name = match subclass {
+        Value::Class { name, .. } => name.clone(),
+        _ => return Err(anyhow::anyhow!("issubclass() arg 1 must be a class")),
+    };
+    
+    let super_name = match superclass {
+        Value::Class { name, .. } => name.clone(),
+        Value::Str(s) => s.clone(),  // Allow string class names for convenience
+        _ => return Err(anyhow::anyhow!("issubclass() arg 2 must be a class or string")),
+    };
+    
+    // Check if subclass name equals superclass name
+    if sub_name == super_name {
+        return Ok(Value::Bool(true));
+    }
+    
+    // Check if superclass is in the subclass's MRO (Method Resolution Order)
+    if let Value::Class { mro, .. } = subclass {
+        let linearization = mro.get_linearization();
+        let is_subclass = linearization.contains(&super_name);
+        Ok(Value::Bool(is_subclass))
+    } else {
+        Ok(Value::Bool(false))
+    }
 }
 
 pub fn super_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -1231,22 +1410,28 @@ pub fn super_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     }
 }
 
-fn staticmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+pub fn staticmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow::anyhow!("staticmethod() takes exactly 1 argument ({} given)", args.len()));
     }
     
-    // For now, we'll just return the function as-is
-    Ok(args[0].clone())
+    // Wrap the function in a StaticMethod descriptor
+    Ok(Value::StaticMethod {
+        method: Box::new(args[0].clone()),
+    })
 }
 
-fn classmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+pub fn classmethod_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow::anyhow!("classmethod() takes exactly 1 argument ({} given)", args.len()));
     }
     
-    // For now, we'll just return the function as-is
-    Ok(args[0].clone())
+    // We wrap the function in a special marker. The class will be added when accessed.
+    // For now, we create a placeholder class - this will be set when accessed from a class
+    Ok(Value::ClassMethod {
+        method: Box::new(args[0].clone()),
+        class: Box::new(Value::None), // Placeholder, will be set during access
+    })
 }
 
 fn dataclass_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -1617,7 +1802,11 @@ fn next_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
                 // Iterator exhausted, raise StopIteration
                 Err(anyhow::anyhow!("StopIteration"))
             }
-        }, 
+        },
+        Value::ClassMethod { .. } | Value::StaticMethod { .. } => {
+            // These are descriptors, not iterators
+            Err(anyhow::anyhow!("ClassMethod and StaticMethod objects are not iterators"))
+        },
         _ => {
             // For other iterators, return None for now
             Ok(Value::None)

@@ -1,0 +1,20 @@
+# Test __call__ dunder method
+
+class Adder:
+    def __init__(self, n):
+        self.n = n
+    
+    def __call__(self, x):
+        return self.n + x
+
+# Create an instance
+add5 = Adder(5)
+
+# Call the object like a function
+result = add5(10)
+print(f"add5(10) = {result}")
+
+# Create another
+add100 = Adder(100)
+result2 = add100(50)
+print(f"add100(50) = {result2}")

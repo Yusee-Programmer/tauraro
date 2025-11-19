@@ -1,0 +1,11 @@
+#!/usr/bin/env tauraro
+print("Before filter")
+numbers = [1, 2, 3, 4, 5]
+
+# Test with lambda
+f = lambda x: x > 2
+print(f"Lambda test: {f(3)}")
+
+filtered = list(filter(lambda x: x > 2, numbers))
+print(f"Filter: {filtered}")
+print("After filter")

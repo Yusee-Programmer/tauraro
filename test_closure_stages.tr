@@ -1,0 +1,29 @@
+#!/usr/bin/env tauraro
+
+def test1():
+    print("Test 1: Simple call")
+    def inner():
+        return 42
+    print(inner())
+
+test1()
+
+def test2():
+    print("Test 2: With *args")
+    def wrapper(*args):
+        print(f"args = {args}")
+    wrapper()
+
+test2()
+
+def test3():
+    print("Test 3: Call with *args")
+    def inner():
+        return 42
+    def wrapper(*args):
+        print(f"Before inner")
+        x = inner()
+        print(f"After inner: {x}")
+    wrapper()
+
+test3()

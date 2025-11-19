@@ -1,0 +1,16 @@
+#!/usr/bin/env tauraro
+
+print("Test 1")
+
+def count_up(n):
+    i = 0
+    while i < n:
+        yield i
+        i += 1
+
+print("Test 2")
+
+for num in count_up(3):
+    print(f"Generated: {num}")
+
+print("Test 3")

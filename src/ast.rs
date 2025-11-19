@@ -225,7 +225,7 @@ pub enum Expr {
     },
     List(Vec<Expr>),
     Tuple(Vec<Expr>),
-    Dict(Vec<(Expr, Expr)>),
+    Dict(Vec<DictItem>),
     Set(Vec<Expr>),
     ListComp {
         element: Box<Expr>,
@@ -260,6 +260,7 @@ pub enum Expr {
         parts: Vec<FormatPart>,
     },
     Starred(Box<Expr>),
+    StarredKwargs(Box<Expr>),  // For **kwargs in function calls
     NamedExpr {
         target: Box<Expr>,
         value: Box<Expr>,
@@ -269,6 +270,12 @@ pub enum Expr {
         ops: Vec<CompareOp>,
         comparators: Vec<Expr>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DictItem {
+    KeyValue(Expr, Expr),
+    Unpacking(Expr),  // For **dict unpacking
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

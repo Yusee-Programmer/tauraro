@@ -1,0 +1,6 @@
+print("Start")
+s = "hello"
+print("Created string")
+print("About to call __len__")
+result = s.__len__()
+print("Got result:", result)

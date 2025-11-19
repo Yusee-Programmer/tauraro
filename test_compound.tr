@@ -1,0 +1,15 @@
+#!/usr/bin/env tauraro
+
+# Test compound assignment
+count = 0
+print(f"Before: {count}")
+count += 1
+print(f"After: {count}")
+
+# Now in a loop
+x = 0
+while x < 2:
+    print(f"x = {x}")
+    x += 1
+
+print("Done")

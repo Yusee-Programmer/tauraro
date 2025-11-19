@@ -1,0 +1,14 @@
+#!/usr/bin/env tauraro
+
+def simple_gen():
+    yield 1
+    yield 2
+
+print("Before generator call")
+g = simple_gen()
+print(f"Got generator: {g}")
+
+for val in g:
+    print(f"Got: {val}")
+
+print("Done")

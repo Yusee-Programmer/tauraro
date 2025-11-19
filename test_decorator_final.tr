@@ -1,0 +1,13 @@
+#!/usr/bin/env tauraro
+
+def my_decorator(func):
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        return result
+    return wrapper
+
+def greet(name):
+    return f"Hello, {name}!"
+
+decorated = my_decorator(greet)
+print(decorated("World"))

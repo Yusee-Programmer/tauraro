@@ -1,0 +1,18 @@
+#!/usr/bin/env tauraro
+
+# Test for loop with range and if/else pattern
+print("=== For Loop Test ===")
+for i in range(3):
+    if i == 2:
+        print(f"For loop: {i}")
+    else:
+        if i == 0 or i == 1:
+            continue
+
+print("=== Test 2: Simple while loop ===")
+count = 0
+while count < 3:
+    print(f"Count: {count}")
+    count = count + 1
+
+print("Done")

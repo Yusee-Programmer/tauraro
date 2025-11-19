@@ -1,0 +1,3 @@
+s = "hello"
+result = s.__len__()
+print(result)
