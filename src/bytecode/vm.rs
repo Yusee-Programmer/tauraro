@@ -570,6 +570,7 @@ impl SuperBytecodeVM {
     }
     
     /// Optimized frame execution using computed GOTOs for maximum performance
+    #[inline(never)]  // Don't inline run_frame itself (it's large), but optimize its inner loops
     pub fn run_frame(&mut self) -> Result<Value> {
         // Check for stack overflow using a simple counter
         if self.frames.len() > 1000 {
@@ -4207,6 +4208,7 @@ impl SuperBytecodeVM {
     /// RUSTPYTHON-INSPIRED OPTIMIZATION: Inline hot operations directly (15-30% speedup)
     /// Based on RustPython's frame.rs execute_instruction pattern - eliminate function call overhead
     #[inline(always)]
+    #[inline]
     fn execute_instruction_fast(&mut self, frame_idx: usize, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
         // COMPUTED GOTO: Direct handler lookup for hot opcodes
         #[cfg(not(debug_assertions))]
@@ -9848,19 +9850,56 @@ impl SuperBytecodeVM {
 
     /// Execute a closure synchronously and return its value
     fn execute_closure_sync(&mut self, closure: Value, args: Vec<Value>) -> Result<Value> {
-        // Create a new VM to execute the closure in isolation
-        let mut isolated_vm = SuperBytecodeVM::new();
-        isolated_vm.globals = self.globals.clone();
-        isolated_vm.builtins = self.builtins.clone();
-        isolated_vm.loaded_modules = self.loaded_modules.clone();
+        // OPTIMIZATION: Execute closure directly on current frame stack instead of creating a new VM
+        // This eliminates massive overhead from SuperBytecodeVM allocation and initialization
+        
+        // Call the closure, which will push a frame onto THIS VM
+        self.call_function_fast(closure, args, HashMap::new(), None, None)?;
 
-        // Call the closure, which will push a frame
-        isolated_vm.call_function_fast(closure, args, HashMap::new(), None, None)?;
-
-        // Now execute the frame
-        let result = isolated_vm.run_frame()?;
-
-        Ok(result)
+        // Now execute until the pushed frame completes
+        // We'll execute until we get a return value (function completes)
+        loop {
+            if self.frames.is_empty() {
+                return Ok(Value::None);
+            }
+            
+            let frame_idx = self.frames.len() - 1;
+            let frame = &self.frames[frame_idx];
+            let pc = frame.pc;
+            let instructions = &frame.code.instructions;
+            
+            // If we've executed all instructions in this frame, pop it and return the result
+            if pc >= instructions.len() {
+                if let Some(frame) = self.frames.pop() {
+                    // Return the last value from locals[0] if it exists, otherwise None
+                    if !frame.locals.is_empty() {
+                        return Ok(frame.locals[0].get_value());
+                    } else {
+                        return Ok(Value::None);
+                    }
+                }
+                return Ok(Value::None);
+            }
+            
+            // Execute one instruction
+            let (opcode, arg1, arg2, arg3) = {
+                let instr = &instructions[pc];
+                (instr.opcode, instr.arg1, instr.arg2, instr.arg3)
+            };
+            
+            match self.execute_instruction_fast(frame_idx, opcode, arg1, arg2, arg3) {
+                Ok(Some(value)) => {
+                    // Function returned, pop frame and return value
+                    self.frames.pop();
+                    return Ok(value);
+                }
+                Ok(None) => {
+                    // Continue executing
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Handle sorted() with VM access to execute closures/lambdas

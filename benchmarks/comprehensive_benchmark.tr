@@ -1,0 +1,115 @@
+def fib_recursive(n):
+    if n <= 1:
+        return n
+    return fib_recursive(n - 1) + fib_recursive(n - 2)
+
+def factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+def sum_loop(n):
+    total = 0
+    for i in range(n):
+        total = total + i
+    return total
+
+def nested_loop(n):
+    total = 0
+    for i in range(n):
+        for j in range(n):
+            total = total + 1
+    return total
+
+def list_iteration(n):
+    lst = list(range(n))
+    total = 0
+    for item in lst:
+        total = total + item
+    return total
+
+def is_prime(n):
+    if n <= 1:
+        return False
+    for i in range(2, int(n**0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+
+def count_primes(n):
+    count = 0
+    for i in range(n):
+        if is_prime(i):
+            count = count + 1
+    return count
+
+def arithmetic_ops(n):
+    result = 0
+    for i in range(n):
+        result = result + i * 2 - 1
+    return result
+
+def list_append(n):
+    lst = []
+    for i in range(n):
+        lst.append(i)
+    return len(lst)
+
+def list_comprehension(n):
+    lst = [i * 2 for i in range(n)]
+    return len(lst)
+
+def list_sum(n):
+    lst = list(range(n))
+    return sum(lst)
+
+def string_concat(n):
+    result = ""
+    for i in range(n):
+        result = result + str(i)
+    return len(result)
+
+def dict_operations(n):
+    d = {}
+    for i in range(n):
+        d[str(i)] = i * 2
+    return len(d)
+
+def dict_lookup(n):
+    d = {str(i): i for i in range(n)}
+    total = 0
+    for i in range(n):
+        total = total + d.get(str(i), 0)
+    return total
+
+print("=" * 70)
+print("TAURARO COMPREHENSIVE BENCHMARK SUITE")
+print("=" * 70)
+
+print("\n[CATEGORY 1: RECURSIVE FUNCTIONS]")
+print(f"Fibonacci(20): {fib_recursive(20)}")
+print(f"Factorial(10): {factorial(10)}")
+
+print("\n[CATEGORY 2: LOOPS & ITERATION]")
+print(f"Sum Loop (1M): {sum_loop(1000000)}")
+print(f"Nested Loop (1Kx1K): {nested_loop(1000)}")
+print(f"List Iteration (1M): {list_iteration(1000000)}")
+
+print("\n[CATEGORY 3: ARITHMETIC & MATH]")
+print(f"Count Primes (10K): {count_primes(10000)}")
+print(f"Arithmetic Ops (10M): {arithmetic_ops(10000000)}")
+
+print("\n[CATEGORY 4: LIST OPERATIONS]")
+print(f"List Append (100K): {list_append(100000)}")
+print(f"List Comprehension (1M): {list_comprehension(1000000)}")
+print(f"List Sum (1M): {list_sum(1000000)}")
+
+print("\n[CATEGORY 5: STRING OPERATIONS]")
+print(f"String Concat (10K): {string_concat(10000)}")
+
+print("\n[CATEGORY 6: DICTIONARY OPERATIONS]")
+print(f"Dict Operations (100K): {dict_operations(100000)}")
+
+print("\n" + "=" * 70)
+print("BENCHMARK COMPLETE")
+print("=" * 70)

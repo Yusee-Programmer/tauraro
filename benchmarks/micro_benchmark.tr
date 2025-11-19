@@ -1,0 +1,18 @@
+def fib(n):
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+print("TAURARO MICRO-BENCHMARK")
+print("=" * 60)
+
+r1 = fib(20)
+print(f"Fibonacci(20):    {r1:>8}")
+
+r2 = 0
+for i in range(100000):
+    r2 = r2 + 1
+print(f"Loop 100K:        {r2:>8}")
+
+print("=" * 60)
+print("Done")

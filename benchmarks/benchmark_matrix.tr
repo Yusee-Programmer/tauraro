@@ -1,0 +1,13 @@
+def matrix_mul(n):
+    A = [[i for i in range(n)] for _ in range(n)]
+    B = [[i for i in range(n)] for _ in range(n)]
+    C = [[0 for _ in range(n)] for _ in range(n)]
+
+    for i in range(n):
+        for j in range(n):
+            for k in range(n):
+                C[i][j] += A[i][k] * B[k][j]
+    return C[0][0]
+
+result = matrix_mul(100)
+print(f"Matrix Mul (100x100): {result}")
