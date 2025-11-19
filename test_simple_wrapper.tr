@@ -1,9 +1,0 @@
-#!/usr/bin/env tauraro
-
-# Simple closure test with *args - like in the comprehensive test
-
-def wrapper(*args, **kwargs):
-    print(args)
-    return "done"
-
-wrapper(1, 2, 3)

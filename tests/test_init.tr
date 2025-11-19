@@ -1,8 +1,0 @@
-class Simple:
-    def __init__(self, x):
-        self.x = x
-        print("__init__ called with x =", x)
-
-print("Creating instance...")
-s = Simple(42)
-print("Instance created:", s)

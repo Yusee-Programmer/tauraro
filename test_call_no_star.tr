@@ -1,8 +1,0 @@
-#!/usr/bin/env tauraro
-
-def simple(x):
-    return x * 2
-
-print("About to call")
-result = simple(5)
-print(f"Result: {result}")

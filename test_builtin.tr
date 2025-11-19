@@ -1,2 +1,0 @@
-result = len([1, 2, 3])
-print(f"len([1, 2, 3]) = {result}")

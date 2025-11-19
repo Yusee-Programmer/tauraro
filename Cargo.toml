@@ -117,11 +117,12 @@ opt-level = 0
 
 [profile.release]
 opt-level = 3
-lto = "thin"  # Thin LTO for good optimization without JIT symbol conflicts
+lto = "fat"  # Fat LTO for maximum optimization
 codegen-units = 1  # Better optimization at cost of compile time
 panic = "abort"  # Smaller binaries, faster code
 strip = false  # Keep symbols for profiling
 overflow-checks = false  # Disable overflow checks in release mode
+incremental = false  # Disable incremental compilation
 
 [lib]
 name = "tauraro"

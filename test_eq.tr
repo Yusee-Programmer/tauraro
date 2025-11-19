@@ -1,8 +1,0 @@
-#!/usr/bin/env tauraro
-
-# Test ==
-i = 0
-result = i == 0
-print(result)
-
-print("Done")

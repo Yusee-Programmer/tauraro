@@ -570,6 +570,7 @@ impl SuperBytecodeVM {
     }
     
     /// Optimized frame execution using computed GOTOs for maximum performance
+    #[inline(never)]  // Don't inline run_frame itself (it's large), but optimize its inner loops
     pub fn run_frame(&mut self) -> Result<Value> {
         // Check for stack overflow using a simple counter
         if self.frames.len() > 1000 {
@@ -1839,13 +1840,34 @@ impl SuperBytecodeVM {
         }
 
         let cond_value = &self.frames[frame_idx].registers[cond_reg];
-        if cond_value.is_truthy() {
+        if self.is_value_truthy(&cond_value.to_value()) {
             self.frames[frame_idx].pc = target;
         } else {
             // CRITICAL: Must increment PC when not jumping, otherwise infinite loop!
             self.frames[frame_idx].pc += 1;
         }
         Ok(None)
+    }
+
+    /// Check if a value is truthy, respecting __bool__ dunder method
+    fn is_value_truthy(&mut self, value: &Value) -> bool {
+        // Check for __bool__ method in custom objects
+        if let Value::Object { class_methods, .. } = value {
+            if let Some(bool_method) = class_methods.get("__bool__") {
+                // Call __bool__(self) synchronously
+                match self.execute_closure_sync(bool_method.clone(), vec![value.clone()]) {
+                    Ok(Value::Bool(b)) => return b,
+                    Ok(result) => {
+                        // If it returns something else, try to convert to bool
+                        return result.is_truthy();
+                    }
+                    Err(_) => {
+                        // Fall through to default is_truthy
+                    }
+                }
+            }
+        }
+        value.is_truthy()
     }
 
     #[inline(always)]
@@ -1877,7 +1899,7 @@ impl SuperBytecodeVM {
         }
 
         let cond_value = &self.frames[frame_idx].registers[cond_reg];
-        if !cond_value.is_truthy() {
+        if !self.is_value_truthy(&cond_value.to_value()) {
             self.frames[frame_idx].pc = target;
         } else {
             // CRITICAL: Must increment PC when not jumping, otherwise infinite loop!
@@ -2116,13 +2138,12 @@ impl SuperBytecodeVM {
 
         let return_value = self.frames[frame_idx].registers[value_reg].to_value();
         
-        // Check if this is a generator frame (has return_register set)
+        // Check if this is a generator frame (has generator_iterator_reg set)
         // If so, we should mark it as finished instead of returning normally
-        if let Some((caller_frame_idx, result_reg)) = self.frames[frame_idx].return_register {
+        if let Some(iter_reg) = self.frames[frame_idx].generator_iterator_reg {
             // This is a generator frame that's returning - mark it as finished
-            if caller_frame_idx < self.frames.len() {
-                let iter_reg = self.frames[frame_idx].generator_iterator_reg;
-                if let Some(iter_reg) = iter_reg {
+            if let Some((caller_frame_idx, result_reg)) = self.frames[frame_idx].return_register {
+                if caller_frame_idx < self.frames.len() {
                     // Create a finished generator and save it back
                     let finished_generator = Value::Generator {
                         code: Box::new(self.frames[frame_idx].code.clone()),
@@ -2181,13 +2202,33 @@ impl SuperBytecodeVM {
         let object_value = &self.frames[frame_idx].registers[object_reg];
         let index_value = &self.frames[frame_idx].registers[index_reg];
 
-        // eprintln!("DEBUG SubscrLoad: object_reg={}, index={:?}, object_type={}",
-        //          object_reg, index_value.to_value(), object_value.to_value().type_name());
-
         // Handle different sequence types
         let obj_val = object_value.to_value();
         let idx_val = index_value.to_value();
-        let result = match (&obj_val, &idx_val) {
+        
+        // First, check if the object has a __getitem__ method
+        let result = if let Value::Object { class_methods, .. } = &obj_val {
+            if let Some(getitem_method) = class_methods.get("__getitem__") {
+                // Call __getitem__(self, key) synchronously
+                match self.execute_closure_sync(getitem_method.clone(), vec![obj_val.clone(), idx_val.clone()]) {
+                    Ok(value) => value,
+                    Err(e) => return Err(e),
+                }
+            } else {
+                // Fall through to default handling
+                self.handle_subscr_load_builtin(&obj_val, &idx_val)?
+            }
+        } else {
+            // Handle builtin types
+            self.handle_subscr_load_builtin(&obj_val, &idx_val)?
+        };
+
+        self.frames[frame_idx].registers[result_reg] = RegisterValue::from_value(result);
+        Ok(None)
+    }
+
+    fn handle_subscr_load_builtin(&self, obj_val: &Value, idx_val: &Value) -> Result<Value> {
+        match (obj_val, idx_val) {
             (Value::List(items), Value::Int(index)) => {
                 let normalized_index = if *index < 0 {
                     items.len() as i64 + *index
@@ -2196,9 +2237,9 @@ impl SuperBytecodeVM {
                 };
 
                 if normalized_index >= 0 && normalized_index < items.len() as i64 {
-                    items.get(normalized_index as isize).unwrap().clone()
+                    Ok(items.get(normalized_index as isize).unwrap().clone())
                 } else {
-                    return Err(anyhow!("Index {} out of range for list of length {}", index, items.len()));
+                    Err(anyhow!("Index {} out of range for list of length {}", index, items.len()))
                 }
             },
             (Value::Tuple(items), Value::Int(index)) => {
@@ -2209,9 +2250,9 @@ impl SuperBytecodeVM {
                 };
 
                 if normalized_index >= 0 && normalized_index < items.len() as i64 {
-                    items[normalized_index as usize].clone()
+                    Ok(items[normalized_index as usize].clone())
                 } else {
-                    return Err(anyhow!("Index {} out of range for tuple of length {}", index, items.len()));
+                    Err(anyhow!("Index {} out of range for tuple of length {}", index, items.len()))
                 }
             },
             (Value::Str(s), Value::Int(index)) => {
@@ -2222,9 +2263,9 @@ impl SuperBytecodeVM {
                 };
 
                 if normalized_index >= 0 && normalized_index < s.len() as i64 {
-                    Value::Str(s.chars().nth(normalized_index as usize).unwrap().to_string())
+                    Ok(Value::Str(s.chars().nth(normalized_index as usize).unwrap().to_string()))
                 } else {
-                    return Err(anyhow!("Index {} out of range for string of length {}", index, s.len()));
+                    Err(anyhow!("Index {} out of range for string of length {}", index, s.len()))
                 }
             },
             (Value::Dict(dict_ref), key) => {
@@ -2236,23 +2277,17 @@ impl SuperBytecodeVM {
                 };
 
                 let dict = dict_ref.borrow();
-                // eprintln!("DEBUG SubscrLoad: looking for key='{}', dict has {} entries, keys: {:?}",
-                //          key_str, dict.len(), dict_ref.borrow().keys().collect::<Vec<_>>());
-
                 if let Some(value) = dict.get(&key_str) {
-                    value.clone()
+                    Ok(value.clone())
                 } else {
-                    return Err(anyhow!("Key '{}' not found in dictionary", key_str));
+                    Err(anyhow!("Key '{}' not found in dictionary", key_str))
                 }
             },
             _ => {
-                return Err(anyhow!("Subscript not supported for types {} and {}",
-                                  object_value.to_value().type_name(), index_value.to_value().type_name()));
+                Err(anyhow!("Subscript not supported for types {} and {}",
+                                  obj_val.type_name(), idx_val.type_name()))
             }
-        };
-
-        self.frames[frame_idx].registers[result_reg] = RegisterValue::from_value(result);
-        Ok(None)
+        }
     }
 
     #[inline(always)]
@@ -4173,6 +4208,7 @@ impl SuperBytecodeVM {
     /// RUSTPYTHON-INSPIRED OPTIMIZATION: Inline hot operations directly (15-30% speedup)
     /// Based on RustPython's frame.rs execute_instruction pattern - eliminate function call overhead
     #[inline(always)]
+    #[inline]
     fn execute_instruction_fast(&mut self, frame_idx: usize, opcode: OpCode, arg1: u32, arg2: u32, arg3: u32) -> Result<Option<Value>> {
         // COMPUTED GOTO: Direct handler lookup for hot opcodes
         #[cfg(not(debug_assertions))]
@@ -6037,13 +6073,20 @@ impl SuperBytecodeVM {
                 }
 
                 // Clone the values we need to avoid borrowing issues
+                let obj_val = self.frames[frame_idx].registers[object_reg].to_value();
                 let index_value = self.frames[frame_idx].registers[index_reg].to_value();
                 let value_to_store = self.frames[frame_idx].registers[value_reg].to_value();
 
-                // eprintln!("DEBUG SubscrStore: object_reg={}, index={:?}, value={:?}",
-                //          object_reg, index_value, value_to_store);
+                // First check if the object has a __setitem__ method
+                if let Value::Object { class_methods, .. } = &obj_val {
+                    if let Some(setitem_method) = class_methods.get("__setitem__") {
+                        // Call __setitem__(self, key, value) synchronously
+                        self.execute_closure_sync(setitem_method.clone(), vec![obj_val.clone(), index_value, value_to_store])?;
+                        return Ok(None);
+                    }
+                }
 
-                // Handle different sequence types
+                // Handle different sequence types for builtin types
                 match &mut self.frames[frame_idx].registers[object_reg].to_value() {
                     Value::List(items) => {
                         if let Value::Int(index) = index_value {
@@ -6072,9 +6115,7 @@ impl SuperBytecodeVM {
                         };
 
                         let mut dict = dict_ref.borrow_mut();
-                        // eprintln!("DEBUG SubscrStore: inserting key='{}', dict had {} entries before", key_str, dict.len());
                         dict.insert(key_str.clone(), value_to_store);
-                        // eprintln!("DEBUG SubscrStore: dict now has {} entries, contains key: {}", dict.len(), dict.contains_key(&key_str));
                     },
                     _ => {
                         return Err(anyhow!("Subscript assignment not supported for type {}",
@@ -8892,6 +8933,13 @@ impl SuperBytecodeVM {
 
                 // Special handling for str() and repr() to support __str__ and __repr__ dunder methods
                 if name == "str" && args.len() == 1 {
+                    // First check for __str__ in custom objects
+                    if let Value::Object { class_methods, .. } = &args[0] {
+                        if let Some(str_method) = class_methods.get("__str__") {
+                            return self.execute_closure_sync(str_method.clone(), vec![args[0].clone()]);
+                        }
+                    }
+                    // Fallback to get_method for builtins
                     if let Some(str_method) = args[0].get_method("__str__") {
                         // Call __str__(self)
                         return self.call_function_fast(
@@ -8905,6 +8953,13 @@ impl SuperBytecodeVM {
                 }
 
                 if name == "repr" && args.len() == 1 {
+                    // First check for __repr__ in custom objects
+                    if let Value::Object { class_methods, .. } = &args[0] {
+                        if let Some(repr_method) = class_methods.get("__repr__") {
+                            return self.execute_closure_sync(repr_method.clone(), vec![args[0].clone()]);
+                        }
+                    }
+                    // Fallback to get_method for builtins
                     if let Some(repr_method) = args[0].get_method("__repr__") {
                         // Call __repr__(self)
                         return self.call_function_fast(
@@ -8915,6 +8970,44 @@ impl SuperBytecodeVM {
                             result_reg
                         );
                     }
+                }
+
+                // Special handling for len() to support __len__ dunder method
+                if name == "len" && args.len() == 1 {
+                    // First check for __len__ in custom objects
+                    if let Value::Object { class_methods, .. } = &args[0] {
+                        if let Some(len_method) = class_methods.get("__len__") {
+                            match self.execute_closure_sync(len_method.clone(), vec![args[0].clone()]) {
+                                Ok(Value::Int(n)) => return Ok(Value::Int(n)),
+                                Ok(_) => return Err(anyhow!("__len__ should return an integer")),
+                                Err(e) => return Err(e),
+                            }
+                        }
+                    }
+                    // Fallback to regular len() handling for builtin types
+                    return func(args.clone());
+                }
+
+                // Special handling for bool() to support __bool__ dunder method
+                if name == "bool" && args.len() <= 1 {
+                    if args.is_empty() {
+                        return Ok(Value::Bool(false));
+                    }
+                    // First check for __bool__ in custom objects
+                    if let Value::Object { class_methods, .. } = &args[0] {
+                        if let Some(bool_method) = class_methods.get("__bool__") {
+                            match self.execute_closure_sync(bool_method.clone(), vec![args[0].clone()]) {
+                                Ok(Value::Bool(b)) => return Ok(Value::Bool(b)),
+                                Ok(_) => {
+                                    // __bool__ must return a bool, but fall back to truthiness
+                                    return Ok(Value::Bool(self.is_value_truthy(&args[0])));
+                                }
+                                Err(e) => return Err(e),
+                            }
+                        }
+                    }
+                    // Fallback: use normal truthiness
+                    return Ok(Value::Bool(self.is_value_truthy(&args[0])));
                 }
 
                 // Special handling for globals() - return actual globals from VM
@@ -9433,74 +9526,6 @@ impl SuperBytecodeVM {
                 // Return the object instance for cases where there's no __init__ or __init__ is not handled above
                 Ok(instance)
             }
-            Value::Object {
-                class_name,
-                fields,
-                class_methods,
-                base_object,
-                mro,
-                ..
-            } => {
-                // Create the object instance
-                let mut instance = Value::Object {
-                    class_name: class_name.clone(),
-                    fields: Rc::new(RefCell::new(HashMap::new())),
-                    class_methods: class_methods.clone(), // Use the class methods from the Object
-                    base_object: base_object.clone(),
-                    mro: mro.clone(),
-                };
-                
-                // If the instance has an __init__ method, call it
-                if let Some(init_method) = class_methods.get("__init__") {
-                    match init_method {
-                        Value::BuiltinFunction(_, func) => {
-                            let mut init_args = vec![instance.clone()];
-                            init_args.extend(args.clone());
-                            func(init_args)?;
-                        },
-                        Value::NativeFunction(func) => {
-                            let mut init_args = vec![instance.clone()];
-                            init_args.extend(args.clone());
-                            func(init_args)?;
-                        },
-                        Value::Closure { name: method_name, params, body: _, captured_scope: _, docstring: _, compiled_code, .. } => {
-                            // For user-defined __init__ methods, we need to call them in a way that
-                            // ensures modifications to the instance are visible
-                            if let Some(code_obj) = compiled_code {
-                                // Use Rc-wrapped globals and builtins
-                                let globals_rc = Rc::clone(&self.globals);
-                                let builtins_rc = Rc::clone(&self.builtins);
-
-                                // Create arguments with self as the first argument
-                                let mut init_args = vec![instance.clone()];
-                                init_args.extend(args.clone());
-
-                                // Create a new frame for the __init__ method
-                                let mut init_frame = Frame::new_function_frame(code_obj.as_ref().clone(), globals_rc, builtins_rc, init_args, HashMap::new());
-
-                                // Store the instance in the result register BEFORE creating the __init__ frame
-                                // This ensures that the instance is available for modification during __init__ execution
-                                if let (Some(caller_frame_idx), Some(result_reg)) = (frame_idx, result_reg) {
-                                    if caller_frame_idx < self.frames.len() {
-                                        self.frames[caller_frame_idx].set_register(result_reg, RegisterValue::from_value(instance.clone()));
-                                    }
-                                    init_frame.return_register = Some((caller_frame_idx, result_reg));
-                                }
-
-                                // Push the frame onto the stack
-                                self.frames.push(init_frame);
-
-                                // Return None to indicate that we've pushed a new frame and the main loop should handle it
-                                return Ok(Value::None);
-                            }
-                        },
-                        _ => {},
-                    }
-                }
-
-                // Return the object instance (which may have been modified by __init__)
-                Ok(instance)
-            }
             Value::BoundMethod { object, method_name } => {
                 // Handle bound method calls
                 // Get the method from the object
@@ -9825,19 +9850,56 @@ impl SuperBytecodeVM {
 
     /// Execute a closure synchronously and return its value
     fn execute_closure_sync(&mut self, closure: Value, args: Vec<Value>) -> Result<Value> {
-        // Create a new VM to execute the closure in isolation
-        let mut isolated_vm = SuperBytecodeVM::new();
-        isolated_vm.globals = self.globals.clone();
-        isolated_vm.builtins = self.builtins.clone();
-        isolated_vm.loaded_modules = self.loaded_modules.clone();
+        // OPTIMIZATION: Execute closure directly on current frame stack instead of creating a new VM
+        // This eliminates massive overhead from SuperBytecodeVM allocation and initialization
+        
+        // Call the closure, which will push a frame onto THIS VM
+        self.call_function_fast(closure, args, HashMap::new(), None, None)?;
 
-        // Call the closure, which will push a frame
-        isolated_vm.call_function_fast(closure, args, HashMap::new(), None, None)?;
-
-        // Now execute the frame
-        let result = isolated_vm.run_frame()?;
-
-        Ok(result)
+        // Now execute until the pushed frame completes
+        // We'll execute until we get a return value (function completes)
+        loop {
+            if self.frames.is_empty() {
+                return Ok(Value::None);
+            }
+            
+            let frame_idx = self.frames.len() - 1;
+            let frame = &self.frames[frame_idx];
+            let pc = frame.pc;
+            let instructions = &frame.code.instructions;
+            
+            // If we've executed all instructions in this frame, pop it and return the result
+            if pc >= instructions.len() {
+                if let Some(frame) = self.frames.pop() {
+                    // Return the last value from locals[0] if it exists, otherwise None
+                    if !frame.locals.is_empty() {
+                        return Ok(frame.locals[0].get_value());
+                    } else {
+                        return Ok(Value::None);
+                    }
+                }
+                return Ok(Value::None);
+            }
+            
+            // Execute one instruction
+            let (opcode, arg1, arg2, arg3) = {
+                let instr = &instructions[pc];
+                (instr.opcode, instr.arg1, instr.arg2, instr.arg3)
+            };
+            
+            match self.execute_instruction_fast(frame_idx, opcode, arg1, arg2, arg3) {
+                Ok(Some(value)) => {
+                    // Function returned, pop frame and return value
+                    self.frames.pop();
+                    return Ok(value);
+                }
+                Ok(None) => {
+                    // Continue executing
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Handle sorted() with VM access to execute closures/lambdas

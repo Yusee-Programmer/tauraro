@@ -1,0 +1,321 @@
+#!/usr/bin/env tauraro
+# Advanced Dunder Methods Examples
+
+print("=" * 60)
+print("ADVANCED DUNDER METHOD EXAMPLES")
+print("=" * 60)
+
+# Example 1: Custom Matrix Class
+print("\n1. MATRIX CLASS WITH OPERATOR OVERLOADING")
+print("-" * 60)
+
+class Matrix:
+    """A simple 2x2 matrix class"""
+    def __init__(self, a, b, c, d):
+        self.a = a
+        self.b = b
+        self.c = c
+        self.d = d
+    
+    def __add__(self, other):
+        return Matrix(
+            self.a + other.a,
+            self.b + other.b,
+            self.c + other.c,
+            self.d + other.d
+        )
+    
+    def __mul__(self, scalar):
+        return Matrix(
+            self.a * scalar,
+            self.b * scalar,
+            self.c * scalar,
+            self.d * scalar
+        )
+    
+    def __rmul__(self, scalar):
+        return self.__mul__(scalar)
+    
+    def __eq__(self, other):
+        eq_a = self.a == other.a
+        eq_b = self.b == other.b
+        eq_c = self.c == other.c
+        eq_d = self.d == other.d
+        return eq_a and eq_b and eq_c and eq_d
+    
+    def __str__(self):
+        return f"Matrix([{self.a}, {self.b}], [{self.c}, {self.d}])"
+
+m1 = Matrix(1, 2, 3, 4)
+m2 = Matrix(5, 6, 7, 8)
+print(f"m1 = {m1}")
+print(f"m2 = {m2}")
+print(f"m1 + m2 = {m1 + m2}")
+print(f"m1 * 2 = {m1 * 2}")
+print(f"3 * m2 = {3 * m2}")
+
+# Example 2: Container-like Class
+print("\n2. CUSTOM CONTAINER CLASS")
+print("-" * 60)
+
+class SimpleList:
+    """A custom list-like container"""
+    def __init__(self):
+        self.items = []
+        self.size = 0
+    
+    def __len__(self):
+        return self.size
+    
+    def __getitem__(self, index):
+        return self.items[index]
+    
+    def __setitem__(self, index, value):
+        self.items[index] = value
+        return None
+    
+    def __bool__(self):
+        return self.size > 0
+    
+    def __str__(self):
+        return f"SimpleList(size={self.size})"
+
+sl = SimpleList()
+print(f"Empty list: {sl}")
+print(f"bool(empty): {bool(sl)}")
+
+# Manually add items
+sl.items = [10, 20, 30]
+sl.size = 3
+print(f"After adding items: {sl}")
+print(f"bool(non-empty): {bool(sl)}")
+print(f"Length: {len(sl)}")
+print(f"First item: {sl[0]}")
+print(f"Second item: {sl[1]}")
+
+sl[1] = 99
+print(f"After sl[1] = 99: {sl}")
+
+# Example 3: Numeric Type Wrapper
+print("\n3. NUMERIC TYPE WRAPPER")
+print("-" * 60)
+
+class DollAmount:
+    """A currency amount in dollars"""
+    def __init__(self, amount):
+        self.amount = amount
+    
+    def __add__(self, other):
+        if isinstance(other, DollAmount):
+            return DollAmount(self.amount + other.amount)
+        return DollAmount(self.amount + other)
+    
+    def __sub__(self, other):
+        if isinstance(other, DollAmount):
+            return DollAmount(self.amount - other.amount)
+        return DollAmount(self.amount - other)
+    
+    def __mul__(self, factor):
+        return DollAmount(self.amount * factor)
+    
+    def __rmul__(self, factor):
+        return self.__mul__(factor)
+    
+    def __eq__(self, other):
+        if isinstance(other, DollAmount):
+            return self.amount == other.amount
+        return self.amount == other
+    
+    def __lt__(self, other):
+        if isinstance(other, DollAmount):
+            return self.amount < other.amount
+        return self.amount < other
+    
+    def __le__(self, other):
+        if isinstance(other, DollAmount):
+            return self.amount <= other.amount
+        return self.amount <= other
+    
+    def __gt__(self, other):
+        if isinstance(other, DollAmount):
+            return self.amount > other.amount
+        return self.amount > other
+    
+    def __bool__(self):
+        return self.amount > 0
+    
+    def __str__(self):
+        return f"${self.amount}"
+
+price1 = DollAmount(10.50)
+price2 = DollAmount(5.25)
+print(f"Price 1: {price1}")
+print(f"Price 2: {price2}")
+print(f"Total: {price1 + price2}")
+print(f"Difference: {price1 - price2}")
+print(f"Triple: {price1 * 3}")
+print(f"Half of price1: {price1 * 0.5}")
+print(f"price1 > price2: {price1 > price2}")
+
+# Example 4: Range-like Object
+print("\n4. CUSTOM RANGE-LIKE OBJECT")
+print("-" * 60)
+
+class Range:
+    """A simple range object with dunder support"""
+    def __init__(self, start, end):
+        self.start = start
+        self.end = end
+        self.current = start
+    
+    def __len__(self):
+        if self.end > self.start:
+            return self.end - self.start
+        return 0
+    
+    def __bool__(self):
+        return self.start < self.end
+    
+    def __str__(self):
+        return f"Range({self.start}, {self.end})"
+
+r1 = Range(1, 5)
+r2 = Range(10, 10)
+
+print(f"Range 1: {r1}")
+print(f"Length: {len(r1)}")
+print(f"Is truthy: {bool(r1)}")
+
+print(f"Range 2: {r2}")
+print(f"Length: {len(r2)}")
+print(f"Is falsy: {not bool(r2)}")
+
+# Example 6: Complex Arithmetic
+# Example 5: Complex Number Class
+print("\n5. COMPLEX NUMBER CLASS")
+print("-" * 60)
+
+class Complex:
+    """A complex number with real and imaginary parts"""
+    def __init__(self, real, imag):
+        self.real = real
+        self.imag = imag
+    
+    def __add__(self, other):
+        return Complex(
+            self.real + other.real,
+            self.imag + other.imag
+        )
+    
+    def __sub__(self, other):
+        return Complex(
+            self.real - other.real,
+            self.imag - other.imag
+        )
+    
+    def __mul__(self, other):
+        # (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+        real_part = self.real * other.real - self.imag * other.imag
+        imag_part = self.real * other.imag + self.imag * other.real
+        return Complex(real_part, imag_part)
+    
+    def __eq__(self, other):
+        eq1 = self.real == other.real
+        eq2 = self.imag == other.imag
+        return eq1 and eq2
+    
+    def __bool__(self):
+        non_zero_real = self.real != 0
+        non_zero_imag = self.imag != 0
+        return non_zero_real or non_zero_imag
+    
+    def __str__(self):
+        if self.imag >= 0:
+            return f"{self.real}+{self.imag}i"
+        else:
+            return f"{self.real}{self.imag}i"
+
+c1 = Complex(1, 2)
+c2 = Complex(3, 4)
+print(f"c1 = {c1}")
+print(f"c2 = {c2}")
+print(f"c1 + c2 = {c1 + c2}")
+print(f"c1 - c2 = {c1 - c2}")
+print(f"c1 * c2 = {c1 * c2}")
+print(f"bool(c1) = {bool(c1)}")
+
+zero = Complex(0, 0)
+print(f"c_zero = {zero}")
+print(f"bool(c_zero) = {bool(zero)}")
+
+# Example 6: Scalar Type Wrapper
+print("\n6. SCALAR TYPE WRAPPER")
+print("-" * 60)
+
+class Scalar:
+    """A wrapper for numeric values with custom operations"""
+    def __init__(self, value):
+        self.value = value
+    
+    def __add__(self, other):
+        if isinstance(other, Scalar):
+            return Scalar(self.value + other.value)
+        return Scalar(self.value + other)
+    
+    def __sub__(self, other):
+        if isinstance(other, Scalar):
+            return Scalar(self.value - other.value)
+        return Scalar(self.value - other)
+    
+    def __mul__(self, other):
+        if isinstance(other, Scalar):
+            return Scalar(self.value * other.value)
+        return Scalar(self.value * other)
+    
+    def __eq__(self, other):
+        if isinstance(other, Scalar):
+            return self.value == other.value
+        return self.value == other
+    
+    def __lt__(self, other):
+        if isinstance(other, Scalar):
+            return self.value < other.value
+        return self.value < other
+    
+    def __bool__(self):
+        return self.value != 0
+    
+    def __len__(self):
+        int_val = self.value
+        if int_val < 0:
+            int_val = -int_val
+        return int_val
+    
+    def __getitem__(self, index):
+        return self.value
+    
+    def __setitem__(self, index, value):
+        self.value = value
+        return None
+    
+    def __str__(self):
+        return f"Scalar({self.value})"
+
+s1 = Scalar(10)
+s2 = Scalar(3)
+print(f"s1 = {s1}")
+print(f"s2 = {s2}")
+print(f"s1 + s2 = {s1 + s2}")
+print(f"s1 - s2 = {s1 - s2}")
+print(f"s1 * s2 = {s1 * s2}")
+print(f"len(s1) = {len(s1)}")
+print(f"s1[0] = {s1[0]}")
+print(f"bool(s1) = {bool(s1)}")
+
+zero_s = Scalar(0)
+print(f"s_zero = {zero_s}")
+print(f"bool(s_zero) = {bool(zero_s)}")
+
+print("\n" + "=" * 60)
+print("✅ ALL ADVANCED EXAMPLES COMPLETED!")
+print("=" * 60)
