@@ -1,7 +1,0 @@
-try:
-    print("In try")
-    x = [1,2,3][10]
-    print("After index (should not print)")
-except:
-    print("In except")
-print("Done")
