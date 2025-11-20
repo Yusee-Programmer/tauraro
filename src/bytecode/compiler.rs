@@ -1175,9 +1175,9 @@ impl SuperCompiler {
                 self.emit(OpCode::ContinueLoop, 0, 0, 0, self.current_line);
                 Ok(())
             }
-            Statement::Raise(expr) => {
-                // Emit Raise instruction
-                let exception_reg = if let Some(expr) = expr {
+            Statement::Raise { exception, cause } => {
+                // Emit Raise instruction with optional cause for exception chaining
+                let exception_reg = if let Some(expr) = exception {
                     self.compile_expression(expr)?
                 } else {
                     // No exception specified, use None
@@ -1186,7 +1186,17 @@ impl SuperCompiler {
                     self.emit(OpCode::LoadConst, none_const, reg, 0, self.current_line);
                     reg
                 };
-                self.emit(OpCode::Raise, exception_reg, 0, 0, self.current_line);
+                
+                let cause_reg = if let Some(cause_expr) = cause {
+                    self.compile_expression(cause_expr)?
+                } else {
+                    // No cause, use 0 to indicate no cause
+                    0
+                };
+                
+                // Use a special opcode or encode cause in the arguments
+                // For now, emit Raise with both exception and cause registers
+                self.emit(OpCode::Raise, exception_reg, cause_reg, 0, self.current_line);
                 Ok(())
             }
             Statement::Assert { condition, message } => {

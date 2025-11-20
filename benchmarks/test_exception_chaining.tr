@@ -1,0 +1,30 @@
+# Test Exception Chaining (raise ... from ...)
+
+# Test 1: Basic exception chaining
+print("Test 1: Basic exception chaining")
+try:
+    try:
+        x = 1 / 0
+    except ZeroDivisionError as e:
+        raise ValueError("Cannot divide") from e
+except ValueError as e:
+    print("✅ Chained exception caught")
+
+# Test 2: Exception with context
+print("\nTest 2: Exception with cause")
+try:
+    try:
+        result = int("invalid")
+    except ValueError as context_err:
+        raise RuntimeError("Conversion failed") from context_err
+except RuntimeError as e:
+    print("✅ Exception with cause caught")
+
+# Test 3: Simple re-raise
+print("\nTest 3: Simple raise")
+try:
+    raise KeyError("test key")
+except KeyError as e:
+    print("✅ KeyError caught and handled")
+
+print("\n--- Exception Chaining Tests Passed ---")

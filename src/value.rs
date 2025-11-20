@@ -107,6 +107,9 @@ pub enum Value {
         class_name: String,
         message: String,
         traceback: Option<String>,
+        cause: Option<Box<Value>>,          // For "raise ... from ..." chaining
+        context: Option<Box<Value>>,        // Implicit exception context
+        parent_exceptions: Vec<String>,     // Exception hierarchy parents
     },
     None,
     // For optional static typing
@@ -495,10 +498,134 @@ impl Value {
     
     /// Create a new exception with traceback information
     pub fn new_exception(class_name: String, message: String, traceback: Option<String>) -> Self {
+        let parent_exceptions = Self::get_exception_parents(&class_name);
         Value::Exception {
             class_name,
             message,
             traceback,
+            cause: None,
+            context: None,
+            parent_exceptions,
+        }
+    }
+
+    /// Create an exception with explicit cause (raise ... from ...)
+    pub fn new_exception_with_cause(
+        class_name: String,
+        message: String,
+        traceback: Option<String>,
+        cause: Option<Box<Value>>,
+    ) -> Self {
+        let parent_exceptions = Self::get_exception_parents(&class_name);
+        Value::Exception {
+            class_name,
+            message,
+            traceback,
+            cause,
+            context: None,
+            parent_exceptions,
+        }
+    }
+
+    /// Create an exception with both cause and context
+    pub fn new_exception_with_context(
+        class_name: String,
+        message: String,
+        traceback: Option<String>,
+        cause: Option<Box<Value>>,
+        context: Option<Box<Value>>,
+    ) -> Self {
+        let parent_exceptions = Self::get_exception_parents(&class_name);
+        Value::Exception {
+            class_name,
+            message,
+            traceback,
+            cause,
+            context,
+            parent_exceptions,
+        }
+    }
+
+    /// Get the exception hierarchy parents for a given exception type
+    pub fn get_exception_parents(exception_type: &str) -> Vec<String> {
+        // Python exception hierarchy
+        match exception_type {
+            // Tier 1: Core exceptions
+            "Exception" => vec!["BaseException".to_string()],
+            "BaseException" => vec![],
+
+            // Standard error types
+            "ValueError" | "TypeError" | "IndexError" | "KeyError" | "AttributeError" |
+            "RuntimeError" | "AssertionError" | "NameError" | "StopIteration" |
+            "LookupError" | "EOFError" | "PermissionError" | "TimeoutError" |
+            "ArithmeticError" | "FloatingPointError" | "ZeroDivisionError" => {
+                vec!["Exception".to_string()]
+            }
+
+            // File-related errors
+            "FileNotFoundError" | "FileExistsError" | "IsADirectoryError" | "NotADirectoryError" => {
+                vec!["OSError".to_string(), "Exception".to_string()]
+            }
+            "IOError" | "OSError" | "PermissionError" | "InterruptedError" | "BlockingIOError" => {
+                vec!["Exception".to_string()]
+            }
+
+            // Import errors
+            "ImportError" | "ModuleNotFoundError" => {
+                vec!["Exception".to_string()]
+            }
+
+            // Syntax errors
+            "SyntaxError" | "IndentationError" | "TabError" => {
+                vec!["Exception".to_string()]
+            }
+
+            // System errors
+            "SystemError" | "SystemExit" | "KeyboardInterrupt" => {
+                vec!["BaseException".to_string()]
+            }
+
+            // Connection errors
+            "ConnectionError" | "BrokenPipeError" | "ChildProcessError" |
+            "ConnectionAbortedError" | "ConnectionRefusedError" | "ConnectionResetError" |
+            "ProcessLookupError" => {
+                vec!["OSError".to_string(), "Exception".to_string()]
+            }
+
+            // Unicode errors
+            "UnicodeError" | "UnicodeDecodeError" | "UnicodeEncodeError" | "UnicodeTranslateError" => {
+                vec!["ValueError".to_string(), "Exception".to_string()]
+            }
+
+            // Warnings and Other
+            "Warning" | "DeprecationWarning" | "RuntimeWarning" | "SyntaxWarning" |
+            "UserWarning" | "FutureWarning" | "ImportWarning" | "UnicodeWarning" |
+            "BytesWarning" | "ResourceWarning" | "PendingDeprecationWarning" => {
+                vec!["Exception".to_string()]
+            }
+
+            // Other exceptions
+            "NotImplementedError" | "RecursionError" | "UnboundLocalError" |
+            "ReferenceError" | "BufferError" | "MemoryError" | "GeneratorExit" => {
+                vec!["Exception".to_string()]
+            }
+
+            // Default: Treat as Exception subclass
+            _ => vec!["Exception".to_string()],
+        }
+    }
+
+    /// Check if an exception is an instance of (or subclass of) a given type
+    pub fn is_exception_of_type(&self, target_type: &str) -> bool {
+        match self {
+            Value::Exception { class_name, parent_exceptions, .. } => {
+                if class_name == target_type {
+                    return true;
+                }
+                // Check if target is in the parent hierarchy
+                parent_exceptions.contains(&target_type.to_string())
+            }
+            _ => false,
         }
     }
     

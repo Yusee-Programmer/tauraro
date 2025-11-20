@@ -1,0 +1,27 @@
+# Test Exception Hierarchy - Simple
+
+# Test 1: Basic exception catch - catch Exception catches ValueError
+print("Test 1: Basic exception hierarchy")
+try:
+    raise ValueError("test error")
+except Exception as e:
+    print("✅ Exception caught by parent")
+
+# Test 2: Specific exception catch
+print("\nTest 2: Specific exception type")
+try:
+    raise ValueError("specific test")
+except ValueError as e:
+    print("✅ ValueError caught specifically")
+
+# Test 3: Exception not caught by wrong type
+print("\nTest 3: Wrong exception type")
+try:
+    try:
+        raise KeyError("wrong")
+    except ValueError:
+        print("❌ Should not catch here")
+except KeyError:
+    print("✅ KeyError not caught by ValueError")
+
+print("\n--- Exception Hierarchy Tests Passed ---")

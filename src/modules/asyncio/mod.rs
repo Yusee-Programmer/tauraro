@@ -317,25 +317,25 @@ fn create_queue(args: Vec<Value>) -> Result<Value> {
 
 // Exception classes
 fn cancelled_error(args: Vec<Value>) -> Result<Value> {
-    Ok(Value::Exception {
-        class_name: "CancelledError".to_string(),
-        message: "Task was cancelled".to_string(),
-        traceback: None,
-    })
+    Ok(Value::new_exception(
+        "CancelledError".to_string(),
+        "Task was cancelled".to_string(),
+        None,
+    ))
 }
 
 fn timeout_error(args: Vec<Value>) -> Result<Value> {
-    Ok(Value::Exception {
-        class_name: "TimeoutError".to_string(),
-        message: "Operation timed out".to_string(),
-        traceback: None,
-    })
+    Ok(Value::new_exception(
+        "TimeoutError".to_string(),
+        "Operation timed out".to_string(),
+        None,
+    ))
 }
 
 fn invalid_state_error(args: Vec<Value>) -> Result<Value> {
-    Ok(Value::Exception {
-        class_name: "InvalidStateError".to_string(),
-        message: "Invalid state".to_string(),
-        traceback: None,
-    })
+    Ok(Value::new_exception(
+        "InvalidStateError".to_string(),
+        "Invalid state".to_string(),
+        None,
+    ))
 }
