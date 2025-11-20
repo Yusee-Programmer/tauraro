@@ -1,0 +1,13 @@
+print("Test 1: Basic multiple handlers")
+try:
+    x = [1, 2][10]
+except (ValueError, IndexError):
+    print("✓ Caught with multiple handlers")
+
+print("Test 2: Multiple types - different exception")
+try:
+    y = "str" + 5
+except (ValueError, TypeError):
+    print("✓ Caught TypeError in multiple handlers")
+
+print("Done")

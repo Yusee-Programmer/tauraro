@@ -1,0 +1,8 @@
+print("Start")
+try:
+    print("In try")
+    x = [1, 2][10]
+    print("After exception")
+except IndexError:
+    print("Caught IndexError")
+print("Done")

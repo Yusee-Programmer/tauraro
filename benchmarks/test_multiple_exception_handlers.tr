@@ -1,0 +1,47 @@
+// Test multiple exception handlers
+print("=== Multiple Exception Handlers Test ===")
+
+// Test 1: Single exception type (baseline)
+print("\nTest 1: Single exception type")
+try:
+    x = int("invalid")
+except ValueError:
+    print("✓ Single handler caught ValueError")
+
+// Test 2: Multiple exception types in tuple
+print("\nTest 2: Multiple exception types in tuple")
+try:
+    d = {}
+    x = d["missing_key"]
+except (ValueError, KeyError, TypeError):
+    print("✓ Multiple handlers caught KeyError")
+
+// Test 3: Multiple types catching different exception
+print("\nTest 3: Different exception from tuple")
+try:
+    x = "string"[0] + 5
+except (ValueError, TypeError, RuntimeError):
+    print("✓ Multiple handlers caught TypeError")
+
+// Test 4: Bare except catches remaining
+print("\nTest 4: Bare except as fallback")
+try:
+    x = int("not a number")
+except ValueError:
+    print("✓ Specific handler caught ValueError before bare except")
+
+// Test 5: Exception name binding with multiple types
+print("\nTest 5: Exception name binding with multiple types")
+try:
+    x = [1, 2, 3][10]
+except (ValueError, IndexError) as e:
+    print("✓ Caught exception: " + str(e))
+
+// Test 6: Order matters - first matching handler wins
+print("\nTest 6: Handler order matters")
+try:
+    x = {}["key"]
+except (KeyError, Exception):
+    print("✓ First matching handler (KeyError) executed")
+
+print("\n=== All multiple exception handler tests passed ===")

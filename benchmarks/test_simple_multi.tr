@@ -1,0 +1,6 @@
+print("Start test")
+try:
+    x = [1, 2][5]
+except (ValueError, IndexError):
+    print("Caught exception")
+print("Done")
