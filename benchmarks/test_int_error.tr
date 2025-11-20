@@ -1,0 +1,11 @@
+"""Test with int() which we know works"""
+print("Testing int() ValueError...")
+try:
+    x = int('not_a_number')
+    print("No exception")
+except ValueError as e:
+    print(f"Caught ValueError: {e}")
+except Exception as e:
+    print(f"Caught Exception: {type(e).__name__}: {e}")
+
+print("Done!")

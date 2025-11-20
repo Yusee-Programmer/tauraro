@@ -34,44 +34,10 @@ impl SuperBytecodeVM {
                 }
                 Ok(Value::List(c))
             },
-            // Handle mixed types by converting to strings (for print statements)
-            (Value::Str(s), Value::Int(n)) => {
-                let mut result = String::with_capacity(s.len() + 16); // Rough estimate for int string representation
-                result.push_str(&s);
-                result.push_str(&n.to_string());
-                Ok(Value::Str(result))
-            },
-            (Value::Int(n), Value::Str(s)) => {
-                let mut result = String::with_capacity(s.len() + 16); // Rough estimate for int string representation
-                result.push_str(&n.to_string());
-                result.push_str(&s);
-                Ok(Value::Str(result))
-            },
-            (Value::Str(s), Value::Float(f)) => {
-                let mut result = String::with_capacity(s.len() + 16); // Rough estimate for float string representation
-                result.push_str(&s);
-                result.push_str(&format!("{:.6}", f)); // Format float similar to how it's done in value.rs
-                Ok(Value::Str(result))
-            },
-            (Value::Float(f), Value::Str(s)) => {
-                let mut result = String::with_capacity(s.len() + 16); // Rough estimate for float string representation
-                result.push_str(&format!("{:.6}", f)); // Format float similar to how it's done in value.rs
-                result.push_str(&s);
-                Ok(Value::Str(result))
-            },
-            (Value::Str(s), Value::Bool(b)) => {
-                let mut result = String::with_capacity(s.len() + 8); // Rough estimate for bool string representation
-                result.push_str(&s);
-                result.push_str(if b { "True" } else { "False" });
-                Ok(Value::Str(result))
-            },
-            (Value::Bool(b), Value::Str(s)) => {
-                let mut result = String::with_capacity(s.len() + 8); // Rough estimate for bool string representation
-                result.push_str(if b { "True" } else { "False" });
-                result.push_str(&s);
-                Ok(Value::Str(result))
-            },
-            _ => Err(anyhow!("Unsupported types for addition")),
+            // Mixed type addition is NOT allowed in Python - should raise TypeError
+            (ref l, ref r) => {
+                Err(anyhow!("TypeError: unsupported operand type(s) for +: '{}' and '{}'", l.type_name(), r.type_name()))
+            }
         }
     }
 
@@ -159,7 +125,7 @@ impl SuperBytecodeVM {
             // Handle None values - multiplying None should raise a clear error
             (ref l, ref r) => {
                 // Provide more detailed error message for debugging - only compute type names in error path
-                Err(anyhow!("unsupported operand type(s) for *: '{}' and '{}'", l.type_name(), r.type_name()))
+                Err(anyhow!("TypeError: unsupported operand type(s) for *: '{}' and '{}'", l.type_name(), r.type_name()))
             }
         }
     }
@@ -169,33 +135,33 @@ impl SuperBytecodeVM {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => {
                 if b == 0i64 {
-                    Err(anyhow!("Division by zero"))
+                    Err(anyhow!("ZeroDivisionError: integer division or modulo by zero"))
                 } else {
                     Ok(Value::Int(a / b))
                 }
             },
             (Value::Float(a), Value::Float(b)) => {
                 if b == 0.0f64 {
-                    Err(anyhow!("Division by zero"))
+                    Err(anyhow!("ZeroDivisionError: float division by zero"))
                 } else {
                     Ok(Value::Float(a / b))
                 }
             },
             (Value::Int(a), Value::Float(b)) => {
                 if b == 0.0f64 {
-                    Err(anyhow!("Division by zero"))
+                    Err(anyhow!("ZeroDivisionError: float division by zero"))
                 } else {
                     Ok(Value::Float(a as f64 / b))
                 }
             },
             (Value::Float(a), Value::Int(b)) => {
                 if b == 0i64 {
-                    Err(anyhow!("Division by zero"))
+                    Err(anyhow!("ZeroDivisionError: integer division or modulo by zero"))
                 } else {
                     Ok(Value::Float(a / b as f64))
                 }
             },
-            _ => Err(anyhow!("Unsupported types for division")),
+            _ => Err(anyhow!("TypeError: unsupported operand type(s) for division")),
         }
     }
 
@@ -204,28 +170,28 @@ impl SuperBytecodeVM {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => {
                 if b == 0i64 {
-                    Err(anyhow!("Modulo by zero"))
+                    Err(anyhow!("ZeroDivisionError: integer division or modulo by zero"))
                 } else {
                     Ok(Value::Int(a % b))
                 }
             },
             (Value::Float(a), Value::Float(b)) => {
                 if b == 0.0f64 {
-                    Err(anyhow!("Modulo by zero"))
+                    Err(anyhow!("ZeroDivisionError: float modulo by zero"))
                 } else {
                     Ok(Value::Float(a % b))
                 }
             },
             (Value::Int(a), Value::Float(b)) => {
                 if b == 0.0f64 {
-                    Err(anyhow!("Modulo by zero"))
+                    Err(anyhow!("ZeroDivisionError: float modulo by zero"))
                 } else {
                     Ok(Value::Float(a as f64 % b))
                 }
             },
             (Value::Float(a), Value::Int(b)) => {
                 if b == 0i64 {
-                    Err(anyhow!("Modulo by zero"))
+                    Err(anyhow!("ZeroDivisionError: integer division or modulo by zero"))
                 } else {
                     Ok(Value::Float(a % b as f64))
                 }

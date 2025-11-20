@@ -951,30 +951,179 @@ impl SuperBytecodeVM {
                         // Convert the Rust error to a Python exception object
                         let error_msg = format!("{}", e);
                         let error_msg_lower = error_msg.to_lowercase();
-                        let exception_class = if error_msg_lower.contains("division by zero") || error_msg_lower.contains("divide by zero") {
+                        let exception_class = if error_msg.starts_with("IndexError:") {
+                            "IndexError"
+                        } else if error_msg.starts_with("KeyError:") {
+                            "KeyError"
+                        } else if error_msg.starts_with("ZeroDivisionError:") {
+                            "ZeroDivisionError"
+                        } else if error_msg.starts_with("TypeError:") {
+                            "TypeError"
+                        } else if error_msg.starts_with("ValueError:") {
+                            "ValueError"
+                        } else if error_msg.starts_with("AttributeError:") {
+                            "AttributeError"
+                        } else if error_msg.starts_with("RuntimeError:") {
+                            "RuntimeError"
+                        } else if error_msg.starts_with("AssertionError:") {
+                            "AssertionError"
+                        } else if error_msg.starts_with("NameError:") {
+                            "NameError"
+                        // Phase 1: High-priority exceptions
+                        } else if error_msg.starts_with("ImportError:") {
+                            "ImportError"
+                        } else if error_msg.starts_with("ModuleNotFoundError:") {
+                            "ModuleNotFoundError"
+                        } else if error_msg.starts_with("FileNotFoundError:") {
+                            "FileNotFoundError"
+                        } else if error_msg.starts_with("IOError:") {
+                            "IOError"
+                        } else if error_msg.starts_with("OSError:") {
+                            "OSError"
+                        } else if error_msg.starts_with("NotImplementedError:") {
+                            "NotImplementedError"
+                        } else if error_msg.starts_with("RecursionError:") {
+                            "RecursionError"
+                        } else if error_msg.starts_with("SyntaxError:") {
+                            "SyntaxError"
+                        } else if error_msg.starts_with("IndentationError:") {
+                            "IndentationError"
+                        // Phase 2: Medium-priority exceptions
+                        } else if error_msg.starts_with("StopIteration:") {
+                            "StopIteration"
+                        } else if error_msg.starts_with("LookupError:") {
+                            "LookupError"
+                        } else if error_msg.starts_with("EOFError:") {
+                            "EOFError"
+                        } else if error_msg.starts_with("PermissionError:") {
+                            "PermissionError"
+                        } else if error_msg.starts_with("TimeoutError:") {
+                            "TimeoutError"
+                        } else if error_msg.starts_with("KeyboardInterrupt:") {
+                            "KeyboardInterrupt"
+                        } else if error_msg.starts_with("SystemExit:") {
+                            "SystemExit"
+                        } else if error_msg.starts_with("OverflowError:") {
+                            "OverflowError"
+                        // Phase 3: Unicode and Warning exceptions
+                        } else if error_msg.starts_with("UnicodeError:") {
+                            "UnicodeError"
+                        } else if error_msg.starts_with("UnicodeDecodeError:") {
+                            "UnicodeDecodeError"
+                        } else if error_msg.starts_with("UnicodeEncodeError:") {
+                            "UnicodeEncodeError"
+                        } else if error_msg.starts_with("Warning:") {
+                            "Warning"
+                        } else if error_msg.starts_with("DeprecationWarning:") {
+                            "DeprecationWarning"
+                        } else if error_msg.starts_with("RuntimeWarning:") {
+                            "RuntimeWarning"
+                        } else if error_msg.starts_with("SyntaxWarning:") {
+                            "SyntaxWarning"
+                        } else if error_msg.starts_with("UserWarning:") {
+                            "UserWarning"
+                        } else if error_msg.starts_with("FutureWarning:") {
+                            "FutureWarning"
+                        } else if error_msg.starts_with("GeneratorExit:") {
+                            "GeneratorExit"
+                        } else if error_msg.starts_with("MemoryError:") {
+                            "MemoryError"
+                        // Phase 4: Advanced exceptions
+                        } else if error_msg.starts_with("SystemError:") {
+                            "SystemError"
+                        } else if error_msg.starts_with("ReferenceError:") {
+                            "ReferenceError"
+                        } else if error_msg.starts_with("BufferError:") {
+                            "BufferError"
+                        } else if error_msg.starts_with("ArithmeticError:") {
+                            "ArithmeticError"
+                        } else if error_msg.starts_with("FloatingPointError:") {
+                            "FloatingPointError"
+                        } else if error_msg.starts_with("ConnectionError:") {
+                            "ConnectionError"
+                        } else if error_msg.starts_with("BrokenPipeError:") {
+                            "BrokenPipeError"
+                        } else if error_msg.starts_with("ChildProcessError:") {
+                            "ChildProcessError"
+                        } else if error_msg.starts_with("ConnectionAbortedError:") {
+                            "ConnectionAbortedError"
+                        } else if error_msg.starts_with("ConnectionRefusedError:") {
+                            "ConnectionRefusedError"
+                        } else if error_msg.starts_with("ConnectionResetError:") {
+                            "ConnectionResetError"
+                        } else if error_msg.starts_with("FileExistsError:") {
+                            "FileExistsError"
+                        } else if error_msg.starts_with("InterruptedError:") {
+                            "InterruptedError"
+                        } else if error_msg.starts_with("IsADirectoryError:") {
+                            "IsADirectoryError"
+                        } else if error_msg.starts_with("NotADirectoryError:") {
+                            "NotADirectoryError"
+                        } else if error_msg.starts_with("ProcessLookupError:") {
+                            "ProcessLookupError"
+                        } else if error_msg.starts_with("UnboundLocalError:") {
+                            "UnboundLocalError"
+                        } else if error_msg.starts_with("UnicodeTranslateError:") {
+                            "UnicodeTranslateError"
+                        } else if error_msg.starts_with("TabError:") {
+                            "TabError"
+                        } else if error_msg.starts_with("ImportWarning:") {
+                            "ImportWarning"
+                        } else if error_msg.starts_with("UnicodeWarning:") {
+                            "UnicodeWarning"
+                        } else if error_msg.starts_with("BytesWarning:") {
+                            "BytesWarning"
+                        } else if error_msg.starts_with("ResourceWarning:") {
+                            "ResourceWarning"
+                        } else if error_msg.starts_with("PendingDeprecationWarning:") {
+                            "PendingDeprecationWarning"
+                        } else if error_msg.starts_with("BlockingIOError:") {
+                            "BlockingIOError"
+                        } else if error_msg_lower.contains("division by zero") || error_msg_lower.contains("divide by zero") {
                             "ZeroDivisionError"
                         } else if error_msg_lower.contains("assertionerror") {
                             "AssertionError"
                         } else if error_msg_lower.contains("nameerror") || error_msg_lower.contains("not defined") {
                             "NameError"
-                        } else if error_msg_lower.contains("indexerror") || error_msg_lower.contains("index") && error_msg_lower.contains("out of") {
+                        } else if error_msg_lower.contains("indexerror") {
                             "IndexError"
-                        } else if error_msg_lower.contains("keyerror") || (error_msg_lower.contains("key") && error_msg_lower.contains("not found")) {
+                        } else if error_msg_lower.contains("keyerror") {
                             "KeyError"
                         } else if error_msg_lower.contains("typeerror") {
                             "TypeError"
                         } else if error_msg_lower.contains("valueerror") || error_msg_lower.contains("invalid literal") || error_msg_lower.contains("could not convert") {
                             "ValueError"
-                        } else if error_msg_lower.contains("attributeerror") || error_msg_lower.contains("attribute") {
+                        } else if error_msg_lower.contains("attributeerror") {
                             "AttributeError"
+                        } else if error_msg_lower.contains("importerror") {
+                            "ImportError"
+                        } else if error_msg_lower.contains("modulenotfounderror") {
+                            "ModuleNotFoundError"
+                        } else if error_msg_lower.contains("filenotfounderror") {
+                            "FileNotFoundError"
+                        } else if error_msg_lower.contains("ioerror") {
+                            "IOError"
+                        } else if error_msg_lower.contains("oserror") {
+                            "OSError"
+                        } else if error_msg_lower.contains("notimplementederror") {
+                            "NotImplementedError"
+                        } else if error_msg_lower.contains("recursionerror") {
+                            "RecursionError"
+                        } else if error_msg_lower.contains("syntaxerror") {
+                            "SyntaxError"
+                        } else if error_msg_lower.contains("indentationerror") {
+                            "IndentationError"
                         } else {
                             "RuntimeError"
                         };
 
+                        // Build traceback with current frame information
+                        let traceback_str = self.build_traceback_string(frame_idx, exception_class);
+
                         let exception = Value::new_exception(
                             exception_class.to_string(),
                             error_msg,
-                            None
+                            Some(traceback_str)
                         );
 
                         // Push the exception onto the registers stack
@@ -988,6 +1137,38 @@ impl SuperBytecodeVM {
                 }
             }
         }
+    }
+
+    /// Build a Python-style traceback string showing the call stack with file names and line numbers
+    fn build_traceback_string(&self, frame_idx: usize, exception_class: &str) -> String {
+        let mut traceback = String::from("Traceback (most recent call last):\n");
+        
+        // Walk through all frames from outermost to the current frame
+        for (i, frame) in self.frames[..=frame_idx].iter().enumerate() {
+            let filename = &frame.code.filename;
+            let function_name = &frame.code.name;
+            
+            // Get the current instruction to extract line number if available
+            let current_line = if frame.pc < frame.code.instructions.len() {
+                frame.code.instructions[frame.pc].line as usize
+            } else {
+                frame.code.first_line as usize
+            };
+            
+            // Add frame to traceback
+            traceback.push_str(&format!(
+                "  File \"{}\", line {}, in {}\n",
+                filename, current_line, function_name
+            ));
+            
+            // Optionally add source code context (would require access to source files)
+            // For now, we just show the location
+            if i < frame_idx {
+                traceback.push_str("    (called from above)\n");
+            }
+        }
+        
+        traceback
     }
 
     /// Check if a value matches a declared type string (for strong static typing)
@@ -1454,7 +1635,7 @@ impl SuperBytecodeVM {
         // OPTIMIZATION: Fast path for unboxed integer arithmetic
         if let (Some(a), Some(b)) = (left.as_int(), right.as_int()) {
             if b == 0 {
-                return Err(anyhow!("Division by zero"));
+                return Err(anyhow!("ZeroDivisionError: division by zero"));
             }
             unsafe {
                 *self.frames[frame_idx].registers.get_unchecked_mut(result_reg) = 
@@ -1516,7 +1697,7 @@ impl SuperBytecodeVM {
         let result = match (&left_val, &right_val) {
             (Value::Float(a), Value::Float(b)) => {
                 if *b == 0.0 {
-                    return Err(anyhow!("Division by zero"));
+                    return Err(anyhow!("ZeroDivisionError: float division by zero"));
                 }
                 Value::Float(a / b)
             },
@@ -2239,7 +2420,7 @@ impl SuperBytecodeVM {
                 if normalized_index >= 0 && normalized_index < items.len() as i64 {
                     Ok(items.get(normalized_index as isize).unwrap().clone())
                 } else {
-                    Err(anyhow!("Index {} out of range for list of length {}", index, items.len()))
+                    Err(anyhow!("IndexError: list index out of range"))
                 }
             },
             (Value::Tuple(items), Value::Int(index)) => {
@@ -2252,7 +2433,7 @@ impl SuperBytecodeVM {
                 if normalized_index >= 0 && normalized_index < items.len() as i64 {
                     Ok(items[normalized_index as usize].clone())
                 } else {
-                    Err(anyhow!("Index {} out of range for tuple of length {}", index, items.len()))
+                    Err(anyhow!("IndexError: tuple index out of range"))
                 }
             },
             (Value::Str(s), Value::Int(index)) => {
@@ -2265,7 +2446,7 @@ impl SuperBytecodeVM {
                 if normalized_index >= 0 && normalized_index < s.len() as i64 {
                     Ok(Value::Str(s.chars().nth(normalized_index as usize).unwrap().to_string()))
                 } else {
-                    Err(anyhow!("Index {} out of range for string of length {}", index, s.len()))
+                    Err(anyhow!("IndexError: string index out of range"))
                 }
             },
             (Value::Dict(dict_ref), key) => {
@@ -2280,11 +2461,11 @@ impl SuperBytecodeVM {
                 if let Some(value) = dict.get(&key_str) {
                     Ok(value.clone())
                 } else {
-                    Err(anyhow!("Key '{}' not found in dictionary", key_str))
+                    Err(anyhow!("KeyError: '{}'", key_str))
                 }
             },
             _ => {
-                Err(anyhow!("Subscript not supported for types {} and {}",
+                Err(anyhow!("TypeError: Subscript not supported for types {} and {}",
                                   obj_val.type_name(), idx_val.type_name()))
             }
         }
@@ -2960,7 +3141,7 @@ impl SuperBytecodeVM {
         if let Some(left_val) = self.frames[frame_idx].registers[left_reg].as_int() {
             if let Some(right_val) = self.frames[frame_idx].registers[right_reg].as_int() {
                 if right_val == 0 {
-                    return Err(anyhow!("Division by zero"));
+                    return Err(anyhow!("ZeroDivisionError: integer division or modulo by zero"));
                 }
                 self.frames[frame_idx].registers[result_reg] = crate::bytecode::register_value::RegisterValue::Int(left_val / right_val);
                 return Ok(None);
@@ -3027,7 +3208,7 @@ impl SuperBytecodeVM {
         if let Some(left_val) = self.frames[frame_idx].registers[left_reg].as_int() {
             if let Some(right_val) = self.frames[frame_idx].registers[right_reg].as_int() {
                 if right_val == 0 {
-                    return Err(anyhow!("Modulo by zero"));
+                    return Err(anyhow!("ZeroDivisionError: integer division or modulo by zero"));
                 }
                 self.frames[frame_idx].registers[result_reg] = crate::bytecode::register_value::RegisterValue::Int(left_val % right_val);
                 return Ok(None);

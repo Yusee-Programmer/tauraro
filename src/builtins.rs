@@ -81,7 +81,8 @@ pub fn init_builtins() -> HashMap<String, Value> {
     builtins.insert("ascii".to_string(), Value::BuiltinFunction("ascii".to_string(), ascii_builtin));
     builtins.insert("format".to_string(), Value::BuiltinFunction("format".to_string(), format_builtin));
     
-    // Exception classes
+    // Exception classes - Tier 1: Currently implemented (10 exceptions)
+    // Phase 1: High priority (production-ready) (9 new exceptions = 19 total)
     builtins.insert("Exception".to_string(), Value::BuiltinFunction("Exception".to_string(), exception_builtin));
     builtins.insert("ValueError".to_string(), Value::BuiltinFunction("ValueError".to_string(), value_error_builtin));
     builtins.insert("TypeError".to_string(), Value::BuiltinFunction("TypeError".to_string(), type_error_builtin));
@@ -93,7 +94,66 @@ pub fn init_builtins() -> HashMap<String, Value> {
     builtins.insert("AttributeError".to_string(), Value::BuiltinFunction("AttributeError".to_string(), attribute_error_builtin));
     builtins.insert("AssertionError".to_string(), Value::BuiltinFunction("AssertionError".to_string(), assertion_error_builtin));
 
-    // FFI builtins (when feature is enabled)
+    // Phase 1: High-priority exceptions for production use (9 new)
+    builtins.insert("ImportError".to_string(), Value::BuiltinFunction("ImportError".to_string(), import_error_builtin));
+    builtins.insert("ModuleNotFoundError".to_string(), Value::BuiltinFunction("ModuleNotFoundError".to_string(), module_not_found_error_builtin));
+    builtins.insert("FileNotFoundError".to_string(), Value::BuiltinFunction("FileNotFoundError".to_string(), file_not_found_error_builtin));
+    builtins.insert("IOError".to_string(), Value::BuiltinFunction("IOError".to_string(), io_error_builtin));
+    builtins.insert("OSError".to_string(), Value::BuiltinFunction("OSError".to_string(), os_error_builtin));
+    builtins.insert("NotImplementedError".to_string(), Value::BuiltinFunction("NotImplementedError".to_string(), not_implemented_error_builtin));
+    builtins.insert("RecursionError".to_string(), Value::BuiltinFunction("RecursionError".to_string(), recursion_error_builtin));
+    builtins.insert("SyntaxError".to_string(), Value::BuiltinFunction("SyntaxError".to_string(), syntax_error_builtin));
+    builtins.insert("IndentationError".to_string(), Value::BuiltinFunction("IndentationError".to_string(), indentation_error_builtin));
+
+    // Phase 2: Medium-priority exceptions (8 exceptions = 27 total)
+    builtins.insert("StopIteration".to_string(), Value::BuiltinFunction("StopIteration".to_string(), stop_iteration_builtin));
+    builtins.insert("LookupError".to_string(), Value::BuiltinFunction("LookupError".to_string(), lookup_error_builtin));
+    builtins.insert("EOFError".to_string(), Value::BuiltinFunction("EOFError".to_string(), eof_error_builtin));
+    builtins.insert("PermissionError".to_string(), Value::BuiltinFunction("PermissionError".to_string(), permission_error_builtin));
+    builtins.insert("TimeoutError".to_string(), Value::BuiltinFunction("TimeoutError".to_string(), timeout_error_builtin));
+    builtins.insert("KeyboardInterrupt".to_string(), Value::BuiltinFunction("KeyboardInterrupt".to_string(), keyboard_interrupt_builtin));
+    builtins.insert("SystemExit".to_string(), Value::BuiltinFunction("SystemExit".to_string(), system_exit_builtin));
+    builtins.insert("OverflowError".to_string(), Value::BuiltinFunction("OverflowError".to_string(), overflow_error_builtin));
+
+    // Phase 3: Unicode and Warning exceptions (11 exceptions = 38 total)
+    builtins.insert("UnicodeError".to_string(), Value::BuiltinFunction("UnicodeError".to_string(), unicode_error_builtin));
+    builtins.insert("UnicodeDecodeError".to_string(), Value::BuiltinFunction("UnicodeDecodeError".to_string(), unicode_decode_error_builtin));
+    builtins.insert("UnicodeEncodeError".to_string(), Value::BuiltinFunction("UnicodeEncodeError".to_string(), unicode_encode_error_builtin));
+    builtins.insert("Warning".to_string(), Value::BuiltinFunction("Warning".to_string(), warning_builtin));
+    builtins.insert("DeprecationWarning".to_string(), Value::BuiltinFunction("DeprecationWarning".to_string(), deprecation_warning_builtin));
+    builtins.insert("RuntimeWarning".to_string(), Value::BuiltinFunction("RuntimeWarning".to_string(), runtime_warning_builtin));
+    builtins.insert("SyntaxWarning".to_string(), Value::BuiltinFunction("SyntaxWarning".to_string(), syntax_warning_builtin));
+    builtins.insert("UserWarning".to_string(), Value::BuiltinFunction("UserWarning".to_string(), user_warning_builtin));
+    builtins.insert("FutureWarning".to_string(), Value::BuiltinFunction("FutureWarning".to_string(), future_warning_builtin));
+    builtins.insert("GeneratorExit".to_string(), Value::BuiltinFunction("GeneratorExit".to_string(), generator_exit_builtin));
+    builtins.insert("MemoryError".to_string(), Value::BuiltinFunction("MemoryError".to_string(), memory_error_builtin));
+
+    // Phase 4: Advanced exceptions (25+ exceptions = 63+ total)
+    builtins.insert("SystemError".to_string(), Value::BuiltinFunction("SystemError".to_string(), system_error_builtin));
+    builtins.insert("ReferenceError".to_string(), Value::BuiltinFunction("ReferenceError".to_string(), reference_error_builtin));
+    builtins.insert("BufferError".to_string(), Value::BuiltinFunction("BufferError".to_string(), buffer_error_builtin));
+    builtins.insert("ArithmeticError".to_string(), Value::BuiltinFunction("ArithmeticError".to_string(), arithmetic_error_builtin));
+    builtins.insert("FloatingPointError".to_string(), Value::BuiltinFunction("FloatingPointError".to_string(), floating_point_error_builtin));
+    builtins.insert("ConnectionError".to_string(), Value::BuiltinFunction("ConnectionError".to_string(), connection_error_builtin));
+    builtins.insert("BrokenPipeError".to_string(), Value::BuiltinFunction("BrokenPipeError".to_string(), broken_pipe_error_builtin));
+    builtins.insert("ChildProcessError".to_string(), Value::BuiltinFunction("ChildProcessError".to_string(), child_process_error_builtin));
+    builtins.insert("ConnectionAbortedError".to_string(), Value::BuiltinFunction("ConnectionAbortedError".to_string(), connection_aborted_error_builtin));
+    builtins.insert("ConnectionRefusedError".to_string(), Value::BuiltinFunction("ConnectionRefusedError".to_string(), connection_refused_error_builtin));
+    builtins.insert("ConnectionResetError".to_string(), Value::BuiltinFunction("ConnectionResetError".to_string(), connection_reset_error_builtin));
+    builtins.insert("FileExistsError".to_string(), Value::BuiltinFunction("FileExistsError".to_string(), file_exists_error_builtin));
+    builtins.insert("InterruptedError".to_string(), Value::BuiltinFunction("InterruptedError".to_string(), interrupted_error_builtin));
+    builtins.insert("IsADirectoryError".to_string(), Value::BuiltinFunction("IsADirectoryError".to_string(), is_a_directory_error_builtin));
+    builtins.insert("NotADirectoryError".to_string(), Value::BuiltinFunction("NotADirectoryError".to_string(), not_a_directory_error_builtin));
+    builtins.insert("ProcessLookupError".to_string(), Value::BuiltinFunction("ProcessLookupError".to_string(), process_lookup_error_builtin));
+    builtins.insert("UnboundLocalError".to_string(), Value::BuiltinFunction("UnboundLocalError".to_string(), unbound_local_error_builtin));
+    builtins.insert("UnicodeTranslateError".to_string(), Value::BuiltinFunction("UnicodeTranslateError".to_string(), unicode_translate_error_builtin));
+    builtins.insert("TabError".to_string(), Value::BuiltinFunction("TabError".to_string(), tab_error_builtin));
+    builtins.insert("ImportWarning".to_string(), Value::BuiltinFunction("ImportWarning".to_string(), import_warning_builtin));
+    builtins.insert("UnicodeWarning".to_string(), Value::BuiltinFunction("UnicodeWarning".to_string(), unicode_warning_builtin));
+    builtins.insert("BytesWarning".to_string(), Value::BuiltinFunction("BytesWarning".to_string(), bytes_warning_builtin));
+    builtins.insert("ResourceWarning".to_string(), Value::BuiltinFunction("ResourceWarning".to_string(), resource_warning_builtin));
+    builtins.insert("PendingDeprecationWarning".to_string(), Value::BuiltinFunction("PendingDeprecationWarning".to_string(), pending_deprecation_warning_builtin));
+    builtins.insert("BlockingIOError".to_string(), Value::BuiltinFunction("BlockingIOError".to_string(), blocking_io_error_builtin));
     #[cfg(feature = "ffi")]
     {
         builtins.insert("load_library".to_string(), Value::BuiltinFunction("load_library".to_string(), ffi_load_library));
@@ -151,7 +211,7 @@ fn print_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
 
 fn len_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
-        return Err(anyhow::anyhow!("len() takes exactly one argument ({} given)", args.len()));
+        return Err(anyhow::anyhow!("TypeError: len() takes exactly one argument ({} given)", args.len()));
     }
     
     match &args[0] {
@@ -163,7 +223,7 @@ fn len_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         Value::FrozenSet(items) => Ok(Value::Int(items.len() as i64)),
         Value::Bytes(bytes) => Ok(Value::Int(bytes.len() as i64)),
         Value::ByteArray(bytes) => Ok(Value::Int(bytes.len() as i64)),
-        _ => Err(anyhow::anyhow!("object of type '{}' has no len()", args[0].type_name())),
+        _ => Err(anyhow::anyhow!("TypeError: object of type '{}' has no len()", args[0].type_name())),
     }
 }
 
@@ -361,7 +421,7 @@ fn abs_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
 
 fn min_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.is_empty() {
-        return Err(anyhow::anyhow!("min() expected at least 1 argument, got 0"));
+        return Err(anyhow::anyhow!("TypeError: min() expected at least 1 argument, got 0"));
     }
     
     if args.len() == 1 {
@@ -369,7 +429,7 @@ fn min_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         match &args[0] {
             Value::List(items) => {
                 if items.is_empty() {
-                    return Err(anyhow::anyhow!("min() arg is an empty sequence"));
+                    return Err(anyhow::anyhow!("ValueError: min() arg is an empty sequence"));
                 }
                 let mut min_val = items.get(0).unwrap().clone();
                 for item in items.iter().skip(1) {
@@ -381,7 +441,7 @@ fn min_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
             }
             Value::Tuple(items) => {
                 if items.is_empty() {
-                    return Err(anyhow::anyhow!("min() arg is an empty sequence"));
+                    return Err(anyhow::anyhow!("ValueError: min() arg is an empty sequence"));
                 }
                 let mut min_val = items[0].clone();
                 for item in items.iter().skip(1) {
@@ -391,7 +451,7 @@ fn min_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
                 }
                 Ok(min_val)
             }
-            _ => Err(anyhow::anyhow!("'{}' object is not iterable", args[0].type_name())),
+            _ => Err(anyhow::anyhow!("TypeError: '{}' object is not iterable", args[0].type_name())),
         }
     } else {
         // Multiple arguments
@@ -2375,4 +2435,348 @@ fn decorator_identity(args: Vec<Value>) -> anyhow::Result<Value> {
     }
     // Just return the function unchanged
     Ok(args[0].clone())
+}
+
+// ============================================================================
+// Phase 1: High-Priority Exception Constructors (9 new exceptions)
+// ============================================================================
+
+fn import_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "cannot import module".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("ImportError".to_string(), message, None))
+}
+
+fn module_not_found_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "No module named 'unknown'".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => format!("No module named '{}'", s),
+            _ => format!("No module named '{}'", args[0]),
+        }
+    };
+    Ok(Value::new_exception("ModuleNotFoundError".to_string(), message, None))
+}
+
+fn file_not_found_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "[Errno 2] No such file or directory".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => format!("[Errno 2] No such file or directory: '{}'", s),
+            _ => format!("[Errno 2] No such file or directory: '{}'", args[0]),
+        }
+    };
+    Ok(Value::new_exception("FileNotFoundError".to_string(), message, None))
+}
+
+fn io_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "I/O error".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("IOError".to_string(), message, None))
+}
+
+fn os_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "Operating system error".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("OSError".to_string(), message, None))
+}
+
+fn not_implemented_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("NotImplementedError".to_string(), message, None))
+}
+
+fn recursion_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "maximum recursion depth exceeded".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("RecursionError".to_string(), message, None))
+}
+
+fn syntax_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "invalid syntax".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("SyntaxError".to_string(), message, None))
+}
+
+fn indentation_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() {
+        "indentation error".to_string()
+    } else {
+        match &args[0] {
+            Value::Str(s) => s.clone(),
+            _ => format!("{}", args[0]),
+        }
+    };
+    Ok(Value::new_exception("IndentationError".to_string(), message, None))
+}
+
+// ============================================================================
+// Phase 2: Medium-Priority Exception Constructors (8 new)
+// ============================================================================
+
+fn stop_iteration_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("StopIteration".to_string(), message, None))
+}
+
+fn lookup_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "lookup error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("LookupError".to_string(), message, None))
+}
+
+fn eof_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "EOF error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("EOFError".to_string(), message, None))
+}
+
+fn permission_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 13] Permission denied".to_string() } else { match &args[0] { Value::Str(s) => format!("[Errno 13] Permission denied: '{}'", s), _ => format!("[Errno 13] Permission denied: '{}'", args[0]) } };
+    Ok(Value::new_exception("PermissionError".to_string(), message, None))
+}
+
+fn timeout_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "timeout".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("TimeoutError".to_string(), message, None))
+}
+
+fn keyboard_interrupt_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("KeyboardInterrupt".to_string(), message, None))
+}
+
+fn system_exit_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("SystemExit".to_string(), message, None))
+}
+
+fn overflow_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "integer overflow".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("OverflowError".to_string(), message, None))
+}
+
+// ============================================================================
+// Phase 3: Unicode and Warning Exception Constructors (11 new)
+// ============================================================================
+
+fn unicode_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "unicode error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("UnicodeError".to_string(), message, None))
+}
+
+fn unicode_decode_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "unicode decode error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("UnicodeDecodeError".to_string(), message, None))
+}
+
+fn unicode_encode_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "unicode encode error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("UnicodeEncodeError".to_string(), message, None))
+}
+
+fn warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("Warning".to_string(), message, None))
+}
+
+fn deprecation_warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("DeprecationWarning".to_string(), message, None))
+}
+
+fn runtime_warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("RuntimeWarning".to_string(), message, None))
+}
+
+fn syntax_warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("SyntaxWarning".to_string(), message, None))
+}
+
+fn user_warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("UserWarning".to_string(), message, None))
+}
+
+fn future_warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("FutureWarning".to_string(), message, None))
+}
+
+fn generator_exit_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("GeneratorExit".to_string(), message, None))
+}
+
+fn memory_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "out of memory".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("MemoryError".to_string(), message, None))
+}
+
+// ============================================================================
+// Phase 4: Advanced Exception Constructors (25+ new)
+// ============================================================================
+
+fn system_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "internal error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("SystemError".to_string(), message, None))
+}
+
+fn reference_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "weak reference object no longer exists".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("ReferenceError".to_string(), message, None))
+}
+
+fn buffer_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "buffer error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("BufferError".to_string(), message, None))
+}
+
+fn arithmetic_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "arithmetic error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("ArithmeticError".to_string(), message, None))
+}
+
+fn floating_point_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "floating point error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("FloatingPointError".to_string(), message, None))
+}
+
+fn connection_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "connection error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("ConnectionError".to_string(), message, None))
+}
+
+fn broken_pipe_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 32] Broken pipe".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("BrokenPipeError".to_string(), message, None))
+}
+
+fn child_process_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "child process error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("ChildProcessError".to_string(), message, None))
+}
+
+fn connection_aborted_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 103] Software caused connection abort".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("ConnectionAbortedError".to_string(), message, None))
+}
+
+fn connection_refused_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 111] Connection refused".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("ConnectionRefusedError".to_string(), message, None))
+}
+
+fn connection_reset_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 104] Connection reset by peer".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("ConnectionResetError".to_string(), message, None))
+}
+
+fn file_exists_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 17] File exists".to_string() } else { match &args[0] { Value::Str(s) => format!("[Errno 17] File exists: '{}'", s), _ => format!("[Errno 17] File exists: '{}'", args[0]) } };
+    Ok(Value::new_exception("FileExistsError".to_string(), message, None))
+}
+
+fn interrupted_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 4] Interrupted system call".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("InterruptedError".to_string(), message, None))
+}
+
+fn is_a_directory_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 21] Is a directory".to_string() } else { match &args[0] { Value::Str(s) => format!("[Errno 21] Is a directory: '{}'", s), _ => format!("[Errno 21] Is a directory: '{}'", args[0]) } };
+    Ok(Value::new_exception("IsADirectoryError".to_string(), message, None))
+}
+
+fn not_a_directory_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 20] Not a directory".to_string() } else { match &args[0] { Value::Str(s) => format!("[Errno 20] Not a directory: '{}'", s), _ => format!("[Errno 20] Not a directory: '{}'", args[0]) } };
+    Ok(Value::new_exception("NotADirectoryError".to_string(), message, None))
+}
+
+fn process_lookup_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 3] No such process".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("ProcessLookupError".to_string(), message, None))
+}
+
+fn unbound_local_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "local variable referenced before assignment".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("UnboundLocalError".to_string(), message, None))
+}
+
+fn unicode_translate_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "unicode translate error".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("UnicodeTranslateError".to_string(), message, None))
+}
+
+fn tab_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "inconsistent use of tabs and spaces in indentation".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("TabError".to_string(), message, None))
+}
+
+fn import_warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("ImportWarning".to_string(), message, None))
+}
+
+fn unicode_warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("UnicodeWarning".to_string(), message, None))
+}
+
+fn bytes_warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("BytesWarning".to_string(), message, None))
+}
+
+fn resource_warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("ResourceWarning".to_string(), message, None))
+}
+
+fn pending_deprecation_warning_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("PendingDeprecationWarning".to_string(), message, None))
+}
+
+fn blocking_io_error_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    let message = if args.is_empty() { "[Errno 11] Resource temporarily unavailable".to_string() } else { match &args[0] { Value::Str(s) => s.clone(), _ => format!("{}", args[0]) } };
+    Ok(Value::new_exception("BlockingIOError".to_string(), message, None))
 }
