@@ -1,7 +1,0 @@
-"""Test single indexerror"""
-print("Testing IndexError...")
-try:
-    x = [1, 2, 3][10]
-    print("No exception")
-except Exception as e:
-    print(f"Caught: {type(e).__name__}: {e}")

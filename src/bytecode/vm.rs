@@ -6872,8 +6872,9 @@ impl SuperBytecodeVM {
                 Ok(None)
             }
             OpCode::Raise => {
-                // Raise an exception
+                // Raise an exception, optionally with cause for chaining
                 let exception_reg = arg1 as usize;
+                let cause_reg = arg2 as usize;
                 
                 if exception_reg >= self.frames[frame_idx].registers.len() {
                     return Err(anyhow!("Raise: exception register index {} out of bounds (len: {})", exception_reg, self.frames[frame_idx].registers.len()));
@@ -6882,40 +6883,66 @@ impl SuperBytecodeVM {
                 // Clone the exception value to avoid borrowing issues
                 let exception_value = self.frames[frame_idx].registers[exception_reg].to_value();
 
-                // Convert custom exception objects to Exception values if needed
-                let (class_name, message) = match &exception_value {
-                    Value::Exception { class_name, message, .. } => {
-                        (class_name.clone(), message.clone())
+                // Extract cause if present
+                let cause_value = if cause_reg > 0 && cause_reg < self.frames[frame_idx].registers.len() {
+                    let cause = self.frames[frame_idx].registers[cause_reg].to_value();
+                    match cause {
+                        Value::None => None,
+                        _ => Some(Box::new(cause)),
                     }
-                    Value::Object { class_name, fields, .. } => {
-                        // Custom exception class instance - extract message
-                        let msg = fields.borrow().get("message")
-                            .cloned()
-                            .or_else(|| fields.borrow().get("msg").cloned())
-                            .or_else(|| fields.borrow().get("args").cloned())
-                            .map(|v| format!("{}", v))
-                            .unwrap_or_default();
-                        (class_name.clone(), msg)
-                    }
-                    _ => {
-                        // Not an exception, just use its string representation
-                        ("RuntimeError".to_string(), format!("{}", exception_value))
-                    }
+                } else {
+                    None
                 };
 
-                // Create traceback information matching Python format
-                let mut traceback_info = format!("Traceback (most recent call last):\n");
-                traceback_info.push_str(&format!("  File \"{}\", line {}, in {}\n",
-                    self.frames[frame_idx].code.filename,
-                    self.frames[frame_idx].line_number,
-                    self.frames[frame_idx].code.name));
-                traceback_info.push_str(&format!("{}: {}", class_name, message));
-
-                let enhanced_exception = Value::new_exception(
-                    class_name.clone(),
-                    message.clone(),
-                    Some(traceback_info)
-                );
+                // For custom exception objects, we keep them as-is; for built-in exceptions, we convert to Exception type
+                let enhanced_exception = match &exception_value {
+                    Value::Exception { .. } => {
+                        // Already an exception, just add cause if needed
+                        if let Some(cause) = cause_value {
+                            // Need to add cause to existing exception
+                            if let Value::Exception { class_name, message, traceback, .. } = exception_value {
+                                Value::new_exception_with_cause(
+                                    class_name,
+                                    message,
+                                    traceback,
+                                    Some(cause),
+                                )
+                            } else {
+                                exception_value
+                            }
+                        } else {
+                            exception_value
+                        }
+                    }
+                    Value::Object { class_name, .. } => {
+                        // Custom exception class instance - keep it as-is, just add traceback if needed
+                        exception_value
+                    }
+                    _ => {
+                        // Not an exception type, convert to RuntimeError
+                        let msg = format!("{}", exception_value);
+                        let mut traceback_info = format!("Traceback (most recent call last):\n");
+                        traceback_info.push_str(&format!("  File \"{}\", line {}, in {}\n",
+                            self.frames[frame_idx].code.filename,
+                            self.frames[frame_idx].line_number,
+                            self.frames[frame_idx].code.name));
+                        
+                        if let Some(cause) = cause_value {
+                            Value::new_exception_with_cause(
+                                "RuntimeError".to_string(),
+                                msg,
+                                Some(traceback_info),
+                                Some(cause),
+                            )
+                        } else {
+                            Value::new_exception(
+                                "RuntimeError".to_string(),
+                                msg,
+                                Some(traceback_info),
+                            )
+                        }
+                    }
+                };
                 
                 // Search for exception handlers in the block stack
                 // Find the innermost exception handler
@@ -6969,7 +6996,7 @@ impl SuperBytecodeVM {
                 Ok(None)
             }
             OpCode::MatchExceptionType => {
-                // Check if exception matches a specific type
+                // Check if exception matches a specific type (including hierarchy)
                 // arg1 = exception register
                 // arg2 = type name string index
                 // arg3 = result register (will be set to Bool)
@@ -6988,11 +7015,40 @@ impl SuperBytecodeVM {
                 let exception_value = &self.frames[frame_idx].registers[exc_reg].to_value();
                 let expected_type_name = &self.frames[frame_idx].code.names[type_name_idx];
 
-                // Check if exception matches the expected type
-                let matches = if let Value::Exception { class_name, .. } = exception_value {
-                    class_name == expected_type_name
-                } else {
-                    false
+                // Check if exception matches the expected type or is a subclass via hierarchy
+                let matches = match exception_value {
+                    Value::Exception { class_name, parent_exceptions, .. } => {
+                        // Direct match
+                        if class_name == expected_type_name {
+                            true
+                        } else {
+                            // Check if expected type is in the hierarchy
+                            parent_exceptions.contains(&expected_type_name.to_string())
+                        }
+                    }
+                    Value::Object { class_name, base_object, .. } => {
+                        // Custom exception class instance
+                        if class_name == expected_type_name {
+                            true
+                        } else {
+                            // Check the class's base classes
+                            let mut is_subclass = false;
+                            for base in &base_object.bases {
+                                if base == expected_type_name {
+                                    is_subclass = true;
+                                    break;
+                                }
+                                // Also check exception hierarchy for base class
+                                let base_parents = Value::get_exception_parents(base);
+                                if base_parents.contains(&expected_type_name.to_string()) {
+                                    is_subclass = true;
+                                    break;
+                                }
+                            }
+                            is_subclass
+                        }
+                    }
+                    _ => false,
                 };
 
                 // Ensure result register exists
@@ -9112,6 +9168,17 @@ impl SuperBytecodeVM {
                     return self.compile_impl(&source, &filename, &mode);
                 }
 
+                // Special handling for list() to support generators
+                // We collect generator values by simulating the for-loop behavior
+                if name == "list" && args.len() == 1 {
+                    if let Value::Generator { .. } = &args[0] {
+                        // Collect all values from the generator
+                        return self.collect_generator_to_list(args[0].clone());
+                    }
+                    // For non-generator arguments, use the normal list() builtin
+                    return func(args.clone());
+                }
+
                 // Special handling for str() and repr() to support __str__ and __repr__ dunder methods
                 if name == "str" && args.len() == 1 {
                     // First check for __str__ in custom objects
@@ -9885,6 +9952,71 @@ impl SuperBytecodeVM {
         }
 
         Ok(processed_args)
+    }
+
+    /// Collect all values from a generator into a list
+    /// This works by temporarily injecting generator collection bytecode
+    fn collect_generator_to_list(&mut self, gen_value: Value) -> Result<Value> {
+        // Collect generator values by creating a temporary frame
+        // that iterates over the generator and collects all yielded values
+        let mut collected = Vec::new();
+        
+        if let Value::Generator { code, .. } = &gen_value {
+            // Create a new frame to execute the generator
+            let globals_rc = Rc::clone(&self.globals);
+            let builtins_rc = Rc::clone(&self.builtins);
+            let mut gen_frame = Frame::new_function_frame(
+                *code.clone(),
+                globals_rc,
+                builtins_rc,
+                vec![],
+                HashMap::new()
+            );
+            
+            // Push generator frame and collect all yields
+            self.frames.push(gen_frame);
+            
+            loop {
+                if self.frames.is_empty() {
+                    break;
+                }
+                
+                let frame_idx = self.frames.len() - 1;
+                let frame = &self.frames[frame_idx];
+                
+                // Check if we're at the end of the generator
+                if frame.pc >= frame.code.instructions.len() {
+                    self.frames.pop();
+                    break;
+                }
+                
+                // Get current instruction
+                let instr_idx = frame.pc;
+                let instr = frame.code.instructions[instr_idx].clone();
+                self.frames[frame_idx].pc += 1;
+                
+                // Check if this is a yield instruction
+                if instr.opcode == OpCode::YieldValue {
+                    let yield_reg = instr.arg1 as usize;
+                    if yield_reg < self.frames[frame_idx].registers.len() {
+                        let yielded_val = self.frames[frame_idx].registers[yield_reg].to_value();
+                        collected.push(yielded_val);
+                    }
+                    // Continue to next instruction
+                    continue;
+                }
+                
+                // Execute other instructions using the fast path
+                let _ = self.execute_instruction_fast(frame_idx, instr.opcode, instr.arg1, instr.arg2, instr.arg3);
+            }
+        }
+        
+        // Convert collected values to a list
+        let mut hplist = HPList::new();
+        for value in collected {
+            hplist.append(value);
+        }
+        Ok(Value::List(hplist))
     }
 
     /// Implement eval() - evaluate a Python expression

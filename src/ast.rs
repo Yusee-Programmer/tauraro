@@ -63,7 +63,10 @@ pub enum Statement {
     Return(Option<Expr>),
     Break,
     Continue,
-    Raise(Option<Expr>),
+    Raise {
+        exception: Option<Expr>,
+        cause: Option<Expr>,  // For "raise ... from ..." chaining
+    },
     Import {
         module: String,
         alias: Option<String>,

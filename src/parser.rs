@@ -2579,13 +2579,21 @@ impl Parser {
 
     fn raise_statement(&mut self) -> Result<Statement, ParseError> {
         self.consume(Token::KwRaise, "Expected 'raise', 'throw', or 'jefa'")?;
-        let value = if self.check(&Token::Newline) || self.check(&Token::Semicolon) || self.is_at_end() {
+        let exception = if self.check(&Token::Newline) || self.check(&Token::Semicolon) || self.is_at_end() {
             None
         } else {
             Some(self.expression()?)
         };
+        
+        // Check for "from" clause for exception chaining
+        let cause = if self.match_token(&[Token::KwFrom]) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        
         self.match_token(&[Token::Semicolon, Token::Newline]);
-        Ok(Statement::Raise(value))
+        Ok(Statement::Raise { exception, cause })
     }
 
     fn with_statement(&mut self) -> Result<Statement, ParseError> {

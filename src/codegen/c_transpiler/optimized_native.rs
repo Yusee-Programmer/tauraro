@@ -1221,8 +1221,8 @@ impl OptimizedNativeTranspiler {
             Statement::Try { body, except_handlers, else_branch, finally } => {
                 self.transpile_try_statement(body, except_handlers, else_branch, finally, &mut code)?;
             }
-            Statement::Raise(exception) => {
-                self.transpile_raise_statement(exception, &mut code)?;
+            Statement::Raise { exception, cause } => {
+                self.transpile_raise_statement(exception, cause, &mut code)?;
             }
             _ => {
                 code.push_str("/* unsupported statement */;\n");
@@ -1939,13 +1939,20 @@ impl OptimizedNativeTranspiler {
         Ok(())
     }
 
-    fn transpile_raise_statement(&mut self, exception: &Option<Expr>, code: &mut String) -> Result<(), String> {
+    fn transpile_raise_statement(&mut self, exception: &Option<Expr>, cause: &Option<Expr>, code: &mut String) -> Result<(), String> {
         code.push_str(&self.indent());
 
         if let Some(exc_expr) = exception {
-            // Raise specific exception
+            // Raise specific exception with optional cause
             let exc_code = self.transpile_expr(exc_expr)?;
-            code.push_str(&format!("longjmp(_exception_buf, {});\n", exc_code));
+            if cause.is_some() {
+                // With cause: raise ... from ...
+                // For now, we'll just raise the exception; full chaining support is in the VM
+                code.push_str(&format!("longjmp(_exception_buf, {});\n", exc_code));
+            } else {
+                // Normal raise
+                code.push_str(&format!("longjmp(_exception_buf, {});\n", exc_code));
+            }
         } else {
             // Re-raise current exception
             code.push_str("longjmp(_exception_buf, 1);\n");

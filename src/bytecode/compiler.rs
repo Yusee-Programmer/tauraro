@@ -1175,9 +1175,9 @@ impl SuperCompiler {
                 self.emit(OpCode::ContinueLoop, 0, 0, 0, self.current_line);
                 Ok(())
             }
-            Statement::Raise(expr) => {
-                // Emit Raise instruction
-                let exception_reg = if let Some(expr) = expr {
+            Statement::Raise { exception, cause } => {
+                // Emit Raise instruction with optional cause for exception chaining
+                let exception_reg = if let Some(expr) = exception {
                     self.compile_expression(expr)?
                 } else {
                     // No exception specified, use None
@@ -1186,7 +1186,17 @@ impl SuperCompiler {
                     self.emit(OpCode::LoadConst, none_const, reg, 0, self.current_line);
                     reg
                 };
-                self.emit(OpCode::Raise, exception_reg, 0, 0, self.current_line);
+                
+                let cause_reg = if let Some(cause_expr) = cause {
+                    self.compile_expression(cause_expr)?
+                } else {
+                    // No cause, use 0 to indicate no cause
+                    0
+                };
+                
+                // Use a special opcode or encode cause in the arguments
+                // For now, emit Raise with both exception and cause registers
+                self.emit(OpCode::Raise, exception_reg, cause_reg, 0, self.current_line);
                 Ok(())
             }
             Statement::Assert { condition, message } => {
@@ -2869,6 +2879,10 @@ impl SuperCompiler {
                     }
                 }
 
+                // Collect all identifiers referenced in the lambda body BEFORE compiling
+                let mut referenced_identifiers = std::collections::HashSet::new();
+                collect_identifiers_in_expr(&body, &mut referenced_identifiers);
+
                 // Compile the lambda body (which is a single expression)
                 let body_reg = lambda_compiler.compile_expression(*body)?;
 
@@ -2882,6 +2896,15 @@ impl SuperCompiler {
                 // Get the compiled lambda code
                 let mut lambda_code = lambda_compiler.code;
                 lambda_code.params = params.clone(); // Set the params field
+                
+                // Find free variables (referenced but not defined locally as parameters)
+                let mut free_variables = Vec::new();
+                for ident in referenced_identifiers {
+                    // Check if this is a parameter (defined in varnames)
+                    if !lambda_code.varnames.contains(&ident) {
+                        free_variables.push(ident);
+                    }
+                }
 
                 // Create a closure value for the lambda with the compiled code
                 let closure_value = Value::Closure {
@@ -2898,8 +2921,23 @@ impl SuperCompiler {
                 let closure_const_idx = self.code.add_constant(closure_value.clone());
 
                 // Load the closure into a register
-                let lambda_reg = self.allocate_register();
+                let mut lambda_reg = self.allocate_register();
                 self.emit(OpCode::LoadConst, closure_const_idx, lambda_reg, 0, self.current_line);
+
+                // IMPORTANT: Capture free variables just like functions do
+                if !free_variables.is_empty() && self.is_in_function_scope() {
+                    // For each free variable, load it and store it with a special name in the function's globals
+                    // This makes it accessible when the closure is called
+                    for free_var in &free_variables {
+                        // Load the free variable
+                        let var_reg = self.compile_expression(Expr::Identifier(free_var.clone()))?;
+                        
+                        // Store it with a special name that the closure handler can recognize
+                        let capture_name = format!("__closure_captured_{}", free_var);
+                        let capture_idx = self.code.add_name(capture_name);
+                        self.emit(OpCode::StoreGlobal, var_reg, capture_idx, 0, self.current_line);
+                    }
+                }
 
                 Ok(lambda_reg)
             }
