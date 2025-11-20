@@ -1088,6 +1088,19 @@ impl Value {
                 }
                 Ok(Value::List(hplist))
             },
+            Value::Generator { .. } => {
+                // Generators need VM support to iterate properly
+                // For now, return an error directing users to collect it manually
+                Err(anyhow::anyhow!("'generator' object is not iterable - use next() or iterate in a loop"))
+            },
+            Value::Iterator { items, .. } => {
+                // Convert Iterator to list
+                let mut hplist = HPList::new();
+                for item in items {
+                    hplist.append(item.clone());
+                }
+                Ok(Value::List(hplist))
+            },
             _ => Err(anyhow::anyhow!("'{}' object is not iterable", self.type_name())),
         }
     }
@@ -2337,17 +2350,35 @@ impl fmt::Display for Value {
             Value::NotImplemented => write!(f, "NotImplemented"),
             Value::Starred(value) => write!(f, "*{}", value),
             Value::List(items) => {
-                let items_str: Vec<String> = items.as_vec().iter().map(|v| format!("{}", v)).collect();
+                let items_str: Vec<String> = items.as_vec().iter().map(|v| {
+                    match v {
+                        Value::Str(s) => format!("'{}'", s),
+                        _ => format!("{}", v)
+                    }
+                }).collect();
                 write!(f, "[{}]", items_str.join(", "))
             }
             Value::Dict(dict) => {
                 let pairs: Vec<String> = dict.borrow().iter()
-                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .map(|(k, v)| {
+                        // k is a String, v is a Value
+                        let key_str = format!("'{}'", k);
+                        let val_str = match v {
+                            Value::Str(s) => format!("'{}'", s),
+                            _ => format!("{}", v)
+                        };
+                        format!("{}: {}", key_str, val_str)
+                    })
                     .collect();
                 write!(f, "{{{}}}", pairs.join(", "))
             }
             Value::Tuple(items) => {
-                let items_str: Vec<String> = items.iter().map(|v| format!("{}", v)).collect();
+                let items_str: Vec<String> = items.iter().map(|v| {
+                    match v {
+                        Value::Str(s) => format!("'{}'", s),
+                        _ => format!("{}", v)
+                    }
+                }).collect();
                 if items.len() == 1 {
                     write!(f, "({},)", items_str[0])
                 } else {
@@ -2355,7 +2386,12 @@ impl fmt::Display for Value {
                 }
             }
             Value::Set(items) => {
-                let items_str: Vec<String> = items.iter().map(|v| format!("{}", v)).collect();
+                let items_str: Vec<String> = items.iter().map(|v| {
+                    match v {
+                        Value::Str(s) => format!("'{}'", s),
+                        _ => format!("{}", v)
+                    }
+                }).collect();
                 write!(f, "{{{}}}", items_str.join(", "))
             }
             Value::FrozenSet(items) => {

@@ -233,6 +233,32 @@ impl Hinter for REPLHelper {
 
 /// Enhanced REPL with full language support and Python-like behavior
 pub fn run_repl() -> Result<()> {
+    // Helper function to check if a string has unclosed triple quotes
+    fn has_unclosed_triple_quotes(s: &str) -> bool {
+        let mut in_triple_single = false;
+        let mut in_triple_double = false;
+        let mut i = 0;
+        let chars: Vec<char> = s.chars().collect();
+        
+        while i < chars.len() {
+            // Check for triple single quotes
+            if i + 2 < chars.len() && chars[i] == '\'' && chars[i+1] == '\'' && chars[i+2] == '\'' {
+                in_triple_single = !in_triple_single;
+                i += 3;
+                continue;
+            }
+            // Check for triple double quotes
+            if i + 2 < chars.len() && chars[i] == '"' && chars[i+1] == '"' && chars[i+2] == '"' {
+                in_triple_double = !in_triple_double;
+                i += 3;
+                continue;
+            }
+            i += 1;
+        }
+        
+        in_triple_single || in_triple_double
+    }
+
     // Print Python-like banner
     println!("Tauraro 1.0.0 (main, Jan 2025)");
     println!("[Rust-based VM] on {}", std::env::consts::OS);
@@ -322,7 +348,7 @@ pub fn run_repl() -> Result<()> {
                         continue;
                     }
 
-                    // Check for multiline constructs
+                    // Check for multiline constructs (including unclosed triple quotes)
                     if trimmed.ends_with(':') ||
                        trimmed.starts_with('@') ||
                        trimmed.starts_with("def ") ||
@@ -335,7 +361,8 @@ pub fn run_repl() -> Result<()> {
                        trimmed.starts_with("try:") ||
                        trimmed.starts_with("except ") ||
                        trimmed.starts_with("finally:") ||
-                       trimmed.starts_with("with ") {
+                       trimmed.starts_with("with ") ||
+                       has_unclosed_triple_quotes(&line) {
                         in_multiline = true;
                         buffer.push_str(&line);
                         buffer.push('\n');
@@ -350,8 +377,8 @@ pub fn run_repl() -> Result<()> {
                     }
                 } else {
                     // We're in multiline mode
-                    if line.trim().is_empty() {
-                        // Empty line - end multiline input and execute
+                    if line.trim().is_empty() && !has_unclosed_triple_quotes(&buffer) {
+                        // Empty line and no unclosed quotes - end multiline input and execute
                         in_multiline = false;
                         // Don't add the empty line to buffer
                     } else {
