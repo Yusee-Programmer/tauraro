@@ -1,0 +1,7 @@
+try:
+    result = len(42)
+    print(f"Got result: {result}")
+except TypeError as e:
+    print(f"TypeError caught: {e}")
+except Exception as e:
+    print(f"Other exception: {e}")

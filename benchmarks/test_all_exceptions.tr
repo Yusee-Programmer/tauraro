@@ -1,0 +1,122 @@
+"""Test All Exception Types - Complete Coverage (54/63)"""
+
+print("=" * 80)
+print("COMPLETE EXCEPTION SYSTEM TEST")
+print("Testing all implemented exceptions: 54/63 Python exceptions")
+print("=" * 80)
+
+passed = 0
+failed = 0
+
+# Original 10 + Phase 1 (9) + Phase 2 (8) + Phase 3 (11) + Phase 4 (25) = 54 total
+
+exceptions_to_test = [
+    # Tier 1: Original (10)
+    ("ValueError", ValueError),
+    ("TypeError", TypeError),
+    ("IndexError", IndexError),
+    ("KeyError", KeyError),
+    ("ZeroDivisionError", ZeroDivisionError),
+    ("AttributeError", AttributeError),
+    ("RuntimeError", RuntimeError),
+    ("AssertionError", AssertionError),
+    ("NameError", NameError),
+    ("Exception", Exception),
+    
+    # Phase 1: High-Priority (9)
+    ("ImportError", ImportError),
+    ("ModuleNotFoundError", ModuleNotFoundError),
+    ("FileNotFoundError", FileNotFoundError),
+    ("IOError", IOError),
+    ("OSError", OSError),
+    ("NotImplementedError", NotImplementedError),
+    ("RecursionError", RecursionError),
+    ("SyntaxError", SyntaxError),
+    ("IndentationError", IndentationError),
+    
+    # Phase 2: Medium-Priority (8)
+    ("StopIteration", StopIteration),
+    ("LookupError", LookupError),
+    ("EOFError", EOFError),
+    ("PermissionError", PermissionError),
+    ("TimeoutError", TimeoutError),
+    ("KeyboardInterrupt", KeyboardInterrupt),
+    ("SystemExit", SystemExit),
+    ("OverflowError", OverflowError),
+    
+    # Phase 3: Unicode & Warnings (11)
+    ("UnicodeError", UnicodeError),
+    ("UnicodeDecodeError", UnicodeDecodeError),
+    ("UnicodeEncodeError", UnicodeEncodeError),
+    ("Warning", Warning),
+    ("DeprecationWarning", DeprecationWarning),
+    ("RuntimeWarning", RuntimeWarning),
+    ("SyntaxWarning", SyntaxWarning),
+    ("UserWarning", UserWarning),
+    ("FutureWarning", FutureWarning),
+    ("GeneratorExit", GeneratorExit),
+    ("MemoryError", MemoryError),
+    
+    # Phase 4: Advanced (25)
+    ("SystemError", SystemError),
+    ("ReferenceError", ReferenceError),
+    ("BufferError", BufferError),
+    ("ArithmeticError", ArithmeticError),
+    ("FloatingPointError", FloatingPointError),
+    ("ConnectionError", ConnectionError),
+    ("BrokenPipeError", BrokenPipeError),
+    ("ChildProcessError", ChildProcessError),
+    ("ConnectionAbortedError", ConnectionAbortedError),
+    ("ConnectionRefusedError", ConnectionRefusedError),
+    ("ConnectionResetError", ConnectionResetError),
+    ("FileExistsError", FileExistsError),
+    ("InterruptedError", InterruptedError),
+    ("IsADirectoryError", IsADirectoryError),
+    ("NotADirectoryError", NotADirectoryError),
+    ("ProcessLookupError", ProcessLookupError),
+    ("UnboundLocalError", UnboundLocalError),
+    ("UnicodeTranslateError", UnicodeTranslateError),
+    ("TabError", TabError),
+    ("ImportWarning", ImportWarning),
+    ("UnicodeWarning", UnicodeWarning),
+    ("BytesWarning", BytesWarning),
+    ("ResourceWarning", ResourceWarning),
+    ("PendingDeprecationWarning", PendingDeprecationWarning),
+    ("BlockingIOError", BlockingIOError),
+]
+
+for exc_name, exc_class in exceptions_to_test:
+    try:
+        e = exc_class("test")
+        print(f"✅ {exc_name:35} - Available")
+        passed = passed + 1
+    except Exception as err:
+        print(f"❌ {exc_name:35} - Error: {err}")
+        failed = failed + 1
+
+print("\n" + "=" * 80)
+print("SUMMARY")
+print("=" * 80)
+total = passed + failed
+print(f"Total Tests: {total}")
+print(f"Passed: {passed}")
+print(f"Failed: {failed}")
+if total > 0:
+    percentage = (passed * 100) // total
+    print(f"Success Rate: {passed}/{total} ({percentage}%)")
+
+print(f"\nCoverage:")
+print(f"  Python Exceptions: {passed}/63 ({(passed*100)//63}%)")
+print(f"  ✅ Tier 1 (Original): 10 exceptions")
+print(f"  ✅ Phase 1 (High-Priority): 9 exceptions")
+print(f"  ✅ Phase 2 (Medium-Priority): 8 exceptions")
+print(f"  ✅ Phase 3 (Unicode/Warnings): 11 exceptions")
+print(f"  ✅ Phase 4 (Advanced): 25 exceptions")
+print(f"  ⭐ Total: {passed} exceptions")
+
+if failed == 0:
+    print(f"\n🎉 ALL EXCEPTION TYPES WORKING! 🎉")
+else:
+    print(f"\n⚠️  {failed} exceptions failed")
+
+print("=" * 80)

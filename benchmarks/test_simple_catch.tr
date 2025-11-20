@@ -1,0 +1,11 @@
+"""Debug - see if except catches at all"""
+print("Before try")
+
+try:
+    print("Inside try, before index")
+    x = [1, 2, 3][10]
+    print("Inside try, after index (should not print)")
+except Exception as e:
+    print(f"Caught exception!")
+
+print("After try-except")
