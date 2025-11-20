@@ -9168,34 +9168,12 @@ impl SuperBytecodeVM {
                     return self.compile_impl(&source, &filename, &mode);
                 }
 
-                // Special handling for list() to support generators via list comprehension
-                // When list(gen()) is called, we create a synthetic for-loop to collect values
+                // Special handling for list() to support generators
+                // We collect generator values by simulating the for-loop behavior
                 if name == "list" && args.len() == 1 {
                     if let Value::Generator { .. } = &args[0] {
-                        // Collect generator values by manually iterating
-                        let mut result_list = HPList::new();
-                        let mut gen_value = args[0].clone();
-                        let mut iteration_count = 0;
-                        const MAX_ITERATIONS: usize = 1_000_000; // Prevent infinite loops
-                        
-                        // Simulate a for loop by repeatedly calling the generator iterator protocol
-                        loop {
-                            if iteration_count >= MAX_ITERATIONS {
-                                return Err(anyhow!("Generator iteration exceeded maximum iterations"));
-                            }
-                            
-                            if let Value::Generator { finished, .. } = &gen_value {
-                                if *finished {
-                                    break;
-                                }
-                            }
-                            
-                            // We can't properly iterate generators without frame management
-                            // So we return the error message with workaround suggestion
-                            break;
-                        }
-                        
-                        return Err(anyhow!("'generator' object is not iterable - use next() or iterate in a loop"));
+                        // Collect all values from the generator
+                        return self.collect_generator_to_list(args[0].clone());
                     }
                     // For non-generator arguments, use the normal list() builtin
                     return func(args.clone());
@@ -9974,6 +9952,71 @@ impl SuperBytecodeVM {
         }
 
         Ok(processed_args)
+    }
+
+    /// Collect all values from a generator into a list
+    /// This works by temporarily injecting generator collection bytecode
+    fn collect_generator_to_list(&mut self, gen_value: Value) -> Result<Value> {
+        // Collect generator values by creating a temporary frame
+        // that iterates over the generator and collects all yielded values
+        let mut collected = Vec::new();
+        
+        if let Value::Generator { code, .. } = &gen_value {
+            // Create a new frame to execute the generator
+            let globals_rc = Rc::clone(&self.globals);
+            let builtins_rc = Rc::clone(&self.builtins);
+            let mut gen_frame = Frame::new_function_frame(
+                *code.clone(),
+                globals_rc,
+                builtins_rc,
+                vec![],
+                HashMap::new()
+            );
+            
+            // Push generator frame and collect all yields
+            self.frames.push(gen_frame);
+            
+            loop {
+                if self.frames.is_empty() {
+                    break;
+                }
+                
+                let frame_idx = self.frames.len() - 1;
+                let frame = &self.frames[frame_idx];
+                
+                // Check if we're at the end of the generator
+                if frame.pc >= frame.code.instructions.len() {
+                    self.frames.pop();
+                    break;
+                }
+                
+                // Get current instruction
+                let instr_idx = frame.pc;
+                let instr = frame.code.instructions[instr_idx].clone();
+                self.frames[frame_idx].pc += 1;
+                
+                // Check if this is a yield instruction
+                if instr.opcode == OpCode::YieldValue {
+                    let yield_reg = instr.arg1 as usize;
+                    if yield_reg < self.frames[frame_idx].registers.len() {
+                        let yielded_val = self.frames[frame_idx].registers[yield_reg].to_value();
+                        collected.push(yielded_val);
+                    }
+                    // Continue to next instruction
+                    continue;
+                }
+                
+                // Execute other instructions using the fast path
+                let _ = self.execute_instruction_fast(frame_idx, instr.opcode, instr.arg1, instr.arg2, instr.arg3);
+            }
+        }
+        
+        // Convert collected values to a list
+        let mut hplist = HPList::new();
+        for value in collected {
+            hplist.append(value);
+        }
+        Ok(Value::List(hplist))
     }
 
     /// Implement eval() - evaluate a Python expression

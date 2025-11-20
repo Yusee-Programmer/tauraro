@@ -1,4 +1,0 @@
-@lambda f: lambda: f() + 1
-def get_num():
-    return 41
-print(get_num())
