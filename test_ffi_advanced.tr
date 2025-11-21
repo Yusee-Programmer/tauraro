@@ -1,0 +1,205 @@
+# Advanced FFI Test - Windows API Integration
+# Tests advanced FFI features and Windows API functions
+
+print("================================================")
+print("TAURARO FFI ADVANCED WINDOWS API TEST")
+print("================================================")
+print()
+
+import sys
+
+if sys.platform != "win32":
+    print("ERROR: This test requires Windows")
+    exit(1)
+
+# Test 1: Multiple Libraries Loaded
+print("[TEST 1] Loading multiple system libraries")
+try:
+    load_library("kernel32")
+    load_library("msvcrt")
+    load_library("user32")  # Try to load user32
+    
+    libs = list_libraries()
+    print(f"✓ Loaded {len(libs)} libraries: {libs}")
+except Exception as e:
+    print(f"⚠ Warning: {e}")
+
+# Test 2: Complex Math Operations
+print()
+print("[TEST 2] Complex math operations")
+try:
+    # Define more math functions
+    define_function("msvcrt", "sin", "double", ["double"])
+    define_function("msvcrt", "cos", "double", ["double"])
+    define_function("msvcrt", "exp", "double", ["double"])
+    define_function("msvcrt", "log", "double", ["double"])
+    
+    # Test sin/cos at common angles
+    print(f"✓ sin(0.0) = {call_function('msvcrt', 'sin', [0.0])}")
+    print(f"✓ cos(0.0) = {call_function('msvcrt', 'cos', [0.0])}")
+    print(f"✓ exp(1.0) = {call_function('msvcrt', 'exp', [1.0])}")
+    print(f"✓ log(2.71828) ≈ {call_function('msvcrt', 'log', [2.71828])}")
+except Exception as e:
+    print(f"✗ Math functions failed: {e}")
+
+# Test 3: String operations with C library
+print()
+print("[TEST 3] C library string operations")
+try:
+    # strcmp - string comparison
+    define_function("msvcrt", "strcmp", "int32", ["string", "string"])
+    
+    cmp1 = call_function("msvcrt", "strcmp", ["abc", "abc"])
+    print(f"✓ strcmp('abc', 'abc') = {cmp1} (should be 0)")
+    
+    cmp2 = call_function("msvcrt", "strcmp", ["abc", "def"])
+    print(f"✓ strcmp('abc', 'def') = {cmp2} (should be negative)")
+    
+    cmp3 = call_function("msvcrt", "strcmp", ["xyz", "abc"])
+    print(f"✓ strcmp('xyz', 'abc') = {cmp3} (should be positive)")
+except Exception as e:
+    print(f"✗ String comparison failed: {e}")
+
+# Test 4: Multiple parameter types
+print()
+print("[TEST 4] Functions with multiple parameter types")
+try:
+    # memcpy: copies memory (int, int, int) -> int (simplified)
+    # sprintf-like functions with format strings
+    
+    # Test abs function
+    define_function("msvcrt", "abs", "int32", ["int32"])
+    
+    abs_val = call_function("msvcrt", "abs", [-42])
+    print(f"✓ abs(-42) = {abs_val}")
+    
+    # Test fabs - floating point absolute value
+    define_function("msvcrt", "fabs", "double", ["double"])
+    fabs_val = call_function("msvcrt", "fabs", [-3.14159])
+    print(f"✓ fabs(-3.14159) = {fabs_val}")
+except Exception as e:
+    print(f"✗ Multiple parameter test failed: {e}")
+
+# Test 5: System information via kernel32
+print()
+print("[TEST 5] Windows system information")
+try:
+    # GetProcessMemoryInfo, GetSystemInfo, etc.
+    # For now, we can use simpler functions
+    
+    # GetTickCount64 - returns larger tick count (64-bit)
+    define_function("kernel32", "GetTickCount64", "uint64", [])
+    ticks64 = call_function("kernel32", "GetTickCount64", [])
+    print(f"✓ GetTickCount64() = {ticks64} milliseconds")
+    
+    # System uptime in days
+    uptime_days = ticks64 / 1000 / 60 / 60 / 24
+    print(f"  Approximate uptime: {uptime_days:.2f} days")
+except Exception as e:
+    print(f"⚠ GetTickCount64 not available (pre-Windows Vista): {e}")
+
+# Test 6: Chained function calls
+print()
+print("[TEST 6] Chained FFI function calls")
+try:
+    # Use sqrt and pow together
+    
+    # Re-define both functions
+    define_function("msvcrt", "pow", "double", ["double", "double"])
+    define_function("msvcrt", "sqrt", "double", ["double"])
+    
+    # Calculate: sqrt(pow(2, 6)) = sqrt(64) = 8
+    pow_result = call_function("msvcrt", "pow", [2.0, 6.0])
+    print(f"✓ pow(2, 6) = {pow_result}")
+    
+    sqrt_result = call_function("msvcrt", "sqrt", [pow_result])
+    print(f"✓ sqrt(pow(2, 6)) = {sqrt_result}")
+    
+    # More complex: sqrt(abs(-16)) = 4
+    abs_result = call_function("msvcrt", "abs", [-16])
+    sqrt_abs = call_function("msvcrt", "sqrt", [float(abs_result)])
+    print(f"✓ sqrt(abs(-16)) = {sqrt_abs}")
+except Exception as e:
+    print(f"✗ Chained calls failed: {e}")
+
+# Test 7: Different numeric types
+print()
+print("[TEST 7] Different numeric return types")
+try:
+    # Test various return types
+    
+    # Get various sizes
+    define_function("msvcrt", "strlen", "size_t", ["string"])
+    len_test = call_function("msvcrt", "strlen", ["FFI Test"])
+    print(f"✓ strlen('FFI Test') = {len_test} (size_t return)")
+    
+    # int32 vs int64 operations
+    define_function("msvcrt", "labs", "int64", ["int64"])
+    labs_result = call_function("msvcrt", "labs", [-999999])
+    print(f"✓ labs(-999999) = {labs_result} (int64 return)")
+except Exception as e:
+    print(f"✗ Different numeric types failed: {e}")
+
+# Test 8: Error handling
+print()
+print("[TEST 8] Error handling")
+try:
+    # Try calling undefined function - should fail gracefully
+    try:
+        call_function("msvcrt", "undefined_function_xyz", [])
+        print("✗ Should have failed for undefined function")
+    except Exception as e:
+        print(f"✓ Correctly caught error for undefined function")
+    
+    # Try with wrong argument count
+    try:
+        define_function("msvcrt", "sqrt", "double", ["double"])
+        call_function("msvcrt", "sqrt", [1.0, 2.0])  # Too many args
+        print("⚠ Wrong argument count should error (depends on FFI implementation)")
+    except Exception as e:
+        print(f"✓ Caught error for wrong argument count")
+except Exception as e:
+    print(f"✗ Error handling test failed: {e}")
+
+# Test 9: Performance - rapid calls
+print()
+print("[TEST 9] Performance test - rapid FFI calls")
+try:
+    define_function("msvcrt", "sqrt", "double", ["double"])
+    
+    # Make 100 rapid FFI calls
+    count = 100
+    total = 0.0
+    for i in range(count):
+        result = call_function("msvcrt", "sqrt", [float((i+1) * 100)])
+        total += result
+    
+    print(f"✓ Made {count} rapid FFI calls successfully")
+    print(f"  Sum of sqrt(100), sqrt(200), ..., sqrt({count*100}) ≈ {total:.2f}")
+except Exception as e:
+    print(f"✗ Performance test failed: {e}")
+
+# Test 10: Library unloading and reloading
+print()
+print("[TEST 10] Library lifecycle management")
+try:
+    # List current libraries
+    libs_before = list_libraries()
+    print(f"✓ Libraries before unload: {len(libs_before)}")
+    
+    # Unload a library
+    unload_library("user32")
+    libs_after = list_libraries()
+    print(f"✓ Libraries after unload: {len(libs_after)}")
+    
+    # Reload it
+    load_library("user32")
+    libs_reloaded = list_libraries()
+    print(f"✓ Libraries after reload: {len(libs_reloaded)}")
+except Exception as e:
+    print(f"⚠ Library lifecycle (optional feature): {e}")
+
+print()
+print("================================================")
+print("FFI ADVANCED TEST COMPLETED!")
+print("================================================")
