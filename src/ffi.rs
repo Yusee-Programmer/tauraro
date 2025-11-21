@@ -553,6 +553,28 @@ impl FFIManager {
                 }
             }
 
+            // No arguments, uint64 return (GetTickCount64)
+            (FFIType::UInt64, &[]) => {
+                unsafe {
+                    let func: unsafe extern "C" fn() -> u64 = std::mem::transmute(function.symbol_ptr);
+                    let result = func();
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // One int64 argument, int64 return (labs, llabs)
+            (FFIType::Int64, &[FFIType::Int | FFIType::Int32 | FFIType::Int64]) => {
+                let arg = match &args[0] {
+                    Value::Int(i) => *i,
+                    _ => return Err(anyhow!("Cannot convert to int64")),
+                };
+                unsafe {
+                    let func: unsafe extern "C" fn(i64) -> i64 = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result))
+                }
+            }
+
             // No arguments, pointer return (e.g., gtk_entry_new)
             (FFIType::Pointer | FFIType::ConstPointer, &[]) => {
                 unsafe {
@@ -619,6 +641,41 @@ impl FFIManager {
                     let func: unsafe extern "C" fn(c_int, c_int) -> c_int =
                         std::mem::transmute(function.symbol_ptr);
                     let result = func(arg1, arg2);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Generic Int32 with 2 string parameters (strcmp)
+            (FFIType::Int | FFIType::Int32, &[FFIType::String | FFIType::Pointer | FFIType::ConstPointer, FFIType::String | FFIType::Pointer | FFIType::ConstPointer]) => {
+                let c_string1 = if matches!(args[0], Value::Str(_)) {
+                    let s = self.value_to_string(&args[0])?;
+                    Some(CString::new(s)?)
+                } else {
+                    None
+                };
+
+                let c_string2 = if matches!(args[1], Value::Str(_)) {
+                    let s = self.value_to_string(&args[1])?;
+                    Some(CString::new(s)?)
+                } else {
+                    None
+                };
+
+                let arg1 = if let Some(ref cs) = c_string1 {
+                    cs.as_ptr() as *const c_void
+                } else {
+                    self.value_to_pointer(&args[0])?
+                };
+
+                let arg2 = if let Some(ref cs) = c_string2 {
+                    cs.as_ptr() as *const c_void
+                } else {
+                    self.value_to_pointer(&args[1])?
+                };
+
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_char, *const c_char) -> c_int = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1 as *const c_char, arg2 as *const c_char);
                     Ok(Value::Int(result as i64))
                 }
             }
@@ -1155,6 +1212,27 @@ impl FFIManager {
                 }
             }
 
+            // SizeT return with string parameter (strlen, etc)
+            (FFIType::SizeT, &[FFIType::String | FFIType::Pointer | FFIType::ConstPointer]) => {
+                let text = self.value_to_string(&args[0])?;
+                let text_cstring = CString::new(text)?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_char) -> usize = std::mem::transmute(function.symbol_ptr);
+                    let result = func(text_cstring.as_ptr());
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Generic SizeT return with single parameter
+            (FFIType::SizeT, params) if params.len() == 1 => {
+                let arg = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> usize = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
             _ => {
                 Err(anyhow!(
                     "Unsupported function signature: {:?} with {} parameters",
@@ -1247,6 +1325,14 @@ impl FFIManager {
                     let result: *mut c_void = cif.call(code_ptr, &ffi_args);
                     // Return pointer as integer (like the fallback implementation)
                     Value::Int(result as usize as i64)
+                },
+                FFIType::SizeT => {
+                    let result: usize = cif.call(code_ptr, &ffi_args);
+                    Value::Int(result as i64)
+                },
+                FFIType::SSizeT => {
+                    let result: isize = cif.call(code_ptr, &ffi_args);
+                    Value::Int(result as i64)
                 },
                 _ => {
                     return Err(anyhow!("Unsupported return type for libffi: {:?}", function.signature.return_type));
