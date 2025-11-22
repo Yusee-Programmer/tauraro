@@ -2317,7 +2317,38 @@ impl SuperBytecodeVM {
             return Err(anyhow!("ReturnValue: register index {} out of bounds (len: {})", value_reg, self.frames[frame_idx].registers.len()));
         }
 
-        let return_value = self.frames[frame_idx].registers[value_reg].to_value();
+        let mut return_value = self.frames[frame_idx].registers[value_reg].to_value();
+        
+        // CLOSURE CHAIN FIX: If returning a closure, capture variables from current frame and parent closures
+        if let Value::Closure { name, params, body, mut captured_scope, docstring, compiled_code, module_globals } = return_value {
+            // Capture all local variables from the current frame
+            for (var_name, &local_idx) in &self.frames[frame_idx].locals_map {
+                if local_idx < self.frames[frame_idx].locals.len() {
+                    let var_value = self.frames[frame_idx].locals[local_idx].get_value();
+                    captured_scope.insert(var_name.clone(), var_value);
+                }
+            }
+            
+            // Also capture any already captured variables from the current frame's closure
+            for (key, value) in self.frames[frame_idx].globals.borrow().iter() {
+                if key.starts_with("__closure_captured_") {
+                    if let Some(var_name) = key.strip_prefix("__closure_captured_") {
+                        captured_scope.insert(var_name.to_string(), value.get_value());
+                    }
+                }
+            }
+            
+            // Create the new closure with captured variables
+            return_value = Value::Closure {
+                name,
+                params,
+                body,
+                captured_scope,
+                docstring,
+                compiled_code,
+                module_globals,
+            };
+        }
         
         // Check if this is a generator frame (has generator_iterator_reg set)
         // If so, we should mark it as finished instead of returning normally
@@ -2747,10 +2778,9 @@ impl SuperBytecodeVM {
         let right_reg = arg2 as usize;
         let result_reg = arg3 as usize;
 
-        let regs = &mut self.frames[frame_idx].registers;
-
         #[cfg(not(debug_assertions))]
         unsafe {
+            let regs = &mut self.frames[frame_idx].registers;
             let left_ptr = regs.as_ptr().add(left_reg);
             let right_ptr = regs.as_ptr().add(right_reg);
             let result_ptr = regs.as_mut_ptr().add(result_reg);
@@ -2764,6 +2794,8 @@ impl SuperBytecodeVM {
             // Slow path: non-integer operands (convert to Value and use generic add)
             let left_val = (*left_ptr).to_value();
             let right_val = (*right_ptr).to_value();
+            let result_reg_copy = result_reg;
+            drop(regs);  // Drop mutable borrow before calling self methods
             
             // Check for __add__ dunder method on left operand
             let dunder_result = if let Value::Object { class_methods, .. } = &left_val {
@@ -2805,69 +2837,70 @@ impl SuperBytecodeVM {
             } else {
                 self.add_values(left_val, right_val)?
             };
-            *result_ptr = crate::bytecode::register_value::RegisterValue::from_value(result);
+            self.frames[frame_idx].registers[result_reg_copy] = crate::bytecode::register_value::RegisterValue::from_value(result);
             return Ok(None);
         }
 
         #[cfg(debug_assertions)]
         {
-            if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
-                return Err(anyhow!("FastIntAdd: register out of bounds"));
+            {
+                let regs = &mut self.frames[frame_idx].registers;
+                if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
+                    return Err(anyhow!("FastIntAdd: register out of bounds"));
+                }
+
+                // FAST PATH: Unboxed integer addition
+                if let (Some(a), Some(b)) = (regs[left_reg].as_int(), regs[right_reg].as_int()) {
+                    regs[result_reg] = crate::bytecode::register_value::RegisterValue::Int(a.wrapping_add(b));
+                    return Ok(None);
+                }
             }
 
-            // FAST PATH: Unboxed integer addition
-            if let (Some(a), Some(b)) = (regs[left_reg].as_int(), regs[right_reg].as_int()) {
-                regs[result_reg] = crate::bytecode::register_value::RegisterValue::Int(a.wrapping_add(b));
+            // Slow path: convert to Value
+            let left_val = self.frames[frame_idx].registers[left_reg].to_value();
+            let right_val = self.frames[frame_idx].registers[right_reg].to_value();
+            
+            // Check for __add__ dunder method on left operand
+            let dunder_result = if let Value::Object { class_methods, .. } = &left_val {
+                if let Some(add_method) = class_methods.get("__add__") {
+                    // Call __add__(self, other) and get the result synchronously
+                    self.execute_closure_sync(
+                        add_method.clone(),
+                        vec![left_val.clone(), right_val.clone()]
+                    ).ok()
+                } else {
+                    None
+                }
             } else {
-                // Slow path: convert to Value
-                let left_val = regs[left_reg].to_value();
-                let right_val = regs[right_reg].to_value();
-                
-                // Check for __add__ dunder method on left operand
-                let dunder_result = if let Value::Object { class_methods, .. } = &left_val {
-                    if let Some(add_method) = class_methods.get("__add__") {
-                        // Call __add__(self, other) and get the result synchronously
+                None
+            };
+            
+            // Check for __radd__ dunder method on right operand if left doesn't have __add__
+            let dunder_result = if dunder_result.is_none() {
+                if let Value::Object { class_methods, .. } = &right_val {
+                    if let Some(radd_method) = class_methods.get("__radd__") {
+                        // Call __radd__(self, other) and get the result synchronously
                         self.execute_closure_sync(
-                            add_method.clone(),
-                            vec![left_val.clone(), right_val.clone()]
+                            radd_method.clone(),
+                            vec![right_val.clone(), left_val.clone()]
                         ).ok()
                     } else {
                         None
                     }
                 } else {
                     None
-                };
-                
-                // Check for __radd__ dunder method on right operand if left doesn't have __add__
-                let dunder_result = if dunder_result.is_none() {
-                    if let Value::Object { class_methods, .. } = &right_val {
-                        if let Some(radd_method) = class_methods.get("__radd__") {
-                            // Call __radd__(self, other) and get the result synchronously
-                            self.execute_closure_sync(
-                                radd_method.clone(),
-                                vec![right_val.clone(), left_val.clone()]
-                            ).ok()
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    dunder_result
-                };
-                
-                // Drop mutable borrow before calling self method
-                drop(regs);
-                
-                // Use dunder result if available, otherwise fall back to default addition
-                let result = if let Some(value) = dunder_result {
-                    value
-                } else {
-                    self.add_values(left_val, right_val)?
-                };
-                self.frames[frame_idx].registers[result_reg] = crate::bytecode::register_value::RegisterValue::from_value(result);
-            }
+                }
+            } else {
+                dunder_result
+            };
+            
+            // Use dunder result if available, otherwise fall back to default addition
+            let result = if let Some(value) = dunder_result {
+                value
+            } else {
+                self.add_values(left_val, right_val)?
+            };
+            self.frames[frame_idx].registers[result_reg] = crate::bytecode::register_value::RegisterValue::from_value(result);
             Ok(None)
         }
     }
@@ -2879,10 +2912,9 @@ impl SuperBytecodeVM {
         let right_reg = arg2 as usize;
         let result_reg = arg3 as usize;
 
-        let regs = &mut self.frames[frame_idx].registers;
-
         #[cfg(not(debug_assertions))]
         unsafe {
+            let regs = &mut self.frames[frame_idx].registers;
             let left_ptr = regs.as_ptr().add(left_reg);
             let right_ptr = regs.as_ptr().add(right_reg);
             let result_ptr = regs.as_mut_ptr().add(result_reg);
@@ -2896,6 +2928,8 @@ impl SuperBytecodeVM {
             // Slow path: non-integer operands
             let left_val = (*left_ptr).to_value();
             let right_val = (*right_ptr).to_value();
+            let result_reg_copy = result_reg;
+            drop(regs);  // Drop mutable borrow before calling self methods
             
             // Check for __sub__ dunder method on left operand
             let dunder_result = if let Value::Object { class_methods, .. } = &left_val {
@@ -2937,66 +2971,68 @@ impl SuperBytecodeVM {
             } else {
                 self.sub_values(left_val, right_val)?
             };
-            *result_ptr = crate::bytecode::register_value::RegisterValue::from_value(result);
+            self.frames[frame_idx].registers[result_reg_copy] = crate::bytecode::register_value::RegisterValue::from_value(result);
             return Ok(None);
         }
 
         #[cfg(debug_assertions)]
         {
-            if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
-                return Err(anyhow!("FastIntSub: register out of bounds"));
-            }
+            {
+                let regs = &mut self.frames[frame_idx].registers;
+                if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
+                    return Err(anyhow!("FastIntSub: register out of bounds"));
+                }
 
-            if let (Some(a), Some(b)) = (regs[left_reg].as_int(), regs[right_reg].as_int()) {
-                regs[result_reg] = crate::bytecode::register_value::RegisterValue::Int(a.wrapping_sub(b));
+                if let (Some(a), Some(b)) = (regs[left_reg].as_int(), regs[right_reg].as_int()) {
+                    regs[result_reg] = crate::bytecode::register_value::RegisterValue::Int(a.wrapping_sub(b));
+                    return Ok(None);
+                }
+            }
+            
+            let left_val = self.frames[frame_idx].registers[left_reg].to_value();
+            let right_val = self.frames[frame_idx].registers[right_reg].to_value();
+            
+            // Check for __sub__ dunder method on left operand
+            let dunder_result = if let Value::Object { class_methods, .. } = &left_val {
+                if let Some(sub_method) = class_methods.get("__sub__") {
+                    // Call __sub__(self, other) and get the result synchronously
+                    self.execute_closure_sync(
+                        sub_method.clone(),
+                        vec![left_val.clone(), right_val.clone()]
+                    ).ok()
+                } else {
+                    None
+                }
             } else {
-                let left_val = regs[left_reg].to_value();
-                let right_val = regs[right_reg].to_value();
-                
-                // Check for __sub__ dunder method on left operand
-                let dunder_result = if let Value::Object { class_methods, .. } = &left_val {
-                    if let Some(sub_method) = class_methods.get("__sub__") {
-                        // Call __sub__(self, other) and get the result synchronously
+                None
+            };
+            
+            // Check for __rsub__ dunder method on right operand if left doesn't have __sub__
+            let dunder_result = if dunder_result.is_none() {
+                if let Value::Object { class_methods, .. } = &right_val {
+                    if let Some(rsub_method) = class_methods.get("__rsub__") {
+                        // Call __rsub__(self, other) and get the result synchronously
                         self.execute_closure_sync(
-                            sub_method.clone(),
-                            vec![left_val.clone(), right_val.clone()]
+                            rsub_method.clone(),
+                            vec![right_val.clone(), left_val.clone()]
                         ).ok()
                     } else {
                         None
                     }
                 } else {
                     None
-                };
-                
-                // Check for __rsub__ dunder method on right operand if left doesn't have __sub__
-                let dunder_result = if dunder_result.is_none() {
-                    if let Value::Object { class_methods, .. } = &right_val {
-                        if let Some(rsub_method) = class_methods.get("__rsub__") {
-                            // Call __rsub__(self, other) and get the result synchronously
-                            self.execute_closure_sync(
-                                rsub_method.clone(),
-                                vec![right_val.clone(), left_val.clone()]
-                            ).ok()
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    dunder_result
-                };
-                
-                // Use dunder result if available, otherwise fall back to default subtraction
-                let result = if let Some(value) = dunder_result {
-                    value
-                } else {
-                    // Drop mutable borrow before calling self method
-                    drop(regs);
-                    self.sub_values(left_val.clone(), right_val.clone())?
-                };
-                self.frames[frame_idx].registers[result_reg] = crate::bytecode::register_value::RegisterValue::from_value(result);
-            }
+                }
+            } else {
+                dunder_result
+            };
+            
+            // Use dunder result if available, otherwise fall back to default subtraction
+            let result = if let Some(value) = dunder_result {
+                value
+            } else {
+                self.sub_values(left_val.clone(), right_val.clone())?
+            };
+            self.frames[frame_idx].registers[result_reg] = crate::bytecode::register_value::RegisterValue::from_value(result);
             Ok(None)
         }
     }
@@ -3008,10 +3044,9 @@ impl SuperBytecodeVM {
         let right_reg = arg2 as usize;
         let result_reg = arg3 as usize;
 
-        let regs = &mut self.frames[frame_idx].registers;
-
         #[cfg(not(debug_assertions))]
         unsafe {
+            let regs = &mut self.frames[frame_idx].registers;
             let left_ptr = regs.as_ptr().add(left_reg);
             let right_ptr = regs.as_ptr().add(right_reg);
             let result_ptr = regs.as_mut_ptr().add(result_reg);
@@ -3025,6 +3060,8 @@ impl SuperBytecodeVM {
             // Slow path: non-integer operands
             let left_val = (*left_ptr).to_value();
             let right_val = (*right_ptr).to_value();
+            let result_reg_copy = result_reg;
+            drop(regs);  // Drop mutable borrow before calling self methods
             
             // Check for __mul__ dunder method on left operand
             let dunder_result = if let Value::Object { class_methods, .. } = &left_val {
@@ -3066,66 +3103,68 @@ impl SuperBytecodeVM {
             } else {
                 self.mul_values(left_val, right_val)?
             };
-            *result_ptr = crate::bytecode::register_value::RegisterValue::from_value(result);
+            self.frames[frame_idx].registers[result_reg_copy] = crate::bytecode::register_value::RegisterValue::from_value(result);
             return Ok(None);
         }
 
         #[cfg(debug_assertions)]
         {
-            if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
-                return Err(anyhow!("FastIntMul: register out of bounds"));
-            }
+            {
+                let regs = &mut self.frames[frame_idx].registers;
+                if left_reg >= regs.len() || right_reg >= regs.len() || result_reg >= regs.len() {
+                    return Err(anyhow!("FastIntMul: register out of bounds"));
+                }
 
-            if let (Some(a), Some(b)) = (regs[left_reg].as_int(), regs[right_reg].as_int()) {
-                regs[result_reg] = crate::bytecode::register_value::RegisterValue::Int(a.wrapping_mul(b));
+                if let (Some(a), Some(b)) = (regs[left_reg].as_int(), regs[right_reg].as_int()) {
+                    regs[result_reg] = crate::bytecode::register_value::RegisterValue::Int(a.wrapping_mul(b));
+                    return Ok(None);
+                }
+            }
+            
+            let left_val = self.frames[frame_idx].registers[left_reg].to_value();
+            let right_val = self.frames[frame_idx].registers[right_reg].to_value();
+            
+            // Check for __mul__ dunder method on left operand
+            let dunder_result = if let Value::Object { class_methods, .. } = &left_val {
+                if let Some(mul_method) = class_methods.get("__mul__") {
+                    // Call __mul__(self, other) and get the result synchronously
+                    self.execute_closure_sync(
+                        mul_method.clone(),
+                        vec![left_val.clone(), right_val.clone()]
+                    ).ok()
+                } else {
+                    None
+                }
             } else {
-                let left_val = regs[left_reg].to_value();
-                let right_val = regs[right_reg].to_value();
-                
-                // Check for __mul__ dunder method on left operand
-                let dunder_result = if let Value::Object { class_methods, .. } = &left_val {
-                    if let Some(mul_method) = class_methods.get("__mul__") {
-                        // Call __mul__(self, other) and get the result synchronously
+                None
+            };
+            
+            // Check for __rmul__ dunder method on right operand if left doesn't have __mul__
+            let dunder_result = if dunder_result.is_none() {
+                if let Value::Object { class_methods, .. } = &right_val {
+                    if let Some(rmul_method) = class_methods.get("__rmul__") {
+                        // Call __rmul__(self, other) and get the result synchronously
                         self.execute_closure_sync(
-                            mul_method.clone(),
-                            vec![left_val.clone(), right_val.clone()]
+                            rmul_method.clone(),
+                            vec![right_val.clone(), left_val.clone()]
                         ).ok()
                     } else {
                         None
                     }
                 } else {
                     None
-                };
-                
-                // Check for __rmul__ dunder method on right operand if left doesn't have __mul__
-                let dunder_result = if dunder_result.is_none() {
-                    if let Value::Object { class_methods, .. } = &right_val {
-                        if let Some(rmul_method) = class_methods.get("__rmul__") {
-                            // Call __rmul__(self, other) and get the result synchronously
-                            self.execute_closure_sync(
-                                rmul_method.clone(),
-                                vec![right_val.clone(), left_val.clone()]
-                            ).ok()
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    dunder_result
-                };
-                
-                // Use dunder result if available, otherwise fall back to default multiplication
-                let result = if let Some(value) = dunder_result {
-                    value
-                } else {
-                    // Drop mutable borrow before calling self method
-                    drop(regs);
-                    self.mul_values(left_val.clone(), right_val.clone())?
-                };
-                self.frames[frame_idx].registers[result_reg] = crate::bytecode::register_value::RegisterValue::from_value(result);
-            }
+                }
+            } else {
+                dunder_result
+            };
+            
+            // Use dunder result if available, otherwise fall back to default multiplication
+            let result = if let Some(value) = dunder_result {
+                value
+            } else {
+                self.mul_values(left_val.clone(), right_val.clone())?
+            };
+            self.frames[frame_idx].registers[result_reg] = crate::bytecode::register_value::RegisterValue::from_value(result);
             Ok(None)
         }
     }
@@ -6223,12 +6262,25 @@ impl SuperBytecodeVM {
                 
                 match self.frames[frame_idx].registers[code_reg].to_value() {
                     Value::Code(code_obj) => {
+                        // Capture free variables from current scope
+                        let mut captured_scope = HashMap::new();
+                        
+                        // Check for __closure_captured_* variables (variables from parent closures)
+                        let frame_globals = self.frames[frame_idx].globals.borrow();
+                        for (key, value) in frame_globals.iter() {
+                            if key.starts_with("__closure_captured_") {
+                                let var_name = key.strip_prefix("__closure_captured_").unwrap_or("").to_string();
+                                captured_scope.insert(var_name, value.get_value());
+                            }
+                        }
+                        drop(frame_globals);
+                        
                         // Create a closure with the code object
                         let closure = Value::Closure {
                             name: code_obj.name.clone(),
                             params: code_obj.params.clone(),
                             body: vec![], // Empty body since it's in the compiled code
-                            captured_scope: HashMap::new(), // No captured scope for now
+                            captured_scope,
                             docstring: None, // No docstring for now
                             compiled_code: Some(Box::new(*code_obj.clone())),
                             module_globals: None,
@@ -7224,12 +7276,25 @@ impl SuperBytecodeVM {
                 
                 match self.frames[frame_idx].registers[code_reg].to_value() {
                     Value::Code(code_obj) => {
+                        // Capture free variables from current scope
+                        let mut captured_scope = HashMap::new();
+                        
+                        // Check for __closure_captured_* variables (variables from parent closures)
+                        let frame_globals = self.frames[frame_idx].globals.borrow();
+                        for (key, value) in frame_globals.iter() {
+                            if key.starts_with("__closure_captured_") {
+                                let var_name = key.strip_prefix("__closure_captured_").unwrap_or("").to_string();
+                                captured_scope.insert(var_name, value.get_value());
+                            }
+                        }
+                        drop(frame_globals);
+                        
                         // Create a closure with the code object
                         let closure = Value::Closure {
                             name: code_obj.name.clone(),
                             params: code_obj.params.clone(),
                             body: vec![], // Empty body since it's in the compiled code
-                            captured_scope: HashMap::new(), // No captured scope for now
+                            captured_scope,
                             docstring: None, // No docstring for now
                             compiled_code: Some(Box::new(*code_obj.clone())),
                             module_globals: None,
@@ -9594,7 +9659,7 @@ impl SuperBytecodeVM {
                 }
                 func(final_args)
             }
-            Value::Closure { name, params, body: _, captured_scope: _, docstring: _, compiled_code, module_globals } => {
+            Value::Closure { name, params, body: _, captured_scope, docstring: _, compiled_code, module_globals } => {
                 // Validate argument types if type checking is enabled
                 #[cfg(feature = "type_checking")]
                 {
@@ -9667,6 +9732,14 @@ impl SuperBytecodeVM {
                         let builtins_rc = Rc::clone(&self.builtins);
 
                         let mut frame = Frame::new_function_frame(*code_obj, globals_rc, builtins_rc, args, kwargs);
+
+                        // Inject captured variables into the frame's globals (with __closure_captured_ prefix)
+                        for (var_name, var_value) in captured_scope.iter() {
+                            frame.globals.borrow_mut().insert(
+                                format!("__closure_captured_{}", var_name),
+                                RcValue::new(var_value.clone())
+                            );
+                        }
 
                         // Set the return register information if provided
                         if let (Some(caller_frame_idx), Some(result_reg)) = (frame_idx, result_reg) {

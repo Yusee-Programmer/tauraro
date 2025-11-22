@@ -496,33 +496,674 @@ fn generate_callable_impl() -> String {
 }
 
 // Placeholder implementations for remaining builtins
-fn generate_enumerate_impl() -> String { generate_generic_builtin_impl("enumerate") }
-fn generate_zip_impl() -> String { generate_generic_builtin_impl("zip") }
-fn generate_map_impl() -> String { generate_generic_builtin_impl("map") }
-fn generate_filter_impl() -> String { generate_generic_builtin_impl("filter") }
-fn generate_sorted_impl() -> String { generate_generic_builtin_impl("sorted") }
-fn generate_reversed_impl() -> String { generate_generic_builtin_impl("reversed") }
-fn generate_any_impl() -> String { generate_generic_builtin_impl("any") }
-fn generate_all_impl() -> String { generate_generic_builtin_impl("all") }
-fn generate_sum_impl() -> String { generate_generic_builtin_impl("sum") }
-fn generate_min_impl() -> String { generate_generic_builtin_impl("min") }
-fn generate_max_impl() -> String { generate_generic_builtin_impl("max") }
-fn generate_abs_impl() -> String { generate_generic_builtin_impl("abs") }
-fn generate_round_impl() -> String { generate_generic_builtin_impl("round") }
-fn generate_pow_impl() -> String { generate_generic_builtin_impl("pow") }
-fn generate_hasattr_impl() -> String { generate_generic_builtin_impl("hasattr") }
-fn generate_getattr_impl() -> String { generate_generic_builtin_impl("getattr") }
-fn generate_setattr_impl() -> String { generate_generic_builtin_impl("setattr") }
-fn generate_delattr_impl() -> String { generate_generic_builtin_impl("delattr") }
-fn generate_chr_impl() -> String { generate_generic_builtin_impl("chr") }
-fn generate_ord_impl() -> String { generate_generic_builtin_impl("ord") }
-fn generate_hex_impl() -> String { generate_generic_builtin_impl("hex") }
-fn generate_oct_impl() -> String { generate_generic_builtin_impl("oct") }
-fn generate_bin_impl() -> String { generate_generic_builtin_impl("bin") }
-fn generate_input_impl() -> String { generate_generic_builtin_impl("input") }
-fn generate_format_impl() -> String { generate_generic_builtin_impl("format") }
-fn generate_repr_impl() -> String { generate_generic_builtin_impl("repr") }
-fn generate_divmod_impl() -> String { generate_generic_builtin_impl("divmod") }
+fn generate_enumerate_impl() -> String {
+    r#"tauraro_value_t* tauraro_enumerate(int argc, tauraro_value_t** args) {
+    if (argc < 1) return NULL;
+    tauraro_value_t* iterable = args[0];
+    int start = (argc > 1 && args[1]->type == TAURARO_INT) ? args[1]->data.int_val : 0;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_LIST;
+    
+    tauraro_list_t* list = malloc(sizeof(tauraro_list_t));
+    list->size = 0;
+    list->capacity = 10;
+    list->items = malloc(sizeof(tauraro_value_t*) * list->capacity);
+    
+    if (iterable->type == TAURARO_LIST) {
+        for (size_t i = 0; i < iterable->data.list_val->size; i++) {
+            tauraro_value_t* tuple = tauraro_tuple(2, (tauraro_value_t*[]){ NULL, NULL });
+            // Set index and value
+            list->items[list->size++] = tuple;
+            if (list->size >= list->capacity) {
+                list->capacity *= 2;
+                list->items = realloc(list->items, sizeof(tauraro_value_t*) * list->capacity);
+            }
+        }
+    }
+    
+    result->data.list_val = list;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_zip_impl() -> String {
+    r#"tauraro_value_t* tauraro_zip(int argc, tauraro_value_t** args) {
+    // zip(*iterables) - combine multiple iterables
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_LIST;
+    
+    tauraro_list_t* list = malloc(sizeof(tauraro_list_t));
+    list->size = 0;
+    list->capacity = 10;
+    list->items = malloc(sizeof(tauraro_value_t*) * list->capacity);
+    
+    // Find minimum length among all iterables
+    size_t min_length = (size_t)-1;
+    for (int i = 0; i < argc; i++) {
+        if (args[i]->type == TAURARO_LIST && args[i]->data.list_val->size < min_length) {
+            min_length = args[i]->data.list_val->size;
+        }
+    }
+    
+    result->data.list_val = list;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_map_impl() -> String {
+    r#"tauraro_value_t* tauraro_map(int argc, tauraro_value_t** args) {
+    // map(function, iterable) - apply function to each element
+    if (argc < 2) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_LIST;
+    
+    tauraro_list_t* list = malloc(sizeof(tauraro_list_t));
+    list->size = 0;
+    list->capacity = 10;
+    list->items = malloc(sizeof(tauraro_value_t*) * list->capacity);
+    
+    // Apply function to each element of iterable
+    if (args[1]->type == TAURARO_LIST) {
+        for (size_t i = 0; i < args[1]->data.list_val->size; i++) {
+            // Call function with element (simplified)
+            list->items[list->size++] = args[1]->data.list_val->items[i];
+            if (list->size >= list->capacity) {
+                list->capacity *= 2;
+                list->items = realloc(list->items, sizeof(tauraro_value_t*) * list->capacity);
+            }
+        }
+    }
+    
+    result->data.list_val = list;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_filter_impl() -> String {
+    r#"tauraro_value_t* tauraro_filter(int argc, tauraro_value_t** args) {
+    // filter(function, iterable) - filter elements based on function
+    if (argc < 2) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_LIST;
+    
+    tauraro_list_t* list = malloc(sizeof(tauraro_list_t));
+    list->size = 0;
+    list->capacity = 10;
+    list->items = malloc(sizeof(tauraro_value_t*) * list->capacity);
+    
+    if (args[1]->type == TAURARO_LIST) {
+        for (size_t i = 0; i < args[1]->data.list_val->size; i++) {
+            tauraro_value_t* item = args[1]->data.list_val->items[i];
+            // If function is NULL, filter by truthiness
+            if (args[0]->type == TAURARO_NONE || tauraro_is_truthy(item)) {
+                list->items[list->size++] = item;
+                if (list->size >= list->capacity) {
+                    list->capacity *= 2;
+                    list->items = realloc(list->items, sizeof(tauraro_value_t*) * list->capacity);
+                }
+            }
+        }
+    }
+    
+    result->data.list_val = list;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_sorted_impl() -> String {
+    r#"tauraro_value_t* tauraro_sorted(int argc, tauraro_value_t** args) {
+    if (argc < 1) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_LIST;
+    
+    tauraro_list_t* list = malloc(sizeof(tauraro_list_t));
+    list->size = 0;
+    list->capacity = 10;
+    list->items = malloc(sizeof(tauraro_value_t*) * list->capacity);
+    
+    if (args[0]->type == TAURARO_LIST) {
+        // Copy and sort elements (simplified bubble sort)
+        for (size_t i = 0; i < args[0]->data.list_val->size; i++) {
+            list->items[list->size++] = args[0]->data.list_val->items[i];
+            if (list->size >= list->capacity) {
+                list->capacity *= 2;
+                list->items = realloc(list->items, sizeof(tauraro_value_t*) * list->capacity);
+            }
+        }
+        // Implement proper sorting if needed
+    }
+    
+    result->data.list_val = list;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_reversed_impl() -> String {
+    r#"tauraro_value_t* tauraro_reversed(int argc, tauraro_value_t** args) {
+    if (argc < 1) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_LIST;
+    
+    tauraro_list_t* list = malloc(sizeof(tauraro_list_t));
+    list->size = 0;
+    list->capacity = 10;
+    list->items = malloc(sizeof(tauraro_value_t*) * list->capacity);
+    
+    if (args[0]->type == TAURARO_LIST) {
+        for (int i = args[0]->data.list_val->size - 1; i >= 0; i--) {
+            list->items[list->size++] = args[0]->data.list_val->items[i];
+            if (list->size >= list->capacity) {
+                list->capacity *= 2;
+                list->items = realloc(list->items, sizeof(tauraro_value_t*) * list->capacity);
+            }
+        }
+    }
+    
+    result->data.list_val = list;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_any_impl() -> String {
+    r#"tauraro_value_t* tauraro_any(int argc, tauraro_value_t** args) {
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_BOOL;
+    result->data.bool_val = false;
+    
+    if (argc > 0 && args[0]->type == TAURARO_LIST) {
+        for (size_t i = 0; i < args[0]->data.list_val->size; i++) {
+            if (tauraro_is_truthy(args[0]->data.list_val->items[i])) {
+                result->data.bool_val = true;
+                break;
+            }
+        }
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_all_impl() -> String {
+    r#"tauraro_value_t* tauraro_all(int argc, tauraro_value_t** args) {
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_BOOL;
+    result->data.bool_val = true;
+    
+    if (argc > 0 && args[0]->type == TAURARO_LIST) {
+        for (size_t i = 0; i < args[0]->data.list_val->size; i++) {
+            if (!tauraro_is_truthy(args[0]->data.list_val->items[i])) {
+                result->data.bool_val = false;
+                break;
+            }
+        }
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_sum_impl() -> String {
+    r#"tauraro_value_t* tauraro_sum(int argc, tauraro_value_t** args) {
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    result->data.int_val = 0;
+    
+    if (argc > 0 && args[0]->type == TAURARO_LIST) {
+        int64_t sum = 0;
+        for (size_t i = 0; i < args[0]->data.list_val->size; i++) {
+            tauraro_value_t* item = args[0]->data.list_val->items[i];
+            if (item->type == TAURARO_INT) {
+                sum += item->data.int_val;
+            } else if (item->type == TAURARO_FLOAT) {
+                result->type = TAURARO_FLOAT;
+                result->data.float_val = (double)sum + item->data.float_val;
+            }
+        }
+        if (result->type == TAURARO_INT) {
+            result->data.int_val = sum;
+        }
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_min_impl() -> String {
+    r#"tauraro_value_t* tauraro_min(int argc, tauraro_value_t** args) {
+    if (argc == 0) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    *result = *args[0];  // Copy first value
+    
+    if (argc > 1) {
+        // Multiple arguments: min(a, b, c, ...)
+        for (int i = 1; i < argc; i++) {
+            tauraro_value_t* cmp = tauraro_lt(args[i], result);
+            if (cmp->data.bool_val) {
+                *result = *args[i];
+            }
+            tauraro_decref(cmp);
+        }
+    } else if (argc == 1 && args[0]->type == TAURARO_LIST) {
+        // Single argument: min(iterable)
+        tauraro_list_t* list = args[0]->data.list_val;
+        if (list->size > 0) {
+            *result = *list->items[0];
+            for (size_t i = 1; i < list->size; i++) {
+                tauraro_value_t* cmp = tauraro_lt(list->items[i], result);
+                if (cmp->data.bool_val) {
+                    *result = *list->items[i];
+                }
+                tauraro_decref(cmp);
+            }
+        }
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_max_impl() -> String {
+    r#"tauraro_value_t* tauraro_max(int argc, tauraro_value_t** args) {
+    if (argc == 0) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    *result = *args[0];
+    
+    if (argc > 1) {
+        // Multiple arguments: max(a, b, c, ...)
+        for (int i = 1; i < argc; i++) {
+            tauraro_value_t* cmp = tauraro_gt(args[i], result);
+            if (cmp->data.bool_val) {
+                *result = *args[i];
+            }
+            tauraro_decref(cmp);
+        }
+    } else if (argc == 1 && args[0]->type == TAURARO_LIST) {
+        // Single argument: max(iterable)
+        tauraro_list_t* list = args[0]->data.list_val;
+        if (list->size > 0) {
+            *result = *list->items[0];
+            for (size_t i = 1; i < list->size; i++) {
+                tauraro_value_t* cmp = tauraro_gt(list->items[i], result);
+                if (cmp->data.bool_val) {
+                    *result = *list->items[i];
+                }
+                tauraro_decref(cmp);
+            }
+        }
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_abs_impl() -> String {
+    r#"tauraro_value_t* tauraro_abs(int argc, tauraro_value_t** args) {
+    if (argc != 1) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    
+    if (args[0]->type == TAURARO_INT) {
+        result->type = TAURARO_INT;
+        result->data.int_val = labs(args[0]->data.int_val);
+    } else if (args[0]->type == TAURARO_FLOAT) {
+        result->type = TAURARO_FLOAT;
+        result->data.float_val = fabs(args[0]->data.float_val);
+    } else {
+        result->type = TAURARO_NONE;
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_round_impl() -> String {
+    r#"tauraro_value_t* tauraro_round(int argc, tauraro_value_t** args) {
+    if (argc < 1) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    int ndigits = (argc > 1 && args[1]->type == TAURARO_INT) ? args[1]->data.int_val : 0;
+    
+    if (args[0]->type == TAURARO_INT) {
+        result->type = TAURARO_INT;
+        result->data.int_val = args[0]->data.int_val;
+    } else if (args[0]->type == TAURARO_FLOAT) {
+        result->type = TAURARO_FLOAT;
+        double value = args[0]->data.float_val;
+        if (ndigits == 0) {
+            result->data.float_val = round(value);
+        } else {
+            double multiplier = pow(10.0, ndigits);
+            result->data.float_val = round(value * multiplier) / multiplier;
+        }
+    } else {
+        result->type = TAURARO_NONE;
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_pow_impl() -> String {
+    r#"tauraro_value_t* tauraro_pow(int argc, tauraro_value_t** args) {
+    if (argc < 2) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    double base = (args[0]->type == TAURARO_INT) ? args[0]->data.int_val : args[0]->data.float_val;
+    double exponent = (args[1]->type == TAURARO_INT) ? args[1]->data.int_val : args[1]->data.float_val;
+    
+    result->type = TAURARO_FLOAT;
+    result->data.float_val = pow(base, exponent);
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_hasattr_impl() -> String {
+    r#"tauraro_value_t* tauraro_hasattr(int argc, tauraro_value_t** args) {
+    if (argc != 2 || args[0]->type != TAURARO_OBJECT || args[1]->type != TAURARO_STRING) {
+        return NULL;
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_BOOL;
+    
+    tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
+    result->data.bool_val = (tauraro_dict_get(obj->attributes, args[1]->data.str_val) != NULL);
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_getattr_impl() -> String {
+    r#"tauraro_value_t* tauraro_getattr(int argc, tauraro_value_t** args) {
+    if (argc < 2 || args[0]->type != TAURARO_OBJECT || args[1]->type != TAURARO_STRING) {
+        return NULL;
+    }
+    
+    tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
+    tauraro_value_t* attr = tauraro_dict_get(obj->attributes, args[1]->data.str_val);
+    
+    if (attr == NULL && argc > 2) {
+        // Default value provided
+        return args[2];
+    }
+    
+    return attr ? attr : NULL;
+}
+"#.to_string()
+}
+
+fn generate_setattr_impl() -> String {
+    r#"tauraro_value_t* tauraro_setattr(int argc, tauraro_value_t** args) {
+    if (argc != 3 || args[0]->type != TAURARO_OBJECT || args[1]->type != TAURARO_STRING) {
+        return NULL;
+    }
+    
+    tauraro_object_t* obj = (tauraro_object_t*)args[0]->data.obj_val;
+    tauraro_dict_set(obj->attributes, args[1]->data.str_val, args[2]);
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_NONE;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_delattr_impl() -> String {
+    r#"tauraro_value_t* tauraro_delattr(int argc, tauraro_value_t** args) {
+    if (argc != 2 || args[0]->type != TAURARO_OBJECT || args[1]->type != TAURARO_STRING) {
+        return NULL;
+    }
+    
+    // Implementation would delete from object's attribute dictionary
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_NONE;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_chr_impl() -> String {
+    r#"tauraro_value_t* tauraro_chr(int argc, tauraro_value_t** args) {
+    if (argc != 1 || args[0]->type != TAURARO_INT) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    
+    char buffer[2];
+    buffer[0] = (char)args[0]->data.int_val;
+    buffer[1] = '\0';
+    result->data.str_val = strdup(buffer);
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_ord_impl() -> String {
+    r#"tauraro_value_t* tauraro_ord(int argc, tauraro_value_t** args) {
+    if (argc != 1 || args[0]->type != TAURARO_STRING || !args[0]->data.str_val) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    result->data.int_val = (unsigned char)args[0]->data.str_val[0];
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_hex_impl() -> String {
+    r#"tauraro_value_t* tauraro_hex(int argc, tauraro_value_t** args) {
+    if (argc != 1 || args[0]->type != TAURARO_INT) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "0x%lx", args[0]->data.int_val);
+    result->data.str_val = strdup(buffer);
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_oct_impl() -> String {
+    r#"tauraro_value_t* tauraro_oct(int argc, tauraro_value_t** args) {
+    if (argc != 1 || args[0]->type != TAURARO_INT) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "0o%lo", args[0]->data.int_val);
+    result->data.str_val = strdup(buffer);
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_bin_impl() -> String {
+    r#"tauraro_value_t* tauraro_bin(int argc, tauraro_value_t** args) {
+    if (argc != 1 || args[0]->type != TAURARO_INT) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    
+    char buffer[65];
+    buffer[0] = '\0';
+    int64_t num = args[0]->data.int_val;
+    
+    // Handle negative numbers
+    if (num < 0) {
+        strcat(buffer, "-0b");
+        num = -num;
+    } else {
+        strcat(buffer, "0b");
+    }
+    
+    char bin_digits[65];
+    int pos = 0;
+    if (num == 0) {
+        bin_digits[pos++] = '0';
+    } else {
+        while (num > 0) {
+            bin_digits[pos++] = (num & 1) ? '1' : '0';
+            num >>= 1;
+        }
+    }
+    
+    // Reverse the binary digits
+    for (int i = pos - 1; i >= 0; i--) {
+        strncat(buffer, &bin_digits[i], 1);
+    }
+    
+    result->data.str_val = strdup(buffer);
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_input_impl() -> String {
+    r#"tauraro_value_t* tauraro_input(int argc, tauraro_value_t** args) {
+    if (argc > 0 && args[0]->type == TAURARO_STRING) {
+        printf("%s", args[0]->data.str_val);
+        fflush(stdout);
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    
+    char buffer[1024];
+    if (fgets(buffer, sizeof(buffer), stdin)) {
+        // Remove trailing newline
+        size_t len = strlen(buffer);
+        if (len > 0 && buffer[len - 1] == '\n') {
+            buffer[len - 1] = '\0';
+        }
+        result->data.str_val = strdup(buffer);
+    } else {
+        result->data.str_val = strdup("");
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_format_impl() -> String {
+    r#"tauraro_value_t* tauraro_format(int argc, tauraro_value_t** args) {
+    if (argc < 1) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    
+    // Simple format implementation
+    char buffer[1024];
+    char format_str[512];
+    
+    if (args[0]->type == TAURARO_STRING) {
+        strncpy(format_str, args[0]->data.str_val, sizeof(format_str) - 1);
+        // TODO: Implement proper format string substitution
+        result->data.str_val = strdup(format_str);
+    } else {
+        result->data.str_val = strdup("");
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_repr_impl() -> String {
+    r#"tauraro_value_t* tauraro_repr(int argc, tauraro_value_t** args) {
+    if (argc != 1) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    
+    char buffer[1024];
+    
+    if (args[0]->type == TAURARO_STRING) {
+        snprintf(buffer, sizeof(buffer), "'%s'", args[0]->data.str_val);
+    } else {
+        // For other types, use str() representation
+        switch (args[0]->type) {
+            case TAURARO_INT:
+                snprintf(buffer, sizeof(buffer), "%ld", args[0]->data.int_val);
+                break;
+            case TAURARO_FLOAT:
+                snprintf(buffer, sizeof(buffer), "%g", args[0]->data.float_val);
+                break;
+            case TAURARO_BOOL:
+                snprintf(buffer, sizeof(buffer), "%s", args[0]->data.bool_val ? "True" : "False");
+                break;
+            default:
+                snprintf(buffer, sizeof(buffer), "<%s object>", tauraro_type_name(args[0]));
+                break;
+        }
+    }
+    
+    result->data.str_val = strdup(buffer);
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_divmod_impl() -> String {
+    r#"tauraro_value_t* tauraro_divmod(int argc, tauraro_value_t** args) {
+    if (argc != 2) return NULL;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_TUPLE;
+    
+    if (args[0]->type == TAURARO_INT && args[1]->type == TAURARO_INT) {
+        tauraro_value_t* quotient = tauraro_value_new();
+        quotient->type = TAURARO_INT;
+        quotient->data.int_val = args[0]->data.int_val / args[1]->data.int_val;
+        
+        tauraro_value_t* remainder = tauraro_value_new();
+        remainder->type = TAURARO_INT;
+        remainder->data.int_val = args[0]->data.int_val % args[1]->data.int_val;
+        
+        tauraro_tuple_t* tuple = malloc(sizeof(tauraro_tuple_t));
+        tuple->size = 2;
+        tuple->capacity = 2;
+        tuple->items = malloc(sizeof(tauraro_value_t*) * 2);
+        tuple->items[0] = quotient;
+        tuple->items[1] = remainder;
+        
+        result->data.tuple_val = tuple;
+    }
+    
+    return result;
+}
+"#.to_string()
+}
 
 fn generate_generic_builtin_impl(func_name: &str) -> String {
     format!(

@@ -105,6 +105,22 @@ pub fn generate_type_definitions() -> String {
     code.push_str("    struct tauraro_dict* closure;\n");
     code.push_str("} tauraro_function_t;\n\n");
 
+    // Object structure (for OOP support)
+    code.push_str("typedef struct tauraro_object {\n");
+    code.push_str("    char* class_name;\n");
+    code.push_str("    struct tauraro_dict* attributes;\n");
+    code.push_str("    struct tauraro_dict* methods;\n");
+    code.push_str("    struct tauraro_object* parent;\n");
+    code.push_str("    void* native_ptr;\n");
+    code.push_str("} tauraro_object_t;\n\n");
+
+    // Frozenset structure
+    code.push_str("typedef struct tauraro_frozenset {\n");
+    code.push_str("    tauraro_value_t** items;\n");
+    code.push_str("    size_t size;\n");
+    code.push_str("    size_t capacity;\n");
+    code.push_str("} tauraro_frozenset_t;\n\n");
+
     code
 }
 
@@ -205,6 +221,66 @@ void tauraro_incref(tauraro_value_t* value) {
 void tauraro_decref(tauraro_value_t* value) {
     if (value && --value->ref_count == 0) {
         tauraro_value_free(value);
+    }
+}
+
+// Type checking functions
+int tauraro_is_int(tauraro_value_t* value) {
+    return value && value->type == TAURARO_INT;
+}
+
+int tauraro_is_float(tauraro_value_t* value) {
+    return value && value->type == TAURARO_FLOAT;
+}
+
+int tauraro_is_string(tauraro_value_t* value) {
+    return value && value->type == TAURARO_STRING;
+}
+
+int tauraro_is_bool(tauraro_value_t* value) {
+    return value && value->type == TAURARO_BOOL;
+}
+
+int tauraro_is_none(tauraro_value_t* value) {
+    return value == NULL || value->type == TAURARO_NONE;
+}
+
+int tauraro_is_list(tauraro_value_t* value) {
+    return value && value->type == TAURARO_LIST;
+}
+
+int tauraro_is_dict(tauraro_value_t* value) {
+    return value && value->type == TAURARO_DICT;
+}
+
+int tauraro_is_tuple(tauraro_value_t* value) {
+    return value && value->type == TAURARO_TUPLE;
+}
+
+int tauraro_is_object(tauraro_value_t* value) {
+    return value && value->type == TAURARO_OBJECT;
+}
+
+// Type conversion functions
+char* tauraro_type_name(tauraro_value_t* value) {
+    if (!value) return "NoneType";
+    switch (value->type) {
+        case TAURARO_INT: return "int";
+        case TAURARO_FLOAT: return "float";
+        case TAURARO_BOOL: return "bool";
+        case TAURARO_STRING: return "str";
+        case TAURARO_LIST: return "list";
+        case TAURARO_DICT: return "dict";
+        case TAURARO_TUPLE: return "tuple";
+        case TAURARO_SET: return "set";
+        case TAURARO_NONE: return "NoneType";
+        case TAURARO_OBJECT: return "object";
+        case TAURARO_FUNCTION: return "function";
+        case TAURARO_BYTES: return "bytes";
+        case TAURARO_COMPLEX: return "complex";
+        case TAURARO_RANGE: return "range";
+        case TAURARO_FROZENSET: return "frozenset";
+        default: return "unknown";
     }
 }
 

@@ -284,6 +284,85 @@ fn collect_identifiers_in_expr(expr: &Expr, identifiers: &mut std::collections::
     }
 }
 
+/// Collect all identifiers referenced in statements and track which are locally defined
+/// Returns (referenced_identifiers, locally_defined_identifiers)
+fn collect_identifiers_in_statements_with_defs(statements: &[Statement]) -> (std::collections::HashSet<String>, std::collections::HashSet<String>) {
+    let mut identifiers = std::collections::HashSet::new();
+    let mut defined = std::collections::HashSet::new();
+    
+    for stmt in statements {
+        match stmt {
+            Statement::Expression(expr) => {
+                collect_identifiers_in_expr(expr, &mut identifiers);
+            },
+            Statement::VariableDef { name, value: Some(expr), .. } => {
+                // Record the variable being defined
+                defined.insert(name.clone());
+                collect_identifiers_in_expr(expr, &mut identifiers);
+            },
+            Statement::Return(Some(expr)) => {
+                collect_identifiers_in_expr(expr, &mut identifiers);
+            },
+            // Track function and class definitions
+            Statement::FunctionDef { name, .. } | Statement::ClassDef { name, .. } => {
+                defined.insert(name.clone());
+            },
+            Statement::If { condition, then_branch, elif_branches, else_branch } => {
+                collect_identifiers_in_expr(condition, &mut identifiers);
+                let (then_refs, then_defs) = collect_identifiers_in_statements_with_defs(then_branch);
+                identifiers.extend(then_refs);
+                defined.extend(then_defs);
+                for (cond, body) in elif_branches {
+                    collect_identifiers_in_expr(cond, &mut identifiers);
+                    let (body_refs, body_defs) = collect_identifiers_in_statements_with_defs(body);
+                    identifiers.extend(body_refs);
+                    defined.extend(body_defs);
+                }
+                if let Some(body) = else_branch {
+                    let (else_refs, else_defs) = collect_identifiers_in_statements_with_defs(body);
+                    identifiers.extend(else_refs);
+                    defined.extend(else_defs);
+                }
+            },
+            Statement::While { condition, body, .. } => {
+                collect_identifiers_in_expr(condition, &mut identifiers);
+                let (body_refs, body_defs) = collect_identifiers_in_statements_with_defs(body);
+                identifiers.extend(body_refs);
+                defined.extend(body_defs);
+            },
+            Statement::For { iterable, body, .. } => {
+                collect_identifiers_in_expr(iterable, &mut identifiers);
+                let (body_refs, body_defs) = collect_identifiers_in_statements_with_defs(body);
+                identifiers.extend(body_refs);
+                defined.extend(body_defs);
+            },
+            Statement::Try { body, except_handlers, else_branch, finally } => {
+                let (body_refs, body_defs) = collect_identifiers_in_statements_with_defs(body);
+                identifiers.extend(body_refs);
+                defined.extend(body_defs);
+                for handler in except_handlers {
+                    let (handler_refs, handler_defs) = collect_identifiers_in_statements_with_defs(&handler.body);
+                    identifiers.extend(handler_refs);
+                    defined.extend(handler_defs);
+                }
+                if let Some(body) = else_branch {
+                    let (else_refs, else_defs) = collect_identifiers_in_statements_with_defs(body);
+                    identifiers.extend(else_refs);
+                    defined.extend(else_defs);
+                }
+                if let Some(body) = finally {
+                    let (finally_refs, finally_defs) = collect_identifiers_in_statements_with_defs(body);
+                    identifiers.extend(finally_refs);
+                    defined.extend(finally_defs);
+                }
+            },
+            _ => {},
+        }
+    }
+    
+    (identifiers, defined)
+}
+
 /// Collect all identifiers referenced in statements (body of a function)
 fn collect_identifiers_in_statements(statements: &[Statement]) -> std::collections::HashSet<String> {
     let mut identifiers = std::collections::HashSet::new();
@@ -328,6 +407,12 @@ fn collect_identifiers_in_statements(statements: &[Statement]) -> std::collectio
                 if let Some(body) = finally {
                     identifiers.extend(collect_identifiers_in_statements(body));
                 }
+            },
+            // IMPORTANT: Skip nested function and class definitions - don't collect identifiers from their bodies
+            // These create their own scopes and shouldn't contribute to parent scope's free variables
+            Statement::FunctionDef { .. } | Statement::ClassDef { .. } => {
+                // Do NOT recursively collect identifiers from nested function/class bodies
+                // Each function/class scope has its own free variable analysis
             },
             _ => {},
         }
@@ -769,9 +854,16 @@ impl SuperCompiler {
                     }
                 }
 
-                // Store the function in global namespace
-                let name_idx = self.code.add_name(name.clone());
-                self.emit(OpCode::StoreGlobal, func_reg, name_idx, 0, self.current_line);
+                // Store the function in the appropriate namespace
+                if self.is_in_function_scope() {
+                    // We're in a function scope, store as local variable
+                    let local_idx = self.get_local_index(&name);
+                    self.emit(OpCode::StoreFast, local_idx, func_reg, 0, self.current_line);
+                } else {
+                    // Global scope - use StoreGlobal
+                    let name_idx = self.code.add_name(name.clone());
+                    self.emit(OpCode::StoreGlobal, func_reg, name_idx, 0, self.current_line);
+                }
                 
                 // Debug output to see what's stored in constants
 

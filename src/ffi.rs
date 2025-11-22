@@ -553,6 +553,28 @@ impl FFIManager {
                 }
             }
 
+            // No arguments, uint64 return (GetTickCount64)
+            (FFIType::UInt64, &[]) => {
+                unsafe {
+                    let func: unsafe extern "C" fn() -> u64 = std::mem::transmute(function.symbol_ptr);
+                    let result = func();
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // One int64 argument, int64 return (labs, llabs)
+            (FFIType::Int64, &[FFIType::Int | FFIType::Int32 | FFIType::Int64]) => {
+                let arg = match &args[0] {
+                    Value::Int(i) => *i,
+                    _ => return Err(anyhow!("Cannot convert to int64")),
+                };
+                unsafe {
+                    let func: unsafe extern "C" fn(i64) -> i64 = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result))
+                }
+            }
+
             // No arguments, pointer return (e.g., gtk_entry_new)
             (FFIType::Pointer | FFIType::ConstPointer, &[]) => {
                 unsafe {
@@ -619,6 +641,41 @@ impl FFIManager {
                     let func: unsafe extern "C" fn(c_int, c_int) -> c_int =
                         std::mem::transmute(function.symbol_ptr);
                     let result = func(arg1, arg2);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Generic Int32 with 2 string parameters (strcmp)
+            (FFIType::Int | FFIType::Int32, &[FFIType::String | FFIType::Pointer | FFIType::ConstPointer, FFIType::String | FFIType::Pointer | FFIType::ConstPointer]) => {
+                let c_string1 = if matches!(args[0], Value::Str(_)) {
+                    let s = self.value_to_string(&args[0])?;
+                    Some(CString::new(s)?)
+                } else {
+                    None
+                };
+
+                let c_string2 = if matches!(args[1], Value::Str(_)) {
+                    let s = self.value_to_string(&args[1])?;
+                    Some(CString::new(s)?)
+                } else {
+                    None
+                };
+
+                let arg1 = if let Some(ref cs) = c_string1 {
+                    cs.as_ptr() as *const c_void
+                } else {
+                    self.value_to_pointer(&args[0])?
+                };
+
+                let arg2 = if let Some(ref cs) = c_string2 {
+                    cs.as_ptr() as *const c_void
+                } else {
+                    self.value_to_pointer(&args[1])?
+                };
+
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_char, *const c_char) -> c_int = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1 as *const c_char, arg2 as *const c_char);
                     Ok(Value::Int(result as i64))
                 }
             }
@@ -1155,6 +1212,697 @@ impl FFIManager {
                 }
             }
 
+            // SizeT return with string parameter (strlen, etc)
+            (FFIType::SizeT, &[FFIType::String | FFIType::Pointer | FFIType::ConstPointer]) => {
+                let text = self.value_to_string(&args[0])?;
+                let text_cstring = CString::new(text)?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_char) -> usize = std::mem::transmute(function.symbol_ptr);
+                    let result = func(text_cstring.as_ptr());
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Generic SizeT return with single parameter
+            (FFIType::SizeT, params) if params.len() == 1 => {
+                let arg = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> usize = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // ============================================================================
+            // COMPREHENSIVE PARAMETER SUPPORT FOR ALL PLATFORMS
+            // ============================================================================
+
+            // Three integer parameters, integer return
+            (FFIType::Int | FFIType::Int32, &[FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_int(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int, c_int, c_int) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Three pointer parameters, pointer return
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                let arg3 = self.value_to_pointer(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void) -> *const c_void =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3);
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
+            // Three pointer parameters, void return
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                let arg3 = self.value_to_pointer(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void) =
+                        std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2, arg3);
+                }
+                Ok(Value::None)
+            }
+
+            // Three double parameters, double return
+            (FFIType::Double, &[FFIType::Double, FFIType::Double, FFIType::Double]) => {
+                let arg1 = self.value_to_float(&args[0])?;
+                let arg2 = self.value_to_float(&args[1])?;
+                let arg3 = self.value_to_float(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_double, c_double, c_double) -> c_double =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3);
+                    Ok(Value::Float(result))
+                }
+            }
+
+            // Three double parameters, void return
+            (FFIType::Void, &[FFIType::Double, FFIType::Double, FFIType::Double]) => {
+                let arg1 = self.value_to_float(&args[0])?;
+                let arg2 = self.value_to_float(&args[1])?;
+                let arg3 = self.value_to_float(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_double, c_double, c_double) =
+                        std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2, arg3);
+                }
+                Ok(Value::None)
+            }
+
+            // Pointer + int + int, pointer return
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_int, c_int) -> *const c_void =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3);
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
+            // Pointer + int + int, void return
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_int, c_int) =
+                        std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2, arg3);
+                }
+                Ok(Value::None)
+            }
+
+            // Pointer + int + int, int return
+            (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_int, c_int) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Pointer + double + double, void return
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Double | FFIType::Float, FFIType::Double | FFIType::Float]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_float(&args[1])?;
+                let arg3 = self.value_to_float(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_double, c_double) =
+                        std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2, arg3);
+                }
+                Ok(Value::None)
+            }
+
+            // Int + int + int, double return
+            (FFIType::Double, &[FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_int(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int, c_int, c_int) -> c_double =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3);
+                    Ok(Value::Float(result))
+                }
+            }
+
+            // Pointer + pointer + int, pointer return
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, c_int) -> *const c_void =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3);
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
+            // Pointer + pointer + int, void return
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, c_int) =
+                        std::mem::transmute(function.symbol_ptr);
+                    func(arg1, arg2, arg3);
+                }
+                Ok(Value::None)
+            }
+
+            // Pointer + pointer + int, int return
+            (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, c_int) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Five integer parameters, int return
+            (FFIType::Int | FFIType::Int32, &[FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_int(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                let arg3 = self.value_to_int(&args[2])?;
+                let arg4 = self.value_to_int(&args[3])?;
+                let arg5 = self.value_to_int(&args[4])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int, c_int, c_int, c_int, c_int) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3, arg4, arg5);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Five pointer parameters, pointer return
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                let arg3 = self.value_to_pointer(&args[2])?;
+                let arg4 = self.value_to_pointer(&args[3])?;
+                let arg5 = self.value_to_pointer(&args[4])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void, *const c_void, *const c_void) -> *const c_void =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3, arg4, arg5);
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
+            // Five double parameters, double return
+            (FFIType::Double, &[FFIType::Double, FFIType::Double, FFIType::Double, FFIType::Double, FFIType::Double]) => {
+                let arg1 = self.value_to_float(&args[0])?;
+                let arg2 = self.value_to_float(&args[1])?;
+                let arg3 = self.value_to_float(&args[2])?;
+                let arg4 = self.value_to_float(&args[3])?;
+                let arg5 = self.value_to_float(&args[4])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_double, c_double, c_double, c_double, c_double) -> c_double =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2, arg3, arg4, arg5);
+                    Ok(Value::Float(result))
+                }
+            }
+
+            // Float return with single float parameter
+            (FFIType::Float, &[FFIType::Float]) => {
+                let arg = self.value_to_float(&args[0])? as f32;
+                unsafe {
+                    let func: unsafe extern "C" fn(f32) -> f32 =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Float(result as f64))
+                }
+            }
+
+            // Float return with two float parameters
+            (FFIType::Float, &[FFIType::Float, FFIType::Float]) => {
+                let arg1 = self.value_to_float(&args[0])? as f32;
+                let arg2 = self.value_to_float(&args[1])? as f32;
+                unsafe {
+                    let func: unsafe extern "C" fn(f32, f32) -> f32 =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2);
+                    Ok(Value::Float(result as f64))
+                }
+            }
+
+            // Mixed: Int + double, double return
+            (FFIType::Double, &[FFIType::Int | FFIType::Int32, FFIType::Double | FFIType::Float]) => {
+                let arg1 = self.value_to_int(&args[0])?;
+                let arg2 = self.value_to_float(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int, c_double) -> c_double =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2);
+                    Ok(Value::Float(result))
+                }
+            }
+
+            // Mixed: Double + int, double return
+            (FFIType::Double, &[FFIType::Double | FFIType::Float, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_float(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_double, c_int) -> c_double =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2);
+                    Ok(Value::Float(result))
+                }
+            }
+
+            // Mixed: Pointer + string, pointer return
+            (FFIType::Pointer | FFIType::ConstPointer, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::String | FFIType::Pointer]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let text = self.value_to_string(&args[1])?;
+                let text_cstring = CString::new(text)?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_char) -> *const c_void =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, text_cstring.as_ptr());
+                    Ok(Value::Int(result as usize as i64))
+                }
+            }
+
+            // Mixed: Pointer + string, void return
+            (FFIType::Void, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::String | FFIType::Pointer]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let text = self.value_to_string(&args[1])?;
+                let text_cstring = CString::new(text)?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_char) =
+                        std::mem::transmute(function.symbol_ptr);
+                    func(arg1, text_cstring.as_ptr());
+                }
+                Ok(Value::None)
+            }
+
+            // Mixed: Pointer + string, int return
+            (FFIType::Int | FFIType::Int32, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::String | FFIType::Pointer]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let text = self.value_to_string(&args[1])?;
+                let text_cstring = CString::new(text)?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_char) -> c_int =
+                        std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, text_cstring.as_ptr());
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // UInt64 return with no parameters
+            (FFIType::UInt64, &[]) => {
+                unsafe {
+                    let func: unsafe extern "C" fn() -> u64 = std::mem::transmute(function.symbol_ptr);
+                    let result = func();
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // UInt64 return with int parameter
+            (FFIType::UInt64, &[FFIType::Int | FFIType::Int32 | FFIType::Int64]) => {
+                let arg = self.value_to_int(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int) -> u64 = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // UInt32 return with no parameters
+            (FFIType::UInt32, &[]) => {
+                unsafe {
+                    let func: unsafe extern "C" fn() -> u32 = std::mem::transmute(function.symbol_ptr);
+                    let result = func();
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // UInt32 return with int parameter
+            (FFIType::UInt32, &[FFIType::Int | FFIType::Int32]) => {
+                let arg = self.value_to_int(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int) -> u32 = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // SSizeT (signed size_t) return with pointer parameter
+            (FFIType::SSizeT, &[FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> isize = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Char return with no parameters
+            (FFIType::Char, &[]) => {
+                unsafe {
+                    let func: unsafe extern "C" fn() -> c_char = std::mem::transmute(function.symbol_ptr);
+                    let result = func();
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Char return with pointer parameter
+            (FFIType::Char, &[FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> c_char = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Bool return with no parameters
+            (FFIType::Bool, &[]) => {
+                unsafe {
+                    let func: unsafe extern "C" fn() -> bool = std::mem::transmute(function.symbol_ptr);
+                    let result = func();
+                    Ok(Value::Bool(result))
+                }
+            }
+
+            // Bool return with pointer parameter
+            (FFIType::Bool, &[FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> bool = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Bool(result))
+                }
+            }
+
+            // Bool return with int parameter
+            (FFIType::Bool, &[FFIType::Int | FFIType::Int32]) => {
+                let arg = self.value_to_int(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int) -> bool = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Bool(result))
+                }
+            }
+
+            // Long return with no parameters
+            (FFIType::Long, &[]) => {
+                unsafe {
+                    let func: unsafe extern "C" fn() -> c_long = std::mem::transmute(function.symbol_ptr);
+                    let result = func();
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Long return with int parameter
+            (FFIType::Long, &[FFIType::Int | FFIType::Int32]) => {
+                let arg = self.value_to_int(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int) -> c_long = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // String return with pointer parameter
+            (FFIType::String, &[FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> *const c_char = std::mem::transmute(function.symbol_ptr);
+                    let result_ptr = func(arg);
+                    if result_ptr.is_null() {
+                        Ok(Value::None)
+                    } else {
+                        let result = CStr::from_ptr(result_ptr).to_string_lossy().into_owned();
+                        Ok(Value::Str(result))
+                    }
+                }
+            }
+
+            // String return with int parameter
+            (FFIType::String, &[FFIType::Int | FFIType::Int32]) => {
+                let arg = self.value_to_int(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int) -> *const c_char = std::mem::transmute(function.symbol_ptr);
+                    let result_ptr = func(arg);
+                    if result_ptr.is_null() {
+                        Ok(Value::None)
+                    } else {
+                        let result = CStr::from_ptr(result_ptr).to_string_lossy().into_owned();
+                        Ok(Value::Str(result))
+                    }
+                }
+            }
+
+            // String return with two pointers
+            (FFIType::String, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_pointer(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void) -> *const c_char = std::mem::transmute(function.symbol_ptr);
+                    let result_ptr = func(arg1, arg2);
+                    if result_ptr.is_null() {
+                        Ok(Value::None)
+                    } else {
+                        let result = CStr::from_ptr(result_ptr).to_string_lossy().into_owned();
+                        Ok(Value::Str(result))
+                    }
+                }
+            }
+
+            // Double return with pointer parameter
+            (FFIType::Double, &[FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> c_double = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Float(result))
+                }
+            }
+
+            // Int64 return with no parameters
+            (FFIType::Int64, &[]) => {
+                unsafe {
+                    let func: unsafe extern "C" fn() -> i64 = std::mem::transmute(function.symbol_ptr);
+                    let result = func();
+                    Ok(Value::Int(result))
+                }
+            }
+
+            // Int64 return with pointer parameter
+            (FFIType::Int64, &[FFIType::Pointer | FFIType::ConstPointer]) => {
+                let arg = self.value_to_pointer(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void) -> i64 = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result))
+                }
+            }
+
+            // Int64 return with int parameter
+            (FFIType::Int64, &[FFIType::Int | FFIType::Int32]) => {
+                let arg = self.value_to_int(&args[0])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int) -> i64 = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg);
+                    Ok(Value::Int(result))
+                }
+            }
+
+            // Int64 return with two int parameters
+            (FFIType::Int64, &[FFIType::Int | FFIType::Int32, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_int(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(c_int, c_int) -> i64 = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2);
+                    Ok(Value::Int(result))
+                }
+            }
+
+            // SizeT return with two parameters
+            (FFIType::SizeT, &[FFIType::Pointer | FFIType::ConstPointer, FFIType::Int | FFIType::Int32]) => {
+                let arg1 = self.value_to_pointer(&args[0])?;
+                let arg2 = self.value_to_int(&args[1])?;
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, c_int) -> usize = std::mem::transmute(function.symbol_ptr);
+                    let result = func(arg1, arg2);
+                    Ok(Value::Int(result as i64))
+                }
+            }
+
+            // Generic: Void with 7 parameters
+            (FFIType::Void, params) if params.len() == 7 => {
+                let mut ptr_args = Vec::new();
+                for arg in &args {
+                    ptr_args.push(self.value_to_pointer(arg)?);
+                }
+                unsafe {
+                    let func: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void, *const c_void, *const c_void, *const c_void, *const c_void) =
+                        std::mem::transmute(function.symbol_ptr);
+                    func(ptr_args[0], ptr_args[1], ptr_args[2], ptr_args[3], ptr_args[4], ptr_args[5], ptr_args[6]);
+                }
+                Ok(Value::None)
+            }
+
+            // Generic: Pointer return with 3+ parameters (catch-all)
+            (FFIType::Pointer | FFIType::ConstPointer, params) if params.len() >= 3 => {
+                let mut ptr_args = Vec::new();
+                for arg in &args {
+                    ptr_args.push(self.value_to_pointer(arg)?);
+                }
+                
+                match params.len() {
+                    3 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void) -> *const c_void =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(ptr_args[0], ptr_args[1], ptr_args[2]);
+                            Ok(Value::Int(result as usize as i64))
+                        }
+                    },
+                    4 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void, *const c_void) -> *const c_void =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(ptr_args[0], ptr_args[1], ptr_args[2], ptr_args[3]);
+                            Ok(Value::Int(result as usize as i64))
+                        }
+                    },
+                    5 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void, *const c_void, *const c_void) -> *const c_void =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(ptr_args[0], ptr_args[1], ptr_args[2], ptr_args[3], ptr_args[4]);
+                            Ok(Value::Int(result as usize as i64))
+                        }
+                    },
+                    6 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void, *const c_void, *const c_void, *const c_void) -> *const c_void =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(ptr_args[0], ptr_args[1], ptr_args[2], ptr_args[3], ptr_args[4], ptr_args[5]);
+                            Ok(Value::Int(result as usize as i64))
+                        }
+                    },
+                    7 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void, *const c_void, *const c_void, *const c_void, *const c_void) -> *const c_void =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(ptr_args[0], ptr_args[1], ptr_args[2], ptr_args[3], ptr_args[4], ptr_args[5], ptr_args[6]);
+                            Ok(Value::Int(result as usize as i64))
+                        }
+                    },
+                    _ => {
+                        Err(anyhow!("Pointer return with {} parameters exceeds supported maximum of 7", params.len()))
+                    }
+                }
+            }
+
+            // Generic: Int return with 3+ parameters (catch-all)
+            (FFIType::Int | FFIType::Int32, params) if params.len() >= 3 => {
+                let mut int_args = Vec::new();
+                for arg in &args {
+                    int_args.push(self.value_to_int(arg)?);
+                }
+                
+                match params.len() {
+                    3 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(c_int, c_int, c_int) -> c_int =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(int_args[0], int_args[1], int_args[2]);
+                            Ok(Value::Int(result as i64))
+                        }
+                    },
+                    4 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(c_int, c_int, c_int, c_int) -> c_int =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(int_args[0], int_args[1], int_args[2], int_args[3]);
+                            Ok(Value::Int(result as i64))
+                        }
+                    },
+                    5 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(c_int, c_int, c_int, c_int, c_int) -> c_int =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(int_args[0], int_args[1], int_args[2], int_args[3], int_args[4]);
+                            Ok(Value::Int(result as i64))
+                        }
+                    },
+                    _ => {
+                        Err(anyhow!("Int return with {} parameters exceeds supported maximum", params.len()))
+                    }
+                }
+            }
+
+            // Generic: Double return with 3+ parameters (catch-all)
+            (FFIType::Double, params) if params.len() >= 3 => {
+                let mut float_args = Vec::new();
+                for arg in &args {
+                    float_args.push(self.value_to_float(arg)?);
+                }
+                
+                match params.len() {
+                    3 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(c_double, c_double, c_double) -> c_double =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(float_args[0], float_args[1], float_args[2]);
+                            Ok(Value::Float(result))
+                        }
+                    },
+                    4 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(c_double, c_double, c_double, c_double) -> c_double =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(float_args[0], float_args[1], float_args[2], float_args[3]);
+                            Ok(Value::Float(result))
+                        }
+                    },
+                    5 => {
+                        unsafe {
+                            let func: unsafe extern "C" fn(c_double, c_double, c_double, c_double, c_double) -> c_double =
+                                std::mem::transmute(function.symbol_ptr);
+                            let result = func(float_args[0], float_args[1], float_args[2], float_args[3], float_args[4]);
+                            Ok(Value::Float(result))
+                        }
+                    },
+                    _ => {
+                        Err(anyhow!("Double return with {} parameters exceeds supported maximum", params.len()))
+                    }
+                }
+            }
+
             _ => {
                 Err(anyhow!(
                     "Unsupported function signature: {:?} with {} parameters",
@@ -1247,6 +1995,14 @@ impl FFIManager {
                     let result: *mut c_void = cif.call(code_ptr, &ffi_args);
                     // Return pointer as integer (like the fallback implementation)
                     Value::Int(result as usize as i64)
+                },
+                FFIType::SizeT => {
+                    let result: usize = cif.call(code_ptr, &ffi_args);
+                    Value::Int(result as i64)
+                },
+                FFIType::SSizeT => {
+                    let result: isize = cif.call(code_ptr, &ffi_args);
+                    Value::Int(result as i64)
                 },
                 _ => {
                     return Err(anyhow!("Unsupported return type for libffi: {:?}", function.signature.return_type));
