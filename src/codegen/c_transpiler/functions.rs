@@ -3,7 +3,7 @@
 //! This module handles compiling Tauraro functions to C code,
 //! including parameter handling, local variables, and return statements.
 
-use crate::ir::{IRFunction, IRBlock, IRInstruction};
+use crate::ir::{IRFunction, IRInstruction};
 use crate::value::Value;
 use crate::ast::Type;
 use anyhow::Result;
@@ -218,6 +218,13 @@ pub fn generate_instruction(
             };
             local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
             Ok(format!("tauraro_value_t* {} = tauraro_super_call({});", result, args_str))
+        }
+        IRInstruction::DictSetItem { dict, key, value } => {
+            Ok(format!("tauraro_dict_set({}, {}, {});", dict, key, value))
+        }
+        IRInstruction::DictGetItem { dict, key, result } => {
+            local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
+            Ok(format!("tauraro_value_t* {} = tauraro_dict_get({}, {});", result, dict, key))
         }
     }
 }

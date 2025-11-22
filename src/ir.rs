@@ -93,7 +93,6 @@ pub enum IRInstruction {
 
     // Data structures
     ListCreate { elements: Vec<String>, result: String },
-    DictCreate { pairs: Vec<(String, String)>, result: String },
     
     // Import statements
     Import { module: String },
@@ -104,6 +103,11 @@ pub enum IRInstruction {
     ObjectSetAttr { object: String, attr: String, value: String },
     ObjectGetAttr { object: String, attr: String, result: String },
     SuperCall { args: Vec<String>, result: String }, // Added for super() calls
+    
+    // Dictionary instructions
+    DictCreate { pairs: Vec<(String, String)>, result: String },
+    DictSetItem { dict: String, key: String, value: String },
+    DictGetItem { dict: String, key: String, result: String },
 }
 
 // Added struct to store type information in IR

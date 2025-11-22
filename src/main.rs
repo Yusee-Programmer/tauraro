@@ -7,6 +7,8 @@ use std::path::PathBuf;
 // Import from the tauraro library crate instead of redeclaring modules
 #[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
 use tauraro::codegen::c_transpiler::CTranspiler;
+#[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
+use tauraro::codegen::c_transpiler::pure_native::PureNativeTranspiler;
 
 use tauraro::codegen::CodeGenerator;
 
@@ -306,51 +308,16 @@ fn compile_file(
             let mut object_files_to_link: Vec<PathBuf> = Vec::new();
 
             let c_code_bytes = if use_native_transpiler {
-                // Parse memory strategy
-                use tauraro::codegen::c_transpiler::memory_management::MemoryStrategy;
-                let mem_strategy = match memory_strategy {
-                    "auto" | "automatic" => MemoryStrategy::Automatic,
-                    "manual" => MemoryStrategy::Manual,
-                    "arena" | "region" => MemoryStrategy::Arena,
-                    _ => {
-                        eprintln!(
-                            "Warning: Unknown memory strategy '{}', using automatic",
-                            memory_strategy
-                        );
-                        MemoryStrategy::Automatic
-                    }
-                };
-
-                // Create build directory for module compilation
-                let build_dir = PathBuf::from("build");
-                std::fs::create_dir_all(&build_dir)?;
-
-                // Use native type transpiler (works directly from AST)
-                let mut native_transpiler = tauraro::codegen::c_transpiler::optimized_native::OptimizedNativeTranspiler::new()
-                    .with_optimizations(optimization > 0)
-                    .with_memory_strategy(mem_strategy)
-                    .with_build_dir(build_dir.clone());
-                let c_code = native_transpiler.transpile_program(&semantic_ast)?;
-
-                // Store object files for linking later
-                object_files_to_link = native_transpiler.get_object_files();
-
+                // Use pure native C transpiler that generates native C code
+                let mut transpiler = PureNativeTranspiler::new();
+                let c_code = transpiler.transpile_program(&semantic_ast)
+                    .map_err(|e| anyhow::anyhow!("Pure native transpiler error: {}", e))?;
                 c_code.into_bytes()
             } else {
-                // Use traditional IR-based C transpiler
-                let c_transpiler = tauraro::codegen::CTranspiler::new();
-                let options = tauraro::codegen::CodegenOptions {
-                    target: tauraro::codegen::Target::C,
-                    opt_level: optimization,
-                    target_triple: Some(target.to_string()),
-                    export_symbols: export,
-                    generate_debug_info: false,
-                    enable_async: true,
-                    enable_ffi: true,
-                    strict_types,
-                    output_path: output.map(|p| p.to_string_lossy().to_string()),
-                };
-                c_transpiler.generate(ir_module, &options)?
+                // If not using native transpiler, generate IR-based C code anyway
+                let transpiler = tauraro::codegen::CTranspiler::new();
+                let c_code = transpiler.transpile(&ir_module)?;
+                c_code.into_bytes()
             };
 
             // Determine output path
