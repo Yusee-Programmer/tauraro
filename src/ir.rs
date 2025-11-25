@@ -16,6 +16,7 @@ pub struct IRModule {
 pub struct IRFunction {
     pub name: String,
     pub params: Vec<String>,
+    pub defaults: HashMap<String, Value>, // Default values for parameters
     pub blocks: Vec<IRBlock>,
     pub return_type: Option<Type>,
     pub param_types: HashMap<String, Type>, // Added to store parameter types
@@ -48,6 +49,9 @@ pub enum IRInstruction {
     
     // Binary operations
     BinaryOp { op: BinaryOp, left: String, right: String, result: String },
+    
+    // Unary operations
+    UnaryOp { op: crate::ast::UnaryOp, operand: String, result: String },
     
     // Typed binary operations (new)
     TypedBinaryOp { op: BinaryOp, left: String, right: String, result: String, type_info: Type },
@@ -108,6 +112,110 @@ pub enum IRInstruction {
     DictCreate { pairs: Vec<(String, String)>, result: String },
     DictSetItem { dict: String, key: String, value: String },
     DictGetItem { dict: String, key: String, result: String },
+    
+    // === NEW ADVANCED FEATURES ===
+    
+    // Lambda expressions
+    Lambda {
+        params: Vec<String>,
+        body_instructions: Vec<IRInstruction>,
+        captured_vars: Vec<String>,
+        result: String,
+    },
+    
+    // List comprehension
+    ListComprehension {
+        element_expr: Vec<IRInstruction>,  // Instructions to compute each element
+        element_result: String,             // Variable holding element result
+        variable: String,                   // Loop variable
+        iterable: String,                   // Source iterable
+        condition: Option<Vec<IRInstruction>>, // Optional filter condition
+        condition_result: Option<String>,   // Variable holding condition result
+        result: String,                     // Final list result
+    },
+    
+    // Dict comprehension
+    DictComprehension {
+        key_expr: Vec<IRInstruction>,
+        key_result: String,
+        value_expr: Vec<IRInstruction>,
+        value_result: String,
+        variable: String,
+        iterable: String,
+        condition: Option<Vec<IRInstruction>>,
+        condition_result: Option<String>,
+        result: String,
+    },
+    
+    // Slicing
+    Slice {
+        object: String,
+        start: Option<String>,
+        stop: Option<String>,
+        step: Option<String>,
+        result: String,
+    },
+    
+    // Tuple operations
+    TupleCreate { elements: Vec<String>, result: String },
+    TupleUnpack { tuple: String, targets: Vec<String> },
+    
+    // F-string / Format string
+    FormatString {
+        parts: Vec<IRFormatPart>,
+        result: String,
+    },
+    
+    // Context manager (with statement)
+    With {
+        context_expr: String,
+        alias: Option<String>,
+        body: Vec<IRInstruction>,
+    },
+    
+    // Generator/Yield
+    Yield { value: Option<String> },
+    YieldFrom { iterable: String },
+    
+    // Match statement
+    Match {
+        value: String,
+        cases: Vec<MatchCase>,
+        result: Option<String>,
+    },
+    
+    // Variable arguments
+    PackArgs { args: Vec<String>, result: String },      // Pack into *args tuple
+    UnpackArgs { args: String, targets: Vec<String> },   // Unpack *args
+    PackKwargs { pairs: Vec<(String, String)>, result: String },  // Pack into **kwargs dict
+    UnpackKwargs { kwargs: String, targets: Vec<String> },        // Unpack **kwargs
+}
+
+// Format string part for f-strings (IR version)
+#[derive(Debug, Clone)]
+pub enum IRFormatPart {
+    Literal(String),
+    Expression { var: String, format_spec: Option<String> },
+}
+
+// Match case for pattern matching
+#[derive(Debug, Clone)]
+pub struct MatchCase {
+    pub pattern: MatchPattern,
+    pub guard: Option<String>,  // Optional guard variable
+    pub body: Vec<IRInstruction>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MatchPattern {
+    Literal(Value),
+    Variable(String),
+    Wildcard,
+    Tuple(Vec<MatchPattern>),
+    List(Vec<MatchPattern>),
+    Dict(Vec<(String, MatchPattern)>),
+    Class { name: String, patterns: Vec<MatchPattern> },
+    Or(Vec<MatchPattern>),
 }
 
 // Added struct to store type information in IR
@@ -236,7 +344,13 @@ impl Generator {
                 for item in body {
                     match item {
                         Statement::FunctionDef { name: method_name, params, body: method_body, return_type, .. } => {
-                            let function_name = format!("{}__{}", name, method_name);
+                            // Create function name, handling dunder methods specially
+                            // For __init__ and other dunder methods, avoid extra underscores
+                            let function_name = if method_name.starts_with("__") && method_name.ends_with("__") {
+                                format!("{}{}", name, method_name)
+                            } else {
+                                format!("{}__{}", name, method_name)
+                            };
 
                             // Record that this method belongs to this class
                             self.class_methods.entry(name.clone())
@@ -259,8 +373,8 @@ impl Generator {
                                 },
                             );
 
-                            let ir_function = self.process_function(function_name, params, method_body)?;
-                            module.functions.insert(format!("{}__{}", name, method_name), ir_function);
+                            let ir_function = self.process_function(function_name.clone(), params, method_body)?;
+                            module.functions.insert(function_name, ir_function);
                         }
                         Statement::VariableDef { name: attr_name, value: Some(value), .. } => {
                             // Handle class attributes
@@ -283,8 +397,8 @@ impl Generator {
                     }
                 }
                 
-                // Add a default constructor if none exists
-                if !has_init {
+                // Add a default constructor if none exists and no parent class
+                if !has_init && bases.is_empty() {
                     // Record the default __init__ method
                     self.class_methods.entry(name.clone())
                         .or_insert_with(HashSet::new)
@@ -294,6 +408,7 @@ impl Generator {
                     let constructor = IRFunction {
                         name: format!("{}__init__", name),
                         params: vec!["self".to_string()],
+                        defaults: HashMap::new(),
                         blocks: vec![IRBlock {
                             instructions: vec![
                                 IRInstruction::Return { value: Some("self".to_string()) }
@@ -526,7 +641,8 @@ impl Generator {
                 for (elif_cond, elif_body) in elif_branches {
                     let mut elif_cond_instrs = Vec::new();
                     self.process_expression_for_instructions(&mut elif_cond_instrs, &elif_cond)?;
-                    let elif_cond_var = "temp_elif_cond".to_string();
+                    // The condition is evaluated into "temp_result" by process_expression_for_instructions
+                    let elif_cond_var = "temp_result".to_string();
 
                     let mut elif_body_instrs = Vec::new();
                     for stmt in elif_body {
@@ -583,6 +699,11 @@ impl Generator {
                         IRInstruction::LoadConst { result, .. } => Some(result.clone()),
                         IRInstruction::Call { result, .. } => result.clone(),
                         IRInstruction::LoadGlobal { result, .. } => Some(result.clone()),
+                        IRInstruction::LoadLocal { result, .. } => Some(result.clone()),
+                        IRInstruction::ListCreate { result, .. } => Some(result.clone()),
+                        IRInstruction::DictCreate { result, .. } => Some(result.clone()),
+                        IRInstruction::BinaryOp { result, .. } => Some(result.clone()),
+                        IRInstruction::ObjectCreate { result, .. } => Some(result.clone()),
                         _ => None,
                     })
                     .unwrap_or_else(|| "temp_iterable".to_string());
@@ -648,6 +769,10 @@ impl Generator {
                     name: name.clone(),
                     value: "temp_result".to_string()
                 });
+                // Track object types when storing objects
+                if let Some(obj_type) = self.object_types.get("temp_result") {
+                    self.object_types.insert(name.clone(), obj_type.clone());
+                }
             },
             Statement::If { condition, then_branch, elif_branches, else_branch } => {
                 self.process_expression_for_instructions(instructions, &condition)?;
@@ -662,7 +787,8 @@ impl Generator {
                 for (elif_cond, elif_body) in elif_branches {
                     let mut elif_cond_instrs = Vec::new();
                     self.process_expression_for_instructions(&mut elif_cond_instrs, &elif_cond)?;
-                    let elif_cond_var = "temp_elif_cond".to_string();
+                    // The condition is evaluated into "temp_result" by process_expression_for_instructions
+                    let elif_cond_var = "temp_result".to_string();
 
                     let mut elif_body_instrs = Vec::new();
                     for stmt in elif_body {
@@ -724,6 +850,11 @@ impl Generator {
                         IRInstruction::LoadConst { result, .. } => Some(result.clone()),
                         IRInstruction::Call { result, .. } => result.clone(),
                         IRInstruction::LoadGlobal { result, .. } => Some(result.clone()),
+                        IRInstruction::LoadLocal { result, .. } => Some(result.clone()),
+                        IRInstruction::ListCreate { result, .. } => Some(result.clone()),
+                        IRInstruction::DictCreate { result, .. } => Some(result.clone()),
+                        IRInstruction::BinaryOp { result, .. } => Some(result.clone()),
+                        IRInstruction::ObjectCreate { result, .. } => Some(result.clone()),
                         _ => None,
                     })
                     .unwrap_or_else(|| "temp_iterable".to_string());
@@ -759,6 +890,18 @@ impl Generator {
     fn process_function(&mut self, name: String, params: Vec<Param>, body: Vec<Statement>) -> Result<IRFunction> {
         let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
         
+        // Extract default values from parameters
+        let mut defaults = HashMap::new();
+        for param in &params {
+            if let Some(default_expr) = &param.default {
+                // Convert the expression to a value (only works for literals)
+                if let Expr::Literal(lit) = default_expr {
+                    let default_val = self.literal_to_value(lit);
+                    defaults.insert(param.name.clone(), default_val);
+                }
+            }
+        }
+        
         // Create parameter type mapping
         let mut param_types = HashMap::new();
         for param in &params {
@@ -786,6 +929,7 @@ impl Generator {
         Ok(IRFunction {
             name,
             params: param_names,
+            defaults,
             blocks,
             return_type,
             param_types,
@@ -1009,6 +1153,38 @@ impl Generator {
                         args: arg_names,
                         result: Some("temp_result".to_string())
                     });
+                } else if method == "upper" || method == "lower" || method == "strip" || method == "split" || method == "join" || method == "append" || method == "remove" {
+                    // Built-in methods for strings and lists
+                    self.process_expression_for_instructions(instructions, &object)?;
+                    let object_var = "temp_object".to_string();
+                    instructions.push(IRInstruction::LoadGlobal {
+                        name: "temp_result".to_string(),
+                        result: object_var.clone()
+                    });
+
+                    // Process each argument and collect their result names
+                    let mut arg_names: Vec<String> = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_result = format!("method_arg_{}", i);
+                        self.process_expression_for_instructions(instructions, arg)?;
+                        instructions.push(IRInstruction::LoadGlobal {
+                            name: "temp_result".to_string(),
+                            result: arg_result.clone()
+                        });
+                        arg_names.push(arg_result);
+                    }
+
+                    // Built-in methods use text__ or lst__ prefix based on method name
+                    let func_prefix = if method == "append" || method == "remove" { "lst" } else { "text" };
+                    let func_name = format!("{}__{}",  func_prefix, method);
+                    let mut method_args = vec![object_var];
+                    method_args.extend(arg_names);
+
+                    instructions.push(IRInstruction::Call {
+                        func: func_name,
+                        args: method_args,
+                        result: Some("temp_result".to_string())
+                    });
                 } else {
                     // Object method call: obj.method() -> ClassName__method(obj, ...)
                     // First process the object expression to get a proper variable
@@ -1026,10 +1202,21 @@ impl Generator {
 
                     // Get the class name for this object
                     // First try object_var (the processed variable), then fall back to object_name
-                    let class_name = self.object_types.get(&object_var)
+                    let mut class_name = self.object_types.get(&object_var)
                         .or_else(|| self.object_types.get(&object_name))
                         .cloned()
                         .unwrap_or_else(|| object_name.clone());
+
+                    // If the class name looks like a variable (starts with lowercase),
+                    // try to find a matching class by capitalizing it
+                    if class_name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+                        let capitalized = format!("{}{}", 
+                            class_name.chars().next().unwrap().to_uppercase().to_string(),
+                            &class_name[1..]);
+                        if self.class_methods.contains_key(&capitalized) {
+                            class_name = capitalized;
+                        }
+                    }
 
                     // Find which class actually defines this method (may be in a parent class)
                     let defining_class = self.find_method_class(&class_name, method);
@@ -1157,6 +1344,80 @@ impl Generator {
                     }
                 }
             },
+            Expr::Compare { left, ops, comparators } => {
+                // Handle comparison operations (>, <, ==, etc.)
+                if ops.len() == 1 && comparators.len() == 1 {
+                    let left_temp = "comp_left".to_string();
+                    let right_temp = "comp_right".to_string();
+
+                    // Evaluate left operand
+                    match left.as_ref() {
+                        Expr::Literal(lit) => {
+                            instructions.push(IRInstruction::LoadConst {
+                                value: self.literal_to_value(lit),
+                                result: left_temp.clone()
+                            });
+                        },
+                        Expr::Identifier(name) => {
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: name.clone(),
+                                result: left_temp.clone()
+                            });
+                        },
+                        _ => {
+                            // Recursively process complex expressions
+                            self.process_expression_for_instructions(instructions, left)?;
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: "temp_result".to_string(),
+                                result: left_temp.clone()
+                            });
+                        }
+                    }
+
+                    // Evaluate right operand
+                    match &comparators[0] {
+                        Expr::Literal(lit) => {
+                            instructions.push(IRInstruction::LoadConst {
+                                value: self.literal_to_value(lit),
+                                result: right_temp.clone()
+                            });
+                        },
+                        Expr::Identifier(name) => {
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: name.clone(),
+                                result: right_temp.clone()
+                            });
+                        },
+                        _ => {
+                            // Recursively process complex expressions
+                            self.process_expression_for_instructions(instructions, &comparators[0])?;
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: "temp_result".to_string(),
+                                result: right_temp.clone()
+                            });
+                        }
+                    }
+
+                    // Convert CompareOp to BinaryOp
+                    let binary_op = match &ops[0] {
+                        CompareOp::Eq => BinaryOp::Eq,
+                        CompareOp::NotEq => BinaryOp::Ne,
+                        CompareOp::Lt => BinaryOp::Lt,
+                        CompareOp::LtE => BinaryOp::Le,
+                        CompareOp::Gt => BinaryOp::Gt,
+                        CompareOp::GtE => BinaryOp::Ge,
+                        _ => BinaryOp::Eq, // fallback
+                    };
+
+                    // Generate binary operation for comparison
+                    instructions.push(IRInstruction::BinaryOp {
+                        op: binary_op,
+                        left: left_temp,
+                        right: right_temp,
+                        result: "temp_result".to_string()
+                    });
+                }
+            },
             Expr::Call { func, args, .. } => {
                 // Process function call
                 let func_name = self.expression_to_string(&func);
@@ -1184,49 +1445,23 @@ impl Generator {
                             let left_temp = format!("{}_left", arg_result);
                             let right_temp = format!("{}_right", arg_result);
 
-                            // Evaluate left side
-                            match left.as_ref() {
-                                Expr::Literal(lit) => {
-                                    instructions.push(IRInstruction::LoadConst {
-                                        value: self.literal_to_value(&lit),
-                                        result: left_temp.clone()
-                                    });
-                                },
-                                Expr::Identifier(n) => {
-                                    instructions.push(IRInstruction::LoadGlobal {
-                                        name: n.clone(),
-                                        result: left_temp.clone()
-                                    });
-                                },
-                                _ => {
-                                    instructions.push(IRInstruction::LoadConst {
-                                        value: Value::None,
-                                        result: left_temp.clone()
-                                    });
-                                }
-                            }
+                            // Recursively evaluate left and right using process_expression_for_instructions
+                            // to handle complex expressions
+                            let mut left_instrs = Vec::new();
+                            self.process_expression_for_instructions(&mut left_instrs, left)?;
+                            instructions.extend(left_instrs);
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: "temp_result".to_string(),
+                                result: left_temp.clone()
+                            });
 
-                            // Evaluate right side
-                            match right.as_ref() {
-                                Expr::Literal(lit) => {
-                                    instructions.push(IRInstruction::LoadConst {
-                                        value: self.literal_to_value(&lit),
-                                        result: right_temp.clone()
-                                    });
-                                },
-                                Expr::Identifier(n) => {
-                                    instructions.push(IRInstruction::LoadGlobal {
-                                        name: n.clone(),
-                                        result: right_temp.clone()
-                                    });
-                                },
-                                _ => {
-                                    instructions.push(IRInstruction::LoadConst {
-                                        value: Value::None,
-                                        result: right_temp.clone()
-                                    });
-                                }
-                            }
+                            let mut right_instrs = Vec::new();
+                            self.process_expression_for_instructions(&mut right_instrs, right)?;
+                            instructions.extend(right_instrs);
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: "temp_result".to_string(),
+                                result: right_temp.clone()
+                            });
 
                             // Generate binary operation
                             instructions.push(IRInstruction::BinaryOp {
@@ -1235,6 +1470,50 @@ impl Generator {
                                 right: right_temp,
                                 result: arg_result.clone()
                             });
+                        },
+                        Expr::Compare { left, ops, comparators } => {
+                            // Handle comparison operations (>, <, ==, etc.)
+                            if ops.len() == 1 && comparators.len() == 1 {
+                                let left_temp = format!("{}_left", arg_result);
+                                let right_temp = format!("{}_right", arg_result);
+
+                                // Evaluate left and right operands
+                                let mut left_instrs = Vec::new();
+                                self.process_expression_for_instructions(&mut left_instrs, left)?;
+                                instructions.extend(left_instrs);
+                                instructions.push(IRInstruction::LoadGlobal {
+                                    name: "temp_result".to_string(),
+                                    result: left_temp.clone()
+                                });
+
+                                let mut right_instrs = Vec::new();
+                                self.process_expression_for_instructions(&mut right_instrs, &comparators[0])?;
+                                instructions.extend(right_instrs);
+                                instructions.push(IRInstruction::LoadGlobal {
+                                    name: "temp_result".to_string(),
+                                    result: right_temp.clone()
+                                });
+
+                                // Convert CompareOp to BinaryOp
+                                let binary_op = match &ops[0] {
+                                    CompareOp::Eq => BinaryOp::Eq,
+                                    CompareOp::NotEq => BinaryOp::Ne,
+                                    CompareOp::Lt => BinaryOp::Lt,
+                                    CompareOp::LtE => BinaryOp::Le,
+                                    CompareOp::Gt => BinaryOp::Gt,
+                                    CompareOp::GtE => BinaryOp::Ge,
+                                    _ => BinaryOp::Eq, // fallback
+                                };
+
+                                // Generate binary operation for comparison
+                                instructions.push(IRInstruction::BinaryOp {
+                                    op: binary_op,
+                                    left: left_temp,
+                                    right: right_temp,
+                                    result: arg_result.clone()
+                                });
+                            } else {
+                            }
                         },
                         Expr::Attribute { object, name } => {
                             // Handle attribute access: object.attribute
@@ -1276,10 +1555,9 @@ impl Generator {
                             }
 
                             // Create list from elements
-                            instructions.push(IRInstruction::Call {
-                                func: "list".to_string(),
-                                args: element_names,
-                                result: Some(arg_result.clone())
+                            instructions.push(IRInstruction::ListCreate {
+                                elements: element_names,
+                                result: arg_result.clone()
                             });
                         },
                         Expr::Tuple(elements) => {
@@ -1319,10 +1597,78 @@ impl Generator {
                                 result: Some(arg_result.clone())
                             });
                         },
+                        Expr::MethodCall { object, method, args: method_args, kwargs: _ } => {
+                            // Handle method call as an argument
+                            let object_name = self.expression_to_string(&object);
+                            
+                            // Determine the class name for method resolution
+                            let class_name = self.object_types.get(&object_name)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    // Try to infer from the variable name
+                                    if let Expr::Identifier(name) = object.as_ref() {
+                                        // Capitalize first letter as a guess
+                                        let mut chars = name.chars();
+                                        match chars.next() {
+                                            None => name.clone(),
+                                            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                                        }
+                                    } else {
+                                        object_name.clone()
+                                    }
+                                });
+                            
+                            // Prepare method arguments
+                            let mut method_arg_names = vec![object_name.clone()];
+                            for (j, method_arg) in method_args.iter().enumerate() {
+                                let method_arg_result = format!("{}_method_arg_{}", arg_result, j);
+                                match method_arg {
+                                    Expr::Literal(lit) => {
+                                        instructions.push(IRInstruction::LoadConst {
+                                            value: self.literal_to_value(&lit),
+                                            result: method_arg_result.clone()
+                                        });
+                                    },
+                                    Expr::Identifier(name) => {
+                                        instructions.push(IRInstruction::LoadGlobal {
+                                            name: name.clone(),
+                                            result: method_arg_result.clone()
+                                        });
+                                    },
+                                    _ => {
+                                        instructions.push(IRInstruction::LoadConst {
+                                            value: Value::None,
+                                            result: method_arg_result.clone()
+                                        });
+                                    }
+                                }
+                                method_arg_names.push(method_arg_result);
+                            }
+                            
+                            // Generate method call with class name prefix
+                            let method_call_name = format!("{}__{}",class_name, method);
+                            instructions.push(IRInstruction::Call {
+                                func: method_call_name,
+                                args: method_arg_names,
+                                result: Some(arg_result.clone())
+                            });
+                        },
+                        Expr::FormatString { parts } => {
+                            // Handle f-string as an argument
+                            self.process_expression_for_instructions(instructions, arg)?;
+                            // Move the result from temp_result to arg_result
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: "temp_result".to_string(),
+                                result: arg_result.clone()
+                            });
+                        },
                         _ => {
-                            // For other complex expressions, use a temp value
-                            instructions.push(IRInstruction::LoadConst {
-                                value: Value::None,
+                            // For other complex expressions (like comparisons, complex binary ops),
+                            // process them using process_expression_for_instructions
+                            self.process_expression_for_instructions(instructions, arg)?;
+                            // Move the result from temp_result to arg_result
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: "temp_result".to_string(),
                                 result: arg_result.clone()
                             });
                         }
@@ -1361,7 +1707,24 @@ impl Generator {
                         result: "temp_result".to_string()
                     });
                     // Record the object type for method call resolution
-                    self.object_types.insert("temp_result".to_string(), class_name);
+                    self.object_types.insert("temp_result".to_string(), class_name.clone());
+                    
+                    // If there are arguments, call __init__ with them
+                    if !arg_names.is_empty() {
+                        // Create the __init__ method name (ClassName__init__)
+                        let init_method_name = format!("{}__init__", class_name);
+                        
+                        // Call __init__ with object as first argument
+                        // Note: __init__ returns None, so we don't capture the result
+                        let mut init_args = vec!["temp_result".to_string()];
+                        init_args.extend(arg_names);
+                        
+                        instructions.push(IRInstruction::Call {
+                            func: init_method_name,
+                            args: init_args,
+                            result: None  // Don't capture __init__ return value
+                        });
+                    }
                 } else {
                     // Regular function call
                     instructions.push(IRInstruction::Call {
@@ -1370,6 +1733,111 @@ impl Generator {
                         result: Some("temp_result".to_string())
                     });
                 }
+            },
+            Expr::List(elements) => {
+                // Handle list literal: [item1, item2, ...]
+                let mut element_names = Vec::new();
+                for (i, elem) in elements.iter().enumerate() {
+                    let elem_result = format!("temp_elem_{}", i);
+                    match elem {
+                        Expr::Literal(lit) => {
+                            instructions.push(IRInstruction::LoadConst {
+                                value: self.literal_to_value(&lit),
+                                result: elem_result.clone()
+                            });
+                        },
+                        Expr::Identifier(name) => {
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: name.clone(),
+                                result: elem_result.clone()
+                            });
+                        },
+                        _ => {
+                            // For complex expressions, recursively process
+                            self.process_expression_for_instructions(instructions, elem)?;
+                            instructions.push(IRInstruction::LoadGlobal {
+                                name: "temp_result".to_string(),
+                                result: elem_result.clone()
+                            });
+                        }
+                    }
+                    element_names.push(elem_result);
+                }
+
+                // Create list from elements
+                instructions.push(IRInstruction::ListCreate {
+                    elements: element_names,
+                    result: "temp_result".to_string()
+                });
+            },
+            Expr::Dict(pairs) => {
+                // Handle dict literal: {key1: value1, key2: value2, ...}
+                let mut pair_names = Vec::new();
+                for (i, item) in pairs.iter().enumerate() {
+                    match item {
+                        crate::ast::DictItem::KeyValue(key, value) => {
+                            let key_result = format!("temp_key_{}", i);
+                            let value_result = format!("temp_value_{}", i);
+
+                            // Process key
+                            match key {
+                                Expr::Literal(lit) => {
+                                    instructions.push(IRInstruction::LoadConst {
+                                        value: self.literal_to_value(&lit),
+                                        result: key_result.clone()
+                                    });
+                                },
+                                Expr::Identifier(name) => {
+                                    instructions.push(IRInstruction::LoadGlobal {
+                                        name: name.clone(),
+                                        result: key_result.clone()
+                                    });
+                                },
+                                _ => {
+                                    self.process_expression_for_instructions(instructions, key)?;
+                                    instructions.push(IRInstruction::LoadGlobal {
+                                        name: "temp_result".to_string(),
+                                        result: key_result.clone()
+                                    });
+                                }
+                            }
+
+                            // Process value
+                            match value {
+                                Expr::Literal(lit) => {
+                                    instructions.push(IRInstruction::LoadConst {
+                                        value: self.literal_to_value(&lit),
+                                        result: value_result.clone()
+                                    });
+                                },
+                                Expr::Identifier(name) => {
+                                    instructions.push(IRInstruction::LoadGlobal {
+                                        name: name.clone(),
+                                        result: value_result.clone()
+                                    });
+                                },
+                                _ => {
+                                    self.process_expression_for_instructions(instructions, value)?;
+                                    instructions.push(IRInstruction::LoadGlobal {
+                                        name: "temp_result".to_string(),
+                                        result: value_result.clone()
+                                    });
+                                }
+                            }
+
+                            pair_names.push((key_result, value_result));
+                        },
+                        crate::ast::DictItem::Unpacking(_expr) => {
+                            // For now, skip unpacking
+                        }
+                    }
+                }
+
+                // Create dict from key-value pairs
+                instructions.push(IRInstruction::DictCreate {
+                    pairs: pair_names,
+                    result: "temp_result".to_string()
+                });
             },
             _ => {
                 // For other expressions, add placeholder
@@ -1674,7 +2142,25 @@ impl Generator {
                         result: "temp".to_string()
                     });
                     // Record the object type for method call resolution
-                    self.object_types.insert("temp".to_string(), class_name);
+                    self.object_types.insert("temp".to_string(), class_name.clone());
+                    
+                    // Check if the class has an __init__ method defined (directly or inherited)
+                    let init_class = self.find_method_class(&class_name, "__init__");
+                    if init_class != class_name || self.class_methods.get(&class_name)
+                        .map(|m| m.contains("__init__"))
+                        .unwrap_or(false) {
+                        // Only call __init__ if it exists somewhere in the hierarchy
+                        // Method names use ClassName__method format (2 underscores)
+                        let init_func = format!("{}__init__", init_class);
+                        let mut init_args = vec!["temp".to_string()];
+                        init_args.extend(arg_names);
+                        
+                        module.globals.push(IRInstruction::Call {
+                            func: init_func,
+                            args: init_args,
+                            result: None
+                        });
+                    }
                 } else {
                     // Regular function call
                     module.globals.push(IRInstruction::Call {
@@ -1694,10 +2180,9 @@ impl Generator {
                 }
 
                 // Create list from elements
-                module.globals.push(IRInstruction::Call {
-                    func: "list".to_string(),
-                    args: element_names,
-                    result: Some("temp".to_string())
+                module.globals.push(IRInstruction::ListCreate {
+                    elements: element_names,
+                    result: "temp".to_string()
                 });
             },
             Expr::Dict(pairs) => {
@@ -1785,6 +2270,19 @@ impl Generator {
                     result: result_var.to_string()
                 });
             },
+            Expr::UnaryOp { op, operand } => {
+                let operand_temp = format!("{}_operand", result_var);
+                
+                // Recursively evaluate the operand
+                self.process_expression_to_result(module, operand, &operand_temp)?;
+                
+                // Generate unary operation
+                module.globals.push(IRInstruction::UnaryOp {
+                    op: op.clone(),
+                    operand: operand_temp,
+                    result: result_var.to_string()
+                });
+            },
             Expr::Call { func, args, .. } => {
                 let func_name = self.expression_to_string(&func);
 
@@ -1829,7 +2327,25 @@ impl Generator {
                         result: result_var.to_string()
                     });
                     // Record the object type for method call resolution
-                    self.object_types.insert(result_var.to_string(), class_name);
+                    self.object_types.insert(result_var.to_string(), class_name.clone());
+                    
+                    // Check if the class has an __init__ method defined (directly or inherited)
+                    let init_class = self.find_method_class(&class_name, "__init__");
+                    if init_class != class_name || self.class_methods.get(&class_name)
+                        .map(|m| m.contains("__init__"))
+                        .unwrap_or(false) {
+                        // Only call __init__ if it exists somewhere in the hierarchy
+                        // Method names use ClassName__method format (2 underscores)
+                        let init_func = format!("{}__init__", init_class);
+                        let mut init_args = vec![result_var.to_string()];
+                        init_args.extend(arg_names);
+                        
+                        module.globals.push(IRInstruction::Call {
+                            func: init_func,
+                            args: init_args,
+                            result: None
+                        });
+                    }
                 } else {
                     module.globals.push(IRInstruction::Call {
                         func: func_name,
@@ -2026,10 +2542,9 @@ impl Generator {
                 }
 
                 // Create list from elements
-                module.globals.push(IRInstruction::Call {
-                    func: "list".to_string(),
-                    args: element_names,
-                    result: Some(result_var.to_string())
+                module.globals.push(IRInstruction::ListCreate {
+                    elements: element_names,
+                    result: result_var.to_string()
                 });
             },
             Expr::Tuple(elements) => {
@@ -2075,6 +2590,43 @@ impl Generator {
                     pairs: pair_names,
                     result: result_var.to_string()
                 });
+            },
+            Expr::Compare { left, ops, comparators } => {
+                // Handle comparison operations (>, <, ==, etc.)
+                if ops.len() == 1 && comparators.len() == 1 {
+                    let left_temp = format!("{}_left", result_var);
+                    let right_temp = format!("{}_right", result_var);
+
+                    // Recursively evaluate left and right
+                    self.process_expression_to_result(module, left, &left_temp)?;
+                    self.process_expression_to_result(module, &comparators[0], &right_temp)?;
+
+                    // Convert CompareOp to BinaryOp
+                    let binary_op = match &ops[0] {
+                        CompareOp::Eq => BinaryOp::Eq,
+                        CompareOp::NotEq => BinaryOp::Ne,
+                        CompareOp::Lt => BinaryOp::Lt,
+                        CompareOp::LtE => BinaryOp::Le,
+                        CompareOp::Gt => BinaryOp::Gt,
+                        CompareOp::GtE => BinaryOp::Ge,
+                        _ => BinaryOp::Eq, // fallback
+                    };
+
+                    // Generate binary operation for comparison
+                    module.globals.push(IRInstruction::BinaryOp {
+                        op: binary_op,
+                        left: left_temp,
+                        right: right_temp,
+                        result: result_var.to_string()
+                    });
+                } else {
+                    // Multiple comparisons (chained) - not yet supported
+                    // For now, fallback to None
+                    module.globals.push(IRInstruction::LoadConst {
+                        value: Value::None,
+                        result: result_var.to_string()
+                    });
+                }
             },
             _ => {
                 module.globals.push(IRInstruction::LoadConst {
