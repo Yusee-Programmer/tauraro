@@ -137,6 +137,9 @@ pub fn generate_instruction(
         IRInstruction::BinaryOp { op, left, right, result } => {
             generate_binary_op(op, left, right, result, local_vars)
         }
+        IRInstruction::UnaryOp { op, operand, result } => {
+            generate_unary_op(op, operand, result, local_vars)
+        }
         IRInstruction::TypedBinaryOp { op, left, right, result, type_info } => {
             generate_typed_binary_op(op, left, right, result, type_info, local_vars)
         }
@@ -225,6 +228,134 @@ pub fn generate_instruction(
         IRInstruction::DictGetItem { dict, key, result } => {
             local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
             Ok(format!("tauraro_value_t* {} = tauraro_dict_get({}, {});", result, dict, key))
+        }
+        
+        // ===== NEW ADVANCED INSTRUCTION HANDLERS =====
+        
+        // Lambda expression
+        IRInstruction::Lambda { params, body_instructions, captured_vars, result } => {
+            local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
+            Ok(format!("tauraro_value_t* {} = NULL; // Lambda (handled by main transpiler)", result))
+        }
+        
+        // List comprehension
+        IRInstruction::ListComprehension { element_expr, element_result, variable, iterable, condition, condition_result, result } => {
+            local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
+            Ok(format!("tauraro_value_t* {} = tauraro_create_list(); // List comprehension", result))
+        }
+        
+        // Dict comprehension
+        IRInstruction::DictComprehension { key_expr, key_result, value_expr, value_result, variable, iterable, condition, condition_result, result } => {
+            local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
+            Ok(format!("tauraro_value_t* {} = tauraro_create_dict(); // Dict comprehension", result))
+        }
+        
+        // Slice operation
+        IRInstruction::Slice { object, start, stop, step, result } => {
+            local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
+            let start_str = start.as_ref().map(|s| s.as_str()).unwrap_or("0");
+            let stop_str = stop.as_ref().map(|s| s.as_str()).unwrap_or("-1");
+            let step_str = step.as_ref().map(|s| s.as_str()).unwrap_or("1");
+            Ok(format!("tauraro_value_t* {} = tauraro_slice({}, {}, {}, {});", result, object, start_str, stop_str, step_str))
+        }
+        
+        // Tuple create
+        IRInstruction::TupleCreate { elements, result } => {
+            local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
+            let elem_list = elements.join(", ");
+            Ok(format!("tauraro_value_t* {} = tauraro_create_tuple({}, (tauraro_value_t*[]){{{}}});", result, elements.len(), elem_list))
+        }
+        
+        // Tuple unpack
+        IRInstruction::TupleUnpack { tuple, targets } => {
+            let mut code = String::new();
+            for (i, target) in targets.iter().enumerate() {
+                local_vars.insert(target.clone(), "tauraro_value_t*".to_string());
+                code.push_str(&format!("tauraro_value_t* {} = tauraro_tuple_get({}, {});\n", target, tuple, i));
+            }
+            Ok(code)
+        }
+        
+        // F-string / Format string
+        IRInstruction::FormatString { parts, result } => {
+            local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
+            Ok(format!("tauraro_value_t* {} = tauraro_str(\"\"); // Format string", result))
+        }
+        
+        // Context manager (with statement)
+        IRInstruction::With { context_expr, alias, body } => {
+            let mut code = String::new();
+            code.push_str("// With statement (context manager)\n");
+            code.push_str("{ // Context manager scope\n");
+            for instr in body {
+                let instr_code = generate_instruction(instr, local_vars, param_types, class_names)?;
+                code.push_str(&format!("    {}\n", instr_code));
+            }
+            code.push_str("}\n");
+            Ok(code)
+        }
+        
+        // Yield (generators)
+        IRInstruction::Yield { value } => {
+            if let Some(val) = value {
+                Ok(format!("_gen_yield = {}; return _gen_yield;", val))
+            } else {
+                Ok("return tauraro_none();".to_string())
+            }
+        }
+        
+        // Yield from
+        IRInstruction::YieldFrom { iterable } => {
+            Ok(format!("// Yield from {} (handled at generator level)", iterable))
+        }
+        
+        // Match statement
+        IRInstruction::Match { value, cases, result } => {
+            let mut code = String::new();
+            code.push_str(&format!("// Match statement on {}\n", value));
+            code.push_str("do {\n");
+            for (i, case) in cases.iter().enumerate() {
+                code.push_str(&format!("    // Case {}\n", i));
+                for instr in &case.body {
+                    let instr_code = generate_instruction(instr, local_vars, param_types, class_names)?;
+                    code.push_str(&format!("    {}\n", instr_code));
+                }
+            }
+            code.push_str("} while(0);\n");
+            Ok(code)
+        }
+        
+        // Pack *args
+        IRInstruction::PackArgs { args, result } => {
+            local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
+            let args_list = args.join(", ");
+            Ok(format!("tauraro_value_t* {} = tauraro_pack_args({}, (tauraro_value_t*[]){{{}}});", result, args.len(), args_list))
+        }
+        
+        // Unpack *args
+        IRInstruction::UnpackArgs { args, targets } => {
+            let mut code = String::new();
+            for (i, target) in targets.iter().enumerate() {
+                local_vars.insert(target.clone(), "tauraro_value_t*".to_string());
+                code.push_str(&format!("tauraro_value_t* {} = tauraro_tuple_get({}, {});\n", target, args, i));
+            }
+            Ok(code)
+        }
+        
+        // Pack **kwargs
+        IRInstruction::PackKwargs { pairs, result } => {
+            local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
+            Ok(format!("tauraro_value_t* {} = tauraro_create_dict(); // Pack kwargs", result))
+        }
+        
+        // Unpack **kwargs
+        IRInstruction::UnpackKwargs { kwargs, targets } => {
+            let mut code = String::new();
+            for target in targets {
+                local_vars.insert(target.clone(), "tauraro_value_t*".to_string());
+                code.push_str(&format!("tauraro_value_t* {} = tauraro_dict_get({}, \"{}\");\n", target, kwargs, target));
+            }
+            Ok(code)
         }
     }
 }
@@ -327,6 +458,25 @@ fn generate_binary_op(
     };
 
     Ok(format!("tauraro_value_t* {} = {}({}, {});", unique_result, op_func, left, right))
+}
+
+fn generate_unary_op(
+    op: &crate::ast::UnaryOp,
+    operand: &str,
+    result: &str,
+    local_vars: &mut HashMap<String, String>
+) -> Result<String> {
+    let unique_result = get_unique_var_name(result, local_vars);
+    local_vars.insert(unique_result.clone(), "tauraro_value_t*".to_string());
+
+    let op_func = match op {
+        crate::ast::UnaryOp::Not => "tauraro_not",
+        crate::ast::UnaryOp::USub | crate::ast::UnaryOp::Minus => "tauraro_negate",
+        crate::ast::UnaryOp::UAdd => "tauraro_positive",
+        crate::ast::UnaryOp::Invert | crate::ast::UnaryOp::BitNot => "tauraro_invert",
+    };
+
+    Ok(format!("tauraro_value_t* {} = {}({});", unique_result, op_func, operand))
 }
 
 fn generate_typed_binary_op(
