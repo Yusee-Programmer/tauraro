@@ -106,6 +106,7 @@ pub enum Statement {
     AttributeAssignment {
         object: Expr,
         name: String,
+        type_annotation: Option<Type>,
         value: Expr,
     },
     SubscriptAssignment {

@@ -1,4 +1,4 @@
-use crate::lexer::{Token, TokenInfo};
+﻿use crate::lexer::{Token, TokenInfo};
 use crate::ast::*;
 use crate::ast::UnpackTarget;
 use thiserror::Error;
@@ -301,6 +301,34 @@ impl Parser {
             Token::KwPass => self.pass_statement(),
             Token::At => self.decorated_statement(),
             _ => {
+                // TYPED ATTRIBUTE CHECK: self.attr: type = value
+                if matches!(self.peek().token, Token::Identifier(_)) {
+                    let attr_checkpoint = self.current;
+                    let obj_name = self.consume_identifier()?;
+                    
+                    if self.match_token(&[Token::Dot]) {
+                        if let Token::Identifier(attr_name) = &self.peek().token.clone() {
+                            let attr = attr_name.clone();
+                            self.advance();
+                            
+                            if self.match_token(&[Token::Colon]) {
+                                let type_ann = Some(self.type_annotation()?);
+                                self.consume(Token::Assign, "Expected '=' after type")?;
+                                let val = self.expression()?;
+                                self.match_token(&[Token::Semicolon, Token::Newline]);
+                                
+                                return Ok(Statement::AttributeAssignment {
+                                    object: Expr::Identifier(obj_name),
+                                    name: attr,
+                                    type_annotation: type_ann,
+                                    value: val,
+                                });
+                            }
+                        }
+                    }
+                    self.current = attr_checkpoint;
+                }
+                
                 // Check if this is a typed variable declaration (identifier : type = value)
                 if matches!(self.peek().token, Token::Identifier(_)) {
                     let checkpoint = self.current;
@@ -1956,6 +1984,7 @@ impl Parser {
             Expr::Attribute { object, name } => Ok(Statement::AttributeAssignment {
                 object: *object,
                 name,
+                type_annotation: None,
                 value: binop_expr,
             }),
             Expr::Subscript { object, index } => Ok(Statement::SubscriptAssignment {
@@ -1979,6 +2008,7 @@ impl Parser {
             Expr::Attribute { object, name } => Ok(Statement::AttributeAssignment {
                 object: *object,
                 name,
+                type_annotation: None,
                 value,
             }),
             Expr::Subscript { object, index } => Ok(Statement::SubscriptAssignment {
@@ -2437,10 +2467,44 @@ impl Parser {
     }
 
     fn type_annotation(&mut self) -> Result<Type, ParseError> {
-        // Simplified type annotation parsing
-        // In a full implementation, this would parse complex type annotations
+        // Parse type annotations including generics like list[int], dict[str, int], tuple[int, str]
         let name = self.consume_identifier()?;
-        Ok(Type::Simple(name))
+        
+        // Check for generic type parameters (e.g., list[int], dict[str, int])
+        if self.match_token(&[Token::LBracket]) {
+            let mut type_args = Vec::new();
+            
+            // Parse first type argument
+            if !self.check(&Token::RBracket) {
+                type_args.push(self.type_annotation()?);
+                
+                // Parse additional type arguments separated by commas
+                while self.match_token(&[Token::Comma]) {
+                    type_args.push(self.type_annotation()?);
+                }
+            }
+            
+            self.consume(Token::RBracket, "Expected ']' after type arguments")?;
+            
+            Ok(Type::Generic {
+                name,
+                args: type_args,
+            })
+        } else if self.match_token(&[Token::BitOr]) {
+            // Handle union types: int | str
+            let mut types = vec![Type::Simple(name)];
+            types.push(self.type_annotation()?);
+            while self.match_token(&[Token::BitOr]) {
+                types.push(self.type_annotation()?);
+            }
+            Ok(Type::Union(types))
+        } else if self.check(&Token::Question) {
+            // Handle optional shorthand: int?
+            self.advance();
+            Ok(Type::Optional(Box::new(Type::Simple(name))))
+        } else {
+            Ok(Type::Simple(name))
+        }
     }
 
     fn extract_docstring(&self, body: &[Statement]) -> Option<String> {
