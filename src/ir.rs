@@ -121,28 +121,29 @@ pub enum IRInstruction {
         body_instructions: Vec<IRInstruction>,
         captured_vars: Vec<String>,
         result: String,
+        body_result_var: String, // Variable that holds the result of the body
     },
     
     // List comprehension
     ListComprehension {
-        element_expr: Vec<IRInstruction>,  // Instructions to compute each element
+        element_instrs: Vec<IRInstruction>,  // Instructions to compute element
         element_result: String,             // Variable holding element result
         variable: String,                   // Loop variable
         iterable: String,                   // Source iterable
-        condition: Option<Vec<IRInstruction>>, // Optional filter condition
+        condition_instrs: Vec<IRInstruction>, // Instructions to compute condition
         condition_result: Option<String>,   // Variable holding condition result
         result: String,                     // Final list result
     },
     
     // Dict comprehension
     DictComprehension {
-        key_expr: Vec<IRInstruction>,
+        key_instrs: Vec<IRInstruction>,
         key_result: String,
-        value_expr: Vec<IRInstruction>,
+        value_instrs: Vec<IRInstruction>,
         value_result: String,
         variable: String,
         iterable: String,
-        condition: Option<Vec<IRInstruction>>,
+        condition_instrs: Vec<IRInstruction>,
         condition_result: Option<String>,
         result: String,
     },
@@ -159,6 +160,7 @@ pub enum IRInstruction {
     // Tuple operations
     TupleCreate { elements: Vec<String>, result: String },
     TupleUnpack { tuple: String, targets: Vec<String> },
+    TupleGetItem { tuple: String, index: i64, result: String },
     
     // F-string / Format string
     FormatString {
@@ -519,6 +521,10 @@ impl Generator {
                             });
                         }
                     },
+                    Expr::ListComp { .. } | Expr::DictComp { .. } | Expr::SetComp { .. } | Expr::GeneratorExp { .. } | Expr::Lambda { .. } => {
+                        // For comprehensions, generator expressions, and lambdas, use process_expression_to_result directly
+                        self.process_expression_to_result(module, &value, &temp_var)?;
+                    },
                     _ => {
                         // For other expressions, use the old method
                         self.process_expression(module, &value)?;
@@ -543,7 +549,10 @@ impl Generator {
                 }
 
                 // Store the result in the global variable
-                if let Some(var_type) = &type_annotation {
+                let var_type_from_info = self.type_info.variable_types.get(&name).cloned();
+                let final_type = type_annotation.clone().or(var_type_from_info);
+                
+                if let Some(var_type) = &final_type {
                     module.globals.push(IRInstruction::StoreTypedGlobal {
                         name: name.clone(),
                         value: temp_var.clone(),
@@ -561,10 +570,23 @@ impl Generator {
                     self.object_types.insert(name.clone(), class_name.clone());
                 }
             },
+            Statement::TupleUnpack { targets, value } => {
+                // Handle tuple unpacking: a, b, c = (1, 2, 3)
+                let value_var = "tuple_unpack_value".to_string();
+                
+                // Evaluate the right-hand side expression
+                self.process_expression_to_result(module, &value, &value_var)?;
+                
+                // Generate TupleUnpack IR instruction
+                module.globals.push(IRInstruction::TupleUnpack {
+                    tuple: value_var,
+                    targets: targets.clone(),
+                });
+            },
             Statement::Expression(expr) => {
                 self.process_expression(module, &expr)?;
             },
-            Statement::AttributeAssignment { object, name: attr_name, value } => {
+            Statement::AttributeAssignment { object, name: attr_name, value, .. } => {
                 // Process attribute assignment
                 // First process the object expression to get a proper variable
                 self.process_expression(module, &object)?;
@@ -742,7 +764,7 @@ impl Generator {
             Statement::Return(None) => {
                 instructions.push(IRInstruction::Return { value: None });
             },
-            Statement::AttributeAssignment { object, name: attr_name, value } => {
+            Statement::AttributeAssignment { object, name: attr_name, value, .. } => {
                 // First process the object expression to get a proper variable
                 self.process_expression_for_instructions(instructions, &object)?;
                 let object_var = "temp_setattr_object".to_string();
@@ -763,12 +785,28 @@ impl Generator {
             Statement::Expression(expr) => {
                 self.process_expression_for_instructions(instructions, &expr)?;
             },
-            Statement::VariableDef { name, value: Some(value), .. } => {
+            Statement::VariableDef { name, value: Some(value), type_annotation, .. } => {
                 self.process_expression_for_instructions(instructions, &value)?;
-                instructions.push(IRInstruction::StoreLocal {
-                    name: name.clone(),
-                    value: "temp_result".to_string()
-                });
+                
+                // Check if we have explicit type annotation or if the variable already has a known type
+                let var_type = type_annotation.clone()
+                    .or_else(|| self.type_info.variable_types.get(&name).cloned());
+                
+                // Store/update type information if available
+                if let Some(type_annotation) = &var_type {
+                    self.type_info.variable_types.insert(name.clone(), type_annotation.clone());
+                    instructions.push(IRInstruction::StoreTypedLocal {
+                        name: name.clone(),
+                        value: "temp_result".to_string(),
+                        type_info: type_annotation.clone(),
+                    });
+                } else {
+                    instructions.push(IRInstruction::StoreLocal {
+                        name: name.clone(),
+                        value: "temp_result".to_string()
+                    });
+                }
+                
                 // Track object types when storing objects
                 if let Some(obj_type) = self.object_types.get("temp_result") {
                     self.object_types.insert(name.clone(), obj_type.clone());
@@ -1061,13 +1099,38 @@ impl Generator {
                     }
                 }
 
-                // Create the binary operation instruction
-                instructions.push(IRInstruction::BinaryOp {
-                    op: op.clone(),
-                    left: left_temp,
-                    right: right_temp,
-                    result: "temp_result".to_string()
-                });
+                // Check if both operands have type information for optimization
+                let left_type = self.get_expression_type(left);
+                let right_type = self.get_expression_type(right);
+                
+                if let (Some(l_type), Some(r_type)) = (&left_type, &right_type) {
+                    if *l_type == *r_type {
+                        // Use typed binary operation
+                        instructions.push(IRInstruction::TypedBinaryOp {
+                            op: op.clone(),
+                            left: left_temp,
+                            right: right_temp,
+                            result: "temp_result".to_string(),
+                            type_info: l_type.clone(),
+                        });
+                    } else {
+                        // Use generic binary operation
+                        instructions.push(IRInstruction::BinaryOp {
+                            op: op.clone(),
+                            left: left_temp,
+                            right: right_temp,
+                            result: "temp_result".to_string()
+                        });
+                    }
+                } else {
+                    // Use generic binary operation
+                    instructions.push(IRInstruction::BinaryOp {
+                        op: op.clone(),
+                        left: left_temp,
+                        right: right_temp,
+                        result: "temp_result".to_string()
+                    });
+                }
             },
             Expr::Attribute { object, name } => {
                 // Process attribute access
@@ -1153,7 +1216,11 @@ impl Generator {
                         args: arg_names,
                         result: Some("temp_result".to_string())
                     });
-                } else if method == "upper" || method == "lower" || method == "strip" || method == "split" || method == "join" || method == "append" || method == "remove" {
+                } else if ["upper", "lower", "strip", "lstrip", "rstrip", "split", "join", 
+                    "replace", "startswith", "endswith", "find", "title", "capitalize", "swapcase",
+                    "isdigit", "isalpha", "isalnum", "isspace", "isupper", "islower", "count", 
+                    "center", "ljust", "rjust", "zfill",
+                    "append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) {
                     // Built-in methods for strings and lists
                     self.process_expression_for_instructions(instructions, &object)?;
                     let object_var = "temp_object".to_string();
@@ -1175,7 +1242,7 @@ impl Generator {
                     }
 
                     // Built-in methods use text__ or lst__ prefix based on method name
-                    let func_prefix = if method == "append" || method == "remove" { "lst" } else { "text" };
+                    let func_prefix = if ["append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) { "lst" } else { "text" };
                     let func_name = format!("{}__{}",  func_prefix, method);
                     let mut method_args = vec![object_var];
                     method_args.extend(arg_names);
@@ -1961,6 +2028,34 @@ impl Generator {
                         args: arg_names,
                         result: Some("temp".to_string())
                     });
+                } else if ["upper", "lower", "strip", "lstrip", "rstrip", "split", "join", 
+                    "replace", "startswith", "endswith", "find", "title", "capitalize", "swapcase",
+                    "isdigit", "isalpha", "isalnum", "isspace", "isupper", "islower", "count", 
+                    "center", "ljust", "rjust", "zfill",
+                    "append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) {
+                    // Built-in methods for strings and lists
+                    let object_var = "temp_object".to_string();
+                    self.process_expression_to_result(module, &object, &object_var)?;
+
+                    // Process each argument and collect their result names
+                    let mut arg_names: Vec<String> = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_result = format!("method_arg_{}", i);
+                        self.process_expression_to_result(module, arg, &arg_result)?;
+                        arg_names.push(arg_result);
+                    }
+
+                    // Built-in methods use text__ or lst__ prefix based on method name
+                    let func_prefix = if ["append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) { "lst" } else { "text" };
+                    let func_name = format!("{}__{}", func_prefix, method);
+                    let mut method_args = vec![object_var];
+                    method_args.extend(arg_names);
+
+                    module.globals.push(IRInstruction::Call {
+                        func: func_name,
+                        args: method_args,
+                        result: Some("temp".to_string())
+                    });
                 } else {
                     // Object method call: obj.method() -> ClassName__method(obj, ...)
                     // First process the object expression to get a proper variable
@@ -2213,6 +2308,38 @@ impl Generator {
                     result: "temp".to_string()
                 });
             },
+            Expr::Tuple(elements) => {
+                // Handle tuple literal: (item1, item2, ...)
+                let mut element_names = Vec::new();
+                for (i, elem) in elements.iter().enumerate() {
+                    let elem_result = format!("temp_elem_{}", i);
+                    self.process_expression_to_result(module, elem, &elem_result)?;
+                    element_names.push(elem_result);
+                }
+
+                // Create tuple from elements using tuple() function
+                module.globals.push(IRInstruction::Call {
+                    func: "tuple".to_string(),
+                    args: element_names,
+                    result: Some("temp".to_string())
+                });
+            },
+            Expr::Subscript { object, index } => {
+                // Handle subscript: obj[index]
+                let object_var = "temp_object".to_string();
+                let index_var = "temp_index".to_string();
+                
+                // Process object and index
+                self.process_expression_to_result(module, object, &object_var)?;
+                self.process_expression_to_result(module, index, &index_var)?;
+                
+                // Generate DictGetItem instruction (works for both dicts and list indexing)
+                module.globals.push(IRInstruction::DictGetItem {
+                    dict: object_var,
+                    key: index_var,
+                    result: "temp".to_string()
+                });
+            },
             _ => {
                 // For other expressions, add placeholder
                 module.globals.push(IRInstruction::LoadConst {
@@ -2393,6 +2520,34 @@ impl Generator {
                             result: result_var.to_string()
                         });
                     }
+                } else if ["upper", "lower", "strip", "lstrip", "rstrip", "split", "join", 
+                    "replace", "startswith", "endswith", "find", "title", "capitalize", "swapcase",
+                    "isdigit", "isalpha", "isalnum", "isspace", "isupper", "islower", "count", 
+                    "center", "ljust", "rjust", "zfill",
+                    "append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) {
+                    // Built-in methods for strings and lists
+                    let object_var = format!("{}_object", result_var);
+                    self.process_expression_to_result(module, &object, &object_var)?;
+
+                    // Process each argument and collect their result names
+                    let mut arg_names: Vec<String> = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_result = format!("{}_method_arg_{}", result_var, i);
+                        self.process_expression_to_result(module, arg, &arg_result)?;
+                        arg_names.push(arg_result);
+                    }
+
+                    // Built-in methods use text__ or lst__ prefix based on method name
+                    let func_prefix = if ["append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) { "lst" } else { "text" };
+                    let func_name = format!("{}__{}", func_prefix, method);
+                    let mut method_args = vec![object_var];
+                    method_args.extend(arg_names);
+
+                    module.globals.push(IRInstruction::Call {
+                        func: func_name,
+                        args: method_args,
+                        result: Some(result_var.to_string())
+                    });
                 } else {
                     // Normal method call
                     // First process the object expression to get a proper variable
@@ -2563,6 +2718,216 @@ impl Generator {
                     result: Some(result_var.to_string())
                 });
             },
+            Expr::Subscript { object, index } => {
+                // Handle subscript: obj[index]
+                let object_var = format!("{}_object", result_var);
+                let index_var = format!("{}_index", result_var);
+                
+                // Process object and index
+                self.process_expression_to_result(module, object, &object_var)?;
+                self.process_expression_to_result(module, index, &index_var)?;
+                
+                // Generate DictGetItem instruction (works for both dicts and list indexing)
+                // Transpiler will handle based on actual type
+                module.globals.push(IRInstruction::DictGetItem {
+                    dict: object_var,
+                    key: index_var,
+                    result: result_var.to_string()
+                });
+            },
+            Expr::Slice { object, start, stop, step } => {
+                // Handle slicing: obj[start:stop:step]
+                let object_var = format!("{}_object", result_var);
+                
+                // Process object
+                self.process_expression_to_result(module, object, &object_var)?;
+                
+                // Process start, stop, step if present
+                let start_var = if let Some(s) = start {
+                    let var = format!("{}_start", result_var);
+                    self.process_expression_to_result(module, s, &var)?;
+                    Some(var)
+                } else {
+                    None
+                };
+                
+                let stop_var = if let Some(s) = stop {
+                    let var = format!("{}_stop", result_var);
+                    self.process_expression_to_result(module, s, &var)?;
+                    Some(var)
+                } else {
+                    None
+                };
+                
+                let step_var = if let Some(s) = step {
+                    let var = format!("{}_step", result_var);
+                    self.process_expression_to_result(module, s, &var)?;
+                    Some(var)
+                } else {
+                    None
+                };
+                
+                // Generate Slice instruction
+                module.globals.push(IRInstruction::Slice {
+                    object: object_var,
+                    start: start_var,
+                    stop: stop_var,
+                    step: step_var,
+                    result: result_var.to_string()
+                });
+            },
+            Expr::ListComp { element, generators } => {
+                // Handle list comprehension: [expr for var in iterable if condition]
+                if generators.is_empty() {
+                    module.globals.push(IRInstruction::ListCreate {
+                        elements: vec![],
+                        result: result_var.to_string()
+                    });
+                } else {
+                    let first_gen = &generators[0];
+                    
+                    // Process the iterable
+                    let iterable_var = format!("{}_iterable", result_var);
+                    self.process_expression_to_result(module, &first_gen.iter, &iterable_var)?;
+                    
+                    // Compile element expression to IR instructions
+                    // Create a temporary compiler state to compile element expression with loop variable available
+                    let element_result_var = format!("{}_elem", result_var);
+                    let mut element_instrs = Vec::new();
+                    
+                    // Compile element expression directly (loop variable will be available as a LoadGlobal in the loop)
+                    let saved_len = module.globals.len();
+                    self.process_expression_to_result(module, element, &element_result_var)?;
+                    
+                    // Extract the instructions that were just added
+                    element_instrs = module.globals.drain(saved_len..).collect();
+                    
+                    // Compile condition if present
+                    let mut condition_instrs = Vec::new();
+                    let condition_result_var = if !first_gen.ifs.is_empty() {
+                        let cond_var = format!("{}_cond", result_var);
+                        let saved_len = module.globals.len();
+                        self.process_expression_to_result(module, &first_gen.ifs[0], &cond_var)?;
+                        condition_instrs = module.globals.drain(saved_len..).collect();
+                        Some(cond_var)
+                    } else {
+                        None
+                    };
+                    
+                    // Add the comprehension instruction
+                    module.globals.push(IRInstruction::ListComprehension {
+                        element_instrs,
+                        element_result: element_result_var,
+                        variable: first_gen.target.clone(),
+                        iterable: iterable_var,
+                        condition_instrs,
+                        condition_result: condition_result_var,
+                        result: result_var.to_string()
+                    });
+                }
+            },
+            Expr::DictComp { key, value, generators } => {
+                // Handle dict comprehension: {k: v for var in iterable if condition}
+                if generators.is_empty() {
+                    module.globals.push(IRInstruction::DictCreate {
+                        pairs: vec![],
+                        result: result_var.to_string()
+                    });
+                } else {
+                    let first_gen = &generators[0];
+                    
+                    // Process the iterable
+                    let iterable_var = format!("{}_iterable", result_var);
+                    self.process_expression_to_result(module, &first_gen.iter, &iterable_var)?;
+                    
+                    // Compile key expression
+                    let key_result_var = format!("{}_key", result_var);
+                    let saved_len = module.globals.len();
+                    self.process_expression_to_result(module, key, &key_result_var)?;
+                    let key_instrs = module.globals.drain(saved_len..).collect();
+                    
+                    // Compile value expression
+                    let value_result_var = format!("{}_value", result_var);
+                    let saved_len = module.globals.len();
+                    self.process_expression_to_result(module, value, &value_result_var)?;
+                    let value_instrs = module.globals.drain(saved_len..).collect();
+                    
+                    // Compile condition if present
+                    let mut condition_instrs = Vec::new();
+                    let condition_result_var = if !first_gen.ifs.is_empty() {
+                        let cond_var = format!("{}_cond", result_var);
+                        let saved_len = module.globals.len();
+                        self.process_expression_to_result(module, &first_gen.ifs[0], &cond_var)?;
+                        condition_instrs = module.globals.drain(saved_len..).collect();
+                        Some(cond_var)
+                    } else {
+                        None
+                    };
+                    
+                    // Add the comprehension instruction
+                    module.globals.push(IRInstruction::DictComprehension {
+                        key_instrs,
+                        key_result: key_result_var,
+                        value_instrs,
+                        value_result: value_result_var,
+                        variable: first_gen.target.clone(),
+                        iterable: iterable_var,
+                        condition_instrs,
+                        condition_result: condition_result_var,
+                        result: result_var.to_string()
+                    });
+                }
+            },
+            Expr::GeneratorExp { element, generators } => {
+                // Handle generator expression: (expr for var in iterable if condition)
+                // Generators in Python return an iterator that lazily evaluates elements
+                // For now, implement as creating a list (eager evaluation) and wrapping it as an iterator
+                // This is a simplification but matches the comprehension approach
+                if generators.is_empty() {
+                    module.globals.push(IRInstruction::ListCreate {
+                        elements: vec![],
+                        result: result_var.to_string()
+                    });
+                } else {
+                    let first_gen = &generators[0];
+                    
+                    // Process the iterable
+                    let iterable_var = format!("{}_iterable", result_var);
+                    self.process_expression_to_result(module, &first_gen.iter, &iterable_var)?;
+                    
+                    // Compile element expression to IR instructions
+                    let element_result_var = format!("{}_elem", result_var);
+                    let mut element_instrs = Vec::new();
+                    
+                    let saved_len = module.globals.len();
+                    self.process_expression_to_result(module, element, &element_result_var)?;
+                    element_instrs = module.globals.drain(saved_len..).collect();
+                    
+                    // Compile condition if present
+                    let mut condition_instrs = Vec::new();
+                    let condition_result_var = if !first_gen.ifs.is_empty() {
+                        let cond_var = format!("{}_cond", result_var);
+                        let saved_len = module.globals.len();
+                        self.process_expression_to_result(module, &first_gen.ifs[0], &cond_var)?;
+                        condition_instrs = module.globals.drain(saved_len..).collect();
+                        Some(cond_var)
+                    } else {
+                        None
+                    };
+                    
+                    // For generators, we create them as iterators (for now, as lists)
+                    // Use ListComprehension and mark result as iterator type
+                    module.globals.push(IRInstruction::ListComprehension {
+                        element_instrs,
+                        element_result: element_result_var,
+                        variable: first_gen.target.clone(),
+                        iterable: iterable_var,
+                        condition_instrs,
+                        condition_result: condition_result_var,
+                        result: result_var.to_string()
+                    });
+                }
+            },
             Expr::Dict(pairs) => {
                 // Handle dict literal: {key1: value1, key2: value2, ...}
                 let mut pair_names = Vec::new();
@@ -2627,6 +2992,29 @@ impl Generator {
                         result: result_var.to_string()
                     });
                 }
+            },
+            Expr::Lambda { params, body } => {
+                // Lambda expression: lambda x, y: x + y
+                // Store a simple Lambda IR instruction that the transpiler will handle
+                
+                // Record the current length to know what instructions are added for the body
+                let start_len = module.globals.len();
+                
+                // Process the lambda body into IR instructions
+                let body_result_var = format!("{}_result", result_var);
+                self.process_expression_to_result(module, body, &body_result_var)?;
+                
+                // Drain the instructions that were added for the body
+                let body_instrs: Vec<IRInstruction> = module.globals.drain(start_len..).collect();
+                
+                // Create the Lambda IR instruction
+                module.globals.push(IRInstruction::Lambda {
+                    params: params.iter().map(|p| p.name.clone()).collect(),
+                    body_instructions: body_instrs,
+                    captured_vars: Vec::new(), // No captured variables for now
+                    result: result_var.to_string(),
+                    body_result_var: body_result_var.to_string(),
+                });
             },
             _ => {
                 module.globals.push(IRInstruction::LoadConst {

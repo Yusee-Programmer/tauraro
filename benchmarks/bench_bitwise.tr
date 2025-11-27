@@ -1,0 +1,13 @@
+# Benchmark: Bitwise Operations - 1 Billion Iterations
+# Tests bitwise computation performance
+
+def bitwise_sum(n: int) -> int:
+    total: int = 0
+    i: int = 1
+    while i <= n:
+        total = total + ((i * 2) + (i // 2) + (i % 16))
+        i = i + 1
+    return total
+
+result: int = bitwise_sum(1000000000)
+print(result)

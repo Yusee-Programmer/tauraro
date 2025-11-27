@@ -14,7 +14,7 @@ pub mod pure_native;
 
 use crate::ir::{IRModule, IRInstruction, IRFunction};
 use crate::value::Value;
-use crate::ast::{Type, BinaryOp};
+use crate::ast::{Type, BinaryOp, Expr, Literal};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
@@ -82,6 +82,12 @@ pub struct CTranspiler {
     generated_utilities: HashSet<String>,
     /// Function parameter counts and defaults (func_name -> (param_count, Vec<(param_name, has_default)>))
     function_params: HashMap<String, (usize, Vec<(String, bool)>)>,
+    /// Lambdas to generate: (function_name, params, body_instructions, captured_vars)
+    lambdas_to_generate: Vec<(String, Vec<String>, Vec<IRInstruction>, Vec<String>, String)>,
+    /// Track static type hints for optimization
+    static_typed_vars: HashMap<String, crate::ast::Type>,
+    /// Enable aggressive optimizations for typed code
+    enable_native_types: bool,
 }
 
 /// Native C types for optimized transpilation
@@ -120,6 +126,9 @@ impl CTranspiler {
             imports: HashMap::new(),
             generated_utilities: HashSet::new(),
             function_params: HashMap::new(),
+            lambdas_to_generate: Vec::new(),
+            static_typed_vars: HashMap::new(),
+            enable_native_types: true,
         }
     }
 
@@ -142,6 +151,75 @@ impl CTranspiler {
         } else {
             name.to_string()
         }
+    }
+
+    /// Compile an Expr to C code that assigns to result_var
+    fn expr_to_c_code(&mut self, expr: &Expr, indent_level: usize, result_var: &str) -> Result<String> {
+        let ind = "    ".repeat(indent_level);
+        let mut output = String::new();
+        
+        match expr {
+            Expr::Identifier(name) => {
+                let resolved = self.resolve_var_name(name);
+                output.push_str(&format!("{}{} = {};\n", ind, result_var, resolved));
+            },
+            Expr::Literal(Literal::Int(n)) => {
+                output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {}}};\n", ind, result_var, n));
+            },
+            Expr::Literal(Literal::Float(f)) => {
+                output.push_str(&format!("{}{} = (TauValue){{.type = 1, .value.f = {}}};\n", ind, result_var, f));
+            },
+            Expr::Literal(Literal::String(s)) => {
+                output.push_str(&format!("{}{} = (TauValue){{.type = 2, .value.s = strdup(\"{}\"), .refcount = 1}};\n", ind, result_var, s.replace("\"", "\\\"")));
+            },
+            Expr::Literal(Literal::Bool(b)) => {
+                output.push_str(&format!("{}{} = (TauValue){{.type = 3, .value.i = {}}};\n", ind, result_var, if *b { 1 } else { 0 }));
+            },
+            Expr::Literal(Literal::None) => {
+                output.push_str(&format!("{}{} = tauraro_none();\n", ind, result_var));
+            },
+            Expr::BinaryOp { left, op, right } => {
+                // Compute left and right into temporaries
+                let left_var = format!("_left_{}", self.temp_var_counter);
+                self.temp_var_counter += 1;
+                let right_var = format!("_right_{}", self.temp_var_counter);
+                self.temp_var_counter += 1;
+                
+                output.push_str(&self.expr_to_c_code(left, indent_level, &left_var)?);
+                output.push_str(&self.expr_to_c_code(right, indent_level, &right_var)?);
+                
+                // Handle binary operations
+                match op {
+                    BinaryOp::Add => {
+                        output.push_str(&format!("{}{} = tauraro_add({}, {});\n", ind, result_var, left_var, right_var));
+                    },
+                    BinaryOp::Sub => {
+                        output.push_str(&format!("{}{} = tauraro_sub({}, {});\n", ind, result_var, left_var, right_var));
+                    },
+                    BinaryOp::Mul => {
+                        output.push_str(&format!("{}{} = tauraro_mul({}, {});\n", ind, result_var, left_var, right_var));
+                    },
+                    BinaryOp::Div => {
+                        output.push_str(&format!("{}{} = tauraro_div({}, {});\n", ind, result_var, left_var, right_var));
+                    },
+                    BinaryOp::Mod => {
+                        output.push_str(&format!("{}{} = tauraro_mod({}, {});\n", ind, result_var, left_var, right_var));
+                    },
+                    BinaryOp::Pow => {
+                        output.push_str(&format!("{}{} = tauraro_pow({}, {});\n", ind, result_var, left_var, right_var));
+                    },
+                    _ => {
+                        output.push_str(&format!("{}{} = {};\n", ind, result_var, left_var));
+                    }
+                }
+            },
+            _ => {
+                // For complex expressions, just use a placeholder 0
+                output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = 0}};\n", ind, result_var));
+            }
+        }
+        
+        Ok(output)
     }
 
     /// Generate a unique variable name to prevent conflicts
@@ -170,6 +248,36 @@ impl CTranspiler {
     fn resolve_var_name(&self, original_name: &str) -> String {
         let name = self.var_name_mapping.get(original_name).cloned().unwrap_or_else(|| original_name.to_string());
         self.mangle_c_keyword(&name)
+    }
+
+    /// Collect all temporary variable names used in a list of instructions
+    fn collect_temp_vars_from_instructions(&self, instrs: &[IRInstruction]) -> std::collections::HashSet<String> {
+        let mut vars = std::collections::HashSet::new();
+        for instr in instrs {
+            match instr {
+                IRInstruction::LoadGlobal { result, .. } => {
+                    vars.insert(self.resolve_var_name(result));
+                }
+                IRInstruction::LoadTypedGlobal { result, .. } => {
+                    vars.insert(self.resolve_var_name(result));
+                }
+                IRInstruction::BinaryOp { result, left, right, .. } => {
+                    vars.insert(self.resolve_var_name(result));
+                    vars.insert(self.resolve_var_name(left));
+                    vars.insert(self.resolve_var_name(right));
+                }
+                IRInstruction::TypedBinaryOp { result, left, right, .. } => {
+                    vars.insert(self.resolve_var_name(result));
+                    vars.insert(self.resolve_var_name(left));
+                    vars.insert(self.resolve_var_name(right));
+                }
+                IRInstruction::UnaryOp { result, .. } => {
+                    vars.insert(self.resolve_var_name(result));
+                }
+                _ => {}
+            }
+        }
+        vars
     }
 
     /// Declare a variable if not already declared
@@ -213,6 +321,9 @@ impl CTranspiler {
         let mut transpiler = self.clone();
         let mut output = String::new();
         
+        // Clear lambdas from previous transpilations
+        transpiler.lambdas_to_generate.clear();
+        
         // Populate function parameter information for default argument handling
         for (func_name, func) in &module.functions {
             let mut params_info = Vec::new();
@@ -221,6 +332,33 @@ impl CTranspiler {
                 params_info.push((param.clone(), has_default));
             }
             transpiler.function_params.insert(func_name.clone(), (func.params.len(), params_info));
+            
+            // Also populate function_definitions with type information for function calls
+            let mut param_types = Vec::new();
+            for param in &func.params {
+                let param_native_type = if let Some(ast_type) = func.param_types.get(param) {
+                    transpiler.ast_type_to_native(ast_type)
+                } else {
+                    NativeType::Generic
+                };
+                param_types.push((param.clone(), param_native_type));
+            }
+            
+            let return_native_type = if let Some(ret_type) = &func.return_type {
+                transpiler.ast_type_to_native(ret_type)
+            } else {
+                NativeType::Generic
+            };
+            
+            let func_info = FunctionInfo {
+                name: func_name.clone(),
+                params: param_types,
+                return_type: return_native_type,
+                is_closure: false,
+                captures: Vec::new(),
+            };
+            
+            transpiler.function_definitions.insert(func_name.clone(), func_info);
         }
 
         // Add C header and includes
@@ -231,6 +369,7 @@ impl CTranspiler {
         output.push_str("#include <math.h>\n");
         output.push_str("#include <stdarg.h>\n");
         output.push_str("#include <setjmp.h>\n");
+        output.push_str("#include <ctype.h>\n");
         output.push_str("\n");
 
         // Add type definitions
@@ -280,12 +419,27 @@ impl CTranspiler {
             transpiler.indent_level = 1;
             transpiler.temp_var_counter = 0;
             transpiler.scope_variables.clear();
+            transpiler.function_parameters.clear();  // Clear function parameters for main scope
 
             // First pass: collect all variables from globals
             if !module.globals.is_empty() {
                 transpiler.collect_variables(&module.globals);
                 // Additional pass: explicitly collect all StoreLocal target names
                 transpiler.collect_store_local_targets(&module.globals);
+            }
+            
+            // Apply type information from module to override generic types
+            // For main() variables, List and Dict types should be stored as Generic (TauValue)
+            // since that's how they're declared in C by generate_variable_declarations
+            for (var_name, var_type) in &module.type_info.variable_types {
+                let native_type = transpiler.ast_type_to_native(var_type);
+                // Convert List/Dict to Generic for local variable storage
+                // (function parameters remain as List/Dict for native operations)
+                let storage_type = match native_type {
+                    NativeType::List | NativeType::Dict => NativeType::Generic,
+                    other => other,
+                };
+                transpiler.scope_variables.insert(var_name.clone(), storage_type);
             }
             
             // Ensure common temporary variables are always declared
@@ -309,8 +463,30 @@ impl CTranspiler {
                 }
             }
             
-            output.push_str("    return 0;\n");
+            output.push_str("\n    return 0;\n");
             output.push_str("}\n");
+        }
+
+        // Generate forward declarations for all collected lambdas
+        if !transpiler.lambdas_to_generate.is_empty() {
+            output.push_str("\n// Lambda function forward declarations\n");
+            for (lambda_name, _, _, _, _) in &transpiler.lambdas_to_generate {
+                output.push_str(&format!("TauValue {}(int argc, TauValue* argv);\n", lambda_name));
+            }
+            output.push_str("\n");
+        }
+
+        // Generate lambda functions after main (now with forward declarations above)
+        if !transpiler.lambdas_to_generate.is_empty() {
+            output.push_str("// Lambda functions\n");
+            for (lambda_name, params, body_instrs, _captured_vars, body_result_var) in &transpiler.lambdas_to_generate {
+                output.push_str(&transpiler.generate_lambda_function(
+                    lambda_name,
+                    params,
+                    body_instrs,
+                    body_result_var
+                )?);
+            }
         }
 
         Ok(output)
@@ -487,6 +663,32 @@ impl CTranspiler {
         output.push_str("TauValue text__startswith(TauValue str, TauValue prefix);\n");
         output.push_str("TauValue text__endswith(TauValue str, TauValue suffix);\n");
         output.push_str("TauValue text__find(TauValue str, TauValue substr);\n");
+        output.push_str("TauValue text__title(TauValue str);\n");
+        output.push_str("TauValue text__capitalize(TauValue str);\n");
+        output.push_str("TauValue text__swapcase(TauValue str);\n");
+        output.push_str("TauValue text__lstrip(TauValue str);\n");
+        output.push_str("TauValue text__rstrip(TauValue str);\n");
+        output.push_str("TauValue text__isdigit(TauValue str);\n");
+        output.push_str("TauValue text__isalpha(TauValue str);\n");
+        output.push_str("TauValue text__isalnum(TauValue str);\n");
+        output.push_str("TauValue text__isspace(TauValue str);\n");
+        output.push_str("TauValue text__isupper(TauValue str);\n");
+        output.push_str("TauValue text__islower(TauValue str);\n");
+        output.push_str("TauValue text__count(TauValue str, TauValue sub);\n");
+        output.push_str("TauValue text__center(TauValue str, TauValue width);\n");
+        output.push_str("TauValue text__ljust(TauValue str, TauValue width);\n");
+        output.push_str("TauValue text__rjust(TauValue str, TauValue width);\n");
+        output.push_str("TauValue text__zfill(TauValue str, TauValue width);\n");
+        output.push_str("TauValue lst__pop(TauValue lst);\n");
+        output.push_str("TauValue lst__insert(TauValue lst, TauValue index, TauValue item);\n");
+        output.push_str("TauValue lst__remove(TauValue lst, TauValue item);\n");
+        output.push_str("TauValue lst__extend(TauValue lst, TauValue other);\n");
+        output.push_str("TauValue lst__index(TauValue lst, TauValue item);\n");
+        output.push_str("TauValue lst__count(TauValue lst, TauValue item);\n");
+        output.push_str("TauValue lst__reverse(TauValue lst);\n");
+        output.push_str("TauValue lst__sort(TauValue lst);\n");
+        output.push_str("TauValue lst__copy(TauValue lst);\n");
+        output.push_str("TauValue lst__clear(TauValue lst);\n");
         output.push_str("TauValue range(TauValue end);\n");
         output.push_str("TauValue range2(TauValue start, TauValue end);\n");
         output.push_str("TauValue range3(TauValue start, TauValue end, TauValue step);\n");
@@ -495,6 +697,53 @@ impl CTranspiler {
         output.push_str("TauValue tauraro_max(TauValue a, TauValue b);\n");
         output.push_str("TauValue tauraro_sum(TauValue list);\n");
         output.push_str("TauValue tauraro_super_call(TauObject* self, TauValue* args, int argc);\n");
+        // Additional builtins
+        output.push_str("TauValue tauraro_sorted(TauValue list);\n");
+        output.push_str("TauValue tauraro_reversed(TauValue list);\n");
+        output.push_str("TauValue tauraro_enumerate_list(TauValue list, TauValue start);\n");
+        output.push_str("TauValue tauraro_zip_lists(TauValue list1, TauValue list2);\n");
+        output.push_str("TauValue tauraro_any(TauValue list);\n");
+        output.push_str("TauValue tauraro_all(TauValue list);\n");
+        output.push_str("TauValue tauraro_type_name(TauValue val);\n");
+        output.push_str("TauValue tauraro_isinstance(TauValue obj, TauValue type_str);\n");
+        output.push_str("TauValue tauraro_ord(TauValue ch);\n");
+        output.push_str("TauValue tauraro_chr(TauValue num);\n");
+        output.push_str("TauValue tauraro_round(TauValue num, TauValue places);\n");
+        output.push_str("TauValue tauraro_pow(TauValue base, TauValue exp);\n");
+        output.push_str("TauValue tauraro_sqrt(TauValue num);\n");
+        output.push_str("TauValue tauraro_hex(TauValue num);\n");
+        output.push_str("TauValue tauraro_bin(TauValue num);\n");
+        output.push_str("TauValue tauraro_oct(TauValue num);\n");
+        output.push_str("TauValue tauraro_divmod(TauValue a, TauValue b);\n");
+        output.push_str("TauValue tauraro_to_list(TauValue val);\n");
+        output.push_str("TauValue tauraro_to_set(TauValue val);\n");
+        output.push_str("TauValue tauraro_repr(TauValue val);\n");
+        // String method declarations
+        output.push_str("TauValue tauraro_str_upper(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_lower(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_strip(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_lstrip(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_rstrip(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_title(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_capitalize(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_swapcase(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_isdigit(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_isalpha(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_isalnum(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_isspace(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_isupper(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_islower(TauValue str);\n");
+        output.push_str("TauValue tauraro_str_count(TauValue str, TauValue sub);\n");
+        output.push_str("TauValue tauraro_str_center(TauValue str, TauValue width);\n");
+        output.push_str("TauValue tauraro_str_ljust(TauValue str, TauValue width);\n");
+        output.push_str("TauValue tauraro_str_rjust(TauValue str, TauValue width);\n");
+        output.push_str("TauValue tauraro_str_zfill(TauValue str, TauValue width);\n");
+        // List method declarations
+        output.push_str("TauValue tauraro_list_pop_v(TauValue list);\n");
+        output.push_str("TauValue tauraro_list_insert(TauValue list, TauValue index, TauValue item);\n");
+        output.push_str("TauValue tauraro_list_remove(TauValue list, TauValue item);\n");
+        output.push_str("TauValue tauraro_list_extend_v(TauValue list, TauValue other);\n");
+        output.push_str("int tauraro_equals(TauValue a, TauValue b);\n");
         output.push_str("\n");
 
         output
@@ -503,14 +752,15 @@ impl CTranspiler {
     fn generate_function_signature(&self, func_name: &str, func: &IRFunction, declare_only: bool) -> Result<String> {
         let mut output = String::new();
 
-        // Determine return type 
-        // NOTE: For the main TauValue-based transpiler, we always use TauValue for user functions
-        // to maintain compatibility with the runtime system. Native types are used in pure_native transpiler.
+        // Determine return type based on type annotation
         let return_type = if func_name == "main" {
             "int".to_string()
+        } else if let Some(ret_type) = &func.return_type {
+            // Use native type if we have a return type annotation
+            let native_type = self.ast_type_to_native(ret_type);
+            self.get_c_type(native_type).to_string()
         } else {
-            // Always use TauValue for user functions in main transpiler
-            // This ensures compatibility with the TauValue-based runtime
+            // Default to TauValue for untyped functions
             "TauValue".to_string()
         };
 
@@ -529,10 +779,19 @@ impl CTranspiler {
         if func_name == "main" {
             output.push_str("int argc, char* argv[]");
         } else {
-            // Always use TauValue parameters in main transpiler for runtime compatibility
-            // Also mangle parameter names
+            // Generate parameter list with proper types
             let param_strs: Vec<String> = func.params.iter()
-                .map(|p| format!("TauValue {}", self.mangle_c_keyword(p)))
+                .map(|p| {
+                    let param_type = if let Some(ast_type) = func.param_types.get(p) {
+                        // Parameter has a type annotation - use native type
+                        let native_type = self.ast_type_to_native(ast_type);
+                        self.get_c_type(native_type).to_string()
+                    } else {
+                        // No type annotation - use TauValue
+                        "TauValue".to_string()
+                    };
+                    format!("{} {}", param_type, self.mangle_c_keyword(p))
+                })
                 .collect();
             output.push_str(&param_strs.join(", "));
         }
@@ -630,6 +889,9 @@ impl CTranspiler {
         self.temp_var_counter = 0;
         self.scope_variables.clear();
         self.function_parameters.clear();
+        
+        // Set current function name for return type handling
+        self.current_function = Some(func.name.clone());
 
         // Add function parameters to scope with their actual types (static typing support)
         for param in &func.params {
@@ -665,15 +927,39 @@ impl CTranspiler {
         output.push_str(&var_decls);
 
         // Generate code (second pass)
+        let mut last_was_return = false;
         for instruction in &all_instructions {
-            output.push_str(&self.transpile_instruction(instruction, self.indent_level)?);
+            let inst_str = self.transpile_instruction(instruction, self.indent_level)?;
+            output.push_str(&inst_str);
+            // Track if the last instruction was a return
+            last_was_return = matches!(instruction, IRInstruction::Return { .. });
         }
 
-        // Add default return for non-main functions
-        if func.name != "main" {
-            output.push_str(&format!("{}TauValue ret = {{.type = 0, .value.i = 0}};\n", self.indent()));
-            output.push_str(&format!("{}return ret;\n", self.indent()));
-        } else {
+        // Add default return for non-main functions ONLY if we didn't have an explicit return
+        if func.name != "main" && !last_was_return {
+            // Get the function's return type
+            if let Some(ret_type) = &func.return_type {
+                let native_ret_type = self.ast_type_to_native(ret_type);
+                match native_ret_type {
+                    NativeType::Int64 => {
+                        output.push_str(&format!("{}return 0;\n", self.indent()));
+                    }
+                    NativeType::Double => {
+                        output.push_str(&format!("{}return 0.0;\n", self.indent()));
+                    }
+                    NativeType::CStr => {
+                        output.push_str(&format!("{}return \"\";\n", self.indent()));
+                    }
+                    _ => {
+                        output.push_str(&format!("{}return (TauValue){{.type = 0, .value.i = 0}};\n", self.indent()));
+                    }
+                }
+            } else {
+                // Untyped function - use TauValue
+                output.push_str(&format!("{}TauValue ret = {{.type = 0, .value.i = 0}};\n", self.indent()));
+                output.push_str(&format!("{}return ret;\n", self.indent()));
+            }
+        } else if func.name == "main" && !last_was_return {
             output.push_str("    return 0;\n");
         }
 
@@ -693,93 +979,489 @@ impl CTranspiler {
 
             IRInstruction::LoadConst { value, result } => {
                 let resolved_result = self.resolve_var_name(result);
-                let wrapped_val = self.wrap_value_in_tauvalue(value);
-                self.var_types.insert(resolved_result.clone(), NativeType::Generic);
-                // Assignment using resolved name (variable already declared in header)
-                output.push_str(&format!("{}{} = {};\n", ind, resolved_result, wrapped_val));
+                // Check both var_types and scope_variables for the result type
+                let result_type = self.var_types.get(&resolved_result).copied()
+                    .or_else(|| self.scope_variables.get(&resolved_result).copied())
+                    .or_else(|| self.var_types.get(result).copied())
+                    .or_else(|| self.scope_variables.get(result).copied())
+                    .unwrap_or(NativeType::Generic);
+                
+                // Generate appropriate assignment based on result type
+                match result_type {
+                    NativeType::Int64 => {
+                        // Extract int value from constant
+                        let int_val = match value {
+                            Value::Int(i) => *i,
+                            _ => 0,
+                        };
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, int_val));
+                    }
+                    NativeType::Double => {
+                        let float_val = match value {
+                            Value::Float(f) => *f,
+                            Value::Int(i) => *i as f64,
+                            _ => 0.0,
+                        };
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, float_val));
+                    }
+                    _ => {
+                        // Generic TauValue assignment
+                        let wrapped_val = self.wrap_value_in_tauvalue(value);
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, wrapped_val));
+                    }
+                }
+                self.var_types.insert(resolved_result.clone(), result_type);
+                self.var_types.insert(result.clone(), result_type);
             }
 
             IRInstruction::LoadLocal { name, result } => {
                 let resolved_name = self.resolve_var_name(name);
                 let resolved_result = self.resolve_var_name(result);
-                let type_opt = self.var_types.get(&resolved_name).copied().or_else(|| self.var_types.get(name).copied());
-                if let Some(var_type) = type_opt {
-                    self.var_types.insert(resolved_result.clone(), var_type);
-                } else {
-                    self.var_types.insert(resolved_result.clone(), NativeType::Generic);
+                
+                // Check the DECLARATION type first - this is how the variable is declared in C
+                // This determines whether it's a raw native type or a TauValue
+                let source_decl_type = self.scope_variables.get(&resolved_name).copied()
+                    .or_else(|| self.scope_variables.get(name).copied());
+                let source_value_type = self.var_types.get(&resolved_name).copied()
+                    .or_else(|| self.var_types.get(name).copied())
+                    .unwrap_or(NativeType::Generic);
+                
+                // If declaration is Generic (TauValue), source is TauValue regardless of value type
+                let source_type = match source_decl_type {
+                    Some(NativeType::Generic) => NativeType::Generic,
+                    Some(other) => other,
+                    None => source_value_type,
+                };
+                
+                let target_type = self.var_types.get(&resolved_result).copied()
+                    .unwrap_or(NativeType::Generic);
+                
+                // Handle type conversions when loading
+                match (target_type, source_type) {
+                    (NativeType::Int64, NativeType::Int64) => {
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Int64, NativeType::Generic) => {
+                        output.push_str(&format!("{}{} = {}.value.i;\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Double, NativeType::Double) => {
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Double, NativeType::Generic) => {
+                        output.push_str(&format!("{}{} = {}.value.f;\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Generic, NativeType::Int64) => {
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {}, .refcount = 1}};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Generic, NativeType::Double) => {
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 1, .value.f = {}, .refcount = 1}};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Generic, NativeType::List) => {
+                        // Wrap TauList* in TauValue
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 4, .value.list = {}, .refcount = 1}};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Generic, NativeType::Dict) => {
+                        // Wrap TauDict* in TauValue
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 5, .value.dict = {}, .refcount = 1}};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::List, NativeType::List) |
+                    (NativeType::Dict, NativeType::Dict) => {
+                        // Same native type - direct assignment
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::List, NativeType::Generic) => {
+                        // Extract TauList* from TauValue
+                        output.push_str(&format!("{}{} = {}.value.list;\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Dict, NativeType::Generic) => {
+                        // Extract TauDict* from TauValue
+                        output.push_str(&format!("{}{} = {}.value.dict;\n", ind, resolved_result, resolved_name));
+                    }
+                    _ => {
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                    }
                 }
-                // Assignment using resolved names (variables already declared in header)
-                output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                self.var_types.insert(resolved_result, target_type);
             }
 
             IRInstruction::StoreLocal { name, value } => {
                 let resolved_name = self.resolve_var_name(name);
                 let resolved_value = self.resolve_var_name(value);
-                // Assignment using resolved names (variables already declared in header)
-                output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
-                let var_type = self.var_types.get(value).copied().or_else(|| self.var_types.get(&resolved_value).copied()).unwrap_or(NativeType::Generic);
-                self.var_types.insert(resolved_name, var_type);
+                
+                // AGGRESSIVE: Always check types and convert if needed
+                // This ensures correctness even if type detection is imperfect
+                
+                // Determine target type from declarations - check scope_variables first for declared types
+                let target_type = self.scope_variables.get(&resolved_name).copied()
+                    .or_else(|| self.scope_variables.get(name).copied())
+                    .or_else(|| self.var_types.get(&resolved_name).copied())
+                    .or_else(|| self.var_types.get(name).copied())
+                    .unwrap_or(NativeType::Generic);
+                
+                let source_type = self.scope_variables.get(&resolved_value).copied()
+                    .or_else(|| self.scope_variables.get(value).copied())
+                    .or_else(|| self.var_types.get(&resolved_value).copied())
+                    .or_else(|| self.var_types.get(value).copied())
+                    .unwrap_or(NativeType::Generic);
+                
+                // Generate assignment with automatic wrapping/unwrapping
+                match (target_type, source_type) {
+                    // Same types - direct assignment
+                    (NativeType::Int64, NativeType::Int64) |
+                    (NativeType::Double, NativeType::Double) |
+                    (NativeType::CStr, NativeType::CStr) |
+                    (NativeType::Bool, NativeType::Bool) |
+                    (NativeType::Generic, NativeType::Generic) => {
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
+                    }
+                    // Native to Generic - wrap
+                    (NativeType::Generic, NativeType::Int64) => {
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {}, .refcount = 1}};\n", ind, resolved_name, resolved_value));
+                    }
+                    (NativeType::Generic, NativeType::Double) => {
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 1, .value.f = {}, .refcount = 1}};\n", ind, resolved_name, resolved_value));
+                    }
+                    (NativeType::Generic, NativeType::CStr) => {
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 2, .value.s = {}, .refcount = 1}};\n", ind, resolved_name, resolved_value));
+                    }
+                    (NativeType::Generic, NativeType::Bool) => {
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 3, .value.i = ({} ? 1 : 0), .refcount = 1}};\n", ind, resolved_name, resolved_value));
+                    }
+                    // Generic to Native - unwrap  
+                    (NativeType::Int64, _) => {
+                        output.push_str(&format!("{}{} = {}.value.i;\n", ind, resolved_name, resolved_value));
+                    }
+                    (NativeType::Double, _) => {
+                        output.push_str(&format!("{}{} = {}.value.f;\n", ind, resolved_name, resolved_value));
+                    }
+                    (NativeType::CStr, _) => {
+                        output.push_str(&format!("{}{} = {}.value.s;\n", ind, resolved_name, resolved_value));
+                    }
+                    (NativeType::Bool, _) => {
+                        output.push_str(&format!("{}{} = {}.value.i ? 1 : 0;\n", ind, resolved_name, resolved_value));
+                    }
+                    // Fallback
+                    _ => {
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
+                    }
+                }
+                
+                self.var_types.insert(resolved_name.clone(), target_type);
+                self.scope_variables.insert(resolved_name, target_type);
             }
 
             IRInstruction::LoadGlobal { name, result } => {
                 let resolved_result = self.resolve_var_name(result);
-                output.push_str(&format!("{}{} = {};\n", ind, resolved_result, name));
-                self.var_types.insert(resolved_result, NativeType::Generic);
+                let resolved_name = self.resolve_var_name(name);
+                
+                // Check the source variable's DECLARED type (scope_variables first)
+                // This is what the variable is actually declared as, not what was last assigned
+                let source_type = self.scope_variables.get(&resolved_name)
+                    .or_else(|| self.scope_variables.get(name))
+                    .or_else(|| self.var_types.get(&resolved_name))
+                    .or_else(|| self.var_types.get(name))
+                    .copied()
+                    .unwrap_or(NativeType::Generic);
+                
+                // Check the target variable's DECLARED type
+                let target_type = self.scope_variables.get(&resolved_result)
+                    .or_else(|| self.var_types.get(&resolved_result))
+                    .copied()
+                    .unwrap_or(NativeType::Generic);
+                
+                // Handle type conversions based on both source and target types
+                match (target_type, source_type) {
+                    (NativeType::Int64, NativeType::Int64) |
+                    (NativeType::Double, NativeType::Double) |
+                    (NativeType::List, NativeType::List) |
+                    (NativeType::Dict, NativeType::Dict) => {
+                        // Same type - direct assignment
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Generic, NativeType::Int64) => {
+                        // Wrap native int in TauValue
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {}, .refcount = 1}};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Generic, NativeType::Double) => {
+                        // Wrap native double in TauValue
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 1, .value.f = {}, .refcount = 1}};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Generic, NativeType::List) => {
+                        // Wrap TauList* in TauValue
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 4, .value.list = {}, .refcount = 1}};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Generic, NativeType::Dict) => {
+                        // Wrap TauDict* in TauValue
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 5, .value.dict = {}, .refcount = 1}};\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Int64, NativeType::Generic) => {
+                        // Extract int from TauValue
+                        output.push_str(&format!("{}{} = {}.value.i;\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Double, NativeType::Generic) => {
+                        // Extract double from TauValue
+                        output.push_str(&format!("{}{} = {}.value.f;\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::List, NativeType::Generic) => {
+                        // Extract TauList* from TauValue
+                        output.push_str(&format!("{}{} = {}.value.list;\n", ind, resolved_result, resolved_name));
+                    }
+                    (NativeType::Dict, NativeType::Generic) => {
+                        // Extract TauDict* from TauValue
+                        output.push_str(&format!("{}{} = {}.value.dict;\n", ind, resolved_result, resolved_name));
+                    }
+                    _ => {
+                        // Generic to Generic or other cases - direct assignment
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                    }
+                }
+                self.var_types.insert(resolved_result.clone(), target_type);
             }
 
                 IRInstruction::LoadTypedGlobal { name, result, type_info } => {
                     let resolved_result = self.resolve_var_name(result);
-                    output.push_str(&format!("{}{} = {};\n", ind, resolved_result, name));
-                    // Track the type for typed globals but keep as Generic for C declaration
-                    self.var_types.insert(resolved_result, NativeType::Generic);
+                    let resolved_name = self.resolve_var_name(name);
+                    let native_type = self.ast_type_to_native(type_info);
+                    
+                    // Check if source is a temp variable (TauValue) - need to extract the value
+                    let is_source_tauvalue = name == "temp" || name == "temp_result" || name.starts_with("temp_") ||
+                                             resolved_name == "temp" || resolved_name == "temp_result" || resolved_name.starts_with("temp_");
+                    
+                    if is_source_tauvalue {
+                        // Source is TauValue, extract based on target type
+                        match native_type {
+                            NativeType::Int64 => {
+                                output.push_str(&format!("{}{} = {}.value.i;\n", ind, resolved_result, resolved_name));
+                            }
+                            NativeType::Double => {
+                                output.push_str(&format!("{}{} = {}.value.f;\n", ind, resolved_result, resolved_name));
+                            }
+                            NativeType::CStr => {
+                                output.push_str(&format!("{}{} = {}.value.s;\n", ind, resolved_result, resolved_name));
+                            }
+                            NativeType::Bool => {
+                                output.push_str(&format!("{}{} = {}.value.i ? 1 : 0;\n", ind, resolved_result, resolved_name));
+                            }
+                            _ => {
+                                // For Generic/other types, direct assignment
+                                output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                            }
+                        }
+                    } else {
+                        // For typed globals with native types, use direct assignment
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                    }
+                    self.var_types.insert(resolved_result, native_type);
                 }
 
             IRInstruction::StoreGlobal { name, value } => {
-                output.push_str(&format!("{}{} = {};\n", ind, name, value));
+                let resolved_name = self.resolve_var_name(name);
+                let resolved_value = self.resolve_var_name(value);
+                
+                // Check if target variable has a known type
+                let target_type = self.var_types.get(&resolved_name)
+                    .or_else(|| self.var_types.get(name))
+                    .copied()
+                    .unwrap_or(NativeType::Generic);
+                
+                // If it's a native type, store directly
+                output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
+                self.var_types.insert(resolved_name, target_type);
             }
 
             IRInstruction::StoreTypedGlobal { name, value, type_info } => {
                 // Store typed global - handle type information for typed variables
+                let resolved_name = self.resolve_var_name(name);
+                let resolved_value = self.resolve_var_name(value);
                 let native_type = self.ast_type_to_native(type_info);
-                output.push_str(&format!("{}{} = {};\n", ind, name, value));
+                
+                // Get source type - but ALWAYS treat temp/temp_result as Generic since they're TauValue
+                let source_type = if value == "temp" || value == "temp_result" || value.starts_with("temp_") ||
+                                     resolved_value == "temp" || resolved_value == "temp_result" || resolved_value.starts_with("temp_") {
+                    NativeType::Generic
+                } else {
+                    self.scope_variables.get(&resolved_value).copied()
+                        .or_else(|| self.scope_variables.get(value).copied())
+                        .or_else(|| self.var_types.get(&resolved_value).copied())
+                        .or_else(|| self.var_types.get(value).copied())
+                        .unwrap_or(NativeType::Generic)
+                };
+                
+                // Handle assignment based on target type 
+                match native_type {
+                    NativeType::Int64 => {
+                        if matches!(source_type, NativeType::Int64) {
+                            output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
+                        } else {
+                            output.push_str(&format!("{}{} = {}.value.i;\n", ind, resolved_name, resolved_value));
+                        }
+                    }
+                    NativeType::Double => {
+                        if matches!(source_type, NativeType::Double) {
+                            output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
+                        } else {
+                            output.push_str(&format!("{}{} = {}.value.f;\n", ind, resolved_name, resolved_value));
+                        }
+                    }
+                    _ => {
+                        // For other types, direct assignment
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
+                    }
+                }
+                
+                self.var_types.insert(resolved_name, native_type);
                 self.var_types.insert(name.clone(), native_type);
             }
             
-            // Typed local variable operations - key for static typing optimization
-            IRInstruction::LoadTypedLocal { name, result, type_info } => {
-                let resolved_name = self.resolve_var_name(name);
-                let resolved_result = self.resolve_var_name(result);
-                let native_type = self.ast_type_to_native(type_info);
-                
-                // For native types, use direct assignment
-                output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
-                self.var_types.insert(resolved_result.clone(), native_type);
-            }
-            
-            IRInstruction::StoreTypedLocal { name, value, type_info } => {
+            // Typed local variable operations - optimize for native types
+                IRInstruction::LoadTypedLocal { name, result, type_info } => {
+                    let resolved_name = self.resolve_var_name(name);
+                    let resolved_result = self.resolve_var_name(result);
+                    let native_type = self.ast_type_to_native(type_info);
+                    
+                    // For native types with optimization enabled, use direct native C types
+                    if self.enable_native_types {
+                        match native_type {
+                            NativeType::Int64 => {
+                                output.push_str(&format!("{}{} = (long long){};\n", ind, resolved_result, resolved_name));
+                                self.var_types.insert(resolved_result.clone(), NativeType::Int64);
+                                self.scope_variables.insert(resolved_result, NativeType::Int64);
+                            }
+                            NativeType::Double => {
+                                output.push_str(&format!("{}{} = (double){};\n", ind, resolved_result, resolved_name));
+                                self.var_types.insert(resolved_result.clone(), NativeType::Double);
+                                self.scope_variables.insert(resolved_result, NativeType::Double);
+                            }
+                            NativeType::CStr => {
+                                output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                                self.var_types.insert(resolved_result.clone(), NativeType::CStr);
+                                self.scope_variables.insert(resolved_result, NativeType::CStr);
+                            }
+                            NativeType::Bool => {
+                                output.push_str(&format!("{}{} = (int){};\n", ind, resolved_result, resolved_name));
+                                self.var_types.insert(resolved_result.clone(), NativeType::Bool);
+                                self.scope_variables.insert(resolved_result, NativeType::Bool);
+                            }
+                            _ => {
+                                // For complex types, use TauValue
+                                output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                                self.var_types.insert(resolved_result.clone(), native_type);
+                                self.scope_variables.insert(resolved_result, native_type);
+                            }
+                        }
+                    } else {
+                        // Without optimization, always use TauValue
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_result, resolved_name));
+                        self.var_types.insert(resolved_result.clone(), NativeType::Generic);
+                        self.scope_variables.insert(resolved_result, NativeType::Generic);
+                    }
+                }            IRInstruction::StoreTypedLocal { name, value, type_info } => {
                 let resolved_name = self.resolve_var_name(name);
                 let resolved_value = self.resolve_var_name(value);
-                let _native_type = self.ast_type_to_native(type_info);
+                let native_type = self.ast_type_to_native(type_info);
                 
-                // Direct assignment for typed locals (still TauValue in main transpiler)
-                output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
-                self.var_types.insert(resolved_name, NativeType::Generic);
+                // Track type for this variable
+                self.static_typed_vars.insert(name.clone(), type_info.clone());
+                self.var_types.insert(resolved_name.clone(), native_type);
+                self.scope_variables.insert(resolved_name.clone(), native_type);
+                
+                // Handle assignment based on target type
+                match native_type {
+                    NativeType::Int64 => {
+                        // Extract int value from TauValue or use directly if already int
+                        let is_temp = resolved_value.starts_with("var_") && resolved_value.ends_with("_temp");
+                        let source_type = if is_temp {
+                            NativeType::Generic
+                        } else {
+                            self.var_types.get(&resolved_value).copied()
+                                .or_else(|| self.scope_variables.get(&resolved_value).copied())
+                                .unwrap_or(NativeType::Generic)
+                        };
+                        
+                        if matches!(source_type, NativeType::Int64) {
+                            output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
+                        } else {
+                            output.push_str(&format!("{}{} = {}.value.i;\n", ind, resolved_name, resolved_value));
+                        }
+                    }
+                    NativeType::Double => {
+                        // Extract float value from TauValue or use directly if already double
+                        let is_temp = resolved_value.starts_with("var_") && resolved_value.ends_with("_temp");
+                        let source_type = if is_temp {
+                            NativeType::Generic
+                        } else {
+                            self.var_types.get(&resolved_value).copied()
+                                .or_else(|| self.scope_variables.get(&resolved_value).copied())
+                                .unwrap_or(NativeType::Generic)
+                        };
+                        
+                        if matches!(source_type, NativeType::Double) {
+                            output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
+                        } else {
+                            output.push_str(&format!("{}{} = {}.value.f;\n", ind, resolved_name, resolved_value));
+                        }
+                    }
+                    _ => {
+                        // For other types, direct assignment
+                        output.push_str(&format!("{}{} = {};\n", ind, resolved_name, resolved_value));
+                    }
+                }
             }
             
-            // Typed binary operation - in main transpiler, always use TauValue for consistency
+            // Typed binary operation - optimize for native types when available
             IRInstruction::TypedBinaryOp { op, left, right, result, type_info } => {
                 let resolved_left = self.resolve_var_name(left);
                 let resolved_right = self.resolve_var_name(right);
                 let resolved_result = self.resolve_var_name(result);
-                let _native_type = self.ast_type_to_native(type_info);
+                let result_type = self.ast_type_to_native(type_info);
+                
+                let left_type = self.var_types.get(&resolved_left).copied()
+                    .or_else(|| self.scope_variables.get(&resolved_left).copied())
+                    .unwrap_or(NativeType::Generic);
+                let right_type = self.var_types.get(&resolved_right).copied()
+                    .or_else(|| self.scope_variables.get(&resolved_right).copied())
+                    .unwrap_or(NativeType::Generic);
                 
                 let op_str = self.format_binary_op(op.clone());
                 
-                // In main transpiler, always extract values and wrap in TauValue
-                // Native type optimization is only in pure_native transpiler
-                output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {}.value.i {} {}.value.i}};\n", 
-                    ind, resolved_result, resolved_left, op_str, resolved_right));
-                self.var_types.insert(resolved_result, NativeType::Generic);
+                // Handle based on result type and operand types
+                match result_type {
+                    NativeType::Int64 => {
+                        // For int result, extract operands if they're TauValue
+                        let left_extract = if matches!(left_type, NativeType::Int64) {
+                            resolved_left.clone()
+                        } else {
+                            format!("{}.value.i", resolved_left)
+                        };
+                        let right_extract = if matches!(right_type, NativeType::Int64) {
+                            resolved_right.clone()
+                        } else {
+                            format!("{}.value.i", resolved_right)
+                        };
+                        output.push_str(&format!("{}{} = {} {} {};\n", ind, resolved_result, left_extract, op_str, right_extract));
+                    }
+                    NativeType::Double => {
+                        // For double result, extract operands if they're TauValue
+                        let left_extract = if matches!(left_type, NativeType::Double) {
+                            resolved_left.clone()
+                        } else {
+                            format!("(double){}.value.f", resolved_left)
+                        };
+                        let right_extract = if matches!(right_type, NativeType::Double) {
+                            resolved_right.clone()
+                        } else {
+                            format!("(double){}.value.f", resolved_right)
+                        };
+                        output.push_str(&format!("{}{} = {} {} {};\n", ind, resolved_result, left_extract, op_str, right_extract));
+                    }
+                    _ => {
+                        // For TauValue result, wrap in TauValue
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = (long long){}.value.i {} (long long){}.value.i, .refcount = 1}};\n", 
+                            ind, resolved_result, resolved_left, op_str, resolved_right));
+                    }
+                }
+                self.var_types.insert(resolved_result.clone(), result_type);
+                self.scope_variables.insert(resolved_result, result_type);
             }
 
             IRInstruction::BinaryOp { op, left, right, result } => {
@@ -829,7 +1511,23 @@ impl CTranspiler {
                 } else {
                     // Regular binary operations
                     let op_str = self.format_binary_op(op.clone());
-                    let result_type = self.infer_binary_op_type(left_type, right_type, op.clone());
+                    let inferred_result_type = self.infer_binary_op_type(left_type, right_type, op.clone());
+                    
+                    // Check the DECLARATION type of the result variable (scope_variables has declaration types)
+                    // This determines whether we can use native types or must wrap in TauValue
+                    let declared_result_type = self.scope_variables.get(&resolved_result).copied()
+                        .unwrap_or(NativeType::Generic);
+                    
+                    // Determine the actual result type to use for code generation
+                    // If declared as native type, use it; otherwise use inferred type (but will wrap in TauValue)
+                    let result_type = if matches!(declared_result_type, NativeType::Int64 | NativeType::Double | NativeType::Bool) {
+                        declared_result_type
+                    } else {
+                        inferred_result_type
+                    };
+                    
+                    // Track if we need to wrap the result in TauValue
+                    let needs_wrapping = matches!(declared_result_type, NativeType::Generic);
 
                     // Special case: Generic + Generic might be string or integer concatenation
                     if matches!(op, BinaryOp::Add) && matches!(left_type, NativeType::Generic) && matches!(right_type, NativeType::Generic) {
@@ -862,37 +1560,140 @@ impl CTranspiler {
                     } else {
                         match result_type {
                             NativeType::Int64 => {
-                                output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {} {} {}}};\n",
-                                    ind, resolved_result,
-                                    self.extract_value(&resolved_left, left_type),
-                                    op_str,
-                                    self.extract_value(&resolved_right, right_type)));
+                                // If result doesn't need wrapping (is declared as native type),
+                                // generate native operation, extracting values from TauValue operands if needed
+                                if !needs_wrapping {
+                                    // Direct native type operation - extract values from operands
+                                    output.push_str(&format!("{}{} = {} {} {};\n",
+                                        ind, resolved_result,
+                                        self.extract_value(&resolved_left, left_type),
+                                        op_str,
+                                        self.extract_value(&resolved_right, right_type)));
+                                } else {
+                                    // Wrap in TauValue since result variable is declared as TauValue
+                                    output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {} {} {}}};\n",
+                                        ind, resolved_result,
+                                        self.extract_value(&resolved_left, left_type),
+                                        op_str,
+                                        self.extract_value(&resolved_right, right_type)));
+                                }
                             }
                             NativeType::Double => {
-                                output.push_str(&format!("{}{} = (TauValue){{.type = 1, .value.f = (double){} {} (double){}}};\n",
-                                    ind, resolved_result,
-                                    self.extract_value(&resolved_left, left_type),
-                                    op_str,
-                                    self.extract_value(&resolved_right, right_type)));
+                                // If result doesn't need wrapping (is declared as native type),
+                                // generate native operation, extracting values from TauValue operands if needed
+                                if !needs_wrapping {
+                                    // Direct native type operation
+                                    output.push_str(&format!("{}{} = (double){} {} (double){};\n",
+                                        ind, resolved_result,
+                                        self.extract_value(&resolved_left, left_type),
+                                        op_str,
+                                        self.extract_value(&resolved_right, right_type)));
+                                } else {
+                                    // Wrap in TauValue since result variable is declared as TauValue
+                                    output.push_str(&format!("{}{} = (TauValue){{.type = 1, .value.f = (double){} {} (double){}}};\n",
+                                        ind, resolved_result,
+                                        self.extract_value(&resolved_left, left_type),
+                                        op_str,
+                                        self.extract_value(&resolved_right, right_type)));
+                                }
                             }
                             NativeType::Bool => {
-                                output.push_str(&format!("{}{} = (TauValue){{.type = 3, .value.i = {}.value.i {} {}.value.i}};\n",
-                                    ind, resolved_result, resolved_left, op_str, resolved_right));
+                                // If result doesn't need wrapping (is declared as native type),
+                                // generate native comparison, extracting values from TauValue if needed
+                                if !needs_wrapping {
+                                    // Direct native comparison - result is a native type
+                                    // Extract values from operands (handles both native and TauValue operands)
+                                    let left_val = self.extract_value(&resolved_left, left_type);
+                                    let right_val = self.extract_value(&resolved_right, right_type);
+                                    output.push_str(&format!("{}{} = {} {} {};\n",
+                                        ind, resolved_result,
+                                        left_val,
+                                        op_str,
+                                        right_val));
+                                } else {
+                                    // Wrap in TauValue since result variable is declared as TauValue
+                                    output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {} {} {}}};\n",
+                                        ind, resolved_result,
+                                        self.extract_value(&resolved_left, left_type),
+                                        op_str,
+                                        self.extract_value(&resolved_right, right_type)));
+                                }
                             }
                             _ => {
-                                output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {}.value.i {} {}.value.i}};\n",
-                                    ind, resolved_result, resolved_left, op_str, resolved_right));
+                                // Default case for other types - if result is native, don't wrap
+                                if !needs_wrapping {
+                                    output.push_str(&format!("{}{} = {} {} {};\n",
+                                        ind, resolved_result,
+                                        self.extract_value(&resolved_left, left_type),
+                                        op_str,
+                                        self.extract_value(&resolved_right, right_type)));
+                                } else {
+                                    output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {} {} {}}};\n",
+                                        ind, resolved_result,
+                                        self.extract_value(&resolved_left, left_type),
+                                        op_str,
+                                        self.extract_value(&resolved_right, right_type)));
+                                }
                             }
                         }
                     }
-                    self.var_types.insert(resolved_result, result_type);
+                    // Track the type of value stored in the result variable
+                    // If wrapping was needed, the variable holds TauValue (Generic), not the native type
+                    if needs_wrapping {
+                        self.var_types.insert(resolved_result, NativeType::Generic);
+                    } else {
+                        self.var_types.insert(resolved_result, result_type);
+                    }
                 }
             }
 
             IRInstruction::Call { func, args, result } => {
                 let args_str = args.join(", ");
                 let var_types_snapshot = self.var_types.clone();
-                match func.as_str() {
+                
+                // Check if this might be a lambda/function pointer call (variable that's not a known function)
+                let is_likely_lambda = !func.contains("::") && !func.contains("__") && 
+                                       !matches!(func.as_str(), 
+                                           "print" | "tauraro_print" | "str" | "len" | "range" | 
+                                           "list" | "dict" | "tuple" | "set" | "int" | "float" | 
+                                           "bool" | "abs" | "min" | "max" | "sum" | "sorted");
+                
+                if is_likely_lambda && var_types_snapshot.get(func).is_some() {
+                    // This is a call to a variable - might be a lambda
+                    if let Some(res) = result {
+                        let resolved_res = self.resolve_var_name(res);
+                        let resolved_func = self.resolve_var_name(func);
+                        // Try to call it as a lambda function
+                        output.push_str(&format!(
+                            "{}// Lambda or function pointer call\n", ind
+                        ));
+                        output.push_str(&format!(
+                            "{}{{\n", ind
+                        ));
+                        output.push_str(&format!(
+                            "{}    TauValue (*_lambda_func)(int, TauValue*) = (TauValue (*)(int, TauValue*))((intptr_t){}.value.ptr);\n",
+                            ind, resolved_func
+                        ));
+                        output.push_str(&format!(
+                            "{}    if (_lambda_func != NULL) {{\n", ind
+                        ));
+                        
+                        // Build arguments array for lambda call
+                        if args.is_empty() {
+                            output.push_str(&format!("{}        {} = _lambda_func(0, NULL);\n", ind, resolved_res));
+                        } else {
+                            output.push_str(&format!("{}        TauValue _lambda_args[] = {{ {} }};\n", ind, args_str));
+                            output.push_str(&format!("{}        {} = _lambda_func({}, _lambda_args);\n", ind, resolved_res, args.len()));
+                        }
+                        
+                        output.push_str(&format!("{}    }} else {{\n", ind));
+                        output.push_str(&format!("{}        {} = tauraro_none();\n", ind, resolved_res));
+                        output.push_str(&format!("{}    }}\n", ind));
+                        output.push_str(&format!("{}}}\n", ind));
+                        self.var_types.insert(resolved_res, NativeType::Generic);
+                    }
+                } else {
+                    match func.as_str() {
                     "print" | "tauraro_print" => {
                         // Format print arguments properly
                         output.push_str(&format!("{}printf(", ind));
@@ -923,13 +1724,31 @@ impl CTranspiler {
                                         format_parts.push("%s".to_string());
                                         arg_values.push(format!("{}->class_name", arg));
                                     }
-                                    NativeType::Dict => {
-                                        format_parts.push("%s".to_string());
-                                        arg_values.push(format!("\"<dict>\""));
-                                    }
                                     NativeType::List => {
+                                        // Check if it's declared as TauValue (Generic) or raw TauList*
                                         format_parts.push("%s".to_string());
-                                        arg_values.push(format!("\"<list>\""));
+                                        let decl_type = self.scope_variables.get(arg).copied()
+                                            .unwrap_or(NativeType::List);
+                                        if matches!(decl_type, NativeType::Generic) {
+                                            // Already TauValue containing a list, use directly
+                                            arg_values.push(format!("tauraro_str_from_value(&{}).value.s", arg));
+                                        } else {
+                                            // Raw TauList*, need to wrap in TauValue for string conversion
+                                            arg_values.push(format!("tauraro_str_from_value(&(TauValue){{.type = 4, .value.list = {}}}).value.s", arg));
+                                        }
+                                    }
+                                    NativeType::Dict => {
+                                        // Check if it's declared as TauValue (Generic) or raw TauDict*
+                                        format_parts.push("%s".to_string());
+                                        let decl_type = self.scope_variables.get(arg).copied()
+                                            .unwrap_or(NativeType::Dict);
+                                        if matches!(decl_type, NativeType::Generic) {
+                                            // Already TauValue containing a dict, use directly
+                                            arg_values.push(format!("tauraro_str_from_value(&{}).value.s", arg));
+                                        } else {
+                                            // Raw TauDict*, need to wrap in TauValue for string conversion
+                                            arg_values.push(format!("tauraro_str_from_value(&(TauValue){{.type = 5, .value.dict = {}}}).value.s", arg));
+                                        }
                                     }
                                     NativeType::Function => {
                                         format_parts.push("%s".to_string());
@@ -1052,7 +1871,8 @@ impl CTranspiler {
                                 3 => output.push_str(&format!("{}{} = range3({}, {}, {});\n", ind, res, args[0], args[1], args[2])),
                                 _ => output.push_str(&format!("{}{} = range({});\n", ind, res, args.join(", "))),
                             }
-                            self.var_types.insert(res.clone(), NativeType::List);
+                            // range() returns TauValue containing a list, not raw TauList*
+                            self.var_types.insert(res.clone(), NativeType::Generic);
                         }
                     }
                     "sum" => {
@@ -1152,7 +1972,7 @@ impl CTranspiler {
                         if let Some(res) = result {
                             if args.len() == 1 {
                                 output.push_str(&format!("{}{} = tauraro_type_name({});\n", ind, res, args[0]));
-                                self.var_types.insert(res.clone(), NativeType::CStr);
+                                self.var_types.insert(res.clone(), NativeType::Generic);
                             }
                         }
                     }
@@ -1179,7 +1999,7 @@ impl CTranspiler {
                         if let Some(res) = result {
                             if args.len() == 1 {
                                 output.push_str(&format!("{}{} = tauraro_chr({});\n", ind, res, args[0]));
-                                self.var_types.insert(res.clone(), NativeType::CStr);
+                                self.var_types.insert(res.clone(), NativeType::Generic);
                             }
                         }
                     }
@@ -1262,12 +2082,23 @@ impl CTranspiler {
                         }
                     }
                     "tuple" => {
-                        // Handle tuple() - convert to tuple (list in C)
+                        // Handle tuple() - create tuple from elements (list in C)
                         if let Some(res) = result {
                             if args.is_empty() {
+                                // Empty tuple
                                 output.push_str(&format!("{}{} = (TauValue){{.type = 4, .value.list = tauraro_create_list(0)}};\n", ind, res));
-                            } else {
+                            } else if args.len() == 1 {
+                                // Single argument - could be an iterable to convert
                                 output.push_str(&format!("{}{} = tauraro_to_list({});\n", ind, res, args[0]));
+                            } else {
+                                // Multiple arguments - create tuple from all elements
+                                output.push_str(&format!("{}TauList* _tuple_{} = tauraro_create_list({});\n", ind, self.temp_var_counter, args.len()));
+                                let tuple_var = format!("_tuple_{}", self.temp_var_counter);
+                                self.temp_var_counter += 1;
+                                for arg in args {
+                                    output.push_str(&format!("{}tauraro_list_append({}, {});\n", ind, tuple_var, arg));
+                                }
+                                output.push_str(&format!("{}{} = (TauValue){{.type = 4, .value.list = {}}};\n", ind, res, tuple_var));
                             }
                             self.var_types.insert(res.clone(), NativeType::List);
                         }
@@ -1277,7 +2108,7 @@ impl CTranspiler {
                         if let Some(res) = result {
                             if args.len() == 1 {
                                 output.push_str(&format!("{}{} = tauraro_hex({});\n", ind, res, args[0]));
-                                self.var_types.insert(res.clone(), NativeType::CStr);
+                                self.var_types.insert(res.clone(), NativeType::Generic);
                             }
                         }
                     }
@@ -1286,7 +2117,7 @@ impl CTranspiler {
                         if let Some(res) = result {
                             if args.len() == 1 {
                                 output.push_str(&format!("{}{} = tauraro_bin({});\n", ind, res, args[0]));
-                                self.var_types.insert(res.clone(), NativeType::CStr);
+                                self.var_types.insert(res.clone(), NativeType::Generic);
                             }
                         }
                     }
@@ -1295,7 +2126,7 @@ impl CTranspiler {
                         if let Some(res) = result {
                             if args.len() == 1 {
                                 output.push_str(&format!("{}{} = tauraro_oct({});\n", ind, res, args[0]));
-                                self.var_types.insert(res.clone(), NativeType::CStr);
+                                self.var_types.insert(res.clone(), NativeType::Generic);
                             }
                         }
                     }
@@ -1382,6 +2213,82 @@ impl CTranspiler {
                                 self.mangle_c_keyword(func)
                             };
                             
+                            // Check if we have parameter type information for this function
+                            // This helps us convert arguments appropriately
+                            let processed_args = if let Some(func_info) = self.function_definitions.get(func) {
+                                // We have parameter type info for this function
+                                args.iter().enumerate().map(|(i, arg)| {
+                                    if i < func_info.params.len() {
+                                        let (_, param_type) = &func_info.params[i];
+                                        let arg_value_type = self.var_types.get(arg).cloned().unwrap_or(NativeType::Generic);
+                                        // Also check declaration type to know if it's a native var or TauValue
+                                        let arg_decl_type = self.scope_variables.get(arg).cloned().unwrap_or(NativeType::Generic);
+                                        
+                                        // Check if we need to unwrap or wrap
+                                        // Important: If decl_type is Generic (TauValue) but value_type is List/Dict,
+                                        // we need to extract .value.list/.value.dict when param expects List/Dict
+                                        // Similarly, if decl_type is Generic and param expects Generic, no conversion needed
+                                        match (param_type, arg_value_type, arg_decl_type) {
+                                            // When param expects native type and arg is TauValue containing that type
+                                            (NativeType::Int64, NativeType::Int64, NativeType::Generic) |
+                                            (NativeType::Int64, NativeType::Generic, NativeType::Generic) => {
+                                                // Unwrap TauValue to long long
+                                                format!("{}.value.i", arg)
+                                            }
+                                            (NativeType::Double, NativeType::Double, NativeType::Generic) |
+                                            (NativeType::Double, NativeType::Generic, NativeType::Generic) => {
+                                                // Unwrap TauValue to double
+                                                format!("{}.value.f", arg)
+                                            }
+                                            (NativeType::CStr, NativeType::CStr, NativeType::Generic) |
+                                            (NativeType::CStr, NativeType::Generic, NativeType::Generic) => {
+                                                // Unwrap TauValue to string
+                                                format!("{}.value.s", arg)
+                                            }
+                                            (NativeType::List, NativeType::List, NativeType::Generic) |
+                                            (NativeType::List, NativeType::Generic, NativeType::Generic) => {
+                                                // Unwrap TauValue to TauList*
+                                                format!("{}.value.list", arg)
+                                            }
+                                            (NativeType::Dict, NativeType::Dict, NativeType::Generic) |
+                                            (NativeType::Dict, NativeType::Generic, NativeType::Generic) => {
+                                                // Unwrap TauValue to TauDict*
+                                                format!("{}.value.dict", arg)
+                                            }
+                                            // When param expects TauValue (Generic) but arg is native type
+                                            (NativeType::Generic, NativeType::Int64, NativeType::Int64) => {
+                                                // Wrap long long to TauValue
+                                                format!("(TauValue){{.type = 0, .value.i = {}}}", arg)
+                                            }
+                                            (NativeType::Generic, NativeType::Double, NativeType::Double) => {
+                                                // Wrap double to TauValue
+                                                format!("(TauValue){{.type = 1, .value.f = {}}}", arg)
+                                            }
+                                            (NativeType::Generic, NativeType::List, NativeType::List) => {
+                                                // Wrap TauList* to TauValue (only when declaration is also List)
+                                                format!("(TauValue){{.type = 4, .value.list = {}}}", arg)
+                                            }
+                                            (NativeType::Generic, NativeType::Dict, NativeType::Dict) => {
+                                                // Wrap TauDict* to TauValue (only when declaration is also Dict)
+                                                format!("(TauValue){{.type = 5, .value.dict = {}}}", arg)
+                                            }
+                                            // When param expects TauValue and arg is already TauValue (containing list/dict)
+                                            (NativeType::Generic, NativeType::List, NativeType::Generic) |
+                                            (NativeType::Generic, NativeType::Dict, NativeType::Generic) |
+                                            (NativeType::Generic, NativeType::Generic, NativeType::Generic) => {
+                                                // Already TauValue, no conversion needed
+                                                arg.clone()
+                                            }
+                                            _ => arg.clone() // No conversion needed for exact matches
+                                        }
+                                    } else {
+                                        arg.clone()
+                                    }
+                                }).collect::<Vec<_>>().join(", ")
+                            } else {
+                                args_str.clone() // No conversion if we don't know parameter types
+                            };
+                            
                             // Check if this is a function call with fewer arguments than expected (default arguments)
                             if args.is_empty() {
                                 // Check if this function has a wrapper for 0 arguments
@@ -1408,29 +2315,191 @@ impl CTranspiler {
                             // Resolve result variable name
                             if let Some(res) = result {
                                 let resolved_res = self.resolve_var_name(res);
-                                output.push_str(&format!("{}{} = {}({});\n", ind, resolved_res, call_func, args_str));
-                                self.var_types.insert(resolved_res, NativeType::Generic);
+                                
+                                // Check if the function returns a native type
+                                let func_return_type = self.function_definitions.get(func)
+                                    .map(|f| f.return_type)
+                                    .unwrap_or(NativeType::Generic);
+                                
+                                // Check what type the result variable is
+                                let result_var_type = self.scope_variables.get(&resolved_res).copied()
+                                    .or_else(|| self.var_types.get(&resolved_res).copied())
+                                    .unwrap_or(NativeType::Generic);
+                                
+                                // If function returns native type but result is TauValue, wrap the result
+                                match (func_return_type, result_var_type) {
+                                    (NativeType::Int64, NativeType::Generic) => {
+                                        // Wrap long long return in TauValue
+                                        output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {}({})}};\n", 
+                                            ind, resolved_res, call_func, processed_args));
+                                    }
+                                    (NativeType::Double, NativeType::Generic) => {
+                                        // Wrap double return in TauValue
+                                        output.push_str(&format!("{}{} = (TauValue){{.type = 1, .value.f = {}({})}};\n", 
+                                            ind, resolved_res, call_func, processed_args));
+                                    }
+                                    (NativeType::Bool, NativeType::Generic) => {
+                                        // Wrap bool return in TauValue
+                                        output.push_str(&format!("{}{} = (TauValue){{.type = 3, .value.i = {}({})}};\n", 
+                                            ind, resolved_res, call_func, processed_args));
+                                    }
+                                    (NativeType::CStr, NativeType::Generic) => {
+                                        // Wrap string return in TauValue
+                                        output.push_str(&format!("{}{} = (TauValue){{.type = 2, .value.s = {}({})}};\n", 
+                                            ind, resolved_res, call_func, processed_args));
+                                    }
+                                    (NativeType::List, NativeType::Generic) => {
+                                        // Wrap TauList* return in TauValue
+                                        output.push_str(&format!("{}{} = (TauValue){{.type = 4, .value.list = {}({})}};\n", 
+                                            ind, resolved_res, call_func, processed_args));
+                                    }
+                                    (NativeType::Dict, NativeType::Generic) => {
+                                        // Wrap TauDict* return in TauValue
+                                        output.push_str(&format!("{}{} = (TauValue){{.type = 5, .value.dict = {}({})}};\n", 
+                                            ind, resolved_res, call_func, processed_args));
+                                    }
+                                    (NativeType::Generic, NativeType::Int64) => {
+                                        // Unwrap TauValue return to long long
+                                        output.push_str(&format!("{}{} = {}({}).value.i;\n", 
+                                            ind, resolved_res, call_func, processed_args));
+                                    }
+                                    (NativeType::Generic, NativeType::Double) => {
+                                        // Unwrap TauValue return to double
+                                        output.push_str(&format!("{}{} = {}({}).value.f;\n", 
+                                            ind, resolved_res, call_func, processed_args));
+                                    }
+                                    (NativeType::Generic, NativeType::List) => {
+                                        // Unwrap TauValue return to TauList*
+                                        output.push_str(&format!("{}{} = {}({}).value.list;\n", 
+                                            ind, resolved_res, call_func, processed_args));
+                                    }
+                                    (NativeType::Generic, NativeType::Dict) => {
+                                        // Unwrap TauValue return to TauDict*
+                                        output.push_str(&format!("{}{} = {}({}).value.dict;\n", 
+                                            ind, resolved_res, call_func, processed_args));
+                                    }
+                                    _ => {
+                                        // Direct assignment for matching types or Generic functions
+                                        output.push_str(&format!("{}{} = {}({});\n", ind, resolved_res, call_func, processed_args));
+                                    }
+                                }
+                                
+                                // Update var_types based on what we ACTUALLY stored
+                                // If we wrapped the result in TauValue, the stored type is Generic
+                                // If we unwrapped or did direct assignment, use the appropriate type
+                                match (func_return_type, result_var_type) {
+                                    // When we wrapped native return in TauValue, result is Generic (TauValue)
+                                    (NativeType::Int64, NativeType::Generic) |
+                                    (NativeType::Double, NativeType::Generic) |
+                                    (NativeType::Bool, NativeType::Generic) |
+                                    (NativeType::CStr, NativeType::Generic) |
+                                    (NativeType::List, NativeType::Generic) |
+                                    (NativeType::Dict, NativeType::Generic) => {
+                                        self.var_types.insert(resolved_res.clone(), NativeType::Generic);
+                                    }
+                                    // When we unwrapped TauValue to native, result is native type
+                                    (NativeType::Generic, NativeType::Int64) => {
+                                        self.var_types.insert(resolved_res.clone(), NativeType::Int64);
+                                    }
+                                    (NativeType::Generic, NativeType::Double) => {
+                                        self.var_types.insert(resolved_res.clone(), NativeType::Double);
+                                    }
+                                    (NativeType::Generic, NativeType::List) => {
+                                        self.var_types.insert(resolved_res.clone(), NativeType::List);
+                                    }
+                                    (NativeType::Generic, NativeType::Dict) => {
+                                        self.var_types.insert(resolved_res.clone(), NativeType::Dict);
+                                    }
+                                    // Direct assignment - use function return type
+                                    _ => {
+                                        self.var_types.insert(resolved_res.clone(), func_return_type);
+                                    }
+                                }
                             } else {
-                                output.push_str(&format!("{}{}({});\n", ind, call_func, args_str));
+                                output.push_str(&format!("{}{}({});\n", ind, call_func, processed_args));
                             }
                         }
                     }
                 }
+                }  // Close the else block for lambda check
             }
 
             IRInstruction::Return { value } => {
                 if let Some(val) = value {
-                    output.push_str(&format!("{}return {};\n", ind, val));
+                    let resolved_val = self.resolve_var_name(val);
+                    
+                    // Get the function's return type from function_definitions
+                    let return_type = self.current_function.as_ref()
+                        .and_then(|fname| self.function_definitions.get(fname))
+                        .map(|finfo| finfo.return_type)
+                        .unwrap_or(NativeType::Generic);
+                    
+                    // Get the value's type
+                    let val_type = self.var_types.get(&resolved_val).copied()
+                        .or_else(|| self.scope_variables.get(&resolved_val).copied())
+                        .unwrap_or(NativeType::Generic);
+                    
+                    // Convert if needed
+                    match (return_type, val_type) {
+                        (NativeType::Int64, NativeType::Generic) => {
+                            output.push_str(&format!("{}return {}.value.i;\n", ind, resolved_val));
+                        }
+                        (NativeType::Double, NativeType::Generic) => {
+                            output.push_str(&format!("{}return {}.value.f;\n", ind, resolved_val));
+                        }
+                        (NativeType::CStr, NativeType::Generic) => {
+                            output.push_str(&format!("{}return {}.value.s;\n", ind, resolved_val));
+                        }
+                        (NativeType::List, NativeType::Generic) => {
+                            output.push_str(&format!("{}return {}.value.list;\n", ind, resolved_val));
+                        }
+                        (NativeType::Dict, NativeType::Generic) => {
+                            output.push_str(&format!("{}return {}.value.dict;\n", ind, resolved_val));
+                        }
+                        (NativeType::Generic, NativeType::Int64) => {
+                            output.push_str(&format!("{}return (TauValue){{.type = 0, .value.i = {}}};\n", ind, resolved_val));
+                        }
+                        (NativeType::Generic, NativeType::Double) => {
+                            output.push_str(&format!("{}return (TauValue){{.type = 1, .value.f = {}}};\n", ind, resolved_val));
+                        }
+                        (NativeType::Generic, NativeType::List) => {
+                            output.push_str(&format!("{}return (TauValue){{.type = 4, .value.list = {}}};\n", ind, resolved_val));
+                        }
+                        (NativeType::Generic, NativeType::Dict) => {
+                            output.push_str(&format!("{}return (TauValue){{.type = 5, .value.dict = {}}};\n", ind, resolved_val));
+                        }
+                        _ => {
+                            output.push_str(&format!("{}return {};\n", ind, resolved_val));
+                        }
+                    }
                 } else {
                     output.push_str(&format!("{}return {{.type = 0, .value.i = 0}};\n", ind));
                 }
             }
 
             IRInstruction::If { condition, then_body, elif_branches, else_body } => {
-                // Extract boolean value from TauValue condition
+                // Check the type of condition variable - if it's a native type, use it directly
                 let resolved_condition = self.resolve_var_name(condition);
-                let condition_check = format!("({}.type == 3 ? {}.value.i : ({}.type == 0 ? ({}.value.i != 0) : 1))", 
-                    resolved_condition, resolved_condition, resolved_condition, resolved_condition);
+                let condition_type = self.var_types.get(&resolved_condition).copied()
+                    .or_else(|| self.scope_variables.get(&resolved_condition).copied())
+                    .unwrap_or(NativeType::Generic);
+                
+                // Generate appropriate condition check based on variable type
+                let condition_check = match condition_type {
+                    NativeType::Int64 | NativeType::Bool => {
+                        // Native type - use it directly (0 = false, non-zero = true)
+                        format!("{}", resolved_condition)
+                    }
+                    NativeType::Double => {
+                        // Native double - compare against 0.0
+                        format!("({} != 0.0)", resolved_condition)
+                    }
+                    _ => {
+                        // TauValue - extract boolean from TauValue
+                        format!("({}.type == 3 ? {}.value.i : ({}.type == 0 ? ({}.value.i != 0) : 1))", 
+                            resolved_condition, resolved_condition, resolved_condition, resolved_condition)
+                    }
+                };
                 output.push_str(&format!("{}if ({}) {{\n", ind, condition_check));
                 for instr in then_body {
                     output.push_str(&self.transpile_instruction(instr, indent_level + 1)?);
@@ -1438,8 +2507,22 @@ impl CTranspiler {
 
                 for (elif_cond, elif_instrs) in elif_branches {
                     let resolved_elif_cond = self.resolve_var_name(elif_cond);
-                    let elif_check = format!("({}.type == 3 ? {}.value.i : ({}.type == 0 ? ({}.value.i != 0) : 1))", 
-                        resolved_elif_cond, resolved_elif_cond, resolved_elif_cond, resolved_elif_cond);
+                    let elif_type = self.var_types.get(&resolved_elif_cond).copied()
+                        .or_else(|| self.scope_variables.get(&resolved_elif_cond).copied())
+                        .unwrap_or(NativeType::Generic);
+                    
+                    let elif_check = match elif_type {
+                        NativeType::Int64 | NativeType::Bool => {
+                            format!("{}", resolved_elif_cond)
+                        }
+                        NativeType::Double => {
+                            format!("({} != 0.0)", resolved_elif_cond)
+                        }
+                        _ => {
+                            format!("({}.type == 3 ? {}.value.i : ({}.type == 0 ? ({}.value.i != 0) : 1))", 
+                                resolved_elif_cond, resolved_elif_cond, resolved_elif_cond, resolved_elif_cond)
+                        }
+                    };
                     output.push_str(&format!("{}}} else if ({}) {{\n", ind, elif_check));
                     for instr in elif_instrs {
                         output.push_str(&self.transpile_instruction(instr, indent_level + 1)?);
@@ -1461,11 +2544,6 @@ impl CTranspiler {
                 // 2. Generate while with the condition check
                 // 3. Execute body and let condition be re-evaluated on next iteration
                 
-                // Extract boolean value from TauValue condition
-                let resolved_condition = self.resolve_var_name(condition);
-                let condition_check = format!("({}.type == 3 ? {}.value.i : ({}.type == 0 ? ({}.value.i != 0) : 1))", 
-                    resolved_condition, resolved_condition, resolved_condition, resolved_condition);
-                
                 // Generate the while loop
                 output.push_str(&format!("{}while (1) {{\n", ind)); // Infinite loop, condition check inside
                 
@@ -1473,6 +2551,29 @@ impl CTranspiler {
                 for instr in condition_instructions {
                     output.push_str(&self.transpile_instruction(instr, indent_level + 1)?);
                 }
+                
+                // Check the type of condition variable - if it's a native type, use it directly
+                let resolved_condition = self.resolve_var_name(condition);
+                let condition_type = self.var_types.get(&resolved_condition).copied()
+                    .or_else(|| self.scope_variables.get(&resolved_condition).copied())
+                    .unwrap_or(NativeType::Generic);
+                
+                // Generate appropriate condition check based on variable type
+                let condition_check = match condition_type {
+                    NativeType::Int64 | NativeType::Bool => {
+                        // Native type - use it directly (0 = false, non-zero = true)
+                        format!("{}", resolved_condition)
+                    }
+                    NativeType::Double => {
+                        // Native double - compare against 0.0
+                        format!("({} != 0.0)", resolved_condition)
+                    }
+                    _ => {
+                        // TauValue - extract boolean from TauValue
+                        format!("({}.type == 3 ? {}.value.i : ({}.type == 0 ? ({}.value.i != 0) : 1))", 
+                            resolved_condition, resolved_condition, resolved_condition, resolved_condition)
+                    }
+                };
                 
                 // Check condition and break if false
                 output.push_str(&format!("{}if (!({} )) break;\n", ind.repeat(2), condition_check));
@@ -1488,29 +2589,83 @@ impl CTranspiler {
                 // For loop - iterate over list items
                 output.push_str(&format!("{}// for loop over {}\n", ind, iterable));
                 
+                // Check if the loop variable is a typed variable
+                let resolved_variable = self.resolve_var_name(variable);
+                let var_type = self.var_types.get(&resolved_variable).copied()
+                    .or_else(|| self.scope_variables.get(&resolved_variable).copied())
+                    .unwrap_or(NativeType::Generic);
+                
+                // Check if the iterable is a native TauList* or a TauValue containing a list
+                let resolved_iterable = self.resolve_var_name(iterable);
+                let iterable_type = self.var_types.get(&resolved_iterable).copied()
+                    .or_else(|| self.scope_variables.get(&resolved_iterable).copied())
+                    .or_else(|| self.var_types.get(iterable).copied())
+                    .or_else(|| self.scope_variables.get(iterable).copied())
+                    .unwrap_or(NativeType::Generic);
+                
                 // Generate unique temp variables for iteration
                 self.temp_var_counter += 1;
                 let loop_counter = format!("_for_i_{}", self.temp_var_counter);
-                let loop_list = format!("_for_list_{}", self.temp_var_counter);
                 
-                // Get the iterable variable
-                output.push_str(&format!("{}TauValue {} = {};\n", ind, loop_list, iterable));
-                
-                // Check if it's a list and iterate
-                output.push_str(&format!("{}if ({}.type == 4) {{\n", ind, loop_list));
-                output.push_str(&format!("{}    TauList* _list = {}.value.list;\n", ind, loop_list));
-                output.push_str(&format!("{}    for(int {} = 0; {} < _list->size; {}++) {{\n", ind, loop_counter, loop_counter, loop_counter));
-                
-                // Declare the loop variable and assign the current item
-                output.push_str(&format!("{}        TauValue {} = _list->items[{}];\n", ind, variable, loop_counter));
-                
-                // Process loop body
-                for instr in body {
-                    output.push_str(&self.transpile_instruction(instr, indent_level + 2)?);
+                // Handle native TauList* vs TauValue containing a list
+                if matches!(iterable_type, NativeType::List) {
+                    // Direct TauList* - no need to wrap/unwrap
+                    output.push_str(&format!("{}TauList* _list = {};\n", ind, resolved_iterable));
+                    output.push_str(&format!("{}for(int {} = 0; {} < _list->size; {}++) {{\n", ind, loop_counter, loop_counter, loop_counter));
+                    
+                    // Declare/assign the loop variable based on its type
+                    match var_type {
+                        NativeType::Int64 => {
+                            output.push_str(&format!("{}    {} = _list->items[{}].value.i;\n", ind, resolved_variable, loop_counter));
+                        }
+                        NativeType::Double => {
+                            output.push_str(&format!("{}    {} = _list->items[{}].value.f;\n", ind, resolved_variable, loop_counter));
+                        }
+                        _ => {
+                            output.push_str(&format!("{}    TauValue {} = _list->items[{}];\n", ind, variable, loop_counter));
+                        }
+                    }
+                    
+                    // Process loop body
+                    for instr in body {
+                        output.push_str(&self.transpile_instruction(instr, indent_level + 1)?);
+                    }
+                    
+                    output.push_str(&format!("{}}}\n", ind));
+                } else {
+                    // TauValue containing a list - original behavior
+                    let loop_list = format!("_for_list_{}", self.temp_var_counter);
+                    
+                    // Get the iterable variable
+                    output.push_str(&format!("{}TauValue {} = {};\n", ind, loop_list, resolved_iterable));
+                    
+                    // Check if it's a list and iterate
+                    output.push_str(&format!("{}if ({}.type == 4) {{\n", ind, loop_list));
+                    output.push_str(&format!("{}    TauList* _list = {}.value.list;\n", ind, loop_list));
+                    output.push_str(&format!("{}    for(int {} = 0; {} < _list->size; {}++) {{\n", ind, loop_counter, loop_counter, loop_counter));
+                    
+                    // Declare/assign the loop variable based on its type
+                    match var_type {
+                        NativeType::Int64 => {
+                            output.push_str(&format!("{}        {} = _list->items[{}].value.i;\n", ind, resolved_variable, loop_counter));
+                        }
+                        NativeType::Double => {
+                            output.push_str(&format!("{}        {} = _list->items[{}].value.f;\n", ind, resolved_variable, loop_counter));
+                        }
+                        _ => {
+                            // For untyped variables, declare as TauValue
+                            output.push_str(&format!("{}        TauValue {} = _list->items[{}];\n", ind, variable, loop_counter));
+                        }
+                    }
+                    
+                    // Process loop body
+                    for instr in body {
+                        output.push_str(&self.transpile_instruction(instr, indent_level + 2)?);
+                    }
+                    
+                    output.push_str(&format!("{}}}\n", ind));
+                    output.push_str(&format!("{}}}\n", ind));
                 }
-                
-                output.push_str(&format!("{}}}\n", ind));
-                output.push_str(&format!("{}}}\n", ind));
             }
 
             IRInstruction::Break => {
@@ -1523,11 +2678,9 @@ impl CTranspiler {
 
             IRInstruction::ListCreate { elements, result } => {
                 output.push_str(&format!("{}// Create list with {} elements\n", ind, elements.len()));
-                // Use TauValue instead of TauList* for compatibility
-                let (var_decl, result_var) = self.ensure_var_declared(result, NativeType::Generic, &ind);
-                if !var_decl.is_empty() {
-                    output.push_str(&format!("{}\n", var_decl));
-                }
+                // Use the original result name directly - don't create unique names
+                // since StoreLocal will assign this to a specific variable
+                let result_var = self.resolve_var_name(result);
                 // Create TauList structure
                 output.push_str(&format!("{}{{ TauList* _list = malloc(sizeof(TauList));\n", ind));
                 output.push_str(&format!("{}_list->size = {};\n", ind, elements.len()));
@@ -1537,21 +2690,24 @@ impl CTranspiler {
                     output.push_str(&format!("{}_list->items[{}] = {};\n", ind, i, elem));
                 }
                 output.push_str(&format!("{}{}.type = 4; {}.value.list = _list; }}\n", ind, result_var, result_var));
+                // The result is a TauValue containing a list, not a raw TauList*
+                // So the type should remain Generic (TauValue), not NativeType::List
+                self.var_types.insert(result_var, NativeType::Generic);
             }
 
             IRInstruction::DictCreate { pairs, result } => {
                 output.push_str(&format!("{}// Create dictionary\n", ind));
-                // Use TauValue instead of TauDict* for compatibility
-                let (var_decl, result_var) = self.ensure_var_declared(result, NativeType::Generic, &ind);
-                if !var_decl.is_empty() {
-                    output.push_str(&format!("{}\n", var_decl));
-                }
+                // Use the original result name directly
+                let result_var = self.resolve_var_name(result);
                 output.push_str(&format!("{}{{ TauDict* _dict = tauraro_create_dict();\n", ind));
                 for (key, val) in pairs.iter() {
                     // Extract string from key if needed
                     output.push_str(&format!("{}tauraro_dict_set(_dict, {}.value.s, {});\n", ind, key, val));
                 }
                 output.push_str(&format!("{}{}.type = 5; {}.value.dict = _dict; }}\n", ind, result_var, result_var));
+                // The result is a TauValue containing a dict, not a raw TauDict*
+                // So the type should remain Generic (TauValue), not NativeType::Dict
+                self.var_types.insert(result_var, NativeType::Generic);
             }
 
             IRInstruction::Try { body, handlers, else_body, finally_body } => {
@@ -1627,9 +2783,26 @@ impl CTranspiler {
             }
             
             IRInstruction::DictGetItem { dict, key, result } => {
-                output.push_str(&format!("{}// Get dictionary item {} from {}\n", ind, key, dict));
-                output.push_str(&format!("{}{} = tauraro_dict_get({}, {});\n", ind, result, dict, key));
-                self.var_types.insert(result.clone(), NativeType::Generic);
+                let resolved_dict = self.resolve_var_name(dict);
+                let resolved_key = self.resolve_var_name(key);
+                let resolved_result = self.resolve_var_name(result);
+                
+                output.push_str(&format!("{}// Get dictionary or list item\n", ind));
+                output.push_str(&format!("{}if ({}.type == 5 && {}.value.dict) {{\n", ind, resolved_dict, resolved_dict));
+                output.push_str(&format!("{}    TauValue* _dict_val = tauraro_dict_get({}.value.dict, {}.value.s);\n", ind, resolved_dict, resolved_key));
+                output.push_str(&format!("{}    {} = _dict_val ? *_dict_val : tauraro_none();\n", ind, resolved_result));
+                output.push_str(&format!("{}}} else if ({}.type == 4 && {}.value.list) {{\n", ind, resolved_dict, resolved_dict));
+                output.push_str(&format!("{}    long long _idx = {}.type == 0 ? {}.value.i : 0;\n", ind, resolved_key, resolved_key));
+                output.push_str(&format!("{}    if (_idx < 0) _idx = {}.value.list->size + _idx;\n", ind, resolved_dict));
+                output.push_str(&format!("{}    if (_idx >= 0 && _idx < (long long){}.value.list->size) {{\n", ind, resolved_dict));
+                output.push_str(&format!("{}        {} = {}.value.list->items[_idx];\n", ind, resolved_result, resolved_dict));
+                output.push_str(&format!("{}    }} else {{\n", ind));
+                output.push_str(&format!("{}        {} = tauraro_none();\n", ind, resolved_result));
+                output.push_str(&format!("{}    }}\n", ind));
+                output.push_str(&format!("{}}} else {{\n", ind));
+                output.push_str(&format!("{}    {} = tauraro_none();\n", ind, resolved_result));
+                output.push_str(&format!("}}\n"));
+                self.var_types.insert(resolved_result, NativeType::Generic);
             }
 
             // Enhanced existing instruction support - extend existing Try instruction
@@ -1783,38 +2956,43 @@ impl CTranspiler {
             // ==================== NEW ADVANCED FEATURES ====================
             
             // Lambda expressions - compile to function pointers
-            IRInstruction::Lambda { params, body_instructions, captured_vars, result } => {
+            IRInstruction::Lambda { params, body_instructions, captured_vars, result, body_result_var } => {
                 let resolved_result = self.resolve_var_name(result);
                 self.temp_var_counter += 1;
                 let lambda_id = self.temp_var_counter;
-                let lambda_name = format!("_lambda_{}", lambda_id);
+                let lambda_func_name = format!("_lambda_impl_{}", lambda_id);
                 
                 output.push_str(&format!("{}// Lambda expression\n", ind));
                 
-                // For simple lambdas, we inline the computation
-                // Complex lambdas would need function pointer generation
-                if body_instructions.len() == 1 {
-                    // Simple single-expression lambda - inline it
-                    output.push_str(&format!("{}{} = (TauValue){{.type = 7, .value.ptr = (void*){}}}; // Lambda stored\n", 
-                        ind, resolved_result, lambda_name));
-                } else {
-                    // Store lambda reference
-                    output.push_str(&format!("{}{} = (TauValue){{.type = 7, .value.ptr = NULL}}; // Lambda placeholder\n", 
-                        ind, resolved_result));
+                // Ensure the result variable is declared
+                if !self.declared_vars.contains(&resolved_result) && !self.scope_variables.contains_key(&resolved_result) {
+                    output.push_str(&format!("{}TauValue {};\n", ind, resolved_result));
+                    self.declared_vars.insert(resolved_result.clone());
                 }
                 
-                // Capture variables
-                if !captured_vars.is_empty() {
-                    output.push_str(&format!("{}// Captured: {}\n", ind, captured_vars.join(", ")));
-                }
+                // Generate a unique function for this lambda
+                // We store the function pointer in a TauValue with type=7 (pointer)
+                output.push_str(&format!("{}{} = (TauValue){{.type = 7, .value.ptr = (void*)(intptr_t){}}};\n", 
+                    ind, resolved_result, lambda_func_name));
                 
+                // Record that this variable holds a function pointer
                 self.var_types.insert(resolved_result, NativeType::Function);
+                
+                // Store lambda info for later code generation
+                // We'll generate the actual function at the end in a helper section
+                self.lambdas_to_generate.push((
+                    lambda_func_name.clone(),
+                    params.clone(),
+                    body_instructions.clone(),
+                    captured_vars.clone(),
+                    body_result_var.clone()
+                ));
             }
             
             // List comprehension - [expr for x in iterable if condition]
             IRInstruction::ListComprehension { 
-                element_expr, element_result, variable, iterable, 
-                condition, condition_result, result 
+                element_instrs, element_result, variable, iterable, 
+                condition_instrs, condition_result, result 
             } => {
                 let resolved_result = self.resolve_var_name(result);
                 let resolved_iterable = self.resolve_var_name(iterable);
@@ -1822,9 +3000,26 @@ impl CTranspiler {
                 let resolved_elem = self.resolve_var_name(element_result);
                 
                 output.push_str(&format!("{}// List comprehension\n", ind));
+                
+                // Declare the result variable
+                output.push_str(&format!("{}TauValue {};\n", ind, resolved_result));
+                
                 output.push_str(&format!("{}TauList* _lc_{} = tauraro_create_list(16);\n", ind, self.temp_var_counter));
                 self.temp_var_counter += 1;
                 let lc_list = format!("_lc_{}", self.temp_var_counter - 1);
+                
+                // Collect all temporary variables that will be used in the loop
+                let mut all_temp_vars = std::collections::HashSet::new();
+                all_temp_vars.extend(self.collect_temp_vars_from_instructions(element_instrs));
+                all_temp_vars.extend(self.collect_temp_vars_from_instructions(condition_instrs));
+                
+                // Pre-declare loop temps before the loop
+                let loop_ind = format!("{}    ", ind);
+                for temp_var in &all_temp_vars {
+                    if temp_var != &resolved_var && temp_var != &resolved_iterable && temp_var != &resolved_result {
+                        output.push_str(&format!("{}TauValue {};\n", loop_ind, temp_var));
+                    }
+                }
                 
                 // Iterate over source
                 output.push_str(&format!("{}if ({}.type == 4 && {}.value.list != NULL) {{\n", ind, resolved_iterable, resolved_iterable));
@@ -1832,18 +3027,21 @@ impl CTranspiler {
                 output.push_str(&format!("{}        TauValue {} = {}.value.list->items[_i];\n", ind, resolved_var, resolved_iterable));
                 
                 // Apply condition if present
-                if let Some(cond_instrs) = condition {
-                    let cond_res = condition_result.as_ref().map(|s| self.resolve_var_name(s)).unwrap_or("_cond".to_string());
-                    for cond_instr in cond_instrs {
-                        output.push_str(&self.transpile_instruction(cond_instr, indent_level + 2)?);
+                if !condition_instrs.is_empty() {
+                    if let Some(cond_result) = condition_result {
+                        let cond_res = self.resolve_var_name(cond_result);
+                        // Compile condition instructions
+                        for instr in condition_instrs {
+                            output.push_str(&self.transpile_instruction(instr, indent_level + 2)?);
+                        }
+                        output.push_str(&format!("{}        if (!({}.type == 3 ? {}.value.i : ({}.type == 0 ? ({}.value.i != 0) : 1))) continue;\n", 
+                            ind, cond_res, cond_res, cond_res, cond_res));
                     }
-                    output.push_str(&format!("{}        if (!({}.type == 3 ? {}.value.i : ({}.type == 0 ? ({}.value.i != 0) : 1))) continue;\n", 
-                        ind, cond_res, cond_res, cond_res, cond_res));
                 }
                 
-                // Compute element expression
-                for elem_instr in element_expr {
-                    output.push_str(&self.transpile_instruction(elem_instr, indent_level + 2)?);
+                // Compute element - execute stored instructions
+                for instr in element_instrs {
+                    output.push_str(&self.transpile_instruction(instr, indent_level + 2)?);
                 }
                 
                 // Append to result list
@@ -1858,8 +3056,8 @@ impl CTranspiler {
             
             // Dict comprehension - {key: value for x in iterable if condition}
             IRInstruction::DictComprehension {
-                key_expr, key_result, value_expr, value_result,
-                variable, iterable, condition, condition_result, result
+                key_instrs, key_result, value_instrs, value_result,
+                variable, iterable, condition_instrs, condition_result, result
             } => {
                 let resolved_result = self.resolve_var_name(result);
                 let resolved_iterable = self.resolve_var_name(iterable);
@@ -1868,9 +3066,27 @@ impl CTranspiler {
                 let resolved_val = self.resolve_var_name(value_result);
                 
                 output.push_str(&format!("{}// Dict comprehension\n", ind));
+                
+                // Declare the result variable
+                output.push_str(&format!("{}TauValue {};\n", ind, resolved_result));
+                
                 output.push_str(&format!("{}TauDict* _dc_{} = tauraro_create_dict();\n", ind, self.temp_var_counter));
                 self.temp_var_counter += 1;
                 let dc_dict = format!("_dc_{}", self.temp_var_counter - 1);
+                
+                // Collect all temporary variables that will be used in the loop
+                let mut all_temp_vars = std::collections::HashSet::new();
+                all_temp_vars.extend(self.collect_temp_vars_from_instructions(key_instrs));
+                all_temp_vars.extend(self.collect_temp_vars_from_instructions(value_instrs));
+                all_temp_vars.extend(self.collect_temp_vars_from_instructions(condition_instrs));
+                
+                // Pre-declare loop temps before the loop
+                let loop_ind = format!("{}    ", ind);
+                for temp_var in &all_temp_vars {
+                    if temp_var != &resolved_var && temp_var != &resolved_iterable && temp_var != &resolved_result {
+                        output.push_str(&format!("{}TauValue {};\n", loop_ind, temp_var));
+                    }
+                }
                 
                 // Iterate over source
                 output.push_str(&format!("{}if ({}.type == 4 && {}.value.list != NULL) {{\n", ind, resolved_iterable, resolved_iterable));
@@ -1878,26 +3094,33 @@ impl CTranspiler {
                 output.push_str(&format!("{}        TauValue {} = {}.value.list->items[_i];\n", ind, resolved_var, resolved_iterable));
                 
                 // Apply condition if present
-                if let Some(cond_instrs) = condition {
-                    let cond_res = condition_result.as_ref().map(|s| self.resolve_var_name(s)).unwrap_or("_cond".to_string());
-                    for cond_instr in cond_instrs {
-                        output.push_str(&self.transpile_instruction(cond_instr, indent_level + 2)?);
+                if !condition_instrs.is_empty() {
+                    if let Some(cond_result) = condition_result {
+                        let cond_res = self.resolve_var_name(cond_result);
+                        // Compile condition instructions
+                        for instr in condition_instrs {
+                            output.push_str(&self.transpile_instruction(instr, indent_level + 2)?);
+                        }
+                        output.push_str(&format!("{}        if (!({}.type == 3 ? {}.value.i : ({}.type == 0 ? ({}.value.i != 0) : 1))) continue;\n", 
+                            ind, cond_res, cond_res, cond_res, cond_res));
                     }
-                    output.push_str(&format!("{}        if (!({}.type == 3 ? {}.value.i : ({}.type == 0 ? ({}.value.i != 0) : 1))) continue;\n", 
-                        ind, cond_res, cond_res, cond_res, cond_res));
                 }
                 
-                // Compute key and value expressions
-                for k_instr in key_expr {
-                    output.push_str(&self.transpile_instruction(k_instr, indent_level + 2)?);
-                }
-                for v_instr in value_expr {
-                    output.push_str(&self.transpile_instruction(v_instr, indent_level + 2)?);
+                // Compute key - execute stored instructions
+                for instr in key_instrs {
+                    output.push_str(&self.transpile_instruction(instr, indent_level + 2)?);
                 }
                 
-                // Insert into dict
-                output.push_str(&format!("{}        if ({}.type == 2) tauraro_dict_set({}, {}.value.s, {});\n", 
-                    ind, resolved_key, dc_dict, resolved_key, resolved_val));
+                // Compute value - execute stored instructions
+                for instr in value_instrs {
+                    output.push_str(&self.transpile_instruction(instr, indent_level + 2)?);
+                }
+                
+                // Add to dict
+                output.push_str(&format!("{}        if ({}.type == 2) {{\n", ind, resolved_key));
+                output.push_str(&format!("{}            tauraro_dict_set({}, {}.value.s, {});\n", ind, dc_dict, resolved_key, resolved_val));
+                output.push_str(&format!("{}        }}\n", ind));
+                
                 output.push_str(&format!("{}    }}\n", ind));
                 output.push_str(&format!("{}}}\n", ind));
                 
@@ -1956,16 +3179,39 @@ impl CTranspiler {
                 let resolved_tuple = self.resolve_var_name(tuple);
                 
                 output.push_str(&format!("{}// Tuple unpacking\n", ind));
+                
+                // First declare all target variables as TauValue
+                for target in targets {
+                    let resolved_target = self.resolve_var_name(target);
+                    output.push_str(&format!("{}TauValue {};\n", ind, resolved_target));
+                    self.var_types.insert(resolved_target.clone(), NativeType::Generic);
+                }
+                
                 output.push_str(&format!("{}if ({}.type == 4 && {}.value.list != NULL) {{\n", ind, resolved_tuple, resolved_tuple));
                 
                 for (i, target) in targets.iter().enumerate() {
                     let resolved_target = self.resolve_var_name(target);
                     output.push_str(&format!("{}    {} = ({}.value.list->size > {}) ? {}.value.list->items[{}] : (TauValue){{.type = 0, .value.i = 0}};\n", 
                         ind, resolved_target, resolved_tuple, i, resolved_tuple, i));
-                    self.var_types.insert(resolved_target, NativeType::Generic);
                 }
                 
                 output.push_str(&format!("{}}}\n", ind));
+            }
+            
+            // Tuple get item
+            IRInstruction::TupleGetItem { tuple, index, result } => {
+                let resolved_tuple = self.resolve_var_name(tuple);
+                let resolved_result = self.resolve_var_name(result);
+                
+                output.push_str(&format!("{}// Tuple get item [{}]\n", ind, index));
+                output.push_str(&format!("{}if ({}.type == 4 && {}.value.list != NULL && {}.value.list->size > {}) {{\n", 
+                    ind, resolved_tuple, resolved_tuple, resolved_tuple, index));
+                output.push_str(&format!("{}    {} = {}.value.list->items[{}];\n", 
+                    ind, resolved_result, resolved_tuple, index));
+                output.push_str(&format!("{}}} else {{\n", ind));
+                output.push_str(&format!("{}    {} = (TauValue){{.type = 0, .value.i = 0}};\n", ind, resolved_result));
+                output.push_str(&format!("{}}}\n", ind));
+                self.var_types.insert(resolved_result, NativeType::Generic);
             }
             
             // F-string / Format string
@@ -2274,6 +3520,7 @@ impl CTranspiler {
             BinaryOp::Sub => "-",
             BinaryOp::Mul => "*",
             BinaryOp::Div => "/",
+            BinaryOp::FloorDiv => "/", // Integer division in C (for int types)
             BinaryOp::Mod => "%",
             BinaryOp::Pow => "**POWER**", // Special marker for power operations
             BinaryOp::LShift => "<<",
@@ -2304,7 +3551,22 @@ impl CTranspiler {
     }
 
     fn extract_value(&self, var_name: &str, var_type: NativeType) -> String {
-        // In main transpiler, ALL variables are TauValue, so we need to extract inner value
+        // Check if this variable is declared as a native type (not TauValue)
+        // If it's a native type variable, we don't need to extract from .value
+        let is_native_variable = self.scope_variables.get(var_name)
+            .map(|t| !matches!(t, NativeType::Generic))
+            .unwrap_or(false);
+        
+        // Also check function parameters which are native typed
+        let is_native_param = self.function_parameters.contains(var_name) && 
+            self.scope_variables.get(var_name).map(|t| !matches!(t, NativeType::Generic)).unwrap_or(false);
+        
+        if is_native_variable || is_native_param {
+            // Variable is already a native type, return it directly
+            return var_name.to_string();
+        }
+        
+        // Otherwise, extract from TauValue
         match var_type {
             NativeType::Int64 | NativeType::Bool | NativeType::Generic => format!("{}.value.i", var_name),
             NativeType::Double => format!("{}.value.f", var_name),
@@ -2349,6 +3611,8 @@ impl CTranspiler {
             }
             Type::Generic { name, args: _ } => {
                 // Handle generic types like list[int], dict[str, int]
+                // Note: For function parameters, these should be TauList*/TauDict* for native operations
+                // For local variables in main(), they are stored as TauValue
                 match name.as_str() {
                     "list" | "List" | "array" | "Array" => NativeType::List,
                     "dict" | "Dict" | "map" | "Map" => NativeType::Dict,
@@ -2383,6 +3647,54 @@ impl CTranspiler {
         )
     }
 
+    fn generate_lambda_function(&self, lambda_name: &str, params: &[String], body_instrs: &[IRInstruction], body_result_var: &str) -> Result<String> {
+        let mut output = String::new();
+        
+        // Generate function signature
+        output.push_str(&format!("TauValue {}(int argc, TauValue* argv) {{\n", lambda_name));
+        
+        // Generate parameter assignments from argv
+        for (i, param) in params.iter().enumerate() {
+            output.push_str(&format!("    TauValue {} = (argc > {}) ? argv[{}] : (TauValue){{.type = 0}};\n", 
+                param, i, i));
+        }
+        
+        // Generate lambda body
+        let mut lambda_transpiler = self.clone();
+        lambda_transpiler.indent_level = 1;
+        lambda_transpiler.declared_vars.clear();
+        lambda_transpiler.var_types.clear();
+        lambda_transpiler.temp_var_counter = 0;
+        lambda_transpiler.scope_variables.clear();
+        
+        // Pre-add parameter variables to scope
+        for param in params {
+            lambda_transpiler.scope_variables.insert(param.clone(), NativeType::Generic);
+        }
+        
+        // Collect ALL variables from body (including temporary ones)
+        lambda_transpiler.collect_variables(body_instrs);
+        lambda_transpiler.collect_store_local_targets(body_instrs);
+        
+        // Declare all necessary variables (except parameters which are already declared)
+        for (var_name, _var_type) in &lambda_transpiler.scope_variables {
+            if !params.contains(var_name) {
+                output.push_str(&format!("    TauValue {};\n", var_name));
+            }
+        }
+        
+        // Execute body instructions
+        for instr in body_instrs {
+            output.push_str(&lambda_transpiler.transpile_instruction(instr, 1)?);
+        }
+        
+        // Return the result (using the body_result_var that was computed)
+        output.push_str(&format!("    return {};\n", body_result_var));
+        output.push_str("}\n\n");
+        
+        Ok(output)
+    }
+
     fn generate_utilities(&self) -> String {
         let mut output = String::new();
 
@@ -2411,26 +3723,55 @@ impl CTranspiler {
         output.push_str("}\n\n");
 
         // ===== STRING CONVERSION =====
+        output.push_str("// Forward declaration for recursive formatting\n");
+        output.push_str("char* tauraro_format_value(TauValue val);\n\n");
+
+        output.push_str("// Format list to string recursively\n");
+        output.push_str("char* tauraro_format_list(TauList* lst) {\n");
+        output.push_str("    if (!lst) return strdup(\"[]\");\n");
+        output.push_str("    char* result = malloc(16384);\n");
+        output.push_str("    result[0] = '[';\n");
+        output.push_str("    result[1] = '\\0';\n");
+        output.push_str("    for (size_t i = 0; i < lst->size; i++) {\n");
+        output.push_str("        if (i > 0) strcat(result, \", \");\n");
+        output.push_str("        char* item = tauraro_format_value(lst->items[i]);\n");
+        output.push_str("        strcat(result, item);\n");
+        output.push_str("        free(item);\n");
+        output.push_str("    }\n");
+        output.push_str("    strcat(result, \"]\");\n");
+        output.push_str("    return result;\n");
+        output.push_str("}\n\n");
+
+        output.push_str("// Format any value to string\n");
+        output.push_str("char* tauraro_format_value(TauValue val) {\n");
+        output.push_str("    char buffer[512];\n");
+        output.push_str("    switch(val.type) {\n");
+        output.push_str("        case 0: snprintf(buffer, sizeof(buffer), \"%lld\", val.value.i); return strdup(buffer);\n");
+        output.push_str("        case 1: snprintf(buffer, sizeof(buffer), \"%g\", val.value.f); return strdup(buffer);\n");
+        output.push_str("        case 2: {\n");
+        output.push_str("            if (!val.value.s) return strdup(\"''\");\n");
+        output.push_str("            char* r = malloc(strlen(val.value.s) + 3);\n");
+        output.push_str("            sprintf(r, \"'%s'\", val.value.s);\n");
+        output.push_str("            return r;\n");
+        output.push_str("        }\n");
+        output.push_str("        case 3: return strdup(val.value.i ? \"True\" : \"False\");\n");
+        output.push_str("        case 4: return tauraro_format_list(val.value.list);\n");
+        output.push_str("        case 5: return strdup(\"<dict>\");\n");
+        output.push_str("        case 6: return strdup(\"<object>\");\n");
+        output.push_str("        case 7: return strdup(\"<function>\");\n");
+        output.push_str("        case -1: return strdup(\"None\");\n");
+        output.push_str("        default: return strdup(\"<unknown>\");\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
         output.push_str("// String conversion utilities\n");
         output.push_str("TauValue tauraro_str_from_value(TauValue* val) {\n");
-        output.push_str("    static char buffer[512];\n");
         output.push_str("    TauValue result = {.type = 2, .value.s = NULL, .refcount = 1};\n");
         output.push_str("    if (!val) {\n");
-        output.push_str("        result.value.s = strdup(\"<null>\");\n");
+        output.push_str("        result.value.s = strdup(\"None\");\n");
         output.push_str("        return result;\n");
         output.push_str("    }\n");
-        output.push_str("    switch(val->type) {\n");
-        output.push_str("        case 0: snprintf(buffer, sizeof(buffer), \"%lld\", val->value.i); result.value.s = strdup(buffer); break;\n");
-        output.push_str("        case 1: snprintf(buffer, sizeof(buffer), \"%f\", val->value.f); result.value.s = strdup(buffer); break;\n");
-        output.push_str("        case 2: result.value.s = val->value.s ? strdup(val->value.s) : strdup(\"<null>\"); break;\n");
-        output.push_str("        case 3: result.value.s = strdup(val->value.i ? \"True\" : \"False\"); break;\n");
-        output.push_str("        case 4: result.value.s = strdup(\"<list>\"); break;\n");
-        output.push_str("        case 5: result.value.s = strdup(\"<dict>\"); break;\n");
-        output.push_str("        case 6: result.value.s = strdup(\"<object>\"); break;\n");
-        output.push_str("        case 7: result.value.s = strdup(\"<function>\"); break;\n");
-        output.push_str("        case 8: result.value.s = strdup(\"<exception>\"); break;\n");
-        output.push_str("        default: result.value.s = strdup(\"<unknown>\");\n");
-        output.push_str("    }\n");
+        output.push_str("    result.value.s = tauraro_format_value(*val);\n");
         output.push_str("    return result;\n");
         output.push_str("}\n\n");
 
@@ -3120,12 +4461,146 @@ impl CTranspiler {
         output.push_str("    return tauraro_int((long long)(p - str.value.s));\n");
         output.push_str("}\n\n");
 
+        // Additional text__ wrapper methods
+        output.push_str("TauValue text__title(TauValue str) { return tauraro_str_title(str); }\n");
+        output.push_str("TauValue text__capitalize(TauValue str) { return tauraro_str_capitalize(str); }\n");
+        output.push_str("TauValue text__swapcase(TauValue str) { return tauraro_str_swapcase(str); }\n");
+        output.push_str("TauValue text__lstrip(TauValue str) { return tauraro_str_lstrip(str); }\n");
+        output.push_str("TauValue text__rstrip(TauValue str) { return tauraro_str_rstrip(str); }\n");
+        output.push_str("TauValue text__isdigit(TauValue str) { return tauraro_str_isdigit(str); }\n");
+        output.push_str("TauValue text__isalpha(TauValue str) { return tauraro_str_isalpha(str); }\n");
+        output.push_str("TauValue text__isalnum(TauValue str) { return tauraro_str_isalnum(str); }\n");
+        output.push_str("TauValue text__isspace(TauValue str) { return tauraro_str_isspace(str); }\n");
+        output.push_str("TauValue text__isupper(TauValue str) { return tauraro_str_isupper(str); }\n");
+        output.push_str("TauValue text__islower(TauValue str) { return tauraro_str_islower(str); }\n");
+        output.push_str("TauValue text__count(TauValue val, TauValue sub) {\n");
+        output.push_str("    if (val.type == 4 && val.value.list) { // list.count()\n");
+        output.push_str("        TauList* list = val.value.list;\n");
+        output.push_str("        long long cnt = 0;\n");
+        output.push_str("        for (size_t i = 0; i < list->size; i++) {\n");
+        output.push_str("            if (tauraro_equals(list->items[i], sub)) cnt++;\n");
+        output.push_str("        }\n");
+        output.push_str("        return tauraro_int(cnt);\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_str_count(val, sub); // str.count()\n");
+        output.push_str("}\n");
+        output.push_str("TauValue text__center(TauValue str, TauValue width) { return tauraro_str_center(str, width); }\n");
+        output.push_str("TauValue text__ljust(TauValue str, TauValue width) { return tauraro_str_ljust(str, width); }\n");
+        output.push_str("TauValue text__rjust(TauValue str, TauValue width) { return tauraro_str_rjust(str, width); }\n");
+        output.push_str("TauValue text__zfill(TauValue str, TauValue width) { return tauraro_str_zfill(str, width); }\n\n");
+
+        // ===== LIST WRAPPER METHODS (lst__*) =====
+        output.push_str("TauValue lst__pop(TauValue lst) {\n");
+        output.push_str("    if (lst.type != 4 || !lst.value.list || lst.value.list->size == 0) return tauraro_none();\n");
+        output.push_str("    return tauraro_list_pop_v(lst);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue lst__insert(TauValue lst, TauValue index, TauValue item) {\n");
+        output.push_str("    if (lst.type != 4 || !lst.value.list) return tauraro_none();\n");
+        output.push_str("    return tauraro_list_insert(lst, index, item);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue lst__remove(TauValue lst, TauValue item) {\n");
+        output.push_str("    if (lst.type != 4 || !lst.value.list) return tauraro_none();\n");
+        output.push_str("    return tauraro_list_remove(lst, item);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue lst__extend(TauValue lst, TauValue other) {\n");
+        output.push_str("    if (lst.type != 4 || !lst.value.list) return tauraro_none();\n");
+        output.push_str("    return tauraro_list_extend_v(lst, other);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue lst__index(TauValue lst, TauValue item) {\n");
+        output.push_str("    if (lst.type != 4 || !lst.value.list) return tauraro_int(-1);\n");
+        output.push_str("    TauList* list = lst.value.list;\n");
+        output.push_str("    for (size_t i = 0; i < list->size; i++) {\n");
+        output.push_str("        if (tauraro_equals(list->items[i], item)) return tauraro_int((long long)i);\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_int(-1);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue lst__count(TauValue lst, TauValue item) {\n");
+        output.push_str("    if (lst.type != 4 || !lst.value.list) return tauraro_int(0);\n");
+        output.push_str("    TauList* list = lst.value.list;\n");
+        output.push_str("    long long count = 0;\n");
+        output.push_str("    for (size_t i = 0; i < list->size; i++) {\n");
+        output.push_str("        if (tauraro_equals(list->items[i], item)) count++;\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_int(count);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue lst__reverse(TauValue lst) {\n");
+        output.push_str("    if (lst.type != 4 || !lst.value.list) return tauraro_none();\n");
+        output.push_str("    TauList* list = lst.value.list;\n");
+        output.push_str("    for (size_t i = 0; i < list->size / 2; i++) {\n");
+        output.push_str("        TauValue tmp = list->items[i];\n");
+        output.push_str("        list->items[i] = list->items[list->size - 1 - i];\n");
+        output.push_str("        list->items[list->size - 1 - i] = tmp;\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue lst__sort(TauValue lst) {\n");
+        output.push_str("    if (lst.type != 4 || !lst.value.list || lst.value.list->size < 2) return tauraro_none();\n");
+        output.push_str("    TauList* list = lst.value.list;\n");
+        output.push_str("    // Simple bubble sort for now\n");
+        output.push_str("    for (size_t i = 0; i < list->size - 1; i++) {\n");
+        output.push_str("        for (size_t j = 0; j < list->size - 1 - i; j++) {\n");
+        output.push_str("            TauValue a = list->items[j], b = list->items[j+1];\n");
+        output.push_str("            int swap = 0;\n");
+        output.push_str("            if (a.type == 0 && b.type == 0) swap = a.value.i > b.value.i;\n");
+        output.push_str("            else if (a.type == 1 && b.type == 1) swap = a.value.f > b.value.f;\n");
+        output.push_str("            else if (a.type == 0 && b.type == 1) swap = (double)a.value.i > b.value.f;\n");
+        output.push_str("            else if (a.type == 1 && b.type == 0) swap = a.value.f > (double)b.value.i;\n");
+        output.push_str("            else if (a.type == 2 && b.type == 2 && a.value.s && b.value.s) swap = strcmp(a.value.s, b.value.s) > 0;\n");
+        output.push_str("            if (swap) { list->items[j] = b; list->items[j+1] = a; }\n");
+        output.push_str("        }\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue lst__copy(TauValue lst) {\n");
+        output.push_str("    if (lst.type != 4 || !lst.value.list) return tauraro_none();\n");
+        output.push_str("    TauList* src = lst.value.list;\n");
+        output.push_str("    TauList* copy = tauraro_create_list(src->size);\n");
+        output.push_str("    for (size_t i = 0; i < src->size; i++) {\n");
+        output.push_str("        tauraro_list_append(copy, src->items[i]);\n");
+        output.push_str("    }\n");
+        output.push_str("    return (TauValue){.type = 4, .value.list = copy, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue lst__clear(TauValue lst) {\n");
+        output.push_str("    if (lst.type != 4 || !lst.value.list) return tauraro_none();\n");
+        output.push_str("    lst.value.list->size = 0;\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
         // ===== TYPE CONVERSION UTILITIES =====
         output.push_str("// Type conversion utilities\n");
         output.push_str("TauValue tauraro_abs(TauValue val) {\n");
         output.push_str("    if (val.type == 0) return tauraro_int(val.value.i < 0 ? -val.value.i : val.value.i);\n");
         output.push_str("    if (val.type == 1) return tauraro_float(val.value.f < 0 ? -val.value.f : val.value.f);\n");
         output.push_str("    return val;\n");
+        output.push_str("}\n\n");
+
+        // Helper for value equality comparison
+        output.push_str("int tauraro_equals(TauValue a, TauValue b) {\n");
+        output.push_str("    if (a.type != b.type) {\n");
+        output.push_str("        // Allow int/float comparison\n");
+        output.push_str("        if ((a.type == 0 && b.type == 1) || (a.type == 1 && b.type == 0)) {\n");
+        output.push_str("            double av = a.type == 0 ? (double)a.value.i : a.value.f;\n");
+        output.push_str("            double bv = b.type == 0 ? (double)b.value.i : b.value.f;\n");
+        output.push_str("            return av == bv;\n");
+        output.push_str("        }\n");
+        output.push_str("        return 0;\n");
+        output.push_str("    }\n");
+        output.push_str("    switch (a.type) {\n");
+        output.push_str("        case 0: return a.value.i == b.value.i;\n");
+        output.push_str("        case 1: return a.value.f == b.value.f;\n");
+        output.push_str("        case 2: return (a.value.s && b.value.s) ? strcmp(a.value.s, b.value.s) == 0 : (a.value.s == b.value.s);\n");
+        output.push_str("        case 3: return a.value.i == b.value.i; // bool stored as int\n");
+        output.push_str("        default: return 0;\n");
+        output.push_str("    }\n");
         output.push_str("}\n\n");
 
         output.push_str("TauValue tauraro_min(TauValue a, TauValue b) {\n");
@@ -3238,18 +4713,7 @@ impl CTranspiler {
         output.push_str("}\n\n");
 
         // ===== FORMAT STRING UTILITIES (OPTIMIZED) =====
-        output.push_str("// Optimized format string builder\n");
-        output.push_str("char* tauraro_format_value(TauValue val) {\n");
-        output.push_str("    char* buf = malloc(256);\n");
-        output.push_str("    switch (val.type) {\n");
-        output.push_str("        case 0: snprintf(buf, 256, \"%lld\", val.value.i); break;\n");
-        output.push_str("        case 1: snprintf(buf, 256, \"%g\", val.value.f); break;\n");
-        output.push_str("        case 2: { free(buf); return strdup(val.value.s ? val.value.s : \"\"); }\n");
-        output.push_str("        case 3: snprintf(buf, 256, \"%s\", val.value.i ? \"True\" : \"False\"); break;\n");
-        output.push_str("        default: snprintf(buf, 256, \"<object>\"); break;\n");
-        output.push_str("    }\n");
-        output.push_str("    return buf;\n");
-        output.push_str("}\n\n");
+        output.push_str("// Note: tauraro_format_value is defined earlier with full list/dict support\n");
 
         output.push_str("TauValue tauraro_fstring_concat(int count, ...) {\n");
         output.push_str("    va_list args;\n");
@@ -3378,8 +4842,11 @@ impl CTranspiler {
         output.push_str("    for (size_t i = 0; i < lst->size; i++) {\n");
         output.push_str("        TauValue v = lst->items[i];\n");
         output.push_str("        if (v.type == 0 && v.value.i == 0) return tauraro_bool(0);\n");
+        output.push_str("        if (v.type == 1 && v.value.f == 0.0) return tauraro_bool(0);\n");
         output.push_str("        if (v.type == 3 && v.value.i == 0) return tauraro_bool(0);\n");
         output.push_str("        if (v.type == 2 && (!v.value.s || v.value.s[0] == '\\0')) return tauraro_bool(0);\n");
+        output.push_str("        if (v.type == 4 && (!v.value.list || v.value.list->size == 0)) return tauraro_bool(0);\n");
+        output.push_str("        if (v.type == 5 && (!v.value.dict || v.value.dict->size == 0)) return tauraro_bool(0);\n");
         output.push_str("    }\n");
         output.push_str("    return tauraro_bool(1);\n");
         output.push_str("}\n\n");
@@ -3390,8 +4857,11 @@ impl CTranspiler {
         output.push_str("    for (size_t i = 0; i < lst->size; i++) {\n");
         output.push_str("        TauValue v = lst->items[i];\n");
         output.push_str("        if (v.type == 0 && v.value.i != 0) return tauraro_bool(1);\n");
+        output.push_str("        if (v.type == 1 && v.value.f != 0.0) return tauraro_bool(1);\n");
         output.push_str("        if (v.type == 3 && v.value.i != 0) return tauraro_bool(1);\n");
         output.push_str("        if (v.type == 2 && v.value.s && v.value.s[0] != '\\0') return tauraro_bool(1);\n");
+        output.push_str("        if (v.type == 4 && v.value.list && v.value.list->size > 0) return tauraro_bool(1);\n");
+        output.push_str("        if (v.type == 5 && v.value.dict && v.value.dict->size > 0) return tauraro_bool(1);\n");
         output.push_str("    }\n");
         output.push_str("    return tauraro_bool(0);\n");
         output.push_str("}\n\n");
@@ -3696,6 +5166,204 @@ impl CTranspiler {
         output.push_str("    return tauraro_bool(strcmp(str.value.s + slen - xlen, suffix.value.s) == 0);\n");
         output.push_str("}\n\n");
 
+        // upper() - convert to uppercase
+        output.push_str("TauValue tauraro_str_upper(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    char* result = strdup(str.value.s);\n");
+        output.push_str("    for (char* p = result; *p; p++) *p = toupper((unsigned char)*p);\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // lower() - convert to lowercase
+        output.push_str("TauValue tauraro_str_lower(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    char* result = strdup(str.value.s);\n");
+        output.push_str("    for (char* p = result; *p; p++) *p = tolower((unsigned char)*p);\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // strip() - remove leading/trailing whitespace
+        output.push_str("TauValue tauraro_str_strip(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    const char* s = str.value.s;\n");
+        output.push_str("    while (*s && isspace((unsigned char)*s)) s++;\n");
+        output.push_str("    if (!*s) return tauraro_str(\"\");\n");
+        output.push_str("    const char* e = s + strlen(s) - 1;\n");
+        output.push_str("    while (e > s && isspace((unsigned char)*e)) e--;\n");
+        output.push_str("    size_t len = e - s + 1;\n");
+        output.push_str("    char* result = malloc(len + 1);\n");
+        output.push_str("    memcpy(result, s, len);\n");
+        output.push_str("    result[len] = '\\0';\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // lstrip() - remove leading whitespace
+        output.push_str("TauValue tauraro_str_lstrip(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    const char* s = str.value.s;\n");
+        output.push_str("    while (*s && isspace((unsigned char)*s)) s++;\n");
+        output.push_str("    return tauraro_str(s);\n");
+        output.push_str("}\n\n");
+
+        // rstrip() - remove trailing whitespace
+        output.push_str("TauValue tauraro_str_rstrip(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    size_t len = strlen(str.value.s);\n");
+        output.push_str("    char* result = strdup(str.value.s);\n");
+        output.push_str("    while (len > 0 && isspace((unsigned char)result[len-1])) len--;\n");
+        output.push_str("    result[len] = '\\0';\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // title() - title case
+        output.push_str("TauValue tauraro_str_title(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    char* result = strdup(str.value.s);\n");
+        output.push_str("    int cap = 1;\n");
+        output.push_str("    for (char* p = result; *p; p++) {\n");
+        output.push_str("        if (isspace((unsigned char)*p)) { cap = 1; }\n");
+        output.push_str("        else if (cap) { *p = toupper((unsigned char)*p); cap = 0; }\n");
+        output.push_str("        else { *p = tolower((unsigned char)*p); }\n");
+        output.push_str("    }\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // capitalize() - capitalize first char
+        output.push_str("TauValue tauraro_str_capitalize(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    char* result = strdup(str.value.s);\n");
+        output.push_str("    if (result[0]) result[0] = toupper((unsigned char)result[0]);\n");
+        output.push_str("    for (char* p = result + 1; *p; p++) *p = tolower((unsigned char)*p);\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // swapcase() - swap case
+        output.push_str("TauValue tauraro_str_swapcase(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    char* result = strdup(str.value.s);\n");
+        output.push_str("    for (char* p = result; *p; p++) {\n");
+        output.push_str("        if (isupper((unsigned char)*p)) *p = tolower((unsigned char)*p);\n");
+        output.push_str("        else if (islower((unsigned char)*p)) *p = toupper((unsigned char)*p);\n");
+        output.push_str("    }\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // isdigit(), isalpha(), isalnum(), isspace(), isupper(), islower()
+        output.push_str("TauValue tauraro_str_isdigit(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s || !str.value.s[0]) return tauraro_bool(0);\n");
+        output.push_str("    for (const char* p = str.value.s; *p; p++) if (!isdigit((unsigned char)*p)) return tauraro_bool(0);\n");
+        output.push_str("    return tauraro_bool(1);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_str_isalpha(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s || !str.value.s[0]) return tauraro_bool(0);\n");
+        output.push_str("    for (const char* p = str.value.s; *p; p++) if (!isalpha((unsigned char)*p)) return tauraro_bool(0);\n");
+        output.push_str("    return tauraro_bool(1);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_str_isalnum(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s || !str.value.s[0]) return tauraro_bool(0);\n");
+        output.push_str("    for (const char* p = str.value.s; *p; p++) if (!isalnum((unsigned char)*p)) return tauraro_bool(0);\n");
+        output.push_str("    return tauraro_bool(1);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_str_isspace(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s || !str.value.s[0]) return tauraro_bool(0);\n");
+        output.push_str("    for (const char* p = str.value.s; *p; p++) if (!isspace((unsigned char)*p)) return tauraro_bool(0);\n");
+        output.push_str("    return tauraro_bool(1);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_str_isupper(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s || !str.value.s[0]) return tauraro_bool(0);\n");
+        output.push_str("    int has_cased = 0;\n");
+        output.push_str("    for (const char* p = str.value.s; *p; p++) {\n");
+        output.push_str("        if (islower((unsigned char)*p)) return tauraro_bool(0);\n");
+        output.push_str("        if (isupper((unsigned char)*p)) has_cased = 1;\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_bool(has_cased);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_str_islower(TauValue str) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s || !str.value.s[0]) return tauraro_bool(0);\n");
+        output.push_str("    int has_cased = 0;\n");
+        output.push_str("    for (const char* p = str.value.s; *p; p++) {\n");
+        output.push_str("        if (isupper((unsigned char)*p)) return tauraro_bool(0);\n");
+        output.push_str("        if (islower((unsigned char)*p)) has_cased = 1;\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_bool(has_cased);\n");
+        output.push_str("}\n\n");
+
+        // count() - count occurrences
+        output.push_str("TauValue tauraro_str_count(TauValue str, TauValue sub) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_int(0);\n");
+        output.push_str("    if (sub.type != 2 || !sub.value.s || !sub.value.s[0]) return tauraro_int(0);\n");
+        output.push_str("    long long count = 0;\n");
+        output.push_str("    size_t sublen = strlen(sub.value.s);\n");
+        output.push_str("    const char* p = str.value.s;\n");
+        output.push_str("    while ((p = strstr(p, sub.value.s)) != NULL) { count++; p += sublen; }\n");
+        output.push_str("    return tauraro_int(count);\n");
+        output.push_str("}\n\n");
+
+        // center(), ljust(), rjust() - padding
+        output.push_str("TauValue tauraro_str_center(TauValue str, TauValue width) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    long long w = width.type == 0 ? width.value.i : 0;\n");
+        output.push_str("    size_t slen = strlen(str.value.s);\n");
+        output.push_str("    if (w <= (long long)slen) return str;\n");
+        output.push_str("    size_t pad = (size_t)w - slen;\n");
+        output.push_str("    size_t left = pad / 2, right = pad - left;\n");
+        output.push_str("    char* result = malloc((size_t)w + 1);\n");
+        output.push_str("    memset(result, ' ', left);\n");
+        output.push_str("    memcpy(result + left, str.value.s, slen);\n");
+        output.push_str("    memset(result + left + slen, ' ', right);\n");
+        output.push_str("    result[w] = '\\0';\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_str_ljust(TauValue str, TauValue width) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    long long w = width.type == 0 ? width.value.i : 0;\n");
+        output.push_str("    size_t slen = strlen(str.value.s);\n");
+        output.push_str("    if (w <= (long long)slen) return str;\n");
+        output.push_str("    char* result = malloc((size_t)w + 1);\n");
+        output.push_str("    memcpy(result, str.value.s, slen);\n");
+        output.push_str("    memset(result + slen, ' ', (size_t)w - slen);\n");
+        output.push_str("    result[w] = '\\0';\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_str_rjust(TauValue str, TauValue width) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    long long w = width.type == 0 ? width.value.i : 0;\n");
+        output.push_str("    size_t slen = strlen(str.value.s);\n");
+        output.push_str("    if (w <= (long long)slen) return str;\n");
+        output.push_str("    char* result = malloc((size_t)w + 1);\n");
+        output.push_str("    size_t pad = (size_t)w - slen;\n");
+        output.push_str("    memset(result, ' ', pad);\n");
+        output.push_str("    memcpy(result + pad, str.value.s, slen);\n");
+        output.push_str("    result[w] = '\\0';\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // zfill() - zero padding
+        output.push_str("TauValue tauraro_str_zfill(TauValue str, TauValue width) {\n");
+        output.push_str("    if (str.type != 2 || !str.value.s) return tauraro_str(\"\");\n");
+        output.push_str("    long long w = width.type == 0 ? width.value.i : 0;\n");
+        output.push_str("    size_t slen = strlen(str.value.s);\n");
+        output.push_str("    if (w <= (long long)slen) return str;\n");
+        output.push_str("    char* result = malloc((size_t)w + 1);\n");
+        output.push_str("    size_t pad = (size_t)w - slen;\n");
+        output.push_str("    int sign_offset = 0;\n");
+        output.push_str("    if (str.value.s[0] == '+' || str.value.s[0] == '-') {\n");
+        output.push_str("        result[0] = str.value.s[0];\n");
+        output.push_str("        sign_offset = 1;\n");
+        output.push_str("    }\n");
+        output.push_str("    memset(result + sign_offset, '0', pad);\n");
+        output.push_str("    memcpy(result + sign_offset + pad, str.value.s + sign_offset, slen - sign_offset);\n");
+        output.push_str("    result[w] = '\\0';\n");
+        output.push_str("    return (TauValue){.type = 2, .value.s = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
         // ===== LIST METHODS (TAUVALUE-BASED) =====
         output.push_str("// List manipulation methods (TauValue wrappers)\n");
         output.push_str("TauValue tauraro_list_pop_v(TauValue list) {\n");
@@ -3882,6 +5550,174 @@ impl CTranspiler {
         output.push_str("    return (TauValue){.type = 2, .value.s = buf, .refcount = 1};\n");
         output.push_str("}\n\n");
 
+        // ===== ADDITIONAL BUILTIN FUNCTIONS =====
+
+        // enumerate_list() - return list of (index, value) tuples
+        output.push_str("TauValue tauraro_enumerate_list(TauValue list, TauValue start_val) {\n");
+        output.push_str("    if (list.type != 4 || !list.value.list) return (TauValue){.type = 4, .value.list = tauraro_create_list(0)};\n");
+        output.push_str("    TauList* src = list.value.list;\n");
+        output.push_str("    long long start = start_val.type == 0 ? start_val.value.i : 0;\n");
+        output.push_str("    TauList* dst = tauraro_create_list(src->size);\n");
+        output.push_str("    for (size_t i = 0; i < src->size; i++) {\n");
+        output.push_str("        TauList* tuple = tauraro_create_list(2);\n");
+        output.push_str("        tauraro_list_append(tuple, tauraro_int(start + (long long)i));\n");
+        output.push_str("        tauraro_list_append(tuple, src->items[i]);\n");
+        output.push_str("        tauraro_list_append(dst, (TauValue){.type = 4, .value.list = tuple});\n");
+        output.push_str("    }\n");
+        output.push_str("    return (TauValue){.type = 4, .value.list = dst, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // zip_lists() - return list of tuples
+        output.push_str("TauValue tauraro_zip_lists(TauValue list1, TauValue list2) {\n");
+        output.push_str("    if (list1.type != 4 || !list1.value.list || list2.type != 4 || !list2.value.list)\n");
+        output.push_str("        return (TauValue){.type = 4, .value.list = tauraro_create_list(0)};\n");
+        output.push_str("    TauList* src1 = list1.value.list;\n");
+        output.push_str("    TauList* src2 = list2.value.list;\n");
+        output.push_str("    size_t min_size = src1->size < src2->size ? src1->size : src2->size;\n");
+        output.push_str("    TauList* dst = tauraro_create_list(min_size);\n");
+        output.push_str("    for (size_t i = 0; i < min_size; i++) {\n");
+        output.push_str("        TauList* tuple = tauraro_create_list(2);\n");
+        output.push_str("        tauraro_list_append(tuple, src1->items[i]);\n");
+        output.push_str("        tauraro_list_append(tuple, src2->items[i]);\n");
+        output.push_str("        tauraro_list_append(dst, (TauValue){.type = 4, .value.list = tuple});\n");
+        output.push_str("    }\n");
+        output.push_str("    return (TauValue){.type = 4, .value.list = dst, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // type_name() - return type as string
+        output.push_str("TauValue tauraro_type_name(TauValue val) {\n");
+        output.push_str("    const char* names[] = {\"int\", \"float\", \"str\", \"bool\", \"list\", \"dict\", \"object\", \"function\", \"exception\", \"module\", \"none\"};\n");
+        output.push_str("    int idx = val.type < 11 ? val.type : 10;\n");
+        output.push_str("    return tauraro_str(names[idx]);\n");
+        output.push_str("}\n\n");
+
+        // isinstance() - type check
+        output.push_str("TauValue tauraro_isinstance(TauValue obj, TauValue type_str) {\n");
+        output.push_str("    if (type_str.type != 2 || !type_str.value.s) return tauraro_bool(0);\n");
+        output.push_str("    const char* t = type_str.value.s;\n");
+        output.push_str("    if (strcmp(t, \"int\") == 0) return tauraro_bool(obj.type == 0);\n");
+        output.push_str("    if (strcmp(t, \"float\") == 0) return tauraro_bool(obj.type == 1);\n");
+        output.push_str("    if (strcmp(t, \"str\") == 0) return tauraro_bool(obj.type == 2);\n");
+        output.push_str("    if (strcmp(t, \"bool\") == 0) return tauraro_bool(obj.type == 3);\n");
+        output.push_str("    if (strcmp(t, \"list\") == 0) return tauraro_bool(obj.type == 4);\n");
+        output.push_str("    if (strcmp(t, \"dict\") == 0) return tauraro_bool(obj.type == 5);\n");
+        output.push_str("    return tauraro_bool(0);\n");
+        output.push_str("}\n\n");
+
+        // ord() - char to int
+        output.push_str("TauValue tauraro_ord(TauValue ch) {\n");
+        output.push_str("    if (ch.type == 2 && ch.value.s && ch.value.s[0]) {\n");
+        output.push_str("        return tauraro_int((unsigned char)ch.value.s[0]);\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_int(0);\n");
+        output.push_str("}\n\n");
+
+        // chr() - int to char
+        output.push_str("TauValue tauraro_chr(TauValue num) {\n");
+        output.push_str("    char buf[2] = {0};\n");
+        output.push_str("    if (num.type == 0 && num.value.i >= 0 && num.value.i <= 127) {\n");
+        output.push_str("        buf[0] = (char)num.value.i;\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_str(buf);\n");
+        output.push_str("}\n\n");
+
+        // round() - round to decimal places
+        output.push_str("TauValue tauraro_round(TauValue num, TauValue places) {\n");
+        output.push_str("    double val = num.type == 0 ? (double)num.value.i : (num.type == 1 ? num.value.f : 0.0);\n");
+        output.push_str("    long long p = places.type == 0 ? places.value.i : 0;\n");
+        output.push_str("    if (p == 0) return tauraro_int((long long)round(val));\n");
+        output.push_str("    double mult = pow(10.0, (double)p);\n");
+        output.push_str("    return tauraro_float(round(val * mult) / mult);\n");
+        output.push_str("}\n\n");
+
+        // pow() - power function
+        output.push_str("TauValue tauraro_pow(TauValue base, TauValue exp) {\n");
+        output.push_str("    double b = base.type == 0 ? (double)base.value.i : (base.type == 1 ? base.value.f : 0.0);\n");
+        output.push_str("    double e = exp.type == 0 ? (double)exp.value.i : (exp.type == 1 ? exp.value.f : 0.0);\n");
+        output.push_str("    double result = pow(b, e);\n");
+        output.push_str("    if (base.type == 0 && exp.type == 0 && exp.value.i >= 0) return tauraro_int((long long)result);\n");
+        output.push_str("    return tauraro_float(result);\n");
+        output.push_str("}\n\n");
+
+        // sqrt() - square root
+        output.push_str("TauValue tauraro_sqrt(TauValue num) {\n");
+        output.push_str("    double val = num.type == 0 ? (double)num.value.i : (num.type == 1 ? num.value.f : 0.0);\n");
+        output.push_str("    return tauraro_float(sqrt(val));\n");
+        output.push_str("}\n\n");
+
+        // hex() - int to hex string
+        output.push_str("TauValue tauraro_hex(TauValue num) {\n");
+        output.push_str("    char buf[32];\n");
+        output.push_str("    long long n = num.type == 0 ? num.value.i : 0;\n");
+        output.push_str("    if (n >= 0) snprintf(buf, 32, \"0x%llx\", n);\n");
+        output.push_str("    else snprintf(buf, 32, \"-0x%llx\", -n);\n");
+        output.push_str("    return tauraro_str(buf);\n");
+        output.push_str("}\n\n");
+
+        // bin() - int to binary string
+        output.push_str("TauValue tauraro_bin(TauValue num) {\n");
+        output.push_str("    char buf[72];\n");
+        output.push_str("    long long n = num.type == 0 ? num.value.i : 0;\n");
+        output.push_str("    int neg = n < 0;\n");
+        output.push_str("    if (neg) n = -n;\n");
+        output.push_str("    char* p = buf + 70;\n");
+        output.push_str("    *p = '\\0';\n");
+        output.push_str("    if (n == 0) { *--p = '0'; }\n");
+        output.push_str("    while (n > 0) { *--p = '0' + (n & 1); n >>= 1; }\n");
+        output.push_str("    *--p = 'b'; *--p = '0';\n");
+        output.push_str("    if (neg) *--p = '-';\n");
+        output.push_str("    return tauraro_str(p);\n");
+        output.push_str("}\n\n");
+
+        // oct() - int to octal string
+        output.push_str("TauValue tauraro_oct(TauValue num) {\n");
+        output.push_str("    char buf[32];\n");
+        output.push_str("    long long n = num.type == 0 ? num.value.i : 0;\n");
+        output.push_str("    if (n >= 0) snprintf(buf, 32, \"0o%llo\", n);\n");
+        output.push_str("    else snprintf(buf, 32, \"-0o%llo\", -n);\n");
+        output.push_str("    return tauraro_str(buf);\n");
+        output.push_str("}\n\n");
+
+        // divmod() - returns (quotient, remainder)
+        output.push_str("TauValue tauraro_divmod(TauValue a, TauValue b) {\n");
+        output.push_str("    long long av = a.type == 0 ? a.value.i : (long long)a.value.f;\n");
+        output.push_str("    long long bv = b.type == 0 ? b.value.i : (long long)b.value.f;\n");
+        output.push_str("    if (bv == 0) bv = 1;\n");
+        output.push_str("    TauList* result = tauraro_create_list(2);\n");
+        output.push_str("    tauraro_list_append(result, tauraro_int(av / bv));\n");
+        output.push_str("    tauraro_list_append(result, tauraro_int(av % bv));\n");
+        output.push_str("    return (TauValue){.type = 4, .value.list = result, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // to_list() - convert iterable to list
+        output.push_str("TauValue tauraro_to_list(TauValue val) {\n");
+        output.push_str("    if (val.type == 4) return val;\n");
+        output.push_str("    if (val.type == 2 && val.value.s) {\n");
+        output.push_str("        size_t len = strlen(val.value.s);\n");
+        output.push_str("        TauList* lst = tauraro_create_list(len);\n");
+        output.push_str("        for (size_t i = 0; i < len; i++) {\n");
+        output.push_str("            char c[2] = {val.value.s[i], '\\0'};\n");
+        output.push_str("            tauraro_list_append(lst, tauraro_str(c));\n");
+        output.push_str("        }\n");
+        output.push_str("        return (TauValue){.type = 4, .value.list = lst, .refcount = 1};\n");
+        output.push_str("    }\n");
+        output.push_str("    return (TauValue){.type = 4, .value.list = tauraro_create_list(0)};\n");
+        output.push_str("}\n\n");
+
+        // to_set() - convert iterable to set (dict with None values)
+        output.push_str("TauValue tauraro_to_set(TauValue val) {\n");
+        output.push_str("    TauDict* dict = tauraro_create_dict();\n");
+        output.push_str("    if (val.type == 4 && val.value.list) {\n");
+        output.push_str("        TauList* lst = val.value.list;\n");
+        output.push_str("        for (size_t i = 0; i < lst->size; i++) {\n");
+        output.push_str("            if (lst->items[i].type == 2 && lst->items[i].value.s) {\n");
+        output.push_str("                tauraro_dict_set(dict, lst->items[i].value.s, tauraro_none());\n");
+        output.push_str("            }\n");
+        output.push_str("        }\n");
+        output.push_str("    }\n");
+        output.push_str("    return (TauValue){.type = 5, .value.dict = dict, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
         output
     }
 
@@ -3899,42 +5735,139 @@ impl CTranspiler {
     fn collect_variables(&mut self, instructions: &[IRInstruction]) {
         for instr in instructions {
             match instr {
-                IRInstruction::LoadConst { result, .. } => {
-                    // Constants are always wrapped in TauValue in our IR system
-                    self.scope_variables.insert(result.clone(), NativeType::Generic);
+                IRInstruction::LoadConst { result, value: _ } => {
+                    // Don't mark as native type - temp/arg variables are usually reused
+                    // Mark as Generic unless it's explicitly typed
+                    if !self.scope_variables.contains_key(result) {
+                        self.scope_variables.insert(result.clone(), NativeType::Generic);
+                    }
                 }
                 IRInstruction::LoadLocal { name, result } => {
-                    if let Some(var_type) = self.scope_variables.get(name).copied() {
-                        self.scope_variables.insert(result.clone(), var_type);
-                    } else {
-                        self.scope_variables.insert(result.clone(), NativeType::Generic);
+                    // Only set result type if it hasn't been set to a native type already
+                    let existing_type = self.scope_variables.get(result).copied();
+                    let should_set = existing_type.is_none() || matches!(existing_type, Some(NativeType::Generic));
+                    
+                    // Get source variable type
+                    let source_type = self.scope_variables.get(name).copied();
+                    
+                    if should_set {
+                        if let Some(var_type) = source_type {
+                            self.scope_variables.insert(result.clone(), var_type);
+                            // Also update var_types to track native types
+                            if !matches!(var_type, NativeType::Generic) {
+                                self.var_types.insert(result.clone(), var_type);
+                            }
+                        } else {
+                            self.scope_variables.insert(result.clone(), NativeType::Generic);
+                        }
                     }
                     // Also ensure the source variable is declared
                     self.scope_variables.entry(name.clone()).or_insert(NativeType::Generic);
                 }
-                IRInstruction::LoadGlobal { result, .. } => {
-                    self.scope_variables.insert(result.clone(), NativeType::Generic);
+                IRInstruction::LoadTypedLocal { name, result, type_info } => {
+                    let var_type = self.ast_type_to_native(type_info);
+                    self.scope_variables.insert(result.clone(), var_type);
+                    self.var_types.insert(result.clone(), var_type);
+                    self.static_typed_vars.insert(result.clone(), type_info.clone());
+                    // Source variable should also be present with same type
+                    self.scope_variables.entry(name.clone()).or_insert(var_type);
+                    self.var_types.entry(name.clone()).or_insert(var_type);
                 }
-                IRInstruction::LoadTypedGlobal { result, .. } => {
-                    // Keep all variables as TauValue in C
-                    self.scope_variables.insert(result.clone(), NativeType::Generic);
+                IRInstruction::LoadGlobal { result, .. } => {
+                    // Only set result type if it hasn't been set to a native type already
+                    // This prevents overwriting typed variables when they're reused
+                    // Check BOTH scope_variables and var_types before overwriting
+                    let existing_type = self.scope_variables.get(result).copied();
+                    let var_type_existing = self.var_types.get(result).copied();
+                    let should_overwrite = existing_type.is_none() || matches!(existing_type, Some(NativeType::Generic));
+                    let has_native_in_var_types = var_type_existing.is_some() && !matches!(var_type_existing, Some(NativeType::Generic));
+                    if should_overwrite && !has_native_in_var_types {
+                        self.scope_variables.insert(result.clone(), NativeType::Generic);
+                    }
+                }
+                IRInstruction::LoadTypedGlobal { result, type_info, .. } => {
+                    let var_type = self.ast_type_to_native(type_info);
+                    self.scope_variables.insert(result.clone(), var_type);
+                    self.var_types.insert(result.clone(), var_type);
+                    self.static_typed_vars.insert(result.clone(), type_info.clone());
                 }
                 IRInstruction::StoreLocal { name, value } => {
-                    // Get the type from the source value, or default to Generic
-                    let var_type = self.scope_variables.get(value).copied().unwrap_or(NativeType::Generic);
-                    self.scope_variables.insert(name.clone(), var_type);
-                    // Also ensure the source variable is declared
+                    // Keep destination's type if it has one, otherwise infer from source
+                    // IMPORTANT: Don't override source's type just because target has a type
+                    // The transpiler will handle type conversions
+                    let target_type = self.scope_variables.get(name).copied()
+                        .or_else(|| self.var_types.get(name).copied());
+                    
+                    let source_type = self.var_types.get(value).copied()
+                        .or_else(|| self.scope_variables.get(value).copied());
+                    
+                    if target_type.is_none() && source_type.is_some() {
+                        // Source has a type and target doesn't, propagate source type to target
+                        self.scope_variables.insert(name.clone(), source_type.unwrap());
+                        if !matches!(source_type.unwrap(), NativeType::Generic) {
+                            self.var_types.insert(name.clone(), source_type.unwrap());
+                        }
+                    }
+                    
+                    // Ensure both are in scope_variables
+                    self.scope_variables.entry(name.clone()).or_insert(NativeType::Generic);
                     self.scope_variables.entry(value.clone()).or_insert(NativeType::Generic);
                 }
-                IRInstruction::BinaryOp { result, .. } => {
-                    self.scope_variables.insert(result.clone(), NativeType::Generic);
+                IRInstruction::StoreTypedLocal { name, value, type_info } => {
+                    // Get the type from type_info for this variable
+                    let var_type = self.ast_type_to_native(type_info);
+                    self.scope_variables.insert(name.clone(), var_type);
+                    self.var_types.insert(name.clone(), var_type);
+                    self.static_typed_vars.insert(name.clone(), type_info.clone());
+                    // DON'T mark source with the destination's type - source might be a temp variable
+                    // The transpiler will handle type conversion during assignment
+                    self.scope_variables.entry(value.clone()).or_insert(NativeType::Generic);
                 }
-                IRInstruction::TypedBinaryOp { result, .. } => {
-                    self.scope_variables.insert(result.clone(), NativeType::Generic);
+                IRInstruction::TypedBinaryOp { result, type_info, .. } => {
+                    // Use the type information from the instruction
+                    let result_type = self.ast_type_to_native(type_info);
+                    self.scope_variables.insert(result.clone(), result_type);
+                    self.var_types.insert(result.clone(), result_type);
                 }
-                IRInstruction::Call { result, .. } => {
+                IRInstruction::BinaryOp { op, left, right, result } => {
+                    // Infer result type from operand types
+                    let left_type = self.scope_variables.get(left).copied()
+                        .or_else(|| self.var_types.get(left).copied())
+                        .unwrap_or(NativeType::Generic);
+                    let right_type = self.scope_variables.get(right).copied()
+                        .or_else(|| self.var_types.get(right).copied())
+                        .unwrap_or(NativeType::Generic);
+                    
+                    // Infer result type based on operand types and operation
+                    let result_type = self.infer_binary_op_type(left_type, right_type, op.clone());
+                    
+                    // Only assign native type to result if both operands are native types
+                    if matches!(left_type, NativeType::Int64 | NativeType::Double) && 
+                       matches!(right_type, NativeType::Int64 | NativeType::Double) {
+                        self.scope_variables.insert(result.clone(), result_type);
+                        self.var_types.insert(result.clone(), result_type);
+                    } else {
+                        self.scope_variables.insert(result.clone(), NativeType::Generic);
+                    }
+                }
+                IRInstruction::Call { func, result, .. } => {
                     if let Some(res) = result {
-                        self.scope_variables.insert(res.clone(), NativeType::Generic);
+                        // Always keep temporary variables as Generic since they're declared as TauValue
+                        // and may be used to store wrapped values
+                        if res == "temp" || res == "temp_result" || res.starts_with("temp_") {
+                            self.scope_variables.insert(res.clone(), NativeType::Generic);
+                        } else if let Some(func_info) = self.function_definitions.get(func) {
+                            // For named result variables, use function return type
+                            let return_type = func_info.return_type;
+                            if !matches!(return_type, NativeType::Generic) {
+                                self.scope_variables.insert(res.clone(), return_type);
+                                self.var_types.insert(res.clone(), return_type);
+                            } else {
+                                self.scope_variables.insert(res.clone(), NativeType::Generic);
+                            }
+                        } else {
+                            self.scope_variables.insert(res.clone(), NativeType::Generic);
+                        }
                     }
                 }
                 IRInstruction::ObjectCreate { result, .. } => {
@@ -3969,14 +5902,22 @@ impl CTranspiler {
                 IRInstruction::For { body, .. } => {
                     self.collect_variables(body);
                 }
-                IRInstruction::StoreGlobal { name, .. } => {
-                    // Collect global variables assigned in main
+                IRInstruction::StoreGlobal { name, value } => {
+                    // Collect both the target and source variables
                     self.scope_variables.entry(name.clone()).or_insert(NativeType::Generic);
+                    self.scope_variables.entry(value.clone()).or_insert(NativeType::Generic);
                 }
-                IRInstruction::StoreTypedGlobal { name, .. } => {
-                    // Collect typed global variables with their type information
-                    // Keep as Generic - all variables are TauValue in C
-                    self.scope_variables.insert(name.clone(), NativeType::Generic);
+                IRInstruction::StoreTypedGlobal { name, value, type_info } => {
+                    // Collect both the target and source variables
+                    let var_type = self.ast_type_to_native(type_info);
+                    self.scope_variables.insert(name.clone(), var_type);
+                    self.var_types.insert(name.clone(), var_type);
+                    self.static_typed_vars.insert(name.clone(), type_info.clone());
+                    self.scope_variables.entry(value.clone()).or_insert(NativeType::Generic);
+                }
+                IRInstruction::Lambda { result, .. } => {
+                    // Collect the result variable where the lambda function pointer is stored
+                    self.scope_variables.insert(result.clone(), NativeType::Function);
                 }
                 _ => {}
             }
@@ -3991,14 +5932,23 @@ impl CTranspiler {
                     // Ensure this variable is in scope_variables
                     self.scope_variables.entry(name.clone()).or_insert(NativeType::Generic);
                 }
+                IRInstruction::StoreTypedLocal { name, type_info, .. } => {
+                    // Ensure this typed variable is in scope_variables with its type
+                    let var_type = self.ast_type_to_native(type_info);
+                    self.scope_variables.insert(name.clone(), var_type);
+                    self.var_types.insert(name.clone(), var_type);
+                    self.static_typed_vars.insert(name.clone(), type_info.clone());
+                }
                 IRInstruction::StoreGlobal { name, .. } => {
                     // For globals in main function, also collect them
                     self.scope_variables.entry(name.clone()).or_insert(NativeType::Generic);
                 }
-                IRInstruction::StoreTypedGlobal { name, .. } => {
+                IRInstruction::StoreTypedGlobal { name, type_info, .. } => {
                     // For typed globals in main function, also collect them
-                    // Keep as Generic - all variables are TauValue in C
-                    self.scope_variables.insert(name.clone(), NativeType::Generic);
+                    let var_type = self.ast_type_to_native(type_info);
+                    self.scope_variables.insert(name.clone(), var_type);
+                    self.var_types.insert(name.clone(), var_type);
+                    self.static_typed_vars.insert(name.clone(), type_info.clone());
                 }
                 IRInstruction::If { then_body, elif_branches, else_body, .. } => {
                     self.collect_store_local_targets(then_body);
@@ -4025,8 +5975,11 @@ impl CTranspiler {
         let mut output = String::new();
         let ind = self.indent();
 
-        // Create unique names for all variables and group by type  
-        let mut by_type: HashMap<NativeType, Vec<String>> = HashMap::new();
+        // Group variables by their native type
+        let mut tauvalue_vars: Vec<String> = Vec::new();
+        let mut int64_vars: Vec<String> = Vec::new();
+        let mut double_vars: Vec<String> = Vec::new();
+        let mut cstr_vars: Vec<String> = Vec::new();
         let mut unique_vars: HashMap<String, NativeType> = HashMap::new();
         
         for (var_name, var_type) in &self.scope_variables {
@@ -4034,6 +5987,15 @@ impl CTranspiler {
             if self.function_parameters.contains(var_name) {
                 continue;
             }
+
+            // For temp variables: only force to Generic if they were already Generic
+            // If they have a native type from TypedBinaryOp, keep that type
+            let final_type = if var_name.starts_with("var_") && var_name.ends_with("_temp") 
+                              && matches!(var_type, NativeType::Generic) {
+                NativeType::Generic
+            } else {
+                *var_type
+            };
 
             let unique_name = if unique_vars.contains_key(var_name) {
                 // Generate unique name if there's already a variable with this name
@@ -4050,19 +6012,35 @@ impl CTranspiler {
                 var_name.clone()
             };
             
-            unique_vars.insert(unique_name.clone(), *var_type);
+            unique_vars.insert(unique_name.clone(), final_type);
             // Mark this variable as declared so ensure_var_declared won't redeclare it
             self.declared_vars.insert(unique_name.clone());
-            by_type.entry(*var_type).or_insert_with(Vec::new).push(unique_name);
+            
+            // Group by type
+            match final_type {
+                NativeType::Int64 => int64_vars.push(unique_name),
+                NativeType::Double => double_vars.push(unique_name),
+                NativeType::CStr => cstr_vars.push(unique_name),
+                _ => tauvalue_vars.push(unique_name),
+            }
         }
 
-        // Output declarations sorted by type
-        for var_type in &[NativeType::Int64, NativeType::Double, NativeType::CStr, NativeType::Bool, NativeType::Object, NativeType::Generic] {
-            if let Some(vars) = by_type.get(var_type) {
-                let type_name = self.get_c_type(*var_type);
-                let var_list = vars.join(", ");
-                output.push_str(&format!("{}{} {};\n", ind, type_name, var_list));
-            }
+        // Output declarations grouped by type
+        if !int64_vars.is_empty() {
+            let var_list = int64_vars.join(", ");
+            output.push_str(&format!("{}long long {};\n", ind, var_list));
+        }
+        if !double_vars.is_empty() {
+            let var_list = double_vars.join(", ");
+            output.push_str(&format!("{}double {};\n", ind, var_list));
+        }
+        if !cstr_vars.is_empty() {
+            let var_list = cstr_vars.join(", ");
+            output.push_str(&format!("{}const char* {};\n", ind, var_list));
+        }
+        if !tauvalue_vars.is_empty() {
+            let var_list = tauvalue_vars.join(", ");
+            output.push_str(&format!("{}TauValue {};\n", ind, var_list));
         }
 
         output
@@ -4087,6 +6065,9 @@ impl Clone for CTranspiler {
             imports: self.imports.clone(),
             generated_utilities: self.generated_utilities.clone(),
             function_params: self.function_params.clone(),
+            lambdas_to_generate: self.lambdas_to_generate.clone(),
+            static_typed_vars: self.static_typed_vars.clone(),
+            enable_native_types: self.enable_native_types,
         }
     }
 }

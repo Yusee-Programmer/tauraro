@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+# Benchmark: Function Calls - 1 Billion Iterations
+
+def increment(x: int) -> int:
+    return x + 1
+
+def call_benchmark(n: int) -> int:
+    total: int = 0
+    i: int = 0
+    while i < n:
+        total = total + increment(i) - i
+        i = i + 1
+    return total
+
+result: int = call_benchmark(1000000000)
+print(result)

@@ -233,19 +233,19 @@ pub fn generate_instruction(
         // ===== NEW ADVANCED INSTRUCTION HANDLERS =====
         
         // Lambda expression
-        IRInstruction::Lambda { params, body_instructions, captured_vars, result } => {
+        IRInstruction::Lambda { params, body_instructions, captured_vars, result, body_result_var } => {
             local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
             Ok(format!("tauraro_value_t* {} = NULL; // Lambda (handled by main transpiler)", result))
         }
         
         // List comprehension
-        IRInstruction::ListComprehension { element_expr, element_result, variable, iterable, condition, condition_result, result } => {
+        IRInstruction::ListComprehension { element_instrs, element_result, variable, iterable, condition_instrs, condition_result, result } => {
             local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
             Ok(format!("tauraro_value_t* {} = tauraro_create_list(); // List comprehension", result))
         }
         
         // Dict comprehension
-        IRInstruction::DictComprehension { key_expr, key_result, value_expr, value_result, variable, iterable, condition, condition_result, result } => {
+        IRInstruction::DictComprehension { key_instrs, key_result, value_instrs, value_result, variable, iterable, condition_instrs, condition_result, result } => {
             local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
             Ok(format!("tauraro_value_t* {} = tauraro_create_dict(); // Dict comprehension", result))
         }
@@ -274,6 +274,12 @@ pub fn generate_instruction(
                 code.push_str(&format!("tauraro_value_t* {} = tauraro_tuple_get({}, {});\n", target, tuple, i));
             }
             Ok(code)
+        }
+        
+        // Tuple get item
+        IRInstruction::TupleGetItem { tuple, index, result } => {
+            local_vars.insert(result.clone(), "TauValue".to_string());
+            Ok(format!("TauValue {} = tauraro_tuple_get({}, {});", result, tuple, index))
         }
         
         // F-string / Format string

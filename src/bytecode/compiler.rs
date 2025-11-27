@@ -1459,7 +1459,7 @@ impl SuperCompiler {
                 
                 Ok(())
             }
-            Statement::AttributeAssignment { object, name, value } => {
+            Statement::AttributeAssignment { object, name, value, .. } => {
                 // Compile attribute assignment: object.name = value
                 let object_reg = self.compile_expression(object)?;
                 let value_reg = self.compile_expression(value)?;
