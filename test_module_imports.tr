@@ -1,0 +1,26 @@
+# Test Module Import Compilation
+# This test file imports multiple built-in modules to verify the module compilation system
+
+import math
+import os
+import json
+
+# Test math module
+pi_value = math.pi
+sqrt_result = math.sqrt(16)
+print("Math module test:")
+print("  pi =", pi_value)
+print("  sqrt(16) =", sqrt_result)
+
+# Test os module
+cwd = os.getcwd()
+print("\nOS module test:")
+print("  Current directory:", cwd)
+
+# Test json module
+data = {"name": "Tauraro", "version": "1.0"}
+json_str = json.dumps(data)
+print("\nJSON module test:")
+print("  JSON string:", json_str)
+
+print("\nAll module imports successful!")

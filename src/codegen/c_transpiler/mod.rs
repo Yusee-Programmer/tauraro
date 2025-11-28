@@ -7,6 +7,7 @@ pub mod builtins;
 pub mod compiler;
 pub mod functions;
 pub mod memory_management;
+pub mod module_compiler;
 pub mod oop;
 pub mod runtime;
 pub mod types;
