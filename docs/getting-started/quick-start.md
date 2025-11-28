@@ -229,6 +229,56 @@ Now that you've learned the basics:
 3. [Explore built-in functions](../builtins/core.md)
 4. [Study OOP features](../language/classes.md)
 5. [Try compiling to C](../compilation/c-backend.md)
+6. [System programming](../builtins/system-programming.md) - Memory, pointers, atomics
+7. [Bare-metal development](../advanced/baremetal.md) - OS kernels, drivers
+
+## Advanced: System Programming
+
+Tauraro also supports low-level system programming:
+
+```python
+# Manual memory management
+buffer = allocate(1024)
+memset(buffer, 0, 1024)
+ptr_write(buffer, "int", 42)
+value = ptr_read(buffer, "int")
+free(buffer)
+
+# Atomic operations (thread-safe)
+atomic_store(counter_addr, 0)
+old = atomic_add(counter_addr, 1)
+success = atomic_cas(lock_addr, 0, 1)
+```
+
+See [System Programming Guide](../builtins/system-programming.md) for details.
+
+## Advanced: Bare-Metal Development
+
+Write OS kernels and embedded firmware:
+
+```bash
+# Compile for bare-metal
+tauraro compile kernel.tr --freestanding --entry-point kernel_main
+```
+
+```python
+# kernel.tr - Simple OS kernel
+def kernel_main():
+    # Write to VGA buffer
+    mmio_write8(0xB8000, ord('H'))
+    mmio_write8(0xB8001, 0x0F)  # White on black
+
+    # Disable interrupts for critical section
+    disable_interrupts()
+    # ... setup IDT ...
+    enable_interrupts()
+
+    # Idle loop
+    while True:
+        halt()
+```
+
+See [Bare-Metal Guide](../advanced/baremetal.md) for details.
 
 ## Examples
 

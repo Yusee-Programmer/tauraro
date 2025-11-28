@@ -91,6 +91,26 @@ enum Commands {
         /// Memory management strategy (auto, manual, arena)
         #[arg(long, default_value = "auto")]
         memory_strategy: String,
+
+        /// Freestanding mode for bare-metal/OS development (no stdlib)
+        #[arg(long)]
+        freestanding: bool,
+
+        /// Don't link C standard library
+        #[arg(long)]
+        no_stdlib: bool,
+
+        /// Custom entry point name (default: main)
+        #[arg(long)]
+        entry_point: Option<String>,
+
+        /// Target architecture for bare-metal (x86, x86_64, arm, arm64, riscv32, riscv64)
+        #[arg(long)]
+        target_arch: Option<String>,
+
+        /// Enable inline assembly support
+        #[arg(long)]
+        inline_asm: bool,
     },
 
     /// Debug AST parsing
@@ -160,6 +180,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             native,
             use_native_transpiler,
             memory_strategy,
+            freestanding,
+            no_stdlib,
+            entry_point,
+            target_arch,
+            inline_asm,
         } => {
             compile_file(
                 &file,
@@ -173,6 +198,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 native,
                 use_native_transpiler,
                 &memory_strategy,
+                freestanding,
+                no_stdlib,
+                entry_point.as_deref(),
+                target_arch.as_deref(),
+                inline_asm,
             )?;
         }
         Commands::DebugAst { file } => {
@@ -205,6 +235,11 @@ fn compile_file(
     native: bool,
     use_native_transpiler: bool,
     memory_strategy: &str,
+    freestanding: bool,
+    no_stdlib: bool,
+    entry_point: Option<&str>,
+    target_arch: Option<&str>,
+    inline_asm: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
 
@@ -307,6 +342,19 @@ fn compile_file(
         "c" => {
             let mut object_files_to_link: Vec<PathBuf> = Vec::new();
 
+            // Create baremetal options if any flags are set
+            let baremetal_opts = if freestanding || no_stdlib || entry_point.is_some() || target_arch.is_some() || inline_asm {
+                tauraro::codegen::c_transpiler::BaremetalOptions {
+                    freestanding,
+                    no_stdlib,
+                    entry_point: entry_point.map(|s| s.to_string()),
+                    target_arch: target_arch.map(|s| s.to_string()),
+                    inline_asm,
+                }
+            } else {
+                tauraro::codegen::c_transpiler::BaremetalOptions::default()
+            };
+
             let c_code_bytes = if use_native_transpiler {
                 // Use pure native C transpiler that generates native C code
                 let mut transpiler = PureNativeTranspiler::new();
@@ -314,8 +362,8 @@ fn compile_file(
                     .map_err(|e| anyhow::anyhow!("Pure native transpiler error: {}", e))?;
                 c_code.into_bytes()
             } else {
-                // If not using native transpiler, generate IR-based C code anyway
-                let transpiler = tauraro::codegen::CTranspiler::new();
+                // If not using native transpiler, generate IR-based C code with baremetal options
+                let transpiler = tauraro::codegen::CTranspiler::with_baremetal_options(baremetal_opts);
                 let c_code = transpiler.transpile(&ir_module)?;
                 c_code.into_bytes()
             };

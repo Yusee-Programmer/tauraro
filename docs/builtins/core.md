@@ -649,4 +649,5 @@ with open("file.bin", "rb") as f:
 - [Type Conversion Functions](conversions.md)
 - [I/O Functions](io.md)
 - [Introspection Functions](introspection.md)
+- [System Programming](system-programming.md) - Memory, pointers, atomics, hardware access
 - [Standard Library](../stdlib/modules.md)

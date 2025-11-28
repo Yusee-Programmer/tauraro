@@ -175,6 +175,71 @@ pub fn init_builtins() -> HashMap<String, Value> {
     builtins.insert("reset_arena".to_string(), Value::BuiltinFunction("reset_arena".to_string(), memory_reset_arena_builtin));
     builtins.insert("memory_stats".to_string(), Value::BuiltinFunction("memory_stats".to_string(), memory_stats_builtin));
 
+    // System programming builtins
+    builtins.insert("sizeof".to_string(), Value::BuiltinFunction("sizeof".to_string(), sizeof_builtin));
+    builtins.insert("alignof".to_string(), Value::BuiltinFunction("alignof".to_string(), alignof_builtin));
+    builtins.insert("memcpy".to_string(), Value::BuiltinFunction("memcpy".to_string(), memcpy_builtin));
+    builtins.insert("memset".to_string(), Value::BuiltinFunction("memset".to_string(), memset_builtin));
+    builtins.insert("memmove".to_string(), Value::BuiltinFunction("memmove".to_string(), memmove_builtin));
+    builtins.insert("memcmp".to_string(), Value::BuiltinFunction("memcmp".to_string(), memcmp_builtin));
+    builtins.insert("ptr_read".to_string(), Value::BuiltinFunction("ptr_read".to_string(), ptr_read_builtin));
+    builtins.insert("ptr_write".to_string(), Value::BuiltinFunction("ptr_write".to_string(), ptr_write_builtin));
+    builtins.insert("ptr_offset".to_string(), Value::BuiltinFunction("ptr_offset".to_string(), ptr_offset_builtin));
+    builtins.insert("null_ptr".to_string(), Value::BuiltinFunction("null_ptr".to_string(), null_ptr_builtin));
+    builtins.insert("is_null".to_string(), Value::BuiltinFunction("is_null".to_string(), is_null_builtin));
+
+    // Advanced system programming builtins
+    builtins.insert("stack_alloc".to_string(), Value::BuiltinFunction("stack_alloc".to_string(), stack_alloc_builtin));
+    builtins.insert("volatile_read".to_string(), Value::BuiltinFunction("volatile_read".to_string(), volatile_read_builtin));
+    builtins.insert("volatile_write".to_string(), Value::BuiltinFunction("volatile_write".to_string(), volatile_write_builtin));
+    builtins.insert("atomic_load".to_string(), Value::BuiltinFunction("atomic_load".to_string(), atomic_load_builtin));
+    builtins.insert("atomic_store".to_string(), Value::BuiltinFunction("atomic_store".to_string(), atomic_store_builtin));
+    builtins.insert("atomic_add".to_string(), Value::BuiltinFunction("atomic_add".to_string(), atomic_add_builtin));
+    builtins.insert("atomic_sub".to_string(), Value::BuiltinFunction("atomic_sub".to_string(), atomic_sub_builtin));
+    builtins.insert("atomic_cas".to_string(), Value::BuiltinFunction("atomic_cas".to_string(), atomic_cas_builtin));
+    builtins.insert("memory_barrier".to_string(), Value::BuiltinFunction("memory_barrier".to_string(), memory_barrier_builtin));
+    builtins.insert("prefetch".to_string(), Value::BuiltinFunction("prefetch".to_string(), prefetch_builtin));
+    builtins.insert("cache_line_size".to_string(), Value::BuiltinFunction("cache_line_size".to_string(), cache_line_size_builtin));
+    builtins.insert("bit_cast".to_string(), Value::BuiltinFunction("bit_cast".to_string(), bit_cast_builtin));
+    builtins.insert("zero_memory".to_string(), Value::BuiltinFunction("zero_memory".to_string(), zero_memory_builtin));
+    builtins.insert("copy_memory".to_string(), Value::BuiltinFunction("copy_memory".to_string(), copy_memory_builtin));
+    builtins.insert("compare_memory".to_string(), Value::BuiltinFunction("compare_memory".to_string(), compare_memory_builtin));
+
+    // Bare-metal / OS development builtins
+    // Port I/O (x86)
+    builtins.insert("port_in".to_string(), Value::BuiltinFunction("port_in".to_string(), port_in_builtin));
+    builtins.insert("port_out".to_string(), Value::BuiltinFunction("port_out".to_string(), port_out_builtin));
+    builtins.insert("port_in16".to_string(), Value::BuiltinFunction("port_in16".to_string(), port_in16_builtin));
+    builtins.insert("port_out16".to_string(), Value::BuiltinFunction("port_out16".to_string(), port_out16_builtin));
+    builtins.insert("port_in32".to_string(), Value::BuiltinFunction("port_in32".to_string(), port_in32_builtin));
+    builtins.insert("port_out32".to_string(), Value::BuiltinFunction("port_out32".to_string(), port_out32_builtin));
+    
+    // Memory-mapped I/O
+    builtins.insert("mmio_read8".to_string(), Value::BuiltinFunction("mmio_read8".to_string(), mmio_read8_builtin));
+    builtins.insert("mmio_write8".to_string(), Value::BuiltinFunction("mmio_write8".to_string(), mmio_write8_builtin));
+    builtins.insert("mmio_read16".to_string(), Value::BuiltinFunction("mmio_read16".to_string(), mmio_read16_builtin));
+    builtins.insert("mmio_write16".to_string(), Value::BuiltinFunction("mmio_write16".to_string(), mmio_write16_builtin));
+    builtins.insert("mmio_read32".to_string(), Value::BuiltinFunction("mmio_read32".to_string(), mmio_read32_builtin));
+    builtins.insert("mmio_write32".to_string(), Value::BuiltinFunction("mmio_write32".to_string(), mmio_write32_builtin));
+    builtins.insert("mmio_read64".to_string(), Value::BuiltinFunction("mmio_read64".to_string(), mmio_read64_builtin));
+    builtins.insert("mmio_write64".to_string(), Value::BuiltinFunction("mmio_write64".to_string(), mmio_write64_builtin));
+    
+    // Interrupt control
+    builtins.insert("disable_interrupts".to_string(), Value::BuiltinFunction("disable_interrupts".to_string(), disable_interrupts_builtin));
+    builtins.insert("enable_interrupts".to_string(), Value::BuiltinFunction("enable_interrupts".to_string(), enable_interrupts_builtin));
+    builtins.insert("halt".to_string(), Value::BuiltinFunction("halt".to_string(), halt_builtin));
+    
+    // CPU control registers (x86)
+    builtins.insert("read_cr0".to_string(), Value::BuiltinFunction("read_cr0".to_string(), read_cr0_builtin));
+    builtins.insert("write_cr0".to_string(), Value::BuiltinFunction("write_cr0".to_string(), write_cr0_builtin));
+    builtins.insert("read_cr3".to_string(), Value::BuiltinFunction("read_cr3".to_string(), read_cr3_builtin));
+    builtins.insert("write_cr3".to_string(), Value::BuiltinFunction("write_cr3".to_string(), write_cr3_builtin));
+    builtins.insert("read_msr".to_string(), Value::BuiltinFunction("read_msr".to_string(), read_msr_builtin));
+    builtins.insert("write_msr".to_string(), Value::BuiltinFunction("write_msr".to_string(), write_msr_builtin));
+    
+    // Inline assembly placeholder (actual implementation in compiled mode)
+    builtins.insert("asm".to_string(), Value::BuiltinFunction("asm".to_string(), asm_builtin));
+
     // Memory management decorators (for VM compatibility, they're identity functions)
     builtins.insert("manual_memory".to_string(), Value::BuiltinFunction("manual_memory".to_string(), decorator_identity));
     builtins.insert("arena_memory".to_string(), Value::BuiltinFunction("arena_memory".to_string(), decorator_identity));
@@ -2425,6 +2490,943 @@ fn memory_stats_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         let stats = ctx.get_stats();
         Ok(Value::Str(stats.to_string()))
     })
+}
+
+// ============================================================================
+// System Programming Builtins
+// ============================================================================
+
+/// Get the size of a value in bytes
+/// Usage: size = sizeof(value)
+fn sizeof_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("sizeof() takes exactly 1 argument"));
+    }
+
+    let size = match &args[0] {
+        Value::Int(_) => std::mem::size_of::<i64>(),
+        Value::Float(_) => std::mem::size_of::<f64>(),
+        Value::Bool(_) => std::mem::size_of::<bool>(),
+        Value::Str(s) => s.len() + 1, // Including null terminator
+        Value::ByteArray(b) => b.len(),
+        _ => std::mem::size_of::<Value>(),
+    };
+
+    Ok(Value::Int(size as i64))
+}
+
+/// Get the alignment of a value type
+/// Usage: align = alignof(value)
+fn alignof_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("alignof() takes exactly 1 argument"));
+    }
+
+    let align = match &args[0] {
+        Value::Int(_) => std::mem::align_of::<i64>(),
+        Value::Float(_) => std::mem::align_of::<f64>(),
+        Value::Bool(_) => std::mem::align_of::<bool>(),
+        _ => std::mem::align_of::<usize>(), // Pointer alignment
+    };
+
+    Ok(Value::Int(align as i64))
+}
+
+/// Copy memory from source to destination
+/// Usage: memcpy(dest_ptr, src_ptr, size)
+fn memcpy_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow!("memcpy() takes exactly 3 arguments (dest, src, size)"));
+    }
+
+    let dest = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memcpy() dest must be a pointer (integer)")),
+    };
+    let src = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memcpy() src must be a pointer (integer)")),
+    };
+    let size = match &args[2] {
+        Value::Int(n) if *n >= 0 => *n as usize,
+        _ => return Err(anyhow!("memcpy() size must be a non-negative integer")),
+    };
+
+    if dest != 0 && src != 0 && size > 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(src as *const u8, dest as *mut u8, size);
+        }
+    }
+
+    Ok(Value::Int(dest as i64))
+}
+
+/// Set memory to a value
+/// Usage: memset(ptr, value, size)
+fn memset_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow!("memset() takes exactly 3 arguments (ptr, value, size)"));
+    }
+
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memset() ptr must be a pointer (integer)")),
+    };
+    let value = match &args[1] {
+        Value::Int(n) => *n as u8,
+        _ => return Err(anyhow!("memset() value must be an integer")),
+    };
+    let size = match &args[2] {
+        Value::Int(n) if *n >= 0 => *n as usize,
+        _ => return Err(anyhow!("memset() size must be a non-negative integer")),
+    };
+
+    if ptr != 0 && size > 0 {
+        unsafe {
+            std::ptr::write_bytes(ptr as *mut u8, value, size);
+        }
+    }
+
+    Ok(Value::Int(ptr as i64))
+}
+
+/// Move memory (handles overlapping regions)
+/// Usage: memmove(dest_ptr, src_ptr, size)
+fn memmove_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow!("memmove() takes exactly 3 arguments (dest, src, size)"));
+    }
+
+    let dest = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memmove() dest must be a pointer (integer)")),
+    };
+    let src = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memmove() src must be a pointer (integer)")),
+    };
+    let size = match &args[2] {
+        Value::Int(n) if *n >= 0 => *n as usize,
+        _ => return Err(anyhow!("memmove() size must be a non-negative integer")),
+    };
+
+    if dest != 0 && src != 0 && size > 0 {
+        unsafe {
+            std::ptr::copy(src as *const u8, dest as *mut u8, size);
+        }
+    }
+
+    Ok(Value::Int(dest as i64))
+}
+
+/// Compare memory regions
+/// Usage: result = memcmp(ptr1, ptr2, size)
+fn memcmp_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow!("memcmp() takes exactly 3 arguments (ptr1, ptr2, size)"));
+    }
+
+    let ptr1 = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memcmp() ptr1 must be a pointer (integer)")),
+    };
+    let ptr2 = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memcmp() ptr2 must be a pointer (integer)")),
+    };
+    let size = match &args[2] {
+        Value::Int(n) if *n >= 0 => *n as usize,
+        _ => return Err(anyhow!("memcmp() size must be a non-negative integer")),
+    };
+
+    if ptr1 == 0 || ptr2 == 0 || size == 0 {
+        return Ok(Value::Int(0));
+    }
+
+    let result = unsafe {
+        let s1 = std::slice::from_raw_parts(ptr1 as *const u8, size);
+        let s2 = std::slice::from_raw_parts(ptr2 as *const u8, size);
+        s1.cmp(s2) as i64
+    };
+
+    Ok(Value::Int(result))
+}
+
+/// Read a value from a pointer
+/// Usage: value = ptr_read(ptr, byte_size=8)
+fn ptr_read_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(anyhow!("ptr_read() takes 1 or 2 arguments (ptr, byte_size=8)"));
+    }
+
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("ptr_read() ptr must be a pointer (integer)")),
+    };
+    let byte_size = if args.len() > 1 {
+        match &args[1] {
+            Value::Int(n) => *n as usize,
+            _ => return Err(anyhow!("ptr_read() byte_size must be an integer")),
+        }
+    } else {
+        8
+    };
+
+    if ptr == 0 {
+        return Ok(Value::Int(0));
+    }
+
+    let value = unsafe {
+        match byte_size {
+            1 => *(ptr as *const i8) as i64,
+            2 => *(ptr as *const i16) as i64,
+            4 => *(ptr as *const i32) as i64,
+            8 => *(ptr as *const i64),
+            _ => *(ptr as *const i64),
+        }
+    };
+
+    Ok(Value::Int(value))
+}
+
+/// Write a value to a pointer
+/// Usage: ptr_write(ptr, value, byte_size=8)
+fn ptr_write_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err(anyhow!("ptr_write() takes 2 or 3 arguments (ptr, value, byte_size=8)"));
+    }
+
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("ptr_write() ptr must be a pointer (integer)")),
+    };
+    let value = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(anyhow!("ptr_write() value must be an integer")),
+    };
+    let byte_size = if args.len() > 2 {
+        match &args[2] {
+            Value::Int(n) => *n as usize,
+            _ => return Err(anyhow!("ptr_write() byte_size must be an integer")),
+        }
+    } else {
+        8
+    };
+
+    if ptr != 0 {
+        unsafe {
+            match byte_size {
+                1 => *(ptr as *mut i8) = value as i8,
+                2 => *(ptr as *mut i16) = value as i16,
+                4 => *(ptr as *mut i32) = value as i32,
+                8 => *(ptr as *mut i64) = value,
+                _ => *(ptr as *mut i64) = value,
+            }
+        }
+    }
+
+    Ok(Value::None)
+}
+
+/// Offset a pointer by a number of bytes
+/// Usage: new_ptr = ptr_offset(ptr, offset)
+fn ptr_offset_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("ptr_offset() takes exactly 2 arguments (ptr, offset)"));
+    }
+
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("ptr_offset() ptr must be a pointer (integer)")),
+    };
+    let offset = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(anyhow!("ptr_offset() offset must be an integer")),
+    };
+
+    let new_ptr = if offset >= 0 {
+        ptr.wrapping_add(offset as usize)
+    } else {
+        ptr.wrapping_sub((-offset) as usize)
+    };
+
+    Ok(Value::Int(new_ptr as i64))
+}
+
+/// Get a null pointer
+/// Usage: ptr = null_ptr()
+fn null_ptr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow!("null_ptr() takes no arguments"));
+    }
+    Ok(Value::Int(0))
+}
+
+/// Check if a pointer is null
+/// Usage: result = is_null(ptr)
+fn is_null_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("is_null() takes exactly 1 argument"));
+    }
+
+    let is_null = match &args[0] {
+        Value::Int(n) => *n == 0,
+        Value::None => true,
+        _ => false,
+    };
+
+    Ok(Value::Bool(is_null))
+}
+
+// ============================================================================
+// Advanced System Programming Builtins
+// ============================================================================
+
+/// Allocate memory on the stack (returns pointer, simulated in VM)
+/// Usage: ptr = stack_alloc(size)
+fn stack_alloc_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("stack_alloc() takes exactly 1 argument (size)"));
+    }
+    let size = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("stack_alloc() size must be an integer")),
+    };
+    // In VM mode, we simulate stack allocation with heap allocation
+    // The C transpiler will generate actual stack allocation
+    let ptr = unsafe { libc::malloc(size) as i64 };
+    Ok(Value::Int(ptr))
+}
+
+/// Read a value from a volatile memory location
+/// Usage: value = volatile_read(ptr)
+fn volatile_read_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("volatile_read() takes exactly 1 argument (ptr)"));
+    }
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("volatile_read() ptr must be a pointer (integer)")),
+    };
+    if ptr == 0 {
+        return Ok(Value::Int(0));
+    }
+    let value = unsafe { std::ptr::read_volatile(ptr as *const i64) };
+    Ok(Value::Int(value))
+}
+
+/// Write a value to a volatile memory location
+/// Usage: volatile_write(ptr, value)
+fn volatile_write_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("volatile_write() takes exactly 2 arguments (ptr, value)"));
+    }
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("volatile_write() ptr must be a pointer (integer)")),
+    };
+    let value = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(anyhow!("volatile_write() value must be an integer")),
+    };
+    if ptr != 0 {
+        unsafe { std::ptr::write_volatile(ptr as *mut i64, value) };
+    }
+    Ok(Value::None)
+}
+
+/// Atomically load a value from memory
+/// Usage: value = atomic_load(ptr)
+fn atomic_load_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    if args.len() != 1 {
+        return Err(anyhow!("atomic_load() takes exactly 1 argument (ptr)"));
+    }
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("atomic_load() ptr must be a pointer (integer)")),
+    };
+    if ptr == 0 {
+        return Ok(Value::Int(0));
+    }
+    let value = unsafe {
+        let atomic = &*(ptr as *const AtomicI64);
+        atomic.load(Ordering::SeqCst)
+    };
+    Ok(Value::Int(value))
+}
+
+/// Atomically store a value to memory
+/// Usage: atomic_store(ptr, value)
+fn atomic_store_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    if args.len() != 2 {
+        return Err(anyhow!("atomic_store() takes exactly 2 arguments (ptr, value)"));
+    }
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("atomic_store() ptr must be a pointer (integer)")),
+    };
+    let value = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(anyhow!("atomic_store() value must be an integer")),
+    };
+    if ptr != 0 {
+        unsafe {
+            let atomic = &*(ptr as *const AtomicI64);
+            atomic.store(value, Ordering::SeqCst);
+        }
+    }
+    Ok(Value::None)
+}
+
+/// Atomically add to a value in memory
+/// Usage: old_value = atomic_add(ptr, value)
+fn atomic_add_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    if args.len() != 2 {
+        return Err(anyhow!("atomic_add() takes exactly 2 arguments (ptr, value)"));
+    }
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("atomic_add() ptr must be a pointer (integer)")),
+    };
+    let value = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(anyhow!("atomic_add() value must be an integer")),
+    };
+    if ptr == 0 {
+        return Ok(Value::Int(0));
+    }
+    let old = unsafe {
+        let atomic = &*(ptr as *const AtomicI64);
+        atomic.fetch_add(value, Ordering::SeqCst)
+    };
+    Ok(Value::Int(old))
+}
+
+/// Atomically subtract from a value in memory
+/// Usage: old_value = atomic_sub(ptr, value)
+fn atomic_sub_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    if args.len() != 2 {
+        return Err(anyhow!("atomic_sub() takes exactly 2 arguments (ptr, value)"));
+    }
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("atomic_sub() ptr must be a pointer (integer)")),
+    };
+    let value = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(anyhow!("atomic_sub() value must be an integer")),
+    };
+    if ptr == 0 {
+        return Ok(Value::Int(0));
+    }
+    let old = unsafe {
+        let atomic = &*(ptr as *const AtomicI64);
+        atomic.fetch_sub(value, Ordering::SeqCst)
+    };
+    Ok(Value::Int(old))
+}
+
+/// Atomic compare-and-swap
+/// Usage: success = atomic_cas(ptr, expected, desired)
+fn atomic_cas_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    if args.len() != 3 {
+        return Err(anyhow!("atomic_cas() takes exactly 3 arguments (ptr, expected, desired)"));
+    }
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("atomic_cas() ptr must be a pointer (integer)")),
+    };
+    let expected = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(anyhow!("atomic_cas() expected must be an integer")),
+    };
+    let desired = match &args[2] {
+        Value::Int(n) => *n,
+        _ => return Err(anyhow!("atomic_cas() desired must be an integer")),
+    };
+    if ptr == 0 {
+        return Ok(Value::Bool(false));
+    }
+    let result = unsafe {
+        let atomic = &*(ptr as *const AtomicI64);
+        atomic.compare_exchange(expected, desired, Ordering::SeqCst, Ordering::SeqCst)
+    };
+    Ok(Value::Bool(result.is_ok()))
+}
+
+/// Insert a memory barrier
+/// Usage: memory_barrier()
+fn memory_barrier_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    use std::sync::atomic::{fence, Ordering};
+    if !args.is_empty() {
+        return Err(anyhow!("memory_barrier() takes no arguments"));
+    }
+    fence(Ordering::SeqCst);
+    Ok(Value::None)
+}
+
+/// Prefetch memory into cache
+/// Usage: prefetch(ptr)
+fn prefetch_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("prefetch() takes exactly 1 argument (ptr)"));
+    }
+    // Note: Actual prefetch is platform-specific and done in C transpiler
+    // In VM mode, this is a no-op
+    Ok(Value::None)
+}
+
+/// Get the cache line size (typically 64 bytes on modern CPUs)
+/// Usage: size = cache_line_size()
+fn cache_line_size_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow!("cache_line_size() takes no arguments"));
+    }
+    // Most modern CPUs use 64-byte cache lines
+    Ok(Value::Int(64))
+}
+
+/// Bitcast between integer and float (reinterpret bytes)
+/// Usage: result = bit_cast(value, target_type)
+/// target_type: "int" or "float"
+fn bit_cast_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("bit_cast() takes exactly 2 arguments (value, target_type)"));
+    }
+    let target = match &args[1] {
+        Value::Str(s) => s.as_str(),
+        _ => return Err(anyhow!("bit_cast() target_type must be a string ('int' or 'float')")),
+    };
+    match target {
+        "int" => {
+            match &args[0] {
+                Value::Float(f) => Ok(Value::Int(f.to_bits() as i64)),
+                Value::Int(i) => Ok(Value::Int(*i)),
+                _ => Err(anyhow!("bit_cast() value must be a number")),
+            }
+        }
+        "float" => {
+            match &args[0] {
+                Value::Int(i) => Ok(Value::Float(f64::from_bits(*i as u64))),
+                Value::Float(f) => Ok(Value::Float(*f)),
+                _ => Err(anyhow!("bit_cast() value must be a number")),
+            }
+        }
+        _ => Err(anyhow!("bit_cast() target_type must be 'int' or 'float'")),
+    }
+}
+
+/// Zero out a memory region
+/// Usage: zero_memory(ptr, size)
+fn zero_memory_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("zero_memory() takes exactly 2 arguments (ptr, size)"));
+    }
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("zero_memory() ptr must be a pointer (integer)")),
+    };
+    let size = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("zero_memory() size must be an integer")),
+    };
+    if ptr != 0 && size > 0 {
+        unsafe { std::ptr::write_bytes(ptr as *mut u8, 0, size) };
+    }
+    Ok(Value::None)
+}
+
+/// Copy memory from source to destination
+/// Usage: copy_memory(dest, src, size)
+fn copy_memory_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow!("copy_memory() takes exactly 3 arguments (dest, src, size)"));
+    }
+    let dest = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("copy_memory() dest must be a pointer (integer)")),
+    };
+    let src = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("copy_memory() src must be a pointer (integer)")),
+    };
+    let size = match &args[2] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("copy_memory() size must be an integer")),
+    };
+    if dest != 0 && src != 0 && size > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(src as *const u8, dest as *mut u8, size) };
+    }
+    Ok(Value::None)
+}
+
+/// Compare two memory regions
+/// Usage: result = compare_memory(ptr1, ptr2, size)
+/// Returns: 0 if equal, <0 if ptr1 < ptr2, >0 if ptr1 > ptr2
+fn compare_memory_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow!("compare_memory() takes exactly 3 arguments (ptr1, ptr2, size)"));
+    }
+    let ptr1 = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("compare_memory() ptr1 must be a pointer (integer)")),
+    };
+    let ptr2 = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("compare_memory() ptr2 must be a pointer (integer)")),
+    };
+    let size = match &args[2] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("compare_memory() size must be an integer")),
+    };
+    if ptr1 == 0 || ptr2 == 0 || size == 0 {
+        return Ok(Value::Int(0));
+    }
+    let result = unsafe {
+        libc::memcmp(ptr1 as *const libc::c_void, ptr2 as *const libc::c_void, size)
+    };
+    Ok(Value::Int(result as i64))
+}
+
+// ============================================================================
+// Bare-metal / OS Development Builtins
+// Note: These are stubs in interpreter mode. Actual hardware operations
+// happen in compiled mode via the C transpiler.
+// ============================================================================
+
+/// Read a byte from an I/O port (x86)
+/// Usage: value = port_in(port)
+fn port_in_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("port_in() takes exactly 1 argument (port)"));
+    }
+    let _port = match &args[0] {
+        Value::Int(n) => *n as u16,
+        _ => return Err(anyhow!("port_in() port must be an integer")),
+    };
+    // In interpreter mode, return 0 (no actual hardware access)
+    Ok(Value::Int(0))
+}
+
+/// Write a byte to an I/O port (x86)
+/// Usage: port_out(port, value)
+fn port_out_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("port_out() takes exactly 2 arguments (port, value)"));
+    }
+    let _port = match &args[0] {
+        Value::Int(n) => *n as u16,
+        _ => return Err(anyhow!("port_out() port must be an integer")),
+    };
+    let _value = match &args[1] {
+        Value::Int(n) => *n as u8,
+        _ => return Err(anyhow!("port_out() value must be an integer")),
+    };
+    // In interpreter mode, this is a no-op
+    Ok(Value::None)
+}
+
+/// Read a 16-bit word from an I/O port (x86)
+fn port_in16_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("port_in16() takes exactly 1 argument (port)"));
+    }
+    let _port = match &args[0] {
+        Value::Int(n) => *n as u16,
+        _ => return Err(anyhow!("port_in16() port must be an integer")),
+    };
+    Ok(Value::Int(0))
+}
+
+/// Write a 16-bit word to an I/O port (x86)
+fn port_out16_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("port_out16() takes exactly 2 arguments (port, value)"));
+    }
+    let _port = match &args[0] {
+        Value::Int(n) => *n as u16,
+        _ => return Err(anyhow!("port_out16() port must be an integer")),
+    };
+    let _value = match &args[1] {
+        Value::Int(n) => *n as u16,
+        _ => return Err(anyhow!("port_out16() value must be an integer")),
+    };
+    Ok(Value::None)
+}
+
+/// Read a 32-bit dword from an I/O port (x86)
+fn port_in32_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("port_in32() takes exactly 1 argument (port)"));
+    }
+    let _port = match &args[0] {
+        Value::Int(n) => *n as u16,
+        _ => return Err(anyhow!("port_in32() port must be an integer")),
+    };
+    Ok(Value::Int(0))
+}
+
+/// Write a 32-bit dword to an I/O port (x86)
+fn port_out32_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("port_out32() takes exactly 2 arguments (port, value)"));
+    }
+    let _port = match &args[0] {
+        Value::Int(n) => *n as u16,
+        _ => return Err(anyhow!("port_out32() port must be an integer")),
+    };
+    let _value = match &args[1] {
+        Value::Int(n) => *n as u32,
+        _ => return Err(anyhow!("port_out32() value must be an integer")),
+    };
+    Ok(Value::None)
+}
+
+/// Read a byte from a memory-mapped I/O address
+fn mmio_read8_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("mmio_read8() takes exactly 1 argument (address)"));
+    }
+    let _addr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("mmio_read8() address must be an integer")),
+    };
+    // In interpreter mode, MMIO is simulated - always return 0
+    // Actual hardware access happens in compiled bare-metal mode
+    Ok(Value::Int(0))
+}
+
+/// Write a byte to a memory-mapped I/O address
+fn mmio_write8_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("mmio_write8() takes exactly 2 arguments (address, value)"));
+    }
+    let _addr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("mmio_write8() address must be an integer")),
+    };
+    let _value = match &args[1] {
+        Value::Int(n) => *n as u8,
+        _ => return Err(anyhow!("mmio_write8() value must be an integer")),
+    };
+    // In interpreter mode, MMIO is simulated - no-op
+    Ok(Value::None)
+}
+
+/// Read a 16-bit value from a memory-mapped I/O address
+fn mmio_read16_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("mmio_read16() takes exactly 1 argument (address)"));
+    }
+    let _addr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("mmio_read16() address must be an integer")),
+    };
+    // In interpreter mode, MMIO is simulated - always return 0
+    Ok(Value::Int(0))
+}
+
+/// Write a 16-bit value to a memory-mapped I/O address
+fn mmio_write16_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("mmio_write16() takes exactly 2 arguments (address, value)"));
+    }
+    let _addr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("mmio_write16() address must be an integer")),
+    };
+    let _value = match &args[1] {
+        Value::Int(n) => *n as u16,
+        _ => return Err(anyhow!("mmio_write16() value must be an integer")),
+    };
+    // In interpreter mode, MMIO is simulated - no-op
+    Ok(Value::None)
+}
+
+/// Read a 32-bit value from a memory-mapped I/O address
+fn mmio_read32_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("mmio_read32() takes exactly 1 argument (address)"));
+    }
+    let _addr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("mmio_read32() address must be an integer")),
+    };
+    // In interpreter mode, MMIO is simulated - always return 0
+    Ok(Value::Int(0))
+}
+
+/// Write a 32-bit value to a memory-mapped I/O address
+fn mmio_write32_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("mmio_write32() takes exactly 2 arguments (address, value)"));
+    }
+    let _addr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("mmio_write32() address must be an integer")),
+    };
+    let _value = match &args[1] {
+        Value::Int(n) => *n as u32,
+        _ => return Err(anyhow!("mmio_write32() value must be an integer")),
+    };
+    // In interpreter mode, MMIO is simulated - no-op
+    Ok(Value::None)
+}
+
+/// Read a 64-bit value from a memory-mapped I/O address
+fn mmio_read64_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("mmio_read64() takes exactly 1 argument (address)"));
+    }
+    let _addr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("mmio_read64() address must be an integer")),
+    };
+    // In interpreter mode, MMIO is simulated - always return 0
+    Ok(Value::Int(0))
+}
+
+/// Write a 64-bit value to a memory-mapped I/O address
+fn mmio_write64_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("mmio_write64() takes exactly 2 arguments (address, value)"));
+    }
+    let _addr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("mmio_write64() address must be an integer")),
+    };
+    let _value = match &args[1] {
+        Value::Int(n) => *n as u64,
+        _ => return Err(anyhow!("mmio_write64() value must be an integer")),
+    };
+    // In interpreter mode, MMIO is simulated - no-op
+    Ok(Value::None)
+}
+
+/// Disable interrupts (CLI instruction on x86)
+/// In interpreter mode, this is a no-op
+fn disable_interrupts_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow!("disable_interrupts() takes no arguments"));
+    }
+    // No-op in interpreter mode - actual implementation in compiled mode
+    Ok(Value::None)
+}
+
+/// Enable interrupts (STI instruction on x86)
+/// In interpreter mode, this is a no-op
+fn enable_interrupts_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow!("enable_interrupts() takes no arguments"));
+    }
+    // No-op in interpreter mode - actual implementation in compiled mode
+    Ok(Value::None)
+}
+
+/// Halt the CPU (HLT instruction on x86)
+/// In interpreter mode, this is a no-op
+fn halt_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow!("halt() takes no arguments"));
+    }
+    // No-op in interpreter mode - actual implementation in compiled mode
+    Ok(Value::None)
+}
+
+/// Read CR0 control register (x86)
+/// In interpreter mode, returns 0
+fn read_cr0_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow!("read_cr0() takes no arguments"));
+    }
+    Ok(Value::Int(0))
+}
+
+/// Write CR0 control register (x86)
+/// In interpreter mode, this is a no-op
+fn write_cr0_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("write_cr0() takes exactly 1 argument (value)"));
+    }
+    let _value = match &args[0] {
+        Value::Int(n) => *n as u64,
+        _ => return Err(anyhow!("write_cr0() value must be an integer")),
+    };
+    Ok(Value::None)
+}
+
+/// Read CR3 control register (page table base) (x86)
+/// In interpreter mode, returns 0
+fn read_cr3_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow!("read_cr3() takes no arguments"));
+    }
+    Ok(Value::Int(0))
+}
+
+/// Write CR3 control register (x86)
+/// In interpreter mode, this is a no-op
+fn write_cr3_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("write_cr3() takes exactly 1 argument (value)"));
+    }
+    let _value = match &args[0] {
+        Value::Int(n) => *n as u64,
+        _ => return Err(anyhow!("write_cr3() value must be an integer")),
+    };
+    Ok(Value::None)
+}
+
+/// Read Model-Specific Register (MSR) (x86)
+/// In interpreter mode, returns 0
+fn read_msr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("read_msr() takes exactly 1 argument (msr_index)"));
+    }
+    let _msr = match &args[0] {
+        Value::Int(n) => *n as u32,
+        _ => return Err(anyhow!("read_msr() msr_index must be an integer")),
+    };
+    Ok(Value::Int(0))
+}
+
+/// Write Model-Specific Register (MSR) (x86)
+/// In interpreter mode, this is a no-op
+fn write_msr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("write_msr() takes exactly 2 arguments (msr_index, value)"));
+    }
+    let _msr = match &args[0] {
+        Value::Int(n) => *n as u32,
+        _ => return Err(anyhow!("write_msr() msr_index must be an integer")),
+    };
+    let _value = match &args[1] {
+        Value::Int(n) => *n as u64,
+        _ => return Err(anyhow!("write_msr() value must be an integer")),
+    };
+    Ok(Value::None)
+}
+
+/// Inline assembly placeholder
+/// In interpreter mode, this is a no-op but validates the string
+/// In compiled mode, the string is inserted as inline assembly
+fn asm_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("asm() takes exactly 1 argument (assembly_string)"));
+    }
+    match &args[0] {
+        Value::Str(_s) => {
+            // In interpreter mode, this is a no-op
+            // In compiled mode, the C transpiler will insert the assembly
+            Ok(Value::None)
+        }
+        _ => Err(anyhow!("asm() argument must be a string")),
+    }
 }
 
 /// Identity decorator - returns the decorated function unchanged
