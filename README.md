@@ -7,7 +7,7 @@ Tauraro combines the ease of Python with the speed of compiled languages, offeri
 ## Features
 
 ### Performance
-- **Native speed execution** - Up to 100x faster than Python
+- **Native speed execution** - Up to 200x faster than Python
 - **Multiple backends** - VM interpreter or compile to native C
 - **Optimized compilation** - Type-based optimizations for maximum performance
 - **Built on Rust** - Leveraging Rust's safety and speed for the runtime
@@ -18,11 +18,20 @@ Tauraro combines the ease of Python with the speed of compiled languages, offeri
 - **Easy migration** - Drop-in replacement for many Python scripts
 - **No new syntax to learn** - If you know Python, you know Tauraro
 
+### System Programming
+- **Bare-metal support** - Write OS kernels, drivers, embedded firmware
+- **Memory management** - Manual allocation, arenas, and automatic GC
+- **Low-level primitives** - Pointers, atomics, volatile I/O
+- **Hardware access** - Port I/O, MMIO, CPU control registers
+- **Freestanding compilation** - No C stdlib required
+
 ### Rich Standard Library
 All modules available by default - no feature flags needed!
 
 - **HTTP Client** - `httpx` module built on Rust's hyper and reqwest
-- **HTTP Utilities** - `httptools` for URL parsing and HTTP utilities
+- **Web Server** - `serveit` high-performance ASGI server
+- **Templates** - `templa` Jinja2-like template engine
+- **ORM** - `orm` database abstraction layer
 - **WebSockets** - `websockets` for real-time communication
 - **Async/Await** - `asyncio` with full coroutine support
 - **Process Management** - `subprocess` and `multiprocessing` modules
@@ -30,7 +39,7 @@ All modules available by default - no feature flags needed!
 
 ### Advanced Features
 - **Hybrid typing** - Optional static types with dynamic fallback
-- **FFI support** - Call C libraries directly
+- **FFI support** - Call C libraries and Win32 APIs directly
 - **Type inference** - Smart type detection for optimizations
 - **REPL** - Interactive shell for exploration
 - **Cross-platform** - Linux, macOS, and Windows support
@@ -163,7 +172,45 @@ def fibonacci(n: int) -> int:
     return fibonacci(n - 1) + fibonacci(n - 2)
 
 # Compile and run at native speed
-# Up to 100x faster than interpreted Python!
+# Up to 200x faster than interpreted Python!
+```
+
+### System Programming
+
+```python
+# Manual memory management
+buffer = allocate(4096)
+memset(buffer, 0, 4096)
+ptr_write(buffer, "int32", 42)
+value = ptr_read(buffer, "int32")
+free(buffer)
+
+# Atomic operations
+atomic_store(counter_addr, 0)
+old = atomic_add(counter_addr, 1)
+```
+
+### Bare-Metal Development
+
+```python
+# Write OS kernels in Tauraro!
+def kernel_main():
+    # VGA text output
+    mmio_write8(0xB8000, ord('H'))
+    mmio_write8(0xB8001, 0x0F)
+    
+    # Interrupt control
+    disable_interrupts()
+    # ... setup IDT ...
+    enable_interrupts()
+    
+    while True:
+        halt()
+```
+
+Compile for bare-metal:
+```bash
+tauraro compile kernel.tr --freestanding --entry-point kernel_main --target-arch x86_64
 ```
 
 ## Performance
@@ -174,29 +221,15 @@ def fibonacci(n: int) -> int:
 |------|-------|----------|
 | Interpreted (VM) | 1x | Development, REPL |
 | Compiled (no types) | 10-50x | General scripts |
-| Compiled (with types) | 50-100x | Performance-critical code |
+| Compiled (with types) | 50-200x | Performance-critical code |
 
 ### Example: Fibonacci(35)
 
-```bash
-# Python 3
-time python3 fib.py
-# ~5.2 seconds
-
-# Tauraro VM
-time tauraro run fib.py
-# ~4.8 seconds
-
-# Tauraro Compiled (no types)
-tauraro compile fib.py -o fib
-time ./fib
-# ~0.4 seconds (13x faster)
-
-# Tauraro Compiled (with types)
-tauraro compile fib_typed.py -o fib_typed
-time ./fib_typed
-# ~0.05 seconds (104x faster!)
-```
+| Implementation | Time | Speedup |
+|----------------|------|---------|
+| Python 3.11 | ~2.8s | 1x |
+| Tauraro VM | ~2.5s | 1.1x |
+| Tauraro Compiled | ~0.014s | **200x** |
 
 ## Documentation
 
@@ -206,24 +239,35 @@ Full documentation is available in the [docs](docs/README.md) directory:
 - [Language Reference](docs/language/syntax.md)
 - [Standard Library](docs/stdlib/modules.md)
 - [Compilation Guide](docs/compilation/c-backend.md)
-- [Advanced Topics](docs/advanced/performance.md)
+- [System Programming](docs/builtins/system-programming.md)
+- [Bare-Metal Development](docs/advanced/baremetal.md)
+- [FFI Guide](docs/advanced/ffi.md)
+- [Performance Tuning](docs/advanced/performance.md)
 
 ## Recent Updates
 
-### New Built-in Modules
-All HTTP and async modules are now included by default:
-- `subprocess` - Process execution and management
-- `multiprocessing` - Process-based parallelism
-- `httpx` - Modern HTTP client (built on Rust)
-- `httptools` - Fast HTTP parsing and URL utilities
-- `websockets` - WebSocket support
-- `asyncio` - Full async/await with tokio runtime
+### Bare-Metal & System Programming
+- **OS Development** - Write kernels, bootloaders, drivers
+- **Hardware Access** - Port I/O, MMIO, interrupts, CPU registers
+- **Freestanding Mode** - Compile without C stdlib
+- **Custom Entry Points** - `--entry-point kernel_main`
+- **Target Architectures** - x86, x86_64, ARM, AArch64, RISC-V
 
-### C Code Generation Improvements
-- Enhanced type inference for mixed-type variables
-- Better variable declaration with correct C types
-- Improved handling of polymorphic values
-- More reliable native compilation
+### Memory & Low-Level Primitives
+- **Manual Memory** - `allocate()`, `free()`, arenas
+- **Pointer Operations** - `ptr_read()`, `ptr_write()`, `ptr_offset()`
+- **Atomic Operations** - `atomic_load()`, `atomic_cas()`, etc.
+- **Memory Operations** - `memcpy()`, `memset()`, `volatile_read/write()`
+
+### Web Development Stack
+- **ServEit** - High-performance ASGI server (like uvicorn)
+- **Templa** - Jinja2-like template engine
+- **ORM** - SQLite database abstraction
+
+### FFI Improvements
+- Win32 API support verified working
+- Native C function pointer generation
+- Cross-platform library loading
 
 ## Architecture
 
@@ -280,22 +324,14 @@ tauraro/
 │   ├── ast.rs             # AST definitions
 │   ├── ir.rs              # Intermediate representation
 │   ├── value.rs           # Runtime value types
+│   ├── builtins.rs        # Built-in functions
 │   ├── vm/                # VM interpreter
 │   ├── bytecode/          # Bytecode compiler
 │   ├── codegen/           # Code generation
-│   │   ├── c_transpiler/  # C backend
-│   │   └── interpreter.rs # Direct interpreter
-│   ├── modules/           # Standard library
-│   │   ├── subprocess.rs
-│   │   ├── multiprocessing.rs
-│   │   ├── httpx.rs
-│   │   ├── httptools.rs
-│   │   ├── websockets.rs
-│   │   └── ...
-│   └── main.rs            # CLI entry point
+│   │   └── c_transpiler/  # C backend
+│   └── modules/           # Standard library
 ├── docs/                  # Documentation
-├── examples/              # Example programs
-└── tests/                 # Test suite
+└── examples/              # Example programs
 ```
 
 ## Roadmap
@@ -303,21 +339,20 @@ tauraro/
 ### Current Status
 - ✅ Python syntax compatibility
 - ✅ VM interpreter
-- ✅ C code generation
+- ✅ C code generation & native compilation
 - ✅ Type inference and optimization
-- ✅ HTTP/async modules
+- ✅ HTTP/async/web modules
 - ✅ Standard library modules
-- ✅ FFI support
+- ✅ FFI support (including Win32)
+- ✅ Memory management (manual, arena, automatic)
+- ✅ System programming primitives
+- ✅ Bare-metal/OS development support
 
 ### Planned Features
 - 🔄 LLVM backend for additional optimizations
-- 🔄 JIT compilation with Cranelift
 - 🔄 WebAssembly target
-- 🔄 Parallel compilation
 - 🔄 Package manager
 - 🔄 IDE integration (LSP)
-- 🔄 True process-based multiprocessing
-- 🔄 Advanced optimizer passes
 
 ## Contributing
 
