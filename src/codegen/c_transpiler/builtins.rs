@@ -36,6 +36,11 @@ pub fn is_builtin_function(func_name: &str) -> bool {
         // System programming builtins
         | "sizeof" | "alignof" | "memcpy" | "memset" | "memmove" | "memcmp"
         | "ptr_read" | "ptr_write" | "ptr_offset" | "null_ptr" | "is_null"
+        // Advanced system programming builtins
+        | "stack_alloc" | "volatile_read" | "volatile_write"
+        | "atomic_load" | "atomic_store" | "atomic_add" | "atomic_sub" | "atomic_cas"
+        | "memory_barrier" | "prefetch" | "cache_line_size"
+        | "bit_cast" | "zero_memory" | "copy_memory" | "compare_memory"
     )
 }
 

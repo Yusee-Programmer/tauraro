@@ -2278,6 +2278,123 @@ impl CTranspiler {
                             }
                         }
                     }
+                    // Advanced system programming functions
+                    "stack_alloc" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_stack_alloc(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "volatile_read" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_volatile_read(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "volatile_write" => {
+                        if let Some(res) = result {
+                            if args.len() == 2 {
+                                output.push_str(&format!("{}{} = tauraro_volatile_write(2, (TauValue*[]){{&{}, &{}}});\n", ind, res, args[0], args[1]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "atomic_load" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_atomic_load(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "atomic_store" => {
+                        if let Some(res) = result {
+                            if args.len() == 2 {
+                                output.push_str(&format!("{}{} = tauraro_atomic_store(2, (TauValue*[]){{&{}, &{}}});\n", ind, res, args[0], args[1]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "atomic_add" => {
+                        if let Some(res) = result {
+                            if args.len() == 2 {
+                                output.push_str(&format!("{}{} = tauraro_atomic_add(2, (TauValue*[]){{&{}, &{}}});\n", ind, res, args[0], args[1]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "atomic_sub" => {
+                        if let Some(res) = result {
+                            if args.len() == 2 {
+                                output.push_str(&format!("{}{} = tauraro_atomic_sub(2, (TauValue*[]){{&{}, &{}}});\n", ind, res, args[0], args[1]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "atomic_cas" => {
+                        if let Some(res) = result {
+                            if args.len() == 3 {
+                                output.push_str(&format!("{}{} = tauraro_atomic_cas(3, (TauValue*[]){{&{}, &{}, &{}}});\n", ind, res, args[0], args[1], args[2]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "memory_barrier" => {
+                        if let Some(res) = result {
+                            output.push_str(&format!("{}{} = tauraro_memory_barrier(0, NULL);\n", ind, res));
+                            self.var_types.insert(res.clone(), NativeType::Generic);
+                        }
+                    }
+                    "prefetch" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_prefetch(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "cache_line_size" => {
+                        if let Some(res) = result {
+                            output.push_str(&format!("{}{} = tauraro_cache_line_size(0, NULL);\n", ind, res));
+                            self.var_types.insert(res.clone(), NativeType::Generic);
+                        }
+                    }
+                    "bit_cast" => {
+                        if let Some(res) = result {
+                            if args.len() == 2 {
+                                output.push_str(&format!("{}{} = tauraro_bit_cast(2, (TauValue*[]){{&{}, &{}}});\n", ind, res, args[0], args[1]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "zero_memory" => {
+                        if let Some(res) = result {
+                            if args.len() == 2 {
+                                output.push_str(&format!("{}{} = tauraro_zero_memory(2, (TauValue*[]){{&{}, &{}}});\n", ind, res, args[0], args[1]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "copy_memory" => {
+                        if let Some(res) = result {
+                            if args.len() == 3 {
+                                output.push_str(&format!("{}{} = tauraro_copy_memory(3, (TauValue*[]){{&{}, &{}, &{}}});\n", ind, res, args[0], args[1], args[2]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "compare_memory" => {
+                        if let Some(res) = result {
+                            if args.len() == 3 {
+                                output.push_str(&format!("{}{} = tauraro_compare_memory(3, (TauValue*[]){{&{}, &{}, &{}}});\n", ind, res, args[0], args[1], args[2]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
                     _ => {
                         // Check for polymorphic base class method calls (Shape__area, Shape__get_name, etc)
                         // Only dispatch for methods that are known to be overridden
@@ -6098,6 +6215,210 @@ impl CTranspiler {
         output.push_str("TauValue tauraro_is_null(int argc, TauValue** args) {\n");
         output.push_str("    if (argc != 1) return tauraro_bool(1);\n");
         output.push_str("    return tauraro_bool(args[0]->value.i == 0);\n");
+        output.push_str("}\n\n");
+
+        // Advanced system programming functions
+        output.push_str("// Advanced System Programming Functions\n\n");
+
+        // stack_alloc - allocate memory on stack (simulated with alloca on platforms that support it)
+        output.push_str("TauValue tauraro_stack_alloc(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1) return tauraro_int(0);\n");
+        output.push_str("    size_t size = (size_t)args[0]->value.i;\n");
+        output.push_str("#if defined(_MSC_VER)\n");
+        output.push_str("    void* ptr = _alloca(size);\n");
+        output.push_str("#elif defined(__GNUC__) || defined(__clang__)\n");
+        output.push_str("    void* ptr = __builtin_alloca(size);\n");
+        output.push_str("#else\n");
+        output.push_str("    void* ptr = malloc(size); // Fallback to heap\n");
+        output.push_str("#endif\n");
+        output.push_str("    return tauraro_int((int64_t)(intptr_t)ptr);\n");
+        output.push_str("}\n\n");
+
+        // volatile_read - read from volatile memory location
+        output.push_str("TauValue tauraro_volatile_read(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1) return tauraro_int(0);\n");
+        output.push_str("    volatile int64_t* ptr = (volatile int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_int(0);\n");
+        output.push_str("    return tauraro_int(*ptr);\n");
+        output.push_str("}\n\n");
+
+        // volatile_write - write to volatile memory location
+        output.push_str("TauValue tauraro_volatile_write(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 2) return (TauValue){.type = 5};\n");
+        output.push_str("    volatile int64_t* ptr = (volatile int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr != NULL) *ptr = args[1]->value.i;\n");
+        output.push_str("    return (TauValue){.type = 5};\n");
+        output.push_str("}\n\n");
+
+        // atomic_load - atomically load a value
+        output.push_str("TauValue tauraro_atomic_load(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1) return tauraro_int(0);\n");
+        output.push_str("#if defined(__GNUC__) || defined(__clang__)\n");
+        output.push_str("    int64_t* ptr = (int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_int(0);\n");
+        output.push_str("    return tauraro_int(__atomic_load_n(ptr, __ATOMIC_SEQ_CST));\n");
+        output.push_str("#elif defined(_MSC_VER)\n");
+        output.push_str("    volatile int64_t* ptr = (volatile int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_int(0);\n");
+        output.push_str("    return tauraro_int(_InterlockedCompareExchange64(ptr, 0, 0));\n");
+        output.push_str("#else\n");
+        output.push_str("    int64_t* ptr = (int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_int(0);\n");
+        output.push_str("    return tauraro_int(*ptr);\n");
+        output.push_str("#endif\n");
+        output.push_str("}\n\n");
+
+        // atomic_store - atomically store a value
+        output.push_str("TauValue tauraro_atomic_store(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 2) return (TauValue){.type = 5};\n");
+        output.push_str("#if defined(__GNUC__) || defined(__clang__)\n");
+        output.push_str("    int64_t* ptr = (int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr != NULL) __atomic_store_n(ptr, args[1]->value.i, __ATOMIC_SEQ_CST);\n");
+        output.push_str("#elif defined(_MSC_VER)\n");
+        output.push_str("    volatile int64_t* ptr = (volatile int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr != NULL) _InterlockedExchange64(ptr, args[1]->value.i);\n");
+        output.push_str("#else\n");
+        output.push_str("    int64_t* ptr = (int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr != NULL) *ptr = args[1]->value.i;\n");
+        output.push_str("#endif\n");
+        output.push_str("    return (TauValue){.type = 5};\n");
+        output.push_str("}\n\n");
+
+        // atomic_add - atomically add to a value
+        output.push_str("TauValue tauraro_atomic_add(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 2) return tauraro_int(0);\n");
+        output.push_str("#if defined(__GNUC__) || defined(__clang__)\n");
+        output.push_str("    int64_t* ptr = (int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_int(0);\n");
+        output.push_str("    return tauraro_int(__atomic_fetch_add(ptr, args[1]->value.i, __ATOMIC_SEQ_CST));\n");
+        output.push_str("#elif defined(_MSC_VER)\n");
+        output.push_str("    volatile int64_t* ptr = (volatile int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_int(0);\n");
+        output.push_str("    return tauraro_int(_InterlockedExchangeAdd64(ptr, args[1]->value.i));\n");
+        output.push_str("#else\n");
+        output.push_str("    int64_t* ptr = (int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_int(0);\n");
+        output.push_str("    int64_t old = *ptr; *ptr += args[1]->value.i; return tauraro_int(old);\n");
+        output.push_str("#endif\n");
+        output.push_str("}\n\n");
+
+        // atomic_sub - atomically subtract from a value
+        output.push_str("TauValue tauraro_atomic_sub(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 2) return tauraro_int(0);\n");
+        output.push_str("#if defined(__GNUC__) || defined(__clang__)\n");
+        output.push_str("    int64_t* ptr = (int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_int(0);\n");
+        output.push_str("    return tauraro_int(__atomic_fetch_sub(ptr, args[1]->value.i, __ATOMIC_SEQ_CST));\n");
+        output.push_str("#elif defined(_MSC_VER)\n");
+        output.push_str("    volatile int64_t* ptr = (volatile int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_int(0);\n");
+        output.push_str("    return tauraro_int(_InterlockedExchangeAdd64(ptr, -args[1]->value.i));\n");
+        output.push_str("#else\n");
+        output.push_str("    int64_t* ptr = (int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_int(0);\n");
+        output.push_str("    int64_t old = *ptr; *ptr -= args[1]->value.i; return tauraro_int(old);\n");
+        output.push_str("#endif\n");
+        output.push_str("}\n\n");
+
+        // atomic_cas - atomic compare and swap
+        output.push_str("TauValue tauraro_atomic_cas(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 3) return tauraro_bool(0);\n");
+        output.push_str("#if defined(__GNUC__) || defined(__clang__)\n");
+        output.push_str("    int64_t* ptr = (int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_bool(0);\n");
+        output.push_str("    int64_t expected = args[1]->value.i;\n");
+        output.push_str("    return tauraro_bool(__atomic_compare_exchange_n(ptr, &expected, args[2]->value.i, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));\n");
+        output.push_str("#elif defined(_MSC_VER)\n");
+        output.push_str("    volatile int64_t* ptr = (volatile int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_bool(0);\n");
+        output.push_str("    int64_t result = _InterlockedCompareExchange64(ptr, args[2]->value.i, args[1]->value.i);\n");
+        output.push_str("    return tauraro_bool(result == args[1]->value.i);\n");
+        output.push_str("#else\n");
+        output.push_str("    int64_t* ptr = (int64_t*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    if (ptr == NULL) return tauraro_bool(0);\n");
+        output.push_str("    if (*ptr == args[1]->value.i) { *ptr = args[2]->value.i; return tauraro_bool(1); }\n");
+        output.push_str("    return tauraro_bool(0);\n");
+        output.push_str("#endif\n");
+        output.push_str("}\n\n");
+
+        // memory_barrier - insert a memory barrier
+        output.push_str("TauValue tauraro_memory_barrier(int argc, TauValue** args) {\n");
+        output.push_str("    (void)argc; (void)args;\n");
+        output.push_str("#if defined(__GNUC__) || defined(__clang__)\n");
+        output.push_str("    __atomic_thread_fence(__ATOMIC_SEQ_CST);\n");
+        output.push_str("#elif defined(_MSC_VER)\n");
+        output.push_str("    _ReadWriteBarrier(); MemoryBarrier();\n");
+        output.push_str("#endif\n");
+        output.push_str("    return (TauValue){.type = 5};\n");
+        output.push_str("}\n\n");
+
+        // prefetch - prefetch memory into cache
+        output.push_str("TauValue tauraro_prefetch(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1) return (TauValue){.type = 5};\n");
+        output.push_str("    void* ptr = (void*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("#if defined(__GNUC__) || defined(__clang__)\n");
+        output.push_str("    __builtin_prefetch(ptr, 0, 3); // Read, high temporal locality\n");
+        output.push_str("#elif defined(_MSC_VER)\n");
+        output.push_str("    _mm_prefetch((char*)ptr, _MM_HINT_T0);\n");
+        output.push_str("#endif\n");
+        output.push_str("    return (TauValue){.type = 5};\n");
+        output.push_str("}\n\n");
+
+        // cache_line_size - get cache line size
+        output.push_str("TauValue tauraro_cache_line_size(int argc, TauValue** args) {\n");
+        output.push_str("    (void)argc; (void)args;\n");
+        output.push_str("    return tauraro_int(64); // Most modern CPUs use 64-byte cache lines\n");
+        output.push_str("}\n\n");
+
+        // bit_cast - reinterpret bits between int and float
+        output.push_str("TauValue tauraro_bit_cast(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 2) return tauraro_int(0);\n");
+        output.push_str("    const char* target = args[1]->value.s;\n");
+        output.push_str("    if (strcmp(target, \"int\") == 0) {\n");
+        output.push_str("        if (args[0]->type == 1) { // Float\n");
+        output.push_str("            union { double d; int64_t i; } u;\n");
+        output.push_str("            u.d = args[0]->value.f;\n");
+        output.push_str("            return tauraro_int(u.i);\n");
+        output.push_str("        }\n");
+        output.push_str("        return tauraro_int(args[0]->value.i);\n");
+        output.push_str("    } else if (strcmp(target, \"float\") == 0) {\n");
+        output.push_str("        if (args[0]->type == 0) { // Int\n");
+        output.push_str("            union { double d; int64_t i; } u;\n");
+        output.push_str("            u.i = args[0]->value.i;\n");
+        output.push_str("            return tauraro_float(u.d);\n");
+        output.push_str("        }\n");
+        output.push_str("        return tauraro_float(args[0]->value.f);\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_int(0);\n");
+        output.push_str("}\n\n");
+
+        // zero_memory - zero out a memory region
+        output.push_str("TauValue tauraro_zero_memory(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 2) return (TauValue){.type = 5};\n");
+        output.push_str("    void* ptr = (void*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    size_t size = (size_t)args[1]->value.i;\n");
+        output.push_str("    if (ptr != NULL && size > 0) memset(ptr, 0, size);\n");
+        output.push_str("    return (TauValue){.type = 5};\n");
+        output.push_str("}\n\n");
+
+        // copy_memory - copy memory from src to dest
+        output.push_str("TauValue tauraro_copy_memory(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 3) return (TauValue){.type = 5};\n");
+        output.push_str("    void* dest = (void*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    void* src = (void*)(intptr_t)args[1]->value.i;\n");
+        output.push_str("    size_t size = (size_t)args[2]->value.i;\n");
+        output.push_str("    if (dest != NULL && src != NULL && size > 0) memcpy(dest, src, size);\n");
+        output.push_str("    return (TauValue){.type = 5};\n");
+        output.push_str("}\n\n");
+
+        // compare_memory - compare two memory regions
+        output.push_str("TauValue tauraro_compare_memory(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 3) return tauraro_int(0);\n");
+        output.push_str("    void* ptr1 = (void*)(intptr_t)args[0]->value.i;\n");
+        output.push_str("    void* ptr2 = (void*)(intptr_t)args[1]->value.i;\n");
+        output.push_str("    size_t size = (size_t)args[2]->value.i;\n");
+        output.push_str("    if (ptr1 == NULL || ptr2 == NULL || size == 0) return tauraro_int(0);\n");
+        output.push_str("    return tauraro_int(memcmp(ptr1, ptr2, size));\n");
         output.push_str("}\n\n");
 
         output
