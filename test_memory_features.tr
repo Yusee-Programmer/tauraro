@@ -1,0 +1,317 @@
+# Test all memory management and system programming features
+
+print("=" * 60)
+print("TAURARO MEMORY & SYSTEM PROGRAMMING FEATURES TEST")
+print("=" * 60)
+
+# ============================================================
+# 1. BASIC MEMORY ALLOCATION
+# ============================================================
+print("\n1. BASIC MEMORY ALLOCATION")
+print("-" * 40)
+
+# Allocate memory
+buffer = allocate(1024)
+print(f"   allocate(1024) = {buffer}")
+
+# Check if it's not null - using explicit comparison to avoid IR issue
+is_buffer_null = is_null(buffer)
+if is_buffer_null == False:
+    print("   is_null(buffer) = False (PASS)")
+else:
+    print("   is_null(buffer) = True (FAIL)")
+
+# Free the memory
+free(buffer)
+print("   free(buffer) - OK")
+
+# ============================================================
+# 2. MEMORY OPERATIONS
+# ============================================================
+print("\n2. MEMORY OPERATIONS")
+print("-" * 40)
+
+# Allocate and test memset
+buf = allocate(100)
+memset(buf, 0, 100)
+print("   memset(buf, 0, 100) - OK")
+
+# Zero memory
+zero_memory(buf, 100)
+print("   zero_memory(buf, 100) - OK")
+
+# Allocate second buffer for copy test
+buf2 = allocate(100)
+memcpy(buf2, buf, 100)
+print("   memcpy(buf2, buf, 100) - OK")
+
+# Memory compare
+result = memcmp(buf, buf2, 100)
+print(f"   memcmp(buf, buf2, 100) = {result} (expected 0)")
+
+# Memmove (safe for overlapping)
+memmove(buf, buf2, 50)
+print("   memmove(buf, buf2, 50) - OK")
+
+# Cleanup
+free(buf)
+free(buf2)
+print("   free(buf), free(buf2) - OK")
+
+# ============================================================
+# 3. POINTER OPERATIONS
+# ============================================================
+print("\n3. POINTER OPERATIONS")
+print("-" * 40)
+
+# Null pointer
+ptr = null_ptr()
+print(f"   null_ptr() = {ptr}")
+print(f"   is_null(null_ptr()) = {is_null(ptr)} (expected True)")
+
+# Allocate and write/read
+data = allocate(64)
+
+# Write integer (8 bytes default)
+ptr_write(data, 42)
+val = ptr_read(data)
+print(f"   ptr_write(data, 42)")
+print(f"   ptr_read(data) = {val} (expected 42)")
+
+# Write at offset
+offset_ptr = ptr_offset(data, 8)
+ptr_write(offset_ptr, 100)
+val2 = ptr_read(offset_ptr)
+print(f"   ptr_offset(data, 8) - OK")
+print(f"   ptr_write/read at offset = {val2} (expected 100)")
+
+# Write int32 (4 bytes)
+ptr_write(data, 999, 4)
+val3 = ptr_read(data, 4)
+print(f"   ptr_write(data, 999, 4) - 4-byte int")
+print(f"   ptr_read(data, 4) = {val3} (expected 999)")
+
+# Write int8 (1 byte)
+ptr_write(data, 127, 1)
+val4 = ptr_read(data, 1)
+print(f"   ptr_write/read 1-byte = {val4} (expected 127)")
+
+# Write int16 (2 bytes)
+ptr_write(data, 12345, 2)
+val5 = ptr_read(data, 2)
+print(f"   ptr_write/read 2-byte = {val5} (expected 12345)")
+
+free(data)
+print("   free(data) - OK")
+
+# ============================================================
+# 4. SIZE AND ALIGNMENT
+# ============================================================
+print("\n4. SIZE AND ALIGNMENT")
+print("-" * 40)
+
+print(f"   sizeof('int') = {sizeof('int')} bytes")
+print(f"   sizeof('float') = {sizeof('float')} bytes")
+print(f"   sizeof('int8') = {sizeof('int8')} bytes")
+print(f"   sizeof('int16') = {sizeof('int16')} bytes")
+print(f"   sizeof('int32') = {sizeof('int32')} bytes")
+print(f"   sizeof('int64') = {sizeof('int64')} bytes")
+print(f"   sizeof('pointer') = {sizeof('pointer')} bytes")
+
+print(f"   alignof('int') = {alignof('int')} bytes")
+print(f"   alignof('pointer') = {alignof('pointer')} bytes")
+
+# ============================================================
+# 5. ARENA MEMORY
+# ============================================================
+print("\n5. ARENA MEMORY")
+print("-" * 40)
+
+# Create arena
+create_arena("test_arena")
+print("   create_arena('test_arena') - OK")
+
+# Reset arena
+reset_arena("test_arena")
+print("   reset_arena('test_arena') - OK")
+
+# Destroy arena
+destroy_arena("test_arena")
+print("   destroy_arena('test_arena') - OK")
+
+# ============================================================
+# 6. MEMORY STATISTICS
+# ============================================================
+print("\n6. MEMORY STATISTICS")
+print("-" * 40)
+
+stats = memory_stats()
+print(f"   memory_stats() = {stats}")
+
+# ============================================================
+# 7. ATOMIC OPERATIONS
+# ============================================================
+print("\n7. ATOMIC OPERATIONS")
+print("-" * 40)
+
+# Allocate memory for atomic variable
+atomic_var = allocate(8)
+zero_memory(atomic_var, 8)
+
+# Atomic store
+atomic_store(atomic_var, 10)
+print("   atomic_store(atomic_var, 10) - OK")
+
+# Atomic load
+loaded = atomic_load(atomic_var)
+print(f"   atomic_load(atomic_var) = {loaded} (expected 10)")
+
+# Atomic add
+old = atomic_add(atomic_var, 5)
+print(f"   atomic_add(atomic_var, 5) = {old} (old value, expected 10)")
+
+new_val = atomic_load(atomic_var)
+print(f"   atomic_load after add = {new_val} (expected 15)")
+
+# Atomic sub
+old2 = atomic_sub(atomic_var, 3)
+print(f"   atomic_sub(atomic_var, 3) = {old2} (old value, expected 15)")
+
+new_val2 = atomic_load(atomic_var)
+print(f"   atomic_load after sub = {new_val2} (expected 12)")
+
+# Atomic CAS (compare-and-swap)
+success = atomic_cas(atomic_var, 12, 100)
+print(f"   atomic_cas(atomic_var, 12, 100) = {success} (expected True)")
+
+final = atomic_load(atomic_var)
+print(f"   atomic_load after CAS = {final} (expected 100)")
+
+# CAS that should fail
+success2 = atomic_cas(atomic_var, 50, 200)
+print(f"   atomic_cas(atomic_var, 50, 200) = {success2} (expected False)")
+
+free(atomic_var)
+print("   free(atomic_var) - OK")
+
+# ============================================================
+# 8. VOLATILE OPERATIONS
+# ============================================================
+print("\n8. VOLATILE OPERATIONS")
+print("-" * 40)
+
+vol_buf = allocate(16)
+
+# Volatile write
+volatile_write(vol_buf, 999)
+print("   volatile_write(vol_buf, 999) - OK")
+
+# Volatile read
+vol_val = volatile_read(vol_buf)
+print(f"   volatile_read(vol_buf) = {vol_val} (expected 999)")
+
+free(vol_buf)
+print("   free(vol_buf) - OK")
+
+# ============================================================
+# 9. MEMORY BARRIER
+# ============================================================
+print("\n9. MEMORY BARRIER")
+print("-" * 40)
+
+memory_barrier()
+print("   memory_barrier() - OK")
+
+# ============================================================
+# 10. CACHE OPERATIONS
+# ============================================================
+print("\n10. CACHE OPERATIONS")
+print("-" * 40)
+
+cache_buf = allocate(128)
+prefetch(cache_buf)
+print("   prefetch(cache_buf) - OK")
+
+line_size = cache_line_size()
+print(f"   cache_line_size() = {line_size} bytes")
+
+free(cache_buf)
+
+# ============================================================
+# 11. STACK ALLOCATION
+# ============================================================
+print("\n11. STACK ALLOCATION")
+print("-" * 40)
+
+stack_buf = stack_alloc(256)
+print(f"   stack_alloc(256) = {stack_buf}")
+# Note: stack allocations are automatically freed
+
+# ============================================================
+# 12. BIT CAST
+# ============================================================
+print("\n12. BIT CAST")
+print("-" * 40)
+
+# Cast float bits to int
+float_val = 3.14
+int_bits = bit_cast(float_val, "int")
+print(f"   bit_cast(3.14, 'int') = {int_bits}")
+
+# Cast back
+float_back = bit_cast(int_bits, "float")
+print(f"   bit_cast back to float = {float_back}")
+
+# ============================================================
+# 13. BARE-METAL BUILTINS (simulated in interpreter)
+# ============================================================
+print("\n13. BARE-METAL BUILTINS (simulated)")
+print("-" * 40)
+
+# MMIO (returns 0 in interpreter mode)
+mmio_val = mmio_read8(0x1000)
+print(f"   mmio_read8(0x1000) = {mmio_val} (simulated)")
+
+mmio_val16 = mmio_read16(0x1000)
+print(f"   mmio_read16(0x1000) = {mmio_val16} (simulated)")
+
+mmio_val32 = mmio_read32(0x1000)
+print(f"   mmio_read32(0x1000) = {mmio_val32} (simulated)")
+
+mmio_write8(0x1000, 42)
+print("   mmio_write8(0x1000, 42) - OK (simulated)")
+
+# Port I/O (x86, returns 0 in interpreter)
+port_val = port_in(0x60)
+print(f"   port_in(0x60) = {port_val} (simulated)")
+
+port_out(0x60, 0)
+print("   port_out(0x60, 0) - OK (simulated)")
+
+# Interrupts
+disable_interrupts()
+print("   disable_interrupts() - OK (simulated)")
+
+enable_interrupts()
+print("   enable_interrupts() - OK (simulated)")
+
+# CPU registers (x86)
+cr0 = read_cr0()
+print(f"   read_cr0() = {cr0} (simulated)")
+
+cr3 = read_cr3()
+print(f"   read_cr3() = {cr3} (simulated)")
+
+msr = read_msr(0x1B)
+print(f"   read_msr(0x1B) = {msr} (simulated)")
+
+# Inline assembly
+asm("nop")
+print("   asm('nop') - OK (simulated)")
+
+# ============================================================
+# SUMMARY
+# ============================================================
+print("\n" + "=" * 60)
+print("ALL MEMORY & SYSTEM PROGRAMMING TESTS COMPLETED!")
+print("=" * 60)

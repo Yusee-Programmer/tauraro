@@ -1666,13 +1666,19 @@ impl CTranspiler {
                         output.push_str(&format!("{}// Runtime type checking for + operation\n", ind));
                         output.push_str(&format!("{}if (({}.type == 2 || {}.type == 2)) {{\n", ind, resolved_left, resolved_right));
                         output.push_str(&format!("{}    char {}[512] = {{0}};\n", ind, temp_concat));
-                        // Handle left operand: if it's a string use it directly, if it's int convert it, otherwise empty
+                        // Handle left operand: if it's a string use it directly, if it's int/bool/float convert it
                         output.push_str(&format!("{}    if ({}.type == 2) {{\n", ind, resolved_left));
                         output.push_str(&format!("{}        strcpy({}, {}.value.s);\n", ind, temp_concat, resolved_left));
                         output.push_str(&format!("{}    }} else if ({}.type == 0) {{\n", ind, resolved_left));
                         output.push_str(&format!("{}        char int_buf[64];\n", ind));
                         output.push_str(&format!("{}        snprintf(int_buf, sizeof(int_buf), \"%lld\", {}.value.i);\n", ind, resolved_left));
                         output.push_str(&format!("{}        strcpy({}, int_buf);\n", ind, temp_concat));
+                        output.push_str(&format!("{}    }} else if ({}.type == 3) {{\n", ind, resolved_left));
+                        output.push_str(&format!("{}        strcpy({}, {}.value.i ? \"True\" : \"False\");\n", ind, temp_concat, resolved_left));
+                        output.push_str(&format!("{}    }} else if ({}.type == 1) {{\n", ind, resolved_left));
+                        output.push_str(&format!("{}        char float_buf[64];\n", ind));
+                        output.push_str(&format!("{}        snprintf(float_buf, sizeof(float_buf), \"%f\", {}.value.f);\n", ind, resolved_left));
+                        output.push_str(&format!("{}        strcpy({}, float_buf);\n", ind, temp_concat));
                         output.push_str(&format!("{}    }}\n", ind));
                         // Handle right operand: concatenate to existing buffer
                         output.push_str(&format!("{}    if ({}.type == 2) {{\n", ind, resolved_right));
@@ -1681,10 +1687,39 @@ impl CTranspiler {
                         output.push_str(&format!("{}        char int_buf[64];\n", ind));
                         output.push_str(&format!("{}        snprintf(int_buf, sizeof(int_buf), \"%lld\", {}.value.i);\n", ind, resolved_right));
                         output.push_str(&format!("{}        strcat({}, int_buf);\n", ind, temp_concat));
+                        output.push_str(&format!("{}    }} else if ({}.type == 3) {{\n", ind, resolved_right));
+                        output.push_str(&format!("{}        strcat({}, {}.value.i ? \"True\" : \"False\");\n", ind, temp_concat, resolved_right));
+                        output.push_str(&format!("{}    }} else if ({}.type == 1) {{\n", ind, resolved_right));
+                        output.push_str(&format!("{}        char float_buf[64];\n", ind));
+                        output.push_str(&format!("{}        snprintf(float_buf, sizeof(float_buf), \"%f\", {}.value.f);\n", ind, resolved_right));
+                        output.push_str(&format!("{}        strcat({}, float_buf);\n", ind, temp_concat));
                         output.push_str(&format!("{}    }}\n", ind));
                         output.push_str(&format!("{}{} = (TauValue){{.type = 2, .value.s = strdup({}), .refcount = 1}};\n", ind, resolved_result, temp_concat));
                         output.push_str(&format!("{}}} else {{\n", ind));
                         output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {}.value.i + {}.value.i}};\n", ind, resolved_result, resolved_left, resolved_right));
+                        output.push_str(&format!("{}}}\n", ind));
+                    } else if matches!(op, BinaryOp::Mul) && matches!(left_type, NativeType::Generic) && matches!(right_type, NativeType::Generic) {
+                        // Special case: String * Int for string repetition
+                        self.temp_var_counter += 1;
+                        let temp_repeat = format!("temp_repeat_rt_{}", self.temp_var_counter);
+                        output.push_str(&format!("{}// Runtime type checking for * operation (string repeat)\n", ind));
+                        output.push_str(&format!("{}if (({}.type == 2 && {}.type == 0) || ({}.type == 0 && {}.type == 2)) {{\n", 
+                            ind, resolved_left, resolved_right, resolved_left, resolved_right));
+                        output.push_str(&format!("{}    const char* _str = ({}.type == 2) ? {}.value.s : {}.value.s;\n", 
+                            ind, resolved_left, resolved_left, resolved_right));
+                        output.push_str(&format!("{}    long long _count = ({}.type == 0) ? {}.value.i : {}.value.i;\n", 
+                            ind, resolved_left, resolved_left, resolved_right));
+                        output.push_str(&format!("{}    if (_count <= 0 || !_str) {{\n", ind));
+                        output.push_str(&format!("{}        {} = (TauValue){{.type = 2, .value.s = strdup(\"\"), .refcount = 1}};\n", ind, resolved_result));
+                        output.push_str(&format!("{}    }} else {{\n", ind));
+                        output.push_str(&format!("{}        size_t _len = strlen(_str);\n", ind));
+                        output.push_str(&format!("{}        char* {} = malloc(_len * _count + 1);\n", ind, temp_repeat));
+                        output.push_str(&format!("{}        {}[0] = '\\0';\n", ind, temp_repeat));
+                        output.push_str(&format!("{}        for (long long _i = 0; _i < _count; _i++) strcat({}, _str);\n", ind, temp_repeat));
+                        output.push_str(&format!("{}        {} = (TauValue){{.type = 2, .value.s = {}, .refcount = 1}};\n", ind, resolved_result, temp_repeat));
+                        output.push_str(&format!("{}    }}\n", ind));
+                        output.push_str(&format!("{}}} else {{\n", ind));
+                        output.push_str(&format!("{}{} = (TauValue){{.type = 0, .value.i = {}.value.i * {}.value.i}};\n", ind, resolved_result, resolved_left, resolved_right));
                         output.push_str(&format!("{}}}\n", ind));
                     } else {
                         match result_type {
@@ -6576,17 +6611,37 @@ impl CTranspiler {
         // ===== SYSTEM PROGRAMMING FUNCTIONS =====
         output.push_str("TauValue tauraro_sizeof(int argc, TauValue** args) {\n");
         output.push_str("    if (argc != 1) return tauraro_int(0);\n");
+        output.push_str("    // Parse string type names\n");
+        output.push_str("    if ((*args)->type == 2 && (*args)->value.s) {\n");
+        output.push_str("        const char* t = (*args)->value.s;\n");
+        output.push_str("        if (strcmp(t, \"int\") == 0 || strcmp(t, \"int32\") == 0) return tauraro_int(4);\n");
+        output.push_str("        if (strcmp(t, \"int8\") == 0 || strcmp(t, \"char\") == 0 || strcmp(t, \"byte\") == 0) return tauraro_int(1);\n");
+        output.push_str("        if (strcmp(t, \"int16\") == 0 || strcmp(t, \"short\") == 0) return tauraro_int(2);\n");
+        output.push_str("        if (strcmp(t, \"int64\") == 0 || strcmp(t, \"long\") == 0) return tauraro_int(8);\n");
+        output.push_str("        if (strcmp(t, \"float\") == 0 || strcmp(t, \"float32\") == 0) return tauraro_int(4);\n");
+        output.push_str("        if (strcmp(t, \"float64\") == 0 || strcmp(t, \"double\") == 0) return tauraro_int(8);\n");
+        output.push_str("        if (strcmp(t, \"pointer\") == 0 || strcmp(t, \"ptr\") == 0) return tauraro_int(sizeof(void*));\n");
+        output.push_str("        if (strcmp(t, \"bool\") == 0) return tauraro_int(1);\n");
+        output.push_str("        return tauraro_int(sizeof(void*));\n");
+        output.push_str("    }\n");
         output.push_str("    switch ((*args)->type) {\n");
         output.push_str("        case 0: return tauraro_int(sizeof(long long));\n");
         output.push_str("        case 1: return tauraro_int(sizeof(double));\n");
         output.push_str("        case 3: return tauraro_int(sizeof(int));\n");
-        output.push_str("        case 2: return tauraro_int((*args)->value.s ? strlen((*args)->value.s) + 1 : 0);\n");
         output.push_str("        default: return tauraro_int(sizeof(TauValue));\n");
         output.push_str("    }\n");
         output.push_str("}\n\n");
 
         output.push_str("TauValue tauraro_alignof(int argc, TauValue** args) {\n");
         output.push_str("    if (argc != 1) return tauraro_int(0);\n");
+        output.push_str("    // Parse string type names\n");
+        output.push_str("    if ((*args)->type == 2 && (*args)->value.s) {\n");
+        output.push_str("        const char* t = (*args)->value.s;\n");
+        output.push_str("        if (strcmp(t, \"int8\") == 0 || strcmp(t, \"char\") == 0 || strcmp(t, \"byte\") == 0 || strcmp(t, \"bool\") == 0) return tauraro_int(1);\n");
+        output.push_str("        if (strcmp(t, \"int16\") == 0 || strcmp(t, \"short\") == 0) return tauraro_int(2);\n");
+        output.push_str("        if (strcmp(t, \"int\") == 0 || strcmp(t, \"int32\") == 0 || strcmp(t, \"float\") == 0 || strcmp(t, \"float32\") == 0) return tauraro_int(4);\n");
+        output.push_str("        return tauraro_int(8);\n");
+        output.push_str("    }\n");
         output.push_str("    switch ((*args)->type) {\n");
         output.push_str("        case 0: return tauraro_int(_Alignof(long long));\n");
         output.push_str("        case 1: return tauraro_int(_Alignof(double));\n");

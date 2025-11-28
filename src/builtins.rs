@@ -2393,12 +2393,22 @@ fn memory_allocate_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         _ => return Err(anyhow!("allocate() size must be an integer")),
     };
 
+    // Allocate actual memory and return pointer as integer
+    let layout = std::alloc::Layout::from_size_align(size, 8)
+        .map_err(|_| anyhow!("Invalid allocation size"))?;
+    
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        return Err(anyhow!("Memory allocation failed"));
+    }
+    
+    // Store the allocation info for later freeing
     MEMORY_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        let (id, _buffer) = ctx.allocate(size);
-        // Return a ByteArray containing the buffer ID
-        Ok(Value::ByteArray(vec![id as u8]))
-    })
+        ctx.track_allocation(ptr as usize, size);
+    });
+    
+    Ok(Value::Int(ptr as i64))
 }
 
 /// Free a manually allocated buffer
@@ -2408,14 +2418,35 @@ fn memory_free_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         return Err(anyhow!("free() takes exactly 1 argument (buffer)"));
     }
 
-    let buffer_id = match &args[0] {
-        Value::ByteArray(bytes) if !bytes.is_empty() => bytes[0] as usize,
-        _ => return Err(anyhow!("free() requires a buffer allocated with allocate()")),
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        // Also support old ByteArray format for backwards compatibility
+        Value::ByteArray(bytes) if !bytes.is_empty() => {
+            // Old format - buffer ID based
+            let buffer_id = bytes[0] as usize;
+            return MEMORY_CONTEXT.with(|ctx| {
+                let mut ctx = ctx.borrow_mut();
+                ctx.free(buffer_id)?;
+                Ok(Value::None)
+            });
+        }
+        _ => return Err(anyhow!("free() requires a pointer (integer) or buffer")),
     };
+
+    if ptr == 0 {
+        return Ok(Value::None); // free(null) is a no-op
+    }
 
     MEMORY_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        ctx.free(buffer_id)?;
+        if let Some(size) = ctx.get_allocation_size(ptr) {
+            let layout = std::alloc::Layout::from_size_align(size, 8)
+                .map_err(|_| anyhow!("Invalid allocation layout"))?;
+            unsafe {
+                std::alloc::dealloc(ptr as *mut u8, layout);
+            }
+            ctx.untrack_allocation(ptr);
+        }
         Ok(Value::None)
     })
 }
@@ -2496,18 +2527,32 @@ fn memory_stats_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
 // System Programming Builtins
 // ============================================================================
 
-/// Get the size of a value in bytes
-/// Usage: size = sizeof(value)
+/// Get the size of a value or type in bytes
+/// Usage: size = sizeof(value) or sizeof("type_name")
+/// Type names: "int", "int8", "int16", "int32", "int64", "float", "float32", "float64", "bool", "pointer"
 fn sizeof_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow!("sizeof() takes exactly 1 argument"));
     }
 
     let size = match &args[0] {
+        Value::Str(s) => {
+            // Type name lookup
+            match s.as_str() {
+                "int" | "int32" | "i32" => 4,
+                "int8" | "i8" | "byte" | "char" => 1,
+                "int16" | "i16" | "short" => 2,
+                "int64" | "i64" | "long" => 8,
+                "float" | "float32" | "f32" => 4,
+                "float64" | "f64" | "double" => 8,
+                "bool" => 1,
+                "pointer" | "ptr" | "usize" | "isize" => std::mem::size_of::<usize>(),
+                _ => s.len() + 1, // Treat as string literal, include null terminator
+            }
+        }
         Value::Int(_) => std::mem::size_of::<i64>(),
         Value::Float(_) => std::mem::size_of::<f64>(),
         Value::Bool(_) => std::mem::size_of::<bool>(),
-        Value::Str(s) => s.len() + 1, // Including null terminator
         Value::ByteArray(b) => b.len(),
         _ => std::mem::size_of::<Value>(),
     };
@@ -2515,14 +2560,24 @@ fn sizeof_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Int(size as i64))
 }
 
-/// Get the alignment of a value type
-/// Usage: align = alignof(value)
+/// Get the alignment of a value or type
+/// Usage: align = alignof(value) or alignof("type_name")
 fn alignof_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         return Err(anyhow!("alignof() takes exactly 1 argument"));
     }
 
     let align = match &args[0] {
+        Value::Str(s) => {
+            // Type name lookup
+            match s.as_str() {
+                "int8" | "i8" | "byte" | "char" | "bool" => 1,
+                "int16" | "i16" | "short" => 2,
+                "int" | "int32" | "i32" | "float" | "float32" | "f32" => 4,
+                "int64" | "i64" | "long" | "float64" | "f64" | "double" | "pointer" | "ptr" => 8,
+                _ => std::mem::align_of::<usize>(),
+            }
+        }
         Value::Int(_) => std::mem::align_of::<i64>(),
         Value::Float(_) => std::mem::align_of::<f64>(),
         Value::Bool(_) => std::mem::align_of::<bool>(),

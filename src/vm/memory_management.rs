@@ -101,6 +101,8 @@ pub struct VMMemoryContext {
     pub current_arena: Option<String>,
     /// Buffer ID counter
     next_buffer_id: usize,
+    /// Raw pointer allocations (ptr -> size) for direct memory management
+    pub raw_allocations: HashMap<usize, usize>,
 }
 
 impl VMMemoryContext {
@@ -111,7 +113,23 @@ impl VMMemoryContext {
             arenas: HashMap::new(),
             current_arena: None,
             next_buffer_id: 1,
+            raw_allocations: HashMap::new(),
         }
+    }
+
+    /// Track a raw pointer allocation
+    pub fn track_allocation(&mut self, ptr: usize, size: usize) {
+        self.raw_allocations.insert(ptr, size);
+    }
+
+    /// Untrack a raw pointer allocation
+    pub fn untrack_allocation(&mut self, ptr: usize) {
+        self.raw_allocations.remove(&ptr);
+    }
+
+    /// Get the size of a raw allocation
+    pub fn get_allocation_size(&self, ptr: usize) -> Option<usize> {
+        self.raw_allocations.get(&ptr).copied()
     }
 
     /// Allocate a buffer
@@ -204,10 +222,13 @@ impl VMMemoryContext {
             .map(|a| a.total_allocated)
             .sum();
 
+        let raw_count = self.raw_allocations.len();
+        let raw_size: usize = self.raw_allocations.values().sum();
+
         MemoryStats {
             strategy: self.strategy,
-            manual_buffers: manual_count,
-            manual_bytes: manual_size,
+            manual_buffers: manual_count + raw_count,
+            manual_bytes: manual_size + raw_size,
             arenas: arena_count,
             arena_bytes: arena_size,
         }
@@ -216,7 +237,14 @@ impl VMMemoryContext {
 
 impl Default for VMMemoryContext {
     fn default() -> Self {
-        Self::new(VMMemoryStrategy::default())
+        Self {
+            strategy: VMMemoryStrategy::default(),
+            manual_buffers: HashMap::new(),
+            arenas: HashMap::new(),
+            current_arena: None,
+            next_buffer_id: 1,
+            raw_allocations: HashMap::new(),
+        }
     }
 }
 
