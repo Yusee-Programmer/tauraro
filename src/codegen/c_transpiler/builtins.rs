@@ -41,6 +41,14 @@ pub fn is_builtin_function(func_name: &str) -> bool {
         | "atomic_load" | "atomic_store" | "atomic_add" | "atomic_sub" | "atomic_cas"
         | "memory_barrier" | "prefetch" | "cache_line_size"
         | "bit_cast" | "zero_memory" | "copy_memory" | "compare_memory"
+        // Bare-metal / OS development builtins
+        | "port_in" | "port_out" | "port_in8" | "port_out8"
+        | "port_in16" | "port_out16" | "port_in32" | "port_out32"
+        | "mmio_read8" | "mmio_write8" | "mmio_read16" | "mmio_write16"
+        | "mmio_read32" | "mmio_write32" | "mmio_read64" | "mmio_write64"
+        | "disable_interrupts" | "enable_interrupts" | "cli" | "sti" | "halt" | "hlt"
+        | "read_cr0" | "write_cr0" | "read_cr3" | "write_cr3"
+        | "read_msr" | "write_msr" | "asm"
     )
 }
 

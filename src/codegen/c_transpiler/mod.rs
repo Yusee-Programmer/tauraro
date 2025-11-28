@@ -18,6 +18,52 @@ use crate::ast::{Type, BinaryOp, Expr, Literal};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
+/// Options for bare-metal/OS development compilation
+#[derive(Debug, Clone, Default)]
+pub struct BaremetalOptions {
+    /// Freestanding mode - no standard library
+    pub freestanding: bool,
+    /// Don't link stdlib
+    pub no_stdlib: bool,
+    /// Custom entry point name (default: main)
+    pub entry_point: Option<String>,
+    /// Target architecture (x86, x86_64, arm, arm64, riscv32, riscv64)
+    pub target_arch: Option<String>,
+    /// Enable inline assembly support
+    pub inline_asm: bool,
+}
+
+impl BaremetalOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    pub fn with_freestanding(mut self, freestanding: bool) -> Self {
+        self.freestanding = freestanding;
+        self
+    }
+    
+    pub fn with_no_stdlib(mut self, no_stdlib: bool) -> Self {
+        self.no_stdlib = no_stdlib;
+        self
+    }
+    
+    pub fn with_entry_point(mut self, entry_point: Option<String>) -> Self {
+        self.entry_point = entry_point;
+        self
+    }
+    
+    pub fn with_target_arch(mut self, target_arch: Option<String>) -> Self {
+        self.target_arch = target_arch;
+        self
+    }
+    
+    pub fn with_inline_asm(mut self, inline_asm: bool) -> Self {
+        self.inline_asm = inline_asm;
+        self
+    }
+}
+
 /// Information about a class for OOP support
 #[derive(Debug, Clone)]
 struct ClassInfo {
@@ -88,6 +134,8 @@ pub struct CTranspiler {
     static_typed_vars: HashMap<String, crate::ast::Type>,
     /// Enable aggressive optimizations for typed code
     enable_native_types: bool,
+    /// Bare-metal/OS development options
+    baremetal_options: BaremetalOptions,
 }
 
 /// Native C types for optimized transpilation
@@ -129,7 +177,38 @@ impl CTranspiler {
             lambdas_to_generate: Vec::new(),
             static_typed_vars: HashMap::new(),
             enable_native_types: true,
+            baremetal_options: BaremetalOptions::default(),
         }
+    }
+
+    /// Create a new C transpiler with bare-metal options
+    pub fn with_baremetal_options(options: BaremetalOptions) -> Self {
+        CTranspiler {
+            var_types: HashMap::new(),
+            declared_vars: HashSet::new(),
+            var_name_mapping: HashMap::new(),
+            indent_level: 0,
+            temp_var_counter: 0,
+            scope_variables: HashMap::new(),
+            function_parameters: HashSet::new(),
+            class_definitions: HashMap::new(),
+            function_definitions: HashMap::new(),
+            current_function: None,
+            loop_depth: 0,
+            exception_handlers: Vec::new(),
+            imports: HashMap::new(),
+            generated_utilities: HashSet::new(),
+            function_params: HashMap::new(),
+            lambdas_to_generate: Vec::new(),
+            static_typed_vars: HashMap::new(),
+            enable_native_types: true,
+            baremetal_options: options,
+        }
+    }
+    
+    /// Set bare-metal options
+    pub fn set_baremetal_options(&mut self, options: BaremetalOptions) {
+        self.baremetal_options = options;
     }
 
     /// Check if a name is a C reserved keyword and mangle it if needed
@@ -361,16 +440,31 @@ impl CTranspiler {
             transpiler.function_definitions.insert(func_name.clone(), func_info);
         }
 
-        // Add C header and includes
-        output.push_str("#include <stdio.h>\n");
-        output.push_str("#include <stdlib.h>\n");
-        output.push_str("#include <string.h>\n");
-        output.push_str("#include <stdbool.h>\n");
-        output.push_str("#include <math.h>\n");
-        output.push_str("#include <stdarg.h>\n");
-        output.push_str("#include <setjmp.h>\n");
-        output.push_str("#include <ctype.h>\n");
-        output.push_str("#include <stdint.h>\n");
+        // Add C header and includes based on mode
+        if transpiler.baremetal_options.freestanding {
+            // Freestanding mode - minimal includes for OS/embedded development
+            output.push_str("// Freestanding mode - no standard library\n");
+            output.push_str("#define TAURARO_FREESTANDING 1\n");
+            output.push_str("#include <stdint.h>\n");
+            output.push_str("#include <stddef.h>\n");
+            if let Some(ref arch) = transpiler.baremetal_options.target_arch {
+                output.push_str(&format!("#define TAURARO_TARGET_ARCH \"{}\"\n", arch));
+            }
+            output.push_str("\n");
+            // Add freestanding utility declarations
+            output.push_str(&transpiler.generate_freestanding_utilities());
+        } else {
+            // Standard mode with full C library
+            output.push_str("#include <stdio.h>\n");
+            output.push_str("#include <stdlib.h>\n");
+            output.push_str("#include <string.h>\n");
+            output.push_str("#include <stdbool.h>\n");
+            output.push_str("#include <math.h>\n");
+            output.push_str("#include <stdarg.h>\n");
+            output.push_str("#include <setjmp.h>\n");
+            output.push_str("#include <ctype.h>\n");
+            output.push_str("#include <stdint.h>\n");
+        }
         output.push_str("\n");
 
         // Add type definitions
@@ -452,7 +546,25 @@ impl CTranspiler {
             // Initialize var_types from scope_variables
             transpiler.var_types = transpiler.scope_variables.clone();
 
-            output.push_str("\nint main(int argc, char* argv[]) {\n");
+            // Generate entry point based on options
+            if transpiler.baremetal_options.freestanding {
+                // Freestanding mode - use custom entry point
+                let entry_point = transpiler.baremetal_options.entry_point
+                    .as_ref()
+                    .map(|s| s.as_str())
+                    .unwrap_or("_start");
+                
+                if entry_point == "_start" {
+                    // Bare-metal entry point - no return, no arguments
+                    output.push_str(&format!("\nvoid {}(void) {{\n", entry_point));
+                } else {
+                    // Custom entry point - keep standard signature
+                    output.push_str(&format!("\nint {}(int argc, char* argv[]) {{\n", entry_point));
+                }
+            } else {
+                // Standard main function
+                output.push_str("\nint main(int argc, char* argv[]) {\n");
+            }
 
             // Generate variable declarations
             output.push_str(&transpiler.generate_variable_declarations());
@@ -464,7 +576,23 @@ impl CTranspiler {
                 }
             }
             
-            output.push_str("\n    return 0;\n");
+            // Generate appropriate return based on mode
+            if transpiler.baremetal_options.freestanding {
+                let entry_point = transpiler.baremetal_options.entry_point
+                    .as_ref()
+                    .map(|s| s.as_str())
+                    .unwrap_or("_start");
+                
+                if entry_point == "_start" {
+                    // Bare-metal - halt or loop forever
+                    output.push_str("\n    // Bare-metal halt\n");
+                    output.push_str("    while(1) { }\n");
+                } else {
+                    output.push_str("\n    return 0;\n");
+                }
+            } else {
+                output.push_str("\n    return 0;\n");
+            }
             output.push_str("}\n");
         }
 
@@ -2395,6 +2523,151 @@ impl CTranspiler {
                             }
                         }
                     }
+                    // Bare-metal / OS development builtins
+                    "port_in" | "port_in8" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_int(inb((uint16_t){}.value.i));\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "port_out" | "port_out8" => {
+                        if args.len() == 2 {
+                            output.push_str(&format!("{}outb((uint16_t){}.value.i, (uint8_t){}.value.i);\n", ind, args[0], args[1]));
+                        }
+                    }
+                    "port_in16" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_int(inw((uint16_t){}.value.i));\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "port_out16" => {
+                        if args.len() == 2 {
+                            output.push_str(&format!("{}outw((uint16_t){}.value.i, (uint16_t){}.value.i);\n", ind, args[0], args[1]));
+                        }
+                    }
+                    "port_in32" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_int(inl((uint16_t){}.value.i));\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "port_out32" => {
+                        if args.len() == 2 {
+                            output.push_str(&format!("{}outl((uint16_t){}.value.i, (uint32_t){}.value.i);\n", ind, args[0], args[1]));
+                        }
+                    }
+                    "mmio_read8" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_int(mmio_read8((uintptr_t){}.value.i));\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "mmio_write8" => {
+                        if args.len() == 2 {
+                            output.push_str(&format!("{}mmio_write8((uintptr_t){}.value.i, (uint8_t){}.value.i);\n", ind, args[0], args[1]));
+                        }
+                    }
+                    "mmio_read16" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_int(mmio_read16((uintptr_t){}.value.i));\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "mmio_write16" => {
+                        if args.len() == 2 {
+                            output.push_str(&format!("{}mmio_write16((uintptr_t){}.value.i, (uint16_t){}.value.i);\n", ind, args[0], args[1]));
+                        }
+                    }
+                    "mmio_read32" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_int(mmio_read32((uintptr_t){}.value.i));\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "mmio_write32" => {
+                        if args.len() == 2 {
+                            output.push_str(&format!("{}mmio_write32((uintptr_t){}.value.i, (uint32_t){}.value.i);\n", ind, args[0], args[1]));
+                        }
+                    }
+                    "mmio_read64" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_int((int64_t)mmio_read64((uintptr_t){}.value.i));\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "mmio_write64" => {
+                        if args.len() == 2 {
+                            output.push_str(&format!("{}mmio_write64((uintptr_t){}.value.i, (uint64_t){}.value.i);\n", ind, args[0], args[1]));
+                        }
+                    }
+                    "disable_interrupts" | "cli" => {
+                        output.push_str(&format!("{}cli();\n", ind));
+                    }
+                    "enable_interrupts" | "sti" => {
+                        output.push_str(&format!("{}sti();\n", ind));
+                    }
+                    "halt" | "hlt" => {
+                        output.push_str(&format!("{}hlt();\n", ind));
+                    }
+                    "read_cr0" => {
+                        if let Some(res) = result {
+                            output.push_str(&format!("{}{} = tauraro_int((int64_t)read_cr0());\n", ind, res));
+                            self.var_types.insert(res.clone(), NativeType::Generic);
+                        }
+                    }
+                    "write_cr0" => {
+                        if args.len() == 1 {
+                            output.push_str(&format!("{}write_cr0((uint64_t){}.value.i);\n", ind, args[0]));
+                        }
+                    }
+                    "read_cr3" => {
+                        if let Some(res) = result {
+                            output.push_str(&format!("{}{} = tauraro_int((int64_t)read_cr3());\n", ind, res));
+                            self.var_types.insert(res.clone(), NativeType::Generic);
+                        }
+                    }
+                    "write_cr3" => {
+                        if args.len() == 1 {
+                            output.push_str(&format!("{}write_cr3((uint64_t){}.value.i);\n", ind, args[0]));
+                        }
+                    }
+                    "read_msr" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_int((int64_t)read_msr((uint32_t){}.value.i));\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "write_msr" => {
+                        if args.len() == 2 {
+                            output.push_str(&format!("{}write_msr((uint32_t){}.value.i, (uint64_t){}.value.i);\n", ind, args[0], args[1]));
+                        }
+                    }
+                    "asm" => {
+                        // Inline assembly - only in freestanding mode
+                        if self.baremetal_options.inline_asm || self.baremetal_options.freestanding {
+                            if args.len() == 1 {
+                                // Extract the string value from the argument
+                                output.push_str(&format!("{}__asm__ volatile ({});\n", ind, args[0]));
+                            }
+                        }
+                    }
                     _ => {
                         // Check for polymorphic base class method calls (Shape__area, Shape__get_name, etc)
                         // Only dispatch for methods that are known to be overridden
@@ -3949,6 +4222,192 @@ impl CTranspiler {
         output.push_str("}\n\n");
         
         Ok(output)
+    }
+
+    /// Generate freestanding mode utilities for bare-metal/OS development
+    fn generate_freestanding_utilities(&self) -> String {
+        let mut output = String::new();
+        
+        output.push_str("// ===== FREESTANDING MODE UTILITIES =====\n\n");
+        
+        // Basic type definitions
+        output.push_str("// Basic freestanding type definitions\n");
+        output.push_str("typedef int bool;\n");
+        output.push_str("#define true 1\n");
+        output.push_str("#define false 0\n");
+        output.push_str("#define NULL ((void*)0)\n\n");
+        
+        // Memory operations without stdlib
+        output.push_str("// Freestanding memory operations\n");
+        output.push_str("static inline void* memset_freestanding(void* dest, int c, size_t n) {\n");
+        output.push_str("    unsigned char* p = (unsigned char*)dest;\n");
+        output.push_str("    while (n--) *p++ = (unsigned char)c;\n");
+        output.push_str("    return dest;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline void* memcpy_freestanding(void* dest, const void* src, size_t n) {\n");
+        output.push_str("    unsigned char* d = (unsigned char*)dest;\n");
+        output.push_str("    const unsigned char* s = (const unsigned char*)src;\n");
+        output.push_str("    while (n--) *d++ = *s++;\n");
+        output.push_str("    return dest;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline int memcmp_freestanding(const void* s1, const void* s2, size_t n) {\n");
+        output.push_str("    const unsigned char* p1 = (const unsigned char*)s1;\n");
+        output.push_str("    const unsigned char* p2 = (const unsigned char*)s2;\n");
+        output.push_str("    while (n--) {\n");
+        output.push_str("        if (*p1 != *p2) return *p1 - *p2;\n");
+        output.push_str("        p1++; p2++;\n");
+        output.push_str("    }\n");
+        output.push_str("    return 0;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("#define memset memset_freestanding\n");
+        output.push_str("#define memcpy memcpy_freestanding\n");
+        output.push_str("#define memcmp memcmp_freestanding\n\n");
+        
+        // String operations
+        output.push_str("// Freestanding string operations\n");
+        output.push_str("static inline size_t strlen_freestanding(const char* s) {\n");
+        output.push_str("    size_t len = 0;\n");
+        output.push_str("    while (*s++) len++;\n");
+        output.push_str("    return len;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline char* strcpy_freestanding(char* dest, const char* src) {\n");
+        output.push_str("    char* ret = dest;\n");
+        output.push_str("    while ((*dest++ = *src++));\n");
+        output.push_str("    return ret;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("#define strlen strlen_freestanding\n");
+        output.push_str("#define strcpy strcpy_freestanding\n\n");
+        
+        // Port I/O (x86/x86_64)
+        output.push_str("// Port I/O operations (x86/x86_64)\n");
+        output.push_str("#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)\n");
+        output.push_str("static inline void outb(uint16_t port, uint8_t val) {\n");
+        output.push_str("    __asm__ volatile (\"outb %0, %1\" : : \"a\"(val), \"Nd\"(port));\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline uint8_t inb(uint16_t port) {\n");
+        output.push_str("    uint8_t ret;\n");
+        output.push_str("    __asm__ volatile (\"inb %1, %0\" : \"=a\"(ret) : \"Nd\"(port));\n");
+        output.push_str("    return ret;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline void outw(uint16_t port, uint16_t val) {\n");
+        output.push_str("    __asm__ volatile (\"outw %0, %1\" : : \"a\"(val), \"Nd\"(port));\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline uint16_t inw(uint16_t port) {\n");
+        output.push_str("    uint16_t ret;\n");
+        output.push_str("    __asm__ volatile (\"inw %1, %0\" : \"=a\"(ret) : \"Nd\"(port));\n");
+        output.push_str("    return ret;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline void outl(uint16_t port, uint32_t val) {\n");
+        output.push_str("    __asm__ volatile (\"outl %0, %1\" : : \"a\"(val), \"Nd\"(port));\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline uint32_t inl(uint16_t port) {\n");
+        output.push_str("    uint32_t ret;\n");
+        output.push_str("    __asm__ volatile (\"inl %1, %0\" : \"=a\"(ret) : \"Nd\"(port));\n");
+        output.push_str("    return ret;\n");
+        output.push_str("}\n");
+        output.push_str("#endif // x86\n\n");
+        
+        // Interrupt control
+        output.push_str("// Interrupt control\n");
+        output.push_str("#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)\n");
+        output.push_str("static inline void cli(void) { __asm__ volatile (\"cli\"); }\n");
+        output.push_str("static inline void sti(void) { __asm__ volatile (\"sti\"); }\n");
+        output.push_str("static inline void hlt(void) { __asm__ volatile (\"hlt\"); }\n\n");
+        
+        output.push_str("static inline uint64_t read_flags(void) {\n");
+        output.push_str("    uint64_t flags;\n");
+        output.push_str("    __asm__ volatile (\"pushfq; popq %0\" : \"=r\"(flags));\n");
+        output.push_str("    return flags;\n");
+        output.push_str("}\n");
+        output.push_str("#elif defined(__arm__) || defined(__aarch64__)\n");
+        output.push_str("static inline void cli(void) { __asm__ volatile (\"cpsid i\" ::: \"memory\"); }\n");
+        output.push_str("static inline void sti(void) { __asm__ volatile (\"cpsie i\" ::: \"memory\"); }\n");
+        output.push_str("#elif defined(__riscv)\n");
+        output.push_str("static inline void cli(void) { __asm__ volatile (\"csrci mstatus, 8\"); }\n");
+        output.push_str("static inline void sti(void) { __asm__ volatile (\"csrsi mstatus, 8\"); }\n");
+        output.push_str("#endif\n\n");
+        
+        // Memory-mapped I/O
+        output.push_str("// Memory-mapped I/O\n");
+        output.push_str("static inline void mmio_write8(uintptr_t addr, uint8_t val) {\n");
+        output.push_str("    *(volatile uint8_t*)addr = val;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline uint8_t mmio_read8(uintptr_t addr) {\n");
+        output.push_str("    return *(volatile uint8_t*)addr;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline void mmio_write16(uintptr_t addr, uint16_t val) {\n");
+        output.push_str("    *(volatile uint16_t*)addr = val;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline uint16_t mmio_read16(uintptr_t addr) {\n");
+        output.push_str("    return *(volatile uint16_t*)addr;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline void mmio_write32(uintptr_t addr, uint32_t val) {\n");
+        output.push_str("    *(volatile uint32_t*)addr = val;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline uint32_t mmio_read32(uintptr_t addr) {\n");
+        output.push_str("    return *(volatile uint32_t*)addr;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline void mmio_write64(uintptr_t addr, uint64_t val) {\n");
+        output.push_str("    *(volatile uint64_t*)addr = val;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline uint64_t mmio_read64(uintptr_t addr) {\n");
+        output.push_str("    return *(volatile uint64_t*)addr;\n");
+        output.push_str("}\n\n");
+        
+        // CPU control
+        output.push_str("// CPU control\n");
+        output.push_str("#if defined(__i386__) || defined(__x86_64__)\n");
+        output.push_str("static inline uint64_t read_cr0(void) {\n");
+        output.push_str("    uint64_t val;\n");
+        output.push_str("    __asm__ volatile (\"mov %%cr0, %0\" : \"=r\"(val));\n");
+        output.push_str("    return val;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline void write_cr0(uint64_t val) {\n");
+        output.push_str("    __asm__ volatile (\"mov %0, %%cr0\" : : \"r\"(val));\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline uint64_t read_cr3(void) {\n");
+        output.push_str("    uint64_t val;\n");
+        output.push_str("    __asm__ volatile (\"mov %%cr3, %0\" : \"=r\"(val));\n");
+        output.push_str("    return val;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline void write_cr3(uint64_t val) {\n");
+        output.push_str("    __asm__ volatile (\"mov %0, %%cr3\" : : \"r\"(val));\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline uint64_t read_msr(uint32_t msr) {\n");
+        output.push_str("    uint32_t lo, hi;\n");
+        output.push_str("    __asm__ volatile (\"rdmsr\" : \"=a\"(lo), \"=d\"(hi) : \"c\"(msr));\n");
+        output.push_str("    return ((uint64_t)hi << 32) | lo;\n");
+        output.push_str("}\n\n");
+        
+        output.push_str("static inline void write_msr(uint32_t msr, uint64_t val) {\n");
+        output.push_str("    uint32_t lo = (uint32_t)val;\n");
+        output.push_str("    uint32_t hi = (uint32_t)(val >> 32);\n");
+        output.push_str("    __asm__ volatile (\"wrmsr\" : : \"c\"(msr), \"a\"(lo), \"d\"(hi));\n");
+        output.push_str("}\n");
+        output.push_str("#endif // x86\n\n");
+        
+        output
     }
 
     fn generate_utilities(&self) -> String {
@@ -6771,6 +7230,7 @@ impl Clone for CTranspiler {
             lambdas_to_generate: self.lambdas_to_generate.clone(),
             static_typed_vars: self.static_typed_vars.clone(),
             enable_native_types: self.enable_native_types,
+            baremetal_options: self.baremetal_options.clone(),
         }
     }
 }
