@@ -175,6 +175,19 @@ pub fn init_builtins() -> HashMap<String, Value> {
     builtins.insert("reset_arena".to_string(), Value::BuiltinFunction("reset_arena".to_string(), memory_reset_arena_builtin));
     builtins.insert("memory_stats".to_string(), Value::BuiltinFunction("memory_stats".to_string(), memory_stats_builtin));
 
+    // System programming builtins
+    builtins.insert("sizeof".to_string(), Value::BuiltinFunction("sizeof".to_string(), sizeof_builtin));
+    builtins.insert("alignof".to_string(), Value::BuiltinFunction("alignof".to_string(), alignof_builtin));
+    builtins.insert("memcpy".to_string(), Value::BuiltinFunction("memcpy".to_string(), memcpy_builtin));
+    builtins.insert("memset".to_string(), Value::BuiltinFunction("memset".to_string(), memset_builtin));
+    builtins.insert("memmove".to_string(), Value::BuiltinFunction("memmove".to_string(), memmove_builtin));
+    builtins.insert("memcmp".to_string(), Value::BuiltinFunction("memcmp".to_string(), memcmp_builtin));
+    builtins.insert("ptr_read".to_string(), Value::BuiltinFunction("ptr_read".to_string(), ptr_read_builtin));
+    builtins.insert("ptr_write".to_string(), Value::BuiltinFunction("ptr_write".to_string(), ptr_write_builtin));
+    builtins.insert("ptr_offset".to_string(), Value::BuiltinFunction("ptr_offset".to_string(), ptr_offset_builtin));
+    builtins.insert("null_ptr".to_string(), Value::BuiltinFunction("null_ptr".to_string(), null_ptr_builtin));
+    builtins.insert("is_null".to_string(), Value::BuiltinFunction("is_null".to_string(), is_null_builtin));
+
     // Memory management decorators (for VM compatibility, they're identity functions)
     builtins.insert("manual_memory".to_string(), Value::BuiltinFunction("manual_memory".to_string(), decorator_identity));
     builtins.insert("arena_memory".to_string(), Value::BuiltinFunction("arena_memory".to_string(), decorator_identity));
@@ -2425,6 +2438,292 @@ fn memory_stats_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
         let stats = ctx.get_stats();
         Ok(Value::Str(stats.to_string()))
     })
+}
+
+// ============================================================================
+// System Programming Builtins
+// ============================================================================
+
+/// Get the size of a value in bytes
+/// Usage: size = sizeof(value)
+fn sizeof_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("sizeof() takes exactly 1 argument"));
+    }
+
+    let size = match &args[0] {
+        Value::Int(_) => std::mem::size_of::<i64>(),
+        Value::Float(_) => std::mem::size_of::<f64>(),
+        Value::Bool(_) => std::mem::size_of::<bool>(),
+        Value::Str(s) => s.len() + 1, // Including null terminator
+        Value::ByteArray(b) => b.len(),
+        _ => std::mem::size_of::<Value>(),
+    };
+
+    Ok(Value::Int(size as i64))
+}
+
+/// Get the alignment of a value type
+/// Usage: align = alignof(value)
+fn alignof_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("alignof() takes exactly 1 argument"));
+    }
+
+    let align = match &args[0] {
+        Value::Int(_) => std::mem::align_of::<i64>(),
+        Value::Float(_) => std::mem::align_of::<f64>(),
+        Value::Bool(_) => std::mem::align_of::<bool>(),
+        _ => std::mem::align_of::<usize>(), // Pointer alignment
+    };
+
+    Ok(Value::Int(align as i64))
+}
+
+/// Copy memory from source to destination
+/// Usage: memcpy(dest_ptr, src_ptr, size)
+fn memcpy_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow!("memcpy() takes exactly 3 arguments (dest, src, size)"));
+    }
+
+    let dest = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memcpy() dest must be a pointer (integer)")),
+    };
+    let src = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memcpy() src must be a pointer (integer)")),
+    };
+    let size = match &args[2] {
+        Value::Int(n) if *n >= 0 => *n as usize,
+        _ => return Err(anyhow!("memcpy() size must be a non-negative integer")),
+    };
+
+    if dest != 0 && src != 0 && size > 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(src as *const u8, dest as *mut u8, size);
+        }
+    }
+
+    Ok(Value::Int(dest as i64))
+}
+
+/// Set memory to a value
+/// Usage: memset(ptr, value, size)
+fn memset_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow!("memset() takes exactly 3 arguments (ptr, value, size)"));
+    }
+
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memset() ptr must be a pointer (integer)")),
+    };
+    let value = match &args[1] {
+        Value::Int(n) => *n as u8,
+        _ => return Err(anyhow!("memset() value must be an integer")),
+    };
+    let size = match &args[2] {
+        Value::Int(n) if *n >= 0 => *n as usize,
+        _ => return Err(anyhow!("memset() size must be a non-negative integer")),
+    };
+
+    if ptr != 0 && size > 0 {
+        unsafe {
+            std::ptr::write_bytes(ptr as *mut u8, value, size);
+        }
+    }
+
+    Ok(Value::Int(ptr as i64))
+}
+
+/// Move memory (handles overlapping regions)
+/// Usage: memmove(dest_ptr, src_ptr, size)
+fn memmove_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow!("memmove() takes exactly 3 arguments (dest, src, size)"));
+    }
+
+    let dest = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memmove() dest must be a pointer (integer)")),
+    };
+    let src = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memmove() src must be a pointer (integer)")),
+    };
+    let size = match &args[2] {
+        Value::Int(n) if *n >= 0 => *n as usize,
+        _ => return Err(anyhow!("memmove() size must be a non-negative integer")),
+    };
+
+    if dest != 0 && src != 0 && size > 0 {
+        unsafe {
+            std::ptr::copy(src as *const u8, dest as *mut u8, size);
+        }
+    }
+
+    Ok(Value::Int(dest as i64))
+}
+
+/// Compare memory regions
+/// Usage: result = memcmp(ptr1, ptr2, size)
+fn memcmp_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        return Err(anyhow!("memcmp() takes exactly 3 arguments (ptr1, ptr2, size)"));
+    }
+
+    let ptr1 = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memcmp() ptr1 must be a pointer (integer)")),
+    };
+    let ptr2 = match &args[1] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("memcmp() ptr2 must be a pointer (integer)")),
+    };
+    let size = match &args[2] {
+        Value::Int(n) if *n >= 0 => *n as usize,
+        _ => return Err(anyhow!("memcmp() size must be a non-negative integer")),
+    };
+
+    if ptr1 == 0 || ptr2 == 0 || size == 0 {
+        return Ok(Value::Int(0));
+    }
+
+    let result = unsafe {
+        let s1 = std::slice::from_raw_parts(ptr1 as *const u8, size);
+        let s2 = std::slice::from_raw_parts(ptr2 as *const u8, size);
+        s1.cmp(s2) as i64
+    };
+
+    Ok(Value::Int(result))
+}
+
+/// Read a value from a pointer
+/// Usage: value = ptr_read(ptr, byte_size=8)
+fn ptr_read_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(anyhow!("ptr_read() takes 1 or 2 arguments (ptr, byte_size=8)"));
+    }
+
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("ptr_read() ptr must be a pointer (integer)")),
+    };
+    let byte_size = if args.len() > 1 {
+        match &args[1] {
+            Value::Int(n) => *n as usize,
+            _ => return Err(anyhow!("ptr_read() byte_size must be an integer")),
+        }
+    } else {
+        8
+    };
+
+    if ptr == 0 {
+        return Ok(Value::Int(0));
+    }
+
+    let value = unsafe {
+        match byte_size {
+            1 => *(ptr as *const i8) as i64,
+            2 => *(ptr as *const i16) as i64,
+            4 => *(ptr as *const i32) as i64,
+            8 => *(ptr as *const i64),
+            _ => *(ptr as *const i64),
+        }
+    };
+
+    Ok(Value::Int(value))
+}
+
+/// Write a value to a pointer
+/// Usage: ptr_write(ptr, value, byte_size=8)
+fn ptr_write_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err(anyhow!("ptr_write() takes 2 or 3 arguments (ptr, value, byte_size=8)"));
+    }
+
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("ptr_write() ptr must be a pointer (integer)")),
+    };
+    let value = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(anyhow!("ptr_write() value must be an integer")),
+    };
+    let byte_size = if args.len() > 2 {
+        match &args[2] {
+            Value::Int(n) => *n as usize,
+            _ => return Err(anyhow!("ptr_write() byte_size must be an integer")),
+        }
+    } else {
+        8
+    };
+
+    if ptr != 0 {
+        unsafe {
+            match byte_size {
+                1 => *(ptr as *mut i8) = value as i8,
+                2 => *(ptr as *mut i16) = value as i16,
+                4 => *(ptr as *mut i32) = value as i32,
+                8 => *(ptr as *mut i64) = value,
+                _ => *(ptr as *mut i64) = value,
+            }
+        }
+    }
+
+    Ok(Value::None)
+}
+
+/// Offset a pointer by a number of bytes
+/// Usage: new_ptr = ptr_offset(ptr, offset)
+fn ptr_offset_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        return Err(anyhow!("ptr_offset() takes exactly 2 arguments (ptr, offset)"));
+    }
+
+    let ptr = match &args[0] {
+        Value::Int(n) => *n as usize,
+        _ => return Err(anyhow!("ptr_offset() ptr must be a pointer (integer)")),
+    };
+    let offset = match &args[1] {
+        Value::Int(n) => *n,
+        _ => return Err(anyhow!("ptr_offset() offset must be an integer")),
+    };
+
+    let new_ptr = if offset >= 0 {
+        ptr.wrapping_add(offset as usize)
+    } else {
+        ptr.wrapping_sub((-offset) as usize)
+    };
+
+    Ok(Value::Int(new_ptr as i64))
+}
+
+/// Get a null pointer
+/// Usage: ptr = null_ptr()
+fn null_ptr_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        return Err(anyhow!("null_ptr() takes no arguments"));
+    }
+    Ok(Value::Int(0))
+}
+
+/// Check if a pointer is null
+/// Usage: result = is_null(ptr)
+fn is_null_builtin(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        return Err(anyhow!("is_null() takes exactly 1 argument"));
+    }
+
+    let is_null = match &args[0] {
+        Value::Int(n) => *n == 0,
+        Value::None => true,
+        _ => false,
+    };
+
+    Ok(Value::Bool(is_null))
 }
 
 /// Identity decorator - returns the decorated function unchanged

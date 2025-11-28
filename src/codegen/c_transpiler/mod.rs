@@ -370,6 +370,7 @@ impl CTranspiler {
         output.push_str("#include <stdarg.h>\n");
         output.push_str("#include <setjmp.h>\n");
         output.push_str("#include <ctype.h>\n");
+        output.push_str("#include <stdint.h>\n");
         output.push_str("\n");
 
         // Add type definitions
@@ -2136,6 +2137,144 @@ impl CTranspiler {
                             if args.len() == 2 {
                                 output.push_str(&format!("{}{} = tauraro_divmod({}, {});\n", ind, res, args[0], args[1]));
                                 self.var_types.insert(res.clone(), NativeType::List);
+                            }
+                        }
+                    }
+                    // Memory management functions
+                    "allocate" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_allocate(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "free" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_free(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "create_arena" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_create_arena(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "destroy_arena" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_destroy_arena(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "reset_arena" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_reset_arena(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "memory_stats" => {
+                        if let Some(res) = result {
+                            output.push_str(&format!("{}{} = tauraro_memory_stats(0, NULL);\n", ind, res));
+                            self.var_types.insert(res.clone(), NativeType::Generic);
+                        }
+                    }
+                    // System programming functions
+                    "sizeof" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_sizeof(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "alignof" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_alignof(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "memcpy" => {
+                        if let Some(res) = result {
+                            if args.len() == 3 {
+                                output.push_str(&format!("{}{} = tauraro_memcpy(3, (TauValue*[]){{&{}, &{}, &{}}});\n", ind, res, args[0], args[1], args[2]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "memset" => {
+                        if let Some(res) = result {
+                            if args.len() == 3 {
+                                output.push_str(&format!("{}{} = tauraro_memset(3, (TauValue*[]){{&{}, &{}, &{}}});\n", ind, res, args[0], args[1], args[2]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "memmove" => {
+                        if let Some(res) = result {
+                            if args.len() == 3 {
+                                output.push_str(&format!("{}{} = tauraro_memmove(3, (TauValue*[]){{&{}, &{}, &{}}});\n", ind, res, args[0], args[1], args[2]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "memcmp" => {
+                        if let Some(res) = result {
+                            if args.len() == 3 {
+                                output.push_str(&format!("{}{} = tauraro_memcmp(3, (TauValue*[]){{&{}, &{}, &{}}});\n", ind, res, args[0], args[1], args[2]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "ptr_read" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_ptr_read(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                            } else if args.len() == 2 {
+                                output.push_str(&format!("{}{} = tauraro_ptr_read(2, (TauValue*[]){{&{}, &{}}});\n", ind, res, args[0], args[1]));
+                            }
+                            self.var_types.insert(res.clone(), NativeType::Generic);
+                        }
+                    }
+                    "ptr_write" => {
+                        if let Some(res) = result {
+                            if args.len() == 2 {
+                                output.push_str(&format!("{}{} = tauraro_ptr_write(2, (TauValue*[]){{&{}, &{}}});\n", ind, res, args[0], args[1]));
+                            } else if args.len() == 3 {
+                                output.push_str(&format!("{}{} = tauraro_ptr_write(3, (TauValue*[]){{&{}, &{}, &{}}});\n", ind, res, args[0], args[1], args[2]));
+                            }
+                            self.var_types.insert(res.clone(), NativeType::Generic);
+                        }
+                    }
+                    "ptr_offset" => {
+                        if let Some(res) = result {
+                            if args.len() == 2 {
+                                output.push_str(&format!("{}{} = tauraro_ptr_offset(2, (TauValue*[]){{&{}, &{}}});\n", ind, res, args[0], args[1]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
+                            }
+                        }
+                    }
+                    "null_ptr" => {
+                        if let Some(res) = result {
+                            output.push_str(&format!("{}{} = tauraro_null_ptr(0, NULL);\n", ind, res));
+                            self.var_types.insert(res.clone(), NativeType::Generic);
+                        }
+                    }
+                    "is_null" => {
+                        if let Some(res) = result {
+                            if args.len() == 1 {
+                                output.push_str(&format!("{}{} = tauraro_is_null(1, (TauValue*[]){{&{}}});\n", ind, res, args[0]));
+                                self.var_types.insert(res.clone(), NativeType::Generic);
                             }
                         }
                     }
@@ -5716,6 +5855,249 @@ impl CTranspiler {
         output.push_str("        }\n");
         output.push_str("    }\n");
         output.push_str("    return (TauValue){.type = 5, .value.dict = dict, .refcount = 1};\n");
+        output.push_str("}\n\n");
+
+        // ===== MEMORY MANAGEMENT FUNCTIONS =====
+        output.push_str("// Memory management structures\n");
+        output.push_str("typedef struct tauraro_arena {\n");
+        output.push_str("    void** buffers;\n");
+        output.push_str("    size_t* sizes;\n");
+        output.push_str("    size_t count;\n");
+        output.push_str("    size_t capacity;\n");
+        output.push_str("    char* name;\n");
+        output.push_str("} tauraro_arena_t;\n\n");
+
+        output.push_str("static struct {\n");
+        output.push_str("    void** manual_buffers;\n");
+        output.push_str("    size_t* buffer_sizes;\n");
+        output.push_str("    size_t buffer_count;\n");
+        output.push_str("    size_t buffer_capacity;\n");
+        output.push_str("    tauraro_arena_t** arenas;\n");
+        output.push_str("    size_t arena_count;\n");
+        output.push_str("    size_t arena_capacity;\n");
+        output.push_str("    char* current_arena;\n");
+        output.push_str("} tauraro_memory_state = {NULL, NULL, 0, 0, NULL, 0, 0, NULL};\n\n");
+
+        output.push_str("static void tauraro_memory_init(void) {\n");
+        output.push_str("    if (tauraro_memory_state.manual_buffers == NULL) {\n");
+        output.push_str("        tauraro_memory_state.buffer_capacity = 64;\n");
+        output.push_str("        tauraro_memory_state.manual_buffers = (void**)malloc(sizeof(void*) * 64);\n");
+        output.push_str("        tauraro_memory_state.buffer_sizes = (size_t*)malloc(sizeof(size_t) * 64);\n");
+        output.push_str("        tauraro_memory_state.buffer_count = 0;\n");
+        output.push_str("        tauraro_memory_state.arena_capacity = 16;\n");
+        output.push_str("        tauraro_memory_state.arenas = (tauraro_arena_t**)malloc(sizeof(tauraro_arena_t*) * 16);\n");
+        output.push_str("        tauraro_memory_state.arena_count = 0;\n");
+        output.push_str("        tauraro_memory_state.current_arena = NULL;\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_allocate(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1 || (*args)->type != 0) return tauraro_none();\n");
+        output.push_str("    tauraro_memory_init();\n");
+        output.push_str("    size_t size = (size_t)(*args)->value.i;\n");
+        output.push_str("    void* buffer = malloc(size);\n");
+        output.push_str("    if (!buffer) return tauraro_none();\n");
+        output.push_str("    if (tauraro_memory_state.buffer_count >= tauraro_memory_state.buffer_capacity) {\n");
+        output.push_str("        tauraro_memory_state.buffer_capacity *= 2;\n");
+        output.push_str("        tauraro_memory_state.manual_buffers = (void**)realloc(tauraro_memory_state.manual_buffers, sizeof(void*) * tauraro_memory_state.buffer_capacity);\n");
+        output.push_str("        tauraro_memory_state.buffer_sizes = (size_t*)realloc(tauraro_memory_state.buffer_sizes, sizeof(size_t) * tauraro_memory_state.buffer_capacity);\n");
+        output.push_str("    }\n");
+        output.push_str("    size_t idx = tauraro_memory_state.buffer_count++;\n");
+        output.push_str("    tauraro_memory_state.manual_buffers[idx] = buffer;\n");
+        output.push_str("    tauraro_memory_state.buffer_sizes[idx] = size;\n");
+        output.push_str("    return tauraro_int((long long)(uintptr_t)buffer);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_free(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1) return tauraro_none();\n");
+        output.push_str("    void* ptr = (void*)(uintptr_t)(*args)->value.i;\n");
+        output.push_str("    if (ptr) {\n");
+        output.push_str("        for (size_t i = 0; i < tauraro_memory_state.buffer_count; i++) {\n");
+        output.push_str("            if (tauraro_memory_state.manual_buffers[i] == ptr) {\n");
+        output.push_str("                free(ptr);\n");
+        output.push_str("                for (size_t j = i; j < tauraro_memory_state.buffer_count - 1; j++) {\n");
+        output.push_str("                    tauraro_memory_state.manual_buffers[j] = tauraro_memory_state.manual_buffers[j + 1];\n");
+        output.push_str("                    tauraro_memory_state.buffer_sizes[j] = tauraro_memory_state.buffer_sizes[j + 1];\n");
+        output.push_str("                }\n");
+        output.push_str("                tauraro_memory_state.buffer_count--;\n");
+        output.push_str("                break;\n");
+        output.push_str("            }\n");
+        output.push_str("        }\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_create_arena(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1 || (*args)->type != 2) return tauraro_none();\n");
+        output.push_str("    tauraro_memory_init();\n");
+        output.push_str("    char* name = (*args)->value.s;\n");
+        output.push_str("    tauraro_arena_t* arena = (tauraro_arena_t*)malloc(sizeof(tauraro_arena_t));\n");
+        output.push_str("    arena->name = strdup(name);\n");
+        output.push_str("    arena->capacity = 64;\n");
+        output.push_str("    arena->count = 0;\n");
+        output.push_str("    arena->buffers = (void**)malloc(sizeof(void*) * arena->capacity);\n");
+        output.push_str("    arena->sizes = (size_t*)malloc(sizeof(size_t) * arena->capacity);\n");
+        output.push_str("    if (tauraro_memory_state.arena_count >= tauraro_memory_state.arena_capacity) {\n");
+        output.push_str("        tauraro_memory_state.arena_capacity *= 2;\n");
+        output.push_str("        tauraro_memory_state.arenas = (tauraro_arena_t**)realloc(tauraro_memory_state.arenas, sizeof(tauraro_arena_t*) * tauraro_memory_state.arena_capacity);\n");
+        output.push_str("    }\n");
+        output.push_str("    tauraro_memory_state.arenas[tauraro_memory_state.arena_count++] = arena;\n");
+        output.push_str("    if (tauraro_memory_state.current_arena) free(tauraro_memory_state.current_arena);\n");
+        output.push_str("    tauraro_memory_state.current_arena = strdup(name);\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_destroy_arena(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1 || (*args)->type != 2) return tauraro_none();\n");
+        output.push_str("    char* name = (*args)->value.s;\n");
+        output.push_str("    for (size_t i = 0; i < tauraro_memory_state.arena_count; i++) {\n");
+        output.push_str("        if (strcmp(tauraro_memory_state.arenas[i]->name, name) == 0) {\n");
+        output.push_str("            tauraro_arena_t* arena = tauraro_memory_state.arenas[i];\n");
+        output.push_str("            for (size_t j = 0; j < arena->count; j++) free(arena->buffers[j]);\n");
+        output.push_str("            free(arena->buffers);\n");
+        output.push_str("            free(arena->sizes);\n");
+        output.push_str("            free(arena->name);\n");
+        output.push_str("            free(arena);\n");
+        output.push_str("            for (size_t j = i; j < tauraro_memory_state.arena_count - 1; j++)\n");
+        output.push_str("                tauraro_memory_state.arenas[j] = tauraro_memory_state.arenas[j + 1];\n");
+        output.push_str("            tauraro_memory_state.arena_count--;\n");
+        output.push_str("            break;\n");
+        output.push_str("        }\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_reset_arena(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1 || (*args)->type != 2) return tauraro_none();\n");
+        output.push_str("    char* name = (*args)->value.s;\n");
+        output.push_str("    for (size_t i = 0; i < tauraro_memory_state.arena_count; i++) {\n");
+        output.push_str("        if (strcmp(tauraro_memory_state.arenas[i]->name, name) == 0) {\n");
+        output.push_str("            tauraro_arena_t* arena = tauraro_memory_state.arenas[i];\n");
+        output.push_str("            for (size_t j = 0; j < arena->count; j++) free(arena->buffers[j]);\n");
+        output.push_str("            arena->count = 0;\n");
+        output.push_str("            break;\n");
+        output.push_str("        }\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_memory_stats(int argc, TauValue** args) {\n");
+        output.push_str("    (void)argc; (void)args;\n");
+        output.push_str("    tauraro_memory_init();\n");
+        output.push_str("    size_t total_manual = 0;\n");
+        output.push_str("    for (size_t i = 0; i < tauraro_memory_state.buffer_count; i++)\n");
+        output.push_str("        total_manual += tauraro_memory_state.buffer_sizes[i];\n");
+        output.push_str("    size_t total_arena = 0;\n");
+        output.push_str("    for (size_t i = 0; i < tauraro_memory_state.arena_count; i++)\n");
+        output.push_str("        for (size_t j = 0; j < tauraro_memory_state.arenas[i]->count; j++)\n");
+        output.push_str("            total_arena += tauraro_memory_state.arenas[i]->sizes[j];\n");
+        output.push_str("    char buffer[512];\n");
+        output.push_str("    snprintf(buffer, sizeof(buffer), \"Memory Strategy: Manual\\nManual Buffers: %zu (%zu bytes)\\nArenas: %zu (%zu bytes)\",\n");
+        output.push_str("        tauraro_memory_state.buffer_count, total_manual, tauraro_memory_state.arena_count, total_arena);\n");
+        output.push_str("    return tauraro_str(buffer);\n");
+        output.push_str("}\n\n");
+
+        // ===== SYSTEM PROGRAMMING FUNCTIONS =====
+        output.push_str("TauValue tauraro_sizeof(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1) return tauraro_int(0);\n");
+        output.push_str("    switch ((*args)->type) {\n");
+        output.push_str("        case 0: return tauraro_int(sizeof(long long));\n");
+        output.push_str("        case 1: return tauraro_int(sizeof(double));\n");
+        output.push_str("        case 3: return tauraro_int(sizeof(int));\n");
+        output.push_str("        case 2: return tauraro_int((*args)->value.s ? strlen((*args)->value.s) + 1 : 0);\n");
+        output.push_str("        default: return tauraro_int(sizeof(TauValue));\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_alignof(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1) return tauraro_int(0);\n");
+        output.push_str("    switch ((*args)->type) {\n");
+        output.push_str("        case 0: return tauraro_int(_Alignof(long long));\n");
+        output.push_str("        case 1: return tauraro_int(_Alignof(double));\n");
+        output.push_str("        default: return tauraro_int(_Alignof(void*));\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_memcpy(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 3) return tauraro_none();\n");
+        output.push_str("    void* dest = (void*)(uintptr_t)args[0]->value.i;\n");
+        output.push_str("    void* src = (void*)(uintptr_t)args[1]->value.i;\n");
+        output.push_str("    size_t n = (size_t)args[2]->value.i;\n");
+        output.push_str("    if (dest && src && n > 0) memcpy(dest, src, n);\n");
+        output.push_str("    return tauraro_int((long long)(uintptr_t)dest);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_memset(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 3) return tauraro_none();\n");
+        output.push_str("    void* dest = (void*)(uintptr_t)args[0]->value.i;\n");
+        output.push_str("    int value = (int)args[1]->value.i;\n");
+        output.push_str("    size_t n = (size_t)args[2]->value.i;\n");
+        output.push_str("    if (dest && n > 0) memset(dest, value, n);\n");
+        output.push_str("    return tauraro_int((long long)(uintptr_t)dest);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_memmove(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 3) return tauraro_none();\n");
+        output.push_str("    void* dest = (void*)(uintptr_t)args[0]->value.i;\n");
+        output.push_str("    void* src = (void*)(uintptr_t)args[1]->value.i;\n");
+        output.push_str("    size_t n = (size_t)args[2]->value.i;\n");
+        output.push_str("    if (dest && src && n > 0) memmove(dest, src, n);\n");
+        output.push_str("    return tauraro_int((long long)(uintptr_t)dest);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_memcmp(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 3) return tauraro_int(-1);\n");
+        output.push_str("    void* s1 = (void*)(uintptr_t)args[0]->value.i;\n");
+        output.push_str("    void* s2 = (void*)(uintptr_t)args[1]->value.i;\n");
+        output.push_str("    size_t n = (size_t)args[2]->value.i;\n");
+        output.push_str("    if (s1 && s2 && n > 0) return tauraro_int(memcmp(s1, s2, n));\n");
+        output.push_str("    return tauraro_int(-1);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_ptr_read(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc < 1) return tauraro_none();\n");
+        output.push_str("    void* ptr = (void*)(uintptr_t)args[0]->value.i;\n");
+        output.push_str("    int byte_size = (argc > 1) ? (int)args[1]->value.i : 8;\n");
+        output.push_str("    if (!ptr) return tauraro_int(0);\n");
+        output.push_str("    switch (byte_size) {\n");
+        output.push_str("        case 1: return tauraro_int(*(int8_t*)ptr);\n");
+        output.push_str("        case 2: return tauraro_int(*(int16_t*)ptr);\n");
+        output.push_str("        case 4: return tauraro_int(*(int32_t*)ptr);\n");
+        output.push_str("        default: return tauraro_int(*(int64_t*)ptr);\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_ptr_write(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc < 2) return tauraro_none();\n");
+        output.push_str("    void* ptr = (void*)(uintptr_t)args[0]->value.i;\n");
+        output.push_str("    long long value = args[1]->value.i;\n");
+        output.push_str("    int byte_size = (argc > 2) ? (int)args[2]->value.i : 8;\n");
+        output.push_str("    if (ptr) {\n");
+        output.push_str("        switch (byte_size) {\n");
+        output.push_str("            case 1: *(int8_t*)ptr = (int8_t)value; break;\n");
+        output.push_str("            case 2: *(int16_t*)ptr = (int16_t)value; break;\n");
+        output.push_str("            case 4: *(int32_t*)ptr = (int32_t)value; break;\n");
+        output.push_str("            default: *(int64_t*)ptr = (int64_t)value; break;\n");
+        output.push_str("        }\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_ptr_offset(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 2) return tauraro_int(0);\n");
+        output.push_str("    uintptr_t ptr = (uintptr_t)args[0]->value.i;\n");
+        output.push_str("    long long offset = args[1]->value.i;\n");
+        output.push_str("    return tauraro_int((long long)(ptr + offset));\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_null_ptr(int argc, TauValue** args) {\n");
+        output.push_str("    (void)argc; (void)args;\n");
+        output.push_str("    return tauraro_int(0);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_is_null(int argc, TauValue** args) {\n");
+        output.push_str("    if (argc != 1) return tauraro_bool(1);\n");
+        output.push_str("    return tauraro_bool(args[0]->value.i == 0);\n");
         output.push_str("}\n\n");
 
         output

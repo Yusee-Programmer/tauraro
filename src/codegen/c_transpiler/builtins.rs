@@ -31,6 +31,11 @@ pub fn is_builtin_function(func_name: &str) -> bool {
         | "setattr" | "delattr" | "format" | "chr" | "ord" | "hex" | "oct"
         | "bin" | "divmod" | "repr" | "ascii" | "dir" | "vars" | "id"
         | "hash" | "bytes" | "bytearray"
+        // Memory management builtins
+        | "allocate" | "free" | "create_arena" | "destroy_arena" | "reset_arena" | "memory_stats"
+        // System programming builtins
+        | "sizeof" | "alignof" | "memcpy" | "memset" | "memmove" | "memcmp"
+        | "ptr_read" | "ptr_write" | "ptr_offset" | "null_ptr" | "is_null"
     )
 }
 
@@ -96,6 +101,25 @@ pub fn generate_builtin_implementation(func_name: &str) -> String {
         "format" => generate_format_impl(),
         "repr" => generate_repr_impl(),
         "divmod" => generate_divmod_impl(),
+        // Memory management
+        "allocate" => generate_allocate_impl(),
+        "free" => generate_free_impl(),
+        "create_arena" => generate_create_arena_impl(),
+        "destroy_arena" => generate_destroy_arena_impl(),
+        "reset_arena" => generate_reset_arena_impl(),
+        "memory_stats" => generate_memory_stats_impl(),
+        // System programming
+        "sizeof" => generate_sizeof_impl(),
+        "alignof" => generate_alignof_impl(),
+        "memcpy" => generate_memcpy_impl(),
+        "memset" => generate_memset_impl(),
+        "memmove" => generate_memmove_impl(),
+        "memcmp" => generate_memcmp_impl(),
+        "ptr_read" => generate_ptr_read_impl(),
+        "ptr_write" => generate_ptr_write_impl(),
+        "ptr_offset" => generate_ptr_offset_impl(),
+        "null_ptr" => generate_null_ptr_impl(),
+        "is_null" => generate_is_null_impl(),
         _ => generate_generic_builtin_impl(func_name),
     }
 }
@@ -1176,4 +1200,547 @@ fn generate_generic_builtin_impl(func_name: &str) -> String {
 "#,
         func_name, func_name
     )
+}
+
+// ============================================================================
+// Memory Management Functions for Systems Programming
+// ============================================================================
+
+fn generate_allocate_impl() -> String {
+    r#"// Memory arena structure for tracking allocations
+typedef struct {
+    void** buffers;
+    size_t* sizes;
+    size_t count;
+    size_t capacity;
+    char* name;
+} tauraro_arena_t;
+
+// Global memory management state
+static struct {
+    void** manual_buffers;
+    size_t* buffer_sizes;
+    size_t buffer_count;
+    size_t buffer_capacity;
+    tauraro_arena_t** arenas;
+    size_t arena_count;
+    size_t arena_capacity;
+    char* current_arena;
+} tauraro_memory_state = {NULL, NULL, 0, 0, NULL, 0, 0, NULL};
+
+// Initialize memory state if needed
+static void tauraro_memory_init(void) {
+    if (tauraro_memory_state.manual_buffers == NULL) {
+        tauraro_memory_state.buffer_capacity = 64;
+        tauraro_memory_state.manual_buffers = (void**)malloc(sizeof(void*) * 64);
+        tauraro_memory_state.buffer_sizes = (size_t*)malloc(sizeof(size_t) * 64);
+        tauraro_memory_state.buffer_count = 0;
+        tauraro_memory_state.arena_capacity = 16;
+        tauraro_memory_state.arenas = (tauraro_arena_t**)malloc(sizeof(tauraro_arena_t*) * 16);
+        tauraro_memory_state.arena_count = 0;
+        tauraro_memory_state.current_arena = NULL;
+    }
+}
+
+tauraro_value_t* tauraro_allocate(int argc, tauraro_value_t** args) {
+    if (argc != 1 || args[0]->type != TAURARO_INT) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    tauraro_memory_init();
+    
+    size_t size = (size_t)args[0]->data.int_val;
+    void* buffer = malloc(size);
+    
+    if (buffer == NULL) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    // Store in tracking array
+    if (tauraro_memory_state.buffer_count >= tauraro_memory_state.buffer_capacity) {
+        tauraro_memory_state.buffer_capacity *= 2;
+        tauraro_memory_state.manual_buffers = (void**)realloc(
+            tauraro_memory_state.manual_buffers, 
+            sizeof(void*) * tauraro_memory_state.buffer_capacity
+        );
+        tauraro_memory_state.buffer_sizes = (size_t*)realloc(
+            tauraro_memory_state.buffer_sizes,
+            sizeof(size_t) * tauraro_memory_state.buffer_capacity
+        );
+    }
+    
+    size_t idx = tauraro_memory_state.buffer_count++;
+    tauraro_memory_state.manual_buffers[idx] = buffer;
+    tauraro_memory_state.buffer_sizes[idx] = size;
+    
+    // Return pointer as integer (for FFI compatibility)
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    result->data.int_val = (long long)(uintptr_t)buffer;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_free_impl() -> String {
+    r#"tauraro_value_t* tauraro_free(int argc, tauraro_value_t** args) {
+    if (argc != 1) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    void* ptr = NULL;
+    if (args[0]->type == TAURARO_INT) {
+        ptr = (void*)(uintptr_t)args[0]->data.int_val;
+    }
+    
+    if (ptr != NULL) {
+        // Find and remove from tracking
+        for (size_t i = 0; i < tauraro_memory_state.buffer_count; i++) {
+            if (tauraro_memory_state.manual_buffers[i] == ptr) {
+                free(ptr);
+                // Shift remaining entries
+                for (size_t j = i; j < tauraro_memory_state.buffer_count - 1; j++) {
+                    tauraro_memory_state.manual_buffers[j] = tauraro_memory_state.manual_buffers[j + 1];
+                    tauraro_memory_state.buffer_sizes[j] = tauraro_memory_state.buffer_sizes[j + 1];
+                }
+                tauraro_memory_state.buffer_count--;
+                break;
+            }
+        }
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_NONE;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_create_arena_impl() -> String {
+    r#"tauraro_value_t* tauraro_create_arena(int argc, tauraro_value_t** args) {
+    if (argc != 1 || args[0]->type != TAURARO_STRING) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    tauraro_memory_init();
+    
+    char* name = args[0]->data.str_val;
+    
+    // Create new arena
+    tauraro_arena_t* arena = (tauraro_arena_t*)malloc(sizeof(tauraro_arena_t));
+    arena->name = strdup(name);
+    arena->capacity = 64;
+    arena->count = 0;
+    arena->buffers = (void**)malloc(sizeof(void*) * arena->capacity);
+    arena->sizes = (size_t*)malloc(sizeof(size_t) * arena->capacity);
+    
+    // Add to arenas list
+    if (tauraro_memory_state.arena_count >= tauraro_memory_state.arena_capacity) {
+        tauraro_memory_state.arena_capacity *= 2;
+        tauraro_memory_state.arenas = (tauraro_arena_t**)realloc(
+            tauraro_memory_state.arenas,
+            sizeof(tauraro_arena_t*) * tauraro_memory_state.arena_capacity
+        );
+    }
+    tauraro_memory_state.arenas[tauraro_memory_state.arena_count++] = arena;
+    
+    // Set as current arena
+    if (tauraro_memory_state.current_arena) free(tauraro_memory_state.current_arena);
+    tauraro_memory_state.current_arena = strdup(name);
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_NONE;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_destroy_arena_impl() -> String {
+    r#"tauraro_value_t* tauraro_destroy_arena(int argc, tauraro_value_t** args) {
+    if (argc != 1 || args[0]->type != TAURARO_STRING) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    char* name = args[0]->data.str_val;
+    
+    for (size_t i = 0; i < tauraro_memory_state.arena_count; i++) {
+        if (strcmp(tauraro_memory_state.arenas[i]->name, name) == 0) {
+            tauraro_arena_t* arena = tauraro_memory_state.arenas[i];
+            
+            // Free all buffers in arena
+            for (size_t j = 0; j < arena->count; j++) {
+                free(arena->buffers[j]);
+            }
+            free(arena->buffers);
+            free(arena->sizes);
+            free(arena->name);
+            free(arena);
+            
+            // Remove from list
+            for (size_t j = i; j < tauraro_memory_state.arena_count - 1; j++) {
+                tauraro_memory_state.arenas[j] = tauraro_memory_state.arenas[j + 1];
+            }
+            tauraro_memory_state.arena_count--;
+            break;
+        }
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_NONE;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_reset_arena_impl() -> String {
+    r#"tauraro_value_t* tauraro_reset_arena(int argc, tauraro_value_t** args) {
+    if (argc != 1 || args[0]->type != TAURARO_STRING) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    char* name = args[0]->data.str_val;
+    
+    for (size_t i = 0; i < tauraro_memory_state.arena_count; i++) {
+        if (strcmp(tauraro_memory_state.arenas[i]->name, name) == 0) {
+            tauraro_arena_t* arena = tauraro_memory_state.arenas[i];
+            
+            // Free all buffers but keep arena
+            for (size_t j = 0; j < arena->count; j++) {
+                free(arena->buffers[j]);
+            }
+            arena->count = 0;
+            break;
+        }
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_NONE;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_memory_stats_impl() -> String {
+    r#"tauraro_value_t* tauraro_memory_stats(int argc, tauraro_value_t** args) {
+    (void)argc; (void)args;
+    
+    tauraro_memory_init();
+    
+    size_t total_manual = 0;
+    for (size_t i = 0; i < tauraro_memory_state.buffer_count; i++) {
+        total_manual += tauraro_memory_state.buffer_sizes[i];
+    }
+    
+    size_t total_arena = 0;
+    for (size_t i = 0; i < tauraro_memory_state.arena_count; i++) {
+        for (size_t j = 0; j < tauraro_memory_state.arenas[i]->count; j++) {
+            total_arena += tauraro_memory_state.arenas[i]->sizes[j];
+        }
+    }
+    
+    char buffer[512];
+    snprintf(buffer, sizeof(buffer),
+        "Memory Strategy: Manual\n"
+        "Manual Buffers: %zu (%zu bytes)\n"
+        "Arenas: %zu (%zu bytes)",
+        tauraro_memory_state.buffer_count, total_manual,
+        tauraro_memory_state.arena_count, total_arena
+    );
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    result->data.str_val = strdup(buffer);
+    return result;
+}
+"#.to_string()
+}
+
+// ============================================================================
+// Low-level System Programming Functions
+// ============================================================================
+
+fn generate_sizeof_impl() -> String {
+    r#"tauraro_value_t* tauraro_sizeof(int argc, tauraro_value_t** args) {
+    if (argc != 1) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_INT;
+        result->data.int_val = 0;
+        return result;
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    
+    // Return size based on type
+    switch (args[0]->type) {
+        case TAURARO_INT:
+            result->data.int_val = sizeof(long long);
+            break;
+        case TAURARO_FLOAT:
+            result->data.int_val = sizeof(double);
+            break;
+        case TAURARO_BOOL:
+            result->data.int_val = sizeof(int);
+            break;
+        case TAURARO_STRING:
+            result->data.int_val = args[0]->data.str_val ? strlen(args[0]->data.str_val) + 1 : 0;
+            break;
+        default:
+            result->data.int_val = sizeof(tauraro_value_t);
+            break;
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_alignof_impl() -> String {
+    r#"tauraro_value_t* tauraro_alignof(int argc, tauraro_value_t** args) {
+    if (argc != 1) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_INT;
+        result->data.int_val = 0;
+        return result;
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    
+    // Return alignment based on type
+    switch (args[0]->type) {
+        case TAURARO_INT:
+            result->data.int_val = _Alignof(long long);
+            break;
+        case TAURARO_FLOAT:
+            result->data.int_val = _Alignof(double);
+            break;
+        default:
+            result->data.int_val = _Alignof(void*);
+            break;
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_memcpy_impl() -> String {
+    r#"tauraro_value_t* tauraro_memcpy(int argc, tauraro_value_t** args) {
+    if (argc != 3) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    void* dest = (void*)(uintptr_t)args[0]->data.int_val;
+    void* src = (void*)(uintptr_t)args[1]->data.int_val;
+    size_t n = (size_t)args[2]->data.int_val;
+    
+    if (dest && src && n > 0) {
+        memcpy(dest, src, n);
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    result->data.int_val = (long long)(uintptr_t)dest;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_memset_impl() -> String {
+    r#"tauraro_value_t* tauraro_memset(int argc, tauraro_value_t** args) {
+    if (argc != 3) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    void* dest = (void*)(uintptr_t)args[0]->data.int_val;
+    int value = (int)args[1]->data.int_val;
+    size_t n = (size_t)args[2]->data.int_val;
+    
+    if (dest && n > 0) {
+        memset(dest, value, n);
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    result->data.int_val = (long long)(uintptr_t)dest;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_memmove_impl() -> String {
+    r#"tauraro_value_t* tauraro_memmove(int argc, tauraro_value_t** args) {
+    if (argc != 3) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    void* dest = (void*)(uintptr_t)args[0]->data.int_val;
+    void* src = (void*)(uintptr_t)args[1]->data.int_val;
+    size_t n = (size_t)args[2]->data.int_val;
+    
+    if (dest && src && n > 0) {
+        memmove(dest, src, n);
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    result->data.int_val = (long long)(uintptr_t)dest;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_memcmp_impl() -> String {
+    r#"tauraro_value_t* tauraro_memcmp(int argc, tauraro_value_t** args) {
+    if (argc != 3) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_INT;
+        result->data.int_val = -1;
+        return result;
+    }
+    
+    void* s1 = (void*)(uintptr_t)args[0]->data.int_val;
+    void* s2 = (void*)(uintptr_t)args[1]->data.int_val;
+    size_t n = (size_t)args[2]->data.int_val;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    
+    if (s1 && s2 && n > 0) {
+        result->data.int_val = memcmp(s1, s2, n);
+    } else {
+        result->data.int_val = -1;
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_ptr_read_impl() -> String {
+    r#"tauraro_value_t* tauraro_ptr_read(int argc, tauraro_value_t** args) {
+    if (argc < 1 || argc > 2) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    void* ptr = (void*)(uintptr_t)args[0]->data.int_val;
+    int byte_size = (argc > 1) ? (int)args[1]->data.int_val : 8;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    
+    if (ptr) {
+        switch (byte_size) {
+            case 1: result->data.int_val = *(int8_t*)ptr; break;
+            case 2: result->data.int_val = *(int16_t*)ptr; break;
+            case 4: result->data.int_val = *(int32_t*)ptr; break;
+            case 8: result->data.int_val = *(int64_t*)ptr; break;
+            default: result->data.int_val = *(int64_t*)ptr; break;
+        }
+    } else {
+        result->data.int_val = 0;
+    }
+    
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_ptr_write_impl() -> String {
+    r#"tauraro_value_t* tauraro_ptr_write(int argc, tauraro_value_t** args) {
+    if (argc < 2 || argc > 3) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+    
+    void* ptr = (void*)(uintptr_t)args[0]->data.int_val;
+    long long value = args[1]->data.int_val;
+    int byte_size = (argc > 2) ? (int)args[2]->data.int_val : 8;
+    
+    if (ptr) {
+        switch (byte_size) {
+            case 1: *(int8_t*)ptr = (int8_t)value; break;
+            case 2: *(int16_t*)ptr = (int16_t)value; break;
+            case 4: *(int32_t*)ptr = (int32_t)value; break;
+            case 8: *(int64_t*)ptr = (int64_t)value; break;
+            default: *(int64_t*)ptr = (int64_t)value; break;
+        }
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_NONE;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_ptr_offset_impl() -> String {
+    r#"tauraro_value_t* tauraro_ptr_offset(int argc, tauraro_value_t** args) {
+    if (argc != 2) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_INT;
+        result->data.int_val = 0;
+        return result;
+    }
+    
+    uintptr_t ptr = (uintptr_t)args[0]->data.int_val;
+    long long offset = args[1]->data.int_val;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    result->data.int_val = (long long)(ptr + offset);
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_null_ptr_impl() -> String {
+    r#"tauraro_value_t* tauraro_null_ptr(int argc, tauraro_value_t** args) {
+    (void)argc; (void)args;
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    result->data.int_val = 0;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_is_null_impl() -> String {
+    r#"tauraro_value_t* tauraro_is_null(int argc, tauraro_value_t** args) {
+    if (argc != 1) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_BOOL;
+        result->data.bool_val = 1;
+        return result;
+    }
+    
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_BOOL;
+    result->data.bool_val = (args[0]->data.int_val == 0) ? 1 : 0;
+    return result;
+}
+"#.to_string()
 }
