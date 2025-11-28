@@ -148,6 +148,7 @@ cargo build --release
 - [Functions](language/functions.md)
 - [Classes and OOP](language/classes.md)
 - [Modules and Imports](language/modules.md)
+- [Reserved Keywords](language/keywords.md) - **NEW!** All reserved words and builtins
 
 ### Type System
 - [Hybrid Typing](types/hybrid-typing.md)
