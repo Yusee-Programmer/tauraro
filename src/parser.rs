@@ -3,6 +3,93 @@ use crate::ast::*;
 use crate::ast::UnpackTarget;
 use thiserror::Error;
 use std::fmt;
+use std::collections::HashSet;
+use std::sync::LazyLock;
+
+/// Reserved keywords that cannot be used as identifiers (English)
+static RESERVED_KEYWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    HashSet::from([
+        // Control flow
+        "if", "elif", "else", "for", "while", "break", "continue", "return",
+        "pass", "yield", "match", "case",
+        // Definitions
+        "func", "def", "class", "lambda",
+        // Imports
+        "import", "from", "as", "extern", "export",
+        // Exception handling
+        "try", "except", "catch", "finally", "raise", "throw", "with",
+        // Async
+        "async", "await",
+        // Scope
+        "global", "nonlocal",
+        // Logical operators
+        "and", "or", "not", "in", "is",
+        // Other
+        "del", "assert",
+        // Constants
+        "True", "true", "False", "false", "None", "none", "null",
+        // Hausa keywords
+        "aiki", "iri", "idan", "kokuma_idan", "akasi", "duk", "yayinda",
+        "maido", "tsaya", "cigaba", "shigoda", "daga", "dasunan", "waje",
+        "fitar", "marasa_jira", "jira", "gwada", "kama", "karshe", "jefa",
+        "tare", "bayar", "dan_aiki", "daidaita", "yanayi", "acikin", "shine",
+        "wuce", "duniya", "ba_gida", "share", "tabbatar",
+        "gaskiyane", "karyane", "babu",
+        "dakuma", "ko", "ba",
+    ])
+});
+
+/// Builtin function names that cannot be redefined (reserved)
+static BUILTIN_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    HashSet::from([
+        // Core I/O
+        "print", "input",
+        // Type conversions
+        "int", "float", "str", "bool", "list", "dict", "tuple", "set", "bytes",
+        // Sequence operations
+        "len", "range", "enumerate", "zip", "map", "filter", "sorted", "reversed",
+        // Aggregation
+        "sum", "min", "max", "any", "all",
+        // Math
+        "abs", "round", "pow", "divmod",
+        // Type checking
+        "type", "isinstance", "issubclass", "callable",
+        // Object introspection
+        "hasattr", "getattr", "setattr", "delattr",
+        "id", "hash", "repr",
+        // Iteration
+        "iter", "next",
+        // String/char operations
+        "chr", "ord", "hex", "bin", "oct", "format",
+        // Object creation
+        "object", "super", "staticmethod", "classmethod", "property",
+        // Memory management
+        "sizeof", "alignof", "allocate", "free", "memcpy", "memset", "memmove",
+        "memory_allocate", "memory_free", "memory_copy", "memory_set", "memory_move",
+        "memory_read", "memory_write",
+        "read_byte", "write_byte", "read_word", "write_word",
+        "is_null", "pointer_add", "pointer_sub", "pointer_to_int", "int_to_pointer",
+        "addressof",
+        // Other builtins
+        "open", "exec", "eval", "compile", "globals", "locals", "vars", "dir",
+        "help", "exit", "quit",
+    ])
+});
+
+/// Check if a name is a reserved keyword (cannot be used as identifier)
+pub fn is_reserved_keyword(name: &str) -> bool {
+    RESERVED_KEYWORDS.contains(name)
+}
+
+/// Check if a name is a builtin function name (cannot be redefined)
+pub fn is_builtin_name(name: &str) -> bool {
+    BUILTIN_NAMES.contains(name)
+}
+
+/// Check if a name is reserved (either keyword or builtin)
+pub fn is_reserved_identifier(name: &str) -> bool {
+    is_reserved_keyword(name) || is_builtin_name(name)
+}
 
 #[derive(Error, Debug)]
 pub enum ParseError {
@@ -14,6 +101,10 @@ pub enum ParseError {
     InvalidSyntax { message: String },
     #[error("Indentation error: {message}")]
     IndentationError { message: String },
+    #[error("Cannot use reserved keyword '{name}' as {context}")]
+    ReservedKeyword { name: String, context: String },
+    #[error("Cannot redefine builtin '{name}'")]
+    BuiltinRedefinition { name: String },
 }
 
 impl ParseError {
@@ -106,6 +197,22 @@ impl Parser {
         } else {
             false
         }
+    }
+
+    /// Validate that a name can be used as an identifier (not reserved)
+    fn validate_identifier(&self, name: &str, context: &str) -> Result<(), ParseError> {
+        if is_reserved_keyword(name) {
+            return Err(ParseError::ReservedKeyword {
+                name: name.to_string(),
+                context: context.to_string(),
+            });
+        }
+        if is_builtin_name(name) {
+            return Err(ParseError::BuiltinRedefinition {
+                name: name.to_string(),
+            });
+        }
+        Ok(())
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
@@ -336,6 +443,8 @@ impl Parser {
                     
                     if self.match_token(&[Token::Colon]) {
                         // This is a typed variable declaration
+                        // Validate variable name is not reserved
+                        self.validate_identifier(&name, "variable name")?;
                         let type_annotation = Some(self.type_annotation()?);
                         self.consume(Token::Assign, "Expected '=' after type annotation")?;
                         let value = self.expression()?;
@@ -529,7 +638,9 @@ impl Parser {
         let is_async = self.match_token(&[Token::KwAsync]);
         self.consume(Token::KwFunc, "Expected 'func', 'def', or 'aiki'")?;
         
-        let name = self.consume_identifier_or_keyword()?;
+        let name = self.consume_identifier()?;
+        // Validate function name is not reserved
+        self.validate_identifier(&name, "function name")?;
         
         // Optional parentheses for parameters
         let mut params = Vec::new();
@@ -540,7 +651,9 @@ impl Parser {
                     if self.match_token(&[Token::Star]) {
                         if self.match_token(&[Token::Star]) {
                             // **kwargs
-                            let param_name = self.consume_identifier_or_keyword()?;
+                            let param_name = self.consume_identifier()?;
+                            // Validate parameter name is not reserved
+                            self.validate_identifier(&param_name, "parameter name")?;
                             params.push(Param {
                                 name: param_name,
                                 type_annotation: None,
@@ -549,7 +662,9 @@ impl Parser {
                             });
                         } else {
                             // *args
-                            let param_name = self.consume_identifier_or_keyword()?;
+                            let param_name = self.consume_identifier()?;
+                            // Validate parameter name is not reserved
+                            self.validate_identifier(&param_name, "parameter name")?;
                             params.push(Param {
                                 name: param_name,
                                 type_annotation: None,
@@ -559,7 +674,9 @@ impl Parser {
                         }
                     } else if self.match_token(&[Token::Power]) {
                         // **kwargs (alternative syntax)
-                        let param_name = self.consume_identifier_or_keyword()?;
+                        let param_name = self.consume_identifier()?;
+                        // Validate parameter name is not reserved
+                        self.validate_identifier(&param_name, "parameter name")?;
                         params.push(Param {
                             name: param_name,
                             type_annotation: None,
@@ -567,7 +684,9 @@ impl Parser {
                             kind: ParamKind::VarKwargs,
                         });
                     } else {
-                        let param_name = self.consume_identifier_or_keyword()?;
+                        let param_name = self.consume_identifier()?;
+                        // Validate parameter name is not reserved
+                        self.validate_identifier(&param_name, "parameter name")?;
                         let type_annotation = if self.match_token(&[Token::Colon]) {
                             Some(self.type_annotation()?)
                         } else {
@@ -620,7 +739,9 @@ impl Parser {
 
     fn class_def(&mut self) -> Result<Statement, ParseError> {
         self.consume(Token::KwClass, "Expected 'class' or 'iri'")?;
-        let name = self.consume_identifier_or_keyword()?;
+        let name = self.consume_identifier()?;
+        // Validate class name is not reserved
+        self.validate_identifier(&name, "class name")?;
         
         let mut bases = Vec::new();
         if self.match_token(&[Token::LParen]) {
@@ -734,6 +855,8 @@ impl Parser {
                     items.push(nested);
                 } else if matches!(self.peek().token, Token::Identifier(_)) {
                     let name = self.consume_identifier()?;
+                    // Validate loop variable name is not reserved
+                    self.validate_identifier(&name, "loop variable")?;
                     items.push(crate::ast::AssignTarget::Identifier(name, None));
                 } else {
                     return Err(ParseError::InvalidSyntax { message: "Invalid target in tuple/list unpacking".to_string() });
@@ -748,6 +871,8 @@ impl Parser {
             Ok(crate::ast::AssignTarget::Tuple(items))
         } else if matches!(self.peek().token, Token::Identifier(_)) {
             let name = self.consume_identifier()?;
+            // Validate loop variable name is not reserved
+            self.validate_identifier(&name, "loop variable")?;
             Ok(crate::ast::AssignTarget::Identifier(name, None))
         } else {
             Err(ParseError::UnexpectedToken { expected: "identifier or tuple target".to_string(), found: format!("{:?}", self.peek().token) })
@@ -781,7 +906,10 @@ impl Parser {
             };
             
             let name = if self.match_token(&[Token::KwAs]) {
-                Some(self.consume_identifier()?)
+                let exc_name = self.consume_identifier()?;
+                // Validate exception variable name is not reserved
+                self.validate_identifier(&exc_name, "exception variable")?;
+                Some(exc_name)
             } else {
                 None
             };
@@ -1346,6 +1474,8 @@ impl Parser {
                     if !self.check(&Token::RParen) {
                         loop {
                             let param_name = self.consume_identifier()?;
+                            // Validate lambda parameter name is not reserved
+                            self.validate_identifier(&param_name, "lambda parameter")?;
                             params.push(Param {
                                 name: param_name,
                                 type_annotation: None,
@@ -1364,6 +1494,8 @@ impl Parser {
                     // Parse multiple parameters separated by commas
                     loop {
                         let param_name = self.consume_identifier()?;
+                        // Validate lambda parameter name is not reserved
+                        self.validate_identifier(&param_name, "lambda parameter")?;
                         params.push(Param {
                             name: param_name,
                             type_annotation: None,
@@ -1976,11 +2108,15 @@ impl Parser {
         };
         
         match target {
-            Expr::Identifier(name) => Ok(Statement::VariableDef {
-                name,
-                type_annotation: None,
-                value: Some(binop_expr),
-            }),
+            Expr::Identifier(name) => {
+                // Validate variable name is not reserved
+                self.validate_identifier(&name, "variable name")?;
+                Ok(Statement::VariableDef {
+                    name,
+                    type_annotation: None,
+                    value: Some(binop_expr),
+                })
+            },
             Expr::Attribute { object, name } => Ok(Statement::AttributeAssignment {
                 object: *object,
                 name,
@@ -2000,11 +2136,15 @@ impl Parser {
 
     fn create_single_assignment(&mut self, target: Expr, value: Expr) -> Result<Statement, ParseError> {
         match target {
-            Expr::Identifier(name) => Ok(Statement::VariableDef {
-                name,
-                type_annotation: None,
-                value: Some(value),
-            }),
+            Expr::Identifier(name) => {
+                // Validate variable name is not reserved
+                self.validate_identifier(&name, "variable name")?;
+                Ok(Statement::VariableDef {
+                    name,
+                    type_annotation: None,
+                    value: Some(value),
+                })
+            },
             Expr::Attribute { object, name } => Ok(Statement::AttributeAssignment {
                 object: *object,
                 name,
@@ -2021,7 +2161,11 @@ impl Parser {
                 let mut targets = Vec::new();
                 for item in items {
                     match item {
-                        Expr::Identifier(name) => targets.push(name),
+                        Expr::Identifier(name) => {
+                            // Validate each unpacking target
+                            self.validate_identifier(&name, "variable name")?;
+                            targets.push(name);
+                        },
                         _ => return Err(ParseError::InvalidSyntax {
                             message: "Tuple unpacking targets must be identifiers".to_string(),
                         }),
@@ -2043,7 +2187,11 @@ impl Parser {
         let mut target_names = Vec::new();
         for target in targets {
             match target {
-                Expr::Identifier(name) => target_names.push(name),
+                Expr::Identifier(name) => {
+                    // Validate each target name is not reserved
+                    self.validate_identifier(&name, "variable name")?;
+                    target_names.push(name);
+                },
                 _ => return Err(ParseError::InvalidSyntax {
                     message: "Multiple assignment targets must be simple identifiers".to_string(),
                 }),
@@ -2523,7 +2671,10 @@ impl Parser {
         
         let module = self.consume_module_path()?;
         let alias = if self.match_token(&[Token::KwAs]) {
-            Some(self.consume_identifier()?)
+            let alias_name = self.consume_identifier()?;
+            // Validate import alias is not reserved
+            self.validate_identifier(&alias_name, "import alias")?;
+            Some(alias_name)
         } else {
             None
         };
@@ -2562,7 +2713,10 @@ impl Parser {
                 
                 let name = self.consume_identifier()?;
                 let alias = if self.match_token(&[Token::KwAs]) {
-                    Some(self.consume_identifier()?)
+                    let alias_name = self.consume_identifier()?;
+                    // Validate import alias is not reserved
+                    self.validate_identifier(&alias_name, "import alias")?;
+                    Some(alias_name)
                 } else {
                     None
                 };
@@ -2664,7 +2818,10 @@ impl Parser {
         self.consume(Token::KwWith, "Expected 'with' or 'tare'")?;
         let context = self.expression()?;
         let alias = if self.match_token(&[Token::KwAs]) {
-            Some(self.consume_identifier()?)
+            let alias_name = self.consume_identifier()?;
+            // Validate context manager alias is not reserved
+            self.validate_identifier(&alias_name, "context manager alias")?;
+            Some(alias_name)
         } else {
             None
         };

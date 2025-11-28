@@ -1,0 +1,74 @@
+# Test file to verify reserved keyword restrictions
+# These should ALL produce errors when parsed
+
+# This file contains INVALID code that should be rejected by the parser
+
+# Test 1: Try using a keyword as variable name
+# Uncomment one at a time to test:
+
+# if = 10  # Should error: Cannot use reserved keyword 'if' as variable name
+
+# Test 2: Try using builtin as variable name
+# print = 10  # Should error: Cannot redefine builtin 'print'
+
+# Test 3: Valid code - this should work
+valid_var = 10
+print(valid_var)
+
+# Test 4: Try using keyword as function name
+# func True():  # Should error
+#     pass
+
+# func print():  # Should error - redefining builtin
+#     pass
+
+# Test 5: Valid function
+func my_function():
+    return 42
+
+print(my_function())
+
+# Test 6: Try using keyword as class name
+# class None:  # Should error
+#     pass
+
+# Test 7: Valid class
+class MyClass:
+    def __init__(self):
+        self.value = 10
+
+obj = MyClass()
+print(obj.value)
+
+# Test 8: Try using keyword in for loop
+# for True in range(5):  # Should error
+#     print(True)
+
+# Test 9: Valid for loop
+for i in range(3):
+    print(i)
+
+# Test 10: Try using builtin as lambda parameter
+# add = lambda len: len + 1  # Should error - len is a builtin
+
+# Test 11: Valid lambda
+add = lambda x: x + 1
+print(add(5))
+
+# Test 12: Try using keyword as exception variable
+# try:
+#     x = 1/0
+# except Exception as True:  # Should error
+#     print("error")
+
+# Test 13: Valid exception handling
+try:
+    x = 1/0
+except Exception as e:
+    print("Caught error")
+
+# Test 14: Try using keyword as with alias
+# with open("test.txt") as None:  # Should error
+#     pass
+
+print("All valid tests passed!")

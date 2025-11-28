@@ -1496,23 +1496,44 @@ fn generate_sizeof_impl() -> String {
     tauraro_value_t* result = tauraro_value_new();
     result->type = TAURARO_INT;
     
-    // Return size based on type
-    switch (args[0]->type) {
-        case TAURARO_INT:
-            result->data.int_val = sizeof(long long);
-            break;
-        case TAURARO_FLOAT:
-            result->data.int_val = sizeof(double);
-            break;
-        case TAURARO_BOOL:
-            result->data.int_val = sizeof(int);
-            break;
-        case TAURARO_STRING:
-            result->data.int_val = args[0]->data.str_val ? strlen(args[0]->data.str_val) + 1 : 0;
-            break;
-        default:
-            result->data.int_val = sizeof(tauraro_value_t);
-            break;
+    // If argument is a string, parse it as a type name
+    if (args[0]->type == TAURARO_STRING && args[0]->data.str_val) {
+        const char* type_name = args[0]->data.str_val;
+        if (strcmp(type_name, "int") == 0 || strcmp(type_name, "int32") == 0) {
+            result->data.int_val = 4;
+        } else if (strcmp(type_name, "int8") == 0 || strcmp(type_name, "char") == 0 || strcmp(type_name, "byte") == 0) {
+            result->data.int_val = 1;
+        } else if (strcmp(type_name, "int16") == 0 || strcmp(type_name, "short") == 0) {
+            result->data.int_val = 2;
+        } else if (strcmp(type_name, "int64") == 0 || strcmp(type_name, "long") == 0) {
+            result->data.int_val = 8;
+        } else if (strcmp(type_name, "float") == 0 || strcmp(type_name, "float32") == 0) {
+            result->data.int_val = 4;
+        } else if (strcmp(type_name, "float64") == 0 || strcmp(type_name, "double") == 0) {
+            result->data.int_val = 8;
+        } else if (strcmp(type_name, "pointer") == 0 || strcmp(type_name, "ptr") == 0) {
+            result->data.int_val = sizeof(void*);
+        } else if (strcmp(type_name, "bool") == 0) {
+            result->data.int_val = 1;
+        } else {
+            result->data.int_val = sizeof(void*);
+        }
+    } else {
+        // Return size based on value type
+        switch (args[0]->type) {
+            case TAURARO_INT:
+                result->data.int_val = sizeof(long long);
+                break;
+            case TAURARO_FLOAT:
+                result->data.int_val = sizeof(double);
+                break;
+            case TAURARO_BOOL:
+                result->data.int_val = sizeof(int);
+                break;
+            default:
+                result->data.int_val = sizeof(tauraro_value_t);
+                break;
+        }
     }
     
     return result;
@@ -1532,17 +1553,33 @@ fn generate_alignof_impl() -> String {
     tauraro_value_t* result = tauraro_value_new();
     result->type = TAURARO_INT;
     
-    // Return alignment based on type
-    switch (args[0]->type) {
-        case TAURARO_INT:
-            result->data.int_val = _Alignof(long long);
-            break;
-        case TAURARO_FLOAT:
-            result->data.int_val = _Alignof(double);
-            break;
-        default:
+    // If argument is a string, parse it as a type name
+    if (args[0]->type == TAURARO_STRING && args[0]->data.str_val) {
+        const char* type_name = args[0]->data.str_val;
+        if (strcmp(type_name, "int8") == 0 || strcmp(type_name, "char") == 0 || strcmp(type_name, "byte") == 0 || strcmp(type_name, "bool") == 0) {
+            result->data.int_val = 1;
+        } else if (strcmp(type_name, "int16") == 0 || strcmp(type_name, "short") == 0) {
+            result->data.int_val = 2;
+        } else if (strcmp(type_name, "int") == 0 || strcmp(type_name, "int32") == 0 || strcmp(type_name, "float") == 0 || strcmp(type_name, "float32") == 0) {
+            result->data.int_val = 4;
+        } else if (strcmp(type_name, "int64") == 0 || strcmp(type_name, "long") == 0 || strcmp(type_name, "float64") == 0 || strcmp(type_name, "double") == 0 || strcmp(type_name, "pointer") == 0 || strcmp(type_name, "ptr") == 0) {
+            result->data.int_val = 8;
+        } else {
             result->data.int_val = _Alignof(void*);
-            break;
+        }
+    } else {
+        // Return alignment based on value type
+        switch (args[0]->type) {
+            case TAURARO_INT:
+                result->data.int_val = _Alignof(long long);
+                break;
+            case TAURARO_FLOAT:
+                result->data.int_val = _Alignof(double);
+                break;
+            default:
+                result->data.int_val = _Alignof(void*);
+                break;
+        }
     }
     
     return result;
