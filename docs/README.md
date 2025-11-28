@@ -10,6 +10,7 @@ Tauraro is a modern programming language that combines:
 - **Hybrid typing** - Optional static types with dynamic fallback
 - **Multiple backends** - Run with VM or compile to native C
 - **Rich Standard Library** - HTTP, async, subprocess, and more - all built-in
+- **System Programming** - Memory management, pointers, atomics, bare-metal support
 - **Easy to learn** - If you know Python, you know Tauraro
 
 ## Recent Updates
@@ -56,6 +57,55 @@ result: int = call_function(MessageBoxA, 0, "Hello!", "Tauraro", 0)
 - ✅ **Cross-Platform**: Windows, Linux, macOS
 
 📖 **[See Full Release Notes](RELEASE_NOTES_v0.2.0.md)** for complete details!
+
+### 🚀 NEW: Bare-Metal & System Programming Support
+
+Write OS kernels, device drivers, and embedded firmware in Tauraro!
+
+#### Bare-Metal Compilation
+```bash
+# Compile for freestanding (no OS) targets
+tauraro compile kernel.tr --freestanding --entry-point kernel_main --target-arch x86_64
+```
+
+#### Hardware Access
+```python
+# Memory-mapped I/O
+value: int = mmio_read32(0xFEE00000)  # Read APIC register
+mmio_write32(0xB8000, 0x0F41)         # Write to VGA buffer
+
+# Port I/O (x86)
+scancode: int = port_in(0x60)          # Read keyboard
+port_out(0x3F8, ord('A'))              # Write to serial port
+
+# Interrupt control
+disable_interrupts()
+# ... critical section ...
+enable_interrupts()
+
+# CPU control registers
+cr0: int = read_cr0()
+write_cr3(page_table_address)
+```
+
+#### System Programming Primitives
+```python
+# Manual memory management
+buffer = allocate(4096)
+memset(buffer, 0, 4096)
+ptr_write(buffer, "int32", 42)
+value: int = ptr_read(buffer, "int32")
+free(buffer)
+
+# Atomic operations
+old = atomic_add(counter_addr, 1)
+success = atomic_cas(lock_addr, 0, 1)
+
+# Volatile I/O
+status = volatile_read(hw_register, "int32")
+```
+
+📖 **[See Bare-Metal Guide](advanced/baremetal.md)** for complete details!
 
 ### Built-in Modules (Always Available)
 All HTTP and async modules are now available by default:
@@ -116,6 +166,7 @@ cargo build --release
 - [Type Conversion](builtins/conversions.md)
 - [I/O Functions](builtins/io.md)
 - [Introspection](builtins/introspection.md)
+- [System Programming](builtins/system-programming.md) - **NEW!** Memory, pointers, atomics
 
 ### Standard Library
 - [Available Modules](stdlib/modules.md) - **Updated with new modules!**
@@ -138,6 +189,7 @@ cargo build --release
 - [Memory Management](advanced/memory.md)
 - [Concurrency](advanced/concurrency.md)
 - [Interoperability](advanced/interop.md)
+- [Bare-Metal Development](advanced/baremetal.md) - **NEW!** OS kernels, drivers, embedded
 
 ### API Reference
 - [Language API](api/language.md)

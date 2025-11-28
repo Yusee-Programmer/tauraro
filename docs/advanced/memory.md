@@ -133,6 +133,123 @@ print(stats)
 # Arenas: 2 (8192 bytes)
 ```
 
+## Low-Level Memory Operations
+
+Tauraro provides C-like memory manipulation primitives for systems programming.
+
+### Memory Copy/Set
+
+```python
+# Copy memory
+memcpy(dest, src, size)      # Copy 'size' bytes from src to dest
+memmove(dest, src, size)     # Safe copy for overlapping regions
+copy_memory(dest, src, size) # Alias for memcpy
+
+# Set memory
+memset(ptr, value, size)     # Fill 'size' bytes with 'value'
+zero_memory(ptr, size)       # Fill with zeros
+
+# Compare memory
+result = memcmp(ptr1, ptr2, size)  # Returns 0 if equal
+result = compare_memory(ptr1, ptr2, size)  # Alias
+```
+
+### Pointer Operations
+
+```python
+# Create null pointer
+ptr = null_ptr()
+
+# Check if null
+if is_null(ptr):
+    print("Pointer is null")
+
+# Pointer arithmetic
+new_ptr = ptr_offset(base_ptr, 16)  # Add 16 bytes
+
+# Read/write through pointers
+value = ptr_read(ptr, "int")      # Read int64
+value = ptr_read(ptr, "int32")    # Read int32
+value = ptr_read(ptr, "float")    # Read double
+value = ptr_read(ptr, "int8")     # Read byte
+
+ptr_write(ptr, "int", 42)         # Write int64
+ptr_write(ptr, "float", 3.14)     # Write double
+```
+
+### Type Sizes
+
+```python
+sizeof("int")      # 8 bytes (int64_t)
+sizeof("float")    # 8 bytes (double)
+sizeof("int32")    # 4 bytes
+sizeof("int8")     # 1 byte
+sizeof("pointer")  # 8 bytes (64-bit)
+
+alignof("int")     # 8 bytes alignment
+alignof("pointer") # 8 bytes alignment
+```
+
+### Volatile Operations
+
+For hardware access and preventing compiler optimization:
+
+```python
+# Always read from memory (no caching)
+value = volatile_read(address, "int32")
+
+# Always write to memory
+volatile_write(address, "int32", value)
+```
+
+### Atomic Operations
+
+Thread-safe atomic operations:
+
+```python
+# Atomic load/store
+value = atomic_load(address)
+atomic_store(address, value)
+
+# Atomic arithmetic
+old_value = atomic_add(address, 5)    # Returns old value
+old_value = atomic_sub(address, 3)
+
+# Compare-and-swap
+success = atomic_cas(address, expected, new_value)
+
+# Memory barrier
+memory_barrier()  # Full memory fence
+```
+
+### Cache Operations
+
+```python
+# Prefetch memory into cache
+prefetch(address)
+
+# Get cache line size
+line_size = cache_line_size()  # Usually 64 bytes
+```
+
+### Stack Allocation
+
+```python
+# Allocate on stack (faster, auto-freed)
+buffer = stack_alloc(256)
+# No need to free - cleaned up automatically
+```
+
+### Bit Manipulation
+
+```python
+# Reinterpret bits as different type
+int_bits = bit_cast(float_value, "float", "int")
+float_val = bit_cast(int_value, "int", "float")
+```
+
+See [System Programming Builtins](../builtins/system-programming.md) for complete details.
+
 ## Mixing Strategies
 
 You can use different strategies in different parts of your code:

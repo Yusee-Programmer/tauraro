@@ -371,6 +371,80 @@ tauraro compile script.py -o program.exe --target windows
 tauraro compile script.py -o program-macos --target darwin
 ```
 
+## Bare-Metal Compilation (NEW!)
+
+Tauraro supports compiling for bare-metal targets like OS kernels, bootloaders, and embedded systems.
+
+### Freestanding Mode
+
+```bash
+# Basic freestanding compilation
+tauraro compile kernel.tr -o kernel.c --backend c --freestanding
+
+# Full bare-metal setup
+tauraro compile kernel.tr -o kernel.c --backend c \
+    --freestanding \
+    --no-stdlib \
+    --entry-point kernel_main \
+    --target-arch x86_64 \
+    --inline-asm
+```
+
+### Bare-Metal Flags
+
+| Flag | Description |
+|------|-------------|
+| `--freestanding` | No C standard library, real hardware access |
+| `--no-stdlib` | Don't link standard library |
+| `--entry-point <name>` | Custom entry point (default: `main`) |
+| `--target-arch <arch>` | Target architecture: `x86`, `x86_64`, `arm`, `aarch64`, `riscv32`, `riscv64` |
+| `--inline-asm` | Enable inline assembly support |
+
+### Standard vs Freestanding Mode
+
+| Feature | Standard Mode | Freestanding Mode |
+|---------|---------------|-------------------|
+| C stdlib | ✅ Available | ❌ Not used |
+| Hardware I/O | Stub (returns 0) | Real hardware access |
+| Interrupts | No-op | Real CLI/STI |
+| Entry point | `main()` | Custom (e.g., `kernel_main`) |
+| Target | User-space apps | OS kernels, drivers |
+
+### Generated Hardware Access Code
+
+**Standard Mode (Safe Testing):**
+```c
+// Stub - safe for testing on regular OS
+static inline uint8_t mmio_read8(uintptr_t addr) {
+    (void)addr;
+    return 0;
+}
+```
+
+**Freestanding Mode (Real Hardware):**
+```c
+// Real hardware access
+static inline uint8_t mmio_read8(uintptr_t addr) {
+    return *(volatile uint8_t*)addr;
+}
+```
+
+### Example: Compiling an OS Kernel
+
+```bash
+# 1. Generate freestanding C code
+tauraro compile kernel.tr -o kernel.c --backend c \
+    --freestanding --entry-point kernel_main
+
+# 2. Cross-compile for target
+x86_64-elf-gcc -ffreestanding -nostdlib -c kernel.c -o kernel.o
+
+# 3. Link with bootloader
+x86_64-elf-ld -T linker.ld -o kernel.elf boot.o kernel.o
+```
+
+See [Bare-Metal Development Guide](../advanced/baremetal.md) for complete details.
+
 ## Binary Size Optimization
 
 ### Strip Debug Symbols
