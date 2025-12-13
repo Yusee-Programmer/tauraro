@@ -4,9 +4,11 @@
 //! Comprehensive support for all Tauraro language constructs with native type inference.
 
 pub mod builtins;
+pub mod builtin_ffi;
 pub mod compiler;
 pub mod functions;
 pub mod memory_management;
+pub mod module_compiler;
 pub mod oop;
 pub mod runtime;
 pub mod types;
@@ -467,13 +469,34 @@ impl CTranspiler {
         }
         output.push_str("\n");
 
+        // Extract imported modules and add FFI type declarations
+        let imported_modules = crate::codegen::c_transpiler::module_compiler::extract_imported_modules(module);
+        let (builtin_modules, _user_modules) = crate::codegen::c_transpiler::module_compiler::categorize_modules(&imported_modules);
+
+        if !builtin_modules.is_empty() {
+            output.push_str(&builtin_ffi::generate_ffi_types());
+            output.push_str(&builtin_ffi::generate_ffi_declarations(&builtin_modules));
+        }
+
         // Add type definitions
         output.push_str(&transpiler.generate_type_definitions());
         output.push_str("\n");
 
+        // Add forward declarations for FFI wrapper functions (after TauValue is defined)
+        if !builtin_modules.is_empty() {
+            output.push_str(&builtin_ffi::generate_wrapper_declarations(&builtin_modules));
+        }
+
         // Add utility functions
         output.push_str(&transpiler.generate_utilities());
         output.push_str("\n");
+
+        // Generate FFI wrapper functions for builtin modules
+        if !builtin_modules.is_empty() {
+            output.push_str("// FFI wrapper functions for builtin modules\n");
+            output.push_str(&builtin_ffi::generate_ffi_wrappers(&builtin_modules));
+            output.push_str("\n");
+        }
 
         // Transpile functions (forward declarations first)
         if !module.functions.is_empty() {

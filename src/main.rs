@@ -355,6 +355,40 @@ fn compile_file(
                 tauraro::codegen::c_transpiler::BaremetalOptions::default()
             };
 
+            // Extract imported modules and process them
+            let imported_modules = tauraro::codegen::c_transpiler::module_compiler::extract_imported_modules(&ir_module);
+            let (builtin_modules, user_modules) = tauraro::codegen::c_transpiler::module_compiler::categorize_modules(&imported_modules);
+            
+            // Create module compiler if there are imports
+            let mut module_compiler = if has_imports {
+                let build_dir = PathBuf::from("build");
+                let mut compiler = tauraro::codegen::c_transpiler::module_compiler::ModuleCompiler::new(&build_dir);
+                compiler.init_directories()?;
+                
+                // Process builtin modules - compile to object files
+                for module_name in &builtin_modules {
+                    if let Err(e) = compiler.process_module(module_name) {
+                        eprintln!("Warning: Failed to process builtin module '{}': {}", module_name, e);
+                    }
+                }
+                
+                // Collect object files for linking
+                object_files_to_link.extend(compiler.object_files().iter().cloned());
+                
+                if !builtin_modules.is_empty() {
+                    println!("Compiled {} builtin module(s) to object files in build/builtins/", builtin_modules.len());
+                }
+                
+                if !user_modules.is_empty() {
+                    println!("User module(s) detected: {:?}", user_modules);
+                    println!("User module headers will be generated in build/headers/");
+                }
+                
+                Some(compiler)
+            } else {
+                None
+            };
+
             let c_code_bytes = if use_native_transpiler {
                 // Use pure native C transpiler that generates native C code
                 let mut transpiler = PureNativeTranspiler::new();

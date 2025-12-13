@@ -102,7 +102,8 @@ pub fn compile_to_executable_with_objects(c_code: &str, output_path: &str, opt_l
                 let mut args = vec![temp_file.as_str()];
                 // Add additional object files
                 args.extend(object_files.iter().map(|p| p.to_str().unwrap_or("")));
-                args.extend(&["-o", output_path, opt_flag, "-lm"]);
+                // Add include path for FFI headers and allow multiple definitions (for Rust panic handler)
+                args.extend(&["-I.", "-Wl,--allow-multiple-definition", "-o", output_path, opt_flag, "-lm"]);
 
                 Command::new(compiler)
                     .args(&args)
@@ -114,6 +115,8 @@ pub fn compile_to_executable_with_objects(c_code: &str, output_path: &str, opt_l
                 let mut args = vec![temp_file.as_str()];
                 // Add additional object files
                 args.extend(object_files.iter().map(|p| p.to_str().unwrap_or("")));
+                // Add include path for FFI headers
+                args.push("-I.");
                 args.push("-o");
                 args.push(output_path);
                 args.push(&opt_flag_clang);
@@ -130,6 +133,8 @@ pub fn compile_to_executable_with_objects(c_code: &str, output_path: &str, opt_l
                 let mut args = vec![temp_file.as_str()];
                 // Add additional object files
                 args.extend(object_files.iter().map(|p| p.to_str().unwrap_or("")));
+                // Add include path for FFI headers
+                args.push("/I.");
                 args.push(&fe_flag);
                 args.push(&opt_flag_msvc);
 
