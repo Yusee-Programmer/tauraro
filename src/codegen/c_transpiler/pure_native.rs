@@ -319,15 +319,11 @@ double tauraro_float_int(int value) {
     return (double)value;
 }
 
-"#);
-
-        if self.used_builtins.contains("len") {
-            output.push_str(r#"int tauraro_len_string(const char* str) {
+int tauraro_len_string(const char* str) {
     return str ? strlen(str) : 0;
 }
 
 "#);
-        }
 
         output
     }
@@ -424,13 +420,23 @@ double tauraro_float_int(int value) {
                 Statement::ClassDef { .. } => {
                     // Skip - already handled
                 }
+                Statement::Expression(Expr::Call { func, .. }) => {
+                    // Skip top-level main() calls - we'll call user_main() instead
+                    if let Expr::Identifier(id) = func.as_ref() {
+                        if id == "main" {
+                            continue;
+                        }
+                    }
+                    let stmt_code = self.transpile_statement(stmt)?;
+                    output.push_str(&stmt_code);
+                }
                 _ => {
                     let stmt_code = self.transpile_statement(stmt)?;
                     output.push_str(&stmt_code);
                 }
             }
         }
-        
+
         // Call user's main function if it exists
         if has_user_main {
             output.push_str("    user_main();\n");
@@ -1044,6 +1050,16 @@ double tauraro_float_int(int value) {
             BinaryOp::Sub => Ok(format!("({} - {})", left_code, right_code)),
             BinaryOp::Mul => Ok(format!("({} * {})", left_code, right_code)),
             BinaryOp::Div => Ok(format!("({} / {})", left_code, right_code)),
+            BinaryOp::FloorDiv => {
+                // Floor division for integers - use integer division
+                // For floats, use floor(a/b)
+                let left_type = self.infer_expression_type(left);
+                if matches!(left_type, NativeCType::Int | NativeCType::Long) {
+                    Ok(format!("({} / {})", left_code, right_code))
+                } else {
+                    Ok(format!("floor({} / {})", left_code, right_code))
+                }
+            }
             BinaryOp::Mod => Ok(format!("({} % {})", left_code, right_code)),
             BinaryOp::Pow => {
                 // Use pow() function for exponentiation
@@ -1075,21 +1091,79 @@ double tauraro_float_int(int value) {
     }
 
     fn infer_function_return_type(&self, body: &[Statement]) -> NativeCType {
+        // First, collect local variable types from the function body
+        let mut local_var_types: HashMap<String, NativeCType> = HashMap::new();
+
+        for stmt in body {
+            if let Statement::VariableDef { name, type_annotation, value } = stmt {
+                let var_type = if let Some(type_ann) = type_annotation {
+                    self.map_type_annotation(Some(type_ann))
+                } else if let Some(val_expr) = value {
+                    self.infer_expression_type(val_expr)
+                } else {
+                    NativeCType::String
+                };
+                local_var_types.insert(name.clone(), var_type);
+            }
+        }
+
         // Look for return statements to infer return type
         for stmt in body {
             if let Statement::Return(Some(expr)) = stmt {
-                return self.infer_expression_type(expr);
+                return self.infer_return_expression_type(expr, &local_var_types);
             }
         }
         // Check if function has any return statements at all
         let has_return = body.iter().any(|stmt| matches!(stmt, Statement::Return(_)));
-        
+
         if has_return {
             // Has return statements but no explicit values - void return
             NativeCType::Void
         } else {
             // No return statements - void function
             NativeCType::Void
+        }
+    }
+
+    fn infer_return_expression_type(&self, expr: &Expr, local_vars: &HashMap<String, NativeCType>) -> NativeCType {
+        match expr {
+            Expr::Literal(value) => match value {
+                Literal::Int(_) => NativeCType::Int,
+                Literal::Float(_) => NativeCType::Double,
+                Literal::String(_) => NativeCType::String,
+                Literal::Bool(_) => NativeCType::Bool,
+                _ => NativeCType::String,
+            },
+            Expr::Identifier(id) => {
+                // Check local variables first, then fall back to instance variables
+                local_vars.get(id).cloned()
+                    .or_else(|| self.variable_types.get(id).cloned())
+                    .unwrap_or(NativeCType::String)
+            }
+            Expr::Call { func, .. } => {
+                if let Expr::Identifier(func_name) = func.as_ref() {
+                    match func_name.as_str() {
+                        "len" => NativeCType::Int,
+                        "str" => NativeCType::String,
+                        "int" => NativeCType::Int,
+                        "float" => NativeCType::Double,
+                        "print" => NativeCType::Void,
+                        _ => self.function_types.get(func_name).cloned().unwrap_or(NativeCType::String)
+                    }
+                } else {
+                    NativeCType::String
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                let left_type = self.infer_return_expression_type(left, local_vars);
+                let right_type = self.infer_return_expression_type(right, local_vars);
+                match (left_type, right_type) {
+                    (NativeCType::Double, _) | (_, NativeCType::Double) => NativeCType::Double,
+                    (NativeCType::Int, NativeCType::Int) => NativeCType::Int,
+                    _ => NativeCType::String,
+                }
+            }
+            _ => NativeCType::String,
         }
     }
 
