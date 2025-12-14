@@ -453,14 +453,21 @@ fn compile_file(
 
                     // Parse and compile the user module
                     let module_content = std::fs::read_to_string(&module_file)?;
-                    let module_lexer = tauraro::lexer::Lexer::new(&module_content);
-                    let module_tokens: Vec<_> = module_lexer.collect();
-                    let mut module_parser = tauraro::parser::Parser::new(module_tokens);
-                    let module_ast = module_parser.parse()?;
 
-                    // Type check and create semantic AST
-                    let mut module_type_checker = tauraro::semantic::TypeChecker::new();
-                    let module_semantic_ast = module_type_checker.check_program(&module_ast)?;
+                    // Lexical analysis
+                    let module_tokens = tauraro::lexer::Lexer::new(&module_content, module_file.to_string_lossy().to_string())
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| anyhow::anyhow!("Lexer error in module '{}': {}", module_name, e))?;
+
+                    // Parsing
+                    let mut module_parser = tauraro::parser::Parser::new(module_tokens);
+                    let module_ast = module_parser.parse()
+                        .map_err(|e| anyhow::anyhow!("Parser error in module '{}': {}", module_name, e))?;
+
+                    // Semantic analysis
+                    let module_semantic_ast = tauraro::semantic::Analyzer::new(strict_types)
+                        .analyze(module_ast)
+                        .map_err(|errors| anyhow::anyhow!("Semantic errors in module '{}': {:?}", module_name, errors))?;
 
                     // Transpile module to C code
                     let mut module_transpiler = PureNativeTranspiler::new();
