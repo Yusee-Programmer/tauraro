@@ -25,6 +25,10 @@ pub struct PureNativeTranspiler {
     used_builtins: HashSet<String>,
     /// Function return types for type inference
     function_types: HashMap<String, NativeCType>,
+    /// Imported modules (module_name -> optional alias)
+    imported_modules: HashMap<String, Option<String>>,
+    /// Imported names from modules (module -> [(name, alias)])
+    imported_names: HashMap<String, Vec<(String, Option<String>)>>,
 }
 
 /// Native C types for pure native code generation
@@ -84,7 +88,14 @@ impl PureNativeTranspiler {
             class_definitions: HashMap::new(),
             used_builtins: HashSet::new(),
             function_types: HashMap::new(),
+            imported_modules: HashMap::new(),
+            imported_names: HashMap::new(),
         }
+    }
+
+    /// Get list of imported module names
+    pub fn get_imported_modules(&self) -> Vec<String> {
+        self.imported_modules.keys().cloned().collect()
     }
 
     /// Generate pure native C code from Tauraro AST
@@ -130,46 +141,79 @@ impl PureNativeTranspiler {
         headers.push_str("#include <math.h>\n");
         headers.push_str("#include <stdarg.h>\n");
         headers.push_str("#include <stddef.h>\n\n");
-        
+
+        // Include user-defined module headers
+        for (module_name, _) in &self.imported_modules {
+            if !Self::is_builtin_module(module_name) {
+                headers.push_str(&format!("#include \"build/headers/{}.h\"\n", module_name));
+            }
+        }
+        for (module_name, _) in &self.imported_names {
+            if !Self::is_builtin_module(module_name) {
+                headers.push_str(&format!("#include \"build/headers/{}.h\"\n", module_name));
+            }
+        }
+        if !self.imported_modules.is_empty() || !self.imported_names.is_empty() {
+            headers.push('\n');
+        }
+
         // Add utility macros
         headers.push_str("// Utility macros\n");
         headers.push_str("#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))\n");
         headers.push_str("#define MAX_LIST_SIZE 1000\n\n");
-        
+
         headers
     }
 
+    /// Check if a module is a built-in module (has Rust FFI implementation)
+    fn is_builtin_module(name: &str) -> bool {
+        const BUILTIN_MODULES: &[&str] = &[
+            "abc", "asyncio", "base64", "collections", "copy", "csv", "datetime",
+            "exceptions", "functools", "gc", "hashlib", "httptools", "httpx",
+            "io", "itertools", "json", "logging", "math", "memory", "os",
+            "pickle", "random", "re", "socket", "sys", "threading", "time",
+            "unittest", "urllib", "websockets"
+        ];
+        BUILTIN_MODULES.contains(&name)
+    }
+
     fn collect_declarations(&mut self, program: &Program) -> Result<(), String> {
-        // Collect function signatures
+        // Collect imports and function signatures
         for stmt in &program.statements {
             match stmt {
+                Statement::Import { module, alias } => {
+                    self.imported_modules.insert(module.clone(), alias.clone());
+                }
+                Statement::FromImport { module, names } => {
+                    self.imported_names.insert(module.clone(), names.clone());
+                }
                 Statement::FunctionDef { name, params, return_type, body, .. } => {
                     let mut param_types = Vec::new();
                     for param in params {
                         let param_type = self.map_type_annotation(param.type_annotation.as_ref());
                         param_types.push((param.name.clone(), param_type));
                     }
-                    
+
                     // Infer return type from annotation or function body
                     let ret_type = if return_type.is_some() {
                         self.map_type_annotation(return_type.as_ref())
                     } else {
                         self.infer_function_return_type(body)
                     };
-                    
+
                     // Use the same renaming logic as in transpile_function
                     let func_name = if name == "main" {
                         "user_main".to_string()
                     } else {
                         name.clone()
                     };
-                    
+
                     self.function_signatures.insert(func_name.clone(), FunctionSig {
                         name: func_name.clone(),
                         params: param_types,
                         return_type: ret_type.clone(),
                     });
-                    
+
                     // Also track the function return type for type inference
                     self.function_types.insert(func_name, ret_type);
                 }
@@ -481,6 +525,16 @@ int tauraro_len_string(const char* str) {
             }
             Statement::FunctionDef { .. } => {
                 // Function definitions are handled separately
+                Ok(String::new())
+            }
+            Statement::Import { module, alias } => {
+                // Track the import for later processing
+                self.imported_modules.insert(module.clone(), alias.clone());
+                Ok(String::new()) // Imports don't generate code in the main body
+            }
+            Statement::FromImport { module, names } => {
+                // Track from imports
+                self.imported_names.insert(module.clone(), names.clone());
                 Ok(String::new())
             }
             Statement::Return(value) => {

@@ -389,18 +389,93 @@ fn compile_file(
                 None
             };
 
-            let c_code_bytes = if use_native_transpiler {
+            let (c_code_bytes, native_imported_modules) = if use_native_transpiler {
                 // Use pure native C transpiler that generates native C code
                 let mut transpiler = PureNativeTranspiler::new();
                 let c_code = transpiler.transpile_program(&semantic_ast)
                     .map_err(|e| anyhow::anyhow!("Pure native transpiler error: {}", e))?;
-                c_code.into_bytes()
+                let imported_mods = transpiler.get_imported_modules();
+                (c_code.into_bytes(), imported_mods)
             } else {
                 // If not using native transpiler, generate IR-based C code with baremetal options
                 let transpiler = tauraro::codegen::CTranspiler::with_baremetal_options(baremetal_opts);
                 let c_code = transpiler.transpile(&ir_module)?;
-                c_code.into_bytes()
+                (c_code.into_bytes(), Vec::new())
             };
+
+            // Process user-defined modules when using native transpiler
+            if use_native_transpiler && !native_imported_modules.is_empty() {
+                use tauraro::codegen::c_transpiler::module_compiler::{is_builtin_module, ModuleCompiler};
+
+                // Create module compiler if it doesn't exist yet
+                let module_comp = if let Some(ref mut mc) = module_compiler {
+                    mc
+                } else {
+                    let build_dir = PathBuf::from("build");
+                    let mut mc = ModuleCompiler::new(&build_dir);
+                    mc.init_directories()?;
+                    module_compiler = Some(mc);
+                    module_compiler.as_mut().unwrap()
+                };
+
+                // Separate builtin and user modules
+                let mut user_mods = Vec::new();
+                let mut builtin_mods = Vec::new();
+                for mod_name in &native_imported_modules {
+                    if is_builtin_module(mod_name) {
+                        builtin_mods.push(mod_name.clone());
+                    } else {
+                        user_mods.push(mod_name.clone());
+                    }
+                }
+
+                // Process builtin modules
+                for module_name in &builtin_mods {
+                    if let Err(e) = module_comp.process_module(module_name) {
+                        eprintln!("Warning: Failed to process builtin module '{}': {}", module_name, e);
+                    }
+                }
+                object_files_to_link.extend(module_comp.object_files().iter().cloned());
+                if !builtin_mods.is_empty() {
+                    println!("Compiled {} builtin module(s) to object files in build/builtins/", builtin_mods.len());
+                }
+
+                // Process user-defined modules - compile them to header files
+                for module_name in &user_mods {
+                    // Find and compile the module file
+                    let module_file = PathBuf::from(format!("{}.py", module_name));
+                    if !module_file.exists() {
+                        eprintln!("Warning: User module '{}' not found at {}", module_name, module_file.display());
+                        continue;
+                    }
+
+                    println!("  Compiling user module '{}' to header file...", module_name);
+
+                    // Parse and compile the user module
+                    let module_content = std::fs::read_to_string(&module_file)?;
+                    let module_lexer = tauraro::lexer::Lexer::new(&module_content);
+                    let module_tokens: Vec<_> = module_lexer.collect();
+                    let mut module_parser = tauraro::parser::Parser::new(module_tokens);
+                    let module_ast = module_parser.parse()?;
+
+                    // Type check and create semantic AST
+                    let mut module_type_checker = tauraro::semantic::TypeChecker::new();
+                    let module_semantic_ast = module_type_checker.check_program(&module_ast)?;
+
+                    // Transpile module to C code
+                    let mut module_transpiler = PureNativeTranspiler::new();
+                    let module_c_code = module_transpiler.transpile_program(&module_semantic_ast)
+                        .map_err(|e| anyhow::anyhow!("Failed to transpile module '{}': {}", module_name, e))?;
+
+                    // Write as header file
+                    let header_path = module_comp.write_user_module_header(module_name, &module_c_code)?;
+                    println!("  Generated header: {}", header_path.display());
+                }
+
+                if !user_mods.is_empty() {
+                    println!("Generated {} user module header(s) in build/headers/", user_mods.len());
+                }
+            }
 
             // Determine output path
             let output_path = if let Some(output_file) = output {
