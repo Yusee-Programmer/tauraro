@@ -31,6 +31,8 @@ pub fn is_builtin_function(func_name: &str) -> bool {
         | "setattr" | "delattr" | "format" | "chr" | "ord" | "hex" | "oct"
         | "bin" | "divmod" | "repr" | "ascii" | "dir" | "vars" | "id"
         | "hash" | "bytes" | "bytearray"
+        // File I/O builtins
+        | "open" | "file_read" | "file_write" | "file_close" | "file_readline"
         // Memory management builtins
         | "allocate" | "free" | "create_arena" | "destroy_arena" | "reset_arena" | "memory_stats"
         // System programming builtins
@@ -133,6 +135,12 @@ pub fn generate_builtin_implementation(func_name: &str) -> String {
         "ptr_offset" => generate_ptr_offset_impl(),
         "null_ptr" => generate_null_ptr_impl(),
         "is_null" => generate_is_null_impl(),
+        // File I/O
+        "open" => generate_open_impl(),
+        "file_read" => generate_file_read_impl(),
+        "file_write" => generate_file_write_impl(),
+        "file_close" => generate_file_close_impl(),
+        "file_readline" => generate_file_readline_impl(),
         _ => generate_generic_builtin_impl(func_name),
     }
 }
@@ -1786,10 +1794,219 @@ fn generate_is_null_impl() -> String {
         result->data.bool_val = 1;
         return result;
     }
-    
+
     tauraro_value_t* result = tauraro_value_new();
     result->type = TAURARO_BOOL;
     result->data.bool_val = (args[0]->data.int_val == 0) ? 1 : 0;
+    return result;
+}
+"#.to_string()
+}
+
+// File I/O implementations
+fn generate_open_impl() -> String {
+    r#"tauraro_value_t* tauraro_open(int argc, tauraro_value_t** args) {
+    if (argc < 1) {
+        fprintf(stderr, "Error: open() requires at least 1 argument (filename)\n");
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+
+    char* filename = args[0]->data.str_val;
+    char* mode = (argc > 1) ? args[1]->data.str_val : "r";
+
+    FILE* fp = fopen(filename, mode);
+    if (!fp) {
+        fprintf(stderr, "Error: Cannot open file '%s'\n", filename);
+        // TODO: Raise FileNotFoundError
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+
+    // Create file object
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_OBJECT;
+
+    tauraro_object_t* file_obj = malloc(sizeof(tauraro_object_t));
+    file_obj->class_name = strdup("file");
+    file_obj->attributes = malloc(sizeof(tauraro_dict_t));
+    file_obj->attributes->size = 0;
+    file_obj->attributes->capacity = 10;
+    file_obj->attributes->keys = malloc(sizeof(char*) * 10);
+    file_obj->attributes->values = malloc(sizeof(tauraro_value_t*) * 10);
+    file_obj->methods = NULL;
+    file_obj->parent = NULL;
+    file_obj->native_ptr = fp;  // Store FILE* pointer
+
+    // Store mode and filename as attributes
+    tauraro_value_t* mode_val = tauraro_value_new();
+    mode_val->type = TAURARO_STRING;
+    mode_val->data.str_val = strdup(mode);
+    tauraro_dict_set(file_obj->attributes, "mode", mode_val);
+
+    tauraro_value_t* name_val = tauraro_value_new();
+    name_val->type = TAURARO_STRING;
+    name_val->data.str_val = strdup(filename);
+    tauraro_dict_set(file_obj->attributes, "name", name_val);
+
+    tauraro_value_t* closed_val = tauraro_value_new();
+    closed_val->type = TAURARO_BOOL;
+    closed_val->data.bool_val = false;
+    tauraro_dict_set(file_obj->attributes, "closed", closed_val);
+
+    result->data.obj_val = file_obj;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_file_read_impl() -> String {
+    r#"// file.read(size=-1) - Read entire file or N bytes
+tauraro_value_t* tauraro_file_read(tauraro_value_t* file_val, int size) {
+    if (file_val->type != TAURARO_OBJECT) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_STRING;
+        result->data.str_val = strdup("");
+        return result;
+    }
+
+    tauraro_object_t* file_obj = (tauraro_object_t*)file_val->data.obj_val;
+    FILE* fp = (FILE*)file_obj->native_ptr;
+
+    // Check if file is closed
+    tauraro_value_t* closed_val = tauraro_dict_get(file_obj->attributes, "closed");
+    if (closed_val && closed_val->data.bool_val) {
+        fprintf(stderr, "Error: I/O operation on closed file\n");
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_STRING;
+        result->data.str_val = strdup("");
+        return result;
+    }
+
+    char* buffer;
+    size_t bytes_read;
+
+    if (size == -1) {
+        // Read entire file
+        fseek(fp, 0, SEEK_END);
+        long file_size = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+
+        buffer = (char*)malloc(file_size + 1);
+        bytes_read = fread(buffer, 1, file_size, fp);
+        buffer[bytes_read] = '\0';
+    } else {
+        // Read N bytes
+        buffer = (char*)malloc(size + 1);
+        bytes_read = fread(buffer, 1, size, fp);
+        buffer[bytes_read] = '\0';
+    }
+
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    result->data.str_val = buffer;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_file_write_impl() -> String {
+    r#"// file.write(data) - Write string to file
+tauraro_value_t* tauraro_file_write(tauraro_value_t* file_val, tauraro_value_t* data_val) {
+    if (file_val->type != TAURARO_OBJECT) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_INT;
+        result->data.int_val = 0;
+        return result;
+    }
+
+    tauraro_object_t* file_obj = (tauraro_object_t*)file_val->data.obj_val;
+    FILE* fp = (FILE*)file_obj->native_ptr;
+
+    // Check if file is closed
+    tauraro_value_t* closed_val = tauraro_dict_get(file_obj->attributes, "closed");
+    if (closed_val && closed_val->data.bool_val) {
+        fprintf(stderr, "Error: I/O operation on closed file\n");
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_INT;
+        result->data.int_val = 0;
+        return result;
+    }
+
+    char* data = data_val->data.str_val;
+    size_t bytes_written = fwrite(data, 1, strlen(data), fp);
+    fflush(fp);  // Ensure data is written
+
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_INT;
+    result->data.int_val = bytes_written;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_file_close_impl() -> String {
+    r#"// file.close() - Close file
+tauraro_value_t* tauraro_file_close(tauraro_value_t* file_val) {
+    if (file_val->type != TAURARO_OBJECT) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+
+    tauraro_object_t* file_obj = (tauraro_object_t*)file_val->data.obj_val;
+    FILE* fp = (FILE*)file_obj->native_ptr;
+
+    // Check if already closed
+    tauraro_value_t* closed_val = tauraro_dict_get(file_obj->attributes, "closed");
+    if (closed_val && !closed_val->data.bool_val) {
+        fclose(fp);
+        closed_val->data.bool_val = true;
+    }
+
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_NONE;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_file_readline_impl() -> String {
+    r#"// file.readline() - Read single line
+tauraro_value_t* tauraro_file_readline(tauraro_value_t* file_val) {
+    if (file_val->type != TAURARO_OBJECT) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_STRING;
+        result->data.str_val = strdup("");
+        return result;
+    }
+
+    tauraro_object_t* file_obj = (tauraro_object_t*)file_val->data.obj_val;
+    FILE* fp = (FILE*)file_obj->native_ptr;
+
+    // Check if file is closed
+    tauraro_value_t* closed_val = tauraro_dict_get(file_obj->attributes, "closed");
+    if (closed_val && closed_val->data.bool_val) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_STRING;
+        result->data.str_val = strdup("");
+        return result;
+    }
+
+    char buffer[4096];
+    if (fgets(buffer, sizeof(buffer), fp)) {
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_STRING;
+        result->data.str_val = strdup(buffer);
+        return result;
+    }
+
+    // EOF reached
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_STRING;
+    result->data.str_val = strdup("");
     return result;
 }
 "#.to_string()
