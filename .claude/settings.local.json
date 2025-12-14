@@ -159,7 +159,10 @@
       "Bash(./build/test_comprehensive_modules.exe:*)",
       "Bash(nm:*)",
       "Bash(timeout 60 ./target/release/tauraro.exe compile:*)",
-      "Bash(timeout 20 ./build/test_comprehensive_modules.exe:*)"
+      "Bash(timeout 20 ./build/test_comprehensive_modules.exe:*)",
+      "Bash(timeout 60:*)",
+      "Bash(chmod:*)",
+      "Bash(bash:*)"
     ],
     "deny": [],
     "ask": []
