@@ -162,7 +162,11 @@
       "Bash(timeout 20 ./build/test_comprehensive_modules.exe:*)",
       "Bash(timeout 60:*)",
       "Bash(chmod:*)",
-      "Bash(bash:*)"
+      "Bash(bash:*)",
+      "Bash(timeout 20 echo:*)",
+      "Bash(git merge:*)",
+      "Bash(git checkout:*)",
+      "Bash(timeout 10 bash:*)"
     ],
     "deny": [],
     "ask": []
