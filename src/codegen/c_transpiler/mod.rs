@@ -13,6 +13,7 @@ pub mod oop;
 pub mod runtime;
 pub mod types;
 pub mod pure_native;
+pub mod sys_module;
 
 use crate::ir::{IRModule, IRInstruction, IRFunction};
 use crate::value::Value;
@@ -491,6 +492,11 @@ impl CTranspiler {
         output.push_str(&transpiler.generate_utilities());
         output.push_str("\n");
 
+        // Add sys module implementation
+        output.push_str("// ===== SYS MODULE =====\n");
+        output.push_str(&sys_module::generate_sys_module_complete());
+        output.push_str("\n");
+
         // Generate FFI wrapper functions for builtin modules
         if !builtin_modules.is_empty() {
             output.push_str("// FFI wrapper functions for builtin modules\n");
@@ -588,6 +594,10 @@ impl CTranspiler {
                 // Standard main function
                 output.push_str("\nint main(int argc, char* argv[]) {\n");
             }
+
+            // Initialize sys module
+            output.push_str("    // Initialize sys module\n");
+            output.push_str("    tauraro_sys_init(argc, argv);\n\n");
 
             // Generate variable declarations
             output.push_str(&transpiler.generate_variable_declarations());
