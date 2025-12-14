@@ -346,6 +346,18 @@ impl PureNativeTranspiler {
     }
 
     fn map_type_annotation(&mut self, type_ann: Option<&Type>) -> NativeCType {
+        let mapped_type = Self::map_type_annotation_readonly(type_ann);
+        // Track collection types
+        match &mapped_type {
+            NativeCType::List(_) | NativeCType::Dict(_, _) | NativeCType::Tuple(_) => {
+                self.used_collection_types.insert(mapped_type.clone());
+            }
+            _ => {}
+        }
+        mapped_type
+    }
+
+    fn map_type_annotation_readonly(type_ann: Option<&Type>) -> NativeCType {
         match type_ann {
             Some(Type::Simple(id)) => match id.as_str() {
                 "int" => NativeCType::Int,
@@ -358,21 +370,17 @@ impl PureNativeTranspiler {
                 match name.to_lowercase().as_str() {
                     "list" => {
                         if let Some(elem_type) = args.first() {
-                            let inner = self.map_type_annotation(Some(elem_type));
-                            let list_type = NativeCType::List(Box::new(inner));
-                            self.used_collection_types.insert(list_type.clone());
-                            list_type
+                            let inner = Self::map_type_annotation_readonly(Some(elem_type));
+                            NativeCType::List(Box::new(inner))
                         } else {
                             NativeCType::Array // Fallback to generic array
                         }
                     },
                     "dict" => {
                         if args.len() >= 2 {
-                            let key_type = self.map_type_annotation(Some(&args[0]));
-                            let value_type = self.map_type_annotation(Some(&args[1]));
-                            let dict_type = NativeCType::Dict(Box::new(key_type), Box::new(value_type));
-                            self.used_collection_types.insert(dict_type.clone());
-                            dict_type
+                            let key_type = Self::map_type_annotation_readonly(Some(&args[0]));
+                            let value_type = Self::map_type_annotation_readonly(Some(&args[1]));
+                            NativeCType::Dict(Box::new(key_type), Box::new(value_type))
                         } else {
                             NativeCType::String // Fallback for untyped dict
                         }
@@ -382,14 +390,12 @@ impl PureNativeTranspiler {
             },
             Some(Type::Tuple(types)) => {
                 let native_types: Vec<NativeCType> = types.iter()
-                    .map(|t| self.map_type_annotation(Some(t)))
+                    .map(|t| Self::map_type_annotation_readonly(Some(t)))
                     .collect();
                 if native_types.is_empty() {
                     NativeCType::String // Empty tuple fallback
                 } else {
-                    let tuple_type = NativeCType::Tuple(native_types);
-                    self.used_collection_types.insert(tuple_type.clone());
-                    tuple_type
+                    NativeCType::Tuple(native_types)
                 }
             },
             Some(Type::Union(_)) => NativeCType::String, // Unions default to string
@@ -1286,7 +1292,7 @@ int tauraro_len_string(const char* str) {
         for stmt in body {
             if let Statement::VariableDef { name, type_annotation, value } = stmt {
                 let var_type = if let Some(type_ann) = type_annotation {
-                    self.map_type_annotation(Some(type_ann))
+                    Self::map_type_annotation_readonly(Some(type_ann))
                 } else if let Some(val_expr) = value {
                     self.infer_expression_type(val_expr)
                 } else {
