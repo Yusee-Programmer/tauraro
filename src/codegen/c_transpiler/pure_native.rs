@@ -29,10 +29,12 @@ pub struct PureNativeTranspiler {
     imported_modules: HashMap<String, Option<String>>,
     /// Imported names from modules (module -> [(name, alias)])
     imported_names: HashMap<String, Vec<(String, Option<String>)>>,
+    /// Collection types that need struct definitions
+    used_collection_types: HashSet<NativeCType>,
 }
 
 /// Native C types for pure native code generation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NativeCType {
     Int,      // int
     Long,     // long long
@@ -44,6 +46,9 @@ pub enum NativeCType {
     Struct(String), // struct ClassName
     TypedArray(Box<NativeCType>), // type[]
     Pointer(Box<NativeCType>), // type*
+    List(Box<NativeCType>), // List[T] -> TauraroList_T struct
+    Dict(Box<NativeCType>, Box<NativeCType>), // Dict[K, V] -> TauraroDict_K_V struct
+    Tuple(Vec<NativeCType>), // Tuple[T1, T2, ...] -> TauraroTuple_T1_T2 struct
 }
 
 impl NativeCType {
@@ -59,6 +64,40 @@ impl NativeCType {
             NativeCType::Struct(name) => format!("struct {}", name),
             NativeCType::TypedArray(inner) => format!("{}[]", inner.to_c_string()),
             NativeCType::Pointer(inner) => format!("{}*", inner.to_c_string()),
+            NativeCType::List(inner) => {
+                format!("TauraroList_{}", Self::type_to_name(inner))
+            },
+            NativeCType::Dict(key, value) => {
+                format!("TauraroDict_{}_{}", Self::type_to_name(key), Self::type_to_name(value))
+            },
+            NativeCType::Tuple(types) => {
+                let type_names: Vec<String> = types.iter()
+                    .map(|t| Self::type_to_name(t))
+                    .collect();
+                format!("TauraroTuple_{}", type_names.join("_"))
+            },
+        }
+    }
+
+    /// Convert a type to a safe C identifier name
+    fn type_to_name(ty: &NativeCType) -> String {
+        match ty {
+            NativeCType::Int => "int".to_string(),
+            NativeCType::Long => "long".to_string(),
+            NativeCType::Double => "double".to_string(),
+            NativeCType::String => "str".to_string(),
+            NativeCType::Bool => "bool".to_string(),
+            NativeCType::Void => "void".to_string(),
+            NativeCType::Array => "arr".to_string(),
+            NativeCType::Struct(name) => name.clone(),
+            NativeCType::TypedArray(inner) => format!("arr_{}", Self::type_to_name(inner)),
+            NativeCType::Pointer(inner) => format!("ptr_{}", Self::type_to_name(inner)),
+            NativeCType::List(inner) => format!("list_{}", Self::type_to_name(inner)),
+            NativeCType::Dict(k, v) => format!("dict_{}_{}", Self::type_to_name(k), Self::type_to_name(v)),
+            NativeCType::Tuple(types) => {
+                let names: Vec<String> = types.iter().map(|t| Self::type_to_name(t)).collect();
+                format!("tuple_{}", names.join("_"))
+            },
         }
     }
 }
@@ -90,6 +129,7 @@ impl PureNativeTranspiler {
             function_types: HashMap::new(),
             imported_modules: HashMap::new(),
             imported_names: HashMap::new(),
+            used_collection_types: HashSet::new(),
         }
     }
 
@@ -160,9 +200,69 @@ impl PureNativeTranspiler {
         // Add utility macros
         headers.push_str("// Utility macros\n");
         headers.push_str("#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))\n");
-        headers.push_str("#define MAX_LIST_SIZE 1000\n\n");
+        headers.push_str("#define MAX_LIST_SIZE 1000\n");
+        headers.push_str("#define MAX_DICT_SIZE 1000\n\n");
+
+        // Generate collection type struct definitions
+        if !self.used_collection_types.is_empty() {
+            headers.push_str(&self.generate_collection_structs());
+            headers.push('\n');
+        }
 
         headers
+    }
+
+    /// Generate C struct definitions for collection types (List, Dict, Tuple)
+    fn generate_collection_structs(&self) -> String {
+        let mut output = String::new();
+        output.push_str("// Collection Type Definitions\n");
+
+        for coll_type in &self.used_collection_types {
+            match coll_type {
+                NativeCType::List(inner) => {
+                    let struct_name = coll_type.to_c_string();
+                    let inner_c_type = inner.to_c_string();
+                    output.push_str(&format!(
+                        "typedef struct {{\n    {} *data;\n    size_t size;\n    size_t capacity;\n}} {};\n\n",
+                        inner_c_type, struct_name
+                    ));
+                    // Add helper functions
+                    output.push_str(&format!(
+                        "{} {}_new(size_t capacity) {{\n    {} list;\n    list.data = ({} *)malloc(capacity * sizeof({}));\n    list.size = 0;\n    list.capacity = capacity;\n    return list;\n}}\n\n",
+                        struct_name, struct_name, struct_name, inner_c_type, inner_c_type
+                    ));
+                    output.push_str(&format!(
+                        "void {}_append({} *list, {} value) {{\n    if (list->size >= list->capacity) {{\n        list->capacity *= 2;\n        list->data = ({} *)realloc(list->data, list->capacity * sizeof({}));\n    }}\n    list->data[list->size++] = value;\n}}\n\n",
+                        struct_name, struct_name, inner_c_type, inner_c_type, inner_c_type
+                    ));
+                },
+                NativeCType::Dict(key, value) => {
+                    let struct_name = coll_type.to_c_string();
+                    let key_c_type = key.to_c_string();
+                    let value_c_type = value.to_c_string();
+                    output.push_str(&format!(
+                        "typedef struct {{\n    {} *keys;\n    {} *values;\n    size_t size;\n    size_t capacity;\n}} {};\n\n",
+                        key_c_type, value_c_type, struct_name
+                    ));
+                    // Add helper functions
+                    output.push_str(&format!(
+                        "{} {}_new(size_t capacity) {{\n    {} dict;\n    dict.keys = ({} *)malloc(capacity * sizeof({}));\n    dict.values = ({} *)malloc(capacity * sizeof({}));\n    dict.size = 0;\n    dict.capacity = capacity;\n    return dict;\n}}\n\n",
+                        struct_name, struct_name, struct_name, key_c_type, key_c_type, value_c_type, value_c_type
+                    ));
+                },
+                NativeCType::Tuple(types) => {
+                    let struct_name = coll_type.to_c_string();
+                    output.push_str(&format!("typedef struct {{\n"));
+                    for (i, ty) in types.iter().enumerate() {
+                        output.push_str(&format!("    {} field{};\n", ty.to_c_string(), i));
+                    }
+                    output.push_str(&format!("}} {};\n\n", struct_name));
+                },
+                _ => {} // Only handle collection types
+            }
+        }
+
+        output
     }
 
     /// Check if a module is a built-in module (has Rust FFI implementation)
@@ -245,7 +345,19 @@ impl PureNativeTranspiler {
         Ok(())
     }
 
-    fn map_type_annotation(&self, type_ann: Option<&Type>) -> NativeCType {
+    fn map_type_annotation(&mut self, type_ann: Option<&Type>) -> NativeCType {
+        let mapped_type = Self::map_type_annotation_readonly(type_ann);
+        // Track collection types
+        match &mapped_type {
+            NativeCType::List(_) | NativeCType::Dict(_, _) | NativeCType::Tuple(_) => {
+                self.used_collection_types.insert(mapped_type.clone());
+            }
+            _ => {}
+        }
+        mapped_type
+    }
+
+    fn map_type_annotation_readonly(type_ann: Option<&Type>) -> NativeCType {
         match type_ann {
             Some(Type::Simple(id)) => match id.as_str() {
                 "int" => NativeCType::Int,
@@ -254,9 +366,38 @@ impl PureNativeTranspiler {
                 "bool" => NativeCType::Bool,
                 class_name => NativeCType::Struct(class_name.to_string()),
             },
-            Some(Type::Generic { name, .. }) if name == "list" => NativeCType::Array, // Simplified
-            Some(Type::Generic { .. }) => NativeCType::String, // Other generics default to string
-            Some(Type::Tuple(_)) => NativeCType::String, // Tuples default to string
+            Some(Type::Generic { name, args }) => {
+                match name.to_lowercase().as_str() {
+                    "list" => {
+                        if let Some(elem_type) = args.first() {
+                            let inner = Self::map_type_annotation_readonly(Some(elem_type));
+                            NativeCType::List(Box::new(inner))
+                        } else {
+                            NativeCType::Array // Fallback to generic array
+                        }
+                    },
+                    "dict" => {
+                        if args.len() >= 2 {
+                            let key_type = Self::map_type_annotation_readonly(Some(&args[0]));
+                            let value_type = Self::map_type_annotation_readonly(Some(&args[1]));
+                            NativeCType::Dict(Box::new(key_type), Box::new(value_type))
+                        } else {
+                            NativeCType::String // Fallback for untyped dict
+                        }
+                    },
+                    _ => NativeCType::String, // Other generics default to string
+                }
+            },
+            Some(Type::Tuple(types)) => {
+                let native_types: Vec<NativeCType> = types.iter()
+                    .map(|t| Self::map_type_annotation_readonly(Some(t)))
+                    .collect();
+                if native_types.is_empty() {
+                    NativeCType::String // Empty tuple fallback
+                } else {
+                    NativeCType::Tuple(native_types)
+                }
+            },
             Some(Type::Union(_)) => NativeCType::String, // Unions default to string
             Some(Type::Optional(_)) => NativeCType::String, // Optionals default to string
             Some(Type::Function { .. }) => NativeCType::String, // Functions default to string
@@ -1151,7 +1292,7 @@ int tauraro_len_string(const char* str) {
         for stmt in body {
             if let Statement::VariableDef { name, type_annotation, value } = stmt {
                 let var_type = if let Some(type_ann) = type_annotation {
-                    self.map_type_annotation(Some(type_ann))
+                    Self::map_type_annotation_readonly(Some(type_ann))
                 } else if let Some(val_expr) = value {
                     self.infer_expression_type(val_expr)
                 } else {
