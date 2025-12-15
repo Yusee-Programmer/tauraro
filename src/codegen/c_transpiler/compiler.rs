@@ -37,6 +37,16 @@ pub fn detect_compilers() -> Vec<String> {
     compilers
 }
 
+/// Detect if FFI (Foreign Function Interface) is used in the C code
+fn detect_ffi_usage(c_code: &str) -> bool {
+    // Check for FFI function calls
+    c_code.contains("load_library(") ||
+    c_code.contains("define_function(") ||
+    c_code.contains("call_function(") ||
+    c_code.contains("ffi_library_t") ||
+    c_code.contains("ffi_function_t")
+}
+
 /// Compile Rust FFI module to object file
 fn compile_rust_ffi_to_object(module_name: &str, output_dir: &str) -> Result<String> {
     let rust_source = format!("src/builtins_ffi/{}_ffi.rs", module_name);
@@ -79,6 +89,12 @@ pub fn compile_to_executable_with_objects(c_code: &str, output_path: &str, opt_l
     std::fs::write(&temp_file, c_code)?;
     println!("C source code written to: {}", temp_file);
 
+    // Detect FFI usage for dynamic linking
+    let uses_ffi = detect_ffi_usage(c_code);
+    if uses_ffi {
+        println!("FFI usage detected - dynamic library linking will be enabled");
+    }
+
     // Detect available compilers
     let compilers = detect_compilers();
     if compilers.is_empty() {
@@ -104,6 +120,13 @@ pub fn compile_to_executable_with_objects(c_code: &str, output_path: &str, opt_l
                 args.extend(object_files.iter().map(|p| p.to_str().unwrap_or("")));
                 // Add include path for FFI headers and allow multiple definitions (for Rust panic handler)
                 args.extend(&["-I.", "-Wl,--allow-multiple-definition", "-o", output_path, opt_flag, "-lm"]);
+
+                // Add dynamic library linking if FFI is used
+                if uses_ffi {
+                    if !cfg!(target_os = "windows") {
+                        args.push("-ldl");
+                    }
+                }
 
                 Command::new(compiler)
                     .args(&args)
@@ -184,6 +207,12 @@ pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> 
     std::fs::write(&temp_file, c_code)?;
     println!("C source code written to: {}", temp_file);
 
+    // Detect FFI usage for dynamic linking
+    let uses_ffi = detect_ffi_usage(c_code);
+    if uses_ffi {
+        println!("FFI usage detected - dynamic library linking will be enabled");
+    }
+
     // Check for builtin module dependencies and compile Rust FFI modules to object files
     let mut builtin_files = Vec::new();
 
@@ -261,6 +290,13 @@ pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> 
                 let mut args = vec![temp_file.as_str()];
                 args.extend(builtin_files.iter().map(|s| s.as_str()));
                 args.extend(&["-o", output_path, opt_flag, "-lm"]);
+
+                // Add dynamic library linking if FFI is used
+                if uses_ffi {
+                    if !cfg!(target_os = "windows") {
+                        args.push("-ldl");
+                    }
+                }
 
                 Command::new(compiler)
                     .args(&args)
