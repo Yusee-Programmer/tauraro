@@ -2777,7 +2777,44 @@ impl Parser {
         let value = if self.check(&Token::Newline) || self.check(&Token::Semicolon) || self.is_at_end() {
             None
         } else {
-            Some(self.expression()?)
+            // Parse first expression
+            let first_expr = self.expression()?;
+
+            // Check if this is a tuple return (has comma)
+            if self.match_token(&[Token::Comma]) {
+                // Skip newlines and comments after comma
+                while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                    self.advance();
+                }
+
+                // Collect remaining expressions
+                let mut items = vec![first_expr];
+
+                // Allow trailing comma before newline/semicolon/dedent
+                if !self.check(&Token::Newline) && !self.check(&Token::Semicolon) && !self.check(&Token::Dedent) && !self.is_at_end() {
+                    loop {
+                        items.push(self.expression()?);
+
+                        if !self.match_token(&[Token::Comma]) {
+                            break;
+                        }
+
+                        // Skip newlines and comments after comma
+                        while self.check(&Token::Newline) || matches!(self.peek().token, Token::Comment(_)) {
+                            self.advance();
+                        }
+
+                        // Allow trailing comma
+                        if self.check(&Token::Newline) || self.check(&Token::Semicolon) || self.check(&Token::Dedent) || self.is_at_end() {
+                            break;
+                        }
+                    }
+                }
+
+                Some(Expr::Tuple(items))
+            } else {
+                Some(first_expr)
+            }
         };
         self.match_token(&[Token::Semicolon, Token::Newline]);
         Ok(Statement::Return(value))

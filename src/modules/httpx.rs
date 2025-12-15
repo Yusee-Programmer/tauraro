@@ -225,6 +225,7 @@ fn stream_iter_lines_wrapper(args: Vec<Value>) -> anyhow::Result<Value> {
 }
 
 /// Create the httpx module
+#[cfg(feature = "http")]
 pub fn create_httpx_module() -> Value {
     let mut namespace = HashMap::new();
 
