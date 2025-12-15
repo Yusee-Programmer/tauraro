@@ -488,13 +488,18 @@ impl CTranspiler {
             output.push_str(&builtin_ffi::generate_wrapper_declarations(&builtin_modules));
         }
 
+        // Add sys module globals (before utilities that use it)
+        output.push_str("// ===== SYS MODULE GLOBALS =====\n");
+        output.push_str(&sys_module::generate_sys_module_globals());
+        output.push_str("\n");
+
         // Add utility functions
         output.push_str(&transpiler.generate_utilities());
         output.push_str("\n");
 
-        // Add sys module implementation
-        output.push_str("// ===== SYS MODULE =====\n");
-        output.push_str(&sys_module::generate_sys_module_complete());
+        // Add sys module initialization function
+        output.push_str("// ===== SYS MODULE INIT =====\n");
+        output.push_str(&sys_module::generate_sys_module_init());
         output.push_str("\n");
 
         // Generate FFI wrapper functions for builtin modules
@@ -597,7 +602,7 @@ impl CTranspiler {
 
             // Initialize sys module
             output.push_str("    // Initialize sys module\n");
-            output.push_str("    tauraro_sys_init(argc, argv);\n\n");
+            output.push_str("    g_sys_module = tauraro_init_sys_module(argc, argv);\n\n");
 
             // Generate variable declarations
             output.push_str(&transpiler.generate_variable_declarations());
@@ -4848,6 +4853,9 @@ impl CTranspiler {
         output.push_str("}\n\n");
 
         output.push_str("TauModule* tauraro_import_module(const char* name) {\n");
+        output.push_str("    if (strcmp(name, \"sys\") == 0 && g_sys_module != NULL) {\n");
+        output.push_str("        return g_sys_module;\n");
+        output.push_str("    }\n");
         output.push_str("    // Simplified import - in real implementation would load from file\n");
         output.push_str("    return tauraro_create_module(name, NULL);\n");
         output.push_str("}\n\n");
