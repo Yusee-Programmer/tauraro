@@ -51,6 +51,8 @@ pub fn is_builtin_function(func_name: &str) -> bool {
         | "disable_interrupts" | "enable_interrupts" | "cli" | "sti" | "halt" | "hlt"
         | "read_cr0" | "write_cr0" | "read_cr3" | "write_cr3"
         | "read_msr" | "write_msr" | "asm"
+        // FFI (Foreign Function Interface) builtins
+        | "load_library" | "define_function" | "call_function"
     )
 }
 
@@ -141,6 +143,10 @@ pub fn generate_builtin_implementation(func_name: &str) -> String {
         "file_write" => generate_file_write_impl(),
         "file_close" => generate_file_close_impl(),
         "file_readline" => generate_file_readline_impl(),
+        // FFI (Foreign Function Interface)
+        "load_library" => generate_load_library_impl(),
+        "define_function" => generate_define_function_impl(),
+        "call_function" => generate_call_function_impl(),
         _ => generate_generic_builtin_impl(func_name),
     }
 }
@@ -2007,6 +2013,322 @@ tauraro_value_t* tauraro_file_readline(tauraro_value_t* file_val) {
     tauraro_value_t* result = tauraro_value_new();
     result->type = TAURARO_STRING;
     result->data.str_val = strdup("");
+    return result;
+}
+"#.to_string()
+}
+
+// ============================================================================
+// FFI (Foreign Function Interface) Functions
+// ============================================================================
+
+fn generate_load_library_impl() -> String {
+    r#"// Platform-specific library loading
+#ifdef _WIN32
+    #include <windows.h>
+    typedef HMODULE library_handle_t;
+    #define LOAD_LIBRARY(name) LoadLibraryA(name)
+    #define GET_FUNCTION(handle, name) GetProcAddress(handle, name)
+    #define CLOSE_LIBRARY(handle) FreeLibrary(handle)
+    #define LIBRARY_ERROR() "Windows library error"
+#else
+    #include <dlfcn.h>
+    typedef void* library_handle_t;
+    #define LOAD_LIBRARY(name) dlopen(name, RTLD_LAZY)
+    #define GET_FUNCTION(handle, name) dlsym(handle, name)
+    #define CLOSE_LIBRARY(handle) dlclose(handle)
+    #define LIBRARY_ERROR() dlerror()
+#endif
+
+// FFI library structure
+typedef struct {
+    char* name;
+    library_handle_t handle;
+} ffi_library_t;
+
+// FFI function structure
+typedef struct {
+    char* name;
+    void* func_ptr;
+    char* return_type;
+    char** param_types;
+    int param_count;
+} ffi_function_t;
+
+// Global FFI state
+static ffi_library_t** ffi_libraries = NULL;
+static int ffi_library_count = 0;
+static int ffi_library_capacity = 0;
+
+static ffi_function_t** ffi_functions = NULL;
+static int ffi_function_count = 0;
+static int ffi_function_capacity = 0;
+
+// Find library by name
+static ffi_library_t* find_ffi_library(const char* name) {
+    for (int i = 0; i < ffi_library_count; i++) {
+        if (strcmp(ffi_libraries[i]->name, name) == 0) {
+            return ffi_libraries[i];
+        }
+    }
+    return NULL;
+}
+
+tauraro_value_t* tauraro_load_library(int argc, tauraro_value_t** args) {
+    if (argc != 1 || args[0]->type != TAURARO_STRING) {
+        fprintf(stderr, "load_library() requires 1 string argument\n");
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+
+    const char* library_name = args[0]->data.str_val;
+
+    // Check if already loaded
+    if (find_ffi_library(library_name) != NULL) {
+        printf("Library already loaded: %s\n", library_name);
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_BOOL;
+        result->data.int_val = 1;
+        return result;
+    }
+
+    // Load the library
+    library_handle_t handle = LOAD_LIBRARY(library_name);
+    if (handle == NULL) {
+        fprintf(stderr, "Failed to load library %s: %s\n", library_name, LIBRARY_ERROR());
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_BOOL;
+        result->data.int_val = 0;
+        return result;
+    }
+
+    printf("Successfully loaded library: %s\n", library_name);
+
+    // Initialize arrays if needed
+    if (ffi_libraries == NULL) {
+        ffi_library_capacity = 16;
+        ffi_libraries = (ffi_library_t**)malloc(sizeof(ffi_library_t*) * ffi_library_capacity);
+    }
+
+    // Create library entry
+    ffi_library_t* lib = (ffi_library_t*)malloc(sizeof(ffi_library_t));
+    lib->name = strdup(library_name);
+    lib->handle = handle;
+
+    // Add to array
+    if (ffi_library_count >= ffi_library_capacity) {
+        ffi_library_capacity *= 2;
+        ffi_libraries = (ffi_library_t**)realloc(ffi_libraries,
+            sizeof(ffi_library_t*) * ffi_library_capacity);
+    }
+    ffi_libraries[ffi_library_count++] = lib;
+
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_BOOL;
+    result->data.int_val = 1;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_define_function_impl() -> String {
+    r#"// Find function by name
+static ffi_function_t* find_ffi_function(const char* name) {
+    for (int i = 0; i < ffi_function_count; i++) {
+        if (strcmp(ffi_functions[i]->name, name) == 0) {
+            return ffi_functions[i];
+        }
+    }
+    return NULL;
+}
+
+tauraro_value_t* tauraro_define_function(int argc, tauraro_value_t** args) {
+    // Args: library_name, function_name, return_type, param_types_list
+    if (argc < 3) {
+        fprintf(stderr, "define_function() requires at least 3 arguments\n");
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+
+    if (args[0]->type != TAURARO_STRING || args[1]->type != TAURARO_STRING ||
+        args[2]->type != TAURARO_STRING) {
+        fprintf(stderr, "define_function() first 3 args must be strings\n");
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+
+    const char* library_name = args[0]->data.str_val;
+    const char* function_name = args[1]->data.str_val;
+    const char* return_type = args[2]->data.str_val;
+
+    // Find library
+    ffi_library_t* lib = find_ffi_library(library_name);
+    if (lib == NULL) {
+        fprintf(stderr, "Library not loaded: %s\n", library_name);
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+
+    // Get function pointer
+    void* func_ptr = GET_FUNCTION(lib->handle, function_name);
+    if (func_ptr == NULL) {
+        fprintf(stderr, "Function not found: %s in %s: %s\n",
+            function_name, library_name, LIBRARY_ERROR());
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+
+    printf("Successfully loaded function: %s from %s\n", function_name, library_name);
+
+    // Initialize if needed
+    if (ffi_functions == NULL) {
+        ffi_function_capacity = 64;
+        ffi_functions = (ffi_function_t**)malloc(sizeof(ffi_function_t*) * ffi_function_capacity);
+    }
+
+    // Create function entry
+    ffi_function_t* func = (ffi_function_t*)malloc(sizeof(ffi_function_t));
+    func->name = strdup(function_name);
+    func->func_ptr = func_ptr;
+    func->return_type = strdup(return_type);
+
+    // Handle parameter types (if provided as list)
+    if (argc > 3 && args[3]->type == TAURARO_LIST) {
+        tauraro_list_t* param_list = args[3]->data.list_val;
+        func->param_count = param_list->length;
+        if (func->param_count > 0) {
+            func->param_types = (char**)malloc(sizeof(char*) * func->param_count);
+            for (int i = 0; i < func->param_count; i++) {
+                if (param_list->items[i].type == TAURARO_STRING) {
+                    func->param_types[i] = strdup(param_list->items[i].data.str_val);
+                } else {
+                    func->param_types[i] = strdup("int");
+                }
+            }
+        } else {
+            func->param_types = NULL;
+        }
+    } else {
+        func->param_count = 0;
+        func->param_types = NULL;
+    }
+
+    // Add to array
+    if (ffi_function_count >= ffi_function_capacity) {
+        ffi_function_capacity *= 2;
+        ffi_functions = (ffi_function_t**)realloc(ffi_functions,
+            sizeof(ffi_function_t*) * ffi_function_capacity);
+    }
+    ffi_functions[ffi_function_count++] = func;
+
+    tauraro_value_t* result = tauraro_value_new();
+    result->type = TAURARO_NONE;
+    return result;
+}
+"#.to_string()
+}
+
+fn generate_call_function_impl() -> String {
+    r#"tauraro_value_t* tauraro_call_function(int argc, tauraro_value_t** args) {
+    if (argc < 1 || args[0]->type != TAURARO_STRING) {
+        fprintf(stderr, "call_function() requires function name as first argument\n");
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+
+    const char* function_name = args[0]->data.str_val;
+    ffi_function_t* func = find_ffi_function(function_name);
+    if (func == NULL) {
+        fprintf(stderr, "Function not defined: %s\n", function_name);
+        tauraro_value_t* result = tauraro_value_new();
+        result->type = TAURARO_NONE;
+        return result;
+    }
+
+    // Convert arguments
+    int arg_count = argc - 1;
+    long long arg_values[16] = {0};
+
+    for (int i = 0; i < arg_count && i < 16; i++) {
+        tauraro_value_t* arg = args[i + 1];
+        if (arg->type == TAURARO_INT) {
+            arg_values[i] = (long long)arg->data.int_val;
+        } else if (arg->type == TAURARO_FLOAT) {
+            *((double*)&arg_values[i]) = arg->data.float_val;
+        } else if (arg->type == TAURARO_STRING) {
+            arg_values[i] = (long long)arg->data.str_val;
+        } else if (arg->type == TAURARO_POINTER) {
+            arg_values[i] = (long long)arg->data.ptr_val;
+        }
+    }
+
+    // Call the function
+    typedef long long (*func_t)();
+    long long ret_int = 0;
+    double ret_double = 0.0;
+
+    // Simple calling convention - cast to appropriate function type
+    switch (arg_count) {
+        case 0:
+            ret_int = ((func_t)func->func_ptr)();
+            break;
+        case 1:
+            ret_int = ((long long (*)(long long))func->func_ptr)(arg_values[0]);
+            break;
+        case 2:
+            ret_int = ((long long (*)(long long, long long))func->func_ptr)(
+                arg_values[0], arg_values[1]);
+            break;
+        case 3:
+            ret_int = ((long long (*)(long long, long long, long long))func->func_ptr)(
+                arg_values[0], arg_values[1], arg_values[2]);
+            break;
+        case 4:
+            ret_int = ((long long (*)(long long, long long, long long, long long))func->func_ptr)(
+                arg_values[0], arg_values[1], arg_values[2], arg_values[3]);
+            break;
+        default:
+            fprintf(stderr, "FFI call supports up to 4 arguments\n");
+            tauraro_value_t* result = tauraro_value_new();
+            result->type = TAURARO_NONE;
+            return result;
+    }
+
+    // Convert result
+    tauraro_value_t* result = tauraro_value_new();
+
+    if (strcmp(func->return_type, "void") == 0) {
+        result->type = TAURARO_NONE;
+    } else if (strcmp(func->return_type, "int") == 0 ||
+               strcmp(func->return_type, "int32") == 0) {
+        result->type = TAURARO_INT;
+        result->data.int_val = (int)ret_int;
+    } else if (strcmp(func->return_type, "int64") == 0) {
+        result->type = TAURARO_INT;
+        result->data.int_val = (long long)ret_int;
+    } else if (strcmp(func->return_type, "float") == 0 ||
+               strcmp(func->return_type, "double") == 0) {
+        result->type = TAURARO_FLOAT;
+        result->data.float_val = ret_double;
+    } else if (strcmp(func->return_type, "string") == 0 ||
+               strcmp(func->return_type, "char*") == 0) {
+        result->type = TAURARO_STRING;
+        result->data.str_val = (char*)ret_int;
+    } else if (strcmp(func->return_type, "pointer") == 0) {
+        result->type = TAURARO_POINTER;
+        result->data.ptr_val = (void*)ret_int;
+    } else {
+        // Default to int
+        result->type = TAURARO_INT;
+        result->data.int_val = (int)ret_int;
+    }
+
     return result;
 }
 "#.to_string()
