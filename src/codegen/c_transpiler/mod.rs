@@ -470,6 +470,18 @@ impl CTranspiler {
         }
         output.push_str("\n");
 
+        // Math constants
+        output.push_str("// Math constants\n");
+        output.push_str("#ifndef M_PI\n");
+        output.push_str("#define M_PI 3.14159265358979323846\n");
+        output.push_str("#endif\n");
+        output.push_str("#ifndef M_E\n");
+        output.push_str("#define M_E 2.71828182845904523536\n");
+        output.push_str("#endif\n");
+        output.push_str("static const double tauraro_math_pi = M_PI;\n");
+        output.push_str("static const double tauraro_math_e = M_E;\n");
+        output.push_str("\n");
+
         // Extract imported modules and add FFI type declarations
         let imported_modules = crate::codegen::c_transpiler::module_compiler::extract_imported_modules(module);
         let (builtin_modules, _user_modules) = crate::codegen::c_transpiler::module_compiler::categorize_modules(&imported_modules);
@@ -2018,8 +2030,21 @@ impl CTranspiler {
                                 let arg = &args[0];
                                 if let Some(var_type) = var_types_snapshot.get(arg) {
                                     match var_type {
+                                        NativeType::Int64 => {
+                                            output.push_str(&format!("{}{} = tauraro_int({});\n", ind, res, arg));
+                                        }
+                                        NativeType::Double => {
+                                            output.push_str(&format!("{}{} = tauraro_int((long long){});\n", ind, res, arg));
+                                        }
                                         NativeType::CStr => {
                                             output.push_str(&format!("{}{} = tauraro_int_string({});\n", ind, res, arg));
+                                        }
+                                        NativeType::Generic => {
+                                            // Convert from TauValue
+                                            output.push_str(&format!("{}if ({}.type == 0) {{ {} = {}; }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else if ({}.type == 1) {{ {} = tauraro_int((long long){}.value.f); }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else if ({}.type == 2) {{ {} = tauraro_int(atoll({}.value.s)); }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else {{ {} = tauraro_int(0); }}\n", ind, res));
                                         }
                                         _ => {
                                             output.push_str(&format!("{}{} = tauraro_int({});\n", ind, res, arg));
@@ -2039,8 +2064,21 @@ impl CTranspiler {
                                 let arg = &args[0];
                                 if let Some(var_type) = var_types_snapshot.get(arg) {
                                     match var_type {
+                                        NativeType::Double => {
+                                            output.push_str(&format!("{}{} = tauraro_float({});\n", ind, res, arg));
+                                        }
+                                        NativeType::Int64 => {
+                                            output.push_str(&format!("{}{} = tauraro_float((double){});\n", ind, res, arg));
+                                        }
                                         NativeType::CStr => {
                                             output.push_str(&format!("{}{} = tauraro_float_string({});\n", ind, res, arg));
+                                        }
+                                        NativeType::Generic => {
+                                            // Convert from TauValue
+                                            output.push_str(&format!("{}if ({}.type == 1) {{ {} = {}; }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else if ({}.type == 0) {{ {} = tauraro_float((double){}.value.i); }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else if ({}.type == 2) {{ {} = tauraro_float(atof({}.value.s)); }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else {{ {} = tauraro_float(0.0); }}\n", ind, res));
                                         }
                                         _ => {
                                             output.push_str(&format!("{}{} = tauraro_float({});\n", ind, res, arg));
@@ -6974,6 +7012,47 @@ impl CTranspiler {
         output.push_str("    size_t size = (size_t)args[2]->value.i;\n");
         output.push_str("    if (ptr1 == NULL || ptr2 == NULL || size == 0) return tauraro_int(0);\n");
         output.push_str("    return tauraro_int(memcmp(ptr1, ptr2, size));\n");
+        output.push_str("}\n\n");
+
+        // ===== FILE I/O FUNCTIONS =====
+        output.push_str("// File I/O support\n");
+        output.push_str("TauValue open(TauValue filename, TauValue mode) {\n");
+        output.push_str("    if (filename.type != 2 || mode.type != 2) return tauraro_none();\n");
+        output.push_str("    FILE* fp = fopen(filename.value.s, mode.value.s);\n");
+        output.push_str("    if (!fp) return tauraro_none();\n");
+        output.push_str("    // Store FILE* as integer pointer\n");
+        output.push_str("    return tauraro_int((long long)(uintptr_t)fp);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue f__write(TauValue file, TauValue data) {\n");
+        output.push_str("    if (file.type != 0 || data.type != 2) return tauraro_none();\n");
+        output.push_str("    FILE* fp = (FILE*)(uintptr_t)file.value.i;\n");
+        output.push_str("    if (!fp) return tauraro_none();\n");
+        output.push_str("    fputs(data.value.s, fp);\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue f__read(TauValue file) {\n");
+        output.push_str("    if (file.type != 0) return tauraro_str(\"\");\n");
+        output.push_str("    FILE* fp = (FILE*)(uintptr_t)file.value.i;\n");
+        output.push_str("    if (!fp) return tauraro_str(\"\");\n");
+        output.push_str("    fseek(fp, 0, SEEK_END);\n");
+        output.push_str("    long size = ftell(fp);\n");
+        output.push_str("    fseek(fp, 0, SEEK_SET);\n");
+        output.push_str("    char* buffer = (char*)malloc(size + 1);\n");
+        output.push_str("    if (!buffer) return tauraro_str(\"\");\n");
+        output.push_str("    fread(buffer, 1, size, fp);\n");
+        output.push_str("    buffer[size] = '\\0';\n");
+        output.push_str("    TauValue result = tauraro_str(buffer);\n");
+        output.push_str("    free(buffer);\n");
+        output.push_str("    return result;\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue f__close(TauValue file) {\n");
+        output.push_str("    if (file.type != 0) return tauraro_none();\n");
+        output.push_str("    FILE* fp = (FILE*)(uintptr_t)file.value.i;\n");
+        output.push_str("    if (fp) fclose(fp);\n");
+        output.push_str("    return tauraro_none();\n");
         output.push_str("}\n\n");
 
         // ===== BARE-METAL / OS DEVELOPMENT STUBS =====
