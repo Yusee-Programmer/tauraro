@@ -93,6 +93,10 @@ pub fn generate_wrapper_declarations(builtin_modules: &[String]) -> String {
     let mut output = String::new();
 
     output.push_str("// Forward declarations for FFI wrapper functions\n");
+    // Forward declare FFI helper functions
+    output.push_str("TauValue tauraro_to_tau(tauraro_value_t* val);\n");
+    output.push_str("\n");
+
     for module_name in builtin_modules {
         output.push_str(&generate_module_wrapper_declarations(module_name));
     }

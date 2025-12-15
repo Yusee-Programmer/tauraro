@@ -139,6 +139,8 @@ pub struct CTranspiler {
     enable_native_types: bool,
     /// Bare-metal/OS development options
     baremetal_options: BaremetalOptions,
+    /// Global imports that need to be accessible across all functions
+    global_imports: HashSet<String>,
 }
 
 /// Native C types for optimized transpilation
@@ -181,6 +183,7 @@ impl CTranspiler {
             static_typed_vars: HashMap::new(),
             enable_native_types: true,
             baremetal_options: BaremetalOptions::default(),
+            global_imports: HashSet::new(),
         }
     }
 
@@ -206,6 +209,7 @@ impl CTranspiler {
             static_typed_vars: HashMap::new(),
             enable_native_types: true,
             baremetal_options: options,
+            global_imports: HashSet::new(),
         }
     }
     
@@ -405,7 +409,14 @@ impl CTranspiler {
         
         // Clear lambdas from previous transpilations
         transpiler.lambdas_to_generate.clear();
-        
+
+        // Collect global imports for proper scoping
+        for instruction in &module.globals {
+            if let IRInstruction::Import { module: mod_name } = instruction {
+                transpiler.global_imports.insert(mod_name.clone());
+            }
+        }
+
         // Populate function parameter information for default argument handling
         for (func_name, func) in &module.functions {
             let mut params_info = Vec::new();
@@ -504,6 +515,20 @@ impl CTranspiler {
         output.push_str("// ===== SYS MODULE GLOBALS =====\n");
         output.push_str(&sys_module::generate_sys_module_globals());
         output.push_str("\n");
+
+        // Add global import variables for module-level imports
+        if !transpiler.global_imports.is_empty() {
+            output.push_str("// ===== GLOBAL MODULE IMPORTS =====\n");
+            for mod_name in &transpiler.global_imports {
+                let sanitized_name = mod_name.replace(".", "_");
+                output.push_str(&format!("static TauValue {};\n", sanitized_name));
+            }
+            output.push_str("\n");
+        }
+
+        // Add __name__ global variable
+        output.push_str("// __name__ special variable\n");
+        output.push_str("static TauValue __name__;\n\n");
 
         // Add utility functions
         output.push_str(&transpiler.generate_utilities());
@@ -615,6 +640,10 @@ impl CTranspiler {
             // Initialize sys module
             output.push_str("    // Initialize sys module\n");
             output.push_str("    g_sys_module = tauraro_init_sys_module(argc, argv);\n\n");
+
+            // Initialize __name__
+            output.push_str("    // Initialize __name__ to \"__main__\"\n");
+            output.push_str("    __name__ = (TauValue){.type = 2, .value.s = strdup(\"__main__\"), .refcount = 1, .next = NULL};\n\n");
 
             // Generate variable declarations
             output.push_str(&transpiler.generate_variable_declarations());
@@ -3507,11 +3536,23 @@ impl CTranspiler {
             
             // Enhanced Import/ImportFrom instructions with advanced module support
             IRInstruction::Import { module } => {
-                output.push_str(&format!("{}// Import module: {}\n", ind, module));
-                output.push_str(&format!("{}TauModule* module_{} = tauraro_import_module(\"{}\");\n", 
-                    ind, module.replace(".", "_"), module));
-                output.push_str(&format!("{}TauValue {} = tauraro_module_to_value(module_{});\n", 
-                    ind, module.replace(".", "_"), module.replace(".", "_")));
+                let sanitized_name = module.replace(".", "_");
+
+                if self.global_imports.contains(module) {
+                    // Global import - assign to global variable
+                    output.push_str(&format!("{}// Import module (global): {}\n", ind, module));
+                    output.push_str(&format!("{}TauModule* module_{} = tauraro_import_module(\"{}\");\n",
+                        ind, sanitized_name, module));
+                    output.push_str(&format!("{}{} = tauraro_module_to_value(module_{});\n",
+                        ind, sanitized_name, sanitized_name));
+                } else {
+                    // Local import - create local variable
+                    output.push_str(&format!("{}// Import module (local): {}\n", ind, module));
+                    output.push_str(&format!("{}TauModule* module_{} = tauraro_import_module(\"{}\");\n",
+                        ind, sanitized_name, module));
+                    output.push_str(&format!("{}TauValue {} = tauraro_module_to_value(module_{});\n",
+                        ind, sanitized_name, sanitized_name));
+                }
             }
             
             IRInstruction::ImportFrom { module, names } => {
@@ -7447,6 +7488,7 @@ impl Clone for CTranspiler {
             static_typed_vars: self.static_typed_vars.clone(),
             enable_native_types: self.enable_native_types,
             baremetal_options: self.baremetal_options.clone(),
+            global_imports: self.global_imports.clone(),
         }
     }
 }
