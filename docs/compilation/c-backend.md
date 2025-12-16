@@ -62,6 +62,62 @@ tauraro compile script.py -o program --debug
 tauraro compile script.py -o program --verbose
 ```
 
+## Shared Library Compilation
+
+Tauraro can compile to shared libraries (.so/.dll/.dylib) for use in plugin systems, language bindings, and more.
+
+### Basic Usage
+
+```bash
+# Compile to shared library (auto-detect platform)
+tauraro compile mylib.py --backend c --native --lib-type shared -o libmylib.so
+
+# Linux: creates libmylib.so
+# Windows: creates libmylib.dll
+# macOS: creates libmylib.dylib
+```
+
+### Cross-Platform Compilation
+
+```bash
+# Compile for Linux from any platform
+tauraro compile mylib.py --backend c --native --lib-type shared --target linux -o libmylib.so
+
+# Compile for Windows from any platform
+tauraro compile mylib.py --backend c --native --lib-type shared --target windows -o mylib.dll
+
+# Compile for macOS from any platform
+tauraro compile mylib.py --backend c --native --lib-type shared --target macos -o libmylib.dylib
+```
+
+### Platform-Specific Compiler Flags
+
+Tauraro automatically uses the correct compiler flags for shared libraries:
+
+**Linux/Unix (GCC/Clang):**
+```bash
+gcc -shared -fPIC mylib.c -o libmylib.so -lm
+```
+
+**Windows (MSVC):**
+```bash
+cl /LD mylib.c /Fe:mylib.dll
+```
+
+**Windows (Clang-CL):**
+```bash
+clang-cl -shared mylib.c -o mylib.dll
+```
+
+### Use Cases
+
+1. **Plugin Systems** - Create loadable plugins for applications
+2. **Language Bindings** - Expose Tauraro functions to C/C++/Python/etc.
+3. **Embedded Systems** - Reusable library components
+4. **Microservices** - Shared service libraries
+
+See [SHARED_LIBRARY_COMPILATION.md](../../SHARED_LIBRARY_COMPILATION.md) for complete documentation.
+
 ## How It Works
 
 The compilation process has several stages:

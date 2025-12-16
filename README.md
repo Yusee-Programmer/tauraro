@@ -40,6 +40,7 @@ All modules available by default - no feature flags needed!
 ### Advanced Features
 - **Hybrid typing** - Optional static types with dynamic fallback
 - **FFI support** - Call C libraries and Win32 APIs directly
+- **Shared library compilation** - Compile to .so/.dll/.dylib for plugins and language bindings
 - **Type inference** - Smart type detection for optimizations
 - **REPL** - Interactive shell for exploration
 - **Cross-platform** - Linux, macOS, and Windows support
@@ -78,8 +79,14 @@ Run with the VM:
 
 Compile to native executable:
 ```bash
-./target/release/tauraro compile --use-native-transpiler --backend c hello.tr -o hello.exe
+./target/release/tauraro compile hello.py --backend c --native -o hello
 ./hello  # Runs at native C speed!
+```
+
+Compile to shared library:
+```bash
+./target/release/tauraro compile hello.py --backend c --native --lib-type shared -o libhello.so
+# Creates libhello.so on Linux, libhello.dylib on macOS, hello.dll on Windows
 ```
 
 ### Try the REPL
@@ -227,6 +234,53 @@ Compile for bare-metal:
 tauraro compile kernel.tr --freestanding --entry-point kernel_main --target-arch x86_64
 ```
 
+### Shared Library Compilation
+
+Create reusable shared libraries for plugins, language bindings, and more:
+
+```python
+# math_lib.py - A reusable math library
+def add(a, b):
+    return a + b
+
+def multiply(a, b):
+    return a * b
+
+def factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+```
+
+**Compile to shared library:**
+```bash
+# Linux
+tauraro compile math_lib.py --backend c --native --lib-type shared -o libmath.so
+
+# Windows
+tauraro compile math_lib.py --backend c --native --lib-type shared -o mathlib.dll
+
+# macOS
+tauraro compile math_lib.py --backend c --native --lib-type shared -o libmath.dylib
+```
+
+**Cross-platform compilation:**
+```bash
+# Compile for Linux from any platform
+tauraro compile mylib.py --backend c --native --lib-type shared --target linux -o libmylib.so
+
+# Compile for Windows from any platform
+tauraro compile mylib.py --backend c --native --lib-type shared --target windows -o mylib.dll
+```
+
+**Use cases:**
+- **Plugin systems** - Create loadable plugins for applications
+- **Language bindings** - Expose Tauraro libraries to C/C++/Python/etc.
+- **Embedded systems** - Reusable library components
+- **Microservices** - Shared service libraries
+
+See [SHARED_LIBRARY_COMPILATION.md](SHARED_LIBRARY_COMPILATION.md) for complete documentation.
+
 ## Performance
 
 ### Benchmark Results
@@ -253,6 +307,8 @@ Full documentation is available in the [docs](docs/README.md) directory:
 - [Language Reference](docs/language/syntax.md)
 - [Standard Library](docs/stdlib/modules.md)
 - [Compilation Guide](docs/compilation/c-backend.md)
+- [Shared Library Compilation](SHARED_LIBRARY_COMPILATION.md)
+- [FFI C Transpiler Implementation](FFI_C_TRANSPILER_IMPLEMENTATION.md)
 - [System Programming](docs/builtins/system-programming.md)
 - [Bare-Metal Development](docs/advanced/baremetal.md)
 - [FFI Guide](docs/advanced/ffi.md)
@@ -298,11 +354,20 @@ Full documentation is available in the [docs](docs/README.md) directory:
 - **HTTP Client** - httpx with async support
 - **WebSockets** - Full real-time communication support
 
-### FFI Improvements
-- Win32 API support verified working
-- Native C function pointer generation
-- Cross-platform library loading
-- Direct system call support
+### Shared Library Compilation (December 2025)
+- **Cross-platform shared libraries** - Compile to .so (Linux), .dll (Windows), .dylib (macOS)
+- **Simple flag** - Use `--lib-type shared` to create shared libraries
+- **Target selection** - Cross-compile for different platforms with `--target`
+- **Automatic flags** - Platform-specific compiler flags handled automatically
+- **Use cases** - Plugin systems, language bindings, embedded libraries, microservices
+
+### FFI Improvements (C Transpiler)
+- **Automatic FFI generation** - FFI functions automatically included in C transpiler output
+- **Win32 API support** - Verified working with Windows API
+- **Native C function pointers** - Direct C library integration
+- **Cross-platform library loading** - Works on Windows, Linux, macOS
+- **Automatic dynamic linking** - `-ldl` flag added automatically when FFI detected
+- **Direct system calls** - Low-level system programming support
 
 ## Architecture
 
@@ -342,11 +407,14 @@ Full documentation is available in the [docs](docs/README.md) directory:
                       │ (GCC/Clang) │
                       └──────┬──────┘
                              │
-                             ▼
-                      ┌─────────────┐
-                      │   Native    │
-                      │ Executable  │
-                      └─────────────┘
+                    ┌────────┴────────┐
+                    │                 │
+                    ▼                 ▼
+             ┌─────────────┐   ┌─────────────┐
+             │   Native    │   │   Shared    │
+             │ Executable  │   │   Library   │
+             │             │   │ (.so/.dll)  │
+             └─────────────┘   └─────────────┘
 ```
 
 ## Project Structure
