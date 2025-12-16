@@ -84,6 +84,10 @@ enum Commands {
         #[arg(long)]
         native: bool,
 
+        /// Library type when using --native (executable, shared)
+        #[arg(long, default_value = "executable")]
+        lib_type: String,
+
         /// Use native type transpiler (generates optimized C with native types)
         #[arg(long)]
         use_native_transpiler: bool,
@@ -178,6 +182,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             generate_header,
             strict_types,
             native,
+            lib_type,
             use_native_transpiler,
             memory_strategy,
             freestanding,
@@ -196,6 +201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 generate_header,
                 strict_types,
                 native,
+                &lib_type,
                 use_native_transpiler,
                 &memory_strategy,
                 freestanding,
@@ -233,6 +239,7 @@ fn compile_file(
     _generate_header: bool,
     strict_types: bool,
     native: bool,
+    lib_type: &str,
     use_native_transpiler: bool,
     memory_strategy: &str,
     freestanding: bool,
@@ -510,48 +517,89 @@ fn compile_file(
             std::fs::write(&output_path, c_code_bytes)?;
             println!("C code generated successfully: {}", output_path.display());
 
-            // If --native flag is set, compile to executable
+            // If --native flag is set, compile to executable or shared library
             if native {
-                // Determine executable path
-                let exe_path = if output_path.extension().and_then(|s| s.to_str()) == Some("c") {
-                    // Change extension to exe (or no extension on Unix)
-                    let mut exe_path = output_path.clone();
-                    exe_path.set_extension(std::env::consts::EXE_EXTENSION);
-                    exe_path
+                let is_shared_lib = lib_type == "shared";
+
+                // Determine output file extension based on lib_type and target platform
+                let output_ext = if is_shared_lib {
+                    // Shared library extension based on target platform
+                    let target_platform = if target != "native" {
+                        target.to_string()
+                    } else {
+                        std::env::consts::OS.to_string()
+                    };
+
+                    match target_platform.as_str() {
+                        "windows" => "dll",
+                        "macos" | "darwin" => "dylib",
+                        _ => "so", // Linux, Unix, etc.
+                    }
                 } else {
-                    // Append .exe to the output path
-                    let mut exe_path = output_path.clone();
-                    exe_path.set_file_name(format!(
+                    // Executable extension
+                    std::env::consts::EXE_EXTENSION
+                };
+
+                // Determine output path
+                let binary_path = if output_path.extension().and_then(|s| s.to_str()) == Some("c") {
+                    // Change extension from .c to appropriate extension
+                    let mut binary_path = output_path.clone();
+                    binary_path.set_extension(output_ext);
+                    binary_path
+                } else {
+                    // Append appropriate extension to the output path
+                    let mut binary_path = output_path.clone();
+                    binary_path.set_file_name(format!(
                         "{}.{}",
                         output_path
                             .file_stem()
                             .and_then(|s| s.to_str())
                             .unwrap_or("output"),
-                        std::env::consts::EXE_EXTENSION
+                        output_ext
                     ));
-                    exe_path
+                    binary_path
                 };
 
                 // Use our compiler detection module for better error handling
-                let compile_result = if !object_files_to_link.is_empty() {
-                    // Use version with object files
-                    tauraro::codegen::c_transpiler::compiler::compile_to_executable_with_objects(
-                        &std::fs::read_to_string(&output_path)?,
-                        exe_path.to_str().unwrap(),
-                        optimization,
-                        &object_files_to_link,
-                    )
+                let compile_result = if is_shared_lib {
+                    // Compile to shared library
+                    if !object_files_to_link.is_empty() {
+                        tauraro::codegen::c_transpiler::compiler::compile_to_shared_library_with_objects(
+                            &std::fs::read_to_string(&output_path)?,
+                            binary_path.to_str().unwrap(),
+                            optimization,
+                            &object_files_to_link,
+                            target,
+                        )
+                    } else {
+                        tauraro::codegen::c_transpiler::compiler::compile_to_shared_library(
+                            &std::fs::read_to_string(&output_path)?,
+                            binary_path.to_str().unwrap(),
+                            optimization,
+                            target,
+                        )
+                    }
                 } else {
-                    // Use standard version
-                    tauraro::codegen::c_transpiler::compiler::compile_to_executable(
-                        &std::fs::read_to_string(&output_path)?,
-                        exe_path.to_str().unwrap(),
-                        optimization,
-                    )
+                    // Compile to executable
+                    if !object_files_to_link.is_empty() {
+                        tauraro::codegen::c_transpiler::compiler::compile_to_executable_with_objects(
+                            &std::fs::read_to_string(&output_path)?,
+                            binary_path.to_str().unwrap(),
+                            optimization,
+                            &object_files_to_link,
+                        )
+                    } else {
+                        tauraro::codegen::c_transpiler::compiler::compile_to_executable(
+                            &std::fs::read_to_string(&output_path)?,
+                            binary_path.to_str().unwrap(),
+                            optimization,
+                        )
+                    }
                 };
 
                 if let Err(e) = compile_result {
-                    eprintln!("Warning: Could not compile to executable: {}", e);
+                    let output_type = if is_shared_lib { "shared library" } else { "executable" };
+                    eprintln!("Warning: Could not compile to {}: {}", output_type, e);
                     println!("Please compile manually with one of the following:");
 
                     // Provide specific instructions based on detected compilers
@@ -560,42 +608,73 @@ fn compile_file(
                         println!("  No C compilers detected. Please install GCC, Clang, or MSVC.");
                     } else {
                         for compiler in &compilers {
-                            match compiler.as_str() {
-                                "gcc" | "clang" => {
-                                    println!(
-                                        "  {} {} -o {} -lm",
-                                        compiler,
-                                        output_path.display(),
-                                        exe_path.display()
-                                    );
+                            if is_shared_lib {
+                                // Shared library compilation commands
+                                match compiler.as_str() {
+                                    "gcc" | "clang" => {
+                                        println!(
+                                            "  {} -shared -fPIC {} -o {} -lm",
+                                            compiler,
+                                            output_path.display(),
+                                            binary_path.display()
+                                        );
+                                    }
+                                    "cl" => {
+                                        println!(
+                                            "  cl /LD {} /Fe:{}",
+                                            output_path.display(),
+                                            binary_path.display()
+                                        );
+                                    }
+                                    _ => {
+                                        println!(
+                                            "  {} -shared -fPIC {} -o {}",
+                                            compiler,
+                                            output_path.display(),
+                                            binary_path.display()
+                                        );
+                                    }
                                 }
-                                "cl" => {
-                                    println!(
-                                        "  cl {} /Fe:{}",
-                                        output_path.display(),
-                                        exe_path.display()
-                                    );
-                                }
-                                "clang-cl" => {
-                                    println!(
-                                        "  clang-cl {} -o {}",
-                                        output_path.display(),
-                                        exe_path.display()
-                                    );
-                                }
-                                _ => {
-                                    println!(
-                                        "  {} {} -o {}",
-                                        compiler,
-                                        output_path.display(),
-                                        exe_path.display()
-                                    );
+                            } else {
+                                // Executable compilation commands
+                                match compiler.as_str() {
+                                    "gcc" | "clang" => {
+                                        println!(
+                                            "  {} {} -o {} -lm",
+                                            compiler,
+                                            output_path.display(),
+                                            binary_path.display()
+                                        );
+                                    }
+                                    "cl" => {
+                                        println!(
+                                            "  cl {} /Fe:{}",
+                                            output_path.display(),
+                                            binary_path.display()
+                                        );
+                                    }
+                                    "clang-cl" => {
+                                        println!(
+                                            "  clang-cl {} -o {}",
+                                            output_path.display(),
+                                            binary_path.display()
+                                        );
+                                    }
+                                    _ => {
+                                        println!(
+                                            "  {} {} -o {}",
+                                            compiler,
+                                            output_path.display(),
+                                            binary_path.display()
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
                 } else {
-                    println!("Executable compiled successfully: {}", exe_path.display());
+                    let output_type = if is_shared_lib { "Shared library" } else { "Executable" };
+                    println!("{} compiled successfully: {}", output_type, binary_path.display());
                 }
             }
         }
