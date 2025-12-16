@@ -141,6 +141,8 @@ pub struct CTranspiler {
     baremetal_options: BaremetalOptions,
     /// Global imports that need to be accessible across all functions
     global_imports: HashSet<String>,
+    /// Track which builtin modules have been imported (for including C implementations)
+    imported_builtin_modules: HashSet<String>,
 }
 
 /// Native C types for optimized transpilation
@@ -184,6 +186,7 @@ impl CTranspiler {
             enable_native_types: true,
             baremetal_options: BaremetalOptions::default(),
             global_imports: HashSet::new(),
+            imported_builtin_modules: HashSet::new(),
         }
     }
 
@@ -210,6 +213,7 @@ impl CTranspiler {
             enable_native_types: true,
             baremetal_options: options,
             global_imports: HashSet::new(),
+            imported_builtin_modules: HashSet::new(),
         }
     }
     
@@ -493,23 +497,9 @@ impl CTranspiler {
         output.push_str("static const double tauraro_math_e = M_E;\n");
         output.push_str("\n");
 
-        // Extract imported modules and add FFI type declarations
-        let imported_modules = crate::codegen::c_transpiler::module_compiler::extract_imported_modules(module);
-        let (builtin_modules, _user_modules) = crate::codegen::c_transpiler::module_compiler::categorize_modules(&imported_modules);
-
-        if !builtin_modules.is_empty() {
-            output.push_str(&builtin_ffi::generate_ffi_types());
-            output.push_str(&builtin_ffi::generate_ffi_declarations(&builtin_modules));
-        }
-
         // Add type definitions
         output.push_str(&transpiler.generate_type_definitions());
         output.push_str("\n");
-
-        // Add forward declarations for FFI wrapper functions (after TauValue is defined)
-        if !builtin_modules.is_empty() {
-            output.push_str(&builtin_ffi::generate_wrapper_declarations(&builtin_modules));
-        }
 
         // Add sys module globals (before utilities that use it)
         output.push_str("// ===== SYS MODULE GLOBALS =====\n");
@@ -539,12 +529,8 @@ impl CTranspiler {
         output.push_str(&sys_module::generate_sys_module_init());
         output.push_str("\n");
 
-        // Generate FFI wrapper functions for builtin modules
-        if !builtin_modules.is_empty() {
-            output.push_str("// FFI wrapper functions for builtin modules\n");
-            output.push_str(&builtin_ffi::generate_ffi_wrappers(&builtin_modules));
-            output.push_str("\n");
-        }
+        // Include builtin modules that were imported
+        output.push_str(&transpiler.include_builtin_modules());
 
         // Transpile functions (forward declarations first)
         if !module.functions.is_empty() {
@@ -2871,10 +2857,26 @@ impl CTranspiler {
                             }
                         } else {
                             // Regular function call
-                            // Check if this is a string method call pattern (e.g., s__upper should be text__upper)
-                            let mut call_func = if func.ends_with("__upper") || func.ends_with("__lower") || 
-                                              func.ends_with("__strip") || func.ends_with("__split") || 
-                                              func.ends_with("__join") {
+                            // First check if this is a builtin module call (e.g., time.time, os.getcwd)
+                            let mut call_func = if func.contains(".") {
+                                // Builtin module function call: module.function -> tauraro_module_function
+                                let parts: Vec<&str> = func.split('.').collect();
+                                if parts.len() == 2 {
+                                    let module = parts[0];
+                                    let function = parts[1];
+                                    // Check if this is a known builtin module
+                                    if self.imported_builtin_modules.contains(module) {
+                                        format!("tauraro_{}_{}", module, function)
+                                    } else {
+                                        // Unknown module - keep original name
+                                        func.to_string()
+                                    }
+                                } else {
+                                    func.to_string()
+                                }
+                            } else if func.ends_with("__upper") || func.ends_with("__lower") ||
+                                      func.ends_with("__strip") || func.ends_with("__split") ||
+                                      func.ends_with("__join") {
                                 // Replace variable prefix with "text" for string methods
                                 func.split("__").nth(1).map(|method| format!("text__{}", method)).unwrap_or_else(|| func.clone())
                             } else {
@@ -3094,55 +3096,68 @@ impl CTranspiler {
             }
 
             IRInstruction::Return { value } => {
+                // Check if we're in the main function (global scope) or a user function
+                let in_main_function = self.current_function.is_none();
+
                 if let Some(val) = value {
                     let resolved_val = self.resolve_var_name(val);
-                    
+
                     // Get the function's return type from function_definitions
                     let return_type = self.current_function.as_ref()
                         .and_then(|fname| self.function_definitions.get(fname))
                         .map(|finfo| finfo.return_type)
                         .unwrap_or(NativeType::Generic);
-                    
+
                     // Get the value's type
                     let val_type = self.var_types.get(&resolved_val).copied()
                         .or_else(|| self.scope_variables.get(&resolved_val).copied())
                         .unwrap_or(NativeType::Generic);
-                    
-                    // Convert if needed
-                    match (return_type, val_type) {
-                        (NativeType::Int64, NativeType::Generic) => {
-                            output.push_str(&format!("{}return {}.value.i;\n", ind, resolved_val));
-                        }
-                        (NativeType::Double, NativeType::Generic) => {
-                            output.push_str(&format!("{}return {}.value.f;\n", ind, resolved_val));
-                        }
-                        (NativeType::CStr, NativeType::Generic) => {
-                            output.push_str(&format!("{}return {}.value.s;\n", ind, resolved_val));
-                        }
-                        (NativeType::List, NativeType::Generic) => {
-                            output.push_str(&format!("{}return {}.value.list;\n", ind, resolved_val));
-                        }
-                        (NativeType::Dict, NativeType::Generic) => {
-                            output.push_str(&format!("{}return {}.value.dict;\n", ind, resolved_val));
-                        }
-                        (NativeType::Generic, NativeType::Int64) => {
-                            output.push_str(&format!("{}return (TauValue){{.type = 0, .value.i = {}}};\n", ind, resolved_val));
-                        }
-                        (NativeType::Generic, NativeType::Double) => {
-                            output.push_str(&format!("{}return (TauValue){{.type = 1, .value.f = {}}};\n", ind, resolved_val));
-                        }
-                        (NativeType::Generic, NativeType::List) => {
-                            output.push_str(&format!("{}return (TauValue){{.type = 4, .value.list = {}}};\n", ind, resolved_val));
-                        }
-                        (NativeType::Generic, NativeType::Dict) => {
-                            output.push_str(&format!("{}return (TauValue){{.type = 5, .value.dict = {}}};\n", ind, resolved_val));
-                        }
-                        _ => {
-                            output.push_str(&format!("{}return {};\n", ind, resolved_val));
+
+                    // If we're in main, always return 0 (main has int return type)
+                    if in_main_function {
+                        output.push_str(&format!("{}// Return from main - ignoring value\n", ind));
+                        output.push_str(&format!("{}return 0;\n", ind));
+                    } else {
+                        // Convert if needed for user functions
+                        match (return_type, val_type) {
+                            (NativeType::Int64, NativeType::Generic) => {
+                                output.push_str(&format!("{}return {}.value.i;\n", ind, resolved_val));
+                            }
+                            (NativeType::Double, NativeType::Generic) => {
+                                output.push_str(&format!("{}return {}.value.f;\n", ind, resolved_val));
+                            }
+                            (NativeType::CStr, NativeType::Generic) => {
+                                output.push_str(&format!("{}return {}.value.s;\n", ind, resolved_val));
+                            }
+                            (NativeType::List, NativeType::Generic) => {
+                                output.push_str(&format!("{}return {}.value.list;\n", ind, resolved_val));
+                            }
+                            (NativeType::Dict, NativeType::Generic) => {
+                                output.push_str(&format!("{}return {}.value.dict;\n", ind, resolved_val));
+                            }
+                            (NativeType::Generic, NativeType::Int64) => {
+                                output.push_str(&format!("{}return (TauValue){{.type = 0, .value.i = {}}};\n", ind, resolved_val));
+                            }
+                            (NativeType::Generic, NativeType::Double) => {
+                                output.push_str(&format!("{}return (TauValue){{.type = 1, .value.f = {}}};\n", ind, resolved_val));
+                            }
+                            (NativeType::Generic, NativeType::List) => {
+                                output.push_str(&format!("{}return (TauValue){{.type = 4, .value.list = {}}};\n", ind, resolved_val));
+                            }
+                            (NativeType::Generic, NativeType::Dict) => {
+                                output.push_str(&format!("{}return (TauValue){{.type = 5, .value.dict = {}}};\n", ind, resolved_val));
+                            }
+                            _ => {
+                                output.push_str(&format!("{}return {};\n", ind, resolved_val));
+                            }
                         }
                     }
                 } else {
-                    output.push_str(&format!("{}return {{.type = 0, .value.i = 0}};\n", ind));
+                    if in_main_function {
+                        output.push_str(&format!("{}return 0;\n", ind));
+                    } else {
+                        output.push_str(&format!("{}return {{.type = 0, .value.i = 0}};\n", ind));
+                    }
                 }
             }
 
@@ -3474,97 +3489,132 @@ impl CTranspiler {
                 self.var_types.insert(resolved_result, NativeType::Generic);
             }
 
-            // Enhanced existing instruction support - extend existing Try instruction
+            // Complete try-except-finally implementation with nested support
             IRInstruction::Try { body, handlers, else_body, finally_body } => {
-                output.push_str(&format!("{}// Try-except-finally block (enhanced)\n", ind));
-                output.push_str(&format!("{}if (setjmp(tauraro_exception_buf) == 0) {{\n", ind));
-                
+                let has_finally = finally_body.is_some();
+                output.push_str(&format!("{}// Try-except-finally block (with nested support)\n", ind));
+                output.push_str(&format!("{}tauraro_push_exception_context({});\n", ind, if has_finally { "1" } else { "0" }));
+                output.push_str(&format!("{}if (setjmp(*tauraro_get_exception_buf()) == 0) {{\n", ind));
+                output.push_str(&format!("{}    // Try block\n", ind));
+
                 // Try body
                 for try_instr in body {
                     output.push_str(&self.transpile_instruction(try_instr, indent_level + 1)?);
                 }
-                
-                // Else body (if no exception)
+
+                // Else body (if no exception occurred)
                 if let Some(else_body) = else_body {
+                    output.push_str(&format!("{}    // Else block (no exception)\n", ind));
                     for else_instr in else_body {
                         output.push_str(&self.transpile_instruction(else_instr, indent_level + 1)?);
                     }
                 }
-                
+
+                // Clear exception and skip handlers if no exception
+                output.push_str(&format!("{}    tauraro_clear_exception();\n", ind));
+
                 output.push_str(&format!("{}}} else {{\n", ind));
-                
+                output.push_str(&format!("{}    // Exception handlers\n", ind));
+
                 // Exception handlers
+                let mut first_handler = true;
                 for (exc_type, var_name, handler_body) in handlers {
+                    let prefix = if first_handler { "" } else { "else " };
+                    first_handler = false;
+
                     if let Some(exc_type) = exc_type {
-                        output.push_str(&format!("{}    if (tauraro_exception_matches(\"{}\")) {{\n", ind, exc_type));
+                        output.push_str(&format!("{}    {}if (tauraro_exception_matches(\"{}\")) {{\n", ind, prefix, exc_type));
                     } else {
-                        output.push_str(&format!("{}    // Catch all exceptions\n", ind));
-                        output.push_str(&format!("{}    {{\n", ind));
+                        // Catch-all handler
+                        if prefix.is_empty() {
+                            output.push_str(&format!("{}    {{\n", ind));
+                        } else {
+                            output.push_str(&format!("{}    {}{{ // Catch all\n", ind, prefix));
+                        }
                     }
-                    
+
+                    // Store exception in variable if requested
                     if let Some(var_name) = var_name {
-                        output.push_str(&format!("{}        TauException* {} = tauraro_current_exception;\n", ind, var_name));
+                        output.push_str(&format!("{}        TauValue {} = tauraro_get_current_exception();\n", ind, var_name));
                     }
-                    
+
+                    // Handler body
                     for handler_instr in handler_body {
                         output.push_str(&self.transpile_instruction(handler_instr, indent_level + 2)?);
                     }
+
+                    // Clear exception after successful handling
+                    output.push_str(&format!("{}        tauraro_clear_exception();\n", ind));
                     output.push_str(&format!("{}    }}\n", ind));
                 }
-                
-                output.push_str(&format!("{}}}\n", ind));
-                
-                // Finally block
-                if let Some(finally_body) = finally_body {
-                    output.push_str(&format!("{}// Finally block\n", ind));
-                    for finally_instr in finally_body {
-                        output.push_str(&self.transpile_instruction(finally_instr, indent_level)?);
-                    }
+
+                // Re-raise if no handler matched
+                if !handlers.is_empty() {
+                    output.push_str(&format!("{}    if (tauraro_current_exception) {{\n", ind));
+                    output.push_str(&format!("{}        // No handler matched, re-raise\n", ind));
+                    output.push_str(&format!("{}        tauraro_reraise();\n", ind));
+                    output.push_str(&format!("{}    }}\n", ind));
                 }
+
+                output.push_str(&format!("{}}}\n", ind));
+
+                // Finally block (always executed)
+                if let Some(finally_body) = finally_body {
+                    output.push_str(&format!("{}// Finally block (always executes)\n", ind));
+                    output.push_str(&format!("{}if (tauraro_should_execute_finally()) {{\n", ind));
+                    for finally_instr in finally_body {
+                        output.push_str(&self.transpile_instruction(finally_instr, indent_level + 1)?);
+                    }
+                    output.push_str(&format!("{}    tauraro_mark_finally_executed();\n", ind));
+                    output.push_str(&format!("{}}}\n", ind));
+                }
+
+                // Pop exception context
+                output.push_str(&format!("{}tauraro_pop_exception_context();\n", ind));
             }
-            
-            // Enhanced Raise instruction
+
+            // Enhanced Raise instruction with better error handling
             IRInstruction::Raise { exception } => {
                 output.push_str(&format!("{}// Raise exception\n", ind));
                 if let Some(exception) = exception {
-                    output.push_str(&format!("{}tauraro_throw_exception({});\n", ind, exception));
+                    // Create exception from expression
+                    output.push_str(&format!("{}tauraro_throw_exception(tauraro_create_exception(\"RuntimeError\", \"{}\"));\n", ind, exception));
                 } else {
-                    output.push_str(&format!("{}tauraro_throw_exception(tauraro_current_exception);\n", ind));
+                    // Re-raise current exception
+                    output.push_str(&format!("{}tauraro_reraise();\n", ind));
                 }
-                output.push_str(&format!("{}return tauraro_none(); // Early return after exception\n", ind));
             }
             
-            // Enhanced Import/ImportFrom instructions with advanced module support
+            // Enhanced Import/ImportFrom instructions with builtin module support
             IRInstruction::Import { module } => {
                 let sanitized_name = module.replace(".", "_");
 
-                if self.global_imports.contains(module) {
-                    // Global import - assign to global variable
-                    output.push_str(&format!("{}// Import module (global): {}\n", ind, module));
-                    output.push_str(&format!("{}TauModule* module_{} = tauraro_import_module(\"{}\");\n",
-                        ind, sanitized_name, module));
-                    output.push_str(&format!("{}{} = tauraro_module_to_value(module_{});\n",
-                        ind, sanitized_name, sanitized_name));
+                // Check if this is a builtin module (time, os, sys, json, etc.)
+                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "datetime", "base64", "hashlib", "re"];
+                if builtin_modules.contains(&module.as_str()) {
+                    // Track builtin module import
+                    self.imported_builtin_modules.insert(module.clone());
+
+                    // For builtin modules, we don't need runtime import - functions are inline
+                    output.push_str(&format!("{}// Builtin module imported: {} (functions available inline)\n", ind, module));
                 } else {
-                    // Local import - create local variable
-                    output.push_str(&format!("{}// Import module (local): {}\n", ind, module));
-                    output.push_str(&format!("{}TauModule* module_{} = tauraro_import_module(\"{}\");\n",
-                        ind, sanitized_name, module));
-                    output.push_str(&format!("{}TauValue {} = tauraro_module_to_value(module_{});\n",
-                        ind, sanitized_name, sanitized_name));
+                    // User module - would need dynamic loading (not implemented for C yet)
+                    output.push_str(&format!("{}// User module import: {} (not yet supported in C backend)\n", ind, module));
                 }
             }
             
             IRInstruction::ImportFrom { module, names } => {
-                output.push_str(&format!("{}// From import: from {} import {}\n", 
-                    ind, module, names.join(", ")));
-                output.push_str(&format!("{}TauModule* temp_module = tauraro_import_module(\"{}\");\n", 
-                    ind, module));
-                
-                for name in names {
-                    output.push_str(&format!("{}{} = tauraro_module_get(temp_module, \"{}\");\n", 
-                        ind, name, name));
-                    self.var_types.insert(name.clone(), NativeType::Generic);
+                // Check if this is a builtin module
+                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "datetime", "base64", "hashlib", "re"];
+                if builtin_modules.contains(&module.as_str()) {
+                    // Track builtin module import
+                    self.imported_builtin_modules.insert(module.clone());
+
+                    output.push_str(&format!("{}// From builtin import: from {} import {} (functions available inline)\n",
+                        ind, module, names.join(", ")));
+                } else {
+                    output.push_str(&format!("{}// From user import: from {} import {} (not yet supported in C backend)\n",
+                        ind, module, names.join(", ")));
                 }
             }
             
@@ -4758,29 +4808,225 @@ impl CTranspiler {
         output.push_str("}\n\n");
 
         // ===== EXCEPTION HANDLING =====
-        output.push_str("// Exception handling system\n");
-        output.push_str("#include <setjmp.h>\n");
-        output.push_str("jmp_buf tauraro_exception_buf;\n");
-        output.push_str("TauException* tauraro_current_exception = NULL;\n\n");
+        output.push_str("// Comprehensive exception handling system with nested try block support\n");
+        output.push_str("#include <setjmp.h>\n\n");
 
+        // Exception context stack for nested try blocks
+        output.push_str("// Exception context for nested try-except-finally blocks\n");
+        output.push_str("#define MAX_EXCEPTION_DEPTH 64\n");
+        output.push_str("typedef struct {\n");
+        output.push_str("    jmp_buf buf;\n");
+        output.push_str("    TauException* exception;\n");
+        output.push_str("    int has_finally;\n");
+        output.push_str("    int finally_executed;\n");
+        output.push_str("} TauExceptionContext;\n\n");
+
+        output.push_str("static TauExceptionContext tauraro_exception_stack[MAX_EXCEPTION_DEPTH];\n");
+        output.push_str("static int tauraro_exception_depth = -1;\n");
+        output.push_str("static TauException* tauraro_current_exception = NULL;\n\n");
+
+        // Exception creation
         output.push_str("TauException* tauraro_create_exception(const char* type, const char* message) {\n");
-        output.push_str("    TauException* exc = malloc(sizeof(TauException));\n");
-        output.push_str("    exc->type = strdup(type);\n");
-        output.push_str("    exc->message = strdup(message);\n");
+        output.push_str("    TauException* exc = (TauException*)malloc(sizeof(TauException));\n");
+        output.push_str("    if (!exc) return NULL;\n");
+        output.push_str("    exc->type = strdup(type ? type : \"Exception\");\n");
+        output.push_str("    exc->message = strdup(message ? message : \"\");\n");
         output.push_str("    exc->traceback = NULL;\n");
         output.push_str("    exc->value = tauraro_none();\n");
         output.push_str("    exc->refcount = 1;\n");
         output.push_str("    return exc;\n");
         output.push_str("}\n\n");
 
-        output.push_str("void tauraro_throw_exception(TauException* exc) {\n");
-        output.push_str("    tauraro_current_exception = exc;\n");
-        output.push_str("    longjmp(tauraro_exception_buf, 1);\n");
+        // Push new exception context (for entering try block)
+        output.push_str("int tauraro_push_exception_context(int has_finally) {\n");
+        output.push_str("    if (tauraro_exception_depth >= MAX_EXCEPTION_DEPTH - 1) {\n");
+        output.push_str("        fprintf(stderr, \"Exception stack overflow\\n\");\n");
+        output.push_str("        exit(1);\n");
+        output.push_str("    }\n");
+        output.push_str("    tauraro_exception_depth++;\n");
+        output.push_str("    tauraro_exception_stack[tauraro_exception_depth].exception = NULL;\n");
+        output.push_str("    tauraro_exception_stack[tauraro_exception_depth].has_finally = has_finally;\n");
+        output.push_str("    tauraro_exception_stack[tauraro_exception_depth].finally_executed = 0;\n");
+        output.push_str("    return tauraro_exception_depth;\n");
         output.push_str("}\n\n");
 
+        // Pop exception context (for leaving try block)
+        output.push_str("void tauraro_pop_exception_context() {\n");
+        output.push_str("    if (tauraro_exception_depth >= 0) {\n");
+        output.push_str("        TauException* exc = tauraro_exception_stack[tauraro_exception_depth].exception;\n");
+        output.push_str("        if (exc && exc->refcount > 0) {\n");
+        output.push_str("            exc->refcount--;\n");
+        output.push_str("            if (exc->refcount == 0) {\n");
+        output.push_str("                free(exc->type);\n");
+        output.push_str("                free(exc->message);\n");
+        output.push_str("                free(exc->traceback);\n");
+        output.push_str("                free(exc);\n");
+        output.push_str("            }\n");
+        output.push_str("        }\n");
+        output.push_str("        tauraro_exception_depth--;\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        // Get current jmp_buf for setjmp
+        output.push_str("jmp_buf* tauraro_get_exception_buf() {\n");
+        output.push_str("    if (tauraro_exception_depth >= 0) {\n");
+        output.push_str("        return &tauraro_exception_stack[tauraro_exception_depth].buf;\n");
+        output.push_str("    }\n");
+        output.push_str("    return NULL;\n");
+        output.push_str("}\n\n");
+
+        // Throw exception with propagation
+        output.push_str("void tauraro_throw_exception(TauException* exc) {\n");
+        output.push_str("    if (!exc) {\n");
+        output.push_str("        exc = tauraro_create_exception(\"RuntimeError\", \"NULL exception thrown\");\n");
+        output.push_str("    }\n");
+        output.push_str("    tauraro_current_exception = exc;\n");
+        output.push_str("    if (tauraro_exception_depth >= 0) {\n");
+        output.push_str("        tauraro_exception_stack[tauraro_exception_depth].exception = exc;\n");
+        output.push_str("        exc->refcount++;\n");
+        output.push_str("        longjmp(tauraro_exception_stack[tauraro_exception_depth].buf, 1);\n");
+        output.push_str("    } else {\n");
+        output.push_str("        // No exception handler, print and exit\n");
+        output.push_str("        fprintf(stderr, \"Unhandled exception: %s: %s\\n\", exc->type, exc->message);\n");
+        output.push_str("        if (exc->traceback) fprintf(stderr, \"%s\\n\", exc->traceback);\n");
+        output.push_str("        exit(1);\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        // Exception type matching (supports inheritance checking)
         output.push_str("int tauraro_exception_matches(const char* type) {\n");
-        output.push_str("    return tauraro_current_exception && \n");
-        output.push_str("           strcmp(tauraro_current_exception->type, type) == 0;\n");
+        output.push_str("    if (!tauraro_current_exception || !type) return 0;\n");
+        output.push_str("    if (strcmp(type, \"*\") == 0) return 1; // Catch-all\n");
+        output.push_str("    if (strcmp(tauraro_current_exception->type, type) == 0) return 1;\n");
+        output.push_str("    \n");
+        output.push_str("    // Exception inheritance hierarchy\n");
+        output.push_str("    const char* exc_type = tauraro_current_exception->type;\n");
+        output.push_str("    if (strcmp(type, \"Exception\") == 0) return 1; // All exceptions derive from Exception\n");
+        output.push_str("    if (strcmp(type, \"BaseException\") == 0) return 1; // All derive from BaseException\n");
+        output.push_str("    \n");
+        output.push_str("    // Standard exception hierarchy checks\n");
+        output.push_str("    if (strcmp(type, \"ArithmeticError\") == 0) {\n");
+        output.push_str("        return strcmp(exc_type, \"ZeroDivisionError\") == 0 ||\n");
+        output.push_str("               strcmp(exc_type, \"OverflowError\") == 0 ||\n");
+        output.push_str("               strcmp(exc_type, \"FloatingPointError\") == 0;\n");
+        output.push_str("    }\n");
+        output.push_str("    if (strcmp(type, \"LookupError\") == 0) {\n");
+        output.push_str("        return strcmp(exc_type, \"IndexError\") == 0 ||\n");
+        output.push_str("               strcmp(exc_type, \"KeyError\") == 0;\n");
+        output.push_str("    }\n");
+        output.push_str("    return 0;\n");
+        output.push_str("}\n\n");
+
+        // Mark finally as executed
+        output.push_str("void tauraro_mark_finally_executed() {\n");
+        output.push_str("    if (tauraro_exception_depth >= 0) {\n");
+        output.push_str("        tauraro_exception_stack[tauraro_exception_depth].finally_executed = 1;\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        // Check if finally needs execution
+        output.push_str("int tauraro_should_execute_finally() {\n");
+        output.push_str("    if (tauraro_exception_depth >= 0) {\n");
+        output.push_str("        return tauraro_exception_stack[tauraro_exception_depth].has_finally &&\n");
+        output.push_str("               !tauraro_exception_stack[tauraro_exception_depth].finally_executed;\n");
+        output.push_str("    }\n");
+        output.push_str("    return 0;\n");
+        output.push_str("}\n\n");
+
+        // Re-raise current exception
+        output.push_str("void tauraro_reraise() {\n");
+        output.push_str("    if (tauraro_current_exception) {\n");
+        output.push_str("        tauraro_throw_exception(tauraro_current_exception);\n");
+        output.push_str("    } else {\n");
+        output.push_str("        tauraro_throw_exception(tauraro_create_exception(\"RuntimeError\", \"No active exception to re-raise\"));\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        // Get current exception as TauValue
+        output.push_str("TauValue tauraro_get_current_exception() {\n");
+        output.push_str("    if (tauraro_current_exception) {\n");
+        output.push_str("        TauValue exc_val;\n");
+        output.push_str("        exc_val.type = 8; // Exception type\n");
+        output.push_str("        exc_val.value.exc = tauraro_current_exception;\n");
+        output.push_str("        exc_val.refcount = 1;\n");
+        output.push_str("        exc_val.next = NULL;\n");
+        output.push_str("        return exc_val;\n");
+        output.push_str("    }\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
+        // Clear current exception
+        output.push_str("void tauraro_clear_exception() {\n");
+        output.push_str("    tauraro_current_exception = NULL;\n");
+        output.push_str("}\n\n");
+
+        // ===== TYPE SYSTEM COMPATIBILITY LAYER =====
+        output.push_str("// Type conversion and compatibility functions\n\n");
+
+        // Type checking helpers
+        output.push_str("int tauraro_is_type_compatible(TauValue val, const char* expected_type) {\n");
+        output.push_str("    if (!expected_type) return 1; // No type constraint\n");
+        output.push_str("    \n");
+        output.push_str("    if (strcmp(expected_type, \"int\") == 0) return val.type == 0;\n");
+        output.push_str("    if (strcmp(expected_type, \"float\") == 0) return val.type == 1;\n");
+        output.push_str("    if (strcmp(expected_type, \"str\") == 0) return val.type == 2;\n");
+        output.push_str("    if (strcmp(expected_type, \"bool\") == 0) return val.type == 3;\n");
+        output.push_str("    if (strcmp(expected_type, \"list\") == 0) return val.type == 4;\n");
+        output.push_str("    if (strcmp(expected_type, \"dict\") == 0) return val.type == 5;\n");
+        output.push_str("    if (strcmp(expected_type, \"object\") == 0) return val.type == 6;\n");
+        output.push_str("    if (strcmp(expected_type, \"function\") == 0) return val.type == 7;\n");
+        output.push_str("    if (strcmp(expected_type, \"Exception\") == 0) return val.type == 8;\n");
+        output.push_str("    \n");
+        output.push_str("    return 1; // Unknown type, allow it\n");
+        output.push_str("}\n\n");
+
+        // Unified type conversion functions (TauValue-based)
+        output.push_str("TauValue tauraro_to_int_unified(TauValue val) {\n");
+        output.push_str("    switch (val.type) {\n");
+        output.push_str("        case 0: return val; // Already int\n");
+        output.push_str("        case 1: return tauraro_int((long long)val.value.f);\n");
+        output.push_str("        case 2: return tauraro_int(val.value.s ? atoll(val.value.s) : 0);\n");
+        output.push_str("        case 3: return tauraro_int(val.value.i ? 1 : 0); // Bool stored as int\n");
+        output.push_str("        default: return tauraro_int(0);\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_to_float_unified(TauValue val) {\n");
+        output.push_str("    switch (val.type) {\n");
+        output.push_str("        case 0: return tauraro_float((double)val.value.i);\n");
+        output.push_str("        case 1: return val; // Already float\n");
+        output.push_str("        case 2: return tauraro_float(val.value.s ? atof(val.value.s) : 0.0);\n");
+        output.push_str("        case 3: return tauraro_float(val.value.i ? 1.0 : 0.0); // Bool stored as int\n");
+        output.push_str("        default: return tauraro_float(0.0);\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_to_str_unified(TauValue val) {\n");
+        output.push_str("    char buf[256];\n");
+        output.push_str("    switch (val.type) {\n");
+        output.push_str("        case 0:\n");
+        output.push_str("            snprintf(buf, sizeof(buf), \"%lld\", val.value.i);\n");
+        output.push_str("            return tauraro_str(buf);\n");
+        output.push_str("        case 1:\n");
+        output.push_str("            snprintf(buf, sizeof(buf), \"%g\", val.value.f);\n");
+        output.push_str("            return tauraro_str(buf);\n");
+        output.push_str("        case 2: return val; // Already string\n");
+        output.push_str("        case 3:\n");
+        output.push_str("            return tauraro_str(val.value.i ? \"True\" : \"False\"); // Bool stored as int\n");
+        output.push_str("        default:\n");
+        output.push_str("            return tauraro_str(\"<object>\");\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue tauraro_to_bool_unified(TauValue val) {\n");
+        output.push_str("    switch (val.type) {\n");
+        output.push_str("        case 0: return tauraro_bool(val.value.i != 0);\n");
+        output.push_str("        case 1: return tauraro_bool(val.value.f != 0.0);\n");
+        output.push_str("        case 2: return tauraro_bool(val.value.s && val.value.s[0] != '\\0');\n");
+        output.push_str("        case 3: return val; // Already bool\n");
+        output.push_str("        case 9: return tauraro_bool(0); // None is False\n");
+        output.push_str("        default: return tauraro_bool(1); // Objects are True\n");
+        output.push_str("    }\n");
         output.push_str("}\n\n");
 
         // ===== SUPER CALL SUPPORT =====
@@ -7319,6 +7565,39 @@ impl CTranspiler {
         output.push_str("static inline void write_msr(uint32_t msr, uint64_t val) { (void)msr; (void)val; }\n\n");
         
         output.push_str("#endif // TAURARO_FREESTANDING\n\n");
+
+        output
+    }
+
+    /// Include C implementations of imported builtin modules
+    fn include_builtin_modules(&self) -> String {
+        let mut output = String::new();
+
+        if self.imported_builtin_modules.is_empty() {
+            return output;
+        }
+
+        output.push_str("// ==========================================\n");
+        output.push_str("// IMPORTED BUILTIN MODULES (C Implementation)\n");
+        output.push_str("// ==========================================\n\n");
+
+        // Map of module names to their C file paths
+        let module_dir = "src/codegen/c_transpiler/builtin_modules";
+
+        for module in &self.imported_builtin_modules {
+            let module_file = format!("{}/{}.c", module_dir, module);
+
+            // Try to read the module file
+            if let Ok(module_code) = std::fs::read_to_string(&module_file) {
+                output.push_str(&format!("// ----- {} MODULE -----\n", module.to_uppercase()));
+                output.push_str(&module_code);
+                output.push_str("\n\n");
+            } else {
+                // Module file not found - add a comment
+                output.push_str(&format!("// WARNING: Builtin module '{}' imported but implementation not found at {}\n", module, module_file));
+                output.push_str(&format!("// Placeholder functions will be needed\n\n"));
+            }
+        }
 
         output
     }
