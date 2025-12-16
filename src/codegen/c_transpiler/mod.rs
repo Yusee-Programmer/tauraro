@@ -3094,55 +3094,68 @@ impl CTranspiler {
             }
 
             IRInstruction::Return { value } => {
+                // Check if we're in the main function (global scope) or a user function
+                let in_main_function = self.current_function.is_none();
+
                 if let Some(val) = value {
                     let resolved_val = self.resolve_var_name(val);
-                    
+
                     // Get the function's return type from function_definitions
                     let return_type = self.current_function.as_ref()
                         .and_then(|fname| self.function_definitions.get(fname))
                         .map(|finfo| finfo.return_type)
                         .unwrap_or(NativeType::Generic);
-                    
+
                     // Get the value's type
                     let val_type = self.var_types.get(&resolved_val).copied()
                         .or_else(|| self.scope_variables.get(&resolved_val).copied())
                         .unwrap_or(NativeType::Generic);
-                    
-                    // Convert if needed
-                    match (return_type, val_type) {
-                        (NativeType::Int64, NativeType::Generic) => {
-                            output.push_str(&format!("{}return {}.value.i;\n", ind, resolved_val));
-                        }
-                        (NativeType::Double, NativeType::Generic) => {
-                            output.push_str(&format!("{}return {}.value.f;\n", ind, resolved_val));
-                        }
-                        (NativeType::CStr, NativeType::Generic) => {
-                            output.push_str(&format!("{}return {}.value.s;\n", ind, resolved_val));
-                        }
-                        (NativeType::List, NativeType::Generic) => {
-                            output.push_str(&format!("{}return {}.value.list;\n", ind, resolved_val));
-                        }
-                        (NativeType::Dict, NativeType::Generic) => {
-                            output.push_str(&format!("{}return {}.value.dict;\n", ind, resolved_val));
-                        }
-                        (NativeType::Generic, NativeType::Int64) => {
-                            output.push_str(&format!("{}return (TauValue){{.type = 0, .value.i = {}}};\n", ind, resolved_val));
-                        }
-                        (NativeType::Generic, NativeType::Double) => {
-                            output.push_str(&format!("{}return (TauValue){{.type = 1, .value.f = {}}};\n", ind, resolved_val));
-                        }
-                        (NativeType::Generic, NativeType::List) => {
-                            output.push_str(&format!("{}return (TauValue){{.type = 4, .value.list = {}}};\n", ind, resolved_val));
-                        }
-                        (NativeType::Generic, NativeType::Dict) => {
-                            output.push_str(&format!("{}return (TauValue){{.type = 5, .value.dict = {}}};\n", ind, resolved_val));
-                        }
-                        _ => {
-                            output.push_str(&format!("{}return {};\n", ind, resolved_val));
+
+                    // If we're in main, always return 0 (main has int return type)
+                    if in_main_function {
+                        output.push_str(&format!("{}// Return from main - ignoring value\n", ind));
+                        output.push_str(&format!("{}return 0;\n", ind));
+                    } else {
+                        // Convert if needed for user functions
+                        match (return_type, val_type) {
+                            (NativeType::Int64, NativeType::Generic) => {
+                                output.push_str(&format!("{}return {}.value.i;\n", ind, resolved_val));
+                            }
+                            (NativeType::Double, NativeType::Generic) => {
+                                output.push_str(&format!("{}return {}.value.f;\n", ind, resolved_val));
+                            }
+                            (NativeType::CStr, NativeType::Generic) => {
+                                output.push_str(&format!("{}return {}.value.s;\n", ind, resolved_val));
+                            }
+                            (NativeType::List, NativeType::Generic) => {
+                                output.push_str(&format!("{}return {}.value.list;\n", ind, resolved_val));
+                            }
+                            (NativeType::Dict, NativeType::Generic) => {
+                                output.push_str(&format!("{}return {}.value.dict;\n", ind, resolved_val));
+                            }
+                            (NativeType::Generic, NativeType::Int64) => {
+                                output.push_str(&format!("{}return (TauValue){{.type = 0, .value.i = {}}};\n", ind, resolved_val));
+                            }
+                            (NativeType::Generic, NativeType::Double) => {
+                                output.push_str(&format!("{}return (TauValue){{.type = 1, .value.f = {}}};\n", ind, resolved_val));
+                            }
+                            (NativeType::Generic, NativeType::List) => {
+                                output.push_str(&format!("{}return (TauValue){{.type = 4, .value.list = {}}};\n", ind, resolved_val));
+                            }
+                            (NativeType::Generic, NativeType::Dict) => {
+                                output.push_str(&format!("{}return (TauValue){{.type = 5, .value.dict = {}}};\n", ind, resolved_val));
+                            }
+                            _ => {
+                                output.push_str(&format!("{}return {};\n", ind, resolved_val));
+                            }
                         }
                     }
                 } else {
-                    output.push_str(&format!("{}return {{.type = 0, .value.i = 0}};\n", ind));
+                    if in_main_function {
+                        output.push_str(&format!("{}return 0;\n", ind));
+                    } else {
+                        output.push_str(&format!("{}return {{.type = 0, .value.i = 0}};\n", ind));
+                    }
                 }
             }
 
