@@ -139,6 +139,8 @@ pub struct CTranspiler {
     enable_native_types: bool,
     /// Bare-metal/OS development options
     baremetal_options: BaremetalOptions,
+    /// Global imports that need to be accessible across all functions
+    global_imports: HashSet<String>,
 }
 
 /// Native C types for optimized transpilation
@@ -181,6 +183,7 @@ impl CTranspiler {
             static_typed_vars: HashMap::new(),
             enable_native_types: true,
             baremetal_options: BaremetalOptions::default(),
+            global_imports: HashSet::new(),
         }
     }
 
@@ -206,6 +209,7 @@ impl CTranspiler {
             static_typed_vars: HashMap::new(),
             enable_native_types: true,
             baremetal_options: options,
+            global_imports: HashSet::new(),
         }
     }
     
@@ -405,7 +409,14 @@ impl CTranspiler {
         
         // Clear lambdas from previous transpilations
         transpiler.lambdas_to_generate.clear();
-        
+
+        // Collect global imports for proper scoping
+        for instruction in &module.globals {
+            if let IRInstruction::Import { module: mod_name } = instruction {
+                transpiler.global_imports.insert(mod_name.clone());
+            }
+        }
+
         // Populate function parameter information for default argument handling
         for (func_name, func) in &module.functions {
             let mut params_info = Vec::new();
@@ -470,6 +481,18 @@ impl CTranspiler {
         }
         output.push_str("\n");
 
+        // Math constants
+        output.push_str("// Math constants\n");
+        output.push_str("#ifndef M_PI\n");
+        output.push_str("#define M_PI 3.14159265358979323846\n");
+        output.push_str("#endif\n");
+        output.push_str("#ifndef M_E\n");
+        output.push_str("#define M_E 2.71828182845904523536\n");
+        output.push_str("#endif\n");
+        output.push_str("static const double tauraro_math_pi = M_PI;\n");
+        output.push_str("static const double tauraro_math_e = M_E;\n");
+        output.push_str("\n");
+
         // Extract imported modules and add FFI type declarations
         let imported_modules = crate::codegen::c_transpiler::module_compiler::extract_imported_modules(module);
         let (builtin_modules, _user_modules) = crate::codegen::c_transpiler::module_compiler::categorize_modules(&imported_modules);
@@ -488,13 +511,32 @@ impl CTranspiler {
             output.push_str(&builtin_ffi::generate_wrapper_declarations(&builtin_modules));
         }
 
+        // Add sys module globals (before utilities that use it)
+        output.push_str("// ===== SYS MODULE GLOBALS =====\n");
+        output.push_str(&sys_module::generate_sys_module_globals());
+        output.push_str("\n");
+
+        // Add global import variables for module-level imports
+        if !transpiler.global_imports.is_empty() {
+            output.push_str("// ===== GLOBAL MODULE IMPORTS =====\n");
+            for mod_name in &transpiler.global_imports {
+                let sanitized_name = mod_name.replace(".", "_");
+                output.push_str(&format!("static TauValue {};\n", sanitized_name));
+            }
+            output.push_str("\n");
+        }
+
+        // Add __name__ global variable
+        output.push_str("// __name__ special variable\n");
+        output.push_str("static TauValue __name__;\n\n");
+
         // Add utility functions
         output.push_str(&transpiler.generate_utilities());
         output.push_str("\n");
 
-        // Add sys module implementation
-        output.push_str("// ===== SYS MODULE =====\n");
-        output.push_str(&sys_module::generate_sys_module_complete());
+        // Add sys module initialization function
+        output.push_str("// ===== SYS MODULE INIT =====\n");
+        output.push_str(&sys_module::generate_sys_module_init());
         output.push_str("\n");
 
         // Generate FFI wrapper functions for builtin modules
@@ -597,7 +639,11 @@ impl CTranspiler {
 
             // Initialize sys module
             output.push_str("    // Initialize sys module\n");
-            output.push_str("    tauraro_sys_init(argc, argv);\n\n");
+            output.push_str("    g_sys_module = tauraro_init_sys_module(argc, argv);\n\n");
+
+            // Initialize __name__
+            output.push_str("    // Initialize __name__ to \"__main__\"\n");
+            output.push_str("    __name__ = (TauValue){.type = 2, .value.s = strdup(\"__main__\"), .refcount = 1, .next = NULL};\n\n");
 
             // Generate variable declarations
             output.push_str(&transpiler.generate_variable_declarations());
@@ -2013,8 +2059,21 @@ impl CTranspiler {
                                 let arg = &args[0];
                                 if let Some(var_type) = var_types_snapshot.get(arg) {
                                     match var_type {
+                                        NativeType::Int64 => {
+                                            output.push_str(&format!("{}{} = tauraro_int({});\n", ind, res, arg));
+                                        }
+                                        NativeType::Double => {
+                                            output.push_str(&format!("{}{} = tauraro_int((long long){});\n", ind, res, arg));
+                                        }
                                         NativeType::CStr => {
                                             output.push_str(&format!("{}{} = tauraro_int_string({});\n", ind, res, arg));
+                                        }
+                                        NativeType::Generic => {
+                                            // Convert from TauValue
+                                            output.push_str(&format!("{}if ({}.type == 0) {{ {} = {}; }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else if ({}.type == 1) {{ {} = tauraro_int((long long){}.value.f); }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else if ({}.type == 2) {{ {} = tauraro_int(atoll({}.value.s)); }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else {{ {} = tauraro_int(0); }}\n", ind, res));
                                         }
                                         _ => {
                                             output.push_str(&format!("{}{} = tauraro_int({});\n", ind, res, arg));
@@ -2034,8 +2093,21 @@ impl CTranspiler {
                                 let arg = &args[0];
                                 if let Some(var_type) = var_types_snapshot.get(arg) {
                                     match var_type {
+                                        NativeType::Double => {
+                                            output.push_str(&format!("{}{} = tauraro_float({});\n", ind, res, arg));
+                                        }
+                                        NativeType::Int64 => {
+                                            output.push_str(&format!("{}{} = tauraro_float((double){});\n", ind, res, arg));
+                                        }
                                         NativeType::CStr => {
                                             output.push_str(&format!("{}{} = tauraro_float_string({});\n", ind, res, arg));
+                                        }
+                                        NativeType::Generic => {
+                                            // Convert from TauValue
+                                            output.push_str(&format!("{}if ({}.type == 1) {{ {} = {}; }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else if ({}.type == 0) {{ {} = tauraro_float((double){}.value.i); }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else if ({}.type == 2) {{ {} = tauraro_float(atof({}.value.s)); }}\n", ind, arg, res, arg));
+                                            output.push_str(&format!("{}else {{ {} = tauraro_float(0.0); }}\n", ind, res));
                                         }
                                         _ => {
                                             output.push_str(&format!("{}{} = tauraro_float({});\n", ind, res, arg));
@@ -3464,11 +3536,23 @@ impl CTranspiler {
             
             // Enhanced Import/ImportFrom instructions with advanced module support
             IRInstruction::Import { module } => {
-                output.push_str(&format!("{}// Import module: {}\n", ind, module));
-                output.push_str(&format!("{}TauModule* module_{} = tauraro_import_module(\"{}\");\n", 
-                    ind, module.replace(".", "_"), module));
-                output.push_str(&format!("{}TauValue {} = tauraro_module_to_value(module_{});\n", 
-                    ind, module.replace(".", "_"), module.replace(".", "_")));
+                let sanitized_name = module.replace(".", "_");
+
+                if self.global_imports.contains(module) {
+                    // Global import - assign to global variable
+                    output.push_str(&format!("{}// Import module (global): {}\n", ind, module));
+                    output.push_str(&format!("{}TauModule* module_{} = tauraro_import_module(\"{}\");\n",
+                        ind, sanitized_name, module));
+                    output.push_str(&format!("{}{} = tauraro_module_to_value(module_{});\n",
+                        ind, sanitized_name, sanitized_name));
+                } else {
+                    // Local import - create local variable
+                    output.push_str(&format!("{}// Import module (local): {}\n", ind, module));
+                    output.push_str(&format!("{}TauModule* module_{} = tauraro_import_module(\"{}\");\n",
+                        ind, sanitized_name, module));
+                    output.push_str(&format!("{}TauValue {} = tauraro_module_to_value(module_{});\n",
+                        ind, sanitized_name, sanitized_name));
+                }
             }
             
             IRInstruction::ImportFrom { module, names } => {
@@ -4848,6 +4932,9 @@ impl CTranspiler {
         output.push_str("}\n\n");
 
         output.push_str("TauModule* tauraro_import_module(const char* name) {\n");
+        output.push_str("    if (strcmp(name, \"sys\") == 0 && g_sys_module != NULL) {\n");
+        output.push_str("        return g_sys_module;\n");
+        output.push_str("    }\n");
         output.push_str("    // Simplified import - in real implementation would load from file\n");
         output.push_str("    return tauraro_create_module(name, NULL);\n");
         output.push_str("}\n\n");
@@ -6968,6 +7055,47 @@ impl CTranspiler {
         output.push_str("    return tauraro_int(memcmp(ptr1, ptr2, size));\n");
         output.push_str("}\n\n");
 
+        // ===== FILE I/O FUNCTIONS =====
+        output.push_str("// File I/O support\n");
+        output.push_str("TauValue open(TauValue filename, TauValue mode) {\n");
+        output.push_str("    if (filename.type != 2 || mode.type != 2) return tauraro_none();\n");
+        output.push_str("    FILE* fp = fopen(filename.value.s, mode.value.s);\n");
+        output.push_str("    if (!fp) return tauraro_none();\n");
+        output.push_str("    // Store FILE* as integer pointer\n");
+        output.push_str("    return tauraro_int((long long)(uintptr_t)fp);\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue f__write(TauValue file, TauValue data) {\n");
+        output.push_str("    if (file.type != 0 || data.type != 2) return tauraro_none();\n");
+        output.push_str("    FILE* fp = (FILE*)(uintptr_t)file.value.i;\n");
+        output.push_str("    if (!fp) return tauraro_none();\n");
+        output.push_str("    fputs(data.value.s, fp);\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue f__read(TauValue file) {\n");
+        output.push_str("    if (file.type != 0) return tauraro_str(\"\");\n");
+        output.push_str("    FILE* fp = (FILE*)(uintptr_t)file.value.i;\n");
+        output.push_str("    if (!fp) return tauraro_str(\"\");\n");
+        output.push_str("    fseek(fp, 0, SEEK_END);\n");
+        output.push_str("    long size = ftell(fp);\n");
+        output.push_str("    fseek(fp, 0, SEEK_SET);\n");
+        output.push_str("    char* buffer = (char*)malloc(size + 1);\n");
+        output.push_str("    if (!buffer) return tauraro_str(\"\");\n");
+        output.push_str("    fread(buffer, 1, size, fp);\n");
+        output.push_str("    buffer[size] = '\\0';\n");
+        output.push_str("    TauValue result = tauraro_str(buffer);\n");
+        output.push_str("    free(buffer);\n");
+        output.push_str("    return result;\n");
+        output.push_str("}\n\n");
+
+        output.push_str("TauValue f__close(TauValue file) {\n");
+        output.push_str("    if (file.type != 0) return tauraro_none();\n");
+        output.push_str("    FILE* fp = (FILE*)(uintptr_t)file.value.i;\n");
+        output.push_str("    if (fp) fclose(fp);\n");
+        output.push_str("    return tauraro_none();\n");
+        output.push_str("}\n\n");
+
         // ===== BARE-METAL / OS DEVELOPMENT STUBS =====
         // These are stubs for user-mode compilation. In freestanding mode,
         // the actual implementations are generated by generate_freestanding_utilities()
@@ -7360,6 +7488,7 @@ impl Clone for CTranspiler {
             static_typed_vars: self.static_typed_vars.clone(),
             enable_native_types: self.enable_native_types,
             baremetal_options: self.baremetal_options.clone(),
+            global_imports: self.global_imports.clone(),
         }
     }
 }

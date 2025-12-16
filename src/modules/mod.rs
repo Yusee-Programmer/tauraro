@@ -78,6 +78,7 @@ pub fn init_builtin_modules() -> HashMap<String, Value> {
     modules.insert("asyncio".to_string(), asyncio::create_asyncio_module());
     modules.insert("httptools".to_string(), httptools::create_httptools_module());
     modules.insert("websockets".to_string(), websockets::create_websockets_module());
+    #[cfg(feature = "http")]
     modules.insert("httpx".to_string(), httpx::create_httpx_module());
     modules.insert("importlib".to_string(), importlib::create_importlib_module());
     modules.insert("serveit".to_string(), serveit::create_serveit_module());
@@ -130,6 +131,7 @@ pub fn get_builtin_module(name: &str) -> Option<Value> {
         "asyncio" => Some(asyncio::create_asyncio_module()),
         "httptools" => Some(httptools::create_httptools_module()),
         "websockets" => Some(websockets::create_websockets_module()),
+        #[cfg(feature = "http")]
         "httpx" => Some(httpx::create_httpx_module()),
         "importlib" => Some(importlib::create_importlib_module()),
         "serveit" => Some(serveit::create_serveit_module()),

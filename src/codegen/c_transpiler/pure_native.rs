@@ -653,9 +653,13 @@ int tauraro_len_string(const char* str) {
     fn generate_main_function(&mut self, program: &Program) -> Result<String, String> {
         let mut output = String::new();
         output.push_str("int main(int argc, char* argv[]) {\n");
-        
+
         self.indent_level += 1;
-        
+
+        // Initialize sys module
+        output.push_str("    // Initialize sys module\n");
+        output.push_str("    g_sys_module = tauraro_init_sys_module(argc, argv);\n\n");
+
         // Check if user defined a main function
         let mut has_user_main = false;
         
