@@ -3590,7 +3590,7 @@ impl CTranspiler {
                 let sanitized_name = module.replace(".", "_");
 
                 // Check if this is a builtin module (time, os, sys, json, etc.)
-                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "re"];
+                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "datetime", "base64", "hashlib", "re"];
                 if builtin_modules.contains(&module.as_str()) {
                     // Track builtin module import
                     self.imported_builtin_modules.insert(module.clone());
@@ -3605,7 +3605,7 @@ impl CTranspiler {
             
             IRInstruction::ImportFrom { module, names } => {
                 // Check if this is a builtin module
-                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "re"];
+                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "datetime", "base64", "hashlib", "re"];
                 if builtin_modules.contains(&module.as_str()) {
                     // Track builtin module import
                     self.imported_builtin_modules.insert(module.clone());
