@@ -141,6 +141,8 @@ pub struct CTranspiler {
     baremetal_options: BaremetalOptions,
     /// Global imports that need to be accessible across all functions
     global_imports: HashSet<String>,
+    /// Track which builtin modules have been imported (for including C implementations)
+    imported_builtin_modules: HashSet<String>,
 }
 
 /// Native C types for optimized transpilation
@@ -184,6 +186,7 @@ impl CTranspiler {
             enable_native_types: true,
             baremetal_options: BaremetalOptions::default(),
             global_imports: HashSet::new(),
+            imported_builtin_modules: HashSet::new(),
         }
     }
 
@@ -210,6 +213,7 @@ impl CTranspiler {
             enable_native_types: true,
             baremetal_options: options,
             global_imports: HashSet::new(),
+            imported_builtin_modules: HashSet::new(),
         }
     }
     
@@ -493,23 +497,9 @@ impl CTranspiler {
         output.push_str("static const double tauraro_math_e = M_E;\n");
         output.push_str("\n");
 
-        // Extract imported modules and add FFI type declarations
-        let imported_modules = crate::codegen::c_transpiler::module_compiler::extract_imported_modules(module);
-        let (builtin_modules, _user_modules) = crate::codegen::c_transpiler::module_compiler::categorize_modules(&imported_modules);
-
-        if !builtin_modules.is_empty() {
-            output.push_str(&builtin_ffi::generate_ffi_types());
-            output.push_str(&builtin_ffi::generate_ffi_declarations(&builtin_modules));
-        }
-
         // Add type definitions
         output.push_str(&transpiler.generate_type_definitions());
         output.push_str("\n");
-
-        // Add forward declarations for FFI wrapper functions (after TauValue is defined)
-        if !builtin_modules.is_empty() {
-            output.push_str(&builtin_ffi::generate_wrapper_declarations(&builtin_modules));
-        }
 
         // Add sys module globals (before utilities that use it)
         output.push_str("// ===== SYS MODULE GLOBALS =====\n");
@@ -539,12 +529,8 @@ impl CTranspiler {
         output.push_str(&sys_module::generate_sys_module_init());
         output.push_str("\n");
 
-        // Generate FFI wrapper functions for builtin modules
-        if !builtin_modules.is_empty() {
-            output.push_str("// FFI wrapper functions for builtin modules\n");
-            output.push_str(&builtin_ffi::generate_ffi_wrappers(&builtin_modules));
-            output.push_str("\n");
-        }
+        // Include builtin modules that were imported
+        output.push_str(&transpiler.include_builtin_modules());
 
         // Transpile functions (forward declarations first)
         if !module.functions.is_empty() {
@@ -2871,10 +2857,26 @@ impl CTranspiler {
                             }
                         } else {
                             // Regular function call
-                            // Check if this is a string method call pattern (e.g., s__upper should be text__upper)
-                            let mut call_func = if func.ends_with("__upper") || func.ends_with("__lower") || 
-                                              func.ends_with("__strip") || func.ends_with("__split") || 
-                                              func.ends_with("__join") {
+                            // First check if this is a builtin module call (e.g., time.time, os.getcwd)
+                            let mut call_func = if func.contains(".") {
+                                // Builtin module function call: module.function -> tauraro_module_function
+                                let parts: Vec<&str> = func.split('.').collect();
+                                if parts.len() == 2 {
+                                    let module = parts[0];
+                                    let function = parts[1];
+                                    // Check if this is a known builtin module
+                                    if self.imported_builtin_modules.contains(module) {
+                                        format!("tauraro_{}_{}", module, function)
+                                    } else {
+                                        // Unknown module - keep original name
+                                        func.to_string()
+                                    }
+                                } else {
+                                    func.to_string()
+                                }
+                            } else if func.ends_with("__upper") || func.ends_with("__lower") ||
+                                      func.ends_with("__strip") || func.ends_with("__split") ||
+                                      func.ends_with("__join") {
                                 // Replace variable prefix with "text" for string methods
                                 func.split("__").nth(1).map(|method| format!("text__{}", method)).unwrap_or_else(|| func.clone())
                             } else {
@@ -3583,37 +3585,36 @@ impl CTranspiler {
                 }
             }
             
-            // Enhanced Import/ImportFrom instructions with advanced module support
+            // Enhanced Import/ImportFrom instructions with builtin module support
             IRInstruction::Import { module } => {
                 let sanitized_name = module.replace(".", "_");
 
-                if self.global_imports.contains(module) {
-                    // Global import - assign to global variable
-                    output.push_str(&format!("{}// Import module (global): {}\n", ind, module));
-                    output.push_str(&format!("{}TauModule* module_{} = tauraro_import_module(\"{}\");\n",
-                        ind, sanitized_name, module));
-                    output.push_str(&format!("{}{} = tauraro_module_to_value(module_{});\n",
-                        ind, sanitized_name, sanitized_name));
+                // Check if this is a builtin module (time, os, sys, json, etc.)
+                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "re"];
+                if builtin_modules.contains(&module.as_str()) {
+                    // Track builtin module import
+                    self.imported_builtin_modules.insert(module.clone());
+
+                    // For builtin modules, we don't need runtime import - functions are inline
+                    output.push_str(&format!("{}// Builtin module imported: {} (functions available inline)\n", ind, module));
                 } else {
-                    // Local import - create local variable
-                    output.push_str(&format!("{}// Import module (local): {}\n", ind, module));
-                    output.push_str(&format!("{}TauModule* module_{} = tauraro_import_module(\"{}\");\n",
-                        ind, sanitized_name, module));
-                    output.push_str(&format!("{}TauValue {} = tauraro_module_to_value(module_{});\n",
-                        ind, sanitized_name, sanitized_name));
+                    // User module - would need dynamic loading (not implemented for C yet)
+                    output.push_str(&format!("{}// User module import: {} (not yet supported in C backend)\n", ind, module));
                 }
             }
             
             IRInstruction::ImportFrom { module, names } => {
-                output.push_str(&format!("{}// From import: from {} import {}\n", 
-                    ind, module, names.join(", ")));
-                output.push_str(&format!("{}TauModule* temp_module = tauraro_import_module(\"{}\");\n", 
-                    ind, module));
-                
-                for name in names {
-                    output.push_str(&format!("{}{} = tauraro_module_get(temp_module, \"{}\");\n", 
-                        ind, name, name));
-                    self.var_types.insert(name.clone(), NativeType::Generic);
+                // Check if this is a builtin module
+                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "re"];
+                if builtin_modules.contains(&module.as_str()) {
+                    // Track builtin module import
+                    self.imported_builtin_modules.insert(module.clone());
+
+                    output.push_str(&format!("{}// From builtin import: from {} import {} (functions available inline)\n",
+                        ind, module, names.join(", ")));
+                } else {
+                    output.push_str(&format!("{}// From user import: from {} import {} (not yet supported in C backend)\n",
+                        ind, module, names.join(", ")));
                 }
             }
             
@@ -7564,6 +7565,39 @@ impl CTranspiler {
         output.push_str("static inline void write_msr(uint32_t msr, uint64_t val) { (void)msr; (void)val; }\n\n");
         
         output.push_str("#endif // TAURARO_FREESTANDING\n\n");
+
+        output
+    }
+
+    /// Include C implementations of imported builtin modules
+    fn include_builtin_modules(&self) -> String {
+        let mut output = String::new();
+
+        if self.imported_builtin_modules.is_empty() {
+            return output;
+        }
+
+        output.push_str("// ==========================================\n");
+        output.push_str("// IMPORTED BUILTIN MODULES (C Implementation)\n");
+        output.push_str("// ==========================================\n\n");
+
+        // Map of module names to their C file paths
+        let module_dir = "src/codegen/c_transpiler/builtin_modules";
+
+        for module in &self.imported_builtin_modules {
+            let module_file = format!("{}/{}.c", module_dir, module);
+
+            // Try to read the module file
+            if let Ok(module_code) = std::fs::read_to_string(&module_file) {
+                output.push_str(&format!("// ----- {} MODULE -----\n", module.to_uppercase()));
+                output.push_str(&module_code);
+                output.push_str("\n\n");
+            } else {
+                // Module file not found - add a comment
+                output.push_str(&format!("// WARNING: Builtin module '{}' imported but implementation not found at {}\n", module, module_file));
+                output.push_str(&format!("// Placeholder functions will be needed\n\n"));
+            }
+        }
 
         output
     }
