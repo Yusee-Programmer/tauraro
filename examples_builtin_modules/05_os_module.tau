@@ -1,0 +1,18 @@
+# OS Module Example
+# Demonstrates operating system operations
+
+import os
+
+def main():
+    print("=== OS MODULE EXAMPLES ===")
+    print("")
+    
+    # Get current working directory
+    cwd = os.getcwd()
+    print("Current working directory:", cwd)
+    
+    print("")
+    print("OS operations working correctly!")
+
+if __name__ == "__main__":
+    main()

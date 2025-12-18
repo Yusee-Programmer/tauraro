@@ -414,10 +414,21 @@ impl CTranspiler {
         // Clear lambdas from previous transpilations
         transpiler.lambdas_to_generate.clear();
 
-        // Collect global imports for proper scoping
+        // Collect global imports for proper scoping and builtin modules
+        let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "datetime", "base64", "hashlib", "re", "io", "csv", "logging", "pickle", "secrets", "uuid", "subprocess", "collections", "copy", "abc", "exceptions", "functools", "gc", "itertools", "socket", "threading", "asyncio", "websockets", "urllib", "httptools", "httpx", "unittest", "importlib", "templa", "serveit", "orm", "multiprocessing"];
         for instruction in &module.globals {
             if let IRInstruction::Import { module: mod_name } = instruction {
                 transpiler.global_imports.insert(mod_name.clone());
+                // Also track as builtin module if it's in the list
+                if builtin_modules.contains(&mod_name.as_str()) {
+                    transpiler.imported_builtin_modules.insert(mod_name.clone());
+                }
+            }
+            if let IRInstruction::ImportFrom { module: mod_name, .. } = instruction {
+                // Also track ImportFrom for builtin modules
+                if builtin_modules.contains(&mod_name.as_str()) {
+                    transpiler.imported_builtin_modules.insert(mod_name.clone());
+                }
             }
         }
 
@@ -2874,14 +2885,31 @@ impl CTranspiler {
                                 } else {
                                     func.to_string()
                                 }
-                            } else if func.ends_with("__upper") || func.ends_with("__lower") ||
+                            } else {
+                                // Check if this is an IR-generated module call: module_function -> tauraro_module_function
+                                let mut module_func = func.to_string();
+                                for module in &self.imported_builtin_modules {
+                                    let prefix = format!("{}_{}", module, "");
+                                    if func.starts_with(&prefix) {
+                                        // Extract the function name after the module prefix
+                                        if let Some(function_part) = func.strip_prefix(&prefix) {
+                                            module_func = format!("tauraro_{}_{}", module, function_part);
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                if module_func != func.to_string() {
+                                    module_func
+                                } else if func.ends_with("__upper") || func.ends_with("__lower") ||
                                       func.ends_with("__strip") || func.ends_with("__split") ||
                                       func.ends_with("__join") {
-                                // Replace variable prefix with "text" for string methods
-                                func.split("__").nth(1).map(|method| format!("text__{}", method)).unwrap_or_else(|| func.clone())
-                            } else {
-                                // Mangle function name if it's a C keyword
-                                self.mangle_c_keyword(func)
+                                    // Replace variable prefix with "text" for string methods
+                                    func.split("__").nth(1).map(|method| format!("text__{}", method)).unwrap_or_else(|| func.clone())
+                                } else {
+                                    // Mangle function name if it's a C keyword
+                                    self.mangle_c_keyword(func)
+                                }
                             };
                             
                             // Check if we have parameter type information for this function
@@ -3590,7 +3618,7 @@ impl CTranspiler {
                 let sanitized_name = module.replace(".", "_");
 
                 // Check if this is a builtin module (time, os, sys, json, etc.)
-                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "datetime", "base64", "hashlib", "re"];
+                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "datetime", "base64", "hashlib", "re", "io", "csv", "logging", "pickle", "secrets", "uuid", "subprocess", "collections", "copy", "abc", "exceptions", "functools", "gc", "itertools", "socket", "threading", "asyncio", "websockets", "urllib", "httptools", "httpx", "unittest", "importlib", "templa", "serveit", "orm", "multiprocessing"];
                 if builtin_modules.contains(&module.as_str()) {
                     // Track builtin module import
                     self.imported_builtin_modules.insert(module.clone());
@@ -3605,7 +3633,7 @@ impl CTranspiler {
             
             IRInstruction::ImportFrom { module, names } => {
                 // Check if this is a builtin module
-                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "datetime", "base64", "hashlib", "re"];
+                let builtin_modules = vec!["time", "os", "sys", "json", "math", "random", "datetime", "base64", "hashlib", "re", "io", "csv", "logging", "pickle", "secrets", "uuid", "subprocess", "collections", "copy", "abc", "exceptions", "functools", "gc", "itertools", "socket", "threading", "asyncio", "websockets", "urllib", "httptools", "httpx", "unittest", "importlib", "templa", "serveit", "orm", "multiprocessing"];
                 if builtin_modules.contains(&module.as_str()) {
                     // Track builtin module import
                     self.imported_builtin_modules.insert(module.clone());
@@ -7951,6 +7979,7 @@ impl Clone for CTranspiler {
             enable_native_types: self.enable_native_types,
             baremetal_options: self.baremetal_options.clone(),
             global_imports: self.global_imports.clone(),
+            imported_builtin_modules: self.imported_builtin_modules.clone(),
         }
     }
 }

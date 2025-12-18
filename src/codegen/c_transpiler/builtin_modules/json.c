@@ -4,6 +4,9 @@
 // Provides: json.dumps(), json.loads() (simplified)
 // Platform: Cross-platform
 
+#ifndef TAURARO_JSON_MODULE_H
+#define TAURARO_JSON_MODULE_H
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -185,7 +188,7 @@ static TauValue tauraro_json_parse_value(const char** json) {
         strncpy(str, start, len);
         str[len] = '\0';
         (*json)++;  // Skip closing quote
-        return tauraro_string(str);
+        TauValue __result = (TauValue){.type = 2, .value.s = str, .refcount = 1, .next = NULL}; return __result;
     }
 
     // Parse number
@@ -256,3 +259,6 @@ static TauValue tauraro_json_parse_value(const char** json) {
     // Invalid JSON
     return (TauValue){.type = 0, .value.i = 0, .refcount = 1, .next = NULL};
 }
+
+
+#endif // TAURARO_JSON_MODULE_H

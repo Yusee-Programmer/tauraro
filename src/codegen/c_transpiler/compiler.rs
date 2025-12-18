@@ -248,6 +248,9 @@ pub fn compile_to_executable(c_code: &str, output_path: &str, opt_level: u8) -> 
         ("exceptions", "tauraro_exceptions_"),
         ("abc", "tauraro_abc_"),
         ("pickle", "tauraro_pickle_"),
+        ("secrets", "tauraro_secrets_"),
+        ("uuid", "tauraro_uuid_"),
+        ("subprocess", "tauraro_subprocess_"),
     ];
 
     for (module_name, prefix) in &builtin_modules {
@@ -560,6 +563,9 @@ pub fn compile_to_shared_library(c_code: &str, output_path: &str, opt_level: u8,
         ("exceptions", "tauraro_exceptions_"),
         ("abc", "tauraro_abc_"),
         ("pickle", "tauraro_pickle_"),
+        ("secrets", "tauraro_secrets_"),
+        ("uuid", "tauraro_uuid_"),
+        ("subprocess", "tauraro_subprocess_"),
     ];
 
     for (module_name, prefix) in &builtin_modules {

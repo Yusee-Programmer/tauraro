@@ -4,6 +4,9 @@
 // Provides: Complete mathematical functions matching Python's math module
 // Platform: Cross-platform (uses standard C math.h)
 
+#ifndef TAURARO_MATH_MODULE_H
+#define TAURARO_MATH_MODULE_H
+
 #include <math.h>
 #include <float.h>
 #include <stdint.h>
@@ -325,3 +328,6 @@ static const double tauraro_math_e = TAURARO_MATH_E;
 static const double tauraro_math_tau = TAURARO_MATH_TAU;
 static const double tauraro_math_inf = TAURARO_MATH_INF;
 static const double tauraro_math_nan = TAURARO_MATH_NAN;
+
+
+#endif // TAURARO_MATH_MODULE_H
