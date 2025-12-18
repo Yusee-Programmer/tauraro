@@ -1,0 +1,33 @@
+# JSON Module Example
+# Demonstrates JSON serialization and deserialization
+
+import json
+
+def main():
+    print("=== JSON MODULE EXAMPLES ===")
+    print("")
+    
+    # Serialize a dictionary to JSON
+    person = {
+        "name": "Alice",
+        "age": 30,
+        "city": "San Francisco"
+    }
+    
+    json_str = json.dumps(person)
+    print("Serialized to JSON:")
+    print(json_str)
+    print("")
+    
+    # Deserialize JSON back to object
+    data = json.loads(json_str)
+    print("Deserialized back to object:")
+    print("Name:", data["name"])
+    print("Age:", data["age"])
+    print("City:", data["city"])
+    
+    print("")
+    print("JSON serialization working correctly!")
+
+if __name__ == "__main__":
+    main()

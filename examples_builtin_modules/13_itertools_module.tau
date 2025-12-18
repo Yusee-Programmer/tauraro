@@ -1,0 +1,22 @@
+# Itertools Module Example
+# Demonstrates iterator tools
+
+import itertools
+
+def main():
+    print("=== ITERTOOLS MODULE EXAMPLES ===")
+    print("")
+    
+    # Chain multiple iterables
+    list1 = [1, 2, 3]
+    list2 = [4, 5, 6]
+    chained = itertools.chain(list1, list2)
+    print("Chain [1,2,3] and [4,5,6]:")
+    for item in chained:
+        print(" ", item)
+    
+    print("")
+    print("Itertools operations working correctly!")
+
+if __name__ == "__main__":
+    main()

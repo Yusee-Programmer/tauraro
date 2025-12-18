@@ -1,0 +1,26 @@
+# Hashlib Module Example
+# Demonstrates cryptographic hashing
+
+import hashlib
+
+def main():
+    print("=== HASHLIB MODULE EXAMPLES ===")
+    print("")
+    
+    message = "Tauraro"
+    print("Message:", message)
+    print("")
+    
+    # MD5 hash
+    md5_hash = hashlib.md5(message)
+    print("MD5:", md5_hash)
+    
+    # SHA256 hash
+    sha256_hash = hashlib.sha256(message)
+    print("SHA256:", sha256_hash)
+    
+    print("")
+    print("Cryptographic hashing working correctly!")
+
+if __name__ == "__main__":
+    main()

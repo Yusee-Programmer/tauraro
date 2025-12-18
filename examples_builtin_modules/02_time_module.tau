@@ -1,0 +1,39 @@
+# Time Module Example
+# Demonstrates time operations and delays
+
+import time
+
+def main():
+    print("=== TIME MODULE EXAMPLES ===")
+    print("")
+    
+    # Get current time
+    current = time.time()
+    print("Current Unix timestamp:", current)
+    
+    # Simple sleep
+    print("Sleeping for 1 second...")
+    time.sleep(1)
+    print("Awake!")
+    
+    # Measure elapsed time
+    print("")
+    print("Measuring execution time:")
+    start = time.time()
+    
+    # Simulate work
+    s = 0
+    for i in range(1000000):
+        s = s + i
+    
+    end = time.time()
+    elapsed = end - start
+    
+    print("Sum calculation took", elapsed, "seconds")
+    print("Result:", s)
+    
+    print("")
+    print("Time tracking working correctly!")
+
+if __name__ == "__main__":
+    main()
