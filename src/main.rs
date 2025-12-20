@@ -699,6 +699,34 @@ fn compile_file(
 
             std::fs::write(&output_path, &rust_code)?;
             println!("Rust code generated successfully: {}", output_path.display());
+
+            // If --native flag is set, compile the generated Rust code to an executable
+            if native {
+                let executable_path = if let Some(output_file) = output {
+                    let stem = output_file
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("output");
+                    #[cfg(target_os = "windows")]
+                    let exe_name = format!("{}.exe", stem);
+                    #[cfg(not(target_os = "windows"))]
+                    let exe_name = stem.to_string();
+                    output_file.parent().unwrap_or_else(|| std::path::Path::new(".")).join(&exe_name)
+                } else {
+                    let stem = file
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("output");
+                    #[cfg(target_os = "windows")]
+                    let exe_name = format!("{}.exe", stem);
+                    #[cfg(not(target_os = "windows"))]
+                    let exe_name = stem.to_string();
+                    file.parent().unwrap_or_else(|| std::path::Path::new(".")).join(&exe_name)
+                };
+
+                compile_rust_to_executable(&output_path, &executable_path)?;
+                println!("Executable compiled successfully: {}", executable_path.display());
+            }
         }
         "wasm" => {
             #[cfg(feature = "wasm")]
@@ -729,6 +757,44 @@ fn compile_file(
     }
 
     println!("Compilation successful!");
+    Ok(())
+}
+
+/// Compile a Rust source file to an executable using rustc
+fn compile_rust_to_executable(
+    rust_source: &PathBuf,
+    executable_path: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::process::Command;
+
+    // Try to compile using rustc with Rust 2021 edition to handle async/await
+    let mut cmd = Command::new("rustc");
+    cmd.arg("--edition")
+        .arg("2021")
+        .arg(rust_source)
+        .arg("-o")
+        .arg(executable_path);
+
+    let output = cmd.output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        
+        // Check if it's a dependency issue - we could use cargo build instead
+        if stderr.contains("unresolved") || stderr.contains("no `Regex`") {
+            eprintln!("Note: Generated Rust code has unresolved external dependencies.");
+            eprintln!("For production use, create a Cargo.toml and use 'cargo build --release'");
+            eprintln!("\nThe .rs file has been generated at: {}", rust_source.display());
+        }
+        
+        return Err(format!(
+            "Failed to compile Rust code with rustc:\n{}\n{}",
+            stdout, stderr
+        )
+        .into());
+    }
+
     Ok(())
 }
 

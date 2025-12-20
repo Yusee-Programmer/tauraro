@@ -247,11 +247,7 @@ impl fmt::Display for TauObject {
 
     // Function implementations
     
-    fn test_lists() -> i64 {
-        0  // Function body not yet generated from IR
-    }
-    
-    fn test_dict() -> i64 {
+    fn test_arithmetic() -> i64 {
         0  // Function body not yet generated from IR
     }
     
@@ -259,11 +255,15 @@ impl fmt::Display for TauObject {
         0  // Function body not yet generated from IR
     }
     
-    fn main() -> i64 {
+    fn test_dict() -> i64 {
         0  // Function body not yet generated from IR
     }
     
-    fn test_arithmetic() -> i64 {
+    fn test_lists() -> i64 {
+        0  // Function body not yet generated from IR
+    }
+    
+    fn main() -> i64 {
         0  // Function body not yet generated from IR
     }
     

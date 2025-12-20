@@ -1,0 +1,15 @@
+# Simple Tauraro script for testing native Rust compilation
+
+def main():
+    print("Hello from native Rust!")
+    x = 42
+    y = x + 8
+    print(f"Result: {y}")
+    
+    # Simple loop
+    for i in range(5):
+        print(f"Count: {i}")
+    
+    return 0
+
+main()

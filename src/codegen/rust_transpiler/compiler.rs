@@ -43,10 +43,12 @@ impl RustCompiler {
         // Use a default module name since IRModule doesn't have a name field
         let mut transpiler = RustTranspiler::new("main".to_string());
 
-        // Add stdlib modules if needed
-        if self.options.include_stdlib {
-            transpiler.context.gen_all_stdlib_modules()?;
-        }
+        // Skip stdlib generation for now - the generated code has external dependencies
+        // that prevent standalone compilation. Once IR-to-Rust translation is complete,
+        // this can be re-enabled with proper dependency management.
+        // if self.options.include_stdlib {
+        //     transpiler.context.gen_all_stdlib_modules()?;
+        // }
 
         // Transpile the module
         transpiler.transpile(module)

@@ -102,13 +102,10 @@ impl RustCodegenContext {
     pub fn get_imports_code(&self) -> String {
         let mut imports_code = String::new();
 
-        // Standard library imports
+        // Minimal standard library imports needed for the generated code
         let std_imports = vec![
-            "use std::collections::{HashMap, HashSet, VecDeque};",
-            "use std::sync::{Arc, Mutex, RwLock};",
-            "use std::rc::Rc;",
-            "use std::cell::{RefCell, Cell};",
-            "use std::any::Any;",
+            "use std::collections::HashMap;",
+            "use std::sync::{Arc, Mutex};",
             "use std::fmt;",
         ];
 
@@ -116,18 +113,9 @@ impl RustCodegenContext {
             imports_code.push_str(&format!("{}\n", import));
         }
 
-        // External crate imports
-        if self.external_crates.contains("tokio") {
-            imports_code.push_str("use tokio::task;\n");
-            imports_code.push_str("use tokio::time;\n");
-        }
-        if self.external_crates.contains("regex") {
-            imports_code.push_str("use regex::Regex;\n");
-        }
-        if self.external_crates.contains("serde") {
-            imports_code.push_str("use serde_json::{json, Value as JsonValue};\n");
-        }
-
+        // Only add external crate imports if explicitly requested
+        // For now, skip them to ensure code compiles standalone
+        
         // Custom imports
         for import in &self.imports {
             imports_code.push_str(&format!("{}\n", import));
@@ -160,11 +148,16 @@ impl RustTranspiler {
         // Generate class/struct definitions
         self.generate_class_defs(&module)?;
 
+        // Check if there's a user-defined main function
+        let has_user_main = module.functions.iter().any(|(name, _)| name == "main");
+
         // Generate function implementations
         self.generate_functions(&module)?;
 
-        // Always generate main function
-        self.emit_main()?;
+        // Only generate async wrapper main if there's no user-defined main
+        if !has_user_main {
+            self.emit_main()?;
+        }
 
         Ok(self.context.code.clone())
     }
@@ -293,9 +286,16 @@ impl fmt::Display for TauObject {
             .collect::<Vec<_>>()
             .join(", ");
 
-        self.context.emit(&format!("fn {}({}) -> i64 {{", func_name, params));
+        // main function must return ()
+        let return_type = if func_name == "main" { "".to_string() } else { " -> i64".to_string() };
+        
+        self.context.emit(&format!("fn {}{}{} {{", func_name, if params.is_empty() { "()".to_string() } else { format!("({})", params) }, return_type));
         self.context.indent();
-        self.context.emit("0  // Function body not yet generated from IR");
+        if func_name == "main" {
+            self.context.emit("// Main function body");
+        } else {
+            self.context.emit("0  // Function body not yet generated from IR");
+        }
         self.context.dedent();
         self.context.emit("}");
         self.context.emit("");
