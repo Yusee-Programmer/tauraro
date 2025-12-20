@@ -11,6 +11,36 @@
 #include <string.h>
 #include <stdio.h>
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 // namedtuple factory
 typedef struct {
     char* typename;
@@ -74,7 +104,7 @@ static inline TauValue tauraro_collections_namedtuple(TauValue typename, TauValu
         }
     }
     
-    return (TauValue){.type = 6, .value.p = (void*)factory, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)factory, .refcount = 1, .next = NULL};
 }
 
 // deque() - Create empty deque
@@ -83,14 +113,14 @@ static inline TauValue tauraro_collections_deque(void) {
     d->front = NULL;
     d->back = NULL;
     d->size = 0;
-    return (TauValue){.type = 6, .value.p = (void*)d, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)d, .refcount = 1, .next = NULL};
 }
 
 // deque.append(x) - Add to right
 static inline TauValue tauraro_collections_deque_append(TauValue deque_val, TauValue value) {
     if (deque_val.type != 6) return (TauValue){.type = 0, .value.i = -1, .refcount = 1, .next = NULL};
     
-    Deque* d = (Deque*)deque_val.value.p;
+    Deque* d = (Deque*)deque_val.value.ptr;
     DequeNode* node = (DequeNode*)malloc(sizeof(DequeNode));
     node->value = value;
     node->prev = d->back;
@@ -111,7 +141,7 @@ static inline TauValue tauraro_collections_deque_append(TauValue deque_val, TauV
 static inline TauValue tauraro_collections_deque_appendleft(TauValue deque_val, TauValue value) {
     if (deque_val.type != 6) return (TauValue){.type = 0, .value.i = -1, .refcount = 1, .next = NULL};
     
-    Deque* d = (Deque*)deque_val.value.p;
+    Deque* d = (Deque*)deque_val.value.ptr;
     DequeNode* node = (DequeNode*)malloc(sizeof(DequeNode));
     node->value = value;
     node->next = d->front;
@@ -144,7 +174,7 @@ static inline TauValue tauraro_collections_Counter(TauValue items) {
         }
     }
     
-    return (TauValue){.type = 6, .value.p = (void*)counter, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)counter, .refcount = 1, .next = NULL};
 }
 
 // OrderedDict() - Create ordered dictionary
@@ -160,7 +190,7 @@ static inline TauValue tauraro_collections_OrderedDict(void) {
     od->key_capacity = 10;
     od->keys = (char**)malloc(sizeof(char*) * od->key_capacity);
     
-    return (TauValue){.type = 6, .value.p = (void*)od, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)od, .refcount = 1, .next = NULL};
 }
 
 // defaultdict(default_factory) - Create dict with default factory
@@ -172,9 +202,9 @@ static inline TauValue tauraro_collections_defaultdict(TauValue factory) {
     dd->dict->keys = NULL;
     dd->dict->values = NULL;
     
-    dd->default_factory = factory.type == 6 ? factory.value.p : NULL;
+    dd->default_factory = factory.type == 6 ? factory.value.ptr : NULL;
     
-    return (TauValue){.type = 6, .value.p = (void*)dd, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)dd, .refcount = 1, .next = NULL};
 }
 
 #endif // TAURARO_COLLECTIONS_MODULE_H

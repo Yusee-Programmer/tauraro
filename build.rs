@@ -148,22 +148,22 @@ fn configure_libraries_fallback(project_path: &Path, _out_path: &Path) {
 fn link_external_libraries(target_os: &str, _out_path: &Path) {
     match target_os {
         "windows" => {
-            // Try to link to OpenSSL
-            if cfg!(feature = "openssl") || env::var("CARGO_CFG_TARGET_OS").is_ok() {
-                println!("cargo:rustc-link-lib=libssl");
-                println!("cargo:rustc-link-lib=libcrypto");
-            }
+            // Try to link to OpenSSL - TEMPORARILY DISABLED
+            // if cfg!(feature = "openssl") || env::var("CARGO_CFG_TARGET_OS").is_ok() {
+            //     println!("cargo:rustc-link-lib=libssl");
+            //     println!("cargo:rustc-link-lib=libcrypto");
+            // }
             
-            // SQLite
-            println!("cargo:rustc-link-lib=sqlite3");
+            // SQLite - TEMPORARILY DISABLED
+            // println!("cargo:rustc-link-lib=sqlite3");
             
-            // CURL
-            println!("cargo:rustc-link-lib=libcurl");
+            // CURL - TEMPORARILY DISABLED  
+            // println!("cargo:rustc-link-lib=libcurl");
             
-            // ZLIB
-            println!("cargo:rustc-link-lib=zlib");
+            // ZLIB - TEMPORARILY DISABLED
+            // println!("cargo:rustc-link-lib=zlib");
             
-            println!("cargo:warning=Windows libraries configured (OpenSSL, SQLite, CURL, ZLIB)");
+            println!("cargo:warning=Windows libraries configured (external libs temporarily disabled for testing)");
         }
         "macos" => {
             // macOS typically has these pre-installed

@@ -12,6 +12,36 @@
 #include <string.h>
 #include <ctype.h>
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 // Forward declarations
 static char* tauraro_value_to_json_string(TauValue val);
 static TauValue tauraro_json_parse_value(const char** json);
@@ -96,19 +126,23 @@ static char* tauraro_value_to_json_string(TauValue val) {
                 char** pairs = malloc(sizeof(char*) * dict->size);
                 size_t count = 0;
 
-                // Convert each key-value pair
-                TauDictEntry* entry = dict->entries;
-                while (entry != NULL && count < dict->size) {
-                    char* key_str = tauraro_value_to_json_string(entry->key);
-                    char* val_str = tauraro_value_to_json_string(entry->value);
-                    size_t pair_size = strlen(key_str) + strlen(val_str) + 3;  // key:value
-                    pairs[count] = malloc(pair_size + 1);
-                    snprintf(pairs[count], pair_size + 1, "%s: %s", key_str, val_str);
-                    total_size += strlen(pairs[count]) + 2;
-                    free(key_str);
-                    free(val_str);
-                    entry = entry->next;
-                    count++;
+                // Convert each key-value pair - iterate through buckets
+                for (size_t i = 0; i < dict->capacity && count < dict->size; i++) {
+                    TauDictEntry* entry = dict->buckets[i];
+                    while (entry != NULL && count < dict->size) {
+                        // key is a string in buckets
+                        TauValue key_val = {.type = 2, .value.s = entry->key, .refcount = 1, .next = NULL};
+                        char* key_str = tauraro_value_to_json_string(key_val);
+                        char* val_str = tauraro_value_to_json_string(entry->value);
+                        size_t pair_size = strlen(key_str) + strlen(val_str) + 3;  // key:value
+                        pairs[count] = malloc(pair_size + 1);
+                        snprintf(pairs[count], pair_size + 1, "%s: %s", key_str, val_str);
+                        total_size += strlen(pairs[count]) + 2;
+                        free(key_str);
+                        free(val_str);
+                        entry = entry->next;
+                        count++;
+                    }
                 }
 
                 // Build result

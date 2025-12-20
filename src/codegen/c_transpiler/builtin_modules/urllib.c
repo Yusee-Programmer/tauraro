@@ -11,14 +11,44 @@
 #include <string.h>
 #include <stdio.h>
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 // urllib.parse functions
 // urllib.parse.urlparse(url)
 static inline TauValue tauraro_urllib_parse_urlparse(TauValue url) {
-    if (url.type != 2) return (TauValue){.type = 5, .value.p = NULL, .refcount = 1, .next = NULL};
+    if (url.type != 2) return (TauValue){.type = 5, .value.ptr = NULL, .refcount = 1, .next = NULL};
     
     // Would parse URL into components
     // Returns tuple: (scheme, netloc, path, params, query, fragment)
-    return (TauValue){.type = 4, .value.p = NULL, .refcount = 1, .next = NULL};  // List/tuple
+    return (TauValue){.type = 4, .value.ptr = NULL, .refcount = 1, .next = NULL};  // List/tuple
 }
 
 // urllib.parse.urlunparse(parts)
@@ -83,7 +113,7 @@ static inline TauValue tauraro_urllib_parse_urlencode(TauValue query) {
 // urllib.parse.parse_qs(qs)
 static inline TauValue tauraro_urllib_parse_parse_qs(TauValue qs) {
     // Would parse query string into dict
-    return (TauValue){.type = 5, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 5, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // urllib.parse.urljoin(base, url)
@@ -116,26 +146,26 @@ static inline TauValue tauraro_urllib_request_urlopen(TauValue url) {
     resp->data = (char*)malloc(1);
     resp->data[0] = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)resp, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)resp, .refcount = 1, .next = NULL};
 }
 
 // urllib.error.URLError
 static inline TauValue tauraro_urllib_error_URLError(TauValue reason) {
     // Would create URLError exception
-    return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // urllib.error.HTTPError
 static inline TauValue tauraro_urllib_error_HTTPError(TauValue url, TauValue code, TauValue msg) {
     // Would create HTTPError exception
-    return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // Response.read()
 static inline TauValue tauraro_urllib_response_read(TauValue response) {
     if (response.type != 6) return (TauValue){.type = 2, .value.s = "", .refcount = 1, .next = NULL};
     
-    UrlResponse* resp = (UrlResponse*)response.value.p;
+    UrlResponse* resp = (UrlResponse*)response.value.ptr;
     return (TauValue){.type = 2, .value.s = resp->data, .refcount = 1, .next = NULL};
 }
 
@@ -143,13 +173,13 @@ static inline TauValue tauraro_urllib_response_read(TauValue response) {
 static inline TauValue tauraro_urllib_response_status(TauValue response) {
     if (response.type != 6) return (TauValue){.type = 0, .value.i = 0, .refcount = 1, .next = NULL};
     
-    UrlResponse* resp = (UrlResponse*)response.value.p;
+    UrlResponse* resp = (UrlResponse*)response.value.ptr;
     return (TauValue){.type = 0, .value.i = resp->status_code, .refcount = 1, .next = NULL};
 }
 
 // Response.headers
 static inline TauValue tauraro_urllib_response_headers(TauValue response) {
-    return (TauValue){.type = 5, .value.p = NULL, .refcount = 1, .next = NULL};  // Dict
+    return (TauValue){.type = 5, .value.ptr = NULL, .refcount = 1, .next = NULL};  // Dict
 }
 
 

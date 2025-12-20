@@ -10,6 +10,36 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 #ifdef _WIN32
     #include <direct.h>
     #include <windows.h>
@@ -400,15 +430,18 @@ static inline TauValue tauraro_os_stat(TauValue path) {
         return (TauValue){.type = 5, .value.dict = NULL, .refcount = 1, .next = NULL};
     }
 
-    // Return as dict (simplified)
-    TauDict* stat_dict = malloc(sizeof(TauDict));
-    stat_dict->size = 1;
-    stat_dict->entries = malloc(sizeof(TauDictEntry));
+    // Return as dict using proper dict functions
+    TauDict* stat_dict = tauraro_create_dict();
     
-    // Store size as main stat
-    TauDictEntry* entry = &stat_dict->entries[0];
-    entry->key = "st_size";
-    entry->value = (TauValue){.type = 0, .value.i = st.st_size, .refcount = 1, .next = NULL};
+    // Store file stats
+    TauValue size_val = {.type = 0, .value.i = st.st_size, .refcount = 1, .next = NULL};
+    tauraro_dict_set(stat_dict, "st_size", size_val);
+    
+    TauValue mode_val = {.type = 0, .value.i = st.st_mode, .refcount = 1, .next = NULL};
+    tauraro_dict_set(stat_dict, "st_mode", mode_val);
+    
+    TauValue mtime_val = {.type = 0, .value.i = st.st_mtime, .refcount = 1, .next = NULL};
+    tauraro_dict_set(stat_dict, "st_mtime", mtime_val);
 
     return (TauValue){
         .type = 5,

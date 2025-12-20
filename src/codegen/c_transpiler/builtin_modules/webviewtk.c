@@ -43,7 +43,7 @@ static inline TauValue tauraro_webviewtk_WebView(TauValue html) {
     wv->window.on_close = NULL;
     wv->running = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)wv, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)wv, .refcount = 1, .next = NULL};
 }
 
 // webviewtk.WebView with options
@@ -66,14 +66,14 @@ static inline TauValue tauraro_webviewtk_WebView_options(TauValue html, TauValue
     wv->window.on_close = NULL;
     wv->running = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)wv, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)wv, .refcount = 1, .next = NULL};
 }
 
 // webviewtk.WebView.run()
 static inline TauValue tauraro_webviewtk_WebView_run(TauValue wv) {
     if (wv.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    WebViewHandle* webview = (WebViewHandle*)wv.value.p;
+    WebViewHandle* webview = (WebViewHandle*)wv.value.ptr;
     webview->running = 1;
     printf("Running WebView: %s (%dx%d)\n", webview->window.title, webview->window.width, webview->window.height);
     
@@ -84,7 +84,7 @@ static inline TauValue tauraro_webviewtk_WebView_run(TauValue wv) {
 static inline TauValue tauraro_webviewtk_WebView_close(TauValue wv) {
     if (wv.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    WebViewHandle* webview = (WebViewHandle*)wv.value.p;
+    WebViewHandle* webview = (WebViewHandle*)wv.value.ptr;
     webview->running = 0;
     
     return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
@@ -94,7 +94,7 @@ static inline TauValue tauraro_webviewtk_WebView_close(TauValue wv) {
 static inline TauValue tauraro_webviewtk_WebView_set_title(TauValue wv, TauValue title) {
     if (wv.type != 6 || title.type != 2) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    WebViewHandle* webview = (WebViewHandle*)wv.value.p;
+    WebViewHandle* webview = (WebViewHandle*)wv.value.ptr;
     free(webview->window.title);
     webview->window.title = (char*)malloc(strlen(title.value.s) + 1);
     strcpy(webview->window.title, title.value.s);
@@ -106,7 +106,7 @@ static inline TauValue tauraro_webviewtk_WebView_set_title(TauValue wv, TauValue
 static inline TauValue tauraro_webviewtk_WebView_set_html(TauValue wv, TauValue html) {
     if (wv.type != 6 || html.type != 2) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    WebViewHandle* webview = (WebViewHandle*)wv.value.p;
+    WebViewHandle* webview = (WebViewHandle*)wv.value.ptr;
     free(webview->window.html);
     webview->window.html = (char*)malloc(strlen(html.value.s) + 1);
     strcpy(webview->window.html, html.value.s);
@@ -118,8 +118,8 @@ static inline TauValue tauraro_webviewtk_WebView_set_html(TauValue wv, TauValue 
 static inline TauValue tauraro_webviewtk_WebView_on_load(TauValue wv, TauValue callback) {
     if (wv.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    WebViewHandle* webview = (WebViewHandle*)wv.value.p;
-    webview->window.on_load = (void (*)(void))callback.value.p;
+    WebViewHandle* webview = (WebViewHandle*)wv.value.ptr;
+    webview->window.on_load = (void (*)(void))callback.value.ptr;
     
     return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
 }
@@ -128,8 +128,8 @@ static inline TauValue tauraro_webviewtk_WebView_on_load(TauValue wv, TauValue c
 static inline TauValue tauraro_webviewtk_WebView_on_close(TauValue wv, TauValue callback) {
     if (wv.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    WebViewHandle* webview = (WebViewHandle*)wv.value.p;
-    webview->window.on_close = (void (*)(void))callback.value.p;
+    WebViewHandle* webview = (WebViewHandle*)wv.value.ptr;
+    webview->window.on_close = (void (*)(void))callback.value.ptr;
     
     return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
 }
@@ -158,12 +158,12 @@ static inline TauValue tauraro_webviewtk_Window(TauValue title, TauValue width, 
     win->on_load = NULL;
     win->on_close = NULL;
     
-    return (TauValue){.type = 6, .value.p = (void*)win, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)win, .refcount = 1, .next = NULL};
 }
 
 // webviewtk.Application()
 static inline TauValue tauraro_webviewtk_Application(void) {
-    return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // webviewtk.Application.run()
