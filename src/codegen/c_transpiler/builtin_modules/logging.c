@@ -12,6 +12,36 @@
 #include <stdio.h>
 #include <time.h>
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 // Logging levels
 #define LOG_DEBUG 10
 #define LOG_INFO 20
@@ -255,7 +285,7 @@ static inline TauValue tauraro_logging_Handler(void) {
     handler->stream = stderr;
     handler->is_file = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)handler, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)handler, .refcount = 1, .next = NULL};
 }
 
 // logging.StreamHandler() - Handler for streams (stdout/stderr)
@@ -266,7 +296,7 @@ static inline TauValue tauraro_logging_StreamHandler(void) {
     handler->stream = stderr;
     handler->is_file = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)handler, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)handler, .refcount = 1, .next = NULL};
 }
 
 // logging.FileHandler(filename) - Handler for files
@@ -286,7 +316,7 @@ static inline TauValue tauraro_logging_FileHandler(TauValue filename) {
         }
     }
     
-    return (TauValue){.type = 6, .value.p = (void*)handler, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)handler, .refcount = 1, .next = NULL};
 }
 
 // logging.Formatter(fmt) - Create formatter with format string
@@ -299,14 +329,14 @@ static inline TauValue tauraro_logging_Formatter(TauValue fmt) {
         strcpy(formatter->format, "[%(levelname)s] %(message)s");
     }
     
-    return (TauValue){.type = 6, .value.p = (void*)formatter, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)formatter, .refcount = 1, .next = NULL};
 }
 
 // logging.Handler.setLevel(level) - Set handler logging level
 static inline TauValue tauraro_logging_Handler_setLevel(TauValue handler, TauValue level) {
     if (handler.type != 6) return (TauValue){.type = 0, .value.i = 0, .refcount = 1, .next = NULL};
     
-    LogHandler* h = (LogHandler*)handler.value.p;
+    LogHandler* h = (LogHandler*)handler.value.ptr;
     if (level.type == 0) {
         h->level = (int)level.value.i;
     }
@@ -319,8 +349,8 @@ static inline TauValue tauraro_logging_Handler_setFormatter(TauValue handler, Ta
     if (handler.type != 6 || formatter.type != 6) 
         return (TauValue){.type = 0, .value.i = 0, .refcount = 1, .next = NULL};
     
-    LogHandler* h = (LogHandler*)handler.value.p;
-    LogFormatter* f = (LogFormatter*)formatter.value.p;
+    LogHandler* h = (LogHandler*)handler.value.ptr;
+    LogFormatter* f = (LogFormatter*)formatter.value.ptr;
     
     strncpy(h->format, f->format, sizeof(h->format) - 1);
     
@@ -332,7 +362,7 @@ static inline TauValue tauraro_logging_Handler_emit(TauValue handler, TauValue m
     if (handler.type != 6 || message.type != 2) 
         return (TauValue){.type = 0, .value.i = 0, .refcount = 1, .next = NULL};
     
-    LogHandler* h = (LogHandler*)handler.value.p;
+    LogHandler* h = (LogHandler*)handler.value.ptr;
     
     if (h->stream) {
         fprintf(h->stream, "%s\n", message.value.s);

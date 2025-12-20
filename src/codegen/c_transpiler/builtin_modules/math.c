@@ -9,7 +9,37 @@
 
 #include <math.h>
 #include <float.h>
-#include <stdint.h>
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+// Helper functions for type conversion (inline definitions)
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
 
 // Mathematical constants
 #define TAURARO_MATH_PI     3.141592653589793
@@ -18,34 +48,10 @@
 #define TAURARO_MATH_INF    INFINITY
 #define TAURARO_MATH_NAN    NAN
 
-// Helper to convert TauValue to double
-static inline double tau_to_double(TauValue v) {
-    if (v.type == 1) return v.value.f;      // Float
-    if (v.type == 0) return (double)v.value.i;  // Int
-    return 0.0;
-}
-
-// Helper to convert TauValue to int64
-static inline int64_t tau_to_int64(TauValue v) {
-    if (v.type == 0) return v.value.i;      // Int
-    if (v.type == 1) return (int64_t)v.value.f;  // Float
-    return 0;
-}
-
-// Helper to create float TauValue
-static inline TauValue tau_float(double f) {
-    return (TauValue){.type = 1, .value.f = f, .refcount = 1, .next = NULL};
-}
-
-// Helper to create int TauValue
-static inline TauValue tau_int(int64_t i) {
-    return (TauValue){.type = 0, .value.i = i, .refcount = 1, .next = NULL};
-}
-
-// Helper to create bool TauValue
-static inline TauValue tau_bool(int b) {
-    return (TauValue){.type = 3, .value.i = b ? 1 : 0, .refcount = 1, .next = NULL};
-}
+// Convenience aliases for Tau helpers
+#define tau_float(f) tauraro_float(f)
+#define tau_int(i) tauraro_int(i)
+#define tau_bool(b) tauraro_bool(b)
 
 // ==========================================
 // POWER AND LOGARITHMIC FUNCTIONS
@@ -318,16 +324,5 @@ static inline TauValue tauraro_math_erf(TauValue x) {
 static inline TauValue tauraro_math_erfc(TauValue x) {
     return tau_float(erfc(tau_to_double(x)));
 }
-
-// ==========================================
-// CONSTANTS (accessed as variables)
-// ==========================================
-
-static const double tauraro_math_pi = TAURARO_MATH_PI;
-static const double tauraro_math_e = TAURARO_MATH_E;
-static const double tauraro_math_tau = TAURARO_MATH_TAU;
-static const double tauraro_math_inf = TAURARO_MATH_INF;
-static const double tauraro_math_nan = TAURARO_MATH_NAN;
-
 
 #endif // TAURARO_MATH_MODULE_H

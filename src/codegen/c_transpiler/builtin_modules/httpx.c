@@ -11,6 +11,36 @@
 #include <string.h>
 #include <stdio.h>
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 // HTTP Client
 typedef struct {
     char* base_url;
@@ -36,7 +66,7 @@ static inline TauValue tauraro_httpx_Client(void) {
     client->headers = NULL;
     client->header_count = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)client, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)client, .refcount = 1, .next = NULL};
 }
 
 // httpx.Client(base_url)
@@ -53,7 +83,7 @@ static inline TauValue tauraro_httpx_Client_with_base(TauValue base_url) {
     client->headers = NULL;
     client->header_count = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)client, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)client, .refcount = 1, .next = NULL};
 }
 
 // httpx.Client.get(url)
@@ -65,7 +95,7 @@ static inline TauValue tauraro_httpx_Client_get(TauValue client, TauValue url) {
     resp->headers = NULL;
     resp->header_count = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)resp, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)resp, .refcount = 1, .next = NULL};
 }
 
 // httpx.Client.post(url, data=None, json=None)
@@ -112,7 +142,7 @@ static inline TauValue tauraro_httpx_get(TauValue url) {
     resp->headers = NULL;
     resp->header_count = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)resp, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)resp, .refcount = 1, .next = NULL};
 }
 
 // httpx.post(url, data=None, json=None)
@@ -149,7 +179,7 @@ static inline TauValue tauraro_httpx_options(TauValue url) {
 static inline TauValue tauraro_httpx_response_status_code(TauValue resp) {
     if (resp.type != 6) return (TauValue){.type = 0, .value.i = 0, .refcount = 1, .next = NULL};
     
-    HttpResponse* response = (HttpResponse*)resp.value.p;
+    HttpResponse* response = (HttpResponse*)resp.value.ptr;
     return (TauValue){.type = 0, .value.i = response->status_code, .refcount = 1, .next = NULL};
 }
 
@@ -157,18 +187,18 @@ static inline TauValue tauraro_httpx_response_status_code(TauValue resp) {
 static inline TauValue tauraro_httpx_response_text(TauValue resp) {
     if (resp.type != 6) return (TauValue){.type = 2, .value.s = "", .refcount = 1, .next = NULL};
     
-    HttpResponse* response = (HttpResponse*)resp.value.p;
+    HttpResponse* response = (HttpResponse*)resp.value.ptr;
     return (TauValue){.type = 2, .value.s = response->text, .refcount = 1, .next = NULL};
 }
 
 // Response.json() method
 static inline TauValue tauraro_httpx_response_json(TauValue resp) {
-    return (TauValue){.type = 5, .value.p = NULL, .refcount = 1, .next = NULL};  // Dict
+    return (TauValue){.type = 5, .value.ptr = NULL, .refcount = 1, .next = NULL};  // Dict
 }
 
 // Response.headers property
 static inline TauValue tauraro_httpx_response_headers(TauValue resp) {
-    return (TauValue){.type = 5, .value.p = NULL, .refcount = 1, .next = NULL};  // Dict
+    return (TauValue){.type = 5, .value.ptr = NULL, .refcount = 1, .next = NULL};  // Dict
 }
 
 

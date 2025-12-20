@@ -11,6 +11,36 @@
 #include <string.h>
 #include <stdio.h>
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 // Base exception structure
 typedef struct {
     char* message;
@@ -31,7 +61,7 @@ static inline TauValue tau_exception_create(const char* type, const char* messag
     exc->filename = NULL;
     exc->traceback = NULL;
     
-    return (TauValue){.type = 6, .value.p = (void*)exc, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)exc, .refcount = 1, .next = NULL};
 }
 
 // Base exceptions
@@ -325,26 +355,26 @@ static inline TauValue tauraro_exceptions_LookupError_Custom(TauValue msg) {
 // Helper functions
 static inline TauValue tauraro_exceptions_get_message(TauValue exc) {
     if (exc.type != 6) return (TauValue){.type = 2, .value.s = "", .refcount = 1, .next = NULL};
-    TauException* e = (TauException*)exc.value.p;
+    TauException* e = (TauException*)exc.value.ptr;
     return (TauValue){.type = 2, .value.s = e->message, .refcount = 1, .next = NULL};
 }
 
 static inline TauValue tauraro_exceptions_get_type(TauValue exc) {
     if (exc.type != 6) return (TauValue){.type = 2, .value.s = "", .refcount = 1, .next = NULL};
-    TauException* e = (TauException*)exc.value.p;
+    TauException* e = (TauException*)exc.value.ptr;
     return (TauValue){.type = 2, .value.s = e->exception_type, .refcount = 1, .next = NULL};
 }
 
 static inline TauValue tauraro_exceptions_set_lineno(TauValue exc, TauValue lineno) {
     if (exc.type != 6 || lineno.type != 0) return exc;
-    TauException* e = (TauException*)exc.value.p;
+    TauException* e = (TauException*)exc.value.ptr;
     e->lineno = lineno.value.i;
     return exc;
 }
 
 static inline TauValue tauraro_exceptions_set_filename(TauValue exc, TauValue filename) {
     if (exc.type != 6 || filename.type != 2) return exc;
-    TauException* e = (TauException*)exc.value.p;
+    TauException* e = (TauException*)exc.value.ptr;
     if (e->filename) free(e->filename);
     e->filename = (char*)malloc(strlen(filename.value.s) + 1);
     strcpy(e->filename, filename.value.s);

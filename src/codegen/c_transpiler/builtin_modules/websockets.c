@@ -11,6 +11,36 @@
 #include <string.h>
 #include <stdio.h>
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
@@ -38,7 +68,7 @@ static inline TauValue tauraro_websockets_connect(TauValue uri) {
     ws->is_server = 0;
     ws->socket_fd = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)ws, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)ws, .refcount = 1, .next = NULL};
 }
 
 // websockets.serve(handler, host, port) - Serve WebSocket server
@@ -52,24 +82,24 @@ static inline TauValue tauraro_websockets_serve(TauValue handler, TauValue host,
     ws->is_server = 1;
     ws->socket_fd = 0;
     
-    return (TauValue){.type = 6, .value.p = (void*)ws, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)ws, .refcount = 1, .next = NULL};
 }
 
 // websockets.WebSocketServerProtocol
 static inline TauValue tauraro_websockets_WebSocketServerProtocol(void) {
-    return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // websockets.WebSocketClientProtocol
 static inline TauValue tauraro_websockets_WebSocketClientProtocol(void) {
-    return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // WebSocket.send(data)
 static inline TauValue tauraro_websockets_send(TauValue ws, TauValue data) {
     if (ws.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    WebSocket* websocket = (WebSocket*)ws.value.p;
+    WebSocket* websocket = (WebSocket*)ws.value.ptr;
     // Send data through socket
     
     return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};  // None
@@ -79,7 +109,7 @@ static inline TauValue tauraro_websockets_send(TauValue ws, TauValue data) {
 static inline TauValue tauraro_websockets_recv(TauValue ws) {
     if (ws.type != 6) return (TauValue){.type = 2, .value.s = "", .refcount = 1, .next = NULL};
     
-    WebSocket* websocket = (WebSocket*)ws.value.p;
+    WebSocket* websocket = (WebSocket*)ws.value.ptr;
     // Receive data from socket
     char* buffer = (char*)malloc(4096);
     strcpy(buffer, "");
@@ -91,7 +121,7 @@ static inline TauValue tauraro_websockets_recv(TauValue ws) {
 static inline TauValue tauraro_websockets_close(TauValue ws) {
     if (ws.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    WebSocket* websocket = (WebSocket*)ws.value.p;
+    WebSocket* websocket = (WebSocket*)ws.value.ptr;
     websocket->connected = 0;
     
     return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};  // None
@@ -106,33 +136,33 @@ static inline TauValue tauraro_websockets_wait_closed(TauValue ws) {
 static inline TauValue tauraro_websockets_is_connected(TauValue ws) {
     if (ws.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    WebSocket* websocket = (WebSocket*)ws.value.p;
+    WebSocket* websocket = (WebSocket*)ws.value.ptr;
     return (TauValue){.type = 3, .value.i = websocket->connected, .refcount = 1, .next = NULL};
 }
 
 // websockets.exceptions.WebSocketException
 static inline TauValue tauraro_websockets_exceptions_WebSocketException(TauValue msg) {
-    return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // websockets.exceptions.ConnectionClosed
 static inline TauValue tauraro_websockets_exceptions_ConnectionClosed(TauValue msg) {
-    return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // websockets.exceptions.InvalidMessage
 static inline TauValue tauraro_websockets_exceptions_InvalidMessage(TauValue msg) {
-    return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // websockets.exceptions.ConnectionClosedOK
 static inline TauValue tauraro_websockets_exceptions_ConnectionClosedOK(TauValue msg) {
-    return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // websockets.exceptions.ConnectionClosedError
 static inline TauValue tauraro_websockets_exceptions_ConnectionClosedError(TauValue msg) {
-    return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 

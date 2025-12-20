@@ -13,6 +13,36 @@
 #include <stdio.h>
 #include "external_libs_config.h"
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 // OpenSSL Integration
 #if HAVE_OPENSSL
     #include <openssl/md5.h>
@@ -59,7 +89,7 @@ typedef struct {
 // hashlib.md5(data) - MD5 hash with OpenSSL
 static inline TauValue tauraro_hashlib_md5(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -71,13 +101,13 @@ static inline TauValue tauraro_hashlib_md5(TauValue data) {
     MD5_Update(&ctx, (const unsigned char*)data.value.s, strlen(data.value.s));
     MD5_Final(hash->digest, &ctx);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 // hashlib.sha1(data) - SHA1 hash with OpenSSL
 static inline TauValue tauraro_hashlib_sha1(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -89,13 +119,13 @@ static inline TauValue tauraro_hashlib_sha1(TauValue data) {
     SHA1_Update(&ctx, (const unsigned char*)data.value.s, strlen(data.value.s));
     SHA1_Final(hash->digest, &ctx);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 // hashlib.sha224(data) - SHA224 hash with OpenSSL
 static inline TauValue tauraro_hashlib_sha224(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -107,13 +137,13 @@ static inline TauValue tauraro_hashlib_sha224(TauValue data) {
     SHA224_Update(&ctx, (const unsigned char*)data.value.s, strlen(data.value.s));
     SHA224_Final(hash->digest, &ctx);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 // hashlib.sha256(data) - SHA256 hash with OpenSSL
 static inline TauValue tauraro_hashlib_sha256(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -125,13 +155,13 @@ static inline TauValue tauraro_hashlib_sha256(TauValue data) {
     SHA256_Update(&ctx, (const unsigned char*)data.value.s, strlen(data.value.s));
     SHA256_Final(hash->digest, &ctx);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 // hashlib.sha384(data) - SHA384 hash with OpenSSL
 static inline TauValue tauraro_hashlib_sha384(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -143,13 +173,13 @@ static inline TauValue tauraro_hashlib_sha384(TauValue data) {
     SHA384_Update(&ctx, (const unsigned char*)data.value.s, strlen(data.value.s));
     SHA384_Final(hash->digest, &ctx);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 // hashlib.sha512(data) - SHA512 hash with OpenSSL
 static inline TauValue tauraro_hashlib_sha512(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -161,7 +191,7 @@ static inline TauValue tauraro_hashlib_sha512(TauValue data) {
     SHA512_Update(&ctx, (const unsigned char*)data.value.s, strlen(data.value.s));
     SHA512_Final(hash->digest, &ctx);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 #else
@@ -189,7 +219,7 @@ static inline void tau_simple_hash(const unsigned char* data, int len, unsigned 
 // hashlib.md5(data) - MD5 hash (fallback)
 static inline TauValue tauraro_hashlib_md5(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -198,13 +228,13 @@ static inline TauValue tauraro_hashlib_md5(TauValue data) {
     
     tau_simple_hash((const unsigned char*)data.value.s, strlen(data.value.s), hash->digest, 16);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 // hashlib.sha1(data) - SHA1 hash (fallback)
 static inline TauValue tauraro_hashlib_sha1(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -213,13 +243,13 @@ static inline TauValue tauraro_hashlib_sha1(TauValue data) {
     
     tau_simple_hash((const unsigned char*)data.value.s, strlen(data.value.s), hash->digest, 20);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 // hashlib.sha224(data) - SHA224 hash (fallback)
 static inline TauValue tauraro_hashlib_sha224(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -228,13 +258,13 @@ static inline TauValue tauraro_hashlib_sha224(TauValue data) {
     
     tau_simple_hash((const unsigned char*)data.value.s, strlen(data.value.s), hash->digest, 28);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 // hashlib.sha256(data) - SHA256 hash (fallback)
 static inline TauValue tauraro_hashlib_sha256(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -243,13 +273,13 @@ static inline TauValue tauraro_hashlib_sha256(TauValue data) {
     
     tau_simple_hash((const unsigned char*)data.value.s, strlen(data.value.s), hash->digest, 32);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 // hashlib.sha384(data) - SHA384 hash (fallback)
 static inline TauValue tauraro_hashlib_sha384(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -258,13 +288,13 @@ static inline TauValue tauraro_hashlib_sha384(TauValue data) {
     
     tau_simple_hash((const unsigned char*)data.value.s, strlen(data.value.s), hash->digest, 48);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 // hashlib.sha512(data) - SHA512 hash (fallback)
 static inline TauValue tauraro_hashlib_sha512(TauValue data) {
     if (data.type != 2) {
-        return (TauValue){.type = 6, .value.p = NULL, .refcount = 1, .next = NULL};
+        return (TauValue){.type = 6, .value.ptr = NULL, .refcount = 1, .next = NULL};
     }
     
     HashObject* hash = (HashObject*)malloc(sizeof(HashObject));
@@ -273,7 +303,7 @@ static inline TauValue tauraro_hashlib_sha512(TauValue data) {
     
     tau_simple_hash((const unsigned char*)data.value.s, strlen(data.value.s), hash->digest, 64);
     
-    return (TauValue){.type = 6, .value.p = (void*)hash, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)hash, .refcount = 1, .next = NULL};
 }
 
 #endif // HAVE_OPENSSL
@@ -315,7 +345,7 @@ static inline TauValue tauraro_hashlib_hash_hexdigest(TauValue hash_obj) {
         return (TauValue){.type = 2, .value.s = "", .refcount = 1, .next = NULL};
     }
     
-    return tau_hash_hexdigest((HashObject*)hash_obj.value.p);
+    return tau_hash_hexdigest((HashObject*)hash_obj.value.ptr);
 }
 
 // hash.digest() - Get digest bytes
@@ -324,7 +354,7 @@ static inline TauValue tauraro_hashlib_hash_digest(TauValue hash_obj) {
         return (TauValue){.type = 2, .value.s = "", .refcount = 1, .next = NULL};
     }
     
-    HashObject* h = (HashObject*)hash_obj.value.p;
+    HashObject* h = (HashObject*)hash_obj.value.ptr;
     char* digest = (char*)malloc(h->digest_size + 1);
     memcpy(digest, h->digest, h->digest_size);
     digest[h->digest_size] = '\0';

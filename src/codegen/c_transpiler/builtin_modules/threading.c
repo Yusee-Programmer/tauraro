@@ -11,6 +11,36 @@
 #include <string.h>
 #include <stdio.h>
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 #ifdef _WIN32
     #include <windows.h>
     #include <process.h>
@@ -83,13 +113,13 @@ static inline TauValue tauraro_threading_Lock(void) {
     pthread_mutex_init(&lock->mutex, NULL);
 #endif
     
-    return (TauValue){.type = 6, .value.p = (void*)lock, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)lock, .refcount = 1, .next = NULL};
 }
 
 static inline TauValue tauraro_threading_acquire(TauValue lock) {
     if (lock.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadLock* l = (ThreadLock*)lock.value.p;
+    ThreadLock* l = (ThreadLock*)lock.value.ptr;
     
 #ifdef _WIN32
     EnterCriticalSection(&l->mutex);
@@ -105,7 +135,7 @@ static inline TauValue tauraro_threading_acquire(TauValue lock) {
 static inline TauValue tauraro_threading_release(TauValue lock) {
     if (lock.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadLock* l = (ThreadLock*)lock.value.p;
+    ThreadLock* l = (ThreadLock*)lock.value.ptr;
     
 #ifdef _WIN32
     LeaveCriticalSection(&l->mutex);
@@ -121,7 +151,7 @@ static inline TauValue tauraro_threading_release(TauValue lock) {
 static inline TauValue tauraro_threading_is_locked(TauValue lock) {
     if (lock.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadLock* l = (ThreadLock*)lock.value.p;
+    ThreadLock* l = (ThreadLock*)lock.value.ptr;
     return (TauValue){.type = 3, .value.i = l->is_locked, .refcount = 1, .next = NULL};
 }
 
@@ -137,13 +167,13 @@ static inline TauValue tauraro_threading_Event(void) {
     pthread_mutex_init(&event->mutex, NULL);
 #endif
     
-    return (TauValue){.type = 6, .value.p = (void*)event, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)event, .refcount = 1, .next = NULL};
 }
 
 static inline TauValue tauraro_threading_set(TauValue event) {
     if (event.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadEvent* e = (ThreadEvent*)event.value.p;
+    ThreadEvent* e = (ThreadEvent*)event.value.ptr;
     e->is_set = 1;
     
 #ifdef _WIN32
@@ -158,7 +188,7 @@ static inline TauValue tauraro_threading_set(TauValue event) {
 static inline TauValue tauraro_threading_clear(TauValue event) {
     if (event.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadEvent* e = (ThreadEvent*)event.value.p;
+    ThreadEvent* e = (ThreadEvent*)event.value.ptr;
     e->is_set = 0;
     
 #ifdef _WIN32
@@ -171,14 +201,14 @@ static inline TauValue tauraro_threading_clear(TauValue event) {
 static inline TauValue tauraro_threading_is_set(TauValue event) {
     if (event.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadEvent* e = (ThreadEvent*)event.value.p;
+    ThreadEvent* e = (ThreadEvent*)event.value.ptr;
     return (TauValue){.type = 3, .value.i = e->is_set, .refcount = 1, .next = NULL};
 }
 
 static inline TauValue tauraro_threading_wait(TauValue event, TauValue timeout) {
     if (event.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadEvent* e = (ThreadEvent*)event.value.p;
+    ThreadEvent* e = (ThreadEvent*)event.value.ptr;
     int wait_ms = timeout.type == 0 ? timeout.value.i * 1000 : -1;
     
     if (e->is_set) return (TauValue){.type = 3, .value.i = 1, .refcount = 1, .next = NULL};
@@ -207,13 +237,13 @@ static inline TauValue tauraro_threading_Semaphore(TauValue count) {
     sem_init(&sem->semaphore, 0, sem->count);
 #endif
     
-    return (TauValue){.type = 6, .value.p = (void*)sem, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)sem, .refcount = 1, .next = NULL};
 }
 
 static inline TauValue tauraro_threading_acquire_semaphore(TauValue sem) {
     if (sem.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadSemaphore* s = (ThreadSemaphore*)sem.value.p;
+    ThreadSemaphore* s = (ThreadSemaphore*)sem.value.ptr;
     
 #ifdef _WIN32
     WaitForSingleObject(s->semaphore, INFINITE);
@@ -228,7 +258,7 @@ static inline TauValue tauraro_threading_acquire_semaphore(TauValue sem) {
 static inline TauValue tauraro_threading_release_semaphore(TauValue sem) {
     if (sem.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadSemaphore* s = (ThreadSemaphore*)sem.value.p;
+    ThreadSemaphore* s = (ThreadSemaphore*)sem.value.ptr;
     
 #ifdef _WIN32
     ReleaseSemaphore(s->semaphore, 1, NULL);
@@ -252,14 +282,14 @@ static inline TauValue tauraro_threading_Condition(void) {
     pthread_mutex_init(&cond->mutex, NULL);
 #endif
     
-    return (TauValue){.type = 6, .value.p = (void*)cond, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)cond, .refcount = 1, .next = NULL};
 }
 
 static inline TauValue tauraro_threading_Condition_wait(TauValue cond, TauValue lock) {
     if (cond.type != 6 || lock.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadCondition* c = (ThreadCondition*)cond.value.p;
-    ThreadLock* l = (ThreadLock*)lock.value.p;
+    ThreadCondition* c = (ThreadCondition*)cond.value.ptr;
+    ThreadLock* l = (ThreadLock*)lock.value.ptr;
     
 #ifdef _WIN32
     // Release lock, wait for signal, reacquire lock
@@ -276,7 +306,7 @@ static inline TauValue tauraro_threading_Condition_wait(TauValue cond, TauValue 
 static inline TauValue tauraro_threading_Condition_notify(TauValue cond) {
     if (cond.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadCondition* c = (ThreadCondition*)cond.value.p;
+    ThreadCondition* c = (ThreadCondition*)cond.value.ptr;
     c->is_signaled = 1;
     
 #ifdef _WIN32
@@ -291,7 +321,7 @@ static inline TauValue tauraro_threading_Condition_notify(TauValue cond) {
 static inline TauValue tauraro_threading_Condition_notify_all(TauValue cond) {
     if (cond.type != 6) return (TauValue){.type = 3, .value.i = 0, .refcount = 1, .next = NULL};
     
-    ThreadCondition* c = (ThreadCondition*)cond.value.p;
+    ThreadCondition* c = (ThreadCondition*)cond.value.ptr;
     c->is_signaled = 1;
     
 #ifdef _WIN32

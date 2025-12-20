@@ -11,6 +11,36 @@
 #include <string.h>
 #include <stdio.h>
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
@@ -57,7 +87,7 @@ static inline TauValue tau_socket_create(int fd, int domain, int type) {
     sock->type = type;
     sock->protocol = (type == TAURARO_SOCKET_SOCK_STREAM) ? TAURARO_SOCKET_IPPROTO_TCP : TAURARO_SOCKET_IPPROTO_UDP;
     sock->is_connected = 0;
-    return (TauValue){.type = 6, .value.p = (void*)sock, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 6, .value.ptr = (void*)sock, .refcount = 1, .next = NULL};
 }
 
 // socket.socket(family=AF_INET, type=SOCK_STREAM, proto=0)
@@ -78,7 +108,7 @@ static inline TauValue tauraro_socket_bind(TauValue sockval, TauValue address) {
     if (sockval.type != 6) 
         return (TauValue){.type = 3, .value.i = -1, .refcount = 1, .next = NULL};
     
-    SocketWrapper* sock = (SocketWrapper*)sockval.value.p;
+    SocketWrapper* sock = (SocketWrapper*)sockval.value.ptr;
     
     // Parse address (host, port) from list
     if (address.type != 4 || !address.value.list || address.value.list->size < 2)
@@ -107,7 +137,7 @@ static inline TauValue tauraro_socket_listen(TauValue sockval, TauValue backlog)
     if (sockval.type != 6) 
         return (TauValue){.type = 3, .value.i = -1, .refcount = 1, .next = NULL};
     
-    SocketWrapper* sock = (SocketWrapper*)sockval.value.p;
+    SocketWrapper* sock = (SocketWrapper*)sockval.value.ptr;
     int back = backlog.type == 0 ? backlog.value.i : 1;
     
     if (listen(sock->socket_fd, back) == SOCK_ERROR) {
@@ -122,7 +152,7 @@ static inline TauValue tauraro_socket_accept(TauValue sockval) {
     if (sockval.type != 6) 
         return (TauValue){.type = 3, .value.i = -1, .refcount = 1, .next = NULL};
     
-    SocketWrapper* sock = (SocketWrapper*)sockval.value.p;
+    SocketWrapper* sock = (SocketWrapper*)sockval.value.ptr;
     struct sockaddr_in client_addr;
     socklen_t addr_len = sizeof(client_addr);
     
@@ -162,7 +192,7 @@ static inline TauValue tauraro_socket_connect(TauValue sockval, TauValue address
     if (sockval.type != 6 || address.type != 4 || !address.value.list)
         return (TauValue){.type = 3, .value.i = -1, .refcount = 1, .next = NULL};
     
-    SocketWrapper* sock = (SocketWrapper*)sockval.value.p;
+    SocketWrapper* sock = (SocketWrapper*)sockval.value.ptr;
     TauValue host_val = address.value.list->items[0];
     TauValue port_val = address.value.list->items[1];
     
@@ -187,7 +217,7 @@ static inline TauValue tauraro_socket_send(TauValue sockval, TauValue data) {
     if (sockval.type != 6 || data.type != 2)
         return (TauValue){.type = 0, .value.i = -1, .refcount = 1, .next = NULL};
     
-    SocketWrapper* sock = (SocketWrapper*)sockval.value.p;
+    SocketWrapper* sock = (SocketWrapper*)sockval.value.ptr;
     const char* buf = data.value.s;
     int len = strlen(buf);
     
@@ -205,7 +235,7 @@ static inline TauValue tauraro_socket_recv(TauValue sockval, TauValue bufsize) {
     if (sockval.type != 6)
         return (TauValue){.type = 2, .value.s = "", .refcount = 1, .next = NULL};
     
-    SocketWrapper* sock = (SocketWrapper*)sockval.value.p;
+    SocketWrapper* sock = (SocketWrapper*)sockval.value.ptr;
     int size = bufsize.type == 0 ? bufsize.value.i : 1024;
     if (size > 65536) size = 65536;  // Max 64KB
     
@@ -231,7 +261,7 @@ static inline TauValue tauraro_socket_close(TauValue sockval) {
     if (sockval.type != 6)
         return (TauValue){.type = 3, .value.i = -1, .refcount = 1, .next = NULL};
     
-    SocketWrapper* sock = (SocketWrapper*)sockval.value.p;
+    SocketWrapper* sock = (SocketWrapper*)sockval.value.ptr;
     SOCK_CLOSE(sock->socket_fd);
     free(sock);
     
@@ -287,7 +317,7 @@ static inline TauValue tauraro_socket_inet_aton(TauValue ip_string) {
 // socket.socketpair(family=AF_UNIX, type=SOCK_STREAM, proto=0)
 static inline TauValue tauraro_socket_socketpair(void) {
     // Return tuple of two connected sockets
-    return (TauValue){.type = 4, .value.p = NULL, .refcount = 1, .next = NULL};
+    return (TauValue){.type = 4, .value.ptr = NULL, .refcount = 1, .next = NULL};
 }
 
 // socket.getservbyname(servicename)

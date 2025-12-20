@@ -11,6 +11,36 @@
 #include <string.h>
 #include <stdio.h>
 
+
+#ifndef TAU_HELPER_FUNCTIONS_DEFINED
+#define TAU_HELPER_FUNCTIONS_DEFINED
+
+static inline double tau_to_double(TauValue v) {
+    if (v.type == 0) return (double)v.value.i;
+    if (v.type == 1) return v.value.f;
+    return 0.0;
+}
+
+static inline int64_t tau_to_int64(TauValue v) {
+    if (v.type == 0) return v.value.i;
+    if (v.type == 1) return (int64_t)v.value.f;
+    return 0;
+}
+
+static inline bool tau_to_bool(TauValue v) {
+    if (v.type == 3) return v.value.i != 0;
+    if (v.type == 0) return v.value.i != 0;
+    if (v.type == 1) return v.value.f != 0.0;
+    if (v.type == 2) return v.value.s != NULL && v.value.s[0] != '\0';
+    return true;
+}
+
+static inline char* tau_to_string(TauValue v) {
+    if (v.type == 2) return v.value.s;
+    return NULL;
+}
+#endif // TAU_HELPER_FUNCTIONS_DEFINED
+
 // Pickle format tags
 #define PICKLE_INT 'i'
 #define PICKLE_FLOAT 'f'
@@ -93,11 +123,16 @@ static inline TauValue tauraro_pickle_dumps(TauValue obj) {
                     *p += strlen(num_str);
                     buf[(*p)++] = '\n';
 
-                    TauDictEntry* entry = dict->entries;
-                    while (entry != NULL) {
-                        serialize_value(entry->key, buf, p);
-                        serialize_value(entry->value, buf, p);
-                        entry = entry->next;
+                    // Iterate through buckets
+                    for (size_t i = 0; i < dict->capacity; i++) {
+                        TauDictEntry* entry = dict->buckets[i];
+                        while (entry != NULL) {
+                            // key is a string, wrap it as TauValue
+                            TauValue key_val = {.type = 2, .value.s = entry->key, .refcount = 1, .next = NULL};
+                            serialize_value(key_val, buf, p);
+                            serialize_value(entry->value, buf, p);
+                            entry = entry->next;
+                        }
                     }
                 }
                 break;
@@ -200,20 +235,16 @@ static inline TauValue tauraro_pickle_loads(TauValue data) {
                     size_t size = strtoul(line, NULL, 10);
                     free(line);
 
-                    TauDict* dict = malloc(sizeof(TauDict));
-                    dict->entries = NULL;
-                    dict->size = 0;
+                    TauDict* dict = tauraro_create_dict();
 
                     for (size_t i = 0; i < size; i++) {
                         TauValue key = deserialize_value(buf, p);
                         TauValue val = deserialize_value(buf, p);
 
-                        TauDictEntry* entry = malloc(sizeof(TauDictEntry));
-                        entry->key = key;
-                        entry->value = val;
-                        entry->next = dict->entries;
-                        dict->entries = entry;
-                        dict->size++;
+                        // Assume key is a string for dict keys
+                        if (key.type == 2) {
+                            tauraro_dict_set(dict, key.value.s, val);
+                        }
                     }
 
                     return (TauValue){.type = 5, .value.dict = dict, .refcount = 1, .next = NULL};
