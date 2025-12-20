@@ -1,0 +1,36 @@
+# Test 4: Classes and OOP
+class Animal:
+    def __init__(self, name, age):
+        self.name = name
+        self.age = age
+    
+    def speak(self):
+        print(self.name + " makes a sound")
+    
+    def get_age(self):
+        return self.age
+
+class Dog(Animal):
+    def speak(self):
+        print(self.name + " barks")
+    
+    def fetch(self):
+        print(self.name + " fetches the ball")
+
+class Cat(Animal):
+    def speak(self):
+        print(self.name + " meows")
+
+def main():
+    dog = Dog("Buddy", 3)
+    cat = Cat("Whiskers", 2)
+    
+    dog.speak()
+    dog.fetch()
+    print("Dog age: " + str(dog.get_age()))
+    
+    cat.speak()
+    print("Cat age: " + str(cat.get_age()))
+
+if __name__ == "__main__":
+    main()

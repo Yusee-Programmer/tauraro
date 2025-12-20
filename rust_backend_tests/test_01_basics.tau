@@ -1,0 +1,40 @@
+# Test 1: Basic operations and arithmetic
+def test_arithmetic():
+    a = 10
+    b = 20
+    print(a + b)
+    print(a - b)
+    print(a * b)
+    print(a / b)
+    print(a % b)
+    print(a ** b)
+
+def test_strings():
+    s = "Hello"
+    s2 = "World"
+    print(s + " " + s2)
+    print(s.upper())
+    print(s.lower())
+    print(len(s))
+
+def test_lists():
+    lst = [1, 2, 3, 4, 5]
+    print(lst)
+    print(len(lst))
+    lst.append(6)
+    print(lst)
+
+def test_dict():
+    d = {"name": "Tauraro", "version": "1.0"}
+    print(d["name"])
+    d["year"] = 2025
+    print(d)
+
+def main():
+    test_arithmetic()
+    test_strings()
+    test_lists()
+    test_dict()
+
+if __name__ == "__main__":
+    main()

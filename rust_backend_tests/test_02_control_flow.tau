@@ -1,0 +1,41 @@
+# Test 2: Control flow and conditions
+def test_if_else():
+    x = 10
+    if x > 5:
+        print("Greater than 5")
+    elif x == 5:
+        print("Equal to 5")
+    else:
+        print("Less than 5")
+
+def test_for_loop():
+    for i in range(5):
+        print(i)
+
+def test_while_loop():
+    count = 0
+    while count < 3:
+        print(count)
+        count = count + 1
+
+def test_break_continue():
+    for i in range(10):
+        if i == 2:
+            continue
+        if i == 5:
+            break
+        print(i)
+
+def test_list_comprehension():
+    result = [x * 2 for x in range(5)]
+    print(result)
+
+def main():
+    test_if_else()
+    test_for_loop()
+    test_while_loop()
+    test_break_continue()
+    test_list_comprehension()
+
+if __name__ == "__main__":
+    main()

@@ -679,76 +679,8 @@ fn compile_file(
             }
         }
         "rust" => {
-            // Rust code generation
-            use tauraro::codegen::rust_transpiler::{RustTranspiler, compiler::RustCompileOptions, compiler::RustCompiler};
-
-            let rust_code = {
-                let compiler = RustCompiler::new(RustCompileOptions {
-                    target: target.to_string(),
-                    optimize: optimization > 0,
-                    include_runtime: true,
-                    include_stdlib: true,
-                    async_runtime: true,
-                    generate_tests: false,
-                });
-
-                compiler.compile_formatted(ir_module)?
-            };
-
-            // Determine output path
-            let output_path = if let Some(output_file) = output {
-                output_file.clone()
-            } else {
-                PathBuf::from(format!(
-                    "{}.rs",
-                    file.file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("output")
-                ))
-            };
-
-            // Write Rust code to file
-            std::fs::write(&output_path, &rust_code)?;
-            println!("Rust code generated successfully: {}", output_path.display());
-
-            // If --native flag is set, compile with Cargo
-            if native {
-                use std::process::Command;
-
-                // Create a temporary Cargo project if not exists
-                let proj_dir = output_path.parent().unwrap_or_else(|| std::path::Path::new("."));
-                let cargo_toml_path = proj_dir.join("Cargo.toml");
-
-                // Check if Cargo project exists
-                if !cargo_toml_path.exists() {
-                    // Create minimal Cargo.toml
-                    let cargo_toml_content = format!(
-                        r#"[package]
-name = "{}"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-tokio = {{ version = "1", features = ["full"] }}
-regex = "1"
-serde_json = "1"
-rand = "0.8"
-
-[[bin]]
-name = "{}"
-path = "{}"
-"#,
-                        file.file_stem().and_then(|s| s.to_str()).unwrap_or("tauraro_program"),
-                        file.file_stem().and_then(|s| s.to_str()).unwrap_or("tauraro_program"),
-                        output_path.file_name().and_then(|s| s.to_str()).unwrap_or("main.rs")
-                    );
-                    std::fs::write(&cargo_toml_path, cargo_toml_content)?;
-                    println!("Created Cargo.toml for Rust project");
-                }
-
-                // Compile with Cargo
-                let mut cmd = Command::new("cargo");
-                cmd.current_dir(proj_dir);
+            return Err(anyhow::anyhow!("Rust backend is temporarily disabled. Please use 'c' backend instead."));
+        }                cmd.current_dir(proj_dir);
                 cmd.arg("build");
                 
                 if optimization > 0 {

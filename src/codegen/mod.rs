@@ -5,7 +5,8 @@ pub mod interpreter;
 #[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
 pub mod c_transpiler;
 
-pub mod rust_transpiler;
+// Temporarily disabled - needs IR/AST structure alignment
+// pub mod rust_transpiler;
 
 // Re-export commonly used items
 pub use crate::codegen::interpreter::{Interpreter, InterpreterCodeGenerator};
@@ -13,7 +14,7 @@ pub use crate::codegen::interpreter::{Interpreter, InterpreterCodeGenerator};
 #[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
 pub use crate::codegen::c_transpiler::CTranspiler;
 
-pub use crate::codegen::rust_transpiler::RustTranspiler;
+// pub use crate::codegen::rust_transpiler::RustTranspiler;  // Disabled
 
 use crate::ir::IRModule;
 use anyhow::Result;

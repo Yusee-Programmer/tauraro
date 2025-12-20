@@ -163,10 +163,8 @@ impl RustTranspiler {
         // Generate function implementations
         self.generate_functions(&module)?;
 
-        // Generate main function if it's a root module
-        if module.name == "main" || module.name == "__main__" {
-            self.emit_main()?;
-        }
+        // Always generate main function for root module execution
+        self.emit_main()?;
 
         Ok(self.context.code.clone())
     }
@@ -280,7 +278,7 @@ impl fmt::Display for TauObject {
         self.context.emit("// Function implementations");
         self.context.emit("");
 
-        for func in &module.functions {
+        for (_name, func) in &module.functions {
             self.generate_function(func)?;
         }
 
