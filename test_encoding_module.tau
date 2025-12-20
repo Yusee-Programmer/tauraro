@@ -1,0 +1,28 @@
+#!/usr/bin/env tauraro
+"""Test Encoding Module"""
+
+import encoding
+
+def main():
+    print("=" * 70)
+    print("ENCODING MODULE TEST")
+    print("=" * 70)
+    print()
+    
+    print("=== Test 1: UTF-8 Encoding ===")
+    text = "hello"
+    encoded = encoding.utf8_encode(text)
+    print(f"UTF-8 encode('hello'): {encoded}")
+    print()
+    
+    print("=== Test 2: ASCII Encoding ===")
+    encoded = encoding.ascii_encode(text)
+    print(f"ASCII encode('hello'): {encoded}")
+    print()
+    
+    print("=" * 70)
+    print("ENCODING MODULE TEST COMPLETED")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    main()

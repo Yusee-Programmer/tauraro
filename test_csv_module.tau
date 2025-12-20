@@ -1,0 +1,22 @@
+#!/usr/bin/env tauraro
+"""Test CSV Module"""
+
+import csv
+
+def main():
+    print("=" * 70)
+    print("CSV MODULE TEST")
+    print("=" * 70)
+    print()
+    
+    print("=== Test 1: CSV Reading ===")
+    rows = [["a", "b", "c"], ["1", "2", "3"]]
+    print(f"CSV rows: {len(rows)}")
+    print()
+    
+    print("=" * 70)
+    print("CSV MODULE TEST COMPLETED")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    main()

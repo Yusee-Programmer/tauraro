@@ -1,0 +1,32 @@
+#!/usr/bin/env tauraro
+"""Test Datetime Module"""
+
+import datetime
+
+def main():
+    print("=" * 70)
+    print("DATETIME MODULE TEST")
+    print("=" * 70)
+    print()
+    
+    print("=== Test 1: Current DateTime ===")
+    now = datetime.datetime.now()
+    print(f"Current datetime: {now}")
+    print()
+    
+    print("=== Test 2: Date Operations ===")
+    today = datetime.date.today()
+    print(f"Today: {today}")
+    print()
+    
+    print("=== Test 3: Time Delta ===")
+    delta = datetime.timedelta(days=5)
+    print(f"5 days delta: {delta}")
+    print()
+    
+    print("=" * 70)
+    print("DATETIME MODULE TEST COMPLETED")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    main()

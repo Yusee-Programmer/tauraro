@@ -1,0 +1,24 @@
+#!/usr/bin/env tauraro
+"""Test IO Module"""
+
+import io
+
+def main():
+    print("=" * 70)
+    print("IO MODULE TEST")
+    print("=" * 70)
+    print()
+    
+    print("=== Test 1: StringIO ===")
+    output = io.StringIO()
+    output.write("Hello World")
+    result = output.getvalue()
+    print(f"StringIO result: {result}")
+    print()
+    
+    print("=" * 70)
+    print("IO MODULE TEST COMPLETED")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    main()

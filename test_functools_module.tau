@@ -1,0 +1,32 @@
+#!/usr/bin/env tauraro
+"""Test Functools Module"""
+
+import functools
+
+def add(a, b):
+    return a + b
+
+def main():
+    print("=" * 70)
+    print("FUNCTOOLS MODULE TEST")
+    print("=" * 70)
+    print()
+    
+    print("=== Test 1: Partial Functions ===")
+    add_five = functools.partial(add, 5)
+    result = add_five(3)
+    print(f"add_five(3) = {result}")
+    print()
+    
+    print("=== Test 2: Reduce ===")
+    numbers = [1, 2, 3, 4, 5]
+    total = functools.reduce(add, numbers)
+    print(f"sum([1,2,3,4,5]) = {total}")
+    print()
+    
+    print("=" * 70)
+    print("FUNCTOOLS MODULE TEST COMPLETED")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    main()

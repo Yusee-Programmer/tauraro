@@ -1,0 +1,34 @@
+#!/usr/bin/env tauraro
+"""Test Advanced Collections"""
+
+def main():
+    print("=" * 70)
+    print("ADVANCED COLLECTIONS TEST")
+    print("=" * 70)
+    print()
+    
+    print("=== Test 1: List Manipulation ===")
+    items = [1, 2, 3, 4, 5]
+    print(f"Original list: {items}")
+    items.reverse()
+    print(f"Reversed: {items}")
+    print()
+    
+    print("=== Test 2: List Slicing ===")
+    items = [1, 2, 3, 4, 5]
+    subset = items[1:4]
+    print(f"items[1:4]: {subset}")
+    print()
+    
+    print("=== Test 3: Dictionary Operations ===")
+    data = {"a": 1, "b": 2, "c": 3}
+    print(f"Dict keys: {len(data)}")
+    print(f"Value of 'a': {data['a']}")
+    print()
+    
+    print("=" * 70)
+    print("ADVANCED COLLECTIONS TEST COMPLETED")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    main()
