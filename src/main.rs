@@ -679,7 +679,7 @@ fn compile_file(
             }
         }
         "rust" => {
-            return Err(anyhow::anyhow!("Rust backend is temporarily disabled. Please use 'c' backend instead."));
+            return Err(anyhow::anyhow!("Rust backend: In development. See RUST_BACKEND_STATUS.md. Use 'c' backend for now."));
         }                cmd.current_dir(proj_dir);
                 cmd.arg("build");
                 

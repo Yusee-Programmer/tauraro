@@ -6,6 +6,7 @@ pub mod interpreter;
 pub mod c_transpiler;
 
 // Temporarily disabled - needs IR/AST structure alignment
+// See RUST_BACKEND_STATUS.md for details and how to fix
 // pub mod rust_transpiler;
 
 // Re-export commonly used items
@@ -14,7 +15,8 @@ pub use crate::codegen::interpreter::{Interpreter, InterpreterCodeGenerator};
 #[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
 pub use crate::codegen::c_transpiler::CTranspiler;
 
-// pub use crate::codegen::rust_transpiler::RustTranspiler;  // Disabled
+// Rust transpiler disabled - see above comment
+// pub use crate::codegen::rust_transpiler::RustTranspiler;
 
 use crate::ir::IRModule;
 use anyhow::Result;
