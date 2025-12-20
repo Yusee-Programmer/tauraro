@@ -679,41 +679,26 @@ fn compile_file(
             }
         }
         "rust" => {
-            return Err(anyhow::anyhow!("Rust backend: In development. See RUST_BACKEND_STATUS.md. Use 'c' backend for now."));
-        }                cmd.current_dir(proj_dir);
-                cmd.arg("build");
-                
-                if optimization > 0 {
-                    cmd.arg("--release");
-                }
+            use tauraro::codegen::rust_transpiler::compiler::{RustCompiler, RustCompileOptions};
 
-                match cmd.status() {
-                    Ok(status) => {
-                        if status.success() {
-                            let binary_name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("tauraro_program");
-                            let binary_path = if optimization > 0 {
-                                proj_dir.join("target/release").join(binary_name)
-                            } else {
-                                proj_dir.join("target/debug").join(binary_name)
-                            };
+            let rust_code = {
+                let compiler = RustCompiler::new(RustCompileOptions::default());
+                compiler.compile_formatted(ir_module)?
+            };
 
-                            if binary_path.exists() {
-                                println!("Rust executable compiled successfully: {}", binary_path.display());
-                            } else {
-                                println!("Cargo build succeeded but executable not found at expected location");
-                                println!("Compiled executable may be in: {}/target/", proj_dir.display());
-                            }
-                        } else {
-                            eprintln!("Cargo build failed");
-                            eprintln!("Please compile manually with: cargo build");
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: Could not invoke Cargo: {}", e);
-                        eprintln!("Cargo may not be installed. Please compile manually with: cargo build");
-                    }
-                }
-            }
+            let output_path = if let Some(output_file) = output {
+                output_file.clone()
+            } else {
+                PathBuf::from(format!(
+                    "{}.rs",
+                    file.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("output")
+                ))
+            };
+
+            std::fs::write(&output_path, &rust_code)?;
+            println!("Rust code generated successfully: {}", output_path.display());
         }
         "wasm" => {
             #[cfg(feature = "wasm")]

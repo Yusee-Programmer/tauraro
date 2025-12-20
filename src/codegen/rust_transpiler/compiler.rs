@@ -40,6 +40,7 @@ impl RustCompiler {
 
     /// Compile IR module to Rust code
     pub fn compile(&self, module: IRModule) -> Result<String> {
+        // Use a default module name since IRModule doesn't have a name field
         let mut transpiler = RustTranspiler::new("main".to_string());
 
         // Add stdlib modules if needed

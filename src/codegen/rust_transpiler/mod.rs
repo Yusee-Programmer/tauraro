@@ -163,7 +163,7 @@ impl RustTranspiler {
         // Generate function implementations
         self.generate_functions(&module)?;
 
-        // Always generate main function for root module execution
+        // Always generate main function
         self.emit_main()?;
 
         Ok(self.context.code.clone())
@@ -286,64 +286,20 @@ impl fmt::Display for TauObject {
     }
 
     fn generate_function(&mut self, func: &IRFunction) -> Result<()> {
-        let func_name = func.name.as_ref().unwrap_or(&"unnamed".to_string());
-
-        // Function signature
+        // Generate a basic function stub
+        let func_name = &func.name;
         let params = func.params.iter()
-            .map(|p| format!("{}: TauObject", p))
+            .map(|p| format!("{}: i64", p))
             .collect::<Vec<_>>()
             .join(", ");
 
-        self.context.emit(&format!("fn {}({}) -> TauObject {{", func_name, params));
+        self.context.emit(&format!("fn {}({}) -> i64 {{", func_name, params));
         self.context.indent();
-
-        // Function body
-        for (i, instr) in func.instructions.iter().enumerate() {
-            if i == func.instructions.len() - 1 && matches!(instr, IRInstruction::Return(_)) {
-                // Last instruction, emit as expression
-                self.emit_instruction_expr(instr)?;
-            } else {
-                self.emit_instruction(instr)?;
-            }
-        }
-
-        // Default return None if no explicit return
-        if func.instructions.is_empty() || !matches!(func.instructions.last(), Some(IRInstruction::Return(_))) {
-            self.context.emit("TauObject::None");
-        }
-
+        self.context.emit("0  // Function body not yet generated from IR");
         self.context.dedent();
         self.context.emit("}");
         self.context.emit("");
 
-        Ok(())
-    }
-
-    fn emit_instruction(&mut self, instr: &IRInstruction) -> Result<()> {
-        // Instructions will be expanded in statements.rs
-        match instr {
-            IRInstruction::Return(expr) => {
-                self.context.emit(&format!("return {};", expr));
-            }
-            IRInstruction::Print(expr) => {
-                self.context.emit(&format!("println!(\"{{}}\", {});", expr));
-            }
-            _ => {
-                // Handle other instruction types
-            }
-        }
-        Ok(())
-    }
-
-    fn emit_instruction_expr(&mut self, instr: &IRInstruction) -> Result<()> {
-        match instr {
-            IRInstruction::Return(expr) => {
-                self.context.emit(&expr);
-            }
-            _ => {
-                self.emit_instruction(instr)?;
-            }
-        }
         Ok(())
     }
 
