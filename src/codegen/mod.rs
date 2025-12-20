@@ -5,11 +5,15 @@ pub mod interpreter;
 #[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
 pub mod c_transpiler;
 
+pub mod rust_transpiler;
+
 // Re-export commonly used items
 pub use crate::codegen::interpreter::{Interpreter, InterpreterCodeGenerator};
 
 #[cfg(any(feature = "c-backend", feature = "clang", feature = "gcc"))]
 pub use crate::codegen::c_transpiler::CTranspiler;
+
+pub use crate::codegen::rust_transpiler::RustTranspiler;
 
 use crate::ir::IRModule;
 use anyhow::Result;
@@ -20,6 +24,7 @@ pub enum Target {
     Native,
     WASM,
     C,
+    Rust,
     Interpreter,
     GCC,
     Clang,
