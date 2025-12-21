@@ -701,6 +701,14 @@ fn tau_round(f: f64) -> i64 {
                     self.context.original_var_values.insert(result.clone(), orig_var.clone());
                 }
             }
+            DictGetItem { dict, key, result } => {
+                // Dictionary indexing: dict[key]
+                self.context.emit(&format!("let {} = {}.get(&{}).cloned().unwrap_or_else(|| String::new());", result, dict, key));
+            }
+            ListCreate { elements, result: res } if false => {
+                // This case is already handled above, but we need to match ListCreate here too
+                // for completeness (shouldn't reach here)
+            }
             _ => {
                 // For unimplemented instructions, emit a comment
                 // self.context.emit(&format!("// TODO: {:?}", instr));

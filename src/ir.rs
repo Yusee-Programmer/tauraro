@@ -269,6 +269,13 @@ impl Generator {
         }
     }
 
+    /// Generate a unique temporary variable name
+    fn new_temp_var(&mut self) -> String {
+        let var_name = format!("temp_var_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        var_name
+    }
+
     /// Find which class defines a method by searching up the inheritance chain
     fn find_method_class(&self, class_name: &str, method_name: &str) -> String {
         // Check if the method is defined in this class

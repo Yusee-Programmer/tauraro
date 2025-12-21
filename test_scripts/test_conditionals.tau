@@ -1,0 +1,25 @@
+#!/usr/bin/env tauraro
+# Conditional branching test
+
+def test_conditionals():
+    print("=== Conditionals Test ===")
+    
+    x = 10
+    y = 20
+    
+    if x < y:
+        print("x is less than y")
+    else:
+        print("x is not less than y")
+    
+    z = 15
+    if z < 10:
+        print("z is small")
+    elif z < 20:
+        print("z is medium")
+    else:
+        print("z is large")
+    
+    print("Conditionals test completed")
+
+test_conditionals()
