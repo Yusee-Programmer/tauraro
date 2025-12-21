@@ -1,0 +1,48 @@
+#!/usr/bin/env tauraro
+# Test: Exception handling
+
+def test_exceptions():
+    print("=== Exception Handling ===")
+    
+    # Basic try-except
+    try:
+        x = 10
+        y = 0
+        z = x / y
+    except ZeroDivisionError as e:
+        print(f"Caught error: {e}")
+    
+    # Multiple except blocks
+    try:
+        numbers = [1, 2, 3]
+        print(numbers[10])
+    except IndexError:
+        print("Index out of range!")
+    except Exception as e:
+        print(f"Other error: {e}")
+    
+    # Try with else
+    try:
+        result = 10 / 2
+        print(f"Division result: {result}")
+    except ZeroDivisionError:
+        print("Cannot divide by zero")
+    else:
+        print("Division successful!")
+    
+    # Try with finally
+    try:
+        file = open("test.txt", "r")
+        print("File opened")
+    except FileNotFoundError:
+        print("File not found")
+    finally:
+        print("Cleanup code always runs")
+    
+    # Raise exception
+    try:
+        raise ValueError("Custom error message")
+    except ValueError as e:
+        print(f"Caught custom: {e}")
+
+test_exceptions()

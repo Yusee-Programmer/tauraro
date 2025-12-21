@@ -1,0 +1,61 @@
+#!/usr/bin/env tauraro
+# Test: Dictionary operations
+
+def test_dicts():
+    print("=== Dictionary Operations ===")
+    
+    # Dictionary creation
+    d = {"name": "John", "age": 30, "city": "NYC"}
+    print(f"Dictionary: {d}")
+    
+    # Access by key
+    name = d["name"]
+    print(f"Name: {name}")
+    
+    # Set key
+    d["age"] = 31
+    print(f"Updated age: {d['age']}")
+    
+    # Add new key
+    d["country"] = "USA"
+    print(f"Added country: {d['country']}")
+    
+    # Check if key exists
+    has_name = "name" in d
+    print(f"Has 'name': {has_name}")
+    
+    # Get keys
+    keys = d.keys()
+    print(f"Keys: {keys}")
+    
+    # Get values
+    values = d.values()
+    print(f"Values: {values}")
+    
+    # Get items
+    items = d.items()
+    print(f"Items: {items}")
+    
+    # Pop
+    city = d.pop("city")
+    print(f"Popped city: {city}")
+    print(f"After pop: {d}")
+    
+    # Pop with default
+    state = d.pop("state", "Unknown")
+    print(f"Non-existent with default: {state}")
+    
+    # Get with default
+    zipcode = d.get("zipcode", "10001")
+    print(f"Get with default: {zipcode}")
+    
+    # Update
+    d.update({"state": "NY", "zip": "10001"})
+    print(f"After update: {d}")
+    
+    # Clear
+    d2 = {"a": 1, "b": 2}
+    d2.clear()
+    print(f"After clear: {d2}")
+
+test_dicts()

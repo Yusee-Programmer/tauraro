@@ -263,8 +263,208 @@ impl fmt::Display for TauObject {
     }
 
     fn generate_class_defs(&mut self, module: &IRModule) -> Result<()> {
-        // This would be populated from module class definitions
+        // Emit helper functions for list, dict, string, and builtin operations
+        self.emit_helper_functions();
         Ok(())
+    }
+
+    fn emit_helper_functions(&mut self) {
+        self.context.emit("// ===== Helper Functions for Methods and Builtins =====");
+        self.context.emit("");
+
+        // Display wrapper for Vec to avoid orphan rule
+        self.context.emit_raw(r#"// Wrapper for Vec to implement Display
+#[derive(Clone, Debug)]
+struct VecDisplay<T: std::fmt::Display>(Vec<T>);
+
+impl<T: std::fmt::Display> std::fmt::Display for VecDisplay<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let items: Vec<String> = self.0.iter().map(|x| format!("{}", x)).collect();
+        write!(f, "[{}]", items.join(", "))
+    }
+}
+
+// Simple Display impl for i64 Vec
+fn format_list(list: &[i64]) -> String {
+    let items: Vec<String> = list.iter().map(|x| format!("{}", x)).collect();
+    format!("[{}]", items.join(", "))
+}
+
+// List method implementations
+fn lst__append(mut list: Vec<i64>, item: i64) -> Vec<i64> {
+    list.push(item);
+    list
+}
+
+fn lst__pop(mut list: Vec<i64>) -> i64 {
+    list.pop().unwrap_or(0)
+}
+
+fn lst__reverse(mut list: Vec<i64>) -> Vec<i64> {
+    list.reverse();
+    list
+}
+
+fn lst__index(list: &[i64], item: i64) -> i64 {
+    for (i, elem) in list.iter().enumerate() {
+        if *elem == item {
+            return i as i64;
+        }
+    }
+    -1
+}
+
+fn lst__count(list: &[i64], item: i64) -> i64 {
+    list.iter().filter(|x| **x == item).count() as i64
+}
+
+fn lst__extend(mut list: Vec<i64>, other: Vec<i64>) -> Vec<i64> {
+    list.extend(other);
+    list
+}
+
+fn lst__insert(mut list: Vec<i64>, index: usize, item: i64) -> Vec<i64> {
+    if index <= list.len() {
+        list.insert(index, item);
+    }
+    list
+}
+
+fn lst__remove(mut list: Vec<i64>, item: i64) -> Vec<i64> {
+    list.retain(|x| *x != item);
+    list
+}
+
+fn lst__clear(mut list: Vec<i64>) -> Vec<i64> {
+    list.clear();
+    list
+}
+
+// String method implementations
+fn text__upper(s: &str) -> String {
+    s.to_uppercase()
+}
+
+fn text__lower(s: &str) -> String {
+    s.to_lowercase()
+}
+
+fn text__strip(s: &str) -> String {
+    s.trim().to_string()
+}
+
+fn text__replace(s: &str, old: &str, new: &str) -> String {
+    s.replace(old, new)
+}
+
+fn text__split(s: &str, sep: &str) -> Vec<String> {
+    s.split(sep).map(|x| x.to_string()).collect()
+}
+
+fn text__join(sep: &str, items: &[String]) -> String {
+    items.join(sep)
+}
+
+fn text__startswith(s: &str, prefix: &str) -> bool {
+    s.starts_with(prefix)
+}
+
+fn text__endswith(s: &str, suffix: &str) -> bool {
+    s.ends_with(suffix)
+}
+
+fn text__find(s: &str, sub: &str) -> i64 {
+    s.find(sub).map(|i| i as i64).unwrap_or(-1)
+}
+
+fn text__index(s: &str, sub: &str) -> i64 {
+    s.find(sub).map(|i| i as i64).unwrap_or(-1)
+}
+
+fn text__count(s: &str, sub: &str) -> i64 {
+    s.matches(sub).count() as i64
+}
+
+// Also support list.count() via text__count (convenience overload)
+fn text__count_list(list: &[i64], item: i64) -> i64 {
+    list.iter().filter(|x| **x == item).count() as i64
+}
+
+fn text__capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+    }
+}
+
+fn text__title(s: &str) -> String {
+    s.split_whitespace()
+        .map(|word| text__capitalize(word))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn text__isdigit(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn text__isalpha(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_alphabetic())
+}
+
+// Dict methods - generic implementations
+fn dict__get(map: &std::collections::HashMap<String, String>, key: &str, default: &str) -> String {
+    map.get(key).cloned().unwrap_or_else(|| default.to_string())
+}
+
+fn dict__keys(map: &std::collections::HashMap<String, String>) -> Vec<String> {
+    map.keys().cloned().collect()
+}
+
+fn dict__values(map: &std::collections::HashMap<String, String>) -> Vec<String> {
+    map.values().cloned().collect()
+}
+
+fn dict__update(mut map: std::collections::HashMap<String, String>, other: std::collections::HashMap<String, String>) -> std::collections::HashMap<String, String> {
+    for (k, v) in other {
+        map.insert(k, v);
+    }
+    map
+}
+
+fn dict__clear(mut map: std::collections::HashMap<String, String>) -> std::collections::HashMap<String, String> {
+    map.clear();
+    map
+}
+
+// Builtin functions
+fn tau_abs(n: i64) -> i64 {
+    n.abs()
+}
+
+fn tau_min(numbers: &[i64]) -> i64 {
+    *numbers.iter().min().unwrap_or(&0)
+}
+
+fn tau_max(numbers: &[i64]) -> i64 {
+    *numbers.iter().max().unwrap_or(&0)
+}
+
+fn tau_sum(numbers: &[i64]) -> i64 {
+    numbers.iter().sum()
+}
+
+fn tau_pow(base: i64, exp: i64) -> i64 {
+    base.pow(exp as u32)
+}
+
+fn tau_round(f: f64) -> i64 {
+    f.round() as i64
+}
+
+"#);
+        self.context.emit("");
     }
 
     fn generate_functions(&mut self, module: &IRModule) -> Result<()> {
@@ -285,8 +485,13 @@ impl fmt::Display for TauObject {
             .collect::<Vec<_>>()
             .join(", ");
 
-        // main function must return ()
-        let return_type = if func_name == "main" { "".to_string() } else { " -> i64".to_string() };
+        // Determine return type based on IR or default to ()
+        let return_type = if func_name == "main" { 
+            "".to_string() 
+        } else { 
+            // By default, user functions return () unless explicitly typed
+            " -> ()".to_string()
+        };
         
         self.context.emit(&format!("fn {}{}{} {{", func_name, if params.is_empty() { "()".to_string() } else { format!("({})", params) }, return_type));
         self.context.indent();
@@ -296,8 +501,6 @@ impl fmt::Display for TauObject {
             // Empty function
             if func_name == "main" {
                 self.context.emit("println!(\"Program executed\");");
-            } else {
-                self.context.emit("0");
             }
         } else {
             // Generate code from all blocks
@@ -349,9 +552,9 @@ impl fmt::Display for TauObject {
                 let rust_op = self.binary_op_to_rust(op);
                 // Special handling for string concatenation
                 if rust_op == "+" {
-                    // Check if we're concatenating strings
+                    // For string-like concatenation, handle various types
                     self.context.emit(&format!(
-                        "let {} = format!(\"{{}}{{}}\", {}, {});", 
+                        "let {} = {{ let l = format!(\"{{:?}}\", &{}); let r = format!(\"{{:?}}\", &{}); format!(\"{{}}{{}}\", l, r) }};", 
                         result, left, right
                     ));
                 } else {
@@ -359,13 +562,13 @@ impl fmt::Display for TauObject {
                 }
             }
             Call { func, args, result } => {
-                let args_str = args.join(", ");
                 // Special handling for print function
                 if func == "print" {
                     if args.len() == 1 {
                         self.context.emit(&format!("println!(\"{{}}\", {});", args[0]));
                     } else {
                         let arg_placeholders = args.iter().map(|_| "{}").collect::<Vec<_>>().join(" ");
+                        let args_str = args.join(", ");
                         self.context.emit(&format!("println!(\"{}\", {});", arg_placeholders, args_str));
                     }
                 } else if func == "len" && args.len() == 1 {
@@ -380,8 +583,31 @@ impl fmt::Display for TauObject {
                             self.context.emit(&format!("let {} = ({}..{}).collect::<Vec<_>>();", res, args[0], args[1]));
                         }
                     }
+                } else if func.starts_with("lst__") || func.starts_with("text__") {
+                    // List and string methods need special handling for references
+                    let modified_args: Vec<String> = args.iter().enumerate().map(|(i, arg)| {
+                        // First argument to many list/string methods needs to be borrowed
+                        if i == 0 && (func == "lst__index" || func == "lst__count" || func == "text__count" || 
+                                      func == "text__find" || func == "text__index" || func == "text__startswith" ||
+                                      func == "text__endswith" || func == "text__split" || func == "text__capitalize" ||
+                                      func == "text__title" || func == "text__isdigit" || func == "text__isalpha" ||
+                                      func == "text__upper" || func == "text__lower" || func == "text__strip" ||
+                                      func == "text__replace" || func == "text__join") {
+                            format!("&{}", arg)
+                        } else {
+                            arg.clone()
+                        }
+                    }).collect();
+                    
+                    let args_str = modified_args.join(", ");
+                    if let Some(res) = result {
+                        self.context.emit(&format!("let {} = {}({});", res, func, args_str));
+                    } else {
+                        self.context.emit(&format!("{}({});", func, args_str));
+                    }
                 } else {
                     // Regular function call
+                    let args_str = args.join(", ");
                     if let Some(res) = result {
                         self.context.emit(&format!("let {} = {}({});", res, func, args_str));
                     } else {
@@ -551,8 +777,7 @@ impl fmt::Display for TauObject {
 
     fn emit_main(&mut self) -> Result<()> {
         self.context.emit("");
-        self.context.emit("#[tokio::main]");
-        self.context.emit("async fn main() {");
+        self.context.emit("fn main() {");
         self.context.indent();
         self.context.emit("println!(\"Program completed successfully\");");
         self.context.dedent();

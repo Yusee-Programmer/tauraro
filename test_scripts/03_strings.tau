@@ -1,0 +1,86 @@
+#!/usr/bin/env tauraro
+# Test: String operations
+
+def test_strings():
+    print("=== String Operations ===")
+    
+    # String creation and length
+    s = "Hello, World!"
+    print(f"String: {s}")
+    print(f"Length: {len(s)}")
+    
+    # Indexing
+    first_char = s[0]
+    print(f"First char: {first_char}")
+    
+    # Slicing
+    slice1 = s[0:5]
+    print(f"Slice [0:5]: {slice1}")
+    
+    slice2 = s[7:]
+    print(f"Slice [7:]: {slice2}")
+    
+    # Upper and lower
+    upper = s.upper()
+    print(f"Upper: {upper}")
+    
+    lower = s.lower()
+    print(f"Lower: {lower}")
+    
+    # Strip
+    s2 = "  hello world  "
+    stripped = s2.strip()
+    print(f"Stripped: '{stripped}'")
+    
+    # Replace
+    replaced = s.replace("World", "Python")
+    print(f"Replaced: {replaced}")
+    
+    # Split
+    s3 = "apple,banana,orange"
+    parts = s3.split(",")
+    print(f"Split by comma: {parts}")
+    
+    # Join
+    joined = "-".join(["a", "b", "c"])
+    print(f"Joined with dash: {joined}")
+    
+    # Find and index
+    idx = s.find("World")
+    print(f"Find 'World': {idx}")
+    
+    idx2 = s.index("World")
+    print(f"Index of 'World': {idx2}")
+    
+    # StartsWith and EndsWith
+    starts = s.startswith("Hello")
+    print(f"Starts with 'Hello': {starts}")
+    
+    ends = s.endswith("!")
+    print(f"Ends with '!': {ends}")
+    
+    # Count
+    s4 = "hello world hello"
+    cnt = s4.count("hello")
+    print(f"Count 'hello': {cnt}")
+    
+    # Capitalize
+    s5 = "hello"
+    cap = s5.capitalize()
+    print(f"Capitalize: {cap}")
+    
+    # Title
+    s6 = "hello world"
+    title = s6.title()
+    print(f"Title: {title}")
+    
+    # Is methods
+    s7 = "12345"
+    is_digit = s7.isdigit()
+    print(f"'12345' is digit: {is_digit}")
+    
+    s8 = "hello"
+    is_alpha = s8.isalpha()
+    print(f"'hello' is alpha: {is_alpha}")
+
+test_strings()

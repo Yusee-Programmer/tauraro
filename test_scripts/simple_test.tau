@@ -1,0 +1,35 @@
+#!/usr/bin/env tauraro
+# Simple test without comparisons
+
+def test_simple():
+    print("=== Simple Test ===")
+    
+    # Variables and arithmetic
+    x = 10
+    y = 20
+    z = x + y
+    print(f"x = {x}")
+    print(f"y = {y}")
+    print(f"Sum: {z}")
+    
+    # Subtraction and multiplication
+    a = z - 10
+    print(f"z - 10 = {a}")
+    
+    b = x * 2
+    print(f"x * 2 = {b}")
+    
+    # Division
+    c = 100 // 3
+    print(f"100 / 3 = {c}")
+    
+    # Power (if supported)
+    d = 2 * 5
+    print(f"2 * 5 = {d}")
+    
+    # For loops with range
+    print("Loop test:")
+    for i in range(3):
+        print(f"  i = {i}")
+
+test_simple()
