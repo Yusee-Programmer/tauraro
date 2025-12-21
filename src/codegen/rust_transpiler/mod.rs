@@ -157,9 +157,9 @@ impl RustTranspiler {
         // Generate function implementations
         self.generate_functions(&module)?;
 
-        // Only generate async wrapper main if there's no user-defined main
+        // Only generate main if there's no user-defined main
         if !has_user_main {
-            self.emit_main()?;
+            self.emit_main(&module.globals)?;
         }
 
         Ok(self.context.code.clone())
@@ -848,11 +848,18 @@ fn tau_round(f: f64) -> i64 {
         }.to_string()
     }
 
-    fn emit_main(&mut self) -> Result<()> {
+    fn emit_main(&mut self, globals: &[crate::ir::IRInstruction]) -> Result<()> {
         self.context.emit("");
         self.context.emit("fn main() {");
         self.context.indent();
-        self.context.emit("println!(\"Program completed successfully\");");
+        
+        // Execute global instructions
+        if globals.is_empty() {
+            self.context.emit("println!(\"Program completed successfully\");");
+        } else {
+            self.generate_block(globals)?;
+        }
+        
         self.context.dedent();
         self.context.emit("}");
 
