@@ -1,0 +1,26 @@
+#!/usr/bin/env tauraro
+# Test string operations
+
+def test_strings():
+    print("=== String Test ===")
+    
+    # Create strings
+    text = "hello world"
+    upper = text.upper()
+    print("Original: hello world")
+    print("Upper: ")
+    print(upper)
+    
+    lower = "HELLO".lower()
+    print("Lower: ")
+    print(lower)
+    
+    # String length
+    msg = "test"
+    length = len(msg)
+    print("Length of 'test':")
+    print(length)
+    
+    print("String test completed")
+
+test_strings()

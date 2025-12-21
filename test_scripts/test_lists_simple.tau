@@ -1,0 +1,18 @@
+#!/usr/bin/env tauraro
+# Test lists without reusing variables
+
+def test_lists():
+    print("=== List Test ===")
+    
+    # Create list
+    my_list = [1, 2, 3, 4, 5]
+    print("Created list")
+    
+    # Loop through list
+    print("List contents:")
+    for num in my_list:
+        print(num)
+    
+    print("List test completed")
+
+test_lists()
