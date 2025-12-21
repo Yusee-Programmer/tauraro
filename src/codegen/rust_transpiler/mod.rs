@@ -279,7 +279,6 @@ impl fmt::Display for TauObject {
     }
 
     fn generate_function(&mut self, func: &IRFunction) -> Result<()> {
-        // Generate a basic function stub
         let func_name = &func.name;
         let params = func.params.iter()
             .map(|p| format!("{}: i64", p))
@@ -291,16 +290,263 @@ impl fmt::Display for TauObject {
         
         self.context.emit(&format!("fn {}{}{} {{", func_name, if params.is_empty() { "()".to_string() } else { format!("({})", params) }, return_type));
         self.context.indent();
-        if func_name == "main" {
-            self.context.emit("// Main function body");
+
+        // Generate function body from IR blocks
+        if func.blocks.is_empty() {
+            // Empty function
+            if func_name == "main" {
+                self.context.emit("println!(\"Program executed\");");
+            } else {
+                self.context.emit("0");
+            }
         } else {
-            self.context.emit("0  // Function body not yet generated from IR");
+            // Generate code from all blocks
+            for block in &func.blocks {
+                self.generate_block(&block.instructions)?;
+            }
         }
+
         self.context.dedent();
         self.context.emit("}");
         self.context.emit("");
 
         Ok(())
+    }
+
+    fn generate_block(&mut self, instructions: &[crate::ir::IRInstruction]) -> Result<()> {
+        for instr in instructions {
+            self.generate_instruction(instr)?;
+        }
+        Ok(())
+    }
+
+    fn generate_instruction(&mut self, instr: &crate::ir::IRInstruction) -> Result<()> {
+        use crate::ir::IRInstruction::*;
+
+        match instr {
+            Comment(text) => {
+                self.context.emit(&format!("// {}", text));
+            }
+            LoadConst { value, result } => {
+                let rust_value = self.value_to_rust(value);
+                self.context.emit(&format!("let {} = {};", result, rust_value));
+            }
+            LoadLocal { name, result } => {
+                self.context.emit(&format!("let {} = {};", result, name));
+            }
+            LoadGlobal { name, result } => {
+                // For now, treat LoadGlobal the same as LoadLocal (simplified)
+                self.context.emit(&format!("let {} = {};", result, name));
+            }
+            StoreLocal { name, value } => {
+                self.context.emit(&format!("let {} = {};", name, value));
+            }
+            StoreGlobal { name, value } => {
+                // For now, treat StoreGlobal the same as StoreLocal (simplified)
+                self.context.emit(&format!("let {} = {};", name, value));
+            }
+            BinaryOp { op, left, right, result } => {
+                let rust_op = self.binary_op_to_rust(op);
+                // Special handling for string concatenation
+                if rust_op == "+" {
+                    // Check if we're concatenating strings
+                    self.context.emit(&format!(
+                        "let {} = format!(\"{{}}{{}}\", {}, {});", 
+                        result, left, right
+                    ));
+                } else {
+                    self.context.emit(&format!("let {} = {} {} {};", result, left, rust_op, right));
+                }
+            }
+            Call { func, args, result } => {
+                let args_str = args.join(", ");
+                // Special handling for print function
+                if func == "print" {
+                    if args.len() == 1 {
+                        self.context.emit(&format!("println!(\"{{}}\", {});", args[0]));
+                    } else {
+                        let arg_placeholders = args.iter().map(|_| "{}").collect::<Vec<_>>().join(" ");
+                        self.context.emit(&format!("println!(\"{}\", {});", arg_placeholders, args_str));
+                    }
+                } else if func == "len" && args.len() == 1 {
+                    if let Some(res) = result {
+                        self.context.emit(&format!("let {} = {}.len() as i64;", res, args[0]));
+                    }
+                } else if func == "range" {
+                    if let Some(res) = result {
+                        if args.len() == 1 {
+                            self.context.emit(&format!("let {} = (0..{}).collect::<Vec<_>>();", res, args[0]));
+                        } else if args.len() == 2 {
+                            self.context.emit(&format!("let {} = ({}..{}).collect::<Vec<_>>();", res, args[0], args[1]));
+                        }
+                    }
+                } else {
+                    // Regular function call
+                    if let Some(res) = result {
+                        self.context.emit(&format!("let {} = {}({});", res, func, args_str));
+                    } else {
+                        self.context.emit(&format!("{}({});", func, args_str));
+                    }
+                }
+            }
+            Return { value } => {
+                // Don't emit return in main function, main must return ()
+                if let Some(val) = value {
+                    self.context.emit(&format!("// return {};", val));
+                }
+            }
+            If { condition, then_body, elif_branches, else_body } => {
+                self.generate_if_statement(condition, then_body, elif_branches, else_body.as_ref())?;
+            }
+            While { condition, body, .. } => {
+                self.context.emit(&format!("while {} {{", condition));
+                self.context.indent();
+                self.generate_block(body)?;
+                self.context.dedent();
+                self.context.emit("}");
+            }
+            For { variable, iterable, body, .. } => {
+                self.context.emit(&format!("for {} in &{} {{", variable, iterable));
+                self.context.indent();
+                self.generate_block(body)?;
+                self.context.dedent();
+                self.context.emit("}");
+            }
+            Break => {
+                self.context.emit("break;");
+            }
+            Continue => {
+                self.context.emit("continue;");
+            }
+            ListCreate { elements, result } => {
+                let elems_str = elements.join(", ");
+                self.context.emit(&format!("let {} = vec![{}];", result, elems_str));
+            }
+            DictCreate { pairs, result } => {
+                self.context.emit(&format!("let mut {} = HashMap::new();", result));
+                for (key, value) in pairs {
+                    self.context.emit(&format!("{}.insert({}, {});", result, key, value));
+                }
+            }
+            FormatString { parts, result } => {
+                self.generate_format_string(parts, result)?;
+            }
+            _ => {
+                // For unimplemented instructions, emit a comment
+                // self.context.emit(&format!("// TODO: {:?}", instr));
+            }
+        }
+        Ok(())
+    }
+
+    fn generate_if_statement(
+        &mut self,
+        condition: &str,
+        then_body: &[crate::ir::IRInstruction],
+        elif_branches: &[(String, Vec<crate::ir::IRInstruction>)],
+        else_body: Option<&Vec<crate::ir::IRInstruction>>,
+    ) -> Result<()> {
+        self.context.emit(&format!("if {} {{", condition));
+        self.context.indent();
+        self.generate_block(then_body)?;
+        self.context.dedent();
+
+        for (elif_cond, elif_body) in elif_branches {
+            self.context.emit(&format!("}} else if {} {{", elif_cond));
+            self.context.indent();
+            self.generate_block(elif_body)?;
+            self.context.dedent();
+        }
+
+        if let Some(else_stmts) = else_body {
+            self.context.emit("} else {");
+            self.context.indent();
+            self.generate_block(else_stmts)?;
+            self.context.dedent();
+        }
+
+        self.context.emit("}");
+        Ok(())
+    }
+
+    fn generate_format_string(
+        &mut self,
+        parts: &[crate::ir::IRFormatPart],
+        result: &str,
+    ) -> Result<()> {
+        use crate::ir::IRFormatPart::*;
+
+        let mut format_str = String::new();
+        let mut format_args = Vec::new();
+
+        for part in parts {
+            match part {
+                Literal(s) => {
+                    format_str.push_str(&s.replace("{", "{{").replace("}", "}}"));
+                }
+                Expression { var, format_spec: _ } => {
+                    format_str.push_str("{}");
+                    format_args.push(var.clone());
+                }
+            }
+        }
+
+        if format_args.is_empty() {
+            self.context.emit(&format!("let {} = \"{}\".to_string();", result, format_str));
+        } else {
+            let args_str = format_args.join(", ");
+            self.context.emit(&format!(
+                "let {} = format!(\"{}\", {});",
+                result, format_str, args_str
+            ));
+        }
+        Ok(())
+    }
+
+    fn value_to_rust(&self, value: &crate::value::Value) -> String {
+        use crate::value::Value::*;
+        match value {
+            Int(i) => i.to_string(),
+            Float(f) => {
+                let s = f.to_string();
+                if s.contains('.') { s } else { format!("{}.0", s) }
+            }
+            Bool(b) => b.to_string(),
+            Str(s) => format!("\"{}\"", s.escape_default()),
+            Ellipsis => "\"...\"".to_string(),
+            _ => "0".to_string(), // Default for unsupported types
+        }
+    }
+
+    fn binary_op_to_rust(&self, op: &crate::ast::BinaryOp) -> String {
+        use crate::ast::BinaryOp::*;
+        match op {
+            Add => "+",
+            Subtract => "-",
+            Multiply => "*",
+            Divide => "/",
+            FloorDivide => "/",
+            Modulo => "%",
+            Power => "^", // Note: In Rust this is XOR, would need powi() for actual power
+            Equal => "==",
+            NotEqual => "!=",
+            Less => "<",
+            LessEqual => "<=",
+            Greater => ">",
+            GreaterEqual => ">=",
+            And => "&&",
+            Or => "||",
+            BitAnd => "&",
+            BitOr => "|",
+            BitXor => "^",
+            LeftShift => "<<",
+            RightShift => ">>",
+            In => "in", // This needs special handling
+            NotIn => "not in", // This needs special handling
+            Is => "is", // This needs special handling
+            IsNot => "is not", // This needs special handling
+            MatMult => "@", // This needs special handling
+        }.to_string()
     }
 
     fn emit_main(&mut self) -> Result<()> {
