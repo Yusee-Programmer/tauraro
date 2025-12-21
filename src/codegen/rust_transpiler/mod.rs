@@ -748,30 +748,48 @@ fn tau_round(f: f64) -> i64 {
         use crate::ast::BinaryOp::*;
         match op {
             Add => "+",
+            Sub => "-",
             Subtract => "-",
             Multiply => "*",
+            Mul => "*",
             Divide => "/",
+            Div => "/",
             FloorDivide => "/",
+            FloorDiv => "/",
             Modulo => "%",
-            Power => "^", // Note: In Rust this is XOR, would need powi() for actual power
+            Mod => "%",
+            Power => "^",
+            Pow => "^",
             Equal => "==",
+            Eq => "==",
             NotEqual => "!=",
+            Ne => "!=",
+            Neq => "!=",
             Less => "<",
+            Lt => "<",
             LessEqual => "<=",
+            Le => "<=",
+            Lte => "<=",
             Greater => ">",
+            Gt => ">",
             GreaterEqual => ">=",
+            Ge => ">=",
+            Gte => ">=",
             And => "&&",
             Or => "||",
             BitAnd => "&",
             BitOr => "|",
             BitXor => "^",
             LeftShift => "<<",
+            LShift => "<<",
             RightShift => ">>",
-            In => "in", // This needs special handling
-            NotIn => "not in", // This needs special handling
-            Is => "is", // This needs special handling
-            IsNot => "is not", // This needs special handling
-            MatMult => "@", // This needs special handling
+            RShift => ">>",
+            In => "in",
+            NotIn => "not in",
+            Is => "==",
+            IsNot => "!=",
+            MatMul => "@",
+            _ => "+", // fallback
         }.to_string()
     }
 
