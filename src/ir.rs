@@ -168,6 +168,14 @@ pub enum IRInstruction {
         result: String,
     },
     
+    // F-string with type preservation (preserves if single expression is numeric)
+    FormatStringWithType {
+        parts: Vec<IRFormatPart>,
+        result: String,
+        original_type: Option<Type>, // Preserves the type if single expression
+        original_var: Option<String>, // Preserves reference to original typed variable
+    },
+    
     // Context manager (with statement)
     With {
         context_expr: String,

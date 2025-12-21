@@ -287,7 +287,7 @@ fn test_simple() -> () {
     let y = temp_result;
     let binop_left = x;
     let binop_right = y;
-    let temp_result = { let l = format!("{:?}", &binop_left); let r = format!("{:?}", &binop_right); format!("{}{}", l, r) };
+    let temp_result = binop_left + binop_right;
     let z = temp_result;
     let temp_result = "x = ";
     let fstring_left_1 = temp_result;

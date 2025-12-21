@@ -37,6 +37,8 @@ pub struct RustCodegenContext {
     pub module_name: String,
     /// Used external crates
     pub external_crates: HashSet<String>,
+    /// Track original numeric values for variables (before format string conversion)
+    pub original_var_values: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +68,7 @@ impl RustCodegenContext {
             imports: HashSet::new(),
             module_name,
             external_crates: HashSet::new(),
+            original_var_values: HashMap::new(),
         }
     }
 
@@ -536,29 +539,63 @@ fn tau_round(f: f64) -> i64 {
             }
             LoadLocal { name, result } => {
                 self.context.emit(&format!("let {} = {};", result, name));
+                // If this variable had a tracked origin, propagate it
+                if let Some(orig) = self.context.original_var_values.get(name) {
+                    self.context.original_var_values.insert(result.clone(), orig.clone());
+                }
             }
             LoadGlobal { name, result } => {
                 // For now, treat LoadGlobal the same as LoadLocal (simplified)
                 self.context.emit(&format!("let {} = {};", result, name));
+                // If this variable had a tracked origin, propagate it
+                if let Some(orig) = self.context.original_var_values.get(name) {
+                    self.context.original_var_values.insert(result.clone(), orig.clone());
+                }
             }
             StoreLocal { name, value } => {
                 self.context.emit(&format!("let {} = {};", name, value));
+                // Track if this variable is assigned from another tracked variable
+                if let Some(orig) = self.context.original_var_values.get(value) {
+                    self.context.original_var_values.insert(name.clone(), orig.clone());
+                }
             }
             StoreGlobal { name, value } => {
                 // For now, treat StoreGlobal the same as StoreLocal (simplified)
                 self.context.emit(&format!("let {} = {};", name, value));
+                // Track if this variable is assigned from another tracked variable
+                if let Some(orig) = self.context.original_var_values.get(value) {
+                    self.context.original_var_values.insert(name.clone(), orig.clone());
+                }
             }
             BinaryOp { op, left, right, result } => {
                 let rust_op = self.binary_op_to_rust(op);
-                // Special handling for string concatenation
-                if rust_op == "+" {
-                    // For string-like concatenation, handle various types
+                
+                // Try to resolve f-string variables to their original numeric values
+                let left_val = if let Some(orig) = self.context.original_var_values.get(left) {
+                    orig.clone()
+                } else {
+                    left.clone()
+                };
+                let right_val = if let Some(orig) = self.context.original_var_values.get(right) {
+                    orig.clone()
+                } else {
+                    right.clone()
+                };
+                
+                // Only use format! for string concatenation if BOTH operands look like strings
+                // (contain "string" or "str" in their name, or are string literals)
+                let left_is_string = left_val.contains("\"") || left_val.starts_with("fstring") || left_val.ends_with("_str");
+                let right_is_string = right_val.contains("\"") || right_val.starts_with("fstring") || right_val.ends_with("_str");
+                
+                if rust_op == "+" && (left_is_string || right_is_string) {
+                    // String concatenation case - use format
                     self.context.emit(&format!(
                         "let {} = {{ let l = format!(\"{{:?}}\", &{}); let r = format!(\"{{:?}}\", &{}); format!(\"{{}}{{}}\", l, r) }};", 
-                        result, left, right
+                        result, left_val, right_val
                     ));
                 } else {
-                    self.context.emit(&format!("let {} = {} {} {};", result, left, rust_op, right));
+                    // Normal numeric operation
+                    self.context.emit(&format!("let {} = {} {} {};", result, left_val, rust_op, right_val));
                 }
             }
             Call { func, args, result } => {
@@ -657,6 +694,13 @@ fn tau_round(f: f64) -> i64 {
             FormatString { parts, result } => {
                 self.generate_format_string(parts, result)?;
             }
+            crate::ir::IRInstruction::FormatStringWithType { parts, result, original_type: _, original_var } => {
+                self.generate_format_string(parts, result)?;
+                // Track the original variable if provided
+                if let Some(orig_var) = original_var {
+                    self.context.original_var_values.insert(result.clone(), orig_var.clone());
+                }
+            }
             _ => {
                 // For unimplemented instructions, emit a comment
                 // self.context.emit(&format!("// TODO: {:?}", instr));
@@ -704,6 +748,7 @@ fn tau_round(f: f64) -> i64 {
 
         let mut format_str = String::new();
         let mut format_args = Vec::new();
+        let mut single_var: Option<String> = None;
 
         for part in parts {
             match part {
@@ -713,6 +758,10 @@ fn tau_round(f: f64) -> i64 {
                 Expression { var, format_spec: _ } => {
                     format_str.push_str("{}");
                     format_args.push(var.clone());
+                    // If there's only one expression and no other literal besides the var, track it
+                    if single_var.is_none() && format_str.replace("{}", "").trim().is_empty() {
+                        single_var = Some(var.clone());
+                    }
                 }
             }
         }
@@ -725,6 +774,12 @@ fn tau_round(f: f64) -> i64 {
                 "let {} = format!(\"{}\", {});",
                 result, format_str, args_str
             ));
+            
+            // If this f-string is just wrapping a single variable for printing,
+            // track the original variable name so arithmetic operations can use it
+            if let Some(orig_var) = single_var {
+                self.context.original_var_values.insert(result.to_string(), orig_var);
+            }
         }
         Ok(())
     }
