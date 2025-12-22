@@ -25,12 +25,6 @@ impl RustCodegenContext {
         Ok(())
     }
 
-    /// Generate a lambda/closure
-    pub fn gen_lambda(&mut self, params: Vec<&str>, body: &str) -> Result<String> {
-        let params_str = params.join(", ");
-        Ok(format!("|{}| {}", params_str, body))
-    }
-
     /// Generate a method definition
     pub fn gen_method_def(&mut self, struct_name: &str, method_name: &str, params: Vec<(&str, &str)>, return_type: &str, is_async: bool) -> Result<()> {
         let async_kw = if is_async { "async " } else { "" };

@@ -753,6 +753,72 @@ fn compile_file(
                 )?;
             }
         }
+        "rust" => {
+            // For Rust backend, generate Rust source code (IR to Rust transpilation)
+            use tauraro::codegen::rust_transpiler::RustTranspiler;
+            
+            let output_path = output.map_or_else(|| PathBuf::from("output.rs"), |p| p.clone());
+            
+            // Transpile IR module to Rust code
+            let mut rust_transpiler = RustTranspiler::new("tauraro_module".to_string());
+            let rust_code = rust_transpiler.transpile(ir_module)?;
+            
+            // Write Rust code to output file
+            std::fs::write(&output_path, &rust_code)?;
+            println!("✓ Rust code generated: {}", output_path.display());
+            
+            // If --native flag is set, try to compile with rustc and execute
+            if native {
+                println!("→ Attempting native Rust compilation with rustc...");
+                
+                // Determine executable output path
+                let exe_name = if cfg!(windows) {
+                    output_path.with_extension("exe")
+                } else {
+                    output_path.with_extension("")
+                };
+                
+                // Try to compile with rustc
+                match compile_rust_to_executable(&output_path, &exe_name) {
+                    Ok(_) => {
+                        println!("✓ Compilation successful!");
+                        println!("→ Executing native binary...\n");
+                        
+                        // Execute the compiled binary
+                        use std::process::Command;
+                        let output = Command::new(&exe_name)
+                            .output()
+                            .map_err(|e| format!("Failed to execute binary: {}", e))?;
+                        
+                        print!("{}", String::from_utf8_lossy(&output.stdout));
+                        if !output.stderr.is_empty() {
+                            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                        }
+                    }
+                    Err(e) => {
+                        println!("⚠ Native compilation failed: {}", e);
+                        println!("→ Falling back to VM execution...\n");
+                        tauraro::vm::core::VM::run_file_with_options(
+                            &source,
+                            "<main>",
+                            "vm",
+                            optimization,
+                            strict_types,
+                        )?;
+                    }
+                }
+            } else {
+                // Without --native flag, execute via VM
+                println!("→ Executing via VM backend...\n");
+                tauraro::vm::core::VM::run_file_with_options(
+                    &source,
+                    "<main>",
+                    "vm",
+                    optimization,
+                    strict_types,
+                )?;
+            }
+        }
         _ => return Err(format!("Unsupported backend: {}", backend).into()),
     }
 

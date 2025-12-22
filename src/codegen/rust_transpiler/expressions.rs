@@ -13,8 +13,37 @@ impl RustCodegenContext {
             Expr::BinaryOp { left, op, right } => {
                 let left_code = self.gen_expr(left)?;
                 let right_code = self.gen_expr(right)?;
-                let op_code = self.gen_binary_op(op)?;
-                Ok(format!("({} {} {})", left_code, op_code, right_code))
+                
+                // Use type-safe helper functions for binary operations
+                let op_call = match op {
+                    BinaryOp::Add => format!("tau_add(&{}, &{})", left_code, right_code),
+                    BinaryOp::Sub => format!("tau_sub(&{}, &{})", left_code, right_code),
+                    BinaryOp::Mul => format!("tau_mul(&{}, &{})", left_code, right_code),
+                    BinaryOp::Div => format!("tau_div(&{}, &{})", left_code, right_code),
+                    BinaryOp::FloorDiv => format!("tau_floordiv(&{}, &{})", left_code, right_code),
+                    BinaryOp::Mod => format!("tau_mod(&{}, &{})", left_code, right_code),
+                    BinaryOp::Pow => format!("tau_pow(&{}, &{})", left_code, right_code),
+                    BinaryOp::Eq => format!("TauObject::Bool({} == {})", left_code, right_code),
+                    BinaryOp::Ne | BinaryOp::Neq => format!("TauObject::Bool({} != {})", left_code, right_code),
+                    BinaryOp::Lt => format!("TauObject::Bool({}.compare(&{}).map(|o| o == std::cmp::Ordering::Less).unwrap_or(false))", left_code, right_code),
+                    BinaryOp::Gt => format!("TauObject::Bool({}.compare(&{}).map(|o| o == std::cmp::Ordering::Greater).unwrap_or(false))", left_code, right_code),
+                    BinaryOp::Le | BinaryOp::Lte => format!("TauObject::Bool({}.compare(&{}).map(|o| o != std::cmp::Ordering::Greater).unwrap_or(false))", left_code, right_code),
+                    BinaryOp::Ge | BinaryOp::Gte => format!("TauObject::Bool({}.compare(&{}).map(|o| o != std::cmp::Ordering::Less).unwrap_or(false))", left_code, right_code),
+                    BinaryOp::And => format!("TauObject::Bool({}.is_truthy() && {}.is_truthy())", left_code, right_code),
+                    BinaryOp::Or => format!("if {}.is_truthy() {{ {} }} else {{ {} }}", left_code, left_code, right_code),
+                    BinaryOp::In => format!("{}.contains(&{}).map(TauObject::Bool).unwrap_or(TauObject::Bool(false))", right_code, left_code),
+                    BinaryOp::NotIn => format!("{{ let result = {}.contains(&{}).unwrap_or(false); TauObject::Bool(!result) }}", right_code, left_code),
+                    BinaryOp::Is => format!("TauObject::Bool({} == {})", left_code, right_code),
+                    BinaryOp::IsNot => format!("TauObject::Bool({} != {})", left_code, right_code),
+                    _ => format!("// unsupported operator"),
+                };
+                
+                // Wrap result for error handling
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod | BinaryOp::Pow) {
+                    Ok(format!("({}).unwrap_or(TauObject::None)", op_call))
+                } else {
+                    Ok(op_call)
+                }
             }
             Expr::UnaryOp { op, operand } => {
                 let operand_code = self.gen_expr(operand)?;
@@ -65,14 +94,14 @@ impl RustCodegenContext {
                     .map(|item| self.gen_expr(item))
                     .collect::<Result<Vec<_>>>()?
                     .join(", ");
-                Ok(format!("vec![{}]", items_code))
+                Ok(format!("TauObject::List(vec![{}])", items_code))
             }
             Expr::Tuple(items) => {
                 let items_code = items.iter()
                     .map(|item| self.gen_expr(item))
                     .collect::<Result<Vec<_>>>()?
                     .join(", ");
-                Ok(format!("({})", items_code))
+                Ok(format!("TauObject::List(vec![{}])", items_code))
             }
             Expr::Dict(pairs) => {
                 let items: Result<Vec<_>> = pairs.iter()
@@ -90,23 +119,33 @@ impl RustCodegenContext {
                     })
                     .collect();
                 let items_str = items?.join(", ");
-                Ok(format!("HashMap::from([{}])", items_str))
+                Ok(format!("TauObject::Dict(HashMap::from([{}]))", items_str))
             }
             Expr::Set(items) => {
                 let items_code = items.iter()
                     .map(|item| self.gen_expr(item))
                     .collect::<Result<Vec<_>>>()?
                     .join(", ");
-                Ok(format!("std::collections::HashSet::from([{}])", items_code))
+                Ok(format!("TauObject::List(vec![{}])", items_code))
             }
-            Expr::ListComp { .. } | Expr::DictComp { .. } | Expr::SetComp { .. } | Expr::GeneratorExp { .. } => {
-                Ok("// Comprehension not yet supported".to_string())
+            Expr::ListComp { element, generators } => {
+                self.gen_list_comp(element, generators)
             }
-            Expr::Lambda { .. } => {
-                Ok("// Lambda not yet supported".to_string())
+            Expr::DictComp { key, value, generators } => {
+                self.gen_dict_comp(key, value, generators)
             }
-            Expr::IfExp { .. } => {
-                Ok("// Conditional expression not yet supported".to_string())
+            Expr::SetComp { element, generators } => {
+                self.gen_set_comp(element, generators)
+            }
+            Expr::GeneratorExp { element, generators } => {
+                // Generator expressions can be represented as iterators
+                self.gen_list_comp(element, generators)
+            }
+            Expr::Lambda { params, body } => {
+                self.gen_lambda(params, body)
+            }
+            Expr::IfExp { condition, then_expr, else_expr } => {
+                self.gen_if_expr(condition, then_expr, else_expr)
             }
             Expr::Await(_) => {
                 Ok("// Await not yet supported".to_string())
@@ -117,8 +156,8 @@ impl RustCodegenContext {
             Expr::YieldFrom(_) => {
                 Ok("// YieldFrom not yet supported".to_string())
             }
-            Expr::FormatString { .. } => {
-                Ok("// Format string not yet supported".to_string())
+            Expr::FormatString { parts } => {
+                self.gen_format_string(parts)
             }
             Expr::Starred(_) => {
                 Ok("// Starred expression not yet supported".to_string())
@@ -129,8 +168,8 @@ impl RustCodegenContext {
             Expr::NamedExpr { .. } => {
                 Ok("// Named expression not yet supported".to_string())
             }
-            Expr::Compare { .. } => {
-                Ok("// Compare expression not yet supported".to_string())
+            Expr::Compare { left, ops, comparators } => {
+                self.gen_compare(left, ops, comparators)
             }
         }
     }
@@ -138,15 +177,15 @@ impl RustCodegenContext {
     /// Generate code for a literal value
     pub fn gen_literal(&self, lit: &Literal) -> Result<String> {
         match lit {
-            Literal::None => Ok("None".to_string()),
-            Literal::Bool(b) => Ok(format!("{}", b)),
-            Literal::Int(i) => Ok(format!("{}", i)),
-            Literal::Float(f) => Ok(format!("{}", f)),
-            Literal::String(s) => Ok(format!("\"{}\"", 
+            Literal::None => Ok("TauObject::None".to_string()),
+            Literal::Bool(b) => Ok(format!("TauObject::Bool({})", b)),
+            Literal::Int(i) => Ok(format!("TauObject::Int({})", i)),
+            Literal::Float(f) => Ok(format!("TauObject::Float({})", f)),
+            Literal::String(s) => Ok(format!("TauObject::String(\"{}\".to_string())", 
                 s.replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r"))),
-            Literal::Bytes(_b) => Ok("b\"bytes\".to_vec()".to_string()),
-            Literal::Complex { .. } => Ok("// Complex numbers not supported".to_string()),
-            Literal::Ellipsis => Ok("// Ellipsis not supported".to_string()),
+            Literal::Bytes(_b) => Ok("TauObject::String(\"bytes\".to_string())".to_string()),
+            Literal::Complex { .. } => Ok("TauObject::None // Complex numbers not supported".to_string()),
+            Literal::Ellipsis => Ok("TauObject::None // Ellipsis not supported".to_string()),
         }
     }
 
@@ -191,6 +230,224 @@ impl RustCodegenContext {
             UnaryOp::USub | UnaryOp::Minus => "-",
             UnaryOp::UAdd => "+",
             UnaryOp::Invert | UnaryOp::BitNot => "!",
+        };
+        Ok(op_str.to_string())
+    }
+
+    /// Generate code for a lambda function
+    pub fn gen_lambda(&self, params: &[crate::ast::Param], body: &Expr) -> Result<String> {
+        // Generate parameter list
+        let params_code = if params.is_empty() {
+            String::from("|_|")
+        } else {
+            let param_names: Vec<String> = params.iter()
+                .map(|p| p.name.clone())
+                .collect();
+            format!("|{}|", param_names.join(", "))
+        };
+        
+        let body_code = self.gen_expr(body)?;
+        Ok(format!("{} {}", params_code, body_code))
+    }
+
+    /// Generate code for list comprehension
+    pub fn gen_list_comp(&self, element: &Expr, generators: &[crate::ast::Comprehension]) -> Result<String> {
+        if generators.is_empty() {
+            return Ok("vec![]".to_string());
+        }
+
+        // For now, support single generator with optional filter
+        let gen = &generators[0];
+        let iter_code = self.gen_expr(&gen.iter)?;
+        let element_code = self.gen_expr(element)?;
+        
+        let mut code = format!("{}.iter()", iter_code);
+        
+        // Add filters if any
+        for filter_expr in &gen.ifs {
+            let filter_code = self.gen_expr(filter_expr)?;
+            // Replace the target variable in the filter with the iterator variable
+            let filter_code = filter_code.replace(&gen.target, &gen.target);
+            code = format!("{}.filter(|&{}| {})", code, gen.target, filter_code);
+        }
+        
+        // Map to the element expression
+        let element_code = element_code.replace(&gen.target, &gen.target);
+        code = format!("{}.map(|&{}| {}).collect::<Vec<_>>()", code, gen.target, element_code);
+        
+        Ok(code)
+    }
+
+    /// Generate code for dict comprehension
+    pub fn gen_dict_comp(&self, key: &Expr, value: &Expr, generators: &[crate::ast::Comprehension]) -> Result<String> {
+        if generators.is_empty() {
+            return Ok("HashMap::new()".to_string());
+        }
+
+        let gen = &generators[0];
+        let iter_code = self.gen_expr(&gen.iter)?;
+        let key_code = self.gen_expr(key)?;
+        let value_code = self.gen_expr(value)?;
+        
+        let mut code = format!("{}.iter()", iter_code);
+        
+        // Add filters if any
+        for filter_expr in &gen.ifs {
+            let filter_code = self.gen_expr(filter_expr)?;
+            code = format!("{}.filter(|&{}| {})", code, gen.target, filter_code);
+        }
+        
+        // Map to (key, value) pairs
+        code = format!("{}.map(|&{}| ({}, {})).collect::<HashMap<_, _>>()", 
+            code, gen.target, key_code, value_code);
+        
+        Ok(code)
+    }
+
+    /// Generate code for set comprehension
+    pub fn gen_set_comp(&self, element: &Expr, generators: &[crate::ast::Comprehension]) -> Result<String> {
+        if generators.is_empty() {
+            return Ok("std::collections::HashSet::new()".to_string());
+        }
+
+        let gen = &generators[0];
+        let iter_code = self.gen_expr(&gen.iter)?;
+        let element_code = self.gen_expr(element)?;
+        
+        let mut code = format!("{}.iter()", iter_code);
+        
+        // Add filters if any
+        for filter_expr in &gen.ifs {
+            let filter_code = self.gen_expr(filter_expr)?;
+            code = format!("{}.filter(|&{}| {})", code, gen.target, filter_code);
+        }
+        
+        // Map to the element expression
+        code = format!("{}.map(|&{}| {}).collect::<std::collections::HashSet<_>>()", 
+            code, gen.target, element_code);
+        
+        Ok(code)
+    }
+
+    /// Generate code for conditional expression (ternary)
+    pub fn gen_if_expr(&self, condition: &Expr, then_expr: &Expr, else_expr: &Expr) -> Result<String> {
+        let cond_code = self.gen_expr(condition)?;
+        let then_code = self.gen_expr(then_expr)?;
+        let else_code = self.gen_expr(else_expr)?;
+        
+        Ok(format!("if {} {{ {} }} else {{ {} }}", cond_code, then_code, else_code))
+    }
+
+    /// Generate code for format string (f-string)
+    pub fn gen_format_string(&self, parts: &[crate::ast::FormatPart]) -> Result<String> {
+        if parts.is_empty() {
+            return Ok("String::new()".to_string());
+        }
+
+        let mut format_parts = Vec::new();
+        
+        for part in parts {
+            match part {
+                crate::ast::FormatPart::String(s) => {
+                    format_parts.push(format!("\"{}\"", s.replace("\"", "\\\"")));
+                }
+                crate::ast::FormatPart::Expression { expr, format_spec, conversion: _ } => {
+                    let expr_code = self.gen_expr(expr)?;
+                    
+                    if let Some(spec) = format_spec {
+                        // Handle format specifiers like :.2f
+                        if spec.starts_with(".") && spec.ends_with("f") {
+                            // Float formatting
+                            format_parts.push(format!("format!(\"{{:{}}}\", {})", spec, expr_code));
+                        } else {
+                            format_parts.push(format!("format!(\"{{}}\", {})", expr_code));
+                        }
+                    } else {
+                        format_parts.push(format!("format!(\"{{}}\", {})", expr_code));
+                    }
+                }
+            }
+        }
+        
+        if format_parts.len() == 1 {
+            Ok(format_parts[0].clone())
+        } else {
+            Ok(format!("format!(\"{{}}\", [{}].join(\"\"))", format_parts.join(", ")))
+        }
+    }
+
+    /// Generate code for comparison expression
+    pub fn gen_compare(&self, left: &Expr, ops: &[crate::ast::CompareOp], comparators: &[Expr]) -> Result<String> {
+        if ops.is_empty() || comparators.is_empty() {
+            return self.gen_expr(left);
+        }
+
+        let mut code = String::new();
+        let mut current_left = self.gen_expr(left)?;
+        
+        for (i, (op, right)) in ops.iter().zip(comparators.iter()).enumerate() {
+            let right_code = self.gen_expr(right)?;
+            
+            let comparison = match op {
+                crate::ast::CompareOp::In => {
+                    // Use contains() method on right operand
+                    format!("{}.contains(&{}).map_err(|e| panic!(\"{{}}\" , e)).unwrap_or(false)", right_code, current_left)
+                }
+                crate::ast::CompareOp::NotIn => {
+                    // Negate contains() result
+                    format!("!{}.contains(&{}).map_err(|e| panic!(\"{{}}\" , e)).unwrap_or(false)", right_code, current_left)
+                }
+                crate::ast::CompareOp::Eq => {
+                    format!("{} == {}", current_left, right_code)
+                }
+                crate::ast::CompareOp::NotEq => {
+                    format!("{} != {}", current_left, right_code)
+                }
+                crate::ast::CompareOp::Lt => {
+                    format!("({}.compare(&{}).map(|ord| ord == std::cmp::Ordering::Less).unwrap_or(false))", current_left, right_code)
+                }
+                crate::ast::CompareOp::LtE => {
+                    format!("({}.compare(&{}).map(|ord| ord != std::cmp::Ordering::Greater).unwrap_or(false))", current_left, right_code)
+                }
+                crate::ast::CompareOp::Gt => {
+                    format!("({}.compare(&{}).map(|ord| ord == std::cmp::Ordering::Greater).unwrap_or(false))", current_left, right_code)
+                }
+                crate::ast::CompareOp::GtE => {
+                    format!("({}.compare(&{}).map(|ord| ord != std::cmp::Ordering::Less).unwrap_or(false))", current_left, right_code)
+                }
+                crate::ast::CompareOp::Is => {
+                    format!("{} == {}", current_left, right_code)
+                }
+                crate::ast::CompareOp::IsNot => {
+                    format!("{} != {}", current_left, right_code)
+                }
+            };
+            
+            if i == 0 {
+                code = comparison;
+            } else {
+                code = format!("{} && {}", code, comparison);
+            }
+            
+            current_left = right_code;
+        }
+        
+        Ok(format!("({})", code))
+    }
+
+    /// Generate code for comparison operator
+    pub fn gen_compare_op(&self, op: &crate::ast::CompareOp) -> Result<String> {
+        use crate::ast::CompareOp;
+        let op_str = match op {
+            CompareOp::Eq => "==",
+            CompareOp::NotEq => "!=",
+            CompareOp::Lt => "<",
+            CompareOp::LtE => "<=",
+            CompareOp::Gt => ">",
+            CompareOp::GtE => ">=",
+            CompareOp::In | CompareOp::NotIn => return Ok("".to_string()), // Handled in gen_compare
+            CompareOp::Is => "==",
+            CompareOp::IsNot => "!=",
         };
         Ok(op_str.to_string())
     }

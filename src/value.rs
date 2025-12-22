@@ -1569,6 +1569,46 @@ impl Value {
                     _ => Err(anyhow::anyhow!("count() argument must be a string")),
                 }
             }
+            "isalpha" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("isalpha() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_alphabetic())))
+            }
+            "isdigit" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("isdigit() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_numeric())))
+            }
+            "isalnum" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("isalnum() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_alphanumeric())))
+            }
+            "isspace" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("isspace() takes no arguments ({} given)", args.len()));
+                }
+                Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_whitespace())))
+            }
+            "isupper" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("isupper() takes no arguments ({} given)", args.len()));
+                }
+                let has_cased = s.chars().any(|c| c.is_alphabetic());
+                let all_upper = s.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase());
+                Ok(Value::Bool(has_cased && all_upper))
+            }
+            "islower" => {
+                if !args.is_empty() {
+                    return Err(anyhow::anyhow!("islower() takes no arguments ({} given)", args.len()));
+                }
+                let has_cased = s.chars().any(|c| c.is_alphabetic());
+                let all_lower = s.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_lowercase());
+                Ok(Value::Bool(has_cased && all_lower))
+            }
             _ => Err(anyhow::anyhow!("'str' object has no attribute '{}'", method_name)),
         }
     }
