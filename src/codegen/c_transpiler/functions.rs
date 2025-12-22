@@ -288,6 +288,12 @@ pub fn generate_instruction(
             Ok(format!("tauraro_value_t* {} = tauraro_str(\"\"); // Format string", result))
         }
         
+        // F-string with type preservation
+        IRInstruction::FormatStringWithType { parts, result, original_type: _, original_var: _ } => {
+            local_vars.insert(result.clone(), "tauraro_value_t*".to_string());
+            Ok(format!("tauraro_value_t* {} = tauraro_str(\"\"); // Format string with type", result))
+        }
+        
         // Context manager (with statement)
         IRInstruction::With { context_expr, alias, body } => {
             let mut code = String::new();

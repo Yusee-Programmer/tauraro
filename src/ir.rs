@@ -168,6 +168,14 @@ pub enum IRInstruction {
         result: String,
     },
     
+    // F-string with type preservation (preserves if single expression is numeric)
+    FormatStringWithType {
+        parts: Vec<IRFormatPart>,
+        result: String,
+        original_type: Option<Type>, // Preserves the type if single expression
+        original_var: Option<String>, // Preserves reference to original typed variable
+    },
+    
     // Context manager (with statement)
     With {
         context_expr: String,
@@ -259,6 +267,13 @@ impl Generator {
             current_class: None,
             temp_var_counter: 0,
         }
+    }
+
+    /// Generate a unique temporary variable name
+    fn new_temp_var(&mut self) -> String {
+        let var_name = format!("temp_var_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        var_name
     }
 
     /// Find which class defines a method by searching up the inheritance chain
@@ -521,8 +536,8 @@ impl Generator {
                             });
                         }
                     },
-                    Expr::ListComp { .. } | Expr::DictComp { .. } | Expr::SetComp { .. } | Expr::GeneratorExp { .. } | Expr::Lambda { .. } => {
-                        // For comprehensions, generator expressions, and lambdas, use process_expression_to_result directly
+                    Expr::ListComp { .. } | Expr::DictComp { .. } | Expr::SetComp { .. } | Expr::GeneratorExp { .. } | Expr::Lambda { .. } | Expr::Subscript { .. } => {
+                        // For comprehensions, generator expressions, lambdas, and subscript operations, use process_expression_to_result directly
                         self.process_expression_to_result(module, &value, &temp_var)?;
                     },
                     _ => {
@@ -2032,8 +2047,10 @@ impl Generator {
                     "replace", "startswith", "endswith", "find", "title", "capitalize", "swapcase",
                     "isdigit", "isalpha", "isalnum", "isspace", "isupper", "islower", "count", 
                     "center", "ljust", "rjust", "zfill",
-                    "append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) {
-                    // Built-in methods for strings and lists
+                    "append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear",
+                    "get", "keys", "values", "items", "update",
+                    "add", "discard", "union", "intersection", "difference"].contains(&method.as_str()) {
+                    // Built-in methods for strings, lists, dicts, and sets
                     let object_var = "temp_object".to_string();
                     self.process_expression_to_result(module, &object, &object_var)?;
 
@@ -2045,8 +2062,16 @@ impl Generator {
                         arg_names.push(arg_result);
                     }
 
-                    // Built-in methods use text__ or lst__ prefix based on method name
-                    let func_prefix = if ["append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) { "lst" } else { "text" };
+                    // Built-in methods use text__, lst__, dict__, or set__ prefix based on method name
+                    let func_prefix = if ["append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) { 
+                        "lst" 
+                    } else if ["get", "keys", "values", "items", "update"].contains(&method.as_str()) {
+                        "dict"
+                    } else if ["add", "discard", "union", "intersection", "difference"].contains(&method.as_str()) {
+                        "set"
+                    } else { 
+                        "text" 
+                    };
                     let func_name = format!("{}__{}", func_prefix, method);
                     let mut method_args = vec![object_var];
                     method_args.extend(arg_names);
@@ -2524,8 +2549,10 @@ impl Generator {
                     "replace", "startswith", "endswith", "find", "title", "capitalize", "swapcase",
                     "isdigit", "isalpha", "isalnum", "isspace", "isupper", "islower", "count", 
                     "center", "ljust", "rjust", "zfill",
-                    "append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) {
-                    // Built-in methods for strings and lists
+                    "append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear",
+                    "get", "keys", "values", "items", "update",
+                    "add", "discard", "union", "intersection", "difference"].contains(&method.as_str()) {
+                    // Built-in methods for strings, lists, dicts, and sets
                     let object_var = format!("{}_object", result_var);
                     self.process_expression_to_result(module, &object, &object_var)?;
 
@@ -2537,11 +2564,30 @@ impl Generator {
                         arg_names.push(arg_result);
                     }
 
-                    // Built-in methods use text__ or lst__ prefix based on method name
-                    let func_prefix = if ["append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) { "lst" } else { "text" };
+                    // Built-in methods use text__, lst__, dict__, or set__ prefix based on method name
+                    let func_prefix = if ["append", "pop", "insert", "remove", "extend", "index", "reverse", "sort", "copy", "clear"].contains(&method.as_str()) { 
+                        "lst" 
+                    } else if ["get", "keys", "values", "items", "update"].contains(&method.as_str()) {
+                        "dict"
+                    } else if ["add", "discard", "union", "intersection", "difference"].contains(&method.as_str()) {
+                        "set"
+                    } else { 
+                        "text" 
+                    };
                     let func_name = format!("{}__{}", func_prefix, method);
                     let mut method_args = vec![object_var];
-                    method_args.extend(arg_names);
+                    
+                    // Add default arguments for methods that require them before extending
+                    if method == "split" && arg_names.is_empty() {
+                        // split() with no arguments should split on whitespace
+                        module.globals.push(IRInstruction::LoadConst {
+                            value: Value::Str(" ".to_string()),
+                            result: format!("{}_default_sep", result_var)
+                        });
+                        method_args.push(format!("{}_default_sep", result_var));
+                    } else {
+                        method_args.extend(arg_names);
+                    }
 
                     module.globals.push(IRInstruction::Call {
                         func: func_name,
@@ -2870,6 +2916,53 @@ impl Generator {
                         key_result: key_result_var,
                         value_instrs,
                         value_result: value_result_var,
+                        variable: first_gen.target.clone(),
+                        iterable: iterable_var,
+                        condition_instrs,
+                        condition_result: condition_result_var,
+                        result: result_var.to_string()
+                    });
+                }
+            },
+            Expr::SetComp { element, generators } => {
+                // Handle set comprehension: {expr for var in iterable if condition}
+                // Set comprehensions are similar to list comprehensions but with deduplication
+                if generators.is_empty() {
+                    module.globals.push(IRInstruction::ListCreate {
+                        elements: vec![],
+                        result: result_var.to_string()
+                    });
+                } else {
+                    let first_gen = &generators[0];
+                    
+                    // Process the iterable
+                    let iterable_var = format!("{}_iterable", result_var);
+                    self.process_expression_to_result(module, &first_gen.iter, &iterable_var)?;
+                    
+                    // Compile element expression to IR instructions
+                    let element_result_var = format!("{}_elem", result_var);
+                    let mut element_instrs = Vec::new();
+                    
+                    let saved_len = module.globals.len();
+                    self.process_expression_to_result(module, element, &element_result_var)?;
+                    element_instrs = module.globals.drain(saved_len..).collect();
+                    
+                    // Compile condition if present
+                    let mut condition_instrs = Vec::new();
+                    let condition_result_var = if !first_gen.ifs.is_empty() {
+                        let cond_var = format!("{}_cond", result_var);
+                        let saved_len = module.globals.len();
+                        self.process_expression_to_result(module, &first_gen.ifs[0], &cond_var)?;
+                        condition_instrs = module.globals.drain(saved_len..).collect();
+                        Some(cond_var)
+                    } else {
+                        None
+                    };
+                    
+                    // Use ListComprehension for set (transpiler will handle deduplication)
+                    module.globals.push(IRInstruction::ListComprehension {
+                        element_instrs,
+                        element_result: element_result_var,
                         variable: first_gen.target.clone(),
                         iterable: iterable_var,
                         condition_instrs,

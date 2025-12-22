@@ -678,6 +678,56 @@ fn compile_file(
                 }
             }
         }
+        "rust" => {
+            use tauraro::codegen::rust_transpiler::compiler::{RustCompiler, RustCompileOptions};
+
+            let rust_code = {
+                let compiler = RustCompiler::new(RustCompileOptions::default());
+                compiler.compile_formatted(ir_module)?
+            };
+
+            let output_path = if let Some(output_file) = output {
+                output_file.clone()
+            } else {
+                PathBuf::from(format!(
+                    "{}.rs",
+                    file.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("output")
+                ))
+            };
+
+            std::fs::write(&output_path, &rust_code)?;
+            println!("Rust code generated successfully: {}", output_path.display());
+
+            // If --native flag is set, compile the generated Rust code to an executable
+            if native {
+                let executable_path = if let Some(output_file) = output {
+                    let stem = output_file
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("output");
+                    #[cfg(target_os = "windows")]
+                    let exe_name = format!("{}.exe", stem);
+                    #[cfg(not(target_os = "windows"))]
+                    let exe_name = stem.to_string();
+                    output_file.parent().unwrap_or_else(|| std::path::Path::new(".")).join(&exe_name)
+                } else {
+                    let stem = file
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("output");
+                    #[cfg(target_os = "windows")]
+                    let exe_name = format!("{}.exe", stem);
+                    #[cfg(not(target_os = "windows"))]
+                    let exe_name = stem.to_string();
+                    file.parent().unwrap_or_else(|| std::path::Path::new(".")).join(&exe_name)
+                };
+
+                compile_rust_to_executable(&output_path, &executable_path)?;
+                println!("Executable compiled successfully: {}", executable_path.display());
+            }
+        }
         "wasm" => {
             #[cfg(feature = "wasm")]
             {
@@ -703,10 +753,114 @@ fn compile_file(
                 )?;
             }
         }
+        "rust" => {
+            // For Rust backend, generate Rust source code (IR to Rust transpilation)
+            use tauraro::codegen::rust_transpiler::RustTranspiler;
+            
+            let output_path = output.map_or_else(|| PathBuf::from("output.rs"), |p| p.clone());
+            
+            // Transpile IR module to Rust code
+            let mut rust_transpiler = RustTranspiler::new("tauraro_module".to_string());
+            let rust_code = rust_transpiler.transpile(ir_module)?;
+            
+            // Write Rust code to output file
+            std::fs::write(&output_path, &rust_code)?;
+            println!("✓ Rust code generated: {}", output_path.display());
+            
+            // If --native flag is set, try to compile with rustc and execute
+            if native {
+                println!("→ Attempting native Rust compilation with rustc...");
+                
+                // Determine executable output path
+                let exe_name = if cfg!(windows) {
+                    output_path.with_extension("exe")
+                } else {
+                    output_path.with_extension("")
+                };
+                
+                // Try to compile with rustc
+                match compile_rust_to_executable(&output_path, &exe_name) {
+                    Ok(_) => {
+                        println!("✓ Compilation successful!");
+                        println!("→ Executing native binary...\n");
+                        
+                        // Execute the compiled binary
+                        use std::process::Command;
+                        let output = Command::new(&exe_name)
+                            .output()
+                            .map_err(|e| format!("Failed to execute binary: {}", e))?;
+                        
+                        print!("{}", String::from_utf8_lossy(&output.stdout));
+                        if !output.stderr.is_empty() {
+                            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                        }
+                    }
+                    Err(e) => {
+                        println!("⚠ Native compilation failed: {}", e);
+                        println!("→ Falling back to VM execution...\n");
+                        tauraro::vm::core::VM::run_file_with_options(
+                            &source,
+                            "<main>",
+                            "vm",
+                            optimization,
+                            strict_types,
+                        )?;
+                    }
+                }
+            } else {
+                // Without --native flag, execute via VM
+                println!("→ Executing via VM backend...\n");
+                tauraro::vm::core::VM::run_file_with_options(
+                    &source,
+                    "<main>",
+                    "vm",
+                    optimization,
+                    strict_types,
+                )?;
+            }
+        }
         _ => return Err(format!("Unsupported backend: {}", backend).into()),
     }
 
     println!("Compilation successful!");
+    Ok(())
+}
+
+/// Compile a Rust source file to an executable using rustc
+fn compile_rust_to_executable(
+    rust_source: &PathBuf,
+    executable_path: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::process::Command;
+
+    // Try to compile using rustc with Rust 2021 edition to handle async/await
+    let mut cmd = Command::new("rustc");
+    cmd.arg("--edition")
+        .arg("2021")
+        .arg(rust_source)
+        .arg("-o")
+        .arg(executable_path);
+
+    let output = cmd.output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        
+        // Check if it's a dependency issue - we could use cargo build instead
+        if stderr.contains("unresolved") || stderr.contains("no `Regex`") {
+            eprintln!("Note: Generated Rust code has unresolved external dependencies.");
+            eprintln!("For production use, create a Cargo.toml and use 'cargo build --release'");
+            eprintln!("\nThe .rs file has been generated at: {}", rust_source.display());
+        }
+        
+        return Err(format!(
+            "Failed to compile Rust code with rustc:\n{}\n{}",
+            stdout, stderr
+        )
+        .into());
+    }
+
     Ok(())
 }
 

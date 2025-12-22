@@ -8876,6 +8876,34 @@ impl SuperBytecodeVM {
                         
                         Value::Str(result)
                     }
+                    "isalpha" => {
+                        // Check if all characters are alphabetic
+                        Value::Bool(!s_clone.is_empty() && s_clone.chars().all(|c| c.is_alphabetic()))
+                    }
+                    "isdigit" => {
+                        // Check if all characters are numeric
+                        Value::Bool(!s_clone.is_empty() && s_clone.chars().all(|c| c.is_numeric()))
+                    }
+                    "isalnum" => {
+                        // Check if all characters are alphanumeric
+                        Value::Bool(!s_clone.is_empty() && s_clone.chars().all(|c| c.is_alphanumeric()))
+                    }
+                    "isspace" => {
+                        // Check if all characters are whitespace
+                        Value::Bool(!s_clone.is_empty() && s_clone.chars().all(|c| c.is_whitespace()))
+                    }
+                    "isupper" => {
+                        // Check if all cased characters are uppercase
+                        let has_cased = s_clone.chars().any(|c| c.is_alphabetic());
+                        let all_upper = s_clone.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase());
+                        Value::Bool(has_cased && all_upper)
+                    }
+                    "islower" => {
+                        // Check if all cased characters are lowercase
+                        let has_cased = s_clone.chars().any(|c| c.is_alphabetic());
+                        let all_lower = s_clone.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_lowercase());
+                        Value::Bool(has_cased && all_lower)
+                    }
                     _ => {
                         return Err(anyhow!("String has no method '{}'", method_name));
                     }
