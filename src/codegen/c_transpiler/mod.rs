@@ -3760,25 +3760,12 @@ impl CTranspiler {
                 
                 output.push_str(&format!("{}// List comprehension\n", ind));
                 
-                // Declare the result variable
-                output.push_str(&format!("{}TauValue {};\n", ind, resolved_result));
+                // Don't declare result locally - it should be at function scope
+                self.declared_vars.insert(resolved_result.clone());
                 
                 output.push_str(&format!("{}TauList* _lc_{} = tauraro_create_list(16);\n", ind, self.temp_var_counter));
                 self.temp_var_counter += 1;
                 let lc_list = format!("_lc_{}", self.temp_var_counter - 1);
-                
-                // Collect all temporary variables that will be used in the loop
-                let mut all_temp_vars = std::collections::HashSet::new();
-                all_temp_vars.extend(self.collect_temp_vars_from_instructions(element_instrs));
-                all_temp_vars.extend(self.collect_temp_vars_from_instructions(condition_instrs));
-                
-                // Pre-declare loop temps before the loop
-                let loop_ind = format!("{}    ", ind);
-                for temp_var in &all_temp_vars {
-                    if temp_var != &resolved_var && temp_var != &resolved_iterable && temp_var != &resolved_result {
-                        output.push_str(&format!("{}TauValue {};\n", loop_ind, temp_var));
-                    }
-                }
                 
                 // Iterate over source
                 output.push_str(&format!("{}if ({}.type == 4 && {}.value.list != NULL) {{\n", ind, resolved_iterable, resolved_iterable));
@@ -3789,7 +3776,7 @@ impl CTranspiler {
                 if !condition_instrs.is_empty() {
                     if let Some(cond_result) = condition_result {
                         let cond_res = self.resolve_var_name(cond_result);
-                        // Compile condition instructions
+                        // Compile condition instructions - they will declare their own temp vars
                         for instr in condition_instrs {
                             output.push_str(&self.transpile_instruction(instr, indent_level + 2)?);
                         }
@@ -3826,26 +3813,12 @@ impl CTranspiler {
                 
                 output.push_str(&format!("{}// Dict comprehension\n", ind));
                 
-                // Declare the result variable
-                output.push_str(&format!("{}TauValue {};\n", ind, resolved_result));
+                // Don't declare result locally - it should be at function scope
+                self.declared_vars.insert(resolved_result.clone());
                 
                 output.push_str(&format!("{}TauDict* _dc_{} = tauraro_create_dict();\n", ind, self.temp_var_counter));
                 self.temp_var_counter += 1;
                 let dc_dict = format!("_dc_{}", self.temp_var_counter - 1);
-                
-                // Collect all temporary variables that will be used in the loop
-                let mut all_temp_vars = std::collections::HashSet::new();
-                all_temp_vars.extend(self.collect_temp_vars_from_instructions(key_instrs));
-                all_temp_vars.extend(self.collect_temp_vars_from_instructions(value_instrs));
-                all_temp_vars.extend(self.collect_temp_vars_from_instructions(condition_instrs));
-                
-                // Pre-declare loop temps before the loop
-                let loop_ind = format!("{}    ", ind);
-                for temp_var in &all_temp_vars {
-                    if temp_var != &resolved_var && temp_var != &resolved_iterable && temp_var != &resolved_result {
-                        output.push_str(&format!("{}TauValue {};\n", loop_ind, temp_var));
-                    }
-                }
                 
                 // Iterate over source
                 output.push_str(&format!("{}if ({}.type == 4 && {}.value.list != NULL) {{\n", ind, resolved_iterable, resolved_iterable));
@@ -3856,7 +3829,7 @@ impl CTranspiler {
                 if !condition_instrs.is_empty() {
                     if let Some(cond_result) = condition_result {
                         let cond_res = self.resolve_var_name(cond_result);
-                        // Compile condition instructions
+                        // Compile condition instructions - they will declare their own temp vars
                         for instr in condition_instrs {
                             output.push_str(&self.transpile_instruction(instr, indent_level + 2)?);
                         }
