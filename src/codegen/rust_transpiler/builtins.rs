@@ -245,6 +245,119 @@ impl RustCodegenContext {
         self.add_import(&format!("use crate::modules::{}::{{{}}};", module, items_str));
         Ok(())
     }
+
+    /// Generate string method call
+    pub fn gen_string_method(&self, object: &str, method: &str, args: Vec<&str>) -> String {
+        match method {
+            "upper" => format!("{}.to_uppercase()", object),
+            "lower" => format!("{}.to_lowercase()", object),
+            "strip" => format!("{}.trim().to_string()", object),
+            "split" => {
+                if args.is_empty() {
+                    format!("{}.split_whitespace().collect::<Vec<_>>()", object)
+                } else {
+                    format!("{}.split({})", object, args[0])
+                }
+            }
+            "join" => {
+                if args.is_empty() {
+                    "// join requires iterable argument".to_string()
+                } else {
+                    format!("{}.join({})", object, args[0])
+                }
+            }
+            "replace" => {
+                if args.len() >= 2 {
+                    format!("{}.replace({}, {})", object, args[0], args[1])
+                } else {
+                    "// replace requires old and new arguments".to_string()
+                }
+            }
+            "startswith" => {
+                if args.is_empty() {
+                    "false".to_string()
+                } else {
+                    format!("{}.starts_with({})", object, args[0])
+                }
+            }
+            "endswith" => {
+                if args.is_empty() {
+                    "false".to_string()
+                } else {
+                    format!("{}.ends_with({})", object, args[0])
+                }
+            }
+            "find" => {
+                if args.is_empty() {
+                    "-1".to_string()
+                } else {
+                    format!("{}.find({}).map(|i| i as i64).unwrap_or(-1)", object, args[0])
+                }
+            }
+            _ => format!("// {} not implemented for strings", method),
+        }
+    }
+
+    /// Generate list method call
+    pub fn gen_list_method(&self, object: &str, method: &str, args: Vec<&str>) -> String {
+        match method {
+            "append" => {
+                if args.is_empty() {
+                    format!("{}.push(/* arg */)", object)
+                } else {
+                    format!("{}.push({})", object, args[0])
+                }
+            }
+            "extend" => {
+                if args.is_empty() {
+                    format!("{}.extend(vec![])", object)
+                } else {
+                    format!("{}.extend({})", object, args[0])
+                }
+            }
+            "remove" => {
+                if args.is_empty() {
+                    format!("{}.pop()", object)
+                } else {
+                    format!("{}.remove({})", object, args[0])
+                }
+            }
+            "pop" => format!("{}.pop()", object),
+            "sort" => format!("{}.sort()", object),
+            "reverse" => format!("{}.reverse()", object),
+            "clear" => format!("{}.clear()", object),
+            "copy" => format!("{}.clone()", object),
+            _ => format!("// {} not implemented for lists", method),
+        }
+    }
+
+    /// Generate dict method call
+    pub fn gen_dict_method(&self, object: &str, method: &str, args: Vec<&str>) -> String {
+        match method {
+            "keys" => format!("{}.keys().cloned().collect::<Vec<_>>()", object),
+            "values" => format!("{}.values().cloned().collect::<Vec<_>>()", object),
+            "items" => format!("{}.iter().collect::<Vec<_>>()", object),
+            "get" => {
+                if args.is_empty() {
+                    format!("{}.get(&\"\")", object)
+                } else if args.len() == 1 {
+                    format!("{}.get({}).cloned()", object, args[0])
+                } else {
+                    format!("{}.get({}).cloned().or(Some({}))", object, args[0], args[1])
+                }
+            }
+            "pop" => {
+                if args.is_empty() {
+                    "// pop requires key".to_string()
+                } else {
+                    format!("{}.remove({})", object, args[0])
+                }
+            }
+            "clear" => format!("{}.clear()", object),
+            "copy" => format!("{}.clone()", object),
+            _ => format!("// {} not implemented for dicts", method),
+        }
+    }
 }
 
 #[cfg(test)]
