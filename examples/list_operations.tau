@@ -1,0 +1,27 @@
+# List Operations Example
+print("=== List Creation and Access ===")
+numbers = [1, 2, 3, 4, 5]
+print("numbers = " + str(numbers))
+print("length = " + str(len(numbers)))
+print("first element = " + str(numbers[0]))
+print("last element = " + str(numbers[4]))
+
+print("\n=== List Methods ===")
+print("sum = " + str(sum(numbers)))
+print("max = " + str(max(numbers)))
+print("min = " + str(min(numbers)))
+
+print("\n=== List Comprehension ===")
+squares = [x * x for x in numbers]
+print("squares = " + str(squares))
+
+evens = [x for x in numbers if x % 2 == 0]
+print("evens = " + str(evens))
+
+doubled = [x * 2 for x in numbers]
+print("doubled = " + str(doubled))
+
+print("\n=== Iteration ===")
+print("Elements in order:")
+for num in numbers:
+    print("  " + str(num))

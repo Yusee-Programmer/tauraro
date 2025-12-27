@@ -1,0 +1,31 @@
+# Mathematical Operations Example
+print("=== Basic Arithmetic ===")
+a = 15
+b = 7
+print("a = " + str(a))
+print("b = " + str(b))
+print("a + b = " + str(a + b))
+print("a - b = " + str(a - b))
+print("a * b = " + str(a * b))
+print("a / b = " + str(a / b))
+print("a // b = " + str(a // b))
+print("a % b = " + str(a % b))
+
+print("\n=== Power and Square Root ===")
+x = 5
+y = 2
+print(str(x) + "^" + str(y) + " = " + str(x ** y))
+
+print("\n=== Comparisons ===")
+print(str(a) + " > " + str(b) + " is " + str(a > b))
+print(str(a) + " < " + str(b) + " is " + str(a < b))
+print(str(a) + " == " + str(a) + " is " + str(a == a))
+
+print("\n=== Factorial ===")
+def factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+for num in range(1, 6):
+    print(str(num) + "! = " + str(factorial(num)))
