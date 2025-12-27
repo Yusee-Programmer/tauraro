@@ -451,4 +451,124 @@ impl RustCodegenContext {
         };
         Ok(op_str.to_string())
     }
+
+    /// Generate improved lambda function with proper type handling
+    pub fn gen_lambda_improved(&self, params: &[crate::ast::Param], body: &Expr) -> Result<String> {
+        if params.is_empty() {
+            let body_code = self.gen_expr(body)?;
+            return Ok(format!("(|_| {{ {} }})", body_code));
+        }
+
+        let param_names: Vec<String> = params
+            .iter()
+            .filter(|p| {
+                !matches!(p.kind, crate::ast::ParamKind::VarArgs | crate::ast::ParamKind::VarKwargs)
+            })
+            .map(|p| p.name.clone())
+            .collect();
+
+        let body_code = self.gen_expr(body)?;
+        Ok(format!("|{}| {{ {} }}", param_names.join(", "), body_code))
+    }
+
+    /// Generate list comprehension with proper variable scoping
+    pub fn gen_list_comp_improved(
+        &self,
+        element: &Expr,
+        generators: &[crate::ast::Comprehension],
+    ) -> Result<String> {
+        if generators.is_empty() {
+            return Ok("vec![]".to_string());
+        }
+
+        if generators.len() == 1 {
+            let gen = &generators[0];
+            let iter_code = self.gen_expr(&gen.iter)?;
+
+            let mut result = format!("{{ let __items = {}; __items.iter()", iter_code);
+
+            for filter_expr in &gen.ifs {
+                let filter_code = self.gen_expr(filter_expr)?;
+                result = format!("{}.filter(|__item| {{ let {} = __item; {} }})", result, gen.target, filter_code);
+            }
+
+            let element_code = self.gen_expr(element)?;
+            result = format!("{}.map(|__item| {{ let {} = __item; {} }}).collect::<Vec<_>>() }}", 
+                result, gen.target, element_code);
+
+            Ok(result)
+        } else {
+            // Multiple generators - handle nested loops with flat_map
+            Ok("vec![]".to_string()) // Placeholder for nested comprehensions
+        }
+    }
+
+    /// Generate dict comprehension with proper scoping
+    pub fn gen_dict_comp_improved(
+        &self,
+        key: &Expr,
+        value: &Expr,
+        generators: &[crate::ast::Comprehension],
+    ) -> Result<String> {
+        if generators.is_empty() {
+            return Ok("std::collections::HashMap::new()".to_string());
+        }
+
+        let gen = &generators[0];
+        let iter_code = self.gen_expr(&gen.iter)?;
+
+        let mut result = format!(
+            "{{ let __items = {}; __items.iter().filter_map(|__item| {{ let {} = __item;",
+            iter_code, gen.target
+        );
+
+        let key_code = self.gen_expr(key)?;
+        let value_code = self.gen_expr(value)?;
+
+        result = format!(
+            "{}Some(({}, {}))}}",
+            result,
+            key_code,
+            value_code
+        );
+
+        result.push_str(").collect::<std::collections::HashMap<_, _>>() }");
+
+        Ok(result)
+    }
+
+    /// Generate set comprehension with proper scoping
+    pub fn gen_set_comp_improved(
+        &self,
+        element: &Expr,
+        generators: &[crate::ast::Comprehension],
+    ) -> Result<String> {
+        if generators.is_empty() {
+            return Ok("std::collections::HashSet::new()".to_string());
+        }
+
+        let gen = &generators[0];
+        let iter_code = self.gen_expr(&gen.iter)?;
+
+        let mut result = format!(
+            "{{ let __items = {}; __items.iter()",
+            iter_code
+        );
+
+        for filter_expr in &gen.ifs {
+            let filter_code = self.gen_expr(filter_expr)?;
+            result = format!(
+                "{}.filter(|__item| {{ let {} = __item; {} }})",
+                result, gen.target, filter_code
+            );
+        }
+
+        let element_code = self.gen_expr(element)?;
+        result = format!(
+            "{}.map(|__item| {{ let {} = __item; {} }}).collect::<std::collections::HashSet<_>>() }}",
+            result, gen.target, element_code
+        );
+
+        Ok(result)
+    }
 }

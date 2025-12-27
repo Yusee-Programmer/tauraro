@@ -34,13 +34,13 @@ enum Commands {
         /// Input file
         file: PathBuf,
 
-        /// Backend to use (vm, llvm, c, wasm)
-        #[arg(short, long, default_value = "vm")]
-        backend: String,
+        /// Backend to use (vm, rust, c, wasm)
+        #[arg(short, long)]
+        backend: Option<String>,
 
         /// Optimization level (0-3)
-        #[arg(short, long, default_value = "0")]
-        optimization: u8,
+        #[arg(short, long)]
+        optimization: Option<u8>,
 
         /// Enable strict type checking
         #[arg(long)]
@@ -56,9 +56,9 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Backend to use (vm, llvm, c, wasm)
-        #[arg(short, long, default_value = "llvm")]
-        backend: String,
+        /// Backend to use (vm, rust, c, wasm)
+        #[arg(short, long)]
+        backend: Option<String>,
 
         /// Target platform
         #[arg(long, default_value = "native")]
@@ -156,14 +156,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             optimization,
             strict_types,
         } => {
-            let source = std::fs::read_to_string(&file)?;
+            // Read the file
+            let source = match std::fs::read_to_string(&file) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: Cannot read file '{}': {}", file.display(), e);
+                    std::process::exit(1);
+                }
+            };
 
-            // Always use VM for now
+            // Use defaults: backend="vm", optimization=0
+            let backend_str = backend.as_deref().unwrap_or("vm");
+            let opt_level = optimization.unwrap_or(0);
+
+            // Run with specified backend (defaults to "vm")
             if let Err(e) = tauraro::vm::core::VM::run_file_with_options(
                 &source,
                 &file.to_string_lossy(),
-                &backend,
-                optimization,
+                backend_str,
+                opt_level,
                 strict_types,
             ) {
                 // Error message already includes traceback information from the VM
@@ -191,6 +202,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             target_arch,
             inline_asm,
         } => {
+            // Validate that backend is provided
+            let backend = match backend {
+                Some(b) => b,
+                None => {
+                    eprintln!("Error: --backend flag is required");
+                    eprintln!("\nAvailable backends:");
+                    eprintln!("  - rust  : Transpile to Rust code");
+                    eprintln!("  - c     : Transpile to C code");
+                    std::process::exit(1);
+                }
+            };
+
             compile_file(
                 &file,
                 output.as_ref(),
@@ -679,53 +702,73 @@ fn compile_file(
             }
         }
         "rust" => {
-            use tauraro::codegen::rust_transpiler::compiler::{RustCompiler, RustCompileOptions};
-
-            let rust_code = {
-                let compiler = RustCompiler::new(RustCompileOptions::default());
-                compiler.compile_formatted(ir_module)?
-            };
-
-            let output_path = if let Some(output_file) = output {
-                output_file.clone()
+            use tauraro::codegen::rust_transpiler::RustTranspiler;
+            use std::path::Path;
+            
+            // Extract project name from input file
+            let project_name = file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("tauraro_app");
+            
+            // Determine output directory
+            let build_dir = if let Some(output_file) = output {
+                // If output is specified, use its parent as build directory
+                output_file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()
             } else {
-                PathBuf::from(format!(
-                    "{}.rs",
-                    file.file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("output")
-                ))
+                // Otherwise use default build/rust
+                PathBuf::from("build")
             };
+            
+            // Transpile IR module to complete Rust project
+            let mut rust_transpiler = RustTranspiler::new("tauraro_module".to_string());
+            let project_root = rust_transpiler.transpile_to_project(ir_module, &build_dir, project_name)?;
 
-            std::fs::write(&output_path, &rust_code)?;
-            println!("Rust code generated successfully: {}", output_path.display());
-
-            // If --native flag is set, compile the generated Rust code to an executable
+            // If --native flag is set, build with Cargo
             if native {
-                let executable_path = if let Some(output_file) = output {
-                    let stem = output_file
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("output");
-                    #[cfg(target_os = "windows")]
-                    let exe_name = format!("{}.exe", stem);
-                    #[cfg(not(target_os = "windows"))]
-                    let exe_name = stem.to_string();
-                    output_file.parent().unwrap_or_else(|| std::path::Path::new(".")).join(&exe_name)
-                } else {
-                    let stem = file
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("output");
-                    #[cfg(target_os = "windows")]
-                    let exe_name = format!("{}.exe", stem);
-                    #[cfg(not(target_os = "windows"))]
-                    let exe_name = stem.to_string();
-                    file.parent().unwrap_or_else(|| std::path::Path::new(".")).join(&exe_name)
-                };
-
-                compile_rust_to_executable(&output_path, &executable_path)?;
-                println!("Executable compiled successfully: {}", executable_path.display());
+                println!("\n→ Building Rust project with Cargo...");
+                
+                use std::process::Command;
+                let cargo_build = Command::new("cargo")
+                    .arg("build")
+                    .arg("--release")
+                    .current_dir(&project_root)
+                    .output();
+                
+                match cargo_build {
+                    Ok(output) => {
+                        if output.status.success() {
+                            println!("✓ Cargo build successful!");
+                            
+                            // Find and execute the binary
+                            #[cfg(target_os = "windows")]
+                            let exe_name = format!("{}.exe", project_name);
+                            #[cfg(not(target_os = "windows"))]
+                            let exe_name = project_name.to_string();
+                            
+                            let exe_path = project_root.join("target").join("release").join(&exe_name);
+                            
+                            if exe_path.exists() {
+                                println!("→ Executing compiled binary...\n");
+                                let exec_output = Command::new(&exe_path)
+                                    .output()
+                                    .map_err(|e| format!("Failed to execute binary: {}", e))?;
+                                
+                                print!("{}", String::from_utf8_lossy(&exec_output.stdout));
+                                if !exec_output.stderr.is_empty() {
+                                    eprint!("{}", String::from_utf8_lossy(&exec_output.stderr));
+                                }
+                            }
+                        } else {
+                            eprintln!("Cargo build failed!");
+                            eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+                            return Err("Cargo build failed".into());
+                        }
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to run cargo: {}", e).into());
+                    }
+                }
             }
         }
         "wasm" => {
@@ -754,49 +797,72 @@ fn compile_file(
             }
         }
         "rust" => {
-            // For Rust backend, generate Rust source code (IR to Rust transpilation)
+            // For Rust backend, generate a complete Rust Cargo project
             use tauraro::codegen::rust_transpiler::RustTranspiler;
+            use std::path::Path;
             
-            let output_path = output.map_or_else(|| PathBuf::from("output.rs"), |p| p.clone());
+            // Determine output directory (build/rust by default)
+            let build_dir = PathBuf::from("build");
             
-            // Transpile IR module to Rust code
+            // Extract project name from input file
+            let project_name = file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("tauraro_app");
+            
+            // Transpile IR module to complete Rust project
             let mut rust_transpiler = RustTranspiler::new("tauraro_module".to_string());
-            let rust_code = rust_transpiler.transpile(ir_module)?;
+            let project_root = rust_transpiler.transpile_to_project(ir_module, &build_dir, project_name)?;
             
-            // Write Rust code to output file
-            std::fs::write(&output_path, &rust_code)?;
-            println!("✓ Rust code generated: {}", output_path.display());
-            
-            // If --native flag is set, try to compile with rustc and execute
+            // Try to build the project with Cargo if --native flag is set
             if native {
-                println!("→ Attempting native Rust compilation with rustc...");
+                println!("\n→ Building Rust project with Cargo...");
                 
-                // Determine executable output path
-                let exe_name = if cfg!(windows) {
-                    output_path.with_extension("exe")
-                } else {
-                    output_path.with_extension("")
-                };
+                use std::process::Command;
+                let cargo_build = Command::new("cargo")
+                    .arg("build")
+                    .arg("--release")
+                    .current_dir(&project_root)
+                    .output();
                 
-                // Try to compile with rustc
-                match compile_rust_to_executable(&output_path, &exe_name) {
-                    Ok(_) => {
-                        println!("✓ Compilation successful!");
-                        println!("→ Executing native binary...\n");
-                        
-                        // Execute the compiled binary
-                        use std::process::Command;
-                        let output = Command::new(&exe_name)
-                            .output()
-                            .map_err(|e| format!("Failed to execute binary: {}", e))?;
-                        
-                        print!("{}", String::from_utf8_lossy(&output.stdout));
-                        if !output.stderr.is_empty() {
-                            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                match cargo_build {
+                    Ok(output) => {
+                        if output.status.success() {
+                            println!("✓ Cargo build successful!");
+                            
+                            // Find and execute the binary
+                            let exe_path = if cfg!(windows) {
+                                project_root.join("target").join("release").join(format!("{}.exe", project_name))
+                            } else {
+                                project_root.join("target").join("release").join(project_name)
+                            };
+                            
+                            if exe_path.exists() {
+                                println!("→ Executing compiled binary...\n");
+                                let exec_output = Command::new(&exe_path)
+                                    .output()
+                                    .map_err(|e| format!("Failed to execute binary: {}", e))?;
+                                
+                                print!("{}", String::from_utf8_lossy(&exec_output.stdout));
+                                if !exec_output.stderr.is_empty() {
+                                    eprint!("{}", String::from_utf8_lossy(&exec_output.stderr));
+                                }
+                            }
+                        } else {
+                            println!("⚠ Cargo build failed!");
+                            println!("{}", String::from_utf8_lossy(&output.stderr));
+                            println!("\n→ Falling back to VM execution...\n");
+                            tauraro::vm::core::VM::run_file_with_options(
+                                &source,
+                                "<main>",
+                                "vm",
+                                optimization,
+                                strict_types,
+                            )?;
                         }
                     }
                     Err(e) => {
-                        println!("⚠ Native compilation failed: {}", e);
+                        println!("⚠ Cargo build failed: {}", e);
                         println!("→ Falling back to VM execution...\n");
                         tauraro::vm::core::VM::run_file_with_options(
                             &source,
@@ -809,7 +875,7 @@ fn compile_file(
                 }
             } else {
                 // Without --native flag, execute via VM
-                println!("→ Executing via VM backend...\n");
+                println!("→ Executing via VM backend (use --native to build and run Rust binary)...\n");
                 tauraro::vm::core::VM::run_file_with_options(
                     &source,
                     "<main>",
