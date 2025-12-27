@@ -1,0 +1,30 @@
+# String Operations Example
+print("=== String Basics ===")
+text = "Tauraro Programming Language"
+print("Original: " + text)
+print("Length: " + str(len(text)))
+
+print("\n=== String Methods ===")
+print("Uppercase: " + text.upper())
+print("Lowercase: " + text.lower())
+
+print("\n=== String Slicing ===")
+word = "Tauraro"
+print("Full word: " + word)
+print("First 3 chars: " + word[0:3])
+print("Last 3 chars: " + word[4:7])
+
+print("\n=== String Searching ===")
+sentence = "The quick brown fox jumps"
+print("Sentence: " + sentence)
+print("Contains 'quick': " + str("quick" in sentence))
+print("Contains 'lazy': " + str("lazy" in sentence))
+
+print("\n=== String Joining ===")
+words = ["Hello", "from", "Tauraro"]
+joined = " ".join(words)
+print("Joined: " + joined)
+
+print("\n=== String Splitting ===")
+parts = sentence.split(" ")
+print("Split result length: " + str(len(parts)))

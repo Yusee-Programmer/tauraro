@@ -1,0 +1,42 @@
+# Object-Oriented Programming Example
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    
+    def display(self):
+        return "Point(" + str(self.x) + ", " + str(self.y) + ")"
+    
+    def move(self, dx, dy):
+        self.x = self.x + dx
+        self.y = self.y + dy
+
+class Circle:
+    def __init__(self, center_x, center_y, radius):
+        self.center = Point(center_x, center_y)
+        self.radius = radius
+    
+    def display(self):
+        return "Circle at " + self.center.display() + " with radius " + str(self.radius)
+    
+    def area(self):
+        return 3.14159 * self.radius * self.radius
+
+print("=== Creating Objects ===")
+p1 = Point(3, 4)
+print("p1 = " + p1.display())
+
+p2 = Point(0, 0)
+print("p2 = " + p2.display())
+
+print("\n=== Moving Points ===")
+p1.move(2, 3)
+print("After move: " + p1.display())
+
+print("\n=== Circle Example ===")
+circle = Circle(5, 5, 3)
+print(circle.display())
+print("Area: " + str(circle.area()))
+
+circle.center.move(1, 1)
+print("After moving center: " + circle.display())

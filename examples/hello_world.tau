@@ -1,0 +1,4 @@
+# Hello World Example
+print("Hello, World!")
+print("Welcome to Tauraro!")
+print("This is a simple greeting program.")
