@@ -1,0 +1,96 @@
+# std.iter.transform — filter, map, reduce operations on Vec[int].
+
+from std.core.vec import Vec
+
+# Return a Vec containing only elements > threshold.
+pub def filter_gt(v: Vec[int], threshold: int) -> Vec[int]:
+    mut out = Vec[int].init(v.len + 4)
+    mut i   = 0
+    while i < v.len:
+        if v.get(i) > threshold: out.push(v.get(i))
+        i = i + 1
+    return out
+
+# Return a Vec containing only elements < threshold.
+pub def filter_lt(v: Vec[int], threshold: int) -> Vec[int]:
+    mut out = Vec[int].init(v.len + 4)
+    mut i   = 0
+    while i < v.len:
+        if v.get(i) < threshold: out.push(v.get(i))
+        i = i + 1
+    return out
+
+# Add delta to every element and return a new Vec.
+pub def map_add(v: Vec[int], delta: int) -> Vec[int]:
+    mut out = Vec[int].init(v.len + 4)
+    mut i   = 0
+    while i < v.len:
+        out.push(v.get(i) + delta)
+        i = i + 1
+    return out
+
+# Multiply every element by factor.
+pub def map_mul(v: Vec[int], factor: int) -> Vec[int]:
+    mut out = Vec[int].init(v.len + 4)
+    mut i   = 0
+    while i < v.len:
+        out.push(v.get(i) * factor)
+        i = i + 1
+    return out
+
+# ─── Reductions ───────────────────────────────────────────────────────────────
+
+pub def sum_vec(v: Vec[int]) -> int:
+    mut total = 0
+    mut i     = 0
+    while i < v.len:
+        total = total + v.get(i)
+        i = i + 1
+    return total
+
+pub def max_vec(v: Vec[int]) -> int:
+    if v.len == 0: return 0
+    mut best = v.get(0)
+    mut i    = 1
+    while i < v.len:
+        mut cur = v.get(i)
+        if cur > best: best = cur
+        i = i + 1
+    return best
+
+pub def min_vec(v: Vec[int]) -> int:
+    if v.len == 0: return 0
+    mut best = v.get(0)
+    mut i    = 1
+    while i < v.len:
+        mut cur = v.get(i)
+        if cur < best: best = cur
+        i = i + 1
+    return best
+
+pub def product_vec(v: Vec[int]) -> int:
+    mut p = 1
+    mut i = 0
+    while i < v.len:
+        p = p * v.get(i)
+        i = i + 1
+    return p
+
+pub def count_vec(v: Vec[int]) -> int:
+    return v.len
+
+# Return True when any element satisfies value == target.
+pub def any_eq(v: Vec[int], target: int) -> bool:
+    mut i = 0
+    while i < v.len:
+        if v.get(i) == target: return true
+        i = i + 1
+    return false
+
+# Return True when all elements equal target.
+pub def all_eq(v: Vec[int], target: int) -> bool:
+    mut i = 0
+    while i < v.len:
+        if v.get(i) != target: return false
+        i = i + 1
+    return true

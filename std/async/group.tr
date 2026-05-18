@@ -1,0 +1,52 @@
+# std.async.group — TaskGroup: spawn and join multiple tasks together.
+#
+# The `taskgroup:` language keyword desugars to the runtime's
+# _tr_taskgroup_wait; this class provides a higher-level API that
+# works today via synchronous completion.
+
+from std.core.vec import Vec
+from std.async.task import Task
+
+pub class TaskGroup:
+    pub tasks: Vec[Task]
+
+extend TaskGroup:
+    pub def init() -> TaskGroup:
+        mut tg = TaskGroup()
+        tg.tasks = Vec[Task].init(8)
+        return tg
+
+    # Register a new named task in the group.
+    pub def spawn(self, name: str) -> Task:
+        mut t = Task.init(name)
+        self.tasks.push(t)
+        return t
+
+    # Mark all tasks complete (synchronous simulation).
+    # Real impl: block until all spawned coroutines resolve.
+    pub def wait_all(self):
+        taskgroup:
+            mut i = 0
+            while i < self.tasks.len:
+                mut t = self.tasks.get(i)
+                if not t.is_done():
+                    spawn t.complete(0)
+                self.tasks.set(i, t)
+                i = i + 1
+
+    # Return True when every task in the group has completed.
+    pub def all_done(self) -> bool:
+        mut i = 0
+        while i < self.tasks.len:
+            if not self.tasks.get(i).is_done(): return false
+            i = i + 1
+        return true
+
+    # Return the number of tasks that have not yet completed.
+    pub def pending_count(self) -> int:
+        mut n = 0
+        mut i = 0
+        while i < self.tasks.len:
+            if not self.tasks.get(i).is_done(): n = n + 1
+            i = i + 1
+        return n

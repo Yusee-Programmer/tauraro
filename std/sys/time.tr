@@ -1,0 +1,24 @@
+# std.sys.time — Timing and sleep via extern "C" runtime bindings.
+#
+# _tr_sleep_ms  — cross-platform: Sleep() on Windows, nanosleep() on POSIX.
+# _tr_timestamp — wraps time(NULL); returns seconds since Unix epoch.
+
+extern "C":
+    def _tr_sleep_ms(ms: int)
+    def _tr_timestamp() -> int
+
+# Pause the current thread for at least ms milliseconds.
+pub def sleep_ms(ms: int):
+    _tr_sleep_ms(ms)
+
+# Pause for at least s seconds.
+pub def sleep_s(s: int):
+    _tr_sleep_ms(s * 1000)
+
+# Return wall-clock time as seconds since the Unix epoch (time_t).
+pub def timestamp() -> int:
+    return _tr_timestamp()
+
+# Rough elapsed-time helper: returns how many ms have passed since start.
+pub def elapsed_ms(start: int) -> int:
+    return (_tr_timestamp() - start) * 1000

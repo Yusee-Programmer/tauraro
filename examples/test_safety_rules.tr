@@ -1,0 +1,42 @@
+# test_safety_rules.tr
+# This file is EXPECTED to produce compiler errors.
+# Run with: cargo run -- --check test_safety_rules.tr
+# Each rule should fire exactly once.
+
+# ── Rule M-7: none assigned to non-Optional ──────────────────────────────────
+def test_m7():
+    mut count: int = none        # ERROR [M-7]: cannot assign none to int
+
+# ── Rule T-5: integer variable as boolean condition ───────────────────────────
+def test_t5():
+    mut n: int = 5
+    if n:                        # ERROR [T-5]: n is int, must write 'if n != 0:'
+        print("yes")
+
+# ── Rule C-4: await outside async ────────────────────────────────────────────
+def test_c4():
+    result = await some_async()  # ERROR [C-4]: await in non-async function
+
+# ── Rule F-3: missing return on some path ────────────────────────────────────
+def test_f3(x: int) -> int:
+    if x > 0:
+        return x
+    # ERROR [F-3]: missing return on else path
+
+# ── Rule N-1: reserved name as variable ──────────────────────────────────────
+def test_n1_var():
+    true = "yes"                 # ERROR [N-1]: true is built-in constant
+    false = 0                    # ERROR [N-1]: false is built-in constant
+    none = "null"                # ERROR [N-1]: none is built-in constant
+    Some = 42                    # ERROR [N-1]: Some is built-in constructor
+    Ok = "done"                  # ERROR [N-1]: Ok is built-in constructor
+
+# ── Rule N-1: reserved name as function ──────────────────────────────────────
+def true():                      # ERROR [N-1]: true is built-in constant
+    pass
+
+def Ok():                        # ERROR [N-1]: Ok is built-in constructor
+    pass
+
+def main():
+    print("Safety rules test — this file should produce errors above.")

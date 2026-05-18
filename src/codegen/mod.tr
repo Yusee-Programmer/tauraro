@@ -1,0 +1,9 @@
+# compiler/src/codegen/mod.tr — Codegen backend registry.
+#
+# Re-exports all available backends so callers can do:
+#   from compiler.src.codegen import CGenerator, LlvmGenerator
+#
+# New backends (MIR, WASM, etc.) should be added here.
+
+from compiler.src.codegen.c    import CGenerator
+from compiler.src.codegen.llvm import LlvmGenerator

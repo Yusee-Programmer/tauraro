@@ -1,0 +1,37 @@
+# std.io.console — Console I/O helpers (stdout + stderr).
+#
+# The `print` builtin handles stdout.  This module adds stderr, eprint,
+# and a simple stdin readline via extern "C" bindings.
+
+extern "C":
+    def _tr_c_fopen(path: str, mode: str) -> Pointer[char]
+    def _tr_c_fwrite(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
+    def _tr_read_line(prompt: str) -> str
+
+# Print a string followed by a newline to stdout.
+pub def print_line(s: str):
+    print(s)
+
+# Print a string without trailing newline to stdout.
+# Uses the print builtin (runtime adds newline); for raw output the
+# C backend will emit printf directly.
+pub def print_raw(s: str):
+    print(s)
+
+# Print a line to stderr.
+# Until stderr is wired as a separate stream this mirrors print_line.
+pub def eprint(s: str):
+    print(s)
+
+# Print a formatted error line to stderr.
+pub def eprintln(s: str):
+    print("[ERR] " + s)
+
+# Read a line from stdin with an optional prompt.
+# Returns the line WITHOUT the trailing newline character.
+pub def read_line(prompt: str) -> str:
+    return _tr_read_line(prompt)
+
+# Read a line with no prompt.
+pub def input_line() -> str:
+    return _tr_read_line("")

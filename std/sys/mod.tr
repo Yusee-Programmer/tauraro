@@ -1,0 +1,12 @@
+# std.sys — Package index.
+#
+#   from std.sys import exit, sleep_ms, timestamp, get_var, Env
+#
+# Sub-modules:
+#   from std.sys.process import exit, get_pid
+#   from std.sys.env     import get_var, has_var, Env
+#   from std.sys.time    import sleep_ms, sleep_s, timestamp, elapsed_ms
+
+from std.sys.process import exit, get_pid
+from std.sys.env     import get_var, has_var, Env
+from std.sys.time    import sleep_ms, sleep_s, timestamp, elapsed_ms

@@ -1,0 +1,71 @@
+# 16_win32_window.tr — Native Win32 GUI: window + buttons via extern C + --link.
+#
+# Demonstrates three linking styles (all produce the same binary):
+#
+# ── 1. Direct .c linking (simplest) ──────────────────────────────────────────
+#   tauraroc -o win32_demo \
+#       --link compiler/examples/win32_helpers.c \
+#       -luser32 -lgdi32 \
+#       compiler/examples/16_win32_window.tr
+#
+# ── 2. Pre-compiled object file (.o) ─────────────────────────────────────────
+#   gcc -c compiler/examples/win32_helpers.c -o compiler/examples/win32_helpers.o
+#   tauraroc -o win32_demo \
+#       --link compiler/examples/win32_helpers.o \
+#       -luser32 -lgdi32 \
+#       compiler/examples/16_win32_window.tr
+#
+# ── 3. Static library (.a) + system DLLs (-l flags) ──────────────────────────
+#   gcc -c win32_helpers.c -o win32_helpers.o
+#   ar rcs libwin32helpers.a win32_helpers.o
+#   tauraroc -o win32_demo \
+#       --link libwin32helpers.a \
+#       -luser32 -lgdi32 \
+#       compiler/examples/16_win32_window.tr
+#
+# ── Run ───────────────────────────────────────────────────────────────────────
+#   compiler/examples/build/win32_demo.exe
+#
+# Notes:
+#   • -luser32 / -lgdi32 link Windows system DLL import libraries
+#     (user32.dll handles windows/messages; gdi32.dll handles drawing)
+#   • Win32 handles (HWND, HINSTANCE…) are returned as i64 — pointer-width
+#     on 64-bit Windows; the C wrapper casts them safely.
+#   • The WndProc (button event handler) lives in win32_helpers.c.
+#     Tauraro drives only the high-level API; all Win32 complexity stays in C.
+
+# ── Extern declarations: functions exported by win32_helpers.c ────────────────
+
+extern "C":
+    def twr_create_window(title: str, x: i32, y: i32, w: i32, h: i32) -> i64
+    def twr_add_button(parent: i64, text: str, x: i32, y: i32, w: i32, h: i32, btn_id: i32) -> i64
+    def twr_get_counter() -> i32
+    def twr_run_loop(hwnd: i64) -> i32
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main(args: Vec[str]):
+    print("=== 16: Win32 Window (extern C + --link) ===")
+    print("Creating native Win32 window...")
+
+    # Create the window: title, x, y, width, height
+    mut hwnd = twr_create_window("Tauraro \xe2\x80\x94 Win32 Demo", 300, 200, 440, 300)
+    if hwnd == 0:
+        print("error: CreateWindow failed (are you on Windows?)")
+        return
+
+    # Add buttons: parent handle, label, x, y, width, height, command-id
+    # WM_COMMAND fires with the given id when the button is clicked.
+    twr_add_button(hwnd, "Click Me!",   40,  70, 120, 36, 101)
+    twr_add_button(hwnd, "Say Hello",  185,  70, 120, 36, 102)
+    twr_add_button(hwnd, "Quit",       165, 155, 110, 36, 103)
+
+    print("Window open. Interact with it, then close or click Quit.")
+
+    # Block here until the window is closed (runs the Win32 message pump).
+    mut rc     = twr_run_loop(hwnd)
+    mut clicks = twr_get_counter()
+
+    print("Window closed.")
+    print("  Message loop exit code : " + rc.to_str())
+    print("  'Click Me!' presses    : " + clicks.to_str())

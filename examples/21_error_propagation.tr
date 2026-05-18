@@ -1,0 +1,54 @@
+# 21_error_propagation.tr
+# Demonstrates the ? error propagation operator and throws functions.
+#
+# throws: marks a function as returning Result[T, E] under the hood.
+#   - return val  => wraps as Result_Ok(val)
+#   - raise(e)    => returns Result_Err(e) immediately (no longjmp)
+#   - func()?     => extracts Ok value or early-returns Err to caller
+
+def parse_digit(s: str) throws str -> int:
+    if len(s) == 0:
+        raise("empty string")
+    mut code: int = s[0] as int
+    if code < 48 or code > 57:
+        raise("not a digit: " + s)
+    return code - 48
+
+def doubled(s: str) throws str -> int:
+    mut n = parse_digit(s)?
+    return n * 2
+
+def tripled(s: str) throws str -> int:
+    mut n = doubled(s)?
+    return n * 3
+
+def propagation_demo():
+    print("--- ? error propagation ---")
+
+    # Call throws functions that return Result[int, str]
+    mut r1: Result[int, str] = tripled("7")
+    if r1.is_ok:
+        print(f"  tripled('7') = {r1.ok}")     # 21
+    else:
+        print(f"  unexpected error: {r1.err}")
+
+    mut r2: Result[int, str] = tripled("x")
+    if r2.is_err:
+        print(f"  tripled('x') error: {r2.err}")  # not a digit: x
+
+    mut r3: Result[int, str] = tripled("")
+    if r3.is_err:
+        print(f"  tripled('')  error: {r3.err}")   # empty string
+
+    # Can also call via try/except for exception-style error handling
+    print("--- throws + try/except interop ---")
+    try:
+        mut r4: Result[int, str] = doubled("9")
+        if r4.is_ok:
+            print(f"  doubled('9') = {r4.ok}")    # 18
+    except e:
+        print(f"  caught exception: {e}")
+
+def main():
+    propagation_demo()
+    print("Error propagation example complete.")

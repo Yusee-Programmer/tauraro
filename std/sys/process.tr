@@ -1,0 +1,13 @@
+# std.sys.process — Process control via extern "C" runtime bindings.
+
+extern "C":
+    def _tr_exit(code: int)
+    def _tr_getpid() -> int
+
+# Terminate the process.  0 = success, non-zero = failure.
+pub def exit(code: int):
+    _tr_exit(code)
+
+# Return the OS process identifier of the running program.
+pub def get_pid() -> int:
+    return _tr_getpid()

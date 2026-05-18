@@ -1,0 +1,42 @@
+# std.collections.queue — FIFO queue backed by Vec[int] with head/tail indices.
+
+from std.core.vec import Vec
+
+pub class Queue:
+    pub data: Vec[int]
+    pub head: int
+    pub tail: int
+
+extend Queue:
+    pub def init(cap: int) -> Queue:
+        mut q = Queue()
+        mut real_cap = cap
+        if real_cap < 8: real_cap = 8
+        q.data = Vec[int].init(real_cap)
+        q.head = 0
+        q.tail = 0
+        return q
+
+    pub def enqueue(self, v: int):
+        self.data.push(v)
+        self.tail = self.tail + 1
+
+    # Remove and return the front value.  Returns 0 when empty.
+    pub def dequeue(self) -> int:
+        if self.head >= self.tail: return 0
+        mut val  = self.data.get(self.head)
+        self.head = self.head + 1
+        return val
+
+    # Return the front value without removing it.  Returns 0 when empty.
+    pub def peek(self) -> int:
+        if self.head >= self.tail: return 0
+        return self.data.get(self.head)
+
+    pub def is_empty(self) -> bool:
+        return self.head >= self.tail
+
+    pub def size(self) -> int:
+        mut sz = self.tail - self.head
+        if sz < 0: return 0
+        return sz

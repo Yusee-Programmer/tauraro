@@ -1,0 +1,112 @@
+# 13_ownership_pointers.tr -- Ownership semantics via class-based patterns.
+#
+# Tauraro infers ownership automatically:
+#   - Own   : heap-allocated, freed when last name goes out of scope
+#   - Borrow: temporary read access via function parameter
+#   - Move  : ownership transfer via assignment
+#
+# The compiler inserts free() calls at scope exit for Own variables.
+# Users never write lifetime annotations.
+
+class Point:
+    pub x: int
+    pub y: int
+
+extend Point:
+    pub def init(px: int, py: int) -> Point:
+        mut p = Point()
+        p.x = px
+        p.y = py
+        return p
+
+    pub def describe(self) -> void:
+        print(f"Point({self.x}, {self.y})")
+
+    pub def dist_sq(self) -> int:
+        return self.x * self.x + self.y * self.y
+
+class Buffer:
+    pub data: Vec[int]
+    pub capacity: int
+
+extend Buffer:
+    pub def init(cap: int) -> Buffer:
+        mut b = Buffer()
+        b.data = Vec[int].init(cap)
+        b.capacity = cap
+        return b
+
+    pub def push(self, v: int) -> void:
+        self.data.push(v)
+
+    pub def get(self, i: int) -> int:
+        return self.data.get(i)
+
+    pub def length(self) -> int:
+        return self.data.len
+
+    pub def describe(self) -> void:
+        print(f"Buffer(len={self.data.len}, cap={self.capacity})")
+
+# ---- Ownership via simple struct assignment ------------------------------------
+
+def demo_ownership() -> void:
+    print("--- Ownership / Move inference ---")
+
+    mut p: Point = Point.init(1, 2)
+    p.describe()
+
+    # Borrow: pass p to a function that reads it
+    mut dsq: int = p.dist_sq()
+    print(f"  dist_sq = {dsq}")
+
+    # p is still valid after borrowing
+    mut p2: Point = Point.init(p.x + 3, p.y + 4)
+    p2.describe()
+
+# ---- RAII-style resource management via Buffer ---------------------------------
+
+def demo_buffer() -> void:
+    print("--- Buffer (RAII-like resource) ---")
+
+    mut buf: Buffer = Buffer.init(8)
+    buf.push(10)
+    buf.push(20)
+    buf.push(30)
+    buf.push(40)
+    buf.describe()
+
+    mut i: int = 0
+    while i < buf.length():
+        mut v: int = buf.get(i)
+        print(f"  buf[{i}] = {v}")
+        i = i + 1
+
+    # When buf goes out of scope, the compiler inserts free(buf).
+
+# ---- Shared immutable access (Borrow) -----------------------------------------
+
+def sum_points(a: Point, b: Point) -> int:
+    return a.x + a.y + b.x + b.y
+
+def demo_borrow() -> void:
+    print("--- Borrow: read-only access ---")
+
+    mut pa: Point = Point.init(3, 4)
+    mut pb: Point = Point.init(1, 2)
+
+    # Both pa and pb are borrowed by sum_points (not moved).
+    mut total: int = sum_points(pa, pb)
+    print(f"  sum of coords = {total}")
+
+    # pa and pb are still usable after the borrow.
+    pa.describe()
+    pb.describe()
+
+# ---- Main -------------------------------------------------------------------
+
+def main():
+    demo_ownership()
+    demo_buffer()
+    demo_borrow()
+    print("Ownership / pointers example complete.")

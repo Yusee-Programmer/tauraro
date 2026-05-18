@@ -1,0 +1,1656 @@
+# compiler/src/parser.tr — Recursive descent parser for the Tauraro self-hosted compiler.
+
+from core.vec import Vec
+from core.alloc import alloc, dealloc
+from compiler.src.token import Token
+from compiler.src.ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+pub def box_expr(e: Expr) -> Pointer[Expr]:
+    mut p = alloc[Expr](1)
+    p.write(e)
+    return p
+
+pub def box_stmt(s: Stmt) -> Pointer[Stmt]:
+    mut p = alloc[Stmt](1)
+    p.write(s)
+    return p
+
+pub def box_decl(d: Decl) -> Pointer[Decl]:
+    mut p = alloc[Decl](1)
+    p.write(d)
+    return p
+
+pub def box_asttype(t: AstType) -> Pointer[AstType]:
+    mut p = alloc[AstType](1)
+    p.write(t)
+    return p
+
+# ─── Parser class ──────────────────────────────────────────────────────────────
+
+pub class Parser:
+    pub tokens: Vec[Token]
+    pub pos: int
+
+extend Parser:
+    pub def init(tokens: Vec[Token]) -> Parser:
+        mut p = Parser()
+        p.tokens = tokens
+        p.pos = 0
+        return p
+
+    pub def peek(self) -> Token:
+        if self.pos < self.tokens.len:
+            return self.tokens.get(self.pos)
+        return Token.Eof
+
+    pub def advance(self) -> Token:
+        mut tok = self.peek()
+        if self.pos < self.tokens.len:
+            self.pos = self.pos + 1
+        return tok
+
+    pub def skip_newlines(self):
+        mut going = True
+        while going:
+            going = False
+            match self.peek():
+                case Token.Newline:
+                    self.pos = self.pos + 1
+                    going = True
+
+    pub def skip_newlines_and_indent(self):
+        mut going = True
+        while going:
+            going = False
+            match self.peek():
+                case Token.Newline | Token.Indent | Token.Dedent:
+                    self.pos = self.pos + 1
+                    going = True
+
+    pub def expect_newline(self):
+        match self.peek():
+            case Token.Newline | Token.Semicolon:
+                self.pos = self.pos + 1
+            case _:
+                pass
+
+    pub def at_end(self) -> bool:
+        match self.peek():
+            case Token.Eof:
+                return True
+        return False
+
+    pub def consume_ident(self) -> str:
+        match self.peek():
+            case Token.Ident(name):
+                self.pos = self.pos + 1
+                return name
+            case Token.KwInt:
+                self.pos = self.pos + 1
+                return "int"
+            case Token.KwFloat:
+                self.pos = self.pos + 1
+                return "float"
+            case Token.KwBool:
+                self.pos = self.pos + 1
+                return "bool"
+            case Token.KwStr | Token.KwString:
+                self.pos = self.pos + 1
+                return "str"
+            case Token.KwChar:
+                self.pos = self.pos + 1
+                return "char"
+            case Token.KwVoid:
+                self.pos = self.pos + 1
+                return "void"
+            case _:
+                pass
+        return ""
+
+    # ── Type parsing ──────────────────────────────────────────────────────────
+
+    pub def parse_type(self) -> AstType:
+        mut name = ""
+        match self.peek():
+            case Token.KwNone:
+                self.pos = self.pos + 1
+                return AstType.init("void")
+            case _:
+                name = self.consume_ident()
+        
+        if name == "":
+            return AstType.init("void")
+
+        match self.peek():
+            case Token.LBracket:
+                self.pos = self.pos + 1
+                mut t = AstType.init(name)
+                mut going = True
+                while going:
+                    match self.peek():
+                        case Token.RBracket | Token.Eof:
+                            going = False
+                    if going:
+                        arg_t = self.parse_type()
+                        t.args.push(box_asttype(arg_t))
+                        match self.peek():
+                            case Token.Comma:
+                                self.pos = self.pos + 1
+                            case _:
+                                going = False
+                match self.peek():
+                    case Token.RBracket:
+                        self.pos = self.pos + 1
+                return t
+        return AstType.init(name)
+
+    # ── Param list parsing ────────────────────────────────────────────────────
+
+    pub def parse_param_list(self) -> Vec[Param]:
+        mut pl = Vec[Param].init(4)
+        mut going = True
+        while going:
+            self.skip_newlines_and_indent()
+            match self.peek():
+                case Token.RParen | Token.Eof:
+                    going = False
+            if going:
+                item_name = self.consume_ident()
+                if item_name != "":
+                    mut ty_ptr = Pointer[AstType](0)
+                    match self.peek():
+                        case Token.Colon:
+                            self.pos = self.pos + 1
+                            ty = self.parse_type()
+                            ty_ptr = box_asttype(ty)
+                    p = Param.init(item_name, ty_ptr)
+                    pl.push(p)
+                    match self.peek():
+                        case Token.Comma:
+                            self.pos = self.pos + 1
+                            self.skip_newlines_and_indent()
+                        case _:
+                            going = False
+                else:
+                    going = False
+        return pl
+
+    # ── Block parsing ─────────────────────────────────────────────────────────
+
+    pub def parse_block(self) -> Block:
+        mut b = Block.init()
+        mut is_inline = False
+        match self.peek():
+            case Token.Indent:
+                self.pos = self.pos + 1
+            case Token.Newline:
+                self.pos = self.pos + 1
+                self.skip_newlines_and_indent()
+            case _:
+                is_inline = True
+
+        if is_inline:
+            b.push(self.parse_stmt())
+            mut semi_going = True
+            while semi_going:
+                match self.peek():
+                    case Token.Semicolon:
+                        self.pos = self.pos + 1
+                        match self.peek():
+                            case Token.Newline | Token.Eof | Token.Dedent:
+                                semi_going = False
+                            case _:
+                                b.push(self.parse_stmt())
+                    case _:
+                        semi_going = False
+            return b
+
+        mut going = True
+        while going:
+            match self.peek():
+                case Token.Dedent | Token.Eof:
+                    going = False
+            if going:
+                self.skip_newlines()
+                match self.peek():
+                    case Token.Dedent | Token.Eof:
+                        going = False
+                if going:
+                    s = self.parse_stmt()
+                    b.push(s)
+        match self.peek():
+            case Token.Dedent:
+                self.pos = self.pos + 1
+        return b
+
+    # ── Statement parsing ─────────────────────────────────────────────────────
+
+    pub def parse_stmt(self) -> Pointer[Stmt]:
+        match self.peek():
+            case Token.KwReturn:
+                self.pos = self.pos + 1
+                match self.peek():
+                    case Token.Newline | Token.Dedent | Token.Eof:
+                        return box_stmt(Stmt.SReturn(Pointer[Expr](0)))
+                mut e = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SReturn(e))
+            case Token.KwPass:
+                self.pos = self.pos + 1
+                self.expect_newline()
+                return box_stmt(Stmt.SPass)
+            case Token.KwBreak:
+                self.pos = self.pos + 1
+                self.expect_newline()
+                return box_stmt(Stmt.SBreak)
+            case Token.KwContinue:
+                self.pos = self.pos + 1
+                self.expect_newline()
+                return box_stmt(Stmt.SContinue)
+            case Token.KwRaise:
+                self.pos = self.pos + 1
+                mut e = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SRaise(e))
+            case Token.KwAsm:
+                return self.parse_asm_stmt()
+            case Token.KwSpawn:
+                return self.parse_spawn_stmt()
+            case Token.KwTaskGroup:
+                return self.parse_taskgroup_stmt()
+            case Token.KwGpu:
+                return self.parse_gpu_stmt()
+            case Token.KwIf:
+                return self.parse_if_stmt()
+            case Token.KwWhile:
+                return self.parse_while_stmt()
+            case Token.KwFor:
+                return self.parse_for_stmt()
+            case Token.KwMatch:
+                return self.parse_match_stmt()
+            case Token.KwMut:
+                return self.parse_let_stmt(True)
+            case Token.KwShared:
+                return self.parse_shared_let_stmt()
+            case Token.KwUnsafe:
+                self.pos = self.pos + 1
+                match self.peek():
+                    case Token.Colon:
+                        self.pos = self.pos + 1
+                body = self.parse_block()
+                return box_stmt(Stmt.SUnsafe(body))
+            case Token.KwTry:
+                return self.parse_try_stmt()
+            case Token.KwAssert:
+                return self.parse_assert_stmt()
+        return self.parse_assign_or_expr_stmt()
+
+    pub def parse_try_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+        try_body = self.parse_block()
+        mut catches = Vec[Pointer[CatchClause]].init(2)
+        while self.peek() == Token.KwExcept:
+            self.pos = self.pos + 1
+            mut err_type = Pointer[AstType](0)
+            mut err_name = ""
+            if self.peek() != Token.Colon:
+                # Peek: if next token is a simple ident followed by ':', treat as variable name
+                mut is_bare_var = false
+                match self.peek():
+                    case Token.Ident(_):
+                        mut save_pos = self.pos
+                        self.pos = self.pos + 1
+                        if self.peek() == Token.Colon:
+                            is_bare_var = true
+                        self.pos = save_pos
+                if is_bare_var:
+                    err_name = self.consume_ident()
+                else:
+                    err_type = box_asttype(self.parse_type())
+                    if self.peek() == Token.KwAs:
+                        self.pos = self.pos + 1
+                        err_name = self.consume_ident()
+            match self.peek():
+                case Token.Colon:
+                    self.pos = self.pos + 1
+            mut body = self.parse_block()
+            mut body_ptr = alloc[Block](1)
+            body_ptr.write(body)
+            mut c = CatchClause.init(err_name, body_ptr)
+            c.err_type = err_type
+            mut c_ptr = alloc[CatchClause](1)
+            c_ptr.write(c)
+            catches.push(c_ptr)
+        
+        mut finally_b = Block.init()
+        if self.peek() == Token.KwFinally:
+            self.pos = self.pos + 1
+            match self.peek():
+                case Token.Colon:
+                    self.pos = self.pos + 1
+            finally_b = self.parse_block()
+        return box_stmt(Stmt.STry(try_body, catches, finally_b))
+
+    pub def parse_assert_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1
+        cond = self.parse_expr()
+        mut msg = Pointer[Expr](0)
+        if self.peek() == Token.Comma:
+            self.pos = self.pos + 1
+            msg = self.parse_expr()
+        self.expect_newline()
+        return box_stmt(Stmt.SAssert(cond, msg))
+
+    pub def parse_asm_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1  # consume 'asm'
+        match self.peek():
+            case Token.LParen:
+                self.pos = self.pos + 1
+        mut parts = Vec[str].init(4)
+        # collect up to 4 comma-separated string literal arguments
+        mut reading = true
+        while reading:
+            match self.peek():
+                case Token.StrLit(s):
+                    self.pos = self.pos + 1
+                    parts.push(s)
+                    match self.peek():
+                        case Token.Comma:
+                            self.pos = self.pos + 1
+                        case _: reading = false
+                case _: reading = false
+        match self.peek():
+            case Token.RParen:
+                self.pos = self.pos + 1
+        self.expect_newline()
+        mut code = ""
+        mut outs = ""
+        mut ins  = ""
+        mut clob = ""
+        if parts.len > 0: code = parts.get(0)
+        if parts.len > 1: outs = parts.get(1)
+        if parts.len > 2: ins  = parts.get(2)
+        if parts.len > 3: clob = parts.get(3)
+        return box_stmt(Stmt.SAsm(code, outs, ins, clob))
+
+    pub def parse_spawn_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1
+        e = self.parse_expr()
+        self.expect_newline()
+        return box_stmt(Stmt.SSpawn(e))
+
+    pub def parse_taskgroup_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+        body = self.parse_block()
+        return box_stmt(Stmt.STaskGroup(body))
+
+    pub def parse_gpu_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+        body = self.parse_block()
+        return box_stmt(Stmt.SGpuBlock(body))
+
+    pub def parse_let_stmt(self, is_mut: bool) -> Pointer[Stmt]:
+        if is_mut:
+            self.pos = self.pos + 1
+        name = self.consume_ident()
+        mut ty_ptr = Pointer[AstType](0)
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+                ty = self.parse_type()
+                ty_ptr = box_asttype(ty)
+        mut val_ptr = Pointer[Expr](0)
+        match self.peek():
+            case Token.Eq:
+                self.pos = self.pos + 1
+                val_ptr = self.parse_expr()
+        self.expect_newline()
+        return box_stmt(Stmt.SLet(name, Ownership.Own, is_mut, false, false, ty_ptr, val_ptr))
+
+    pub def parse_shared_let_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1  # consume 'shared'
+        name = self.consume_ident()
+        mut ty_ptr = Pointer[AstType](0)
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+                ty = self.parse_type()
+                ty_ptr = box_asttype(ty)
+        mut val_ptr = Pointer[Expr](0)
+        match self.peek():
+            case Token.Eq:
+                self.pos = self.pos + 1
+                val_ptr = self.parse_expr()
+        self.expect_newline()
+        return box_stmt(Stmt.SLet(name, Ownership.Shared, true, false, true, ty_ptr, val_ptr))
+
+    pub def parse_if_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1
+        cond = self.parse_expr()
+        self.skip_newlines()
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+        then_b = self.parse_block()
+        mut elifs = Vec[ElifClause].init(2)
+        mut else_b = Block.init()
+        mut going = True
+        while going:
+            going = False
+            self.skip_newlines()
+            match self.peek():
+                case Token.KwElif:
+                    self.pos = self.pos + 1
+                    ec = self.parse_expr()
+                    self.skip_newlines()
+                    match self.peek():
+                        case Token.Colon:
+                            self.pos = self.pos + 1
+                    eb = self.parse_block()
+                    mut eb_ptr = alloc[Block](1)
+                    eb_ptr.write(eb)
+                    elifs.push(ElifClause.init(ec, eb_ptr))
+                    going = True
+                case Token.KwElse:
+                    self.pos = self.pos + 1
+                    self.skip_newlines()
+                    match self.peek():
+                        case Token.Colon:
+                            self.pos = self.pos + 1
+                    else_b = self.parse_block()
+        return box_stmt(Stmt.SIf(cond, then_b, elifs, else_b))
+
+    pub def parse_while_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1
+        cond = self.parse_expr()
+        self.skip_newlines()
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+        body = self.parse_block()
+        return box_stmt(Stmt.SWhile(cond, body, Vec[Decorator].init(0)))
+
+    pub def parse_for_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1
+        var = self.consume_ident()
+        match self.peek():
+            case Token.KwIn:
+                self.pos = self.pos + 1
+        iter_e = self.parse_expr()
+        self.skip_newlines()
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+        body = self.parse_block()
+        return box_stmt(Stmt.SFor(var, iter_e, body, Vec[Decorator].init(0)))
+
+    pub def parse_match_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1
+        subj = self.parse_expr()
+        self.skip_newlines()
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+        self.skip_newlines()
+        match self.peek():
+            case Token.Indent:
+                self.pos = self.pos + 1
+        mut arms = Vec[MatchArm].init(4)
+        mut going = True
+        while going:
+            self.skip_newlines()
+            match self.peek():
+                case Token.Dedent | Token.Eof:
+                    going = False
+            if going:
+                mut pat = self.parse_pattern()
+                if self.peek() == Token.Pipe:
+                    mut or_pats = Vec[Pattern].init(4)
+                    or_pats.push(pat)
+                    while self.peek() == Token.Pipe:
+                        self.pos = self.pos + 1
+                        or_pats.push(self.parse_pattern())
+                    pat = Pattern.POr(or_pats)
+                match self.peek():
+                    case Token.Colon:
+                        self.pos = self.pos + 1
+                mut arm_block = Block.init()
+                mut is_block_arm = False
+                match self.peek():
+                    case Token.Newline | Token.Indent:
+                        arm_block = self.parse_block()
+                        is_block_arm = True
+                if not is_block_arm:
+                    arm_block.push(self.parse_stmt())
+                mut ab_ptr = alloc[Block](1)
+                ab_ptr.write(arm_block)
+                arms.push(MatchArm.init(pat, ab_ptr))
+        match self.peek():
+            case Token.Dedent:
+                self.pos = self.pos + 1
+        return box_stmt(Stmt.SMatch(subj, arms))
+
+    pub def parse_pattern(self) -> Pattern:
+        match self.peek():
+            case Token.KwCase:
+                self.pos = self.pos + 1
+        match self.peek():
+            case Token.Ident(type_name):
+                self.pos = self.pos + 1
+                match self.peek():
+                    case Token.Dot:
+                        self.pos = self.pos + 1
+                        variant = self.consume_ident()
+                        match self.peek():
+                            case Token.LParen:
+                                self.pos = self.pos + 1
+                                mut fields = Vec[str].init(4)
+                                while self.peek() != Token.RParen and self.peek() != Token.Eof:
+                                    mut fname = self.consume_ident()
+                                    if fname == "":
+                                        self.pos = self.pos + 1
+                                    else:
+                                        fields.push(fname)
+                                    if self.peek() == Token.Comma:
+                                        self.pos = self.pos + 1
+                                if self.peek() == Token.RParen:
+                                    self.pos = self.pos + 1
+                                if fields.len == 1:
+                                    return Pattern.PVariantBind(type_name, variant, fields.get(0))
+                                return Pattern.PVariantBindMany(type_name, variant, fields)
+                        return Pattern.PVariant(type_name, variant)
+                return Pattern.PBind(type_name)
+            case Token.IntLit(v):
+                self.pos = self.pos + 1
+                return Pattern.PLitInt(v)
+            case Token.KwTrue:
+                self.pos = self.pos + 1
+                return Pattern.PLitBool(True)
+            case Token.KwFalse:
+                self.pos = self.pos + 1
+                return Pattern.PLitBool(False)
+            case Token.StrLit(s):
+                self.pos = self.pos + 1
+                return Pattern.PLitStr(s)
+        return Pattern.PWild
+
+    pub def parse_assign_or_expr_stmt(self) -> Pointer[Stmt]:
+        lhs = self.parse_expr()
+        match self.peek():
+            case Token.Colon:
+                # Type declaration: name: type = val
+                match lhs.read():
+                    case Expr.EIdent(name):
+                        self.pos = self.pos + 1
+                        mut ty = self.parse_type()
+                        mut val = Pointer[Expr](0)
+                        if self.peek() == Token.Eq:
+                            self.pos = self.pos + 1
+                            val = self.parse_expr()
+                        self.expect_newline()
+                        return box_stmt(Stmt.SLet(name, Ownership.Own, False, false, false, box_asttype(ty), val))
+                    case _: pass
+            case Token.Eq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, rhs))
+            case Token.PlusEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("+", lhs, rhs))))
+            case Token.MinusEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("-", lhs, rhs))))
+            case Token.StarEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("*", lhs, rhs))))
+            case Token.SlashEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("/", lhs, rhs))))
+            case Token.PercentEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("%", lhs, rhs))))
+            case Token.FloorDivEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("//", lhs, rhs))))
+            case Token.StarStarEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("**", lhs, rhs))))
+            case Token.AmpEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("&", lhs, rhs))))
+            case Token.PipeEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("|", lhs, rhs))))
+            case Token.CaretEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("^", lhs, rhs))))
+            case Token.LtLtEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("<<", lhs, rhs))))
+            case Token.GtGtEq:
+                self.pos = self.pos + 1
+                mut rhs = self.parse_expr()
+                self.expect_newline()
+                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp(">>", lhs, rhs))))
+        self.expect_newline()
+        return box_stmt(Stmt.SExpr(lhs))
+
+    pub def parse_expr(self) -> Pointer[Expr]:
+        return self.parse_ternary()
+
+    pub def parse_ternary(self) -> Pointer[Expr]:
+        mut left = self.parse_or_expr()
+        if self.peek() == Token.Newline:
+            return left
+        if self.peek() == Token.KwIf:
+            self.pos = self.pos + 1
+            mut cond = self.parse_or_expr()
+            if self.peek() == Token.KwElse:
+                self.pos = self.pos + 1
+            mut else_e = self.parse_ternary()
+            return box_expr(Expr.EIfElse(cond, left, else_e))
+        return left
+
+    pub def parse_or_expr(self) -> Pointer[Expr]:
+        mut left = self.parse_and_expr()
+        while self.peek() == Token.KwOr:
+            self.pos = self.pos + 1
+            self.skip_newlines_and_indent()
+            right = self.parse_and_expr()
+            left = box_expr(Expr.EBinOp("or", left, right))
+        return left
+
+    pub def parse_and_expr(self) -> Pointer[Expr]:
+        mut left = self.parse_not_expr()
+        while self.peek() == Token.KwAnd:
+            self.pos = self.pos + 1
+            self.skip_newlines_and_indent()
+            right = self.parse_not_expr()
+            left = box_expr(Expr.EBinOp("and", left, right))
+        return left
+
+    pub def parse_not_expr(self) -> Pointer[Expr]:
+        match self.peek():
+            case Token.KwNot:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EUnaryOp("not", self.parse_not_expr()))
+        return self.parse_comparison()
+
+    pub def parse_comparison(self) -> Pointer[Expr]:
+        mut left = self.parse_bitor_expr()
+        match self.peek():
+            case Token.EqEq:
+                self.pos = self.pos + 1
+                left = box_expr(Expr.EBinOp("==", left, self.parse_bitor_expr()))
+            case Token.NotEq:
+                self.pos = self.pos + 1
+                left = box_expr(Expr.EBinOp("!=", left, self.parse_bitor_expr()))
+            case Token.Lt:
+                self.pos = self.pos + 1
+                left = box_expr(Expr.EBinOp("<", left, self.parse_bitor_expr()))
+            case Token.Gt:
+                self.pos = self.pos + 1
+                left = box_expr(Expr.EBinOp(">", left, self.parse_bitor_expr()))
+            case Token.LtEq:
+                self.pos = self.pos + 1
+                left = box_expr(Expr.EBinOp("<=", left, self.parse_bitor_expr()))
+            case Token.GtEq:
+                self.pos = self.pos + 1
+                left = box_expr(Expr.EBinOp(">=", left, self.parse_bitor_expr()))
+            case Token.KwIs:
+                self.pos = self.pos + 1
+                left = box_expr(Expr.EBinOp("is", left, self.parse_bitor_expr()))
+            case Token.KwIn:
+                self.pos = self.pos + 1
+                left = box_expr(Expr.EBinOp("in", left, self.parse_bitor_expr()))
+            case _:
+                pass
+        return left
+
+    pub def parse_bitor_expr(self) -> Pointer[Expr]:
+        mut left = self.parse_bitxor_expr()
+        while self.peek() == Token.Pipe:
+            self.pos = self.pos + 1
+            left = box_expr(Expr.EBinOp("|", left, self.parse_bitxor_expr()))
+        return left
+
+    pub def parse_bitxor_expr(self) -> Pointer[Expr]:
+        mut left = self.parse_bitand_expr()
+        while self.peek() == Token.Caret:
+            self.pos = self.pos + 1
+            left = box_expr(Expr.EBinOp("^", left, self.parse_bitand_expr()))
+        return left
+
+    pub def parse_bitand_expr(self) -> Pointer[Expr]:
+        mut left = self.parse_shift_expr()
+        while self.peek() == Token.Amp:
+            self.pos = self.pos + 1
+            left = box_expr(Expr.EBinOp("&", left, self.parse_shift_expr()))
+        return left
+
+    pub def parse_shift_expr(self) -> Pointer[Expr]:
+        mut left = self.parse_additive()
+        while True:
+            match self.peek():
+                case Token.LtLt:
+                    self.pos = self.pos + 1
+                    left = box_expr(Expr.EBinOp("<<", left, self.parse_additive()))
+                case Token.GtGt:
+                    self.pos = self.pos + 1
+                    left = box_expr(Expr.EBinOp(">>", left, self.parse_additive()))
+                case _: break
+        return left
+
+    pub def parse_additive(self) -> Pointer[Expr]:
+        mut left = self.parse_multiplicative()
+        while True:
+            match self.peek():
+                case Token.Plus:
+                    self.pos = self.pos + 1
+                    self.skip_newlines_and_indent()
+                    left = box_expr(Expr.EBinOp("+", left, self.parse_multiplicative()))
+                case Token.Minus:
+                    self.pos = self.pos + 1
+                    self.skip_newlines_and_indent()
+                    left = box_expr(Expr.EBinOp("-", left, self.parse_multiplicative()))
+                case _: break
+        return left
+
+    pub def parse_multiplicative(self) -> Pointer[Expr]:
+        mut left = self.parse_power()
+        while True:
+            match self.peek():
+                case Token.Star:
+                    self.pos = self.pos + 1
+                    left = box_expr(Expr.EBinOp("*", left, self.parse_power()))
+                case Token.Slash:
+                    self.pos = self.pos + 1
+                    left = box_expr(Expr.EBinOp("/", left, self.parse_power()))
+                case Token.Percent:
+                    self.pos = self.pos + 1
+                    left = box_expr(Expr.EBinOp("%", left, self.parse_power()))
+                case Token.FloorDiv:
+                    self.pos = self.pos + 1
+                    left = box_expr(Expr.EBinOp("//", left, self.parse_power()))
+                case _: break
+        return left
+
+    pub def parse_power(self) -> Pointer[Expr]:
+        mut base = self.parse_unary()
+        if self.peek() == Token.StarStar:
+            self.pos = self.pos + 1
+            mut exp = self.parse_power()
+            return box_expr(Expr.EBinOp("**", base, exp))
+        return base
+
+    pub def parse_unary(self) -> Pointer[Expr]:
+        match self.peek():
+            case Token.Minus:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EUnaryOp("-", self.parse_unary()))
+            case Token.Tilde:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EUnaryOp("~", self.parse_unary()))
+            case Token.Amp:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EUnaryOp("&", self.parse_unary()))
+            case Token.Star:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EUnaryOp("*", self.parse_unary()))
+        return self.parse_postfix()
+
+    pub def parse_postfix(self) -> Pointer[Expr]:
+        mut e = self.parse_primary()
+        while True:
+            match self.peek():
+                case Token.Dot:
+                    self.pos = self.pos + 1
+                    mut attr = self.consume_ident()
+                    match self.peek():
+                        case Token.LParen:
+                            self.pos = self.pos + 1
+                            e = box_expr(Expr.EMethodCall(e, attr, self.parse_arg_list()))
+                        case _:
+                            e = box_expr(Expr.EPropAccess(e, attr))
+                case Token.LParen:
+                    self.pos = self.pos + 1
+                    e = box_expr(Expr.ECall(e, self.parse_arg_list()))
+                case Token.LBracket:
+                    self.pos = self.pos + 1
+                    mut idx = self.parse_expr()
+                    # Consume extra comma-separated type args (e.g. Map[str, T])
+                    while self.peek() == Token.Comma:
+                        self.pos = self.pos + 1
+                        self.skip_newlines_and_indent()
+                        self.parse_expr()
+                    if self.peek() == Token.RBracket:
+                        self.pos = self.pos + 1
+                    e = box_expr(Expr.EIndex(e, idx))
+                case Token.Question:
+                    self.pos = self.pos + 1
+                    e = box_expr(Expr.ETryExpr(e))
+                case Token.KwAs:
+                    self.pos = self.pos + 1
+                    e = box_expr(Expr.ECast(e, box_asttype(self.parse_type())))
+                case _: break
+        return e
+
+    pub def parse_arg_list(self) -> Vec[Pointer[Expr]]:
+        mut el = Vec[Pointer[Expr]].init(4)
+        mut going = True
+        while going:
+            self.skip_newlines_and_indent()
+            match self.peek():
+                case Token.RParen | Token.Eof:
+                    going = False
+            if going:
+                el.push(self.parse_expr())
+                match self.peek():
+                    case Token.Comma:
+                        self.pos = self.pos + 1
+                        self.skip_newlines_and_indent()
+                    case _:
+                        going = False
+        match self.peek():
+            case Token.RParen:
+                self.pos = self.pos + 1
+        return el
+
+    pub def parse_primary(self) -> Pointer[Expr]:
+        match self.peek():
+            case Token.IntLit(v):
+                self.pos = self.pos + 1
+                return box_expr(Expr.ELitInt(v))
+            case Token.FloatLit(v):
+                self.pos = self.pos + 1
+                return box_expr(Expr.ELitFloat(v))
+            case Token.StrLit(s):
+                self.pos = self.pos + 1
+                return box_expr(Expr.ELitStr(s))
+            case Token.RawStrLit(s):
+                self.pos = self.pos + 1
+                return box_expr(Expr.ERawStr(s))
+            case Token.ByteStrLit(s):
+                self.pos = self.pos + 1
+                return box_expr(Expr.ELitBytes(s))
+            case Token.FStrLit(s):
+                self.pos = self.pos + 1
+                return self.parse_fstring(s)
+            case Token.CharLit(v):
+                self.pos = self.pos + 1
+                return box_expr(Expr.ELitChar(v))
+            case Token.BoolLit(v):
+                self.pos = self.pos + 1
+                return box_expr(Expr.ELitBool(v))
+            case Token.KwTrue:
+                self.pos = self.pos + 1
+                return box_expr(Expr.ELitBool(True))
+            case Token.KwFalse:
+                self.pos = self.pos + 1
+                return box_expr(Expr.ELitBool(False))
+            case Token.KwNone:
+                self.pos = self.pos + 1
+                return box_expr(Expr.ELitNone)
+            case Token.KwInt:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EIdent("int"))
+            case Token.KwFloat:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EIdent("float"))
+            case Token.KwBool:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EIdent("bool"))
+            case Token.KwStr | Token.KwString:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EIdent("str"))
+            case Token.KwChar:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EIdent("char"))
+            case Token.KwVoid:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EIdent("void"))
+            case Token.Ident(name):
+                self.pos = self.pos + 1
+                if name == "super":
+                    mut base_class = ""
+                    if self.peek() == Token.Dot:
+                        self.pos = self.pos + 1
+                        mut next_id = self.consume_ident()
+                        if self.peek() == Token.Dot:
+                            self.pos = self.pos + 1
+                            base_class = next_id
+                            mut method = self.consume_ident()
+                            if self.peek() == Token.LParen:
+                                self.pos = self.pos + 1
+                                mut args = self.parse_arg_list()
+                                return box_expr(Expr.ESuperMethodCall(base_class, method, args))
+                            else:
+                                return box_expr(Expr.ESuperPropAccess(base_class, method))
+                        else:
+                            mut method = next_id
+                            if self.peek() == Token.LParen:
+                                self.pos = self.pos + 1
+                                mut args = self.parse_arg_list()
+                                return box_expr(Expr.ESuperMethodCall("", method, args))
+                            else:
+                                return box_expr(Expr.ESuperPropAccess("", method))
+                return box_expr(Expr.EIdent(name))
+            case Token.KwSizeOf:
+                self.pos = self.pos + 1
+                match self.peek():
+                    case Token.LParen:
+                        self.pos = self.pos + 1
+                mut ty = box_asttype(self.parse_type())
+                match self.peek():
+                    case Token.RParen:
+                        self.pos = self.pos + 1
+                return box_expr(Expr.ESizeOf(ty))
+            case Token.LParen:
+                self.pos = self.pos + 1
+                self.skip_newlines()
+                if self.peek() == Token.RParen:
+                    self.pos = self.pos + 1
+                    return box_expr(Expr.ETuple(Vec[Pointer[Expr]].init(0)))
+                mut e = self.parse_expr()
+                self.skip_newlines()
+                if self.peek() == Token.Comma:
+                    self.pos = self.pos + 1
+                    self.skip_newlines()
+                    mut items = Vec[Pointer[Expr]].init(2)
+                    items.push(e)
+                    while self.peek() != Token.RParen and self.peek() != Token.Eof:
+                        items.push(self.parse_expr())
+                        self.skip_newlines()
+                        if self.peek() == Token.Comma:
+                            self.pos = self.pos + 1
+                        self.skip_newlines()
+                    match self.peek():
+                        case Token.RParen:
+                            self.pos = self.pos + 1
+                    return box_expr(Expr.ETuple(items))
+                else:
+                    match self.peek():
+                        case Token.RParen:
+                            self.pos = self.pos + 1
+                    return e
+            case Token.LBracket:
+                self.pos = self.pos + 1
+                self.skip_newlines()
+                if self.peek() == Token.RBracket:
+                    self.pos = self.pos + 1
+                    return box_expr(Expr.EList(Vec[Pointer[Expr]].init(0)))
+                mut first = self.parse_or_expr()
+                self.skip_newlines()
+                if self.peek() == Token.KwFor:
+                    mut generators = Vec[Pointer[Comprehension]].init(2)
+                    while self.peek() == Token.KwFor:
+                        self.pos = self.pos + 1
+                        mut target = self.consume_ident()
+                        match self.peek():
+                            case Token.KwIn:
+                                self.pos = self.pos + 1
+                        mut iter = self.parse_or_expr()
+                        mut ifs = Vec[Pointer[Expr]].init(2)
+                        while self.peek() == Token.KwIf:
+                            self.pos = self.pos + 1
+                            ifs.push(self.parse_or_expr())
+                        mut c = Comprehension.init(target, iter)
+                        c.ifs = ifs
+                        mut c_ptr = alloc[Comprehension](1)
+                        c_ptr.write(c)
+                        generators.push(c_ptr)
+                    match self.peek():
+                        case Token.RBracket:
+                            self.pos = self.pos + 1
+                    return box_expr(Expr.EListComp(first, generators))
+                mut items = Vec[Pointer[Expr]].init(2)
+                items.push(first)
+                if self.peek() == Token.Comma:
+                    self.pos = self.pos + 1
+                    self.skip_newlines()
+                    while self.peek() != Token.RBracket and self.peek() != Token.Eof:
+                        items.push(self.parse_expr())
+                        self.skip_newlines()
+                        if self.peek() == Token.Comma:
+                            self.pos = self.pos + 1
+                        self.skip_newlines()
+                match self.peek():
+                    case Token.RBracket:
+                        self.pos = self.pos + 1
+                return box_expr(Expr.EList(items))
+            case Token.LBrace:
+                self.pos = self.pos + 1
+                self.skip_newlines()
+                mut keys = Vec[Pointer[Expr]].init(2)
+                mut vals = Vec[Pointer[Expr]].init(2)
+                mut set_items = Vec[Pointer[Expr]].init(2)
+                mut is_set = False
+                if self.peek() != Token.RBrace:
+                    mut first = self.parse_expr()
+                    self.skip_newlines()
+                    if self.peek() == Token.Colon:
+                        self.pos = self.pos + 1
+                        self.skip_newlines()
+                        mut value = self.parse_expr()
+                        keys.push(first)
+                        vals.push(value)
+                        self.skip_newlines()
+                        if self.peek() == Token.Comma:
+                            self.pos = self.pos + 1
+                        self.skip_newlines()
+                        while self.peek() != Token.RBrace and self.peek() != Token.Eof:
+                            mut key = self.parse_expr()
+                            self.skip_newlines()
+                            match self.peek():
+                                case Token.Colon:
+                                    self.pos = self.pos + 1
+                            self.skip_newlines()
+                            mut v = self.parse_expr()
+                            keys.push(key)
+                            vals.push(v)
+                            self.skip_newlines()
+                            if self.peek() == Token.Comma:
+                                self.pos = self.pos + 1
+                            else:
+                                break
+                            self.skip_newlines()
+                    else:
+                        is_set = True
+                        set_items.push(first)
+                        self.skip_newlines()
+                        if self.peek() == Token.Comma:
+                            self.pos = self.pos + 1
+                        self.skip_newlines()
+                        while self.peek() != Token.RBrace and self.peek() != Token.Eof:
+                            set_items.push(self.parse_expr())
+                            self.skip_newlines()
+                            if self.peek() == Token.Comma:
+                                self.pos = self.pos + 1
+                            else:
+                                break
+                            self.skip_newlines()
+                self.skip_newlines()
+                match self.peek():
+                    case Token.RBrace:
+                        self.pos = self.pos + 1
+                if is_set:
+                    return box_expr(Expr.ESet(set_items))
+                else:
+                    return box_expr(Expr.EDict(keys, vals))
+            case Token.KwTry:
+                mut st = self.parse_try_stmt()
+                match st.read():
+                    case Stmt.STry(try_body, catches, finally_b):
+                        return box_expr(Expr.ETry(try_body, catches, finally_b))
+            case Token.KwAwait:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EAwait(self.parse_expr()))
+            case Token.KwYield:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EYield(self.parse_expr()))
+            case Token.KwDef | Token.KwAsync:
+                mut is_async = False
+                if self.peek() == Token.KwAsync:
+                    self.pos = self.pos + 1
+                    is_async = True
+                match self.peek():
+                    case Token.KwDef:
+                        self.pos = self.pos + 1
+                match self.peek():
+                    case Token.LParen:
+                        self.pos = self.pos + 1
+                mut params = self.parse_param_list()
+                mut return_type = Pointer[AstType](0)
+                if self.peek() == Token.Arrow:
+                    self.pos = self.pos + 1
+                    return_type = box_asttype(self.parse_type())
+                match self.peek():
+                    case Token.Colon:
+                        self.pos = self.pos + 1
+                mut body = self.parse_block()
+                return box_expr(Expr.EClosure(params, return_type, body, is_async))
+            case Token.FStrLit(raw):
+                self.pos = self.pos + 1
+                return self.parse_fstring(raw)
+        if not self.at_end():
+            mut tok_name = "unknown"
+            match self.peek():
+                case Token.Newline: tok_name = "Newline"
+                case Token.Indent: tok_name = "Indent"
+                case Token.Dedent: tok_name = "Dedent"
+                case Token.Ident(n): tok_name = "Ident:" + n
+                case Token.KwMut: tok_name = "KwMut"
+                case Token.KwPub: tok_name = "KwPub"
+                case Token.KwReturn: tok_name = "KwReturn"
+                case Token.KwIf: tok_name = "KwIf"
+                case Token.KwWhile: tok_name = "KwWhile"
+                case Token.Comma: tok_name = "Comma"
+                case Token.Colon: tok_name = "Colon"
+                case Token.RParen: tok_name = "RParen"
+                case Token.RBracket: tok_name = "RBracket"
+                case Token.RBrace: tok_name = "RBrace"
+                case _: tok_name = "other"
+            print("Parser error: unexpected token=" + tok_name + " at pos=" + self.pos.to_str())
+            self.pos = self.pos + 1
+        return box_expr(Expr.ELitNone)
+
+    pub def parse_fstring(self, raw: str) -> Pointer[Expr]:
+        mut fl = Vec[FStringPart].init(4)
+        mut p = raw as Pointer[char]
+        mut i = 0
+        mut sb = StringBuilder.init(64)
+        
+        while True:
+            mut c = p.offset(i).read() as int
+            if c == 0: break
+            
+            if c == 123: # '{'
+                # Push previous text part
+                if sb.len() > 0:
+                    fl.push(FStringPart.init_text(sb.to_string().as_str()))
+                    sb = StringBuilder.init(64)
+                
+                i = i + 1
+                mut expr_sb = StringBuilder.init(64)
+                mut depth = 1
+                while depth > 0:
+                    mut ec = p.offset(i).read() as int
+                    if ec == 0: break
+                    if ec == 123: depth = depth + 1
+                    if ec == 125: depth = depth - 1
+                    if depth > 0: expr_sb.append_char(ec)
+                    i = i + 1
+                
+                # Parse the expression inside {}
+                mut expr_str = expr_sb.to_string().as_str()
+                mut lexer = Lexer.init(expr_str)
+                mut tokens = lexer.tokenize()
+                # Remove EOF from tokens before parsing expression
+                if tokens.len > 0:
+                    mut parser = Parser.init(tokens)
+                    mut e = parser.parse_expr()
+                    fl.push(FStringPart.init_expr(e))
+            else:
+                sb.append_char(c)
+                i = i + 1
+        
+        if sb.len() > 0:
+            fl.push(FStringPart.init_text(sb.to_string().as_str()))
+            
+        return box_expr(Expr.EFString(fl))
+
+    pub def parse_program(self) -> Program:
+        mut prog = Program.init()
+        self.skip_newlines_and_indent()
+        while not self.at_end():
+            self.skip_newlines_and_indent()
+            if not self.at_end():
+                prog.push(self.parse_decl())
+        return prog
+
+    pub def parse_decl(self) -> Pointer[Decl]:
+        mut decorators = Vec[Decorator].init(0)
+        while self.peek() == Token.At:
+            self.pos = self.pos + 1
+            name = self.consume_ident()
+            mut d = Decorator.init(name)
+            if self.peek() == Token.LParen:
+                self.pos = self.pos + 1
+                d.args = self.parse_arg_list()
+            decorators.push(d)
+            self.expect_newline()
+
+        mut is_public = False
+        match self.peek():
+            case Token.KwPub:
+                is_public = True
+                self.pos = self.pos + 1
+        
+        match self.peek():
+            case Token.KwFrom:
+                return self.parse_from_import()
+            case Token.KwImport:
+                return self.parse_import()
+            case Token.KwDef:
+                mut f = self.parse_function_def(False)
+                f.is_public = is_public
+                f.decorators = decorators
+                return box_decl(Decl.DFunction(f))
+            case Token.KwClass:
+                mut c_ptr = self.parse_class_decl()
+                match c_ptr.read():
+                    case Decl.DClass(c):
+                        c.is_public = is_public
+                        c.decorators = decorators
+                        c_ptr.write(Decl.DClass(c))
+                return c_ptr
+            case Token.KwEnum:
+                mut e_ptr = self.parse_enum_decl()
+                match e_ptr.read():
+                    case Decl.DEnum(e):
+                        e.is_public = is_public
+                        e.decorators = decorators
+                        e_ptr.write(Decl.DEnum(e))
+                return e_ptr
+            case Token.KwInterface:
+                mut i_ptr = self.parse_interface_decl()
+                match i_ptr.read():
+                    case Decl.DInterface(i):
+                        i.is_public = is_public
+                        i_ptr.write(Decl.DInterface(i))
+                return i_ptr
+            case Token.KwExtend:
+                return self.parse_extend_decl()
+            case Token.KwExtern:
+                return self.parse_extern_decl()
+            case Token.KwAsync:
+                self.pos = self.pos + 1
+                match self.peek():
+                    case Token.KwDef:
+                        mut f = self.parse_function_def(False)
+                        f.is_async = True
+                        f.is_public = is_public
+                        f.decorators = decorators
+                        return box_decl(Decl.DFunction(f))
+        return box_decl(Decl.DTopLevelStmt(self.parse_stmt()))
+
+    # Parse:
+    #   from module import Name
+    #   from module import Name as Alias
+    #   from module import (A, B as C, D)          ← parenthesised, single-line
+    #   from module import [A, B as C, D]           ← bracket list, single-line
+    #   from module import [                        ← bracket list, multi-line
+    #       A,
+    #       B as C,
+    #       D,
+    #   ]
+    pub def parse_from_import(self) -> Pointer[Decl]:
+        self.pos = self.pos + 1
+        mut path = self.consume_ident()
+        while self.peek() == Token.Dot:
+            self.pos = self.pos + 1
+            path = path + "." + self.consume_ident()
+        match self.peek():
+            case Token.KwImport:
+                self.pos = self.pos + 1
+        mut il     = Vec[ImportItem].init(4)
+        mut multi  = false
+        match self.peek():
+            case Token.LParen | Token.LBracket:
+                self.pos = self.pos + 1
+                multi = true
+        mut going = true
+        while going:
+            # Inside a bracket/paren block skip newlines AND indent/dedent tokens
+            # so that multi-line imports like [ \n  A, \n  B \n] work naturally.
+            if multi:
+                self.skip_newlines_and_indent()
+            else:
+                self.skip_newlines()
+            match self.peek():
+                case Token.RParen | Token.RBracket | Token.Eof:
+                    going = false
+                case Token.Newline | Token.Dedent:
+                    if not multi:
+                        going = false
+            if going:
+                mut item_name = self.consume_ident()
+                if item_name != "":
+                    mut item = ImportItem.init(item_name)
+                    # Optional per-item alias:  Name as Alias
+                    if self.peek() == Token.KwAs:
+                        self.pos = self.pos + 1
+                        item.alias = self.consume_ident()
+                    il.push(item)
+                    if self.peek() == Token.Comma:
+                        self.pos = self.pos + 1
+                    elif not multi:
+                        going = false
+                else:
+                    going = false
+        # Consume the closing ) or ]
+        if multi:
+            match self.peek():
+                case Token.RParen | Token.RBracket:
+                    self.pos = self.pos + 1
+        self.expect_newline()
+        return box_decl(Decl.DFromImport(path, il))
+
+    pub def parse_import(self) -> Pointer[Decl]:
+        self.pos = self.pos + 1
+        mut path = self.consume_ident()
+        while self.peek() == Token.Dot:
+            self.pos = self.pos + 1
+            path = path + "." + self.consume_ident()
+        mut alias = ""
+        if self.peek() == Token.KwAs:
+            self.pos = self.pos + 1
+            alias = self.consume_ident()
+        self.expect_newline()
+        return box_decl(Decl.DImport(path, alias))
+
+    pub def parse_function_def(self, is_method: bool) -> FunctionDef:
+        self.pos = self.pos + 1
+        mut name = self.consume_ident()
+        mut f = FunctionDef.init(name)
+        if self.peek() == Token.LBracket:
+            self.pos = self.pos + 1
+            while self.peek() != Token.RBracket:
+                f.generics.push(self.consume_ident())
+                if self.peek() == Token.Comma:
+                    self.pos = self.pos + 1
+            if self.peek() == Token.RBracket:
+                self.pos = self.pos + 1
+        if self.peek() == Token.LParen:
+            self.pos = self.pos + 1
+            f.params = self.parse_param_list()
+            if self.peek() == Token.RParen:
+                self.pos = self.pos + 1
+        match self.peek():
+            case Token.KwThrows:
+                self.pos = self.pos + 1
+                f.throws_ty = box_asttype(self.parse_type())
+            case _:
+                pass
+        if self.peek() == Token.Arrow:
+            self.pos = self.pos + 1
+            f.ret_ty = box_asttype(self.parse_type())
+        if self.peek() == Token.Colon:
+            self.pos = self.pos + 1
+            f.body = self.parse_block()
+        else:
+            self.expect_newline()
+            f.body = Block.init()
+        return f
+
+    pub def parse_class_decl(self) -> Pointer[Decl]:
+        self.pos = self.pos + 1
+        mut name = self.consume_ident()
+        mut c = ClassDef.init(name)
+        if self.peek() == Token.LBracket:
+            self.pos = self.pos + 1
+            while self.peek() != Token.RBracket:
+                c.generics.push(self.consume_ident())
+                if self.peek() == Token.Comma:
+                    self.pos = self.pos + 1
+            if self.peek() == Token.RBracket:
+                self.pos = self.pos + 1
+        if self.peek() == Token.KwImplements:
+            self.pos = self.pos + 1
+            while True:
+                c.iface_names.push(self.consume_ident())
+                if self.peek() == Token.Comma:
+                    self.pos = self.pos + 1
+                else: break
+        if self.peek() == Token.Colon:
+            self.pos = self.pos + 1
+        self.skip_newlines()
+        match self.peek():
+            case Token.Indent:
+                self.pos = self.pos + 1
+        mut going = True
+        while going:
+            self.skip_newlines()
+            mut decorators = Vec[Decorator].init(0)
+            while self.peek() == Token.At:
+                self.pos = self.pos + 1
+                dname = self.consume_ident()
+                mut d = Decorator.init(dname)
+                if self.peek() == Token.LParen:
+                    self.pos = self.pos + 1
+                    d.args = self.parse_arg_list()
+                decorators.push(d)
+                self.expect_newline()
+
+            mut is_p = False
+            match self.peek():
+                case Token.KwPub:
+                    is_p = True
+                    self.pos = self.pos + 1
+            match self.peek():
+                case Token.Dedent | Token.Eof:
+                    going = False
+                case Token.KwDef:
+                    mut m = self.parse_function_def(True)
+                    m.is_public = is_p
+                    m.decorators = decorators
+                    c.methods.push(m)
+                case Token.KwAsync:
+                    self.pos = self.pos + 1
+                    match self.peek():
+                        case Token.KwDef:
+                            mut m = self.parse_function_def(True)
+                            m.is_async = True
+                            m.is_public = is_p
+                            m.decorators = decorators
+                            c.methods.push(m)
+                case Token.Ident(fname):
+                    self.pos = self.pos + 1
+                    mut ty_ptr = Pointer[AstType](0)
+                    if self.peek() == Token.Colon:
+                        self.pos = self.pos + 1
+                        ty_ptr = box_asttype(self.parse_type())
+                    mut fld = FieldDef.init(fname, ty_ptr)
+                    c.fields.push(fld)
+                    self.expect_newline()
+                case Token.KwPass:
+                    self.pos = self.pos + 1
+                    self.expect_newline()
+                case _:
+                    self.pos = self.pos + 1
+        if self.peek() == Token.Dedent:
+            self.pos = self.pos + 1
+        return box_decl(Decl.DClass(c))
+
+    pub def parse_enum_decl(self) -> Pointer[Decl]:
+        self.pos = self.pos + 1
+        mut name = self.consume_ident()
+        mut e = EnumDef.init(name)
+        if self.peek() == Token.KwImplements:
+            self.pos = self.pos + 1
+            while True:
+                e.iface_names.push(self.consume_ident())
+                if self.peek() == Token.Comma:
+                    self.pos = self.pos + 1
+                else: break
+        if self.peek() == Token.Colon:
+            self.pos = self.pos + 1
+        self.skip_newlines()
+        match self.peek():
+            case Token.Indent:
+                self.pos = self.pos + 1
+        mut going = True
+        while going:
+            self.skip_newlines()
+            mut decorators = Vec[Decorator].init(0)
+            while self.peek() == Token.At:
+                self.pos = self.pos + 1
+                dname = self.consume_ident()
+                mut d = Decorator.init(dname)
+                if self.peek() == Token.LParen:
+                    self.pos = self.pos + 1
+                    d.args = self.parse_arg_list()
+                decorators.push(d)
+                self.expect_newline()
+
+            mut is_p = False
+            match self.peek():
+                case Token.KwPub:
+                    is_p = True
+                    self.pos = self.pos + 1
+            match self.peek():
+                case Token.Dedent | Token.Eof:
+                    going = False
+                case Token.Ident(vname):
+                    self.pos = self.pos + 1
+                    mut vd = VariantDef.init(vname)
+                    if self.peek() == Token.LParen:
+                        self.pos = self.pos + 1
+                        vd.fields = self.parse_param_list()
+                        if self.peek() == Token.RParen:
+                            self.pos = self.pos + 1
+                    e.variants.push(vd)
+                    self.expect_newline()
+                case Token.KwDef:
+                    mut m = self.parse_function_def(True)
+                    m.is_public = is_p
+                    m.decorators = decorators
+                    e.methods.push(m)
+                case Token.KwPass:
+                    self.pos = self.pos + 1
+                    self.expect_newline()
+                case _:
+                    self.pos = self.pos + 1
+        if self.peek() == Token.Dedent:
+            self.pos = self.pos + 1
+        return box_decl(Decl.DEnum(e))
+
+    pub def parse_interface_decl(self) -> Pointer[Decl]:
+        self.pos = self.pos + 1
+        mut name = self.consume_ident()
+        mut i = InterfaceDef.init(name)
+        if self.peek() == Token.Colon:
+            self.pos = self.pos + 1
+        self.skip_newlines()
+        match self.peek():
+            case Token.Indent:
+                self.pos = self.pos + 1
+        mut going = True
+        while going:
+            self.skip_newlines()
+            mut is_p = False
+            match self.peek():
+                case Token.KwPub:
+                    is_p = True
+                    self.pos = self.pos + 1
+            match self.peek():
+                case Token.Dedent | Token.Eof:
+                    going = False
+                case Token.KwDef:
+                    mut m = self.parse_function_def(True)
+                    m.is_public = is_p
+                    i.methods.push(m)
+                case Token.KwPass:
+                    self.pos = self.pos + 1
+                    self.expect_newline()
+                case _:
+                    self.pos = self.pos + 1
+        if self.peek() == Token.Dedent:
+            self.pos = self.pos + 1
+        return box_decl(Decl.DInterface(i))
+
+    pub def parse_extend_decl(self) -> Pointer[Decl]:
+        self.pos = self.pos + 1
+        mut target = self.consume_ident()
+        if self.peek() == Token.Colon:
+            self.pos = self.pos + 1
+        self.skip_newlines()
+        match self.peek():
+            case Token.Indent:
+                self.pos = self.pos + 1
+        mut fl = Vec[FunctionDef].init(4)
+        mut going = True
+        while going:
+            self.skip_newlines()
+            mut decorators = Vec[Decorator].init(0)
+            while self.peek() == Token.At:
+                self.pos = self.pos + 1
+                dname = self.consume_ident()
+                mut d = Decorator.init(dname)
+                if self.peek() == Token.LParen:
+                    self.pos = self.pos + 1
+                    d.args = self.parse_arg_list()
+                decorators.push(d)
+                self.expect_newline()
+
+            mut is_p = False
+            match self.peek():
+                case Token.KwPub:
+                    is_p = True
+                    self.pos = self.pos + 1
+            match self.peek():
+                case Token.Dedent | Token.Eof:
+                    going = False
+                case Token.KwDef:
+                    mut m = self.parse_function_def(True)
+                    m.is_public = is_p
+                    m.decorators = decorators
+                    fl.push(m)
+                case Token.KwPass:
+                    self.pos = self.pos + 1
+                    self.expect_newline()
+                case _:
+                    self.pos = self.pos + 1
+        if self.peek() == Token.Dedent:
+            self.pos = self.pos + 1
+        mut d = Decl.DExtend(target, fl)
+        return box_decl(d)
+
+    pub def parse_extern_decl(self) -> Pointer[Decl]:
+        self.pos = self.pos + 1
+        mut abi = "C"
+        match self.peek():
+            case Token.StrLit(s):
+                self.pos = self.pos + 1
+                abi = s
+        if self.peek() == Token.Colon:
+            self.pos = self.pos + 1
+        self.skip_newlines()
+        match self.peek():
+            case Token.Indent:
+                self.pos = self.pos + 1
+        mut fl = Vec[FunctionDef].init(4)
+        mut going = True
+        while going:
+            self.skip_newlines()
+            mut is_p = False
+            match self.peek():
+                case Token.KwPub:
+                    is_p = True
+                    self.pos = self.pos + 1
+            match self.peek():
+                case Token.Dedent | Token.Eof:
+                    going = False
+                case Token.KwDef:
+                    mut m = self.parse_function_def(False)
+                    m.is_public = is_p
+                    fl.push(m)
+                case _:
+                    self.pos = self.pos + 1
+        if self.peek() == Token.Dedent:
+            self.pos = self.pos + 1
+        return box_decl(Decl.DExtern(abi, fl))

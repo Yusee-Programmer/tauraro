@@ -1,0 +1,12 @@
+# std.async — Package index.
+#
+#   from std.async import Task, Future, Channel, TaskGroup
+#
+# Sub-modules:
+#   from std.async.task    import Task, Future
+#   from std.async.channel import Channel
+#   from std.async.group   import TaskGroup
+
+from std.async.task    import Task, Future
+from std.async.channel import Channel
+from std.async.group   import TaskGroup

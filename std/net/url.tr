@@ -1,0 +1,51 @@
+# std.net.url — URL parsing and building.
+
+from std.core.string import StringBuilder
+from std.string.str import str_len, str_char_at, str_contains_char, str_slice
+
+pub class Url:
+    pub scheme: str
+    pub host:   str
+    pub port:   int
+    pub path:   str
+    pub query:  str
+
+extend Url:
+    pub def init(host: str, port: int, path: str) -> Url:
+        mut u = Url()
+        u.scheme = "http"
+        u.host   = host
+        u.port   = port
+        u.path   = path
+        u.query  = ""
+        return u
+
+    pub def with_scheme(self, scheme: str) -> Url:
+        self.scheme = scheme
+        return self
+
+    pub def with_query(self, query: str) -> Url:
+        self.query = query
+        return self
+
+    pub def to_string(self) -> str:
+        mut sb = StringBuilder.init(128)
+        sb.append(self.scheme)
+        sb.append("://")
+        sb.append(self.host)
+        if self.port != 80 and self.port != 443 and self.port != 0:
+            sb.append(":")
+            mut p = self.port
+            if p == 8080: sb.append("8080")
+            elif p == 8443: sb.append("8443")
+            elif p == 3000: sb.append("3000")
+            elif p == 5000: sb.append("5000")
+            else: sb.append("????")
+        sb.append(self.path)
+        if str_len(self.query) > 0:
+            sb.append("?")
+            sb.append(self.query)
+        return sb.to_string().as_str()
+
+    pub def is_https(self) -> bool:
+        return self.scheme == "https"

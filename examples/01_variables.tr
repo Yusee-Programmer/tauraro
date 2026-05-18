@@ -1,0 +1,62 @@
+# 01_variables.tr — Variables, types, mutability, and basic output in Tauraro.
+
+def demo_integers() -> void:
+    # Immutable binding — cannot be reassigned
+    x: int = 42
+    print(x)
+
+    # Mutable binding — can be reassigned
+    mut count: int = 0
+    count = count + 1
+    count = count + 1
+    print(count)   # 2
+
+def demo_floats() -> void:
+    pi: float = 3.14159
+    print(pi)
+
+    mut temp: float = 100.0
+    temp = temp - 32.0
+    print(temp)   # 68.0
+
+def demo_bools() -> void:
+    is_ready: bool = True
+    is_done: bool = False
+    print(is_ready)
+    print(is_done)
+
+def demo_strings() -> void:
+    greeting: str = "Hello, Tauraro!"
+    print(greeting)
+
+    # String concatenation with +
+    first: str = "Tauraro"
+    second: str = " lang"
+    combined: str = first + second
+    print(combined)
+
+    # f-string interpolation
+    name: str = "world"
+    msg: str = f"Hello, {name}!"
+    print(msg)
+
+def demo_type_inference() -> void:
+    # Type is inferred from the literal when annotation is omitted
+    mut n = 10
+    mut s = "hello"
+    mut b = True
+    mut f = 2.718
+
+    n = n + 5
+    print(n)   # 15
+    print(s)
+    print(b)
+    print(f)
+
+def main():
+    print("=== 01: Variables ===")
+    demo_integers()
+    demo_floats()
+    demo_bools()
+    demo_strings()
+    demo_type_inference()

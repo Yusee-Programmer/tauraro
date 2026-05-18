@@ -1,0 +1,176 @@
+# std.string.str — String utilities implemented in pure Tauraro.
+# Uses Pointer[char] arithmetic; the only import is StringBuilder.
+
+from std.core.string import StringBuilder
+
+# ─── Measurement ──────────────────────────────────────────────────────────────
+
+pub def str_len(s: str) -> int:
+    mut p = s as Pointer[char]
+    mut n = 0
+    while p.offset(n).read() as int != 0:
+        n = n + 1
+    return n
+
+# ─── Predicates ───────────────────────────────────────────────────────────────
+
+pub def str_starts_with(s: str, prefix: str) -> bool:
+    mut sp = s as Pointer[char]
+    mut pp = prefix as Pointer[char]
+    mut i  = 0
+    while True:
+        mut pc = pp.offset(i).read() as int
+        if pc == 0: return true
+        mut sc = sp.offset(i).read() as int
+        if sc == 0 or sc != pc: return false
+        i = i + 1
+    return false
+
+pub def str_ends_with(s: str, suffix: str) -> bool:
+    mut sl = str_len(s)
+    mut el = str_len(suffix)
+    if el > sl: return false
+    mut sp = s as Pointer[char]
+    mut ep = suffix as Pointer[char]
+    mut offset = sl - el
+    mut i = 0
+    while i < el:
+        if sp.offset(offset + i).read() as int != ep.offset(i).read() as int:
+            return false
+        i = i + 1
+    return true
+
+pub def str_contains_char(s: str, c: int) -> bool:
+    mut p = s as Pointer[char]
+    mut i = 0
+    while True:
+        mut ch = p.offset(i).read() as int
+        if ch == 0: return false
+        if ch == c: return true
+        i = i + 1
+    return false
+
+pub def str_contains(s: str, sub: str) -> bool:
+    mut sl   = str_len(s)
+    mut subl = str_len(sub)
+    if subl == 0: return true
+    if subl > sl: return false
+    mut sp   = s as Pointer[char]
+    mut subp = sub as Pointer[char]
+    mut i = 0
+    while i <= sl - subl:
+        mut j = 0
+        mut match_ = true
+        while j < subl:
+            if sp.offset(i + j).read() as int != subp.offset(j).read() as int:
+                match_ = false
+                j = subl  # break
+            j = j + 1
+        if match_: return true
+        i = i + 1
+    return false
+
+pub def str_eq(a: str, b: str) -> bool:
+    mut pa = a as Pointer[char]
+    mut pb = b as Pointer[char]
+    mut i  = 0
+    while True:
+        mut ca = pa.offset(i).read() as int
+        mut cb = pb.offset(i).read() as int
+        if ca != cb: return false
+        if ca == 0: return true
+        i = i + 1
+    return true
+
+# ─── Slicing & building ───────────────────────────────────────────────────────
+
+pub def str_slice(s: str, start: int, end: int) -> str:
+    mut len    = str_len(s)
+    mut real_s = start
+    mut real_e = end
+    if real_s < 0: real_s = 0
+    if real_e > len: real_e = len
+    if real_s >= real_e: return ""
+    mut size = real_e - real_s
+    mut sb   = StringBuilder.init(size + 1)
+    mut p    = s as Pointer[char]
+    mut i    = real_s
+    while i < real_e:
+        sb.append_char(p.offset(i).read() as int)
+        i = i + 1
+    return sb.to_string().as_str()
+
+pub def str_repeat(s: str, n: int) -> str:
+    if n <= 0: return ""
+    mut sb = StringBuilder.init(str_len(s) * n + 1)
+    mut i  = 0
+    while i < n:
+        sb.append(s)
+        i = i + 1
+    return sb.to_string().as_str()
+
+pub def str_reverse(s: str) -> str:
+    mut len = str_len(s)
+    mut sb  = StringBuilder.init(len + 1)
+    mut p   = s as Pointer[char]
+    mut i   = len - 1
+    while i >= 0:
+        sb.append_char(p.offset(i).read() as int)
+        i = i - 1
+    return sb.to_string().as_str()
+
+# ─── Case conversion ──────────────────────────────────────────────────────────
+
+pub def str_to_upper(s: str) -> str:
+    mut len = str_len(s)
+    mut sb  = StringBuilder.init(len + 1)
+    mut p   = s as Pointer[char]
+    mut i   = 0
+    while i < len:
+        mut ch = p.offset(i).read() as int
+        if ch >= 97 and ch <= 122: ch = ch - 32
+        sb.append_char(ch)
+        i = i + 1
+    return sb.to_string().as_str()
+
+pub def str_to_lower(s: str) -> str:
+    mut len = str_len(s)
+    mut sb  = StringBuilder.init(len + 1)
+    mut p   = s as Pointer[char]
+    mut i   = 0
+    while i < len:
+        mut ch = p.offset(i).read() as int
+        if ch >= 65 and ch <= 90: ch = ch + 32
+        sb.append_char(ch)
+        i = i + 1
+    return sb.to_string().as_str()
+
+# ─── Trimming ─────────────────────────────────────────────────────────────────
+
+pub def str_trim_left(s: str) -> str:
+    mut p = s as Pointer[char]
+    mut i = 0
+    while True:
+        mut c = p.offset(i).read() as int
+        if c == 0 or (c != 32 and c != 9 and c != 10 and c != 13): break
+        i = i + 1
+    return str_slice(s, i, str_len(s))
+
+pub def str_trim_right(s: str) -> str:
+    mut len = str_len(s)
+    mut p   = s as Pointer[char]
+    mut i   = len - 1
+    while i >= 0:
+        mut c = p.offset(i).read() as int
+        if c != 32 and c != 9 and c != 10 and c != 13: break
+        i = i - 1
+    return str_slice(s, 0, i + 1)
+
+pub def str_trim(s: str) -> str:
+    return str_trim_left(str_trim_right(s))
+
+# ─── Char access ──────────────────────────────────────────────────────────────
+
+pub def str_char_at(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    return p.offset(i).read() as int

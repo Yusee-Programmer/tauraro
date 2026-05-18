@@ -1,0 +1,10 @@
+*.exe
+*.c
+*.txt
+*.log
+*.tmp
+*.bak
+*.obj
+*.dll
+*.so
+*.dylib

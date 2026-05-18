@@ -1,0 +1,19 @@
+# std.iter — Package index.
+#
+#   from std.iter import iota, range_vec, sum_vec, filter_gt, map_add
+#
+# Sub-modules:
+#   from std.iter.range     import iota, range_vec, range_step, range_n
+#   from std.iter.transform import filter_gt, filter_lt, map_add, map_mul
+#   from std.iter.transform import sum_vec, max_vec, min_vec, product_vec
+
+from std.iter.range     import [
+    range_vec, range_step, range_n, iota,
+]
+
+from std.iter.transform import [
+    filter_gt, filter_lt,
+    map_add, map_mul,
+    sum_vec, max_vec, min_vec, product_vec,
+    count_vec, any_eq, all_eq,
+]

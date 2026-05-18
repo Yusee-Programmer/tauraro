@@ -1,0 +1,2518 @@
+# compiler/src/codegen/c.tr — C code generator for the Tauraro self-hosted compiler.
+# Generates brutally optimized C from HIR with zero-cost abstractions.
+
+from core.vec import Vec
+from core.map import Map
+from core.string import StringBuilder
+from core.alloc import alloc
+from compiler.src.hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, _tr_str_len, hir_stmt_ownership, hir_expr_type
+from compiler.src.ast import AstType, Decorator, Pattern, Ownership
+
+# ─── Type helpers ─────────────────────────────────────────────────────────────
+
+pub def _indent_str(n: int) -> str:
+    mut s = ""
+    mut i = 0
+    while i < n:
+        s = s + "    "
+        i = i + 1
+    return s
+
+pub def _is_str_type(n: str) -> bool:
+    return n == "str" or n == "String"
+
+pub def _is_int_type(n: str) -> bool:
+    if n == "int" or n == "i64" or n == "i32" or n == "i16" or n == "i8": return true
+    if n == "u64" or n == "u32" or n == "u16" or n == "u8": return true
+    if n == "usize" or n == "isize" or n == "long long": return true
+    return false
+
+pub def _is_float_type(n: str) -> bool:
+    return n == "float" or n == "f64" or n == "f32" or n == "double"
+
+pub def _is_c_keyword(n: str) -> bool:
+    if n == "double" or n == "float" or n == "int" or n == "char": return true
+    if n == "long" or n == "short" or n == "void" or n == "unsigned": return true
+    if n == "signed" or n == "register" or n == "inline" or n == "auto": return true
+    if n == "struct" or n == "union" or n == "enum" or n == "extern": return true
+    return false
+
+pub def _is_primitive(n: str) -> bool:
+    if _is_int_type(n) or _is_float_type(n): return true
+    if n == "bool" or n == "char" or n == "void" or n == "None": return true
+    return false
+
+pub def _escape_str_for_c(s: str) -> str:
+    mut sb = StringBuilder.init(64)
+    mut p = s as Pointer[char]
+    mut i = 0
+    while True:
+        mut c = p.offset(i).read() as int
+        if c == 0: break
+        if c == 34: sb.append("\\\"")
+        elif c == 92: sb.append("\\\\")
+        elif c == 10: sb.append("\\n")
+        elif c == 13: sb.append("\\r")
+        elif c == 9: sb.append("\\t")
+        else: sb.append_char(c)
+        i = i + 1
+    return sb.to_string().as_str()
+
+# ─── CGenerator class ─────────────────────────────────────────────────────────
+
+pub class CGenerator:
+    pub buf:            StringBuilder
+    pub fwd_buf:        StringBuilder   # forward declarations
+    pub struct_buf:     StringBuilder   # struct definitions
+    pub list_types_buf: StringBuilder   # value-type List_T definitions (emitted after structs)
+    pub proto_buf:      StringBuilder   # function prototypes
+    pub mono_buf:       StringBuilder   # monomorphized generic class code
+    pub temp_count:     int
+    pub classes:        Map[str, HirClass]
+    pub enums:          Map[str, HirEnum]
+    pub interfaces:     Map[str, HirInterface]
+    pub functions:      Map[str, HirFunction]
+    pub decl_vars:      Map[str, bool]
+    pub type_subst:     Map[str, str]   # T → "long long" during mono gen
+    pub mono_done:      Map[str, bool]  # "Vec_i64" → true (prevents duplicate gen)
+    pub list_type_done: Map[str, bool]  # "Token" → true (prevents duplicate list gen)
+    pub list_fwd_done:  Map[str, bool]  # "Token" → true (prevents duplicate fwd decl)
+    pub cur_class:      str
+    pub cur_func:       str
+    pub closure_count:  int
+    pub emitted_fns:    Map[str, bool]   # tracks emitted free-standing fn names to prevent duplicates
+    pub spawn_wrappers:  Map[str, bool]   # fn_name → true once wrapper emitted
+    pub shared_vars:     Map[str, str]    # var_name → type_name (for _TrSharedBox unwrap)
+    pub cur_throws_ty:   str              # non-empty = current function has throws annotation
+    pub in_task_group:   int              # depth counter for task_group nesting
+    pub in_gpu_block:    int              # depth counter for gpu: block nesting
+
+    pub def init() -> CGenerator:
+        mut g = CGenerator()
+        g.buf           = StringBuilder.init(65536)
+        g.fwd_buf       = StringBuilder.init(4096)
+        g.struct_buf    = StringBuilder.init(16384)
+        g.list_types_buf = StringBuilder.init(2048)
+        g.proto_buf     = StringBuilder.init(8192)
+        g.mono_buf      = StringBuilder.init(8192)
+        g.temp_count    = 0
+        g.classes       = Map[str, HirClass].init(128)
+        g.enums         = Map[str, HirEnum].init(64)
+        g.interfaces    = Map[str, HirInterface].init(32)
+        g.functions     = Map[str, HirFunction].init(256)
+        g.decl_vars     = Map[str, bool].init(64)
+        g.type_subst    = Map[str, str].init(8)
+        g.mono_done     = Map[str, bool].init(32)
+        g.list_type_done = Map[str, bool].init(16)
+        g.list_fwd_done  = Map[str, bool].init(16)
+        g.cur_class     = ""
+        g.cur_func      = ""
+        g.closure_count = 0
+        g.emitted_fns   = Map[str, bool].init(256)
+        g.spawn_wrappers = Map[str, bool].init(16)
+        g.shared_vars    = Map[str, str].init(16)
+        g.cur_throws_ty  = ""
+        g.in_task_group  = 0
+        g.in_gpu_block   = 0
+        return g
+
+    pub def next_temp(self) -> str:
+        self.temp_count = self.temp_count + 1
+        return "_t" + self.temp_count.to_str()
+
+    pub def seed_params(self, f: HirFunction):
+        mut pi = 0
+        while pi < f.params.len:
+            self.decl_vars.insert(f.params.get(pi).name, true)
+            pi = pi + 1
+
+    pub def w(self, s: str): self.buf.append(s)
+    pub def wf(self, s: str): self.fwd_buf.append(s)
+    pub def ws(self, s: str): self.struct_buf.append(s)
+    pub def wp(self, s: str): self.proto_buf.append(s)
+    pub def wlt(self, s: str): self.list_types_buf.append(s)
+
+    pub def ensure_list_type(self, n: str):
+        if self.list_type_done.contains(n): return
+        self.list_type_done.insert(n, true)
+        self.wlt("typedef struct List_" + n + " { " + n + "* data; size_t len; size_t capacity; } List_" + n + ";\n")
+        self.wlt("static inline List_" + n + "* List_" + n + "_new(void) { List_" + n + "* l=(List_" + n + "*)malloc(sizeof(List_" + n + ")); l->data=(" + n + "*)malloc(sizeof(" + n + ")*8); l->len=0; l->capacity=8; return l; }\n")
+        self.wlt("static inline void List_" + n + "_append(List_" + n + "* l, " + n + " val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(" + n + "*)realloc(l->data,sizeof(" + n + ")*l->capacity); } l->data[l->len++]=val; }\n")
+        self.wlt("static inline " + n + " List_" + n + "_get(List_" + n + "* l, long long i) { if(!l||(size_t)i>=l->len) return (" + n + "){0}; return l->data[i]; }\n")
+        self.wlt("static inline " + n + " List_" + n + "_pop(List_" + n + "* l) { if(!l||l->len==0) return (" + n + "){0}; l->len--; return l->data[l->len]; }\n")
+        self.wlt("static inline void List_" + n + "_free(List_" + n + "* l) { if(l){ free(l->data); free(l); } }\n")
+
+    pub def check_and_emit_list_fwd(self, ty: AstType):
+        if ty as usize == 0 as usize: return
+        if ty.name == "List" or ty.name == "Vec":
+            if ty.args.len > 0:
+                mut elem = ty.args.get(0).read()
+                if self.enums.contains(elem.name):
+                    if not self.list_fwd_done.contains(elem.name):
+                        self.list_fwd_done.insert(elem.name, true)
+                        self.w("typedef struct List_" + elem.name + " List_" + elem.name + ";\n")
+
+    pub def emit_list_fwd_decls(self, prog: HirProgram):
+        mut ci = 0
+        while ci < prog.classes.len:
+            mut cls = prog.classes.get(ci)
+            mut fi = 0
+            while fi < cls.fields.len:
+                self.check_and_emit_list_fwd(cls.fields.get(fi).ty)
+                fi = fi + 1
+            ci = ci + 1
+        mut ei = 0
+        while ei < prog.enums.len:
+            mut enm = prog.enums.get(ei)
+            mut vi = 0
+            while vi < enm.variants.len:
+                mut v = enm.variants.get(vi)
+                mut vfi = 0
+                while vfi < v.fields.len:
+                    self.check_and_emit_list_fwd(v.fields.get(vfi).ty)
+                    vfi = vfi + 1
+                vi = vi + 1
+            ei = ei + 1
+
+    # ── Type mapping ──────────────────────────────────────────────────────────
+
+    pub def type_to_c(self, ty: AstType) -> str:
+        if ty as usize == 0 as usize: return "void"
+        mut n: str = ty.name
+        if n == "" or n == "void" or n == "None": return "void"
+
+        # Check active type substitution first (used during monomorphization)
+        if self.type_subst.contains(n): return self.type_subst.get(n)
+
+        if n == "int" or n == "i64" or n == "isize": return "long long"
+        if n == "i32": return "int"
+        if n == "i16": return "short"
+        if n == "i8": return "signed char"
+        if n == "u64" or n == "usize": return "unsigned long long"
+        if n == "u32": return "unsigned int"
+        if n == "u16": return "unsigned short"
+        if n == "u8": return "unsigned char"
+        if n == "f64" or n == "float": return "double"
+        if n == "f32": return "float"
+        if n == "bool": return "bool"
+        if n == "char": return "char"
+        if _is_str_type(n): return "char*"
+
+        # Check if it's a generic type parameter in current function
+        if self.cur_func != "":
+            if self.functions.contains(self.cur_func):
+                mut f = self.functions.get(self.cur_func)
+                mut gi = 0
+                while gi < f.generics.len:
+                    if f.generics.get(gi) == n: return "void*"
+                    gi = gi + 1
+
+        if n == "Pointer":
+            if ty.args.len > 0:
+                mut inner = ty.args.get(0).read()
+                mut it = self.type_to_c(inner)
+                if it == "void" or it == "void*": return "void*"
+                return it + "*"
+            return "void*"
+
+        # User-defined generic class takes precedence over built-in Vec/Map/List
+        if self.classes.contains(n):
+            mut ucls = self.classes.get(n)
+            if ucls.generics.len > 0 and ty.args.len > 0:
+                mut sfx = self.type_args_suffix(ty.args)
+                self.ensure_mono(ucls, ty.args)
+                return n + "_" + sfx + "*"
+            return n + "*"
+
+        if n == "List":
+            if ty.args.len > 0:
+                mut elem = ty.args.get(0).read()
+                mut sfx = self.list_elem_suffix(elem.name)
+                if sfx == "ptr": return "List_ptr*"
+                return "List_" + sfx + "*"
+            return "List_ptr*"
+
+        if n == "Vec":
+            if ty.args.len > 0:
+                mut elem = ty.args.get(0).read()
+                mut sfx = self.list_elem_suffix(elem.name)
+                if sfx == "ptr": return "List_ptr*"
+                return "List_" + sfx + "*"
+            return "List_ptr*"
+
+        if n == "Map" or n == "Dict":
+            return "TrMap*"
+
+        if n == "Result": return "Result"
+        if n == "Option": return "Option"
+        if self.enums.contains(n): return n
+        if self.interfaces.contains(n): return n + "_obj"
+        return n + "*"
+
+    pub def type_suffix(self, n: str) -> str:
+        if n == "int" or n == "i64": return "i64"
+        if n == "i32": return "i32"
+        if n == "i16": return "i16"
+        if n == "i8": return "i8"
+        if n == "u64" or n == "usize": return "u64"
+        if n == "u32": return "u32"
+        if n == "u16": return "u16"
+        if n == "u8": return "u8"
+        if n == "f64" or n == "float": return "f64"
+        if n == "f32": return "f32"
+        if n == "bool": return "bool"
+        if n == "char": return "char"
+        if _is_str_type(n): return "str"
+        return n
+
+    pub def list_elem_suffix(self, n: str) -> str:
+        mut sfx = self.type_suffix(n)
+        if sfx == "i64" or sfx == "f64" or sfx == "str" or sfx == "bool" or sfx == "i8" or sfx == "i32" or sfx == "char" or sfx == "u8" or sfx == "u32":
+            return sfx
+        if self.enums.contains(n):
+            self.ensure_list_type(n)
+            return n
+        return "ptr"
+
+    # ── Generic monomorphization helpers ─────────────────────────────────────
+
+    pub def type_args_suffix(self, args: Vec[Pointer[AstType]]) -> str:
+        mut sfx = ""
+        mut i = 0
+        while i < args.len:
+            if i > 0: sfx = sfx + "_"
+            mut arg_name = args.get(i).read().name
+            # Apply active type substitution (e.g., T → long long during mono gen)
+            if self.type_subst.contains(arg_name):
+                mut concrete = self.type_subst.get(arg_name)
+                # Map C type back to a type_suffix-friendly name
+                if concrete == "long long": arg_name = "int"
+                elif concrete == "double": arg_name = "float"
+                elif concrete == "char*": arg_name = "str"
+                elif concrete == "bool": arg_name = "bool"
+                elif concrete == "char": arg_name = "char"
+                elif concrete == "unsigned long long": arg_name = "u64"
+                elif concrete == "unsigned int": arg_name = "u32"
+                elif concrete == "int": arg_name = "i32"
+                elif concrete == "short": arg_name = "i16"
+                elif concrete == "signed char": arg_name = "i8"
+                elif concrete == "float": arg_name = "f32"
+                else: arg_name = concrete
+            sfx = sfx + self.type_suffix(arg_name)
+            i = i + 1
+        return sfx
+
+    # Ensure a monomorphized version of cls is generated into mono_buf.
+    # Safe to call multiple times — guarded by mono_done map.
+    pub def ensure_mono(self, cls: HirClass, type_args: Vec[Pointer[AstType]]):
+        mut sfx = self.type_args_suffix(type_args)
+        mut mono_key = cls.name + "_" + sfx
+        if self.mono_done.contains(mono_key): return
+        self.mono_done.insert(mono_key, true)
+
+        mut mono_name = cls.name + "_" + sfx
+
+        # Set up type substitution: generic param → concrete C type
+        mut old_subst = self.type_subst
+        self.type_subst = Map[str, str].init(8)
+        mut i = 0
+        while i < cls.generics.len and i < type_args.len:
+            mut param = cls.generics.get(i)
+            mut concrete = self.type_to_c(type_args.get(i).read())
+            self.type_subst.insert(param, concrete)
+            i = i + 1
+
+        # Redirect writes to mono_buf so output is collected for flushing later
+        mut old_buf      = self.buf
+        mut old_sbuf     = self.struct_buf
+        mut old_pbuf     = self.proto_buf
+        self.buf         = self.mono_buf
+        self.struct_buf  = self.mono_buf
+        self.proto_buf   = self.mono_buf
+
+        # Forward declaration
+        self.w("typedef struct " + mono_name + " " + mono_name + ";\n")
+
+        # Struct body
+        self.w("typedef struct " + mono_name + " {\n")
+        mut fi = 0
+        while fi < cls.fields.len:
+            mut f = cls.fields.get(fi)
+            self.w("    " + self.type_to_c(f.ty) + " " + f.name + ";\n")
+            fi = fi + 1
+        if cls.fields.len == 0:
+            self.w("    char _pad;\n")
+        self.w("} " + mono_name + ";\n\n")
+
+        # Method prototypes then bodies
+        mut mi = 0
+        while mi < cls.methods.len:
+            mut m = cls.methods.get(mi)
+            mut old_class = self.cur_class
+            mut old_func  = self.cur_func
+            self.cur_class = mono_name
+            self.cur_func  = m.name
+            mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
+            self.w(sig + ";\n")
+            mi = mi + 1
+        mi = 0
+        while mi < cls.methods.len:
+            mut m = cls.methods.get(mi)
+            mut old_class = self.cur_class
+            mut old_func  = self.cur_func
+            self.cur_class = mono_name
+            self.cur_func  = m.name
+            self.decl_vars = Map[str, bool].init(64)
+            self.seed_params(m)
+            mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
+            self.w(sig + " {\n")
+            self.gen_block(m.body, 1)
+            self.w("}\n\n")
+            self.cur_class = old_class
+            self.cur_func  = old_func
+            mi = mi + 1
+
+        # Save back the (possibly realloc-grown) mono buffer before restoring.
+        # self.buf IS the mono buffer; without this, mono_buf.ptr becomes stale
+        # after any realloc during generation and causes an access violation at flush time.
+        self.mono_buf   = self.buf
+        self.buf        = old_buf
+        self.struct_buf = old_sbuf
+        self.proto_buf  = old_pbuf
+        self.type_subst = old_subst
+
+    # ── Attributes & signatures ───────────────────────────────────────────────
+
+    pub def get_inline_attrs(self, f: HirFunction) -> str:
+        mut i = 0
+        while i < f.decorators.len:
+            if f.decorators.get(i).name == "inline": return "static __attribute__((always_inline,hot)) "
+            if f.decorators.get(i).name == "hot": return "static __attribute__((hot)) "
+            if f.decorators.get(i).name == "noinline": return "static __attribute__((noinline)) "
+            i = i + 1
+        if f.name == "main" or f.name == "_tr_main":
+            return "__attribute__((hot,optimize(\"O3,unroll-loops\"))) "
+        if f.name == "init":
+            return "static __attribute__((malloc,returns_nonnull,hot)) "
+        return "static __attribute__((hot)) "
+
+    # Like get_inline_attrs but without `static` — for cross-module prototypes in tauraro_types.h.
+    pub def get_proto_attrs(self, f: HirFunction) -> str:
+        mut i = 0
+        while i < f.decorators.len:
+            if f.decorators.get(i).name == "inline": return "__attribute__((always_inline,hot)) "
+            if f.decorators.get(i).name == "hot": return "__attribute__((hot)) "
+            if f.decorators.get(i).name == "noinline": return "__attribute__((noinline)) "
+            i = i + 1
+        if f.name == "main" or f.name == "_tr_main":
+            return "__attribute__((hot,optimize(\"O3,unroll-loops\"))) "
+        if f.name == "init":
+            return "__attribute__((malloc,returns_nonnull,hot)) "
+        return "__attribute__((hot)) "
+
+    pub def gen_func_sig(self, f: HirFunction, class_name: str) -> str:
+        mut old_f = self.cur_func
+        self.cur_func = f.name
+        mut ret_ty_str = self.type_to_c(f.ret_ty)
+        if f.throws_ty.name != "":
+            ret_ty_str = "Result"
+        mut fname = f.name
+        if fname == "main": fname = "_tr_main"
+        # Escape C reserved keywords used as function names
+        if _is_c_keyword(fname): fname = "_tr_fn_" + fname
+        if class_name != "":
+            fname = class_name + "_" + fname
+        mut sig = ret_ty_str + " " + fname + "("
+        mut first = true
+
+        if class_name != "" and not f.is_static:
+            if self.enums.contains(class_name):
+                sig = sig + class_name + " self"
+            else:
+                sig = sig + class_name + "* self"
+            first = false
+
+        mut i = 0
+        while i < f.params.len:
+            mut p = f.params.get(i)
+            if p.name != "self":
+                if not first: sig = sig + ", "
+                sig = sig + self.type_to_c(p.ty) + " " + p.name
+                first = false
+            i = i + 1
+
+        if f.is_variadic:
+            if not first: sig = sig + ", "
+            sig = sig + "..."
+
+        sig = sig + ")"
+        self.cur_func = old_f
+        return sig
+
+    # ── Struct generation ─────────────────────────────────────────────────────
+
+    pub def gen_class_struct(self, c: HirClass):
+        self.ws("typedef struct " + c.name + " {\n")
+        mut i = 0
+        while i < c.fields.len:
+            mut f = c.fields.get(i)
+            self.ws("    " + self.type_to_c(f.ty) + " " + f.name + ";\n")
+            i = i + 1
+        if c.fields.len == 0:
+            self.ws("    char _pad;\n")
+        self.ws("} " + c.name + ";\n\n")
+
+    pub def gen_enum_struct(self, e: HirEnum):
+        # Emit tag constants
+        self.ws("typedef enum {\n")
+        mut i = 0
+        while i < e.variants.len:
+            mut v = e.variants.get(i)
+            self.ws("    " + e.name + "_" + v.name)
+            if i < e.variants.len - 1: self.ws(",")
+            self.ws("\n")
+            i = i + 1
+        if e.variants.len == 0:
+            self.ws("    " + e.name + "_EMPTY\n")
+        self.ws("} " + e.name + "_tag;\n\n")
+
+        # Emit the tagged union struct
+        self.ws("typedef struct " + e.name + " {\n")
+        self.ws("    " + e.name + "_tag tag;\n")
+        mut has_data = false
+        i = 0
+        while i < e.variants.len:
+            if e.variants.get(i).fields.len > 0:
+                has_data = true
+            i = i + 1
+        if has_data:
+            self.ws("    union {\n")
+            i = 0
+            while i < e.variants.len:
+                mut v = e.variants.get(i)
+                if v.fields.len > 0:
+                    self.ws("        struct {\n")
+                    mut j = 0
+                    while j < v.fields.len:
+                        mut fld = v.fields.get(j)
+                        self.ws("            " + self.type_to_c(fld.ty) + " " + fld.name + ";\n")
+                        j = j + 1
+                    self.ws("        } " + v.name + ";\n")
+                i = i + 1
+            self.ws("    } data;\n")
+        self.ws("} " + e.name + ";\n\n")
+
+        # Emit constructor macros for each variant
+        i = 0
+        while i < e.variants.len:
+            mut v = e.variants.get(i)
+            if v.fields.len == 0:
+                self.ws("#define " + e.name + "_make_" + v.name + "() ((" + e.name + "){.tag=" + e.name + "_" + v.name + "})\n")
+            else:
+                self.ws("static inline __attribute__((always_inline)) " + e.name + " " + e.name + "_ctor_" + v.name + "(")
+                mut j = 0
+                while j < v.fields.len:
+                    if j > 0: self.ws(", ")
+                    self.ws(self.type_to_c(v.fields.get(j).ty) + " " + v.fields.get(j).name)
+                    j = j + 1
+                self.ws(") { " + e.name + " _r = {.tag=" + e.name + "_" + v.name + "}; ")
+                j = 0
+                while j < v.fields.len:
+                    self.ws("_r.data." + v.name + "." + v.fields.get(j).name + " = " + v.fields.get(j).name + "; ")
+                    j = j + 1
+                self.ws("return _r; }\n")
+            i = i + 1
+        self.ws("\n")
+
+    pub def gen_interface_vtable(self, iface: HirInterface):
+        self.ws("typedef struct _" + iface.name + "_vtable {\n")
+        mut i = 0
+        while i < iface.methods.len:
+            mut m = iface.methods.get(i)
+            mut ret = self.type_to_c(m.ret_ty)
+            self.ws("    " + ret + " (*" + m.name + ")(void* self")
+            mut j = 0
+            while j < m.params.len:
+                mut p = m.params.get(j)
+                if p.name != "self":
+                    self.ws(", " + self.type_to_c(p.ty) + " " + p.name)
+                j = j + 1
+            self.ws(");\n")
+            i = i + 1
+        self.ws("} " + iface.name + "_vtable;\n\n")
+        self.ws("typedef struct { " + iface.name + "_vtable* vtable; void* data; } " + iface.name + "_obj;\n\n")
+
+    # Build the static-inline _as_ wrap function string for one class+interface pair.
+    # Called from generate_types_header (appended after all prototypes).
+    pub def gen_one_iface_wrap(self, cls_name: str, iface: HirInterface) -> str:
+        mut s = "static inline " + iface.name + "_obj " + cls_name + "_as_" + iface.name + "(" + cls_name + "* self) {\n"
+        s = s + "    static const " + iface.name + "_vtable _vtbl_" + cls_name + "_" + iface.name + " = {\n"
+        mut mi = 0
+        while mi < iface.methods.len:
+            mut m = iface.methods.get(mi)
+            mut ret_c = self.type_to_c(m.ret_ty)
+            mut cast_sig = ret_c + "(*)(void*"
+            mut pi = 0
+            while pi < m.params.len:
+                mut p = m.params.get(pi)
+                if p.name != "self":
+                    cast_sig = cast_sig + ", " + self.type_to_c(p.ty)
+                pi = pi + 1
+            cast_sig = cast_sig + ")"
+            s = s + "        ." + m.name + " = (" + cast_sig + ")(" + cls_name + "_" + m.name + "),\n"
+            mi = mi + 1
+        s = s + "    };\n"
+        s = s + "    return (" + iface.name + "_obj){ .vtable = (" + iface.name + "_vtable*)&_vtbl_" + cls_name + "_" + iface.name + ", .data = (void*)self };\n"
+        s = s + "}\n"
+        return s
+
+    # ── Expression generation ─────────────────────────────────────────────────
+
+    pub def gen_expr(self, e_ptr: Pointer[HirExpr]) -> str:
+        if e_ptr as usize == 0 as usize: return "NULL"
+        e = e_ptr.read()
+        match e:
+            case HirExpr.ELitInt(v, _): return v.to_str() + "LL"
+            case HirExpr.ELitFloat(v, _): return v.to_str()
+            case HirExpr.ELitStr(v, _): return "\"" + _escape_str_for_c(v) + "\""
+            case HirExpr.ERawStr(v, _): return "\"" + _escape_str_for_c(v) + "\""
+            case HirExpr.ELitBytes(v, _): return "\"" + _escape_str_for_c(v) + "\""
+            case HirExpr.ELitChar(v, _):
+                if v == 0: return "'\\0'"
+                if v == 10: return "'\\n'"
+                if v == 9: return "'\\t'"
+                if v == 13: return "'\\r'"
+                if v == 92: return "'\\\\'"
+                if v == 39: return "'\\''"
+                return "'" + _tr_char_to_str(v) + "'"
+            case HirExpr.ELitBool(v, _):
+                if v: return "true"
+                else: return "false"
+            case HirExpr.ELitNone(_): return "NULL"
+            case HirExpr.EIdent(n, _, _): return n
+            case HirExpr.EBinOp(op, l, r, _): return self.gen_binop(op, l, r)
+            case HirExpr.EUnaryOp(op, expr, _): return self.gen_unary(op, expr)
+            case HirExpr.ECall(callee, args, call_ty): return self.gen_call(callee, args, call_ty)
+            case HirExpr.EMethodCall(o, m, a, ty): return self.gen_method_call(o, m, a, ty)
+            case HirExpr.EPropAccess(o, p, _): return self.gen_prop_access(o, p)
+            case HirExpr.EIndex(o, idx, _): return self.gen_index(o, idx)
+            case HirExpr.ESizeOf(target_ty, _):
+                return "((long long)sizeof(" + self.type_to_c(target_ty) + "))"
+            case HirExpr.ECast(expr, target_ty):
+                return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
+            case HirExpr.EFString(parts, _): return self.gen_fstring(parts)
+            case HirExpr.ETryExpr(expr, ok_ty):
+                # Fallback: unsafe extract (proper propagation handled at statement level)
+                mut inner_s2 = self.gen_expr(expr)
+                mut ok_c = self.type_to_c(ok_ty)
+                if ok_c == "void" or ok_c == "__auto_type": ok_c = "long long"
+                if _is_int_type(ok_ty.name) or ok_ty.name == "bool":
+                    return "((" + ok_c + ")(uintptr_t)((" + inner_s2 + ").data.Ok.val))"
+                return "((" + ok_c + "*)((" + inner_s2 + ").data.Ok.val))"
+            case HirExpr.ETuple(items, _): return self.gen_tuple(items)
+            case HirExpr.EList(items, ty): return self.gen_list_literal(items, ty)
+            case HirExpr.EDict(keys, vals, _): return self.gen_dict_literal(keys, vals)
+            case HirExpr.EClosure(params, ret_ty, body, _):
+                return self.gen_closure(params, ret_ty, body)
+            case HirExpr.ERange(start, end, inclusive, _):
+                return self.gen_expr(start)
+            case HirExpr.ESuperMethodCall(base, method, args, _):
+                mut sig = base + "_" + method + "((void*)self"
+                mut i = 0
+                while i < args.len:
+                    sig = sig + ", " + self.gen_expr(args.get(i))
+                    i = i + 1
+                return sig + ")"
+            case HirExpr.ESuperPropAccess(base, prop, _):
+                return "(((" + base + "*)self)->" + prop + ")"
+            case HirExpr.EAwait(expr, _):
+                return self.gen_expr(expr)
+            case HirExpr.EYield(expr, _):
+                return self.gen_expr(expr)
+            case HirExpr.ESet(items, _):
+                mut set_ty = AstType.init("ptr")
+                if items.len > 0:
+                    mut first_ty_n: str = hir_expr_type(items.get(0)).name
+                    set_ty = AstType.init(first_ty_n)
+                return self.gen_list_literal(items, set_ty)
+            case HirExpr.EListComp(element, generators, _):
+                return self.gen_list_comp(element, generators)
+            case HirExpr.EGeneratorExpr(element, generators, _):
+                return self.gen_list_comp(element, generators)
+            case HirExpr.ESlice(start, stop, step, _):
+                if start as usize != 0 as usize: return self.gen_expr(start)
+                return "0LL"
+            case HirExpr.EIfElse(cond, then_e, else_e, ty):
+                mut ts = self.gen_expr(then_e)
+                mut es = self.gen_expr(else_e)
+                if _is_int_type(ty.name):
+                    if ts == "NULL": ts = "0LL"
+                    if es == "NULL": es = "0LL"
+                return "((" + self.gen_expr(cond) + ") ? (" + ts + ") : (" + es + "))"
+            case _: return "0 /* unsupported expr */"
+
+    pub def gen_binop(self, op: str, l: Pointer[HirExpr], r: Pointer[HirExpr]) -> str:
+        mut ls = self.gen_expr(l)
+        mut rs = self.gen_expr(r)
+        mut lt_n: str = hir_expr_type(l).name
+        mut rt_n: str = hir_expr_type(r).name
+        if op == "+" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
+            return "_tr_str_concat(" + ls + ", " + rs + ")"
+        if op == "and": return "(" + ls + " && " + rs + ")"
+        if op == "or": return "(" + ls + " || " + rs + ")"
+        if op == "is": return "(" + ls + " == " + rs + ")"
+        if op == "in": return "_tr_contains(" + ls + ", " + rs + ")"
+        if op == "**": return "((long long)pow((double)(" + ls + "), (double)(" + rs + ")))"
+        if op == "//": return "((long long)(" + ls + ") / (long long)(" + rs + "))"
+        if _is_str_type(lt_n) and (op == "==" or op == "!="):
+            if op == "==": return "(strcmp((char*)" + ls + ", (char*)" + rs + ") == 0)"
+            return "(strcmp((char*)" + ls + ", (char*)" + rs + ") != 0)"
+        if self.enums.contains(lt_n) and (op == "==" or op == "!="):
+            return "(" + ls + ".tag " + op + " " + rs + ".tag)"
+        return "(" + ls + " " + op + " " + rs + ")"
+
+    pub def gen_unary(self, op: str, expr: Pointer[HirExpr]) -> str:
+        mut inner = self.gen_expr(expr)
+        if op == "not" or op == "!": return "(!" + inner + ")"
+        if op == "*" or op == "deref": return "(*" + inner + ")"
+        if op == "&" or op == "ref": return "(&" + inner + ")"
+        return "(" + op + inner + ")"
+
+    pub def gen_prop_access(self, o: Pointer[HirExpr], p: str) -> str:
+        mut t_n: str = hir_expr_type(o).name
+        mut obj_s = self.gen_expr(o)
+        # Shared var: unwrap _TrSharedBox* → (TypeName*)obj->data
+        if self.shared_vars.contains(obj_s):
+            mut sh_ty = self.shared_vars.get(obj_s)
+            return "((" + sh_ty + "*)(" + obj_s + "->data))->" + p
+        if self.enums.contains(t_n):
+            if obj_s == t_n: return t_n + "_make_" + p + "()"
+            return obj_s + ".data." + p
+        if t_n == "Pointer": return "(*" + obj_s + ")." + p
+        if _is_str_type(t_n) and (p == "len" or p == "length"):
+            return "((long long)_tr_strlen(" + obj_s + "))"
+        if t_n == "Result":
+            if p == "is_err": return "(" + obj_s + ".tag == Result_Err)"
+            if p == "is_ok": return "(" + obj_s + ".tag == Result_Ok)"
+            if p == "ok":
+                mut full_ty = hir_expr_type(o)
+                if full_ty.args.len > 0:
+                    mut ok_ct = self.type_to_c(full_ty.args.get(0).read())
+                    return "((" + ok_ct + ")(" + obj_s + ".data.Ok.val))"
+                return obj_s + ".data.Ok.val"
+            if p == "err":
+                mut full_ty2 = hir_expr_type(o)
+                if full_ty2.args.len > 1:
+                    mut err_ct = self.type_to_c(full_ty2.args.get(1).read())
+                    return "((" + err_ct + ")(" + obj_s + ".data.Err.err))"
+                return "(char*)(" + obj_s + ".data.Err.err)"
+            return obj_s + "." + p
+        if t_n == "Option":
+            if p == "is_some": return "(" + obj_s + ".tag == Option_Some)"
+            if p == "is_none": return "(" + obj_s + ".tag == Option_None)"
+            if p == "value" or p == "val":
+                mut full_opt_ty = hir_expr_type(o)
+                if full_opt_ty.args.len > 0:
+                    mut opt_ct = self.type_to_c(full_opt_ty.args.get(0).read())
+                    return "((" + opt_ct + ")(" + obj_s + ".data.Some.val))"
+                return obj_s + ".data.Some.val"
+            return obj_s + "." + p
+        if self.interfaces.contains(t_n) and self.interfaces as usize != 0 as usize:
+            return obj_s + "." + p
+        return obj_s + "->" + p
+
+    pub def gen_index(self, o: Pointer[HirExpr], idx: Pointer[HirExpr]) -> str:
+        mut os = self.gen_expr(o)
+        mut is_idx = self.gen_expr(idx)
+        mut ty_n: str = hir_expr_type(o).name
+        if ty_n == "Pointer": return os + "[" + is_idx + "]"
+        if ty_n == "List": return os + "->data[" + is_idx + "]"
+        if self.classes.contains(ty_n):
+            return ty_n + "_get_index(" + os + ", " + is_idx + ")"
+        return os + "[" + is_idx + "]"
+
+    pub def gen_call(self, callee: Pointer[HirExpr], args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
+        mut callee_s = self.gen_expr(callee)
+        # Mangle C reserved keywords used as call targets
+        if _is_c_keyword(callee_s): callee_s = "_tr_fn_" + callee_s
+
+        # print / buga builtins
+        if callee_s == "print" or callee_s == "buga":
+            return self.gen_print_call(args)
+
+        # len builtin
+        if callee_s == "len":
+            if args.len > 0:
+                mut arg0 = args.get(0)
+                if _is_str_type(hir_expr_type(arg0).name): return "_tr_strlen(" + self.gen_expr(arg0) + ")"
+                return self.gen_expr(arg0) + "->len"
+            return "0LL"
+
+        # range builtin (used in for loops – returns range struct)
+        if callee_s == "range":
+            if args.len == 1:
+                return "_tr_range(0, " + self.gen_expr(args.get(0)) + ", 1)"
+            elif args.len == 2:
+                return "_tr_range(" + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ", 1)"
+            elif args.len == 3:
+                return "_tr_range(" + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ", " + self.gen_expr(args.get(2)) + ")"
+            return "_tr_range(0, 0, 1)"
+
+        # _tr_exit
+        if callee_s == "_tr_exit":
+            if args.len > 0: return "exit((int)(" + self.gen_expr(args.get(0)) + "))"
+            return "exit(0)"
+
+        # ord / chr — character conversions
+        if callee_s == "ord":
+            if args.len > 0: return "((long long)(unsigned char)(" + self.gen_expr(args.get(0)) + ")[0])"
+            return "0LL"
+        if callee_s == "chr":
+            if args.len > 0: return "((char)(" + self.gen_expr(args.get(0)) + "))"
+            return "'\\0'"
+
+        # abs — absolute value
+        if callee_s == "abs":
+            if args.len > 0:
+                mut abs_a = self.gen_expr(args.get(0))
+                mut abs_t_n: str = hir_expr_type(args.get(0)).name
+                if _is_float_type(abs_t_n): return "fabs((double)(" + abs_a + "))"
+                return "llabs((long long)(" + abs_a + "))"
+            return "0LL"
+
+        # max / min — pairwise comparisons
+        if callee_s == "max":
+            if args.len == 2:
+                mut ma = self.next_temp()
+                mut mb = self.next_temp()
+                return "({ __auto_type " + ma + " = " + self.gen_expr(args.get(0)) + "; __auto_type " + mb + " = " + self.gen_expr(args.get(1)) + "; " + ma + " > " + mb + " ? " + ma + " : " + mb + "; })"
+            return "0LL"
+        if callee_s == "min":
+            if args.len == 2:
+                mut mna = self.next_temp()
+                mut mnb = self.next_temp()
+                return "({ __auto_type " + mna + " = " + self.gen_expr(args.get(0)) + "; __auto_type " + mnb + " = " + self.gen_expr(args.get(1)) + "; " + mna + " < " + mnb + " ? " + mna + " : " + mnb + "; })"
+            return "0LL"
+
+        # round — rounding a float
+        if callee_s == "round":
+            if args.len > 0: return "(double)round((double)(" + self.gen_expr(args.get(0)) + "))"
+            return "0.0"
+
+        # str() — convert to string
+        if callee_s == "str":
+            if args.len > 0:
+                mut str_arg = args.get(0)
+                mut str_t_n: str = hir_expr_type(str_arg).name
+                if _is_int_type(str_t_n): return "_tr_int_to_str((long long)(" + self.gen_expr(str_arg) + "))"
+                if _is_float_type(str_t_n): return "_tr_float_to_str((double)(" + self.gen_expr(str_arg) + "))"
+                if str_t_n == "bool": return "((" + self.gen_expr(str_arg) + ") ? \"true\" : \"false\")"
+                return "(char*)(" + self.gen_expr(str_arg) + ")"
+            return "\"\""
+
+        # int() / float() / bool() — type coercions
+        if callee_s == "int":
+            if args.len > 0: return "(long long)(" + self.gen_expr(args.get(0)) + ")"
+            return "0LL"
+        if callee_s == "float" or callee_s == "_tr_fn_float":
+            if args.len > 0: return "(double)(" + self.gen_expr(args.get(0)) + ")"
+            return "0.0"
+        if callee_s == "bool":
+            if args.len > 0: return "(_Bool)(" + self.gen_expr(args.get(0)) + ")"
+            return "0"
+
+        # type() — returns a string representation of the type
+        if callee_s == "type":
+            return "\"<object>\""
+
+        # iter / enumerate / sorted / reversed — identity for now
+        if callee_s == "iter" or callee_s == "enumerate" or callee_s == "sorted" or callee_s == "reversed":
+            if args.len > 0: return self.gen_expr(args.get(0))
+            return "NULL"
+
+        # sum — sum all elements of a list
+        if callee_s == "sum":
+            if args.len > 0:
+                mut sum_tmp = self.next_temp()
+                mut sum_l = self.next_temp()
+                return "({ long long " + sum_tmp + " = 0; __auto_type " + sum_l + " = " + self.gen_expr(args.get(0)) + "; for (long long _si = 0; _si < " + sum_l + "->len; _si++) " + sum_tmp + " += (long long)" + sum_l + "->data[_si]; " + sum_tmp + "; })"
+            return "0LL"
+
+        # any / all — short-circuit list scan
+        if callee_s == "any":
+            if args.len > 0:
+                mut any_l = self.next_temp()
+                return "({ _Bool _any_r = 0; __auto_type " + any_l + " = " + self.gen_expr(args.get(0)) + "; for (long long _ai = 0; _ai < " + any_l + "->len; _ai++) if (" + any_l + "->data[_ai]) { _any_r = 1; break; } _any_r; })"
+            return "0"
+        if callee_s == "all":
+            if args.len > 0:
+                mut all_l = self.next_temp()
+                return "({ _Bool _all_r = 1; __auto_type " + all_l + " = " + self.gen_expr(args.get(0)) + "; for (long long _ai = 0; _ai < " + all_l + "->len; _ai++) if (!" + all_l + "->data[_ai]) { _all_r = 0; break; } _all_r; })"
+            return "1"
+
+        # Option / Result constructors
+        if callee_s == "Some":
+            if args.len > 0: return "_tr_option_some((void*)(" + self.gen_expr(args.get(0)) + "))"
+            return "_tr_option_none()"
+        if callee_s == "Ok":
+            if args.len > 0: return "_tr_result_ok((void*)(" + self.gen_expr(args.get(0)) + "))"
+            return "_tr_result_ok(NULL)"
+        if callee_s == "Err":
+            if args.len > 0: return "_tr_result_err((void*)(" + self.gen_expr(args.get(0)) + "))"
+            return "_tr_result_err(NULL)"
+
+        # Intercept alloc
+        if callee_s == "alloc" or callee_s == "core_alloc_alloc":
+            mut count_s = "1LL"
+            if args.len > 0: count_s = self.gen_expr(args.get(0))
+            mut alloc_ty = "void"
+            # Use the call's return type Pointer[T] to determine T
+            if call_ty.name == "Pointer" and call_ty.args.len > 0:
+                alloc_ty = self.type_to_c(call_ty.args.get(0).read())
+            else:
+                match callee.read():
+                    case HirExpr.EIdent(_, ident_ty, _):
+                        if ident_ty.args.len > 0:
+                            alloc_ty = self.type_to_c(ident_ty.args.get(0).read())
+                    case _: pass
+            if alloc_ty == "void" or alloc_ty == "void*":
+                return "malloc((size_t)(" + count_s + "))"
+            return "((" + alloc_ty + "*)_tr_c_calloc((size_t)(" + count_s + "), sizeof(" + alloc_ty + ")))"
+
+        # input() — read a line from stdin
+        if callee_s == "input":
+            if args.len > 0: return "_tr_input(" + self.gen_expr(args.get(0)) + ")"
+            return "_tr_input(NULL)"
+
+        # Pointer[T](addr) → (T*)addr  (null pointer construction)
+        if callee_s == "Pointer":
+            if args.len > 0:
+                mut ptr_arg = self.gen_expr(args.get(0))
+                match callee.read():
+                    case HirExpr.EIdent(_, ident_ty, _):
+                        if ident_ty.args.len > 0:
+                            mut elem = ident_ty.args.get(0).read()
+                            mut ct = self.type_to_c(elem)
+                            return "(" + ct + "*)(" + ptr_arg + ")"
+                    case _: pass
+                return "(void*)(" + ptr_arg + ")"
+            return "NULL"
+
+        # Class constructor call: ClassName() or GenericClass[T]()
+        match callee.read():
+            case HirExpr.EIdent(n, ident_ty, _):
+                if self.classes.contains(n):
+                    mut ucls = self.classes.get(n)
+                    if ucls.generics.len > 0 and ident_ty.args.len > 0:
+                        mut sfx = self.type_args_suffix(ident_ty.args)
+                        self.ensure_mono(ucls, ident_ty.args)
+                        mut mn = n + "_" + sfx
+                        return "((" + mn + "*)_tr_checked_alloc(sizeof(" + mn + ")))"
+                    return "((" + n + "*)_tr_checked_alloc(sizeof(" + n + ")))"
+                if self.enums.contains(n):
+                    return "(" + n + "){.tag=" + n + "_" + n + "}"
+            case HirExpr.EPropAccess(obj_inner, variant, _):
+                mut oi_type_n = hir_expr_type(obj_inner).name
+                if oi_type_n == "Result":
+                    if variant == "ok":
+                        mut ok_val = "NULL"
+                        if args.len > 0:
+                            ok_val = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                        return "((Result){.tag=Result_Ok, .data.Ok.val=" + ok_val + "})"
+                    elif variant == "err":
+                        mut err_val = "NULL"
+                        if args.len > 0:
+                            err_val = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                        return "((Result){.tag=Result_Err, .data.Err.err=" + err_val + "})"
+                elif oi_type_n == "Option":
+                    if variant == "some" or variant == "Some":
+                        mut sv = "NULL"
+                        if args.len > 0:
+                            sv = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                        return "((Option){.tag=Option_Some, .data.Some.val=" + sv + "})"
+                    elif variant == "none" or variant == "None":
+                        return "((Option){.tag=Option_None})"
+                if self.enums.contains(oi_type_n):
+                    if args.len > 0:
+                        return oi_type_n + "_ctor_" + variant + "(" + self.gen_args(args) + ")"
+                    else:
+                        return oi_type_n + "_make_" + variant + "()"
+            case _: pass
+
+        # If callee is a known function, auto-wrap class args that target interface params
+        if self.functions.contains(callee_s):
+            mut fn_def = self.functions.get(callee_s)
+            mut self_skip = 0
+            if fn_def.params as usize != 0 as usize and fn_def.params.len > 0 and fn_def.params.get(0).name == "self":
+                self_skip = 1
+            mut any_wrapped = false
+            mut ai = 0
+            while ai < args.len:
+                mut pi = ai + self_skip
+                if fn_def.params as usize != 0 as usize and pi < fn_def.params.len:
+                    if self.interfaces.contains(fn_def.params.get(pi).ty.name):
+                        mut actual_ty_n = hir_expr_type(args.get(ai)).name
+                        if self.classes.contains(actual_ty_n):
+                            any_wrapped = true
+                ai = ai + 1
+            if any_wrapped:
+                mut wrapped_args = ""
+                ai = 0
+                while ai < args.len:
+                    if ai > 0: wrapped_args = wrapped_args + ", "
+                    mut pi = ai + self_skip
+                    mut arg_s = self.gen_expr(args.get(ai))
+                    if fn_def.params as usize != 0 as usize and pi < fn_def.params.len:
+                        mut expected_iface = fn_def.params.get(pi).ty.name
+                        if self.interfaces.contains(expected_iface):
+                            mut actual_ty_n = hir_expr_type(args.get(ai)).name
+                            if self.classes.contains(actual_ty_n):
+                                arg_s = actual_ty_n + "_as_" + expected_iface + "(" + arg_s + ")"
+                    wrapped_args = wrapped_args + arg_s
+                    ai = ai + 1
+                return callee_s + "(" + wrapped_args + ")"
+
+        return callee_s + "(" + self.gen_args(args) + ")"
+
+    pub def gen_print_call(self, args: Vec[Pointer[HirExpr]]) -> str:
+        if args.len == 0: return "printf(\"\\n\")"
+        mut arg0 = args.get(0)
+        mut ty0_n: str = hir_expr_type(arg0).name
+        mut s0 = self.gen_expr(arg0)
+        if _is_int_type(ty0_n): return "printf(\"%lld\\n\", (long long)(" + s0 + "))"
+        if _is_float_type(ty0_n): return "printf(\"%g\\n\", (double)(" + s0 + "))"
+        if ty0_n == "bool": return "printf(\"%s\\n\", (" + s0 + ") ? \"true\" : \"false\")"
+        if ty0_n == "char": return "printf(\"%c\\n\", " + s0 + ")"
+        return "printf(\"%s\\n\", (char*)(" + s0 + "))"
+
+    pub def gen_args(self, args: Vec[Pointer[HirExpr]]) -> str:
+        mut s = ""
+        mut i = 0
+        while i < args.len:
+            if i > 0: s = s + ", "
+            s = s + self.gen_expr(args.get(i))
+            i = i + 1
+        return s
+
+    pub def gen_method_call(self, obj: Pointer[HirExpr], method: str, args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
+        mut obj_s = self.gen_expr(obj)
+        mut t_n: str = hir_expr_type(obj).name
+
+        # Shared var: unwrap _TrSharedBox* → (TypeName*)obj->data for method dispatch
+        if self.shared_vars.contains(obj_s):
+            mut sh_ty = self.shared_vars.get(obj_s)
+            mut sh_unwrapped = "((" + sh_ty + "*)(" + obj_s + "->data))"
+            mut sh_sig = sh_ty + "_" + method + "(" + sh_unwrapped
+            if args.len > 0:
+                sh_sig = sh_sig + ", " + self.gen_args(args)
+            return sh_sig + ")"
+
+        # Interface vtable dispatch: obj.vtable->method(obj.data, extra_args...)
+        if self.interfaces.contains(t_n):
+            mut s = obj_s + ".vtable->" + method + "(" + obj_s + ".data"
+            if args.len > 0:
+                s = s + ", " + self.gen_args(args)
+            return s + ")"
+
+        # Result[T,E] method dispatch
+        if t_n == "Result":
+            if obj_s == "Result":
+                # Static constructor: Result[T,E].ok(val) or Result[T,E].err(val)
+                if method == "ok":
+                    mut ok_cv = "NULL"
+                    if args.len > 0:
+                        ok_cv = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                    return "((Result){.tag=Result_Ok, .data.Ok.val=" + ok_cv + "})"
+                elif method == "err":
+                    mut err_cv = "NULL"
+                    if args.len > 0:
+                        err_cv = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                    return "((Result){.tag=Result_Err, .data.Err.err=" + err_cv + "})"
+            # Instance methods on a Result value
+            if method == "is_err": return "(" + obj_s + ".tag == Result_Err)"
+            if method == "is_ok": return "(" + obj_s + ".tag == Result_Ok)"
+            if method == "unwrap": return "Result_unwrap(" + obj_s + ")"
+            if method == "unwrap_err": return "Result_unwrap_err(" + obj_s + ")"
+            mut res_extra = ""
+            if args.len > 0:
+                res_extra = ", " + self.gen_args(args)
+            return "Result_" + method + "(" + obj_s + res_extra + ")"
+
+        # Option[T] method dispatch
+        if t_n == "Option":
+            if obj_s == "Option":
+                # Static constructor
+                if method == "some" or method == "Some":
+                    mut sv2 = "NULL"
+                    if args.len > 0:
+                        sv2 = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                    return "((Option){.tag=Option_Some, .data.Some.val=" + sv2 + "})"
+                elif method == "none" or method == "None":
+                    return "((Option){.tag=Option_None})"
+            # Instance methods
+            if method == "is_some": return "(" + obj_s + ".tag == Option_Some)"
+            if method == "is_none": return "(" + obj_s + ".tag == Option_None)"
+            if method == "unwrap": return "Option_unwrap(" + obj_s + ")"
+            mut opt_extra = ""
+            if args.len > 0:
+                opt_extra = ", " + self.gen_args(args)
+            return "Option_" + method + "(" + obj_s + opt_extra + ")"
+
+        # Pointer method calls (force intercept since type info might be lost for lhs)
+        if t_n == "Pointer" or method == "offset" or method == "read" or method == "write" or method == "as_ptr":
+            if method == "offset": return "(" + obj_s + " + " + self.gen_expr(args.get(0)) + ")"
+            if method == "read": return "(*" + obj_s + ")"
+            if method == "write": return "(*" + obj_s + " = " + self.gen_expr(args.get(0)) + ")"
+            if method == "as_ptr": return obj_s
+
+        # Primitive conversion methods
+        if method == "to_str" or method == "to_string":
+            if _is_int_type(t_n): return "_tr_int_to_str((long long)(" + obj_s + "))"
+            if _is_float_type(t_n): return "_tr_float_to_str((double)(" + obj_s + "))"
+            if t_n == "bool": return "((" + obj_s + ") ? \"true\" : \"false\")"
+            if t_n == "char": return "_tr_char_to_str_alloc(" + obj_s + ")"
+            # Fall through for class types (StringBuilder, user classes) so they hit their own branch
+            if not self.classes.contains(t_n) and t_n != "StringBuilder":
+                return obj_s
+        if method == "to_float": return "(double)(" + obj_s + ")"
+        if method == "to_int": return "(long long)(" + obj_s + ")"
+        if method == "as_str": return "(char*)(" + obj_s + ")"
+        if method == "starts_with" and args.len > 0:
+            return "_tr_str_starts_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+        if method == "ends_with" and args.len > 0:
+            return "_tr_str_ends_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+        if method == "contains" and args.len > 0 and _is_str_type(t_n):
+            return "_tr_str_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+
+        mut class_name: str = t_n
+        if _is_str_type(class_name): class_name = "TrStr"
+
+        # StringBuilder special handling (must be before len/length shortcut)
+        if class_name == "StringBuilder":
+            if method == "init": return "StringBuilder_init(" + self.gen_args(args) + ")"
+            if method == "append": return "StringBuilder_append(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "append_char": return "StringBuilder_append_char(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "to_string": return "StringBuilder_to_string(" + obj_s + ")"
+            if method == "len" or method == "length": return obj_s + "->buf->len"
+            if method == "free": return "StringBuilder_free(" + obj_s + ")"
+
+        # len/length — only shortcut for non-user-class types
+        if (method == "len" or method == "__len__" or method == "length") and not self.classes.contains(t_n) and not self.enums.contains(t_n):
+            if _is_str_type(t_n): return "_tr_strlen(" + obj_s + ")"
+            return "((long long)" + obj_s + "->len)"
+
+        # User-defined generic class: dispatch through monomorphized name
+        if self.classes.contains(class_name):
+            mut ucls = self.classes.get(class_name)
+            if ucls.generics.len > 0:
+                if hir_expr_type(obj).args.len > 0:
+                    mut sfx = self.type_args_suffix(hir_expr_type(obj).args)
+                    mut mono_name = class_name + "_" + sfx
+                    self.ensure_mono(ucls, hir_expr_type(obj).args)
+                    mut gmethod_c: str = method
+                    if _is_c_keyword(gmethod_c): gmethod_c = "_tr_fn_" + gmethod_c
+                    if method == "init" or method == "new":
+                        return mono_name + "_" + gmethod_c + "(" + self.gen_args(args) + ")"
+                    if obj_s == class_name:
+                        return mono_name + "_" + gmethod_c + "(" + self.gen_args(args) + ")"
+                    mut ms = mono_name + "_" + gmethod_c + "(" + obj_s
+                    if args.len > 0: ms = ms + ", " + self.gen_args(args)
+                    return ms + ")"
+
+        # Non-generic user class dispatch
+        if self.classes.contains(class_name):
+            mut method_c: str = method
+            if _is_c_keyword(method_c): method_c = "_tr_fn_" + method_c
+            if method == "init" or method == "new":
+                return class_name + "_" + method_c + "(" + self.gen_args(args) + ")"
+            if obj_s == class_name:
+                return class_name + "_" + method_c + "(" + self.gen_args(args) + ")"
+            mut s = class_name + "_" + method_c + "(" + obj_s
+            if args.len > 0: s = s + ", " + self.gen_args(args)
+            return s + ")"
+
+        if self.enums.contains(class_name):
+            mut _evdef = self.enums.get(class_name)
+            mut _is_var = false
+            mut _vi2 = 0
+            while _vi2 < _evdef.variants.len:
+                if _evdef.variants.get(_vi2).name == method: _is_var = true
+                _vi2 = _vi2 + 1
+            if _is_var:
+                if args.len > 0:
+                    return class_name + "_ctor_" + method + "(" + self.gen_args(args) + ")"
+                else:
+                    return class_name + "_make_" + method + "()"
+            mut s = class_name + "_" + method + "(" + obj_s
+            if args.len > 0: s = s + ", " + self.gen_args(args)
+            return s + ")"
+
+        # Extract List/Vec element suffix from the obj expression's type args
+        mut elem_sfx: str = "ptr"
+        match obj.read():
+            case HirExpr.EIdent(_, ity, _):
+                if ity.args.len > 0: elem_sfx = self.list_elem_suffix(ity.args.get(0).read().name)
+            case HirExpr.EMethodCall(_, _, _, mty):
+                if mty.args.len > 0: elem_sfx = self.list_elem_suffix(mty.args.get(0).read().name)
+            case HirExpr.ECall(_, _, cty):
+                if cty.args.len > 0: elem_sfx = self.list_elem_suffix(cty.args.get(0).read().name)
+            case HirExpr.EPropAccess(_, _, pty):
+                if pty.args.len > 0: elem_sfx = self.list_elem_suffix(pty.args.get(0).read().name)
+            case _: pass
+
+        # List[T] / Vec[T] method dispatch (Vec maps to List in the C runtime)
+        if class_name == "List" or class_name == "Vec" or (class_name == "int" and (method == "append" or method == "push" or method == "pop" or method == "set" or method == "get" or method == "free" or method == "contains")):
+            if method == "append" or method == "push":
+                return "List_" + elem_sfx + "_append(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "free": return "List_" + elem_sfx + "_free(" + obj_s + ")"
+            if method == "pop":
+                mut pop_r = "List_" + elem_sfx + "_pop(" + obj_s + ")"
+                if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer":
+                    return "((" + call_ty.name + "*)" + pop_r + ")"
+                return pop_r
+            if method == "set":
+                return "List_" + elem_sfx + "_set(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "contains":
+                return "List_" + elem_sfx + "_contains(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "get":
+                mut get_r = "List_" + elem_sfx + "_get(" + obj_s + ", " + self.gen_args(args) + ")"
+                if elem_sfx == "ptr" and call_ty.name == "Pointer" and call_ty.args.len > 0:
+                    mut inner_ct = self.type_to_c(call_ty.args.get(0).read())
+                    return "((" + inner_ct + "*)" + get_r + ")"
+                if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer" and call_ty.name != "List" and call_ty.name != "Vec" and call_ty.name != "Map" and call_ty.name != "Dict" and call_ty.name != "str":
+                    return "((" + call_ty.name + "*)" + get_r + ")"
+                return get_r
+            if method == "len" or method == "length": return "((long long)" + obj_s + "->len)"
+            if method == "new" or method == "init":
+                return "List_" + elem_sfx + "_new()"
+
+        # Map/Dict method dispatch
+        if class_name == "Map" or class_name == "Dict":
+            if method == "init" or method == "new": return "_tr_dict_new(" + self.gen_args(args) + ")"
+            if method == "get":
+                mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.gen_args(args) + ")"
+                if self.classes.contains(call_ty.name):
+                    return "((" + call_ty.name + "*)" + mget_r + ")"
+                return mget_r
+            if method == "set" or method == "insert": return "_tr_dict_set(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "contains": return "_tr_dict_contains(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "remove": return "_tr_dict_remove(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "len" or method == "length": return "_tr_dict_len(" + obj_s + ")"
+
+        mut extra_args = ""
+        if args.len > 0:
+            extra_args = ", " + self.gen_args(args)
+        return method + "(" + obj_s + extra_args + ")"
+
+    pub def gen_fstring(self, parts: Vec[HirFStringPart]) -> str:
+        if parts.len == 0: return "\"\""
+        mut fmt = ""
+        mut fargs = ""
+        mut i = 0
+        while i < parts.len:
+            mut part = parts.get(i)
+            if not part.is_expr:
+                fmt = fmt + _escape_str_for_c(part.text)
+            else:
+                mut s = self.gen_expr(part.expr)
+                mut ty_n: str = hir_expr_type(part.expr).name
+                if _is_int_type(ty_n):
+                    fmt = fmt + "%lld"
+                    fargs = fargs + ", (long long)(" + s + ")"
+                elif _is_float_type(ty_n):
+                    fmt = fmt + "%g"
+                    fargs = fargs + ", (double)(" + s + ")"
+                elif ty_n == "bool":
+                    fmt = fmt + "%s"
+                    fargs = fargs + ", ((" + s + ") ? \"true\" : \"false\")"
+                elif ty_n == "char":
+                    fmt = fmt + "%c"
+                    fargs = fargs + ", (char)(" + s + ")"
+                else:
+                    fmt = fmt + "%s"
+                    fargs = fargs + ", (char*)(" + s + ")"
+            i = i + 1
+        return "({ int _fz = snprintf(NULL,0,\"" + fmt + "\"" + fargs + "); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,\"" + fmt + "\"" + fargs + "); _fr; })"
+
+    pub def gen_tuple(self, items: Vec[Pointer[HirExpr]]) -> str:
+        if items.len == 0: return "((TrTuple){0})"
+        if items.len == 2:
+            return "((TrTuple2){.first=" + self.gen_expr(items.get(0)) + ", .second=" + self.gen_expr(items.get(1)) + "})"
+        return "((TrTuple){.data={" + self.gen_args(items) + "}})"
+
+    pub def gen_list_literal(self, items: Vec[Pointer[HirExpr]], ty: AstType) -> str:
+        mut sfx = "ptr"
+        if ty.args.len > 0: sfx = self.list_elem_suffix(ty.args.get(0).read().name)
+        elif items.len > 0:
+            sfx = self.list_elem_suffix(hir_expr_type(items.get(0)).name)
+        mut l = "_l_" + self.next_temp()
+        mut s = "({ List_" + sfx + "* " + l + " = List_" + sfx + "_new(); "
+        mut i = 0
+        while i < items.len:
+            s = s + "List_" + sfx + "_append(" + l + ", " + self.gen_expr(items.get(i)) + "); "
+            i = i + 1
+        return s + l + "; })"
+
+    pub def gen_dict_literal(self, keys: Vec[Pointer[HirExpr]], vals: Vec[Pointer[HirExpr]]) -> str:
+        mut s = "_tr_dict_new(" + str(keys.len) + "LL)"
+        return s
+
+    pub def gen_list_comp(self, element: Pointer[HirExpr], generators: Vec[Pointer[HirComprehension]]) -> str:
+        mut tmp = self.next_temp()
+        mut elem_ty_n: str = hir_expr_type(element).name
+        mut sfx = self.list_elem_suffix(elem_ty_n)
+        mut s = "({ List_" + sfx + "* " + tmp + " = List_" + sfx + "_new(); "
+        mut i = 0
+        while i < generators.len:
+            mut gen = generators.get(i).read()
+            mut iter_s = self.gen_expr(gen.iter)
+            s = s + "{ __auto_type _gc" + i.to_str() + " = " + iter_s + "; long long _gi" + i.to_str() + " = 0;"
+            s = s + " while (_gi" + i.to_str() + " < _gc" + i.to_str() + "->len) {"
+            s = s + " __auto_type " + gen.target + " = _gc" + i.to_str() + "->data[_gi" + i.to_str() + "]; "
+            mut fi = 0
+            while fi < gen.ifs.len:
+                s = s + "if (" + self.gen_expr(gen.ifs.get(fi)) + ") { "
+                fi = fi + 1
+            i = i + 1
+        s = s + "List_" + sfx + "_append(" + tmp + ", " + self.gen_expr(element) + "); "
+        i = 0
+        while i < generators.len:
+            mut gen2 = generators.get(i).read()
+            mut fi = 0
+            while fi < gen2.ifs.len:
+                s = s + "} "
+                fi = fi + 1
+            s = s + "_gi" + i.to_str() + "++; } } "
+            i = i + 1
+        return s + tmp + "; })"
+
+    pub def gen_closure(self, params: Vec[HirParam], ret_ty: AstType, body: HirBlock) -> str:
+        self.closure_count = self.closure_count + 1
+        mut cname = "_closure_" + self.closure_count.to_str()
+        self.wp("static __attribute__((hot)) ")
+        self.wp(self.type_to_c(ret_ty) + " " + cname + "(")
+        mut first = true
+        mut i = 0
+        while i < params.len:
+            mut p = params.get(i)
+            if not first: self.wp(", ")
+            self.wp(self.type_to_c(p.ty) + " " + p.name)
+            first = false
+            i = i + 1
+        self.wp(") {\n")
+        mut old_buf = self.buf
+        self.buf = self.proto_buf
+        self.gen_block(body, 1)
+        self.buf = old_buf
+        self.wp("}\n\n")
+        return cname
+
+    # ── Spawn wrapper pre-scan ────────────────────────────────────────────────
+
+    pub def emit_spawn_wrapper_for_expr(self, e: Pointer[HirExpr]):
+        if e as usize == 0 as usize: return
+        match e.read():
+            case HirExpr.ECall(callee, args, _):
+                mut fn_name = ""
+                match callee.read():
+                    case HirExpr.EIdent(n, _, _): fn_name = n
+                    case _: return
+                if fn_name == "": return
+                if self.spawn_wrappers.contains(fn_name): return
+                self.spawn_wrappers.insert(fn_name, true)
+                if args.len == 0:
+                    self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { (void)_vp; " + fn_name + "(); return NULL; }\n")
+                elif args.len == 1:
+                    mut arg_ty_n = hir_expr_type(args.get(0)).name
+                    mut cast_back = "(long long)(uintptr_t)_vp"
+                    if not _is_int_type(arg_ty_n) and arg_ty_n != "bool" and arg_ty_n != "char":
+                        mut c_arg_ty = self.type_to_c(hir_expr_type(args.get(0)))
+                        cast_back = "(" + c_arg_ty + "*)_vp"
+                    self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { " + fn_name + "(" + cast_back + "); return NULL; }\n")
+                else:
+                    self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { (void)_vp; /* multi-arg spawn not supported */ return NULL; }\n")
+            case _: pass
+
+    pub def prescan_block_spawns(self, block: HirBlock):
+        if block as usize == 0 as usize: return
+        mut i = 0
+        while i < block.stmts.len:
+            self.prescan_stmt_spawns(block.stmts.get(i))
+            i = i + 1
+
+    pub def prescan_stmt_spawns(self, s: Pointer[HirStmt]):
+        if s as usize == 0 as usize: return
+        match s.read():
+            case HirStmt.SSpawn(e):
+                self.emit_spawn_wrapper_for_expr(e)
+            case HirStmt.STaskGroup(body):
+                self.prescan_block_spawns(body)
+            case HirStmt.SIf(_, t, e):
+                self.prescan_block_spawns(t)
+                if e as usize != 0 as usize:
+                    self.prescan_block_spawns(e)
+            case HirStmt.SWhile(_, body):
+                self.prescan_block_spawns(body)
+            case HirStmt.SFor(_, _, body):
+                self.prescan_block_spawns(body)
+            case HirStmt.STry(tb, catches, fin):
+                self.prescan_block_spawns(tb)
+                if fin as usize != 0 as usize:
+                    self.prescan_block_spawns(fin)
+                mut ci = 0
+                while ci < catches.len:
+                    mut cc = catches.get(ci).read()
+                    self.prescan_block_spawns(cc.body)
+                    ci = ci + 1
+            case _: pass
+
+    pub def prescan_spawns(self, prog: HirProgram):
+        mut i = 0
+        while i < prog.functions.len:
+            self.prescan_block_spawns(prog.functions.get(i).body)
+            i = i + 1
+        i = 0
+        while i < prog.classes.len:
+            mut c = prog.classes.get(i)
+            mut mi = 0
+            while mi < c.methods.len:
+                self.prescan_block_spawns(c.methods.get(mi).body)
+                mi = mi + 1
+            i = i + 1
+
+    # ── Statement generation ──────────────────────────────────────────────────
+
+    pub def gen_stmt(self, s_ptr: Pointer[HirStmt], indent: int):
+        if s_ptr as usize == 0 as usize: return
+        pad = _indent_str(indent)
+        match s_ptr.read():
+            case HirStmt.SExpr(e):
+                # ? propagation at expression-statement level
+                if e as usize != 0 as usize:
+                    match e.read():
+                        case HirExpr.ETryExpr(inner_try, _):
+                            mut tmp_qr = "_qr" + self.next_temp()
+                            self.w(pad + "Result " + tmp_qr + " = (" + self.gen_expr(inner_try) + ");\n")
+                            self.w(pad + "if (" + tmp_qr + ".tag == Result_Err) return " + tmp_qr + ";\n")
+                            return
+                        case _: pass
+                self.w(pad + self.gen_expr(e) + ";\n")
+            case HirStmt.SReturn(e):
+                if e as usize == 0 as usize:
+                    if self.cur_throws_ty != "":
+                        self.w(pad + "return ((Result){.tag=Result_Ok});\n")
+                    elif self.cur_func == "main":
+                        self.w(pad + "return 0;\n")
+                    else:
+                        self.w(pad + "return;\n")
+                else:
+                    # ? propagation in return position
+                    match e.read():
+                        case HirExpr.ETryExpr(inner_try2, ok_ty2):
+                            mut tmp_qr2 = "_qr" + self.next_temp()
+                            self.w(pad + "Result " + tmp_qr2 + " = (" + self.gen_expr(inner_try2) + ");\n")
+                            self.w(pad + "if (" + tmp_qr2 + ".tag == Result_Err) return " + tmp_qr2 + ";\n")
+                            if self.cur_throws_ty != "":
+                                mut ok_c2 = self.type_to_c(ok_ty2)
+                                if _is_int_type(ok_ty2.name) or ok_ty2.name == "bool":
+                                    self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(uintptr_t)((" + ok_c2 + ")(uintptr_t)" + tmp_qr2 + ".data.Ok.val)});\n")
+                                else:
+                                    self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=" + tmp_qr2 + ".data.Ok.val});\n")
+                            else:
+                                mut ok_c2b = self.type_to_c(ok_ty2)
+                                if _is_int_type(ok_ty2.name) or ok_ty2.name == "bool":
+                                    self.w(pad + "return (" + ok_c2b + ")(uintptr_t)" + tmp_qr2 + ".data.Ok.val;\n")
+                                else:
+                                    self.w(pad + "return (" + ok_c2b + "*)" + tmp_qr2 + ".data.Ok.val;\n")
+                            return
+                        case _: pass
+                    if self.cur_throws_ty != "":
+                        # throws function: wrap return value in Result_Ok
+                        mut ret_s = self.gen_expr(e)
+                        mut ret_ty_n = hir_expr_type(e).name
+                        if _is_int_type(ret_ty_n) or ret_ty_n == "bool" or ret_ty_n == "char":
+                            self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(uintptr_t)(" + ret_s + ")});\n")
+                        else:
+                            self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(" + ret_s + ")});\n")
+                    else:
+                        self.w(pad + "return " + self.gen_expr(e) + ";\n")
+            case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
+                mut c_ty = self.type_to_c(ty)
+                if c_ty == "void" and v as usize != 0 as usize: c_ty = "__auto_type"
+                # ? propagation in let binding
+                if v as usize != 0 as usize:
+                    match v.read():
+                        case HirExpr.ETryExpr(inner_try3, ok_ty3):
+                            mut tmp_qr3 = "_qr" + self.next_temp()
+                            self.w(pad + "Result " + tmp_qr3 + " = (" + self.gen_expr(inner_try3) + ");\n")
+                            self.w(pad + "if (" + tmp_qr3 + ".tag == Result_Err) return " + tmp_qr3 + ";\n")
+                            mut ok_c3 = self.type_to_c(ok_ty3)
+                            if ok_c3 == "void" or ok_c3 == "__auto_type": ok_c3 = "long long"
+                            mut ok_val3 = ""
+                            if _is_int_type(ok_ty3.name) or ok_ty3.name == "bool" or ok_ty3.name == "char":
+                                ok_val3 = "(" + ok_c3 + ")(uintptr_t)" + tmp_qr3 + ".data.Ok.val"
+                            else:
+                                ok_val3 = "(" + ok_c3 + "*)" + tmp_qr3 + ".data.Ok.val"
+                            if is_const:
+                                self.w(pad + "const " + ok_c3 + " " + n + " = " + ok_val3 + ";\n")
+                            else:
+                                self.w(pad + ok_c3 + " " + n + " = " + ok_val3 + ";\n")
+                            self.decl_vars.insert(n, true)
+                            return
+                        case _: pass
+                if is_const:
+                    self.w(pad + "const " + c_ty + " " + n)
+                elif is_shared:
+                    self.w(pad + "_TrSharedBox* " + n)
+                else:
+                    self.w(pad + c_ty + " " + n)
+                if v as usize != 0 as usize:
+                    if is_shared:
+                        # Detect clone vs new-wrap: if value is an already-shared var, clone it
+                        mut is_clone = false
+                        match v.read():
+                            case HirExpr.EIdent(vn, _, _):
+                                if self.shared_vars.contains(vn):
+                                    self.w(" = _tr_shared_clone(" + vn + ");\n")
+                                    is_clone = true
+                            case _: pass
+                        if not is_clone:
+                            self.w(" = _tr_shared_new(" + self.gen_expr(v) + ");\n")
+                        # Register var in shared_vars with the raw Tauraro type name
+                        mut sh_type_name = ty.name
+                        if sh_type_name == "void" or sh_type_name == "None":
+                            sh_type_name = hir_expr_type(v).name
+                        self.shared_vars.insert(n, sh_type_name)
+                    else:
+                        # For empty list literals, propagate annotation type so suffix is correct
+                        mut init_s = ""
+                        # Auto-wrap class instance into interface object
+                        if self.interfaces.contains(ty.name):
+                            mut val_ty_n = hir_expr_type(v).name
+                            if self.classes.contains(val_ty_n):
+                                init_s = val_ty_n + "_as_" + ty.name + "(" + self.gen_expr(v) + ")"
+                        if init_s == "":
+                            match v.read():
+                                case HirExpr.EList(items, list_ty):
+                                    # Avoid variable reassignment — ownership model would free list_ty early
+                                    if list_ty.args.len == 0 and ty.name == "List" and ty.args.len > 0:
+                                        init_s = self.gen_list_literal(items, ty)
+                                    else:
+                                        init_s = self.gen_list_literal(items, list_ty)
+                                case _:
+                                    init_s = self.gen_expr(v)
+                        self.w(" = " + init_s + ";\n")
+                else:
+                    if is_shared:
+                        self.w(" = NULL;\n")
+                        self.shared_vars.insert(n, ty.name)
+                    elif c_ty == "Result" or c_ty == "Option":
+                        self.w(" = (" + c_ty + "){0};\n")
+                    else:
+                        self.w(" = 0;\n")
+                self.decl_vars.insert(n, true)
+            case HirStmt.SAssign(t, v):
+                match t.read():
+                    case HirExpr.EIdent(n, _, _):
+                        if not self.decl_vars.contains(n):
+                            self.w(pad + "__auto_type " + n + " = " + self.gen_expr(v) + ";\n")
+                            self.decl_vars.insert(n, true)
+                            return
+                self.w(pad + self.gen_expr(t) + " = " + self.gen_expr(v) + ";\n")
+            case HirStmt.SIf(c, t, e):
+                self.w(pad + "if (" + self.gen_expr(c) + ") {\n")
+                self.gen_block(t, indent + 1)
+                mut cur = e
+                mut going = cur as usize != 0 as usize
+                while going:
+                    if cur.stmts.len == 1:
+                        match cur.stmts.get(0).read():
+                            case HirStmt.SIf(ic, it, ie):
+                                self.w(pad + "} else if (" + self.gen_expr(ic) + ") {\n")
+                                self.gen_block(it, indent + 1)
+                                cur = ie
+                                going = cur as usize != 0 as usize
+                            case _:
+                                self.w(pad + "} else {\n")
+                                self.gen_block(cur, indent + 1)
+                                going = false
+                    elif cur.stmts.len > 0:
+                        self.w(pad + "} else {\n")
+                        self.gen_block(cur, indent + 1)
+                        going = false
+                    else:
+                        going = false
+                self.w(pad + "}\n")
+            case HirStmt.SWhile(c, b):
+                self.w(pad + "while (" + self.gen_expr(c) + ") {\n")
+                self.gen_block(b, indent + 1)
+                self.w(pad + "}\n")
+            case HirStmt.SFor(var, iter, body):
+                if self.in_gpu_block > 0:
+                    self.w(pad + "#pragma omp for\n")
+                self.gen_for_loop(var, iter, body, indent)
+            case HirStmt.SMatch(e, arms):
+                self.gen_match(e, arms, indent)
+            case HirStmt.STry(try_body, catches, finally_b):
+                self.gen_try(try_body, catches, finally_b, indent)
+            case HirStmt.SRaise(e):
+                if self.cur_throws_ty != "":
+                    # throws function: raise becomes return Result_Err
+                    self.w(pad + "return ((Result){.tag=Result_Err, .data.Err.err=(void*)(" + self.gen_expr(e) + ")});\n")
+                else:
+                    self.w(pad + "_tr_exc_raise((char*)(" + self.gen_expr(e) + "));\n")
+            case HirStmt.SAssert(cond, msg):
+                if msg as usize == 0 as usize:
+                    self.w(pad + "_TR_ASSERT(" + self.gen_expr(cond) + ");\n")
+                else:
+                    self.w(pad + "_TR_ASSERT_MSG(" + self.gen_expr(cond) + ", " + self.gen_expr(msg) + ");\n")
+            case HirStmt.SUnsafe(b):
+                self.w(pad + "/* unsafe block */\n")
+                self.gen_block(b, indent)
+            case HirStmt.SWith(items, aliases, body):
+                mut wi = 0
+                while wi < items.len:
+                    mut item_s = self.gen_expr(items.get(wi))
+                    if wi < aliases.len and aliases.get(wi) != "":
+                        self.w(pad + "__auto_type " + aliases.get(wi) + " = " + item_s + ";\n")
+                    else:
+                        self.w(pad + item_s + ";\n")
+                    wi = wi + 1
+                self.gen_block(body, indent)
+            case HirStmt.SAsm(code, outputs, inputs, clobbers):
+                mut asm_s = pad + "__asm__ volatile(\"" + _escape_str_for_c(code) + "\""
+                if outputs != "" or inputs != "" or clobbers != "":
+                    asm_s = asm_s + " : " + outputs
+                    if inputs != "" or clobbers != "":
+                        asm_s = asm_s + " : " + inputs
+                        if clobbers != "":
+                            asm_s = asm_s + " : \"" + clobbers + "\""
+                self.w(asm_s + ");\n")
+            case HirStmt.SSpawn(e):
+                match e.read():
+                    case HirExpr.ECall(callee, args, _):
+                        mut sp_fn = ""
+                        match callee.read():
+                            case HirExpr.EIdent(n, _, _): sp_fn = n
+                            case _: pass
+                        if sp_fn == "":
+                            self.w(pad + self.gen_expr(e) + "; /* spawn: inline */\n")
+                        elif args.len == 0:
+                            if self.in_task_group > 0:
+                                self.w(pad + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + sp_fn + ", NULL));\n")
+                            else:
+                                self.w(pad + "_tr_thread_detach(_tr_thread_start(_tr_spawn_wrap_" + sp_fn + ", NULL));\n")
+                        elif args.len == 1:
+                            mut arg_ty_n = hir_expr_type(args.get(0)).name
+                            mut void_cast = "(void*)(uintptr_t)(" + self.gen_expr(args.get(0)) + ")"
+                            if not _is_int_type(arg_ty_n) and arg_ty_n != "bool" and arg_ty_n != "char":
+                                void_cast = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                            if self.in_task_group > 0:
+                                self.w(pad + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + sp_fn + ", " + void_cast + "));\n")
+                            else:
+                                self.w(pad + "_tr_thread_detach(_tr_thread_start(_tr_spawn_wrap_" + sp_fn + ", " + void_cast + "));\n")
+                        else:
+                            self.w(pad + self.gen_expr(e) + "; /* spawn: multi-arg unsupported, sync fallback */\n")
+                    case _:
+                        self.w(pad + self.gen_expr(e) + "; /* spawn: non-call sync */\n")
+            case HirStmt.STaskGroup(body):
+                self.w(pad + "_tr_tg_begin();\n")
+                self.w(pad + "{\n")
+                self.in_task_group = self.in_task_group + 1
+                self.gen_block(body, indent + 1)
+                self.in_task_group = self.in_task_group - 1
+                self.w(pad + "}\n")
+                self.w(pad + "_tr_taskgroup_wait();\n")
+            case HirStmt.SGpuBlock(body):
+                # gpu: compiles to OpenMP-parallelized C (CPU fallback).
+                # For real GPU kernels, use extern "C": to call CUDA/HIP/OpenCL kernels.
+                self.w(pad + "#ifdef _OPENMP\n")
+                self.w(pad + "/* gpu: parallel block (OpenMP) */\n")
+                self.w(pad + "#pragma omp parallel\n")
+                self.w(pad + "{\n")
+                self.in_gpu_block = self.in_gpu_block + 1
+                self.gen_block(body, indent + 1)
+                self.in_gpu_block = self.in_gpu_block - 1
+                self.w(pad + "}\n")
+                self.w(pad + "#else\n")
+                self.w(pad + "/* gpu: sequential fallback (compile with -fopenmp for parallelism) */\n")
+                self.w(pad + "{\n")
+                self.in_gpu_block = self.in_gpu_block + 1
+                self.gen_block(body, indent + 1)
+                self.in_gpu_block = self.in_gpu_block - 1
+                self.w(pad + "}\n")
+                self.w(pad + "#endif\n")
+            case HirStmt.SBreak: self.w(pad + "break;\n")
+            case HirStmt.SContinue: self.w(pad + "continue;\n")
+            case HirStmt.SPass: self.w(pad + "/* pass */\n")
+            case HirStmt.SFree(name): self.w(pad + "if (" + name + ") { free(" + name + "); " + name + " = NULL; }\n")
+            case _: pass
+
+    pub def gen_for_loop(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
+        pad = _indent_str(indent)
+        mut iter_s = self.gen_expr(iter)
+
+        # Check if it's a range call
+        match iter.read():
+            case HirExpr.ECall(callee, args, _):
+                match callee.read():
+                    case HirExpr.EIdent(n, _, _):
+                        if n == "range":
+                            mut start_s = "0LL"
+                            mut end_s = "0LL"
+                            mut step_s = "1LL"
+                            if args.len == 1:
+                                end_s = self.gen_expr(args.get(0))
+                            elif args.len == 2:
+                                start_s = self.gen_expr(args.get(0))
+                                end_s = self.gen_expr(args.get(1))
+                            elif args.len >= 3:
+                                start_s = self.gen_expr(args.get(0))
+                                end_s = self.gen_expr(args.get(1))
+                                step_s = self.gen_expr(args.get(2))
+                            self.w(pad + "for (long long " + var + " = " + start_s + "; " + var + " < " + end_s + "; " + var + " += " + step_s + ") {\n")
+                            self.gen_block(body, indent + 1)
+                            self.w(pad + "}\n")
+                            return
+                    case _: pass
+            case _: pass
+
+        # Generic iteration over a collection
+        mut tmp = self.next_temp()
+        self.w(pad + "{ long long " + tmp + "_i = 0;\n")
+        self.w(pad + "  __auto_type " + tmp + "_col = " + iter_s + ";\n")
+        self.w(pad + "  while (" + tmp + "_i < " + tmp + "_col->len) {\n")
+        self.w(pad + "    __auto_type " + var + " = " + tmp + "_col->data[" + tmp + "_i];\n")
+        self.gen_block(body, indent + 2)
+        self.w(pad + "    " + tmp + "_i++;\n")
+        self.w(pad + "  }\n")
+        self.w(pad + "}\n")
+
+    pub def gen_try(self, try_body: HirBlock, catches: Vec[Pointer[HirCatchClause]], finally_b: HirBlock, indent: int):
+        pad = _indent_str(indent)
+        mut jb = self.next_temp()
+        mut em = self.next_temp()
+        self.w(pad + "{\n")
+        self.w(pad + "    jmp_buf " + jb + "; char* " + em + " = NULL;\n")
+        self.w(pad + "    _tr_exc_push(&" + jb + ", &" + em + ");\n")
+        self.w(pad + "    if (setjmp(" + jb + ") == 0) {\n")
+        self.gen_block(try_body, indent + 2)
+        self.w(pad + "        _tr_exc_pop();\n")
+        if catches.len > 0:
+            self.w(pad + "    } else {\n")
+            # Note: _tr_exc_raise already decremented sp before longjmp.
+            # Do NOT call _tr_exc_pop() here — that would remove the outer handler frame.
+            mut i = 0
+            while i < catches.len:
+                mut cc = catches.get(i).read()
+                if cc.err_name != "":
+                    self.w(pad + "        char* " + cc.err_name + " = " + em + ";\n")
+                    self.w(pad + "        (void)" + cc.err_name + ";\n")
+                self.gen_block(cc.body, indent + 2)
+                i = i + 1
+        else:
+            self.w(pad + "    } else {\n")
+            self.w(pad + "        /* exception not caught */\n")
+        self.w(pad + "    }\n")
+        if finally_b as usize != 0 as usize and finally_b.stmts.len > 0:
+            self.w(pad + "    /* finally */\n")
+            self.gen_block(finally_b, indent + 1)
+        self.w(pad + "}\n")
+
+    pub def gen_block(self, b: HirBlock, indent: int):
+        if b as usize == 0 as usize: return
+        mut i = 0
+        while i < b.stmts.len:
+            self.gen_stmt(b.stmts.get(i), indent)
+            i = i + 1
+
+    pub def gen_match(self, expr: Pointer[HirExpr], arms: Vec[HirMatchArm], indent: int):
+        pad = _indent_str(indent)
+        mut subj = self.next_temp()
+        self.w(pad + "__auto_type " + subj + " = " + self.gen_expr(expr) + ";\n")
+
+        mut i = 0
+        while i < arms.len:
+            mut arm = arms.get(i)
+            mut cond = "1 /* wildcard */"
+            mut bindings = ""
+
+            match arm.pat:
+                case Pattern.PLitInt(v): cond = subj + " == " + v.to_str() + "LL"
+                case Pattern.PLitBool(v):
+                    if v: cond = subj
+                    else: cond = "!" + subj
+                case Pattern.PLitStr(v): cond = "_tr_str_eq(" + subj + ", \"" + _escape_str_for_c(v) + "\")"
+                case Pattern.PVariant(tn, vn): cond = subj + ".tag == " + tn + "_" + vn
+                case Pattern.PVariantBind(tn, vn, field):
+                    cond = subj + ".tag == " + tn + "_" + vn
+                    mut actual_fld = field
+                    if self.enums.contains(tn):
+                        mut _ev_def = self.enums.get(tn)
+                        mut _vi = 0
+                        while _vi < _ev_def.variants.len:
+                            mut _ev = _ev_def.variants.get(_vi)
+                            if _ev.name == vn and _ev.fields.len > 0:
+                                actual_fld = _ev.fields.get(0).name
+                            _vi = _vi + 1
+                    bindings = "__auto_type " + field + " = " + subj + ".data." + vn + "." + actual_fld + ";\n"
+                case Pattern.PVariantBindMany(tn, vn, fields):
+                    cond = subj + ".tag == " + tn + "_" + vn
+                    mut _bi = 0
+                    while _bi < fields.len:
+                        mut _bf = fields.get(_bi)
+                        if _bf != "_":
+                            mut _actual = _bf
+                            if self.enums.contains(tn):
+                                mut _ev_def2 = self.enums.get(tn)
+                                mut _vi2 = 0
+                                while _vi2 < _ev_def2.variants.len:
+                                    mut _ev2 = _ev_def2.variants.get(_vi2)
+                                    if _ev2.name == vn and _bi < _ev2.fields.len:
+                                        _actual = _ev2.fields.get(_bi).name
+                                    _vi2 = _vi2 + 1
+                            bindings = bindings + "__auto_type " + _bf + " = " + subj + ".data." + vn + "." + _actual + ";\n"
+                        _bi = _bi + 1
+                case Pattern.PBind(n):
+                    cond = "1"
+                    bindings = "__auto_type " + n + " = " + subj + ";\n"
+                case Pattern.PWild: cond = "1"
+                case Pattern.POr(pats):
+                    mut or_conds = ""
+                    mut oi = 0
+                    while oi < pats.len:
+                        mut pp = pats.get(oi)
+                        mut pc = "1"
+                        match pp:
+                            case Pattern.PVariant(tn, vn): pc = subj + ".tag == " + tn + "_" + vn
+                            case Pattern.PLitInt(vi): pc = subj + " == " + vi.to_str() + "LL"
+                            case Pattern.PLitStr(vs): pc = "_tr_str_eq(" + subj + ", \"" + _escape_str_for_c(vs) + "\")"
+                            case Pattern.PLitBool(bv):
+                                if bv: pc = subj
+                                else: pc = "!" + subj
+                            case Pattern.PBind(bn):
+                                pc = "1"
+                                bindings = bindings + "__auto_type " + bn + " = " + subj + ";\n"
+                            case _: pc = "1"
+                        if oi == 0: or_conds = pc
+                        else: or_conds = or_conds + " || " + pc
+                        oi = oi + 1
+                    cond = "(" + or_conds + ")"
+                case _: cond = "1"
+
+            if i == 0: self.w(pad + "if (" + cond + ") {\n")
+            else: self.w(pad + "} else if (" + cond + ") {\n")
+
+            if bindings != "":
+                self.w(pad + "    " + bindings)
+
+            self.gen_block(arm.body, indent + 1)
+            i = i + 1
+
+        if arms.len > 0: self.w(pad + "}\n")
+
+    # ── Program generation ────────────────────────────────────────────────────
+
+    pub def register_program(self, prog: HirProgram):
+        mut i = 0
+        while i < prog.classes.len:
+            self.classes.insert(prog.classes.get(i).name, prog.classes.get(i))
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            self.enums.insert(prog.enums.get(i).name, prog.enums.get(i))
+            i = i + 1
+        i = 0
+        while i < prog.interfaces.len:
+            self.interfaces.insert(prog.interfaces.get(i).name, prog.interfaces.get(i))
+            i = i + 1
+        i = 0
+        while i < prog.functions.len:
+            self.functions.insert(prog.functions.get(i).name, prog.functions.get(i))
+            i = i + 1
+
+    # ── Generic type pre-scan (collect all instantiations before codegen) ────
+
+    pub def scan_mono_ty(self, ty: AstType):
+        if ty as usize == 0 as usize: return
+        if ty.name == "": return
+        mut i = 0
+        while i < ty.args.len:
+            self.scan_mono_ty(ty.args.get(i).read())
+            i = i + 1
+        if ty.args.len > 0 and self.classes.contains(ty.name):
+            mut ucls = self.classes.get(ty.name)
+            if ucls.generics.len > 0:
+                self.ensure_mono(ucls, ty.args)
+
+    pub def scan_mono_block(self, block: HirBlock):
+        if block as usize == 0 as usize: return
+        mut i = 0
+        while i < block.stmts.len:
+            self.scan_mono_stmt(block.stmts.get(i))
+            i = i + 1
+
+    pub def scan_mono_stmt(self, s_ptr: Pointer[HirStmt]):
+        if s_ptr as usize == 0 as usize: return
+        match s_ptr.read():
+            case HirStmt.SLet(_, _, _, _, _, ty, _):
+                self.scan_mono_ty(ty)
+            case HirStmt.SIf(_, then_b, else_b):
+                self.scan_mono_block(then_b)
+                if else_b as usize != 0 as usize:
+                    self.scan_mono_block(else_b)
+            case HirStmt.SWhile(_, body):
+                self.scan_mono_block(body)
+            case HirStmt.SFor(_, _, body):
+                self.scan_mono_block(body)
+            case HirStmt.SMatch(_, arms):
+                mut ai = 0
+                while ai < arms.len:
+                    self.scan_mono_block(arms.get(ai).body)
+                    ai = ai + 1
+            case HirStmt.STry(try_body, catches, finally_b):
+                self.scan_mono_block(try_body)
+                if finally_b as usize != 0 as usize:
+                    self.scan_mono_block(finally_b)
+            case HirStmt.SUnsafe(body):
+                self.scan_mono_block(body)
+            case HirStmt.STaskGroup(body):
+                self.scan_mono_block(body)
+            case _: pass
+
+    pub def scan_mono_func(self, f: HirFunction):
+        self.scan_mono_ty(f.ret_ty)
+        mut i = 0
+        while i < f.params.len:
+            self.scan_mono_ty(f.params.get(i).ty)
+            i = i + 1
+        self.scan_mono_block(f.body)
+
+    pub def scan_mono_prog(self, prog: HirProgram):
+        # Scan field and method types in concrete (non-generic) classes only.
+        # Generic classes use unresolved type params (T, V, …) in their signatures;
+        # scanning them here would call ensure_mono with non-concrete args.
+        mut i = 0
+        while i < prog.classes.len:
+            mut cls = prog.classes.get(i)
+            if cls.generics.len == 0:
+                mut fi = 0
+                while fi < cls.fields.len:
+                    self.scan_mono_ty(cls.fields.get(fi).ty)
+                    fi = fi + 1
+                mut mi = 0
+                while mi < cls.methods.len:
+                    self.scan_mono_func(cls.methods.get(mi))
+                    mi = mi + 1
+            i = i + 1
+        # Scan free-standing functions (skip methods of generic classes —
+        # their signatures contain unresolved type params like T/V).
+        i = 0
+        while i < prog.functions.len:
+            mut fn = prog.functions.get(i)
+            mut skip = false
+            if fn.class_name != "":
+                if self.classes.contains(fn.class_name):
+                    mut owner = self.classes.get(fn.class_name)
+                    if owner.generics.len > 0: skip = true
+            if not skip: self.scan_mono_func(fn)
+            i = i + 1
+        # Scan top-level stmts
+        i = 0
+        while i < prog.top_level_stmts.len:
+            self.scan_mono_stmt(prog.top_level_stmts.get(i))
+            i = i + 1
+
+    pub def generate(self, prog: HirProgram) -> str:
+        self.register_program(prog)
+
+        # ── Phase 1: Runtime header include + file-wide optimization pragmas ────
+        self.w("#define _TR_MAIN\n")
+        self.w("#include \"tauraro_rt.h\"\n")
+        self.w("#pragma GCC optimize(\"O3,unroll-loops\")\n")
+
+        # ── Phase 2: Forward declarations (opaque struct pointers) ────────────
+        # Skip generic classes — their mono versions are handled in Phase 2.75
+        mut i = 0
+        while i < prog.classes.len:
+            mut cls2 = prog.classes.get(i)
+            if cls2.generics.len == 0:
+                self.w("typedef struct " + cls2.name + " " + cls2.name + ";\n")
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            self.w("typedef struct " + prog.enums.get(i).name + " " + prog.enums.get(i).name + ";\n")
+            i = i + 1
+        i = 0
+        while i < prog.interfaces.len:
+            self.w("typedef struct _" + prog.interfaces.get(i).name + "_vtable " + prog.interfaces.get(i).name + "_vtable;\n")
+            i = i + 1
+        # Emit forward declarations for value-type List_T structs used in fields
+        self.emit_list_fwd_decls(prog)
+        self.w("\n")
+
+        # ── Phase 2.5: Extern C function declarations ─────────────────────────
+        i = 0
+        while i < prog.extern_funcs.len:
+            mut ef = prog.extern_funcs.get(i)
+            mut ef_ret = self.type_to_c(ef.ret_ty)
+            mut ef_name = ef.name
+            self.w("extern " + ef_ret + " " + ef_name + "(")
+            mut ef_first = true
+            mut epi = 0
+            while epi < ef.params.len:
+                mut ep = ef.params.get(epi)
+                if ep.name != "self":
+                    if not ef_first: self.w(", ")
+                    self.w(self.type_to_c(ep.ty) + " " + ep.name)
+                    ef_first = false
+                epi = epi + 1
+            if ef.is_variadic:
+                if not ef_first: self.w(", ")
+                self.w("...")
+            self.w(");\n")
+            i = i + 1
+        if prog.extern_funcs.len > 0: self.w("\n")
+
+        # ── Phase 2.75: Generic monomorphization ──────────────────────────────
+        # Pre-scan all HIR types to collect and generate monomorphized classes.
+        # mono_buf accumulates: fwd decl + struct body + prototypes + impls.
+        self.scan_mono_prog(prog)
+        mut mono_out = self.mono_buf.to_string().as_str()
+        if mono_out != "":
+            self.w(mono_out)
+            self.w("\n")
+
+        # ── Phase 3: Struct definitions ───────────────────────────────────────
+        i = 0
+        while i < prog.enums.len:
+            self.gen_enum_struct(prog.enums.get(i))
+            i = i + 1
+        i = 0
+        while i < prog.classes.len:
+            mut cls3 = prog.classes.get(i)
+            if cls3.generics.len == 0:
+                self.gen_class_struct(cls3)
+            i = i + 1
+        i = 0
+        while i < prog.interfaces.len:
+            self.gen_interface_vtable(prog.interfaces.get(i))
+            i = i + 1
+
+        # Flush struct buffer into main output
+        self.w(self.struct_buf.to_string().as_str())
+        self.struct_buf = StringBuilder.init(16)
+
+        # ── Phase 3.5: Value-type list definitions (after all enums/structs defined) ──
+        mut lt_out = self.list_types_buf.to_string().as_str()
+        if lt_out != "": self.w(lt_out)
+
+        # ── Phase 4: Function prototypes ──────────────────────────────────────
+        i = 0
+        while i < prog.classes.len:
+            mut c = prog.classes.get(i)
+            if c.generics.len == 0:
+                mut mi = 0
+                while mi < c.methods.len:
+                    mut m = c.methods.get(mi)
+                    self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, c.name) + ";\n")
+                    mi = mi + 1
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            mut e = prog.enums.get(i)
+            mut mi = 0
+            while mi < e.methods.len:
+                mut m = e.methods.get(mi)
+                self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, e.name) + ";\n")
+                mi = mi + 1
+            i = i + 1
+        i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if f.name != "main" and not f.is_extern:
+                mut skip4 = false
+                if f.class_name != "" and self.classes.contains(f.class_name):
+                    skip4 = true  # class methods already emitted from prog.classes loop
+                elif f.class_name != "" and self.enums.contains(f.class_name):
+                    skip4 = true  # enum methods already emitted from prog.enums loop
+                if not skip4:
+                    if not self.emitted_fns.contains("p_" + f.name):
+                        self.emitted_fns.insert("p_" + f.name, true)
+                        self.w(self.get_inline_attrs(f) + self.gen_func_sig(f, f.class_name) + ";\n")
+            i = i + 1
+        self.w("\n")
+
+        # ── Phase 4.5: Spawn wrappers (static thread-entry functions) ─────────
+        self.prescan_spawns(prog)
+        self.w("\n")
+
+        # ── Phase 5: Method implementations ───────────────────────────────────
+        i = 0
+        while i < prog.classes.len:
+            mut c = prog.classes.get(i)
+            if c.generics.len == 0:
+                mut mi = 0
+                while mi < c.methods.len:
+                    mut m = c.methods.get(mi)
+                    self.cur_class = c.name
+                    self.cur_func  = m.name
+                    self.cur_throws_ty = m.throws_ty.name
+                    self.decl_vars = Map[str, bool].init(64)
+                    self.shared_vars = Map[str, str].init(8)
+                    self.seed_params(m)
+                    self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
+                    self.gen_block(m.body, 1)
+                    self.w("}\n\n")
+                    self.cur_class = ""
+                    self.cur_func  = ""
+                    self.cur_throws_ty = ""
+                    mi = mi + 1
+            i = i + 1
+
+        i = 0
+        while i < prog.enums.len:
+            mut e = prog.enums.get(i)
+            mut mi = 0
+            while mi < e.methods.len:
+                mut m = e.methods.get(mi)
+                self.cur_class = e.name
+                self.cur_func  = m.name
+                self.cur_throws_ty = m.throws_ty.name
+                self.decl_vars = Map[str, bool].init(64)
+                self.shared_vars = Map[str, str].init(8)
+                self.seed_params(m)
+                self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
+                self.gen_block(m.body, 1)
+                self.w("}\n\n")
+                self.cur_class = ""
+                self.cur_func  = ""
+                self.cur_throws_ty = ""
+                mi = mi + 1
+            i = i + 1
+
+        # ── Phase 6: Free-standing function implementations ───────────────────
+        i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if f.name != "main" and not f.is_extern:
+                mut skip6 = false
+                if f.class_name != "" and self.classes.contains(f.class_name):
+                    skip6 = true  # class methods already emitted from prog.classes loop
+                elif f.class_name != "" and self.enums.contains(f.class_name):
+                    skip6 = true  # enum methods already emitted from prog.enums loop
+                # Skip duplicate free-standing functions (same name from multiple modules)
+                if not skip6:
+                    if self.emitted_fns.contains("i_" + f.name):
+                        skip6 = true
+                    else:
+                        self.emitted_fns.insert("i_" + f.name, true)
+                if not skip6:
+                    self.cur_func  = f.name
+                    self.cur_class = f.class_name
+                    self.cur_throws_ty = f.throws_ty.name
+                    self.decl_vars = Map[str, bool].init(64)
+                    self.shared_vars = Map[str, str].init(8)
+                    self.seed_params(f)
+                    self.w(self.get_inline_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
+                    self.gen_block(f.body, 1)
+                    self.w("}\n\n")
+                    self.cur_func  = ""
+                    self.cur_class = ""
+                    self.cur_throws_ty = ""
+            i = i + 1
+
+        # ── Phase 7: C main entry point ───────────────────────────────────────
+        self.w("__attribute__((hot,optimize(\"O3,unroll-loops\"))) int main(int argc, char** argv) {\n")
+        # Set up args list only when main() takes a parameter
+        mut main_has_args = false
+        mut main_args_name = "args"
+        mut mi2 = 0
+        while mi2 < prog.functions.len:
+            mut mf = prog.functions.get(mi2)
+            if mf.name == "main" and mf.params.len > 0:
+                main_has_args = true
+                main_args_name = mf.params.get(0).name
+            mi2 = mi2 + 1
+        if main_has_args:
+            self.w("    List_str* " + main_args_name + " = List_str_new();\n")
+            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_str_append(" + main_args_name + ", argv[_ai]); }\n")
+
+        # Call top-level statements
+        i = 0
+        while i < prog.top_level_stmts.len:
+            self.gen_stmt(prog.top_level_stmts.get(i), 1)
+            i = i + 1
+
+        # Call user's main function if it exists
+        i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if f.name == "main":
+                self.cur_func  = "main"
+                self.decl_vars = Map[str, bool].init(64)
+                self.gen_block(f.body, 1)
+                self.cur_func  = ""
+            i = i + 1
+
+        self.w("    return 0;\n}\n")
+
+        return self.buf.to_string().as_str()
+
+    # ── Modular output helpers ────────────────────────────────────────────────────
+
+    # Full types header: forward decls + struct/enum/interface bodies + ALL function
+    # prototypes from every module.  Each module .c file does #include "tauraro_types.h"
+    # so every cross-module call is visible to the C compiler without extra header files.
+    pub def generate_types_header(self, prog: HirProgram) -> str:
+        if self.classes.len == 0:
+            self.register_program(prog)
+            self.scan_mono_prog(prog)
+
+        # Temporarily redirect self.buf / struct_buf / list_types_buf so that the
+        # helpers (emit_list_fwd_decls, gen_class_struct, etc.) write into our buffers.
+        mut old_buf      = self.buf
+        mut old_struct   = self.struct_buf
+        mut old_list     = self.list_types_buf
+        self.buf           = StringBuilder.init(4096)
+        self.struct_buf    = StringBuilder.init(16384)
+        self.list_types_buf = StringBuilder.init(2048)
+
+        mut out = StringBuilder.init(65536)
+        out.append("#pragma once\n")
+        out.append("#include \"tauraro_rt.h\"\n\n")
+
+        # ── Forward declarations ──────────────────────────────────────────────
+        mut i = 0
+        while i < prog.classes.len:
+            mut c2 = prog.classes.get(i)
+            if c2.generics.len == 0:
+                out.append("typedef struct " + c2.name + " " + c2.name + ";\n")
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            out.append("typedef struct " + prog.enums.get(i).name + " " + prog.enums.get(i).name + ";\n")
+            i = i + 1
+        i = 0
+        while i < prog.interfaces.len:
+            out.append("typedef struct _" + prog.interfaces.get(i).name + "_vtable " + prog.interfaces.get(i).name + "_vtable;\n")
+            i = i + 1
+        self.emit_list_fwd_decls(prog)          # writes to self.buf
+        out.append(self.buf.to_string().as_str())
+        self.buf = StringBuilder.init(256)
+        out.append("\n")
+
+        # ── Extern C declarations ─────────────────────────────────────────────
+        i = 0
+        while i < prog.extern_funcs.len:
+            mut ef = prog.extern_funcs.get(i)
+            mut ef_s = "extern " + self.type_to_c(ef.ret_ty) + " " + ef.name + "("
+            mut ef_first = true
+            mut epi = 0
+            while epi < ef.params.len:
+                mut ep = ef.params.get(epi)
+                if ep.name != "self":
+                    if not ef_first: ef_s = ef_s + ", "
+                    ef_s = ef_s + self.type_to_c(ep.ty) + " " + ep.name
+                    ef_first = false
+                epi = epi + 1
+            if ef.is_variadic:
+                if not ef_first: ef_s = ef_s + ", "
+                ef_s = ef_s + "..."
+            out.append(ef_s + ");\n")
+            i = i + 1
+        if prog.extern_funcs.len > 0: out.append("\n")
+
+        # ── Monomorphized generic types ───────────────────────────────────────
+        mut mono = self.mono_buf.to_string().as_str()
+        if mono != "": out.append(mono + "\n")
+
+        # ── Struct / enum / interface definitions ─────────────────────────────
+        i = 0
+        while i < prog.enums.len:
+            self.gen_enum_struct(prog.enums.get(i))
+            i = i + 1
+        i = 0
+        while i < prog.classes.len:
+            mut c3 = prog.classes.get(i)
+            if c3.generics.len == 0:
+                self.gen_class_struct(c3)
+            i = i + 1
+        i = 0
+        while i < prog.interfaces.len:
+            self.gen_interface_vtable(prog.interfaces.get(i))
+            i = i + 1
+        out.append(self.struct_buf.to_string().as_str())
+        out.append(self.list_types_buf.to_string().as_str())
+        out.append("\n")
+
+        # ── ALL function prototypes (cross-module visibility) ─────────────────
+        i = 0
+        while i < prog.classes.len:
+            mut c4 = prog.classes.get(i)
+            if c4.generics.len == 0:
+                mut mi = 0
+                while mi < c4.methods.len:
+                    mut m = c4.methods.get(mi)
+                    out.append(self.get_proto_attrs(m) + self.gen_func_sig(m, c4.name) + ";\n")
+                    mi = mi + 1
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            mut e4 = prog.enums.get(i)
+            mut mi = 0
+            while mi < e4.methods.len:
+                mut m = e4.methods.get(mi)
+                out.append(self.get_proto_attrs(m) + self.gen_func_sig(m, e4.name) + ";\n")
+                mi = mi + 1
+            i = i + 1
+        i = 0
+        while i < prog.functions.len:
+            mut f4 = prog.functions.get(i)
+            if f4.name != "main" and not f4.is_extern:
+                mut skip4 = false
+                if f4.class_name != "" and self.classes.contains(f4.class_name): skip4 = true
+                elif f4.class_name != "" and self.enums.contains(f4.class_name): skip4 = true
+                if not skip4:
+                    if not self.emitted_fns.contains("p_" + f4.name):
+                        self.emitted_fns.insert("p_" + f4.name, true)
+                        out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
+            i = i + 1
+        out.append("\n")
+
+        # ── Spawn wrappers (after prototypes so wrappers can call declared fns) ─
+        self.buf = StringBuilder.init(1024)
+        self.prescan_spawns(prog)
+        mut sw_out = self.buf.to_string().as_str()
+        self.buf = StringBuilder.init(256)
+        if sw_out != "":
+            out.append(sw_out)
+            out.append("\n")
+
+        # ── Interface vtable wrap functions (static inline, after prototypes) ─
+        mut wi = 0
+        while wi < prog.classes.len:
+            mut wcls = prog.classes.get(wi)
+            if wcls.generics.len == 0 and wcls.iface_names as usize != 0 as usize:
+                mut wii = 0
+                while wii < wcls.iface_names.len:
+                    mut wiface_name = wcls.iface_names.get(wii)
+                    if self.interfaces.contains(wiface_name):
+                        mut wiface = self.interfaces.get(wiface_name)
+                        out.append(self.gen_one_iface_wrap(wcls.name, wiface))
+                        out.append("\n")
+                    wii = wii + 1
+            wi = wi + 1
+
+        # Restore all temporary buffers
+        self.buf           = old_buf
+        self.struct_buf    = old_struct
+        self.list_types_buf = old_list
+
+        return out.to_string().as_str()
+
+    # Generate C implementations for one module (no struct defs — those are in tauraro_types.h).
+    # class_set: class/enum names declared in this module.
+    # fn_set:    standalone function names declared in this module.
+    # depth:     how many directories deep the output file is (for relative include path).
+    pub def generate_module_c(self, prog: HirProgram, class_set: Map[str, bool], fn_set: Map[str, bool], depth: int) -> str:
+        self.buf = StringBuilder.init(65536)
+
+        mut inc_prefix = ""
+        mut d = 0
+        while d < depth:
+            inc_prefix = inc_prefix + "../"
+            d = d + 1
+
+        self.w("#include \"" + inc_prefix + "tauraro_types.h\"\n")
+        self.w("#pragma GCC optimize(\"O3,unroll-loops\")\n\n")
+
+        # ── Class / enum method implementations ──────────────────────────────
+        mut i = 0
+        while i < prog.classes.len:
+            mut c = prog.classes.get(i)
+            if c.generics.len == 0 and class_set.contains(c.name):
+                if not self.emitted_fns.contains("cls_" + c.name):
+                    self.emitted_fns.insert("cls_" + c.name, true)
+                    mut mi = 0
+                    while mi < c.methods.len:
+                        mut m = c.methods.get(mi)
+                        self.cur_class = c.name
+                        self.cur_func  = m.name
+                        self.decl_vars = Map[str, bool].init(64)
+                        self.seed_params(m)
+                        self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
+                        self.gen_block(m.body, 1)
+                        self.w("}\n\n")
+                        self.cur_class = ""
+                        self.cur_func  = ""
+                        mi = mi + 1
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            mut e = prog.enums.get(i)
+            if class_set.contains(e.name):
+                if not self.emitted_fns.contains("cls_" + e.name):
+                    self.emitted_fns.insert("cls_" + e.name, true)
+                    mut mi = 0
+                    while mi < e.methods.len:
+                        mut m = e.methods.get(mi)
+                        self.cur_class = e.name
+                        self.cur_func  = m.name
+                        self.decl_vars = Map[str, bool].init(64)
+                        self.seed_params(m)
+                        self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
+                        self.gen_block(m.body, 1)
+                        self.w("}\n\n")
+                        self.cur_class = ""
+                        self.cur_func  = ""
+                        mi = mi + 1
+            i = i + 1
+
+        # ── Free-standing function implementations ────────────────────────────
+        i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if f.name != "main" and not f.is_extern:
+                mut in_mod = false
+                if f.class_name == "" and fn_set.contains(f.name):
+                    in_mod = true
+                elif f.class_name != "" and class_set.contains(f.class_name):
+                    if not self.classes.contains(f.class_name) and not self.enums.contains(f.class_name):
+                        in_mod = true  # extend method on a non-user-defined type
+                if in_mod:
+                    if not self.emitted_fns.contains("i_" + f.name):
+                        self.emitted_fns.insert("i_" + f.name, true)
+                        self.cur_func  = f.name
+                        self.cur_class = f.class_name
+                        self.decl_vars = Map[str, bool].init(64)
+                        self.seed_params(f)
+                        self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
+                        self.gen_block(f.body, 1)
+                        self.w("}\n\n")
+                        self.cur_func  = ""
+                        self.cur_class = ""
+            i = i + 1
+
+        return self.buf.to_string().as_str()
+
+    # Generate main.c: main-module implementations + C entry point.
+    pub def generate_main_c(self, prog: HirProgram, class_set: Map[str, bool], fn_set: Map[str, bool]) -> str:
+        self.buf = StringBuilder.init(65536)
+
+        self.w("#define _TR_MAIN\n")
+        self.w("#include \"tauraro_types.h\"\n")
+        self.w("#pragma GCC optimize(\"O3,unroll-loops\")\n\n")
+
+        # Emit spawn wrappers (static thread-entry functions) before any function body
+        self.prescan_spawns(prog)
+        self.w("\n")
+
+        # Main-module class / enum method implementations
+        mut i = 0
+        while i < prog.classes.len:
+            mut c = prog.classes.get(i)
+            if c.generics.len == 0 and class_set.contains(c.name):
+                if not self.emitted_fns.contains("cls_" + c.name):
+                    self.emitted_fns.insert("cls_" + c.name, true)
+                    mut mi = 0
+                    while mi < c.methods.len:
+                        mut m = c.methods.get(mi)
+                        self.cur_class = c.name
+                        self.cur_func  = m.name
+                        self.cur_throws_ty = m.throws_ty.name
+                        self.decl_vars = Map[str, bool].init(64)
+                        self.shared_vars = Map[str, str].init(8)
+                        self.seed_params(m)
+                        self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
+                        self.gen_block(m.body, 1)
+                        self.w("}\n\n")
+                        self.cur_class = ""
+                        self.cur_func  = ""
+                        self.cur_throws_ty = ""
+                        mi = mi + 1
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            mut e = prog.enums.get(i)
+            if class_set.contains(e.name):
+                if not self.emitted_fns.contains("cls_" + e.name):
+                    self.emitted_fns.insert("cls_" + e.name, true)
+                    mut mi = 0
+                    while mi < e.methods.len:
+                        mut m = e.methods.get(mi)
+                        self.cur_class = e.name
+                        self.cur_func  = m.name
+                        self.cur_throws_ty = m.throws_ty.name
+                        self.decl_vars = Map[str, bool].init(64)
+                        self.shared_vars = Map[str, str].init(8)
+                        self.seed_params(m)
+                        self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
+                        self.gen_block(m.body, 1)
+                        self.w("}\n\n")
+                        self.cur_class = ""
+                        self.cur_func  = ""
+                        self.cur_throws_ty = ""
+                        mi = mi + 1
+            i = i + 1
+
+        # Main-module free-standing function implementations
+        i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if f.name != "main" and not f.is_extern:
+                mut in_mod = false
+                if f.class_name == "" and fn_set.contains(f.name):
+                    in_mod = true
+                elif f.class_name != "" and class_set.contains(f.class_name):
+                    if not self.classes.contains(f.class_name) and not self.enums.contains(f.class_name):
+                        in_mod = true
+                if in_mod:
+                    if not self.emitted_fns.contains("i_" + f.name):
+                        self.emitted_fns.insert("i_" + f.name, true)
+                        self.cur_func  = f.name
+                        self.cur_class = f.class_name
+                        self.cur_throws_ty = f.throws_ty.name
+                        self.decl_vars = Map[str, bool].init(64)
+                        self.shared_vars = Map[str, str].init(8)
+                        self.seed_params(f)
+                        self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
+                        self.gen_block(f.body, 1)
+                        self.w("}\n\n")
+                        self.cur_func  = ""
+                        self.cur_class = ""
+                        self.cur_throws_ty = ""
+            i = i + 1
+
+        # C main() entry point
+        self.w("__attribute__((hot,optimize(\"O3,unroll-loops\"))) int main(int argc, char** argv) {\n")
+        mut main_has_args = false
+        mut main_args_name = "args"
+        mut mi2 = 0
+        while mi2 < prog.functions.len:
+            mut mf = prog.functions.get(mi2)
+            if mf.name == "main" and mf.params.len > 0:
+                main_has_args = true
+                main_args_name = mf.params.get(0).name
+            mi2 = mi2 + 1
+        if main_has_args:
+            self.w("    List_str* " + main_args_name + " = List_str_new();\n")
+            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_str_append(" + main_args_name + ", argv[_ai]); }\n")
+
+        i = 0
+        while i < prog.top_level_stmts.len:
+            self.gen_stmt(prog.top_level_stmts.get(i), 1)
+            i = i + 1
+
+        i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if f.name == "main":
+                self.cur_func  = "main"
+                self.decl_vars = Map[str, bool].init(64)
+                self.gen_block(f.body, 1)
+                self.cur_func  = ""
+            i = i + 1
+
+        self.w("    return 0;\n}\n")
+        return self.buf.to_string().as_str()

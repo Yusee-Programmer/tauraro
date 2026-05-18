@@ -1,0 +1,95 @@
+# std.string.fmt — String formatting and number-to-string conversion.
+# Pure Tauraro; no FFI required.
+
+from std.core.string import StringBuilder
+from std.string.str import str_len
+
+# ─── Integer → string ─────────────────────────────────────────────────────────
+
+pub def int_to_str(n: int) -> str:
+    if n == 0: return "0"
+    mut sb  = StringBuilder.init(24)
+    mut neg = false
+    mut x   = n
+    if x < 0:
+        neg = true
+        x   = 0 - x
+    while x > 0:
+        mut d = x - (x / 10) * 10
+        if d == 0: sb.append_char(48)
+        elif d == 1: sb.append_char(49)
+        elif d == 2: sb.append_char(50)
+        elif d == 3: sb.append_char(51)
+        elif d == 4: sb.append_char(52)
+        elif d == 5: sb.append_char(53)
+        elif d == 6: sb.append_char(54)
+        elif d == 7: sb.append_char(55)
+        elif d == 8: sb.append_char(56)
+        else: sb.append_char(57)
+        x = x / 10
+    if neg: sb.append_char(45)  # '-'
+    return str_reverse(sb.to_string().as_str())
+
+pub def int_to_hex(n: int) -> str:
+    if n == 0: return "0"
+    mut sb = StringBuilder.init(18)
+    mut x  = n
+    while x > 0:
+        mut d = x - (x / 16) * 16
+        if d < 10: sb.append_char(48 + d)
+        else: sb.append_char(87 + d)   # 'a' - 10 + d
+        x = x / 16
+    return str_reverse(sb.to_string().as_str())
+
+pub def int_to_bin(n: int) -> str:
+    if n == 0: return "0"
+    mut sb = StringBuilder.init(66)
+    mut x  = n
+    while x > 0:
+        mut bit = x - (x / 2) * 2
+        if bit == 0: sb.append_char(48)
+        else: sb.append_char(49)
+        x = x / 2
+    return str_reverse(sb.to_string().as_str())
+
+# ─── Padding ──────────────────────────────────────────────────────────────────
+
+# Right-align s in a field of width w, padding with pad_char.
+pub def str_pad_left(s: str, width: int, pad_char: int) -> str:
+    mut slen = str_len(s)
+    if slen >= width: return s
+    mut sb = StringBuilder.init(width + 1)
+    mut i  = slen
+    while i < width:
+        sb.append_char(pad_char)
+        i = i + 1
+    sb.append(s)
+    return sb.to_string().as_str()
+
+# Left-align s in a field of width w, padding with pad_char.
+pub def str_pad_right(s: str, width: int, pad_char: int) -> str:
+    mut slen = str_len(s)
+    if slen >= width: return s
+    mut sb = StringBuilder.init(width + 1)
+    sb.append(s)
+    mut i  = slen
+    while i < width:
+        sb.append_char(pad_char)
+        i = i + 1
+    return sb.to_string().as_str()
+
+# Zero-pad an integer to at least width digits.
+pub def zero_pad(n: int, width: int) -> str:
+    return str_pad_left(int_to_str(n), width, 48)  # 48 = '0'
+
+# ─── Joining ──────────────────────────────────────────────────────────────────
+
+pub def str_reverse(s: str) -> str:
+    mut len = str_len(s)
+    mut sb  = StringBuilder.init(len + 1)
+    mut p   = s as Pointer[char]
+    mut i   = len - 1
+    while i >= 0:
+        sb.append_char(p.offset(i).read() as int)
+        i = i - 1
+    return sb.to_string().as_str()

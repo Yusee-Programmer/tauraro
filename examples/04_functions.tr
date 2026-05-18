@@ -1,0 +1,64 @@
+# 04_functions.tr -- Function definitions, parameters, return types, and recursion.
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+def average(a: float, b: float, c: float) -> float:
+    return (a + b + c) / 3.0
+
+# Void function -- no return type annotation needed
+def greet(name: str) -> void:
+    print(f"Hello, {name}!")
+
+def factorial(n: int) -> int:
+    if n <= 1: return 1
+    return n * factorial(n - 1)
+
+def fib(n: int) -> int:
+    if n <= 0: return 0
+    if n == 1: return 1
+    return fib(n - 1) + fib(n - 2)
+
+def hypotenuse_squared(a: int, b: int) -> int:
+    return add(a * a, b * b)
+
+def is_even(n: int) -> bool:
+    return n % 2 == 0
+
+def demo_calls() -> void:
+    print("--- Basic calls ---")
+    mut r1: int = add(3, 7)
+    print(r1)
+    mut avg: float = average(1.0, 2.0, 3.0)
+    print(avg)
+    greet("Tauraro")
+
+def demo_recursion() -> void:
+    print("--- Factorial ---")
+    mut i: int = 0
+    while i < 8:
+        mut fv: int = factorial(i)
+        print(fv)
+        i = i + 1
+
+    print("--- Fibonacci ---")
+    mut j: int = 0
+    while j < 10:
+        mut fv: int = fib(j)
+        print(fv)
+        j = j + 1
+
+def demo_composed() -> void:
+    print("--- Composed calls ---")
+    mut hs: int = hypotenuse_squared(3, 4)
+    print(hs)
+    mut ev4: bool = is_even(4)
+    print(ev4)
+    mut ev7: bool = is_even(7)
+    print(ev7)
+
+def main():
+    print("=== 04: Functions ===")
+    demo_calls()
+    demo_recursion()
+    demo_composed()

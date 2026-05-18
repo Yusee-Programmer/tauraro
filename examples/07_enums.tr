@@ -1,0 +1,78 @@
+# 07_enums.tr -- Enums (simple and with data), pattern matching, wildcard arms.
+
+# Simple enum -- variants carry no data
+enum Direction:
+    North
+    South
+    East
+    West
+
+# Enum with single data field per variant (Tauraro's algebraic data types)
+enum Shape:
+    Circle(radius: int)
+    Rect(side: int)
+    Triangle(base: int)
+
+# Option-like enum for safe nullable values
+enum MaybeInt:
+    Some(value: int)
+    Nothing
+
+def describe_direction(d: Direction) -> void:
+    match d:
+        case Direction.North: print("heading north")
+        case Direction.South: print("heading south")
+        case Direction.East:  print("heading east")
+        case Direction.West:  print("heading west")
+        case _: print("unknown direction")
+
+# area function dispatches on the shape variant
+def area_of(s: Shape) -> int:
+    match s:
+        case Shape.Circle(r):   return r * r * 3
+        case Shape.Rect(r2):    return r2 * r2
+        case Shape.Triangle(b): return b * b / 2
+        case _: return 0
+
+def describe_maybe(m: MaybeInt) -> void:
+    match m:
+        case MaybeInt.Some(v): print(f"got value: {v}")
+        case MaybeInt.Nothing: print("got nothing")
+
+def demo_direction() -> void:
+    print("--- Direction enum ---")
+    mut d1: Direction = Direction.North
+    describe_direction(d1)
+    mut d2: Direction = Direction.West
+    describe_direction(d2)
+
+def demo_shapes() -> void:
+    print("--- Shape enum with data ---")
+    mut a1: int = area_of(Shape.Circle(5))
+    print(a1)
+    mut a2: int = area_of(Shape.Rect(4))
+    print(a2)
+    mut a3: int = area_of(Shape.Triangle(6))
+    print(a3)
+
+def demo_maybe() -> void:
+    print("--- MaybeInt enum ---")
+    mut m1: MaybeInt = MaybeInt.Some(99)
+    describe_maybe(m1)
+    mut m2: MaybeInt = MaybeInt.Nothing
+    describe_maybe(m2)
+
+def demo_wildcard() -> void:
+    print("--- Wildcard arm ---")
+    mut n: int = 7
+    match n:
+        case 1: print("one")
+        case 2: print("two")
+        case _: print("other")
+
+def main():
+    print("=== 07: Enums ===")
+    demo_direction()
+    demo_shapes()
+    demo_maybe()
+    demo_wildcard()

@@ -1,0 +1,20 @@
+# std.collections.vec — Dynamic array Vec[T].
+#
+# Re-exports from std.core.vec so callers can write:
+#   from std.collections.vec import Vec
+# or, via the package index:
+#   from std.collections import Vec
+
+from std.core.vec import Vec
+
+pub def vec_new[T](cap: int) -> Vec[T]:
+    return Vec[T].init(cap)
+
+pub def vec_of_int(cap: int) -> Vec[int]:
+    return Vec[int].init(cap)
+
+pub def vec_of_str(cap: int) -> Vec[str]:
+    return Vec[str].init(cap)
+
+pub def vec_of_bool(cap: int) -> Vec[bool]:
+    return Vec[bool].init(cap)

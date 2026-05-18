@@ -1,0 +1,12 @@
+# std.net — Package index.
+#
+#   from std.net import TcpStream, HttpClient, HttpResponse, Url
+#
+# Sub-modules:
+#   from std.net.tcp  import TcpStream
+#   from std.net.http import HttpClient, HttpResponse
+#   from std.net.url  import Url
+
+from std.net.tcp  import TcpStream
+from std.net.http import HttpClient, HttpResponse
+from std.net.url  import Url

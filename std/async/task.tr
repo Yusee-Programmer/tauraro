@@ -1,0 +1,58 @@
+# std.async.task — Task and Future primitives.
+#
+# A Task wraps a named unit of work.  In the full async runtime Tasks are
+# polled by the scheduler; right now they run synchronously via the
+# spawn / taskgroup: language constructs backed by the runtime thread pool.
+
+pub class Task:
+    pub name:   str
+    pub done:   bool
+    pub result: int      # generic integer result slot
+
+extend Task:
+    pub def init(name: str) -> Task:
+        mut t = Task()
+        t.name   = name
+        t.done   = false
+        t.result = 0
+        return t
+
+    pub def complete(self, result: int):
+        self.result = result
+        self.done   = true
+
+    pub def is_done(self) -> bool:
+        return self.done
+
+    pub def get_result(self) -> int:
+        return self.result
+
+# ─── Future (simple promise-like value holder) ────────────────────────────────
+
+pub class Future:
+    pub ready:  bool
+    pub value:  int
+
+extend Future:
+    pub def pending() -> Future:
+        mut f = Future()
+        f.ready = false
+        f.value = 0
+        return f
+
+    pub def resolved(value: int) -> Future:
+        mut f = Future()
+        f.ready = true
+        f.value = value
+        return f
+
+    pub def resolve(self, value: int):
+        self.value = value
+        self.ready = true
+
+    pub def is_ready(self) -> bool:
+        return self.ready
+
+    # Block until ready (synchronous simulation; real impl would poll).
+    pub def await_(self) -> int:
+        return self.value

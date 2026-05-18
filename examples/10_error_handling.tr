@@ -1,0 +1,101 @@
+# 10_error_handling.tr -- Error-as-value patterns, defensive checks, graceful failure.
+#
+# Tauraro uses integer error codes and conditional returns for error propagation.
+# try/except is also supported for exception-style error handling.
+
+# ---- Error code constants -----------------------------------------------------
+
+def err_ok() -> int:    return 0
+def err_div0() -> int:  return 1
+def err_range() -> int: return 2
+
+# ---- Functions that can fail --------------------------------------------------
+
+# Safe integer division -- returns a code, prints result or error.
+def safe_divide(a: int, b: int) -> int:
+    if b == 0:
+        print("Error: division by zero")
+        return err_div0()
+    mut result: int = a / b
+    print(f"  {a} / {b} = {result}")
+    return err_ok()
+
+# Clamp a value to [lo, hi]. Returns error code if range is inverted.
+def safe_clamp(val: int, lo: int, hi: int) -> int:
+    if lo > hi:
+        print(f"Error: invalid range")
+        return err_range()
+    if val < lo:
+        return lo
+    if val > hi:
+        return hi
+    return val
+
+# Try to parse a digit character into an integer (0-9 only).
+# Returns -1 on bad input.
+def parse_digit(c: int) -> int:
+    if c < 48 or c > 57:
+        return 0 - 1
+    return c - 48
+
+# ---- Defensive helper ---------------------------------------------------------
+
+def requires_positive(n: int) -> bool:
+    if n <= 0:
+        print(f"Validation error: got {n}")
+        return False
+    return True
+
+# ---- Error-as-value exception simulation --------------------------------------
+
+def risky_op(flag: bool) -> void:
+    if flag:
+        print("  risky_op caught an error")
+    else:
+        print("  risky_op: succeeded normally")
+
+# ---- Main ---------------------------------------------------------------------
+
+def main():
+    print("--- Safe division ---")
+    mut code: int = safe_divide(10, 2)
+    if code != err_ok():
+        print(f"  Division failed with code {code}")
+
+    code = safe_divide(7, 0)
+    if code != err_ok():
+        print(f"  Division failed with code {code}")
+
+    print("--- Safe clamp ---")
+    mut v: int = safe_clamp(15, 0, 10)
+    print(f"  clamp(15, 0, 10) = {v}")
+
+    v = safe_clamp(5, 20, 10)
+    if v == err_range():
+        print("  Inverted range detected")
+
+    print("--- Digit parse ---")
+    mut d: int = parse_digit(53)
+    if d < 0:
+        print("  Not a digit")
+    else:
+        print(f"  Parsed digit: {d}")
+
+    d = parse_digit(90)
+    if d < 0:
+        print("  Not a digit (as expected)")
+
+    print("--- error simulation ---")
+    risky_op(False)
+    risky_op(True)
+
+    print("--- Defensive validation ---")
+    mut ok: bool = requires_positive(42)
+    if ok:
+        print("  42 is positive -- proceeding")
+
+    ok = requires_positive(0 - 3)
+    if not ok:
+        print("  Skipping work due to bad input")
+
+    print("Error-handling example complete.")

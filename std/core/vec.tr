@@ -1,0 +1,95 @@
+# std.core.vec — Generic dynamic array Vec[T].
+#
+# Implemented entirely in pure Tauraro using extern "C" memory primitives.
+# No dependency on the bootstrap compiler's core.vec module.
+#
+# Internal storage is a raw byte buffer (Pointer[char]).  Typed access uses
+# Pointer[T] casts in unsafe blocks — the codegen emits correct C pointer
+# arithmetic which already accounts for sizeof(T).
+
+extern "C":
+    def _tr_checked_alloc(size: int) -> Pointer[char]
+    def _tr_c_realloc(ptr: Pointer[char], size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+
+pub class Vec[T]:
+    pub data:     Pointer[char]   # raw byte store (malloc'd)
+    pub len:   int
+    pub capacity: int
+
+extend Vec[T]:
+    pub def init(cap: int) -> Vec[T]:
+        mut cap2 = cap
+        if cap2 < 4: cap2 = 4
+        mut v = Vec[T]()
+        v.data     = _tr_checked_alloc(cap2 * sizeof[T])
+        v.len   = 0
+        v.capacity = cap2
+        return v
+
+    pub def push(self, val: T):
+        if self.len >= self.capacity:
+            self.capacity = self.capacity * 2
+            self.data = _tr_c_realloc(self.data, self.capacity * sizeof[T])
+        unsafe:
+            (self.data as Pointer[T]).offset(self.len).write(val)
+        self.len = self.len + 1
+
+    pub def pop(self) -> T:
+        self.len = self.len - 1
+        unsafe:
+            return (self.data as Pointer[T]).offset(self.len).read()
+
+    pub def get(self, i: int) -> T:
+        unsafe:
+            return (self.data as Pointer[T]).offset(i).read()
+
+    pub def set(self, i: int, val: T):
+        unsafe:
+            (self.data as Pointer[T]).offset(i).write(val)
+
+    # Append all elements from another Vec[T].
+    pub def extend(self, other: Vec[T]):
+        mut i = 0
+        while i < other.len:
+            self.push(other.get(i))
+            i = i + 1
+
+    # Return true if the element appears in the vec (uses == comparison).
+    pub def contains(self, val: T) -> bool:
+        mut i = 0
+        while i < self.len:
+            unsafe:
+                if (self.data as Pointer[T]).offset(i).read() == val: return true
+            i = i + 1
+        return false
+
+    # Remove element at position i by shifting tail left.
+    pub def remove(self, i: int):
+        if i < 0 or i >= self.len: return
+        unsafe:
+            mut dst = (self.data as Pointer[T]).offset(i)
+            mut src = (self.data as Pointer[T]).offset(i + 1)
+            mut _nbytes = (self.len - i - 1) * sizeof[T]
+            _tr_c_memcpy(dst as Pointer[char], src as Pointer[char], _nbytes)
+        self.len = self.len - 1
+
+    # Swap elements at positions a and b.
+    pub def swap(self, a: int, b: int):
+        if a == b: return
+        mut tmp = self.get(a)
+        self.set(a, self.get(b))
+        self.set(b, tmp)
+
+    pub def is_empty(self) -> bool:
+        return self.len == 0
+
+    pub def clear(self):
+        self.len = 0
+
+    pub def free(self):
+        _tr_c_free(self.data)
+        self.data = 0 as Pointer[char]
+        self.len = 0
+        self.capacity = 0

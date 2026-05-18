@@ -1,0 +1,37 @@
+# std.iter.range — Range construction and step utilities for Vec[int].
+
+from std.core.vec import Vec
+
+# Build a Vec[int] containing [start, end).
+pub def range_vec(start: int, end: int) -> Vec[int]:
+    mut cap = end - start
+    if cap < 0: cap = 0
+    mut v = Vec[int].init(cap + 4)
+    mut i = start
+    while i < end:
+        v.push(i)
+        i = i + 1
+    return v
+
+# Build a Vec[int] with a custom step.
+pub def range_step(start: int, end: int, step: int) -> Vec[int]:
+    if step == 0: return Vec[int].init(0)
+    mut v = Vec[int].init(16)
+    mut i = start
+    if step > 0:
+        while i < end:
+            v.push(i)
+            i = i + step
+    else:
+        while i > end:
+            v.push(i)
+            i = i + step
+    return v
+
+# Build a Vec[int] with n elements starting from start.
+pub def range_n(start: int, n: int) -> Vec[int]:
+    return range_vec(start, start + n)
+
+# Build a Vec[int] from 0 to n-1.
+pub def iota(n: int) -> Vec[int]:
+    return range_vec(0, n)

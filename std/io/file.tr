@@ -1,0 +1,99 @@
+# std.io.file — File I/O implemented in pure Tauraro via extern "C" bindings.
+#
+# Binds directly to _tr_c_fopen / _tr_c_fread / _tr_c_fwrite / _tr_c_fclose
+# from tauraro_rt.h.  No bootstrap core.io dependency.
+
+extern "C":
+    def _tr_c_fopen(path: str, mode: str) -> Pointer[char]
+    def _tr_c_fclose(fp: Pointer[char]) -> int
+    def _tr_c_fread(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
+    def _tr_c_fwrite(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
+    def _tr_c_fseek(fp: Pointer[char], offset: int, whence: int) -> int
+    def _tr_c_ftell(fp: Pointer[char]) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+
+# Read the entire contents of path and return it as a str.
+# Returns "" when the file cannot be opened.
+pub def read_file(path: str) -> str:
+    mut fp = _tr_c_fopen(path, "rb")
+    if fp as int == 0:
+        return ""
+    _tr_c_fseek(fp, 0, 2)          # SEEK_END = 2
+    mut size = _tr_c_ftell(fp)
+    _tr_c_fseek(fp, 0, 0)          # SEEK_SET = 0
+    if size <= 0:
+        _tr_c_fclose(fp)
+        return ""
+    mut buf = _tr_c_malloc(size + 1)
+    _tr_c_fread(buf, 1, size, fp)
+    unsafe:
+        buf.offset(size).write('\0')
+    _tr_c_fclose(fp)
+    return buf as str
+
+# Write data to path, creating or overwriting the file.
+# Returns True on success.
+pub def write_file(path: str, data: str) -> bool:
+    mut fp = _tr_c_fopen(path, "wb")
+    if fp as int == 0:
+        return false
+    mut p = data as Pointer[char]
+    mut length = 0
+    while p.offset(length).read() as int != 0:
+        length = length + 1
+    _tr_c_fwrite(p, 1, length, fp)
+    _tr_c_fclose(fp)
+    return true
+
+# Append data to path without truncating existing content.
+pub def append_file(path: str, data: str) -> bool:
+    mut fp = _tr_c_fopen(path, "ab")
+    if fp as int == 0:
+        return false
+    mut p = data as Pointer[char]
+    mut length = 0
+    while p.offset(length).read() as int != 0:
+        length = length + 1
+    _tr_c_fwrite(p, 1, length, fp)
+    _tr_c_fclose(fp)
+    return true
+
+# Return True when the file at path exists and is openable for reading.
+pub def file_exists(path: str) -> bool:
+    mut fp = _tr_c_fopen(path, "rb")
+    if fp as int != 0:
+        _tr_c_fclose(fp)
+        return true
+    return false
+
+# ─── File class ───────────────────────────────────────────────────────────────
+
+pub class File:
+    pub path:    str
+    pub content: str
+
+extend File:
+    pub def init(path: str) -> File:
+        mut f = File()
+        f.path    = path
+        f.content = ""
+        return f
+
+    # Read from disk; caches in self.content.
+    pub def read(self) -> str:
+        self.content = read_file(self.path)
+        return self.content
+
+    # Write data to disk; also updates self.content.
+    pub def write(self, data: str):
+        self.content = data
+        write_file(self.path, data)
+
+    # Append data to disk.
+    pub def append(self, data: str):
+        self.content = self.content + data
+        append_file(self.path, data)
+
+    # Return True when the file exists on disk.
+    pub def exists(self) -> bool:
+        return file_exists(self.path)

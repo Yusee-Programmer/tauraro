@@ -1,0 +1,32 @@
+# std.core.alloc — Low-level memory management via extern "C" bindings.
+#
+# All allocations go through the runtime's checked allocator which aborts on
+# OOM.  raw_alloc / raw_realloc / raw_free are thin wrappers so callers never
+# import from the bootstrap compiler's core.alloc module.
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_realloc(ptr: Pointer[char], size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_c_memset(ptr: Pointer[char], val: int, n: int)
+    def _tr_c_memmove(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_checked_alloc(size: int) -> Pointer[char]
+
+pub def raw_alloc(size: int) -> Pointer[char]:
+    return _tr_checked_alloc(size)
+
+pub def raw_realloc(ptr: Pointer[char], size: int) -> Pointer[char]:
+    return _tr_c_realloc(ptr, size)
+
+pub def raw_free(ptr: Pointer[char]):
+    _tr_c_free(ptr)
+
+pub def raw_copy(dst: Pointer[char], src: Pointer[char], n: int):
+    _tr_c_memcpy(dst, src, n)
+
+pub def raw_zero(ptr: Pointer[char], n: int):
+    _tr_c_memset(ptr, 0, n)
+
+pub def raw_move(dst: Pointer[char], src: Pointer[char], n: int):
+    _tr_c_memmove(dst, src, n)

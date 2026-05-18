@@ -1,0 +1,87 @@
+# std.net.http — HTTP/1.1 client built on TcpStream.
+
+from std.core.string import StringBuilder
+from std.net.tcp import TcpStream
+from std.string.str import str_len
+
+pub class HttpResponse:
+    pub status: int
+    pub body:   str
+
+extend HttpResponse:
+    pub def init(status: int, body: str) -> HttpResponse:
+        mut r = HttpResponse()
+        r.status = status
+        r.body   = body
+        return r
+
+    pub def is_ok(self) -> bool:
+        return self.status == 200
+
+    pub def to_string(self) -> str:
+        mut sb = StringBuilder.init(64)
+        sb.append("HTTP ")
+        if self.status == 200:       sb.append("200 OK")
+        elif self.status == 201:     sb.append("201 Created")
+        elif self.status == 204:     sb.append("204 No Content")
+        elif self.status == 301:     sb.append("301 Moved Permanently")
+        elif self.status == 302:     sb.append("302 Found")
+        elif self.status == 400:     sb.append("400 Bad Request")
+        elif self.status == 401:     sb.append("401 Unauthorized")
+        elif self.status == 403:     sb.append("403 Forbidden")
+        elif self.status == 404:     sb.append("404 Not Found")
+        elif self.status == 500:     sb.append("500 Internal Server Error")
+        else:                        sb.append("??? Unknown")
+        sb.append("\n")
+        sb.append(self.body)
+        return sb.to_string().as_str()
+
+pub class HttpClient:
+    pub host:    str
+    pub port:    int
+    pub timeout: int
+
+extend HttpClient:
+    pub def init(host: str, port: int) -> HttpClient:
+        mut c = HttpClient()
+        c.host    = host
+        c.port    = port
+        c.timeout = 5000
+        return c
+
+    # Send a GET request and return the response.
+    pub def get(self, path: str) -> HttpResponse:
+        mut stream = TcpStream.connect(self.host, self.port)
+        if not stream.is_connected():
+            return HttpResponse.init(0, "connection failed")
+        mut sb = StringBuilder.init(256)
+        sb.append("GET ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\nHost: ")
+        sb.append(self.host)
+        sb.append("\r\nConnection: close\r\n\r\n")
+        stream.send(sb.to_string().as_str())
+        mut body = stream.recv(65536)
+        stream.close()
+        return HttpResponse.init(200, body)
+
+    # Send a POST request with a body and return the response.
+    pub def post(self, path: str, data: str) -> HttpResponse:
+        mut stream = TcpStream.connect(self.host, self.port)
+        if not stream.is_connected():
+            return HttpResponse.init(0, "connection failed")
+        mut content_len = str_len(data)
+        mut sb = StringBuilder.init(512)
+        sb.append("POST ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\nHost: ")
+        sb.append(self.host)
+        sb.append("\r\nContent-Length: ")
+        if content_len == 0: sb.append("0")
+        else: sb.append("????")   # TODO: int_to_str once imported
+        sb.append("\r\nConnection: close\r\n\r\n")
+        sb.append(data)
+        stream.send(sb.to_string().as_str())
+        mut resp = stream.recv(65536)
+        stream.close()
+        return HttpResponse.init(200, resp)
