@@ -3,7 +3,7 @@
 from core.vec import Vec
 from core.alloc import alloc, dealloc
 from token import Token
-from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart
+from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart, Ownership
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -274,6 +274,8 @@ extend Parser:
                 return self.parse_let_stmt(True)
             case Token.KwShared:
                 return self.parse_shared_let_stmt()
+            case Token.KwConst:
+                return self.parse_const_let_stmt()
             case Token.KwUnsafe:
                 self.pos = self.pos + 1
                 match self.peek():
@@ -434,6 +436,23 @@ extend Parser:
                 val_ptr = self.parse_expr()
         self.expect_newline()
         return box_stmt(Stmt.SLet(name, Ownership.Shared, true, false, true, ty_ptr, val_ptr))
+
+    pub def parse_const_let_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1  # consume 'const'
+        name = self.consume_ident()
+        mut ty_ptr = Pointer[AstType](0)
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+                ty = self.parse_type()
+                ty_ptr = box_asttype(ty)
+        mut val_ptr = Pointer[Expr](0)
+        match self.peek():
+            case Token.Eq:
+                self.pos = self.pos + 1
+                val_ptr = self.parse_expr()
+        self.expect_newline()
+        return box_stmt(Stmt.SLet(name, Ownership.Own, false, true, false, ty_ptr, val_ptr))
 
     pub def parse_if_stmt(self) -> Pointer[Stmt]:
         self.pos = self.pos + 1
@@ -1154,6 +1173,7 @@ extend Parser:
                 case Token.Dedent: tok_name = "Dedent"
                 case Token.Ident(n): tok_name = "Ident:" + n
                 case Token.KwMut: tok_name = "KwMut"
+                case Token.KwConst: tok_name = "KwConst"
                 case Token.KwPub: tok_name = "KwPub"
                 case Token.KwReturn: tok_name = "KwReturn"
                 case Token.KwIf: tok_name = "KwIf"
