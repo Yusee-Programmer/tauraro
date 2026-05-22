@@ -9,8 +9,8 @@
 from core.vec import Vec
 from core.string import StringBuilder
 from core.map import Map
-from compiler.src.codegen.c import _is_int_type, _is_float_type, _is_str_type
-from compiler.src.hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, hir_expr_type
+from codegen.c import _is_int_type, _is_float_type, _is_str_type
+from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, hir_expr_type
 
 # ─── LLVM type mapping ────────────────────────────────────────────────────────
 

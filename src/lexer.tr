@@ -1,7 +1,7 @@
 # compiler/src/lexer.tr — Tauraro lexer written in Tauraro.
 # Tokenizes a source string into a Vec[Token].
 
-from compiler.src.token import Token
+from token import Token
 from core.vec import Vec
 from core.string import StringBuilder
 
