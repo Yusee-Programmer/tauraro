@@ -6,7 +6,7 @@
 
 # ---- Named functions used as callbacks ----------------------------------------
 
-def double(x: int) -> int:
+def dbl(x: int) -> int:
     return x * 2
 
 def square(x: int) -> int:
@@ -79,16 +79,16 @@ extend Multiplier:
 # ---- Named-function apply demonstration ----------------------------------------
 
 def apply_named(x: int) -> int:
-    return double(square(x))
+    return dbl(square(x))
 
 def main():
     print("--- Named function calls ---")
-    mut r1: int = double(7)
-    print(f"double(7)  = {r1}")
+    mut r1: int = dbl(7)
+    print(f"dbl(7)  = {r1}")
     mut r2: int = square(5)
     print(f"square(5)  = {r2}")
     mut r3: int = apply_named(3)
-    print(f"double(square(3)) = {r3}")
+    print(f"dbl(square(3)) = {r3}")
 
     print("--- Strategy pattern (IntFn) ---")
     mut fn1: IntFn = IntFn.init("times3", 3)

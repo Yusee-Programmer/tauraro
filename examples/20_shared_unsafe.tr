@@ -51,16 +51,16 @@ def unsafe_demo():
     print(f"  original x was 42, p.read() gave {y}")
     print(f"  after p.write(100), x = {x}")
 
-    # Pointer arithmetic: walk an array
-    mut arr: Vec[int] = Vec[int].init(4)
-    arr.push(10)
-    arr.push(20)
-    arr.push(30)
-    arr.push(40)
-    print("  array via pointer walk:")
+    # Array access via List
+    mut arr: List[int] = []
+    arr.append(10)
+    arr.append(20)
+    arr.append(30)
+    arr.append(40)
+    print("  array elements:")
     mut i: int = 0
     while i < 4:
-        print(f"    arr[{i}] = {arr.get(i)}")
+        print(f"    arr[{i}] = {arr[i]}")
         i = i + 1
 
 def main():
