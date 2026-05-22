@@ -64,6 +64,7 @@ pub class Sema:
     pub current_scope_depth: int
     pub in_async_fn:        bool
     pub assign_froms:       Map[str, int] # block-local last use tracking
+    pub current_line:       int
 
 extend Sema:
     pub def init() -> Sema:
@@ -80,6 +81,7 @@ extend Sema:
         s.current_scope_depth = 0
         s.in_async_fn        = false
         s.assign_froms       = Map[str, int].init(32)
+        s.current_line       = 0
 
         # ── Built-in functions ─────────────────────────────────────────────────
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -155,7 +157,10 @@ extend Sema:
         return s
 
     pub def error(self, msg: str):
-        self.errors.push(msg)
+        if self.current_line > 0:
+            self.errors.push("line " + str(self.current_line) + ": " + msg)
+        else:
+            self.errors.push(msg)
 
     pub def enter_scope(self):
         mut s_obj = Scope.init()
@@ -171,7 +176,7 @@ extend Sema:
         if name != "self" and name != "_" and _tr_strlen(name) > 1:
             mut cat = self.is_reserved_error(name)
             if cat != "":
-                self.errors.push("[N-1] '" + name + "' is a " + cat + " and cannot be used as a variable name. Choose a different name (e.g. 'my_" + name + "').")
+                self.error("[N-1] '" + name + "' is a " + cat + " and cannot be used as a variable name. Choose a different name (e.g. 'my_" + name + "').")
             else:
                 mut wcat = self.is_reserved_warn(name)
                 if wcat != "":
@@ -281,11 +286,12 @@ extend Sema:
             case _: pass
 
     pub def lower_func(self, f: FunctionDef) -> HirFunction:
+        self.current_line = f.line
         # Rule N-1: Function name check
         if f.name != "main" and f.name != "" and _tr_strlen(f.name) > 1:
             mut fn_cat = self.is_reserved_error(f.name)
             if fn_cat != "":
-                self.errors.push("[N-1] '" + f.name + "' is a " + fn_cat + " and cannot be used as a function name.")
+                self.error("[N-1] '" + f.name + "' is a " + fn_cat + " and cannot be used as a function name.")
         # Save async context, set function context
         mut saved_async = self.in_async_fn
         self.in_async_fn = f.is_async
@@ -338,7 +344,8 @@ extend Sema:
             mut ret_nm = f.ret_ty.read().name
             if ret_nm != "void" and ret_nm != "None" and ret_nm != "" and f.name != "init" and f.name != "new":
                 if not self.block_returns(f.body):
-                    self.errors.push("[F-3] Function '" + f.name + "' returns '" + ret_nm + "' but is missing a return statement on at least one code path. FIX: Add a return at the end, or ensure all if/elif/else branches return.")
+                    self.current_line = f.line
+                    self.error("[F-3] Function '" + f.name + "' returns '" + ret_nm + "' but is missing a return statement on at least one code path. FIX: Add a return at the end, or ensure all if/elif/else branches return.")
 
         self.exit_scope()
         # Restore async context
@@ -347,6 +354,7 @@ extend Sema:
         return hf
 
     pub def lower_class(self, c: ClassDef) -> HirClass:
+        self.current_line = c.line
         self.current_class_name = c.name
         mut hfields = Vec[HirField].init(4)
         mut i = 0
@@ -460,7 +468,7 @@ extend Sema:
                                     case Expr.EIdent(fn_name):
                                         mut fn_sym = self.resolve(fn_name)
                                         if fn_sym.kind == SymbolKind.SFunction and fn_sym.ty.read().name == "Result":
-                                            self.errors.push("[T-4] '" + fn_name + "()' returns a Result and its error must be handled. FIX: Assign the result and match on it, use '?' to propagate, or '_ = " + fn_name + "(...)' to explicitly discard.")
+                                            self.error("[T-4] '" + fn_name + "()' returns a Result and its error must be handled. FIX: Assign the result and match on it, use '?' to propagate, or '_ = " + fn_name + "(...)' to explicitly discard.")
                                     case _: pass
                         case _: pass
                 return h_s_expr
@@ -472,7 +480,7 @@ extend Sema:
                         case Expr.ELitNone:
                             mut m7_ty_name = ty_ptr.read().name
                             if m7_ty_name != "Option" and m7_ty_name != "None" and m7_ty_name != "void" and m7_ty_name != "":
-                                self.errors.push("[M-7] Cannot assign 'none' to '" + name + "' which has type '" + m7_ty_name + "'. Only Option[T] can hold 'none'. FIX: Use 'Option[" + m7_ty_name + "]' as the type, or give '" + name + "' a real initial value.")
+                                self.error("[M-7] Cannot assign 'none' to '" + name + "' which has type '" + m7_ty_name + "'. Only Option[T] can hold 'none'. FIX: Use 'Option[" + m7_ty_name + "]' as the type, or give '" + name + "' a real initial value.")
                         case _: pass
                 mut ty = AstType.init("void")
                 if ty_ptr as usize != 0 as usize: ty = ty_ptr.read()
@@ -492,7 +500,7 @@ extend Sema:
                             mut t5_sym = self.resolve(t5_name)
                             mut t5_ty = t5_sym.ty.read().name
                             if t5_ty == "int" or t5_ty == "i64" or t5_ty == "i32" or t5_ty == "float" or t5_ty == "f64":
-                                self.errors.push("[T-5] '" + t5_name + "' is a number (" + t5_ty + ") and cannot be used as an 'if' condition. FIX: Write 'if " + t5_name + " != 0:' to explicitly check for non-zero.")
+                                self.error("[T-5] '" + t5_name + "' is a number (" + t5_ty + ") and cannot be used as an 'if' condition. FIX: Write 'if " + t5_name + " != 0:' to explicitly check for non-zero.")
                         case _: pass
                 # Lower if/elif/else chain into nested SIf nodes
                 mut hcond = self.lower_expr(cond)
@@ -568,6 +576,9 @@ extend Sema:
             case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
             case Stmt.SPass: return box_hirstmt(HirStmt.SPass)
             case Stmt.SUnsafe(body): return box_hirstmt(HirStmt.SUnsafe(self.lower_block(body)))
+            case Stmt.SLine(n):
+                self.current_line = n
+                return box_hirstmt(HirStmt.SPass)
             case _: return box_hirstmt(HirStmt.SPass)
 
     pub def variant_field_ty(self, type_name: str, variant_name: str, field_idx: int) -> AstType:
@@ -920,7 +931,7 @@ extend Sema:
             case Expr.EAwait(inner_await):
                 # Rule C-4: await only valid inside async def
                 if not self.in_async_fn:
-                    self.errors.push("[C-4] 'await' used outside an async function. FIX: Declare '" + self.current_func_name + "' as 'async def " + self.current_func_name + "(...)' to use await inside it.")
+                    self.error("[C-4] 'await' used outside an async function. FIX: Declare '" + self.current_func_name + "' as 'async def " + self.current_func_name + "(...)' to use await inside it.")
                 mut hinner_await = self.lower_expr(inner_await)
                 mut await_ty = hir_expr_type(hinner_await)
                 return box_hirexpr(HirExpr.EAwait(hinner_await, await_ty))
