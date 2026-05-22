@@ -127,10 +127,10 @@ extend ModuleResolver:
                 source = read_file(path + ".tr")
             if source == "": return
 
-        mut lexer  = Lexer.init(source)
-        mut tokens = lexer.tokenize()
-        mut parser = Parser.init(tokens)
-        mut prog   = parser.parse_program()
+        mut lexer   = Lexer.init(source)
+        mut tokens  = lexer.tokenize()
+        mut parser  = Parser.init(tokens, lexer.token_lines)
+        mut prog    = parser.parse_program()
 
         # Scan declarations: load imported modules first, then collect decls.
         mut i = 0
