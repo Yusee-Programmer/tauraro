@@ -3,6 +3,7 @@
 from core.vec import Vec
 from core.alloc import alloc, dealloc
 from token import Token
+from lexer import Lexer
 from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart, Ownership
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -32,11 +33,13 @@ pub def box_asttype(t: AstType) -> Pointer[AstType]:
 pub class Parser:
     pub tokens: Vec[Token]
     pub pos: int
+    pub lines: Vec[int]
 
 extend Parser:
-    pub def init(tokens: Vec[Token]) -> Parser:
+    pub def init(tokens: Vec[Token], lines: Vec[int]) -> Parser:
         mut p = Parser()
         p.tokens = tokens
+        p.lines = lines
         p.pos = 0
         return p
 
@@ -81,6 +84,13 @@ extend Parser:
             case Token.Eof:
                 return True
         return False
+
+    pub def cur_line(self) -> int:
+        if self.pos < self.lines.len:
+            return self.lines.get(self.pos)
+        if self.lines.len > 0:
+            return self.lines.get(self.lines.len - 1)
+        return 0
 
     pub def consume_ident(self) -> str:
         match self.peek():
@@ -192,6 +202,7 @@ extend Parser:
                 is_inline = True
 
         if is_inline:
+            b.push(box_stmt(Stmt.SLine(self.cur_line())))
             b.push(self.parse_stmt())
             mut semi_going = True
             while semi_going:
@@ -202,6 +213,7 @@ extend Parser:
                             case Token.Newline | Token.Eof | Token.Dedent:
                                 semi_going = False
                             case _:
+                                b.push(box_stmt(Stmt.SLine(self.cur_line())))
                                 b.push(self.parse_stmt())
                     case _:
                         semi_going = False
@@ -218,7 +230,9 @@ extend Parser:
                     case Token.Dedent | Token.Eof:
                         going = False
                 if going:
+                    mut _sline = self.cur_line()
                     s = self.parse_stmt()
+                    b.push(box_stmt(Stmt.SLine(_sline)))
                     b.push(s)
         match self.peek():
             case Token.Dedent:
@@ -1218,10 +1232,10 @@ extend Parser:
                 # Parse the expression inside {}
                 mut expr_str = expr_sb.to_string().as_str()
                 mut lexer = Lexer.init(expr_str)
-                mut tokens = lexer.tokenize()
+                mut _fstr_tokens = lexer.tokenize()
                 # Remove EOF from tokens before parsing expression
-                if tokens.len > 0:
-                    mut parser = Parser.init(tokens)
+                if _fstr_tokens.len > 0:
+                    mut parser = Parser.init(_fstr_tokens, lexer.token_lines)
                     mut e = parser.parse_expr()
                     fl.push(FStringPart.init_expr(e))
             else:
@@ -1266,30 +1280,38 @@ extend Parser:
             case Token.KwImport:
                 return self.parse_import()
             case Token.KwDef:
+                mut _fline = self.cur_line()
                 mut f = self.parse_function_def(False)
+                f.line = _fline
                 f.is_public = is_public
                 f.decorators = decorators
                 return box_decl(Decl.DFunction(f))
             case Token.KwClass:
+                mut _cline = self.cur_line()
                 mut c_ptr = self.parse_class_decl()
                 match c_ptr.read():
                     case Decl.DClass(c):
+                        c.line = _cline
                         c.is_public = is_public
                         c.decorators = decorators
                         c_ptr.write(Decl.DClass(c))
                 return c_ptr
             case Token.KwEnum:
+                mut _eline = self.cur_line()
                 mut e_ptr = self.parse_enum_decl()
                 match e_ptr.read():
                     case Decl.DEnum(e):
+                        e.line = _eline
                         e.is_public = is_public
                         e.decorators = decorators
                         e_ptr.write(Decl.DEnum(e))
                 return e_ptr
             case Token.KwInterface:
+                mut _iline = self.cur_line()
                 mut i_ptr = self.parse_interface_decl()
                 match i_ptr.read():
                     case Decl.DInterface(i):
+                        i.line = _iline
                         i.is_public = is_public
                         i_ptr.write(Decl.DInterface(i))
                 return i_ptr
@@ -1465,7 +1487,9 @@ extend Parser:
                 case Token.Dedent | Token.Eof:
                     going = False
                 case Token.KwDef:
+                    mut _mline = self.cur_line()
                     mut m = self.parse_function_def(True)
+                    m.line = _mline
                     m.is_public = is_p
                     m.decorators = decorators
                     c.methods.push(m)
@@ -1473,7 +1497,9 @@ extend Parser:
                     self.pos = self.pos + 1
                     match self.peek():
                         case Token.KwDef:
+                            mut _mline = self.cur_line()
                             mut m = self.parse_function_def(True)
+                            m.line = _mline
                             m.is_async = True
                             m.is_public = is_p
                             m.decorators = decorators

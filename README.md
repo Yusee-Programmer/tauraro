@@ -1,182 +1,198 @@
-# Tauraro Self-Hosted Compiler
+# Tauraro Programming Language
 
-A complete, production-ready **Tauraro compiler written entirely in Tauraro**. This is the **Phase 1.5** milestone: self-hosting the compiler so it can compile itself.
+A modern systems programming language designed for performance, safety, and expressiveness. **Tauraro compiles to C**, then leverages GCC/Clang for native code generation. The compiler itself is now **self-hosted—written entirely in Tauraro** (initially bootstrapped from Rust).
 
 ## Overview
 
-The Tauraro compiler is a modern systems programming language compiler that transpiles to C, then leverages GCC/Clang for native code generation. It features:
+Tauraro is a statically-typed, compiled language that combines the best of modern language design with practical systems programming capabilities:
 
-- **Self-hosted**: Written entirely in Tauraro, the compiler can compile itself
-- **Multi-backend**: Primary C transpiler with LLVM IR stub for Phase 2
-- **Modular compilation**: Per-module C output with separate type headers
-- **Bilingual**: Full support for English and Hausa keywords
-- **Production-ready C codegen**: Optimized, brutally efficient C output
-- **Complete pipeline**: Lexer → Parser → Semantic Analysis → Code Generation
+- **Fast compilation & execution**: Transpiles to optimized C then native code
+- **Type safety**: Strong static typing with type inference
+- **Ownership semantics**: Automatic memory management with optional manual control
+- **Bilingual**: Every keyword has English and Hausa equivalents
+- **Multi-paradigm**: Object-oriented, functional, and procedural programming styles
+- **System access**: Raw pointers, unsafe blocks, and FFI for systems programming
+- **Async/await**: Lightweight concurrency with channels and task spawning
 
 ## Quick Start
 
-### Bootstrap from Rust (initial compilation)
+### Installation
 
+Download or build the `tauraroc` compiler from releases, or [build from source](docs/building.md).
+
+### Your First Program
+
+Create `hello.tr`:
+```tauraro
+pub def main():
+    print("Hello, Tauraro!")
+```
+
+Compile and run:
 ```bash
-# Clone and build the Rust bootstrap compiler
-cargo build --release
-
-# Use it to compile the self-hosted Tauraro compiler
-cargo run --release -- src/main.tr --emit c -o bootstrap.c
-
-# Compile the generated bootstrap C code
-gcc -O3 bootstrap.c runtime/tauraro_rt.h -o tauraroc
-
-# Now you have a self-hosted compiler!
-./tauraroc examples/01_variables.tr --run
+tauraroc hello.tr --run
 ```
 
-### Using the self-hosted compiler
+### Basic Examples
 
-```bash
-# Compile and run
-./tauraroc examples/hello.tr --run
-
-# Compile to modular C output
-./tauraroc src/main.tr --emit c
-
-# Type-check only
-./tauraroc examples/01_variables.tr --check
-
-# Compile with optimization
-./tauraroc program.tr -O3 -o program
-
-# Link external C libraries
-./tauraroc program.tr --link /path/to/lib.a -luser32 -o program.exe
+**Variables and Types**:
+```tauraro
+def main():
+    mut x: int = 42
+    let name: str = "Tauraro"
+    print(f"{name}: {x}")
 ```
 
-## CLI Reference
+**Functions**:
+```tauraro
+pub def add(a: int, b: int) -> int:
+    return a + b
 
+def main():
+    print(add(5, 3))
 ```
-Usage: tauraroc <file.tr> [options]
 
-Options:
-  --emit c           Emit modular C code to build/ directory
-  --emit ast         Print AST representation and stop
-  --emit mir         Print MIR basic blocks and stop
-  --run              Compile and immediately execute the binary
-  --check            Run semantic analysis only (no codegen)
-  --verbose          Show all pipeline phases with timing
-  --backend llvm     Use LLVM IR backend instead of C (stub for Phase 2)
-  
-  -o <path>          Output executable name (default: source filename)
-  -O0/-O1/-O2/-O3    Optimization level (default: -O2)
-  -Os                Optimize for size
-  
-  --link <path>      Link a file by path (.c .o .a .dll .lib .so)
-  -l<name>           Link a library by name (e.g., -luser32, -lgdi32)
-  -l <name>          Same as -l<name> with a space separator
+**Classes**:
+```tauraro
+class Point:
+    x: int
+    y: int
+    
+    pub def distance(self) -> float:
+        return sqrt(self.x * self.x + self.y * self.y)
+
+def main():
+    mut p = Point { x: 3, y: 4 }
+    print(p.distance())
 ```
+
+**Pattern Matching**:
+```tauraro
+enum Result[T, E]:
+    case Ok(T)
+    case Err(E)
+
+def main():
+    let result: Result[int, str] = Ok(42)
+    match result:
+        case Ok(value):
+            print(f"Success: {value}")
+        case Err(err):
+            print(f"Error: {err}")
+```
+
+## Learning Tauraro
+
+**Getting Started:**
+- Read [docs/lang/01_intro.md](docs/lang/01_intro.md) for a language overview
+- Check [examples/](examples/) for practical code samples
+- Study [docs/lang/](docs/lang/) for detailed feature guides
+
+**Language Features by Category:**
+
+| Category | Examples |
+|----------|----------|
+| **Basics** | Variables, operators, control flow |
+| **Functions** | Parameters, return types, default args |
+| **OOP** | Classes, methods, inheritance |
+| **Functional** | Pattern matching, closures, higher-order functions |
+| **Type System** | Generics, interfaces, enums, error handling |
+| **Systems** | Raw pointers, unsafe blocks, FFI, inline asm |
+| **Async** | async/await, channels, task spawning |
+| **Collections** | Vec, Map, Deque, Queue, Stack, Set |
 
 ## Project Structure
 
 ```
 .
-├── README.md                 ← This file
-├── docs/                     ← Documentation
-│   └── lang/                 ← Language feature guides
-├── examples/                 ← Example programs
-│   ├── 01_variables.tr       ← Variable declarations and types
-│   ├── 02_operators.tr       ← Arithmetic and logical operators
-│   ├── 03_control_flow.tr    ← If/elif/else, for, while
-│   ├── 04_functions.tr       ← Function definitions and calls
-│   ├── 05_strings.tr         ← String literals and f-strings
-│   ├── 06_classes.tr         ← Class definitions with methods
-│   ├── 07_enums.tr           ← Enum types with pattern matching
-│   ├── 08_pattern_matching.tr ← Match expressions and destructuring
-│   ├── 09_interfaces.tr      ← Interface definitions and vtables
-│   ├── 10_error_handling.tr  ← Result types and error handling
-│   ├── 11_closures.tr        ← Closure captures and lambdas
-│   ├── 12_collections.tr     ← Vec, Map, deque, etc.
-│   ├── 13_ownership_pointers.tr ← Ownership, borrow, move semantics
-│   ├── 14_system_programming.tr ← Unsafe blocks, raw pointers
-│   ├── 15_dynamic_linking.tr ← Loading .dll/.so at runtime
-│   ├── 16_win32_window.tr    ← Win32 API window creation
-│   ├── 19_async_spawn.tr     ← Async/await with spawned tasks
-│   ├── 20_shared_unsafe.tr   ← Shared mutable state with unsafe
+├── README.md                          ← This file
+├── examples/                          ← Example programs (start here!)
+│   ├── 01_variables.tr                ← Variables, types, type inference
+│   ├── 02_operators.tr                ← Arithmetic, logical, comparison
+│   ├── 03_control_flow.tr             ← if/elif/else, for, while, break
+│   ├── 04_functions.tr                ← Function definitions and calls
+│   ├── 05_strings.tr                  ← String literals and f-strings
+│   ├── 06_classes.tr                  ← Classes, fields, methods
+│   ├── 07_enums.tr                    ← Enums and pattern matching
+│   ├── 08_pattern_matching.tr         ← Advanced pattern matching
+│   ├── 09_interfaces.tr               ← Interfaces and vtable dispatch
+│   ├── 10_error_handling.tr           ← Result types, error propagation
+│   ├── 11_closures.tr                 ← Closures and lambda expressions
+│   ├── 12_collections.tr              ← Vec, Map, Deque, etc.
+│   ├── 13_ownership_pointers.tr       ← Memory management, pointers
+│   ├── 14_system_programming.tr       ← Unsafe, raw pointers, FFI
+│   ├── 15_dynamic_linking.tr          ← Load libraries at runtime
+│   ├── 16_win32_window.tr             ← Platform-specific examples
+│   ├── 19_async_spawn.tr              ← Async/await, task spawning
+│   ├── 20_shared_unsafe.tr            ← Shared state with unsafe
 │   └── [more examples...]
 │
-├── runtime/                  ← C runtime headers
-│   ├── tauraro_rt.h          ← Memory allocation, system calls
-│   └── tauraro_types.h       ← Generated type definitions
+├── docs/                              ← Documentation
+│   ├── lang/                          ← Language reference
+│   │   ├── 01_intro.md
+│   │   ├── 02_variables_and_types.md
+│   │   ├── 03_operators.md
+│   │   ├── 04_control_flow.md
+│   │   └── 05_functions.md
+│   └── README.md
 │
-├── src/                      ← Compiler source code
-│   ├── main.tr               ← CLI driver, module resolver, linker
-│   ├── token.tr              ← Token enum and keyword tables (bilingual)
-│   ├── lexer.tr              ← Hand-written FSM lexer with indent/dedent
-│   ├── parser.tr             ← Recursive descent parser (~1400 lines)
-│   ├── ast.tr                ← AST type definitions (Program, Decl, Stmt, Expr)
-│   ├── sema.tr               ← Semantic analysis & type checking
-│   ├── hir.tr                ← HIR types and AST→HIR lowering
-│   ├── resolver.tr           ← Module resolver (unity-build)
-│   └── codegen/              ← Code generators
-│       ├── c.tr              ← C transpiler (PRIMARY, production-ready)
-│       ├── llvm.tr           ← LLVM IR backend (stub)
-│       └── mod.tr            ← Module declarations
+├── std/                               ← Standard Library
+│   ├── core/                          ← Core: Vec, Map, string, allocators
+│   ├── collections/                   ← Deque, Queue, Stack, Set, Dict
+│   ├── async/                         ← Async runtime, channels, tasks
+│   ├── io/                            ← Console I/O, file I/O
+│   ├── iter/                          ← Iterators, ranges, transformations
+│   ├── math/                          ← Math functions, bitwise ops
+│   ├── net/                           ← TCP, HTTP, URL parsing
+│   ├── string/                        ← String utilities, formatting
+│   └── sys/                           ← Environment, processes, time
 │
-└── std/                      ← Standard library modules
-    ├── core/                 ← Core allocators, Vec, Map, string
-    ├── collections/          ← Deque, Queue, Stack, Dict, Set, Tuple
-    ├── async/                ← Async runtime, channels, task spawning
-    ├── io/                   ← Console I/O, file I/O
-    ├── iter/                 ← Iterator protocols, range
-    ├── math/                 ← Math functions, bitwise ops
-    ├── net/                  ← TCP, HTTP, URL parsing
-    ├── string/               ← String formatting, f-strings
-    └── sys/                  ← Environment, process, time
+├── runtime/                           ← C Runtime (internal)
+│   ├── tauraro_rt.h                   ← Memory allocation, system calls
+│   └── tauraro_types.h                ← Generated type definitions
+│
+├── src/                               ← Compiler Source (written in Tauraro)
+│   ├── main.tr                        ← CLI driver
+│   ├── lexer.tr                       ← Lexer
+│   ├── parser.tr                      ← Parser
+│   ├── sema.tr                        ← Type checking & analysis
+│   ├── codegen/                       ← Code generators
+│   └── [other compiler modules]
 ```
 
-## Compiler Pipeline
+## How Tauraro Works
+
+Tauraro is a **statically-typed compiled language** with a modern compilation pipeline:
 
 ```
-source.tr
+your_program.tr
     │
-    ├─→ [1] Module Resolver (resolver.tr)
-    │   Recursively loads and merges all imported modules
-    │   Builds unified program tree
+    ├─→ Lexer
+    │   Tokenization with indentation tracking
     │
-    ├─→ [2] Lexer (lexer.tr)
-    │   Hand-written finite state machine
-    │   Tracks indentation levels → INDENT/DEDENT tokens
-    │   Returns flat token stream
+    ├─→ Parser
+    │   Abstract Syntax Tree (AST) generation
     │
-    ├─→ [3] Parser (parser.tr)
-    │   Recursive descent parser
-    │   Builds Abstract Syntax Tree (AST)
+    ├─→ Semantic Analysis
+    │   Type checking, inference, ownership analysis
     │
-    ├─→ [4] Semantic Analysis (sema.tr)
-    │   Type checking & inference
-    │   Ownership analysis (Own/Borrow/Move/Shared/Stack)
-    │   Escape analysis
-    │   Automatic free() injection
-    │   Produces annotated Higher Intermediate Representation (HIR)
+    ├─→ C Code Generation
+    │   Transpiles to optimized C code
     │
-    ├─→ [5] Code Generation
-    │   │
-    │   ├─ [C Backend] codegen/c.tr (PRIMARY)
-    │   │   Monomorphizes generics
-    │   │   Generates modular C output:
-    │   │   ├─ tauraro_types.h  (shared type defs + prototypes)
-    │   │   ├─ tauraro_rt.h     (runtime headers)
-    │   │   ├─ main.c           (program entry point)
-    │   │   └─ module_*.c       (per-module implementation)
-    │   │
-    │   └─ [LLVM Backend] codegen/llvm.tr (stub for Phase 2)
-    │       Generates LLVM IR
+    ├─→ C Compilation (GCC/Clang)
+    │   Compiles to native machine code
     │
-    ├─→ [6] C Compilation
-    │   Detected compiler: gcc, clang, or cc
-    │   Compiles all .c files with -O{0,1,2,3,s}
-    │   Links external libraries via -l<name> or --link <path>
-    │   Injects runtime math library (-lm)
-    │
-    └─→ executable
+    └─→ Executable
+        Ready to run!
 ```
+
+**Key Design Principles:**
+
+1. **Transpile to C**: Leverage proven C compilers and optimize for all platforms
+2. **Type safety**: Strong static typing catches errors at compile time
+3. **Zero-cost abstractions**: High-level features compile to efficient code
+4. **Predictable performance**: What you see is what you get (no hidden GC)
+5. **Explicit is better**: Memory management and unsafe code are opt-in
 
 ## Language Features Supported
 
@@ -276,157 +292,85 @@ def hello(n: int):
         print(i)
 ```
 
-## C Code Generation Examples
 
-### Classes
 
-**Tauraro:**
-```tauraro
-class Point:
-    x: int
-    y: int
-    
-    pub def distance(self) -> float:
-        return sqrt(self.x * self.x + self.y * self.y)
-```
+## Compilation Options
 
-**Generated C:**
-```c
-typedef struct {
-    long long x;
-    long long y;
-} Point;
+The `tauraroc` compiler provides flexible compilation modes:
 
-double Point_distance(Point* self) {
-    return sqrt((double)self->x * self->x + self->y * self->y);
-}
-```
-
-### Enums
-
-**Tauraro:**
-```tauraro
-enum Result[T, E]:
-    case Ok(T)
-    case Err(E)
-```
-
-**Generated C:**
-```c
-typedef struct {
-    int tag;  // 0 = Ok, 1 = Err
-    union {
-        T ok_value;
-        E err_value;
-    } data;
-} Result;
-```
-
-### F-strings
-
-**Tauraro:**
-```tauraro
-def format_point(x: int, y: int):
-    return f"Point({x}, {y})"
-```
-
-**Generated C:**
-```c
-char* format_point(long long x, long long y) {
-    char* buf = malloc(64);
-    snprintf(buf, 64, "Point(%lld, %lld)", x, y);
-    return buf;
-}
-```
-
-## Compilation Modes
-
-### 1. Full Compilation (Default)
-Produces optimized executable via C:
 ```bash
+# Compile and run immediately
+tauraroc program.tr --run
+
+# Compile to executable (default)
+tauraroc program.tr -o program
+
+# Compile with optimization level
 tauraroc program.tr -O3 -o program
-```
 
-### 2. C Code Emission
-Generates modular C source to `build/`:
-```bash
-tauraroc program.tr --emit c
-# Output: build/tauraro_types.h, build/main.c, build/module_*.c
-```
-
-### 3. AST Emission
-Prints AST and stops (no code generation):
-```bash
-tauraroc program.tr --emit ast
-```
-
-### 4. MIR Emission
-Prints intermediate representation stats:
-```bash
-tauraroc program.tr --emit mir
-```
-
-### 5. Type-Check Only
-Runs semantic analysis, reports errors:
-```bash
+# Type-check only (don't generate code)
 tauraroc program.tr --check
+
+# Emit C code to build/ (for inspection)
+tauraroc program.tr --emit c
+
+# Show AST representation
+tauraroc program.tr --emit ast
+
+# Link external C libraries
+tauraroc program.tr --link /path/to/lib.a -luser32 -o program
+
+# Verbose output
+tauraroc program.tr --verbose
 ```
 
-## Building from Source
+**Optimization levels:**
+- `-O0` — No optimization (fastest compile)
+- `-O1`, `-O2`, `-O3` — Increasing optimization (slower compile, faster runtime)
+- `-Os` — Optimize for binary size
 
-### Requirements
+## Installation & Building
+
+### Using Pre-built Binaries
+
+Download `tauraroc` from [releases](https://github.com/your/repo/releases).
+
+### Building from Source
+
+**Requirements:**
 - GCC, Clang, or MSVC (for C compilation)
-- Rust toolchain (for bootstrap compiler only)
-- CMake 3.20+ (optional, for LLVM Phase 2)
+- A working Tauraro compiler (bootstrap)
 
-### Steps
+The Tauraro compiler is written in Tauraro. It was initially written in Rust to bootstrap the language, but now the compiler is self-hosted and can compile itself.
 
-```bash
-# 1. Clone the repository
-git clone https://github.com/user/tauraro.git
-cd tauraro
+To get started, use a pre-built binary or refer to [building documentation](docs/building.md).
 
-# 2. Build the Rust bootstrap compiler
-cargo build --release
+## Community & Support
 
-# 3. Compile the self-hosted compiler
-cargo run --release -- src/main.tr -O3 -o bootstrap.c
+- **Issues**: Report bugs or suggest features on [GitHub Issues](https://github.com/your/repo/issues)
+- **Discussions**: Join our [community discussions](https://github.com/your/repo/discussions)
+- **Documentation**: See [docs/](docs/) for comprehensive guides
 
-# 4. Compile bootstrap C to native executable
-gcc -O3 bootstrap.c runtime/tauraro_rt.h -o tauraroc
+## Status & Roadmap
 
-# 5. Verify self-hosting
-./tauraroc src/main.tr -O3 -o tauraroc2
-./tauraroc2 examples/01_variables.tr --run
-```
+**Current Status: Alpha** — Tauraro is under active development. Core language features are stable and production-ready for systems programming tasks.
 
-## Examples
+**Completed:**
+- ✅ Core language features (functions, classes, enums, interfaces)
+- ✅ Pattern matching & destructuring
+- ✅ Generics with monomorphization
+- ✅ Ownership & memory safety analysis
+- ✅ Async/await with lightweight concurrency
+- ✅ Comprehensive standard library
+- ✅ Bilingual support (English + Hausa)
+- ✅ Self-hosted compiler
 
-See `examples/` directory:
-
-- **01_variables.tr** - Variable declarations, type inference
-- **04_functions.tr** - Function definitions, parameters, return types
-- **06_classes.tr** - Class definitions with methods
-- **07_enums.tr** - Enums with pattern matching
-- **09_interfaces.tr** - Interface vtable dispatch
-- **12_collections.tr** - Vec, Map, collections usage
-- **13_ownership_pointers.tr** - Ownership, borrowing, pointers
-- **19_async_spawn.tr** - Async functions, task spawning
-
-## Development Status
-
-- ✅ **Phase 1.5**: Self-hosted compiler (complete)
-  - ✅ Lexer with indent/dedent
-  - ✅ Parser (recursive descent, ~1400 lines)
-  - ✅ Semantic analysis & ownership inference
-  - ✅ C code generation (production-ready)
-  - ✅ Module resolution (unity-build)
-  - ✅ Bilingual support (English + Hausa)
-
-- 🔄 **Phase 2**: LLVM backend & optimizations
-  - ⏳ LLVM IR generation
-  - ⏳ Advanced optimizations
-  - ⏳ Cross-platform support
+**Planned (Phase 2):**
+- 🔄 LLVM backend for additional optimization
+- ⏳ Package manager & dependency resolution
+- ⏳ Cross-platform support improvements
+- ⏳ Language server protocol (LSP) support
+- ⏳ Interactive REPL
 
 ## License
 

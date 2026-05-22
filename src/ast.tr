@@ -195,6 +195,7 @@ pub enum Stmt:
     SSpawn(expr: Pointer[Expr])
     STaskGroup(body: Block)
     SGpuBlock(body: Block)
+    SLine(n: int)
 
 pub class Block:
     pub stmts: Vec[Pointer[Stmt]]
@@ -253,6 +254,7 @@ pub class FunctionDef:
     pub is_extern: bool
     pub is_public: bool
     pub body: Block
+    pub line: int
 
 extend FunctionDef:
     pub def init(name: str) -> FunctionDef:
@@ -269,6 +271,7 @@ extend FunctionDef:
         f.is_extern = false
         f.is_public = false
         f.body = Block.init()
+        f.line = 0
         return f
 
 pub class FieldDef:
@@ -294,6 +297,7 @@ pub class ClassDef:
     pub decorators: Vec[Decorator]
     pub constraints: Vec[GenericConstraint]
     pub is_public: bool
+    pub line: int
 
 extend ClassDef:
     pub def init(name: str) -> ClassDef:
@@ -307,6 +311,7 @@ extend ClassDef:
         c.decorators = Vec[Decorator].init(0)
         c.constraints = Vec[GenericConstraint].init(0)
         c.is_public = false
+        c.line = 0
         return c
 
 pub class VariantDef:
@@ -328,6 +333,7 @@ pub class EnumDef:
     pub methods: Vec[FunctionDef]
     pub decorators: Vec[Decorator]
     pub is_public: bool
+    pub line: int
 
 extend EnumDef:
     pub def init(name: str) -> EnumDef:
@@ -339,6 +345,7 @@ extend EnumDef:
         e.methods = Vec[FunctionDef].init(4)
         e.decorators = Vec[Decorator].init(0)
         e.is_public = false
+        e.line = 0
         return e
 
 pub class InterfaceDef:
@@ -346,6 +353,7 @@ pub class InterfaceDef:
     pub generics: Vec[str]
     pub methods: Vec[FunctionDef]
     pub is_public: bool
+    pub line: int
 
 extend InterfaceDef:
     pub def init(name: str) -> InterfaceDef:
@@ -354,6 +362,7 @@ extend InterfaceDef:
         i.generics = Vec[str].init(0)
         i.methods = Vec[FunctionDef].init(4)
         i.is_public = false
+        i.line = 0
         return i
 
 pub class ImportItem:
