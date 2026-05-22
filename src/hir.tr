@@ -3,7 +3,7 @@
 from core.vec import Vec
 from core.alloc import alloc, dealloc
 from core.string import StringObj
-from compiler.src.ast import AstType, Decorator, Pattern, Ownership
+from ast import AstType, Decorator, Pattern, Ownership
 
 # ─── Expressions ──────────────────────────────────────────────────────────────
 

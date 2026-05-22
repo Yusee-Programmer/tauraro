@@ -4,8 +4,8 @@ from core.vec import Vec
 from core.map import Map
 from core.alloc import alloc, dealloc
 from core.io import _tr_exit, write_file, append_file
-from compiler.src.ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension
-from compiler.src.hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type
+from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension
+from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type
 
 
 pub enum SymbolKind:
@@ -333,7 +333,8 @@ extend Sema:
         hf.is_variadic = f.is_variadic
 
         # Rule F-3: Definite return check for non-void, non-extern functions
-        if not f.is_extern and f.ret_ty as usize != 0 as usize:
+        # Skip for interface method signatures (empty body = no stmts)
+        if not f.is_extern and f.body.stmts.len > 0 and f.ret_ty as usize != 0 as usize:
             mut ret_nm = f.ret_ty.read().name
             if ret_nm != "void" and ret_nm != "None" and ret_nm != "" and f.name != "init" and f.name != "new":
                 if not self.block_returns(f.body):

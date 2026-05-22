@@ -95,13 +95,13 @@ def demo_bitwise_ops() -> void:
 # ---- Integer arithmetic patterns --------------------------------------------
 
 def gcd(a: int, b: int) -> int:
-    mut ga: int = a
-    mut gb: int = b
-    while gb != 0:
-        mut t: int = gb
-        gb = ga % gb
-        ga = t
-    return ga
+    mut acc_a: int = a
+    mut acc_b: int = b
+    while acc_b != 0:
+        mut t: int = acc_b
+        acc_b = acc_a % acc_b
+        acc_a = t
+    return acc_a
 
 def demo_integer_patterns() -> void:
     print("--- Integer arithmetic ---")

@@ -5,10 +5,23 @@ from core.vec import Vec
 from core.map import Map
 from core.string import StringBuilder
 from core.alloc import alloc
-from compiler.src.hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, _tr_str_len, hir_stmt_ownership, hir_expr_type
-from compiler.src.ast import AstType, Decorator, Pattern, Ownership
+from core.io import write_file
+from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, _tr_str_len, hir_stmt_ownership, hir_expr_type
+from ast import AstType, Decorator, Pattern, Ownership, Decl
 
-# ─── Type helpers ─────────────────────────────────────────────────────────────
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+pub def _c_dot_to_safe(s: str) -> str:
+    mut n = 0
+    mut p = s as Pointer[char]
+    while p.offset(n).read() as int != 0: n = n + 1
+    mut buf = _tr_str_slice(s, 0, n)
+    mut bp = buf as Pointer[char]
+    mut j = 0
+    while j < n:
+        if bp.offset(j).read() as int == 46: bp.offset(j).write(95 as char)
+        j = j + 1
+    return buf
 
 pub def _indent_str(n: int) -> str:
     mut s = ""
@@ -17,6 +30,18 @@ pub def _indent_str(n: int) -> str:
         s = s + "    "
         i = i + 1
     return s
+
+pub def _is_invalid_ptr(addr: usize) -> bool:
+    if addr < 0x10000 as usize: return true
+    if addr > 0x7fffffffffff as usize: return true
+    if addr == 0xabababab as usize or addr == 0xfeeefeee as usize: return true
+    if addr == 0xbaadf00d as usize or addr == 0xcccccccc as usize: return true
+    if addr == 0xcdcdcdcd as usize or addr == 0xdddddddd as usize: return true
+    if addr == 0xfeeefeeefeeefeee as usize or addr == 0xabababababababab as usize: return true
+    if addr == 0xbaadf00dbaadf00d as usize or addr == 0xcccccccccccccccc as usize: return true
+    if addr % 8 as usize != 0 as usize: return true
+    return false
+
 
 pub def _is_str_type(n: str) -> bool:
     return n == "str" or n == "String"
@@ -82,6 +107,7 @@ pub class CGenerator:
     pub closure_count:  int
     pub emitted_fns:    Map[str, bool]   # tracks emitted free-standing fn names to prevent duplicates
     pub spawn_wrappers:  Map[str, bool]   # fn_name → true once wrapper emitted
+    pub prescanned_fns:  Map[str, bool]   # fn key → true once body prescanned (prevents re-scan after heap churn)
     pub shared_vars:     Map[str, str]    # var_name → type_name (for _TrSharedBox unwrap)
     pub cur_throws_ty:   str              # non-empty = current function has throws annotation
     pub in_task_group:   int              # depth counter for task_group nesting
@@ -110,6 +136,7 @@ pub class CGenerator:
         g.closure_count = 0
         g.emitted_fns   = Map[str, bool].init(256)
         g.spawn_wrappers = Map[str, bool].init(16)
+        g.prescanned_fns = Map[str, bool].init(256)
         g.shared_vars    = Map[str, str].init(16)
         g.cur_throws_ty  = ""
         g.in_task_group  = 0
@@ -1310,7 +1337,7 @@ pub class CGenerator:
     # ── Spawn wrapper pre-scan ────────────────────────────────────────────────
 
     pub def emit_spawn_wrapper_for_expr(self, e: Pointer[HirExpr]):
-        if e as usize == 0 as usize: return
+        if _is_invalid_ptr(e as usize): return
         match e.read():
             case HirExpr.ECall(callee, args, _):
                 mut fn_name = ""
@@ -1334,14 +1361,18 @@ pub class CGenerator:
             case _: pass
 
     pub def prescan_block_spawns(self, block: HirBlock):
-        if block as usize == 0 as usize: return
+        if _is_invalid_ptr(block as usize): return
+        if _is_invalid_ptr(block.stmts as usize): return
+        if _is_invalid_ptr(block.stmts.data as usize): return
+        mut blen = block.stmts.len
         mut i = 0
-        while i < block.stmts.len:
-            self.prescan_stmt_spawns(block.stmts.get(i))
+        while i < blen:
+            mut sp = block.stmts.get(i)
+            self.prescan_stmt_spawns(sp)
             i = i + 1
 
     pub def prescan_stmt_spawns(self, s: Pointer[HirStmt]):
-        if s as usize == 0 as usize: return
+        if _is_invalid_ptr(s as usize): return
         match s.read():
             case HirStmt.SSpawn(e):
                 self.emit_spawn_wrapper_for_expr(e)
@@ -1349,7 +1380,7 @@ pub class CGenerator:
                 self.prescan_block_spawns(body)
             case HirStmt.SIf(_, t, e):
                 self.prescan_block_spawns(t)
-                if e as usize != 0 as usize:
+                if not _is_invalid_ptr(e as usize):
                     self.prescan_block_spawns(e)
             case HirStmt.SWhile(_, body):
                 self.prescan_block_spawns(body)
@@ -1357,33 +1388,51 @@ pub class CGenerator:
                 self.prescan_block_spawns(body)
             case HirStmt.STry(tb, catches, fin):
                 self.prescan_block_spawns(tb)
-                if fin as usize != 0 as usize:
+                if not _is_invalid_ptr(fin as usize):
                     self.prescan_block_spawns(fin)
                 mut ci = 0
                 while ci < catches.len:
                     mut cc = catches.get(ci).read()
                     self.prescan_block_spawns(cc.body)
                     ci = ci + 1
-            case _: pass
+            case _:
+                pass
 
     pub def prescan_spawns(self, prog: HirProgram):
+        if _is_invalid_ptr(prog as usize): return
+        if _is_invalid_ptr(prog.functions as usize): return
+        if _is_invalid_ptr(prog.classes as usize): return
         mut i = 0
         while i < prog.functions.len:
-            self.prescan_block_spawns(prog.functions.get(i).body)
+            mut f = prog.functions.get(i)
+            if not _is_invalid_ptr(f as usize):
+                if not self.prescanned_fns.contains(f.name):
+                    self.prescanned_fns.insert(f.name, true)
+                    mut fb = f.body
+                    if not _is_invalid_ptr(fb as usize):
+                        self.prescan_block_spawns(fb)
             i = i + 1
         i = 0
         while i < prog.classes.len:
             mut c = prog.classes.get(i)
-            mut mi = 0
-            while mi < c.methods.len:
-                self.prescan_block_spawns(c.methods.get(mi).body)
-                mi = mi + 1
+            if not _is_invalid_ptr(c as usize):
+                if not _is_invalid_ptr(c.methods as usize):
+                    mut mi = 0
+                    while mi < c.methods.len:
+                        mut m = c.methods.get(mi)
+                        if not _is_invalid_ptr(m as usize):
+                            mut mk = c.name + "::" + m.name
+                            if not self.prescanned_fns.contains(mk):
+                                self.prescanned_fns.insert(mk, true)
+                                if not _is_invalid_ptr(m.body as usize):
+                                    self.prescan_block_spawns(m.body)
+                        mi = mi + 1
             i = i + 1
 
     # ── Statement generation ──────────────────────────────────────────────────
 
     pub def gen_stmt(self, s_ptr: Pointer[HirStmt], indent: int):
-        if s_ptr as usize == 0 as usize: return
+        if _is_invalid_ptr(s_ptr as usize): return
         pad = _indent_str(indent)
         match s_ptr.read():
             case HirStmt.SExpr(e):
@@ -1518,20 +1567,31 @@ pub class CGenerator:
                             self.w(pad + "__auto_type " + n + " = " + self.gen_expr(v) + ";\n")
                             self.decl_vars.insert(n, true)
                             return
-                self.w(pad + self.gen_expr(t) + " = " + self.gen_expr(v) + ";\n")
+                mut _assign_rhs = ""
+                match v.read():
+                    case HirExpr.EList(litems, list_ty):
+                        if list_ty.args.len == 0:
+                            mut tgt_ty = hir_expr_type(t)
+                            if (tgt_ty.name == "List" or tgt_ty.name == "Vec") and tgt_ty.args.len > 0:
+                                _assign_rhs = self.gen_list_literal(litems, tgt_ty)
+                    case _: pass
+                if _assign_rhs == "": _assign_rhs = self.gen_expr(v)
+                self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
             case HirStmt.SIf(c, t, e):
                 self.w(pad + "if (" + self.gen_expr(c) + ") {\n")
                 self.gen_block(t, indent + 1)
                 mut cur = e
-                mut going = cur as usize != 0 as usize
+                mut going = not _is_invalid_ptr(cur as usize)
                 while going:
-                    if cur.stmts.len == 1:
+                    if _is_invalid_ptr(cur.stmts as usize):
+                        going = false
+                    elif cur.stmts.len == 1:
                         match cur.stmts.get(0).read():
                             case HirStmt.SIf(ic, it, ie):
                                 self.w(pad + "} else if (" + self.gen_expr(ic) + ") {\n")
                                 self.gen_block(it, indent + 1)
                                 cur = ie
-                                going = cur as usize != 0 as usize
+                                going = not _is_invalid_ptr(cur as usize)
                             case _:
                                 self.w(pad + "} else {\n")
                                 self.gen_block(cur, indent + 1)
@@ -1720,7 +1780,8 @@ pub class CGenerator:
         self.w(pad + "}\n")
 
     pub def gen_block(self, b: HirBlock, indent: int):
-        if b as usize == 0 as usize: return
+        if _is_invalid_ptr(b as usize): return
+        if _is_invalid_ptr(b.stmts as usize): return
         mut i = 0
         while i < b.stmts.len:
             self.gen_stmt(b.stmts.get(i), indent)
@@ -1846,14 +1907,15 @@ pub class CGenerator:
                 self.ensure_mono(ucls, ty.args)
 
     pub def scan_mono_block(self, block: HirBlock):
-        if block as usize == 0 as usize: return
+        if _is_invalid_ptr(block as usize): return
+        if _is_invalid_ptr(block.stmts as usize): return
         mut i = 0
         while i < block.stmts.len:
             self.scan_mono_stmt(block.stmts.get(i))
             i = i + 1
 
     pub def scan_mono_stmt(self, s_ptr: Pointer[HirStmt]):
-        if s_ptr as usize == 0 as usize: return
+        if _is_invalid_ptr(s_ptr as usize): return
         match s_ptr.read():
             case HirStmt.SLet(_, _, _, _, _, ty, _):
                 self.scan_mono_ty(ty)
@@ -2165,6 +2227,12 @@ pub class CGenerator:
     # prototypes from every module.  Each module .c file does #include "tauraro_types.h"
     # so every cross-module call is visible to the C compiler without extra header files.
     pub def generate_types_header(self, prog: HirProgram) -> str:
+        if _is_invalid_ptr(prog as usize): return ""
+        if _is_invalid_ptr(prog.classes as usize): return ""
+        if _is_invalid_ptr(prog.enums as usize): return ""
+        if _is_invalid_ptr(prog.interfaces as usize): return ""
+        if _is_invalid_ptr(prog.functions as usize): return ""
+
         if self.classes.len == 0:
             self.register_program(prog)
             self.scan_mono_prog(prog)
@@ -2186,16 +2254,21 @@ pub class CGenerator:
         mut i = 0
         while i < prog.classes.len:
             mut c2 = prog.classes.get(i)
-            if c2.generics.len == 0:
-                out.append("typedef struct " + c2.name + " " + c2.name + ";\n")
+            if not _is_invalid_ptr(c2 as usize):
+                if c2.generics.len == 0:
+                    out.append("typedef struct " + c2.name + " " + c2.name + ";\n")
             i = i + 1
         i = 0
         while i < prog.enums.len:
-            out.append("typedef struct " + prog.enums.get(i).name + " " + prog.enums.get(i).name + ";\n")
+            mut e2 = prog.enums.get(i)
+            if not _is_invalid_ptr(e2 as usize):
+                out.append("typedef struct " + e2.name + " " + e2.name + ";\n")
             i = i + 1
         i = 0
         while i < prog.interfaces.len:
-            out.append("typedef struct _" + prog.interfaces.get(i).name + "_vtable " + prog.interfaces.get(i).name + "_vtable;\n")
+            mut iface2 = prog.interfaces.get(i)
+            if not _is_invalid_ptr(iface2 as usize):
+                out.append("typedef struct _" + iface2.name + "_vtable " + iface2.name + "_vtable;\n")
             i = i + 1
         self.emit_list_fwd_decls(prog)          # writes to self.buf
         out.append(self.buf.to_string().as_str())
@@ -2203,25 +2276,27 @@ pub class CGenerator:
         out.append("\n")
 
         # ── Extern C declarations ─────────────────────────────────────────────
-        i = 0
-        while i < prog.extern_funcs.len:
-            mut ef = prog.extern_funcs.get(i)
-            mut ef_s = "extern " + self.type_to_c(ef.ret_ty) + " " + ef.name + "("
-            mut ef_first = true
-            mut epi = 0
-            while epi < ef.params.len:
-                mut ep = ef.params.get(epi)
-                if ep.name != "self":
-                    if not ef_first: ef_s = ef_s + ", "
-                    ef_s = ef_s + self.type_to_c(ep.ty) + " " + ep.name
-                    ef_first = false
-                epi = epi + 1
-            if ef.is_variadic:
-                if not ef_first: ef_s = ef_s + ", "
-                ef_s = ef_s + "..."
-            out.append(ef_s + ");\n")
-            i = i + 1
-        if prog.extern_funcs.len > 0: out.append("\n")
+        if not _is_invalid_ptr(prog.extern_funcs as usize):
+            i = 0
+            while i < prog.extern_funcs.len:
+                mut ef = prog.extern_funcs.get(i)
+                if not _is_invalid_ptr(ef as usize):
+                    mut ef_s = "extern " + self.type_to_c(ef.ret_ty) + " " + ef.name + "("
+                    mut ef_first = true
+                    mut epi = 0
+                    while epi < ef.params.len:
+                        mut ep = ef.params.get(epi)
+                        if ep.name != "self":
+                            if not ef_first: ef_s = ef_s + ", "
+                            ef_s = ef_s + self.type_to_c(ep.ty) + " " + ep.name
+                            ef_first = false
+                        epi = epi + 1
+                    if ef.is_variadic:
+                        if not ef_first: ef_s = ef_s + ", "
+                        ef_s = ef_s + "..."
+                    out.append(ef_s + ");\n")
+                i = i + 1
+            if prog.extern_funcs.len > 0: out.append("\n")
 
         # ── Monomorphized generic types ───────────────────────────────────────
         mut mono = self.mono_buf.to_string().as_str()
@@ -2230,17 +2305,22 @@ pub class CGenerator:
         # ── Struct / enum / interface definitions ─────────────────────────────
         i = 0
         while i < prog.enums.len:
-            self.gen_enum_struct(prog.enums.get(i))
+            mut e3 = prog.enums.get(i)
+            if not _is_invalid_ptr(e3 as usize):
+                self.gen_enum_struct(e3)
             i = i + 1
         i = 0
         while i < prog.classes.len:
             mut c3 = prog.classes.get(i)
-            if c3.generics.len == 0:
-                self.gen_class_struct(c3)
+            if not _is_invalid_ptr(c3 as usize):
+                if c3.generics.len == 0:
+                    self.gen_class_struct(c3)
             i = i + 1
         i = 0
         while i < prog.interfaces.len:
-            self.gen_interface_vtable(prog.interfaces.get(i))
+            mut iface3 = prog.interfaces.get(i)
+            if not _is_invalid_ptr(iface3 as usize):
+                self.gen_interface_vtable(iface3)
             i = i + 1
         out.append(self.struct_buf.to_string().as_str())
         out.append(self.list_types_buf.to_string().as_str())
@@ -2250,33 +2330,40 @@ pub class CGenerator:
         i = 0
         while i < prog.classes.len:
             mut c4 = prog.classes.get(i)
-            if c4.generics.len == 0:
-                mut mi = 0
-                while mi < c4.methods.len:
-                    mut m = c4.methods.get(mi)
-                    out.append(self.get_proto_attrs(m) + self.gen_func_sig(m, c4.name) + ";\n")
-                    mi = mi + 1
+            if not _is_invalid_ptr(c4 as usize):
+                if c4.generics.len == 0:
+                    mut mi = 0
+                    if not _is_invalid_ptr(c4.methods as usize):
+                        while mi < c4.methods.len:
+                            mut m = c4.methods.get(mi)
+                            if not _is_invalid_ptr(m as usize):
+                                out.append(self.get_proto_attrs(m) + self.gen_func_sig(m, c4.name) + ";\n")
+                            mi = mi + 1
             i = i + 1
         i = 0
         while i < prog.enums.len:
             mut e4 = prog.enums.get(i)
-            mut mi = 0
-            while mi < e4.methods.len:
-                mut m = e4.methods.get(mi)
-                out.append(self.get_proto_attrs(m) + self.gen_func_sig(m, e4.name) + ";\n")
-                mi = mi + 1
+            if not _is_invalid_ptr(e4 as usize):
+                mut mi = 0
+                if not _is_invalid_ptr(e4.methods as usize):
+                    while mi < e4.methods.len:
+                        mut m = e4.methods.get(mi)
+                        if not _is_invalid_ptr(m as usize):
+                            out.append(self.get_proto_attrs(m) + self.gen_func_sig(m, e4.name) + ";\n")
+                        mi = mi + 1
             i = i + 1
         i = 0
         while i < prog.functions.len:
             mut f4 = prog.functions.get(i)
-            if f4.name != "main" and not f4.is_extern:
-                mut skip4 = false
-                if f4.class_name != "" and self.classes.contains(f4.class_name): skip4 = true
-                elif f4.class_name != "" and self.enums.contains(f4.class_name): skip4 = true
-                if not skip4:
-                    if not self.emitted_fns.contains("p_" + f4.name):
-                        self.emitted_fns.insert("p_" + f4.name, true)
-                        out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
+            if not _is_invalid_ptr(f4 as usize):
+                if f4.name != "main" and not f4.is_extern:
+                    mut skip4 = false
+                    if f4.class_name != "" and self.classes.contains(f4.class_name): skip4 = true
+                    elif f4.class_name != "" and self.enums.contains(f4.class_name): skip4 = true
+                    if not skip4:
+                        if not self.emitted_fns.contains("p_" + f4.name):
+                            self.emitted_fns.insert("p_" + f4.name, true)
+                            out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
             i = i + 1
         out.append("\n")
 
@@ -2293,15 +2380,17 @@ pub class CGenerator:
         mut wi = 0
         while wi < prog.classes.len:
             mut wcls = prog.classes.get(wi)
-            if wcls.generics.len == 0 and wcls.iface_names as usize != 0 as usize:
-                mut wii = 0
-                while wii < wcls.iface_names.len:
-                    mut wiface_name = wcls.iface_names.get(wii)
-                    if self.interfaces.contains(wiface_name):
-                        mut wiface = self.interfaces.get(wiface_name)
-                        out.append(self.gen_one_iface_wrap(wcls.name, wiface))
-                        out.append("\n")
-                    wii = wii + 1
+            if not _is_invalid_ptr(wcls as usize):
+                if wcls.generics.len == 0 and wcls.iface_names as usize != 0 as usize and not _is_invalid_ptr(wcls.iface_names as usize):
+                    mut wii = 0
+                    while wii < wcls.iface_names.len:
+                        mut wiface_name = wcls.iface_names.get(wii)
+                        if self.interfaces.contains(wiface_name):
+                            mut wiface = self.interfaces.get(wiface_name)
+                            if not _is_invalid_ptr(wiface as usize):
+                                out.append(self.gen_one_iface_wrap(wcls.name, wiface))
+                                out.append("\n")
+                        wii = wii + 1
             wi = wi + 1
 
         # Restore all temporary buffers
@@ -2310,6 +2399,107 @@ pub class CGenerator:
         self.list_types_buf = old_list
 
         return out.to_string().as_str()
+
+    # Appended to tauraro_types.h: module-prefixed typedef aliases + Vec/Map struct defs +
+    # core_alloc declarations, so include/core/*.c can use module-qualified names against
+    # the self-hosted-generated header without modification.
+    pub def generate_module_compat(self, all_decl_modules: Vec[str], all_decls: Vec[Pointer[Decl]]) -> str:
+        mut out = "\n/* === Module-prefixed typedef aliases (auto-generated) === */\n"
+        out = out + "/* Maps module-qualified C names to short-name types in tauraro_types.h */\n\n"
+
+        out = out + "typedef StringObj core_string_StringObj;\n"
+        out = out + "typedef StringBuilder core_string_StringBuilder;\n\n"
+
+        mut seen = Map[str, bool].init(128)
+        mut i = 0
+        while i < all_decl_modules.len:
+            mut mod_dp = all_decl_modules.get(i)
+            if mod_dp != "":
+                mut sm = _c_dot_to_safe(mod_dp)
+                match all_decls.get(i).read():
+                    case Decl.DClass(c):
+                        if c.generics.len == 0:
+                            mut key = sm + "_" + c.name
+                            if not seen.contains(key):
+                                seen.insert(key, true)
+                                out = out + "typedef " + c.name + " " + key + ";\n"
+                                out = out + "struct core_vec_Vec_" + key + " { " + key + "** data; long long len; long long capacity; };\n"
+                                out = out + "typedef struct core_vec_Vec_" + key + " core_vec_Vec_" + key + ";\n"
+                                out = out + "struct core_vec_Vec_" + key + "_ptr { " + key + "*** data; long long len; long long capacity; };\n"
+                                out = out + "typedef struct core_vec_Vec_" + key + "_ptr core_vec_Vec_" + key + "_ptr;\n"
+                                out = out + "struct core_map_MapNode_str_" + key + " { char* key; " + key + "* value; struct core_map_MapNode_str_" + key + "* next; };\n"
+                                out = out + "typedef struct core_map_MapNode_str_" + key + " core_map_MapNode_str_" + key + ";\n"
+                                out = out + "struct core_map_Map_str_" + key + " { core_map_MapNode_str_" + key + "** buckets; long long capacity; long long len; };\n"
+                                out = out + "typedef struct core_map_Map_str_" + key + " core_map_Map_str_" + key + ";\n"
+                                out = out + "__attribute__((hot)) " + key + "** core_alloc_alloc_" + key + "(long long count);\n"
+                                out = out + "__attribute__((hot)) " + key + "** core_alloc_resize_" + key + "(" + key + "** ptr, long long new_count);\n"
+                                out = out + "__attribute__((hot)) void core_alloc_dealloc_" + key + "(" + key + "** ptr);\n"
+                                out = out + "__attribute__((hot)) " + key + "*** core_alloc_alloc_" + key + "_ptr(long long count);\n"
+                                out = out + "__attribute__((hot)) " + key + "*** core_alloc_resize_" + key + "_ptr(" + key + "*** ptr, long long new_count);\n"
+                                out = out + "__attribute__((hot)) void core_alloc_dealloc_" + key + "_ptr(" + key + "*** ptr);\n"
+                                out = out + "__attribute__((hot)) core_map_MapNode_str_" + key + "** core_alloc_alloc_core_map_MapNode_str_" + key + "(long long count);\n"
+                                out = out + "__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_" + key + "(core_map_MapNode_str_" + key + "** ptr);\n"
+                                out = out + "\n"
+                    case Decl.DEnum(e):
+                        if e.generics.len == 0:
+                            mut key = sm + "_" + e.name
+                            if not seen.contains(key):
+                                seen.insert(key, true)
+                                out = out + "typedef " + e.name + " " + key + ";\n"
+                                out = out + "struct core_vec_Vec_" + key + " { " + key + "* data; long long len; long long capacity; };\n"
+                                out = out + "typedef struct core_vec_Vec_" + key + " core_vec_Vec_" + key + ";\n"
+                                out = out + "struct core_vec_Vec_" + key + "_ptr { " + key + "** data; long long len; long long capacity; };\n"
+                                out = out + "typedef struct core_vec_Vec_" + key + "_ptr core_vec_Vec_" + key + "_ptr;\n"
+                                out = out + "__attribute__((hot)) " + key + "* core_alloc_alloc_" + key + "(long long count);\n"
+                                out = out + "__attribute__((hot)) " + key + "* core_alloc_resize_" + key + "(" + key + "* ptr, long long new_count);\n"
+                                out = out + "__attribute__((hot)) void core_alloc_dealloc_" + key + "(" + key + "* ptr);\n"
+                                out = out + "__attribute__((hot)) " + key + "** core_alloc_alloc_" + key + "_ptr(long long count);\n"
+                                out = out + "__attribute__((hot)) " + key + "** core_alloc_resize_" + key + "_ptr(" + key + "** ptr, long long new_count);\n"
+                                out = out + "__attribute__((hot)) void core_alloc_dealloc_" + key + "_ptr(" + key + "** ptr);\n"
+                                out = out + "\n"
+                    case Decl.DInterface(iface):
+                        if iface.generics.len == 0:
+                            mut key = sm + "_" + iface.name
+                            if not seen.contains(key):
+                                seen.insert(key, true)
+                                out = out + "typedef " + iface.name + " " + key + ";\n\n"
+                    case _: pass
+            i = i + 1
+
+        out = out + "/* Primitive vec/map types for include/core/*.c */\n"
+        out = out + "struct core_vec_Vec_str { char** data; long long len; long long capacity; };\n"
+        out = out + "typedef struct core_vec_Vec_str core_vec_Vec_str;\n"
+        out = out + "__attribute__((hot)) char** core_alloc_alloc_str(long long count);\n"
+        out = out + "__attribute__((hot)) char** core_alloc_resize_str(char** ptr, long long new_count);\n"
+        out = out + "__attribute__((hot)) void core_alloc_dealloc_str(char** ptr);\n"
+        out = out + "struct core_vec_Vec_i64 { long long* data; long long len; long long capacity; };\n"
+        out = out + "typedef struct core_vec_Vec_i64 core_vec_Vec_i64;\n"
+        out = out + "__attribute__((hot)) long long* core_alloc_alloc_i64(long long count);\n"
+        out = out + "__attribute__((hot)) long long* core_alloc_resize_i64(long long* ptr, long long new_count);\n"
+        out = out + "__attribute__((hot)) void core_alloc_dealloc_i64(long long* ptr);\n"
+        out = out + "struct core_map_MapNode_str_bool { char* key; bool value; struct core_map_MapNode_str_bool* next; };\n"
+        out = out + "typedef struct core_map_MapNode_str_bool core_map_MapNode_str_bool;\n"
+        out = out + "struct core_map_Map_str_bool { core_map_MapNode_str_bool** buckets; long long capacity; long long len; };\n"
+        out = out + "typedef struct core_map_Map_str_bool core_map_Map_str_bool;\n"
+        out = out + "__attribute__((hot)) core_map_MapNode_str_bool** core_alloc_alloc_core_map_MapNode_str_bool(long long count);\n"
+        out = out + "__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_bool(core_map_MapNode_str_bool** ptr);\n"
+        out = out + "struct core_map_MapNode_str_str { char* key; char* value; struct core_map_MapNode_str_str* next; };\n"
+        out = out + "typedef struct core_map_MapNode_str_str core_map_MapNode_str_str;\n"
+        out = out + "struct core_map_Map_str_str { core_map_MapNode_str_str** buckets; long long capacity; long long len; };\n"
+        out = out + "typedef struct core_map_Map_str_str core_map_Map_str_str;\n"
+        out = out + "__attribute__((hot)) core_map_MapNode_str_str** core_alloc_alloc_core_map_MapNode_str_str(long long count);\n"
+        out = out + "__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_str(core_map_MapNode_str_str** ptr);\n"
+        out = out + "struct core_map_MapNode_str_i64 { char* key; long long value; struct core_map_MapNode_str_i64* next; };\n"
+        out = out + "typedef struct core_map_MapNode_str_i64 core_map_MapNode_str_i64;\n"
+        out = out + "struct core_map_Map_str_i64 { core_map_MapNode_str_i64** buckets; long long capacity; long long len; };\n"
+        out = out + "typedef struct core_map_Map_str_i64 core_map_Map_str_i64;\n"
+        out = out + "__attribute__((hot)) core_map_MapNode_str_i64** core_alloc_alloc_core_map_MapNode_str_i64(long long count);\n"
+        out = out + "__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_i64(core_map_MapNode_str_i64** ptr);\n"
+        out = out + "__attribute__((hot)) char* core_alloc_alloc_char(long long count);\n"
+        out = out + "__attribute__((hot)) void core_alloc_copy_char(char* dst, char* src, long long count);\n"
+        out = out + "__attribute__((hot)) char* core_alloc_resize_char(char* ptr, long long new_count);\n"
+        out = out + "__attribute__((hot)) void core_alloc_dealloc_char(char* ptr);\n"
+        return out
 
     # Generate C implementations for one module (no struct defs — those are in tauraro_types.h).
     # class_set: class/enum names declared in this module.
@@ -2410,109 +2600,124 @@ pub class CGenerator:
 
         # Main-module class / enum method implementations
         mut i = 0
-        while i < prog.classes.len:
-            mut c = prog.classes.get(i)
-            if c.generics.len == 0 and class_set.contains(c.name):
-                if not self.emitted_fns.contains("cls_" + c.name):
-                    self.emitted_fns.insert("cls_" + c.name, true)
-                    mut mi = 0
-                    while mi < c.methods.len:
-                        mut m = c.methods.get(mi)
-                        self.cur_class = c.name
-                        self.cur_func  = m.name
-                        self.cur_throws_ty = m.throws_ty.name
-                        self.decl_vars = Map[str, bool].init(64)
-                        self.shared_vars = Map[str, str].init(8)
-                        self.seed_params(m)
-                        self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
-                        self.gen_block(m.body, 1)
-                        self.w("}\n\n")
-                        self.cur_class = ""
-                        self.cur_func  = ""
-                        self.cur_throws_ty = ""
-                        mi = mi + 1
-            i = i + 1
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.classes as usize):
+            while i < prog.classes.len:
+                mut c = prog.classes.get(i)
+                if not _is_invalid_ptr(c as usize):
+                    if c.generics.len == 0 and class_set.contains(c.name):
+                        if not self.emitted_fns.contains("cls_" + c.name):
+                            self.emitted_fns.insert("cls_" + c.name, true)
+                            mut mi = 0
+                            if not _is_invalid_ptr(c.methods as usize):
+                                while mi < c.methods.len:
+                                    mut m = c.methods.get(mi)
+                                    if not _is_invalid_ptr(m as usize):
+                                        self.cur_class = c.name
+                                        self.cur_func  = m.name
+                                        self.cur_throws_ty = m.throws_ty.name
+                                        self.decl_vars = Map[str, bool].init(64)
+                                        self.shared_vars = Map[str, str].init(8)
+                                        self.seed_params(m)
+                                        self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
+                                        self.gen_block(m.body, 1)
+                                        self.w("}\n\n")
+                                        self.cur_class = ""
+                                        self.cur_func  = ""
+                                        self.cur_throws_ty = ""
+                                    mi = mi + 1
+                i = i + 1
         i = 0
-        while i < prog.enums.len:
-            mut e = prog.enums.get(i)
-            if class_set.contains(e.name):
-                if not self.emitted_fns.contains("cls_" + e.name):
-                    self.emitted_fns.insert("cls_" + e.name, true)
-                    mut mi = 0
-                    while mi < e.methods.len:
-                        mut m = e.methods.get(mi)
-                        self.cur_class = e.name
-                        self.cur_func  = m.name
-                        self.cur_throws_ty = m.throws_ty.name
-                        self.decl_vars = Map[str, bool].init(64)
-                        self.shared_vars = Map[str, str].init(8)
-                        self.seed_params(m)
-                        self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
-                        self.gen_block(m.body, 1)
-                        self.w("}\n\n")
-                        self.cur_class = ""
-                        self.cur_func  = ""
-                        self.cur_throws_ty = ""
-                        mi = mi + 1
-            i = i + 1
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.enums as usize):
+            while i < prog.enums.len:
+                mut e = prog.enums.get(i)
+                if not _is_invalid_ptr(e as usize):
+                    if class_set.contains(e.name):
+                        if not self.emitted_fns.contains("cls_" + e.name):
+                            self.emitted_fns.insert("cls_" + e.name, true)
+                            mut mi = 0
+                            if not _is_invalid_ptr(e.methods as usize):
+                                while mi < e.methods.len:
+                                    mut m = e.methods.get(mi)
+                                    if not _is_invalid_ptr(m as usize):
+                                        self.cur_class = e.name
+                                        self.cur_func  = m.name
+                                        self.cur_throws_ty = m.throws_ty.name
+                                        self.decl_vars = Map[str, bool].init(64)
+                                        self.shared_vars = Map[str, str].init(8)
+                                        self.seed_params(m)
+                                        self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
+                                        self.gen_block(m.body, 1)
+                                        self.w("}\n\n")
+                                        self.cur_class = ""
+                                        self.cur_func  = ""
+                                        self.cur_throws_ty = ""
+                                    mi = mi + 1
+                i = i + 1
 
         # Main-module free-standing function implementations
         i = 0
-        while i < prog.functions.len:
-            mut f = prog.functions.get(i)
-            if f.name != "main" and not f.is_extern:
-                mut in_mod = false
-                if f.class_name == "" and fn_set.contains(f.name):
-                    in_mod = true
-                elif f.class_name != "" and class_set.contains(f.class_name):
-                    if not self.classes.contains(f.class_name) and not self.enums.contains(f.class_name):
-                        in_mod = true
-                if in_mod:
-                    if not self.emitted_fns.contains("i_" + f.name):
-                        self.emitted_fns.insert("i_" + f.name, true)
-                        self.cur_func  = f.name
-                        self.cur_class = f.class_name
-                        self.cur_throws_ty = f.throws_ty.name
-                        self.decl_vars = Map[str, bool].init(64)
-                        self.shared_vars = Map[str, str].init(8)
-                        self.seed_params(f)
-                        self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
-                        self.gen_block(f.body, 1)
-                        self.w("}\n\n")
-                        self.cur_func  = ""
-                        self.cur_class = ""
-                        self.cur_throws_ty = ""
-            i = i + 1
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
+            while i < prog.functions.len:
+                mut f = prog.functions.get(i)
+                if not _is_invalid_ptr(f as usize):
+                    if f.name != "main" and not f.is_extern:
+                        mut in_mod = false
+                        if f.class_name == "" and fn_set.contains(f.name):
+                            in_mod = true
+                        elif f.class_name != "" and class_set.contains(f.class_name):
+                            if not self.classes.contains(f.class_name) and not self.enums.contains(f.class_name):
+                                in_mod = true
+                        if in_mod:
+                            if not self.emitted_fns.contains("i_" + f.name):
+                                self.emitted_fns.insert("i_" + f.name, true)
+                                self.cur_func  = f.name
+                                self.cur_class = f.class_name
+                                self.cur_throws_ty = f.throws_ty.name
+                                self.decl_vars = Map[str, bool].init(64)
+                                self.shared_vars = Map[str, str].init(8)
+                                self.seed_params(f)
+                                self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
+                                self.gen_block(f.body, 1)
+                                self.w("}\n\n")
+                                self.cur_func  = ""
+                                self.cur_class = ""
+                                self.cur_throws_ty = ""
+                i = i + 1
 
         # C main() entry point
         self.w("__attribute__((hot,optimize(\"O3,unroll-loops\"))) int main(int argc, char** argv) {\n")
         mut main_has_args = false
         mut main_args_name = "args"
         mut mi2 = 0
-        while mi2 < prog.functions.len:
-            mut mf = prog.functions.get(mi2)
-            if mf.name == "main" and mf.params.len > 0:
-                main_has_args = true
-                main_args_name = mf.params.get(0).name
-            mi2 = mi2 + 1
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
+            while mi2 < prog.functions.len:
+                mut mf = prog.functions.get(mi2)
+                if not _is_invalid_ptr(mf as usize):
+                    if mf.name == "main" and mf.params.len > 0:
+                        main_has_args = true
+                        main_args_name = mf.params.get(0).name
+                mi2 = mi2 + 1
         if main_has_args:
             self.w("    List_str* " + main_args_name + " = List_str_new();\n")
             self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_str_append(" + main_args_name + ", argv[_ai]); }\n")
 
         i = 0
-        while i < prog.top_level_stmts.len:
-            self.gen_stmt(prog.top_level_stmts.get(i), 1)
-            i = i + 1
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.top_level_stmts as usize):
+            while i < prog.top_level_stmts.len:
+                self.gen_stmt(prog.top_level_stmts.get(i), 1)
+                i = i + 1
 
         i = 0
-        while i < prog.functions.len:
-            mut f = prog.functions.get(i)
-            if f.name == "main":
-                self.cur_func  = "main"
-                self.decl_vars = Map[str, bool].init(64)
-                self.gen_block(f.body, 1)
-                self.cur_func  = ""
-            i = i + 1
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
+            while i < prog.functions.len:
+                mut f = prog.functions.get(i)
+                if not _is_invalid_ptr(f as usize):
+                    if f.name == "main":
+                        self.cur_func  = "main"
+                        self.decl_vars = Map[str, bool].init(64)
+                        self.gen_block(f.body, 1)
+                        self.cur_func  = ""
+                i = i + 1
 
         self.w("    return 0;\n}\n")
         return self.buf.to_string().as_str()

@@ -44,7 +44,7 @@ extern "C":
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main(args: Vec[str]):
+def main():
     print("=== 16: Win32 Window (extern C + --link) ===")
     print("Creating native Win32 window...")
 

@@ -4,13 +4,13 @@
 from core.io import read_file, write_file, file_exists
 from core.vec import Vec
 from core.map import Map
-from compiler.src.resolver import ModuleResolver
-from compiler.src.lexer import Lexer
-from compiler.src.parser import Parser
-from compiler.src.sema import Sema
-from compiler.src.ast import Decl
-from compiler.src.codegen.c import CGenerator
-from compiler.src.codegen.llvm import LlvmGenerator
+from resolver import ModuleResolver
+from lexer import Lexer
+from parser import Parser
+from sema import Sema
+from ast import Decl
+from codegen.c import CGenerator
+from codegen.llvm import LlvmGenerator
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -89,8 +89,6 @@ pub def read_runtime_header(bin_path: str) -> str:
     mut src1 = bin_dir + "tauraro_rt.h"
     if file_exists(src1): return read_file(src1)
     if file_exists("runtime/tauraro_rt.h"): return read_file("runtime/tauraro_rt.h")
-    if file_exists("compiler/runtime/tauraro_rt.h"): return read_file("compiler/runtime/tauraro_rt.h")
-    if file_exists("compiler/src/build/tauraro_rt.h"): return read_file("compiler/src/build/tauraro_rt.h")
     return ""
 
 pub def ensure_runtime_header(out_dir: str, bin_path: str):
@@ -103,9 +101,6 @@ pub def ensure_runtime_header(out_dir: str, bin_path: str):
 pub def sync_headers_to_runtime(rt_content: str, types_content: str):
     write_file("runtime/tauraro_rt.h", rt_content)
     write_file("runtime/tauraro_types.h", types_content)
-    make_dir("compiler/runtime")
-    write_file("compiler/runtime/tauraro_rt.h", rt_content)
-    write_file("compiler/runtime/tauraro_types.h", types_content)
 
 pub def strip_trailing_sep(s: str) -> str:
     mut n = 0
@@ -320,7 +315,6 @@ pub def main(args: Vec[str]):
     mut c_gen  = CGenerator.init()
     mut rt_h   = read_runtime_header(args.get(0))
 
-    # Pre-register all types and collect monomorphized generics once.
     c_gen.register_program(hir)
     c_gen.scan_mono_prog(hir)
 
@@ -333,6 +327,7 @@ pub def main(args: Vec[str]):
     if rt_h != "":
         write_file(build_dir + "tauraro_rt.h", rt_h)
     mut types_h = c_gen.generate_types_header(hir)
+    types_h = types_h + c_gen.generate_module_compat(resolver.all_decl_modules, resolver.all_decls)
     write_file(build_dir + "tauraro_types.h", types_h)
     if rt_h != "":
         sync_headers_to_runtime(rt_h, types_h)

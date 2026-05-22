@@ -22,7 +22,7 @@ extern "C":
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main(args: Vec[str]):
+def main():
     print("=== 15: Dynamic Linking (extern C) ===")
 
     # Integer math
