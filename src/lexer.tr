@@ -107,6 +107,7 @@ pub class Lexer:
     pub line:   int             # 1-based line number
     pub indent_stack: Vec[int]  # stack of indent levels
     pub pending_dedents: int    # dedents to emit before next token
+    pub token_lines: Vec[int]   # parallel line numbers for each token
 
     pub def init(source: str) -> Lexer:
         mut lx = Lexer()
@@ -123,6 +124,7 @@ pub class Lexer:
         lx.indent_stack = Vec[int].init(16)
         lx.indent_stack.push(0)   # base indent level = 0
         lx.pending_dedents = 0
+        lx.token_lines = Vec[int].init(1024)
         return lx
 
     # ── Token access helpers ──
@@ -357,6 +359,7 @@ pub class Lexer:
         while not self.at_end():
             if self.pending_dedents > 0:
                 tokens.push(Token.Dedent)
+                self.token_lines.push(self.line)
                 self.pending_dedents = self.pending_dedents - 1
                 continue
 
@@ -397,12 +400,14 @@ pub class Lexer:
                     if indent > cur_indent:
                         self.indent_stack.push(indent)
                         tokens.push(Token.Indent)
+                        self.token_lines.push(self.line)
                     elif indent < cur_indent:
                         while self.indent_stack.len > 1:
                             mut top = self.indent_stack.get(self.indent_stack.len - 1)
                             if top <= indent: break
                             self.indent_stack.len = self.indent_stack.len - 1
                             tokens.push(Token.Dedent)
+                            self.token_lines.push(self.line)
 
             mut c = self.peek()
             if char_is_space(c): 
@@ -413,6 +418,7 @@ pub class Lexer:
                 if c == 13 and self.peek() == 10: self.advance()
                 if nesting == 0:
                     tokens.push(Token.Newline)
+                    self.token_lines.push(self.line)
                     at_line_start = True
                 continue
             if c == 35:
@@ -420,115 +426,144 @@ pub class Lexer:
                 self.skip_comment()
                 if nesting == 0:
                     tokens.push(Token.Newline)
+                    self.token_lines.push(self.line)
                     at_line_start = True
                 continue
 
             if char_is_digit(c):
                 tokens.push(self.read_int())
+                self.token_lines.push(self.line)
                 continue
             if c == 34 or c == 39:
                 if c == 39 and self.peek_at(2) == 39:
                     tokens.push(self.read_char())
+                    self.token_lines.push(self.line)
                 else:
                     tokens.push(self.read_string(c))
+                    self.token_lines.push(self.line)
                 continue
             if c == 102 and (self.peek_at(1) == 34 or self.peek_at(1) == 39):
                 tokens.push(self.read_fstring())
+                self.token_lines.push(self.line)
                 continue
             if c == 114 and (self.peek_at(1) == 34 or self.peek_at(1) == 39):
                 tokens.push(self.read_raw_string())
+                self.token_lines.push(self.line)
                 continue
             if c == 98 and (self.peek_at(1) == 34 or self.peek_at(1) == 39):
                 tokens.push(self.read_byte_string())
+                self.token_lines.push(self.line)
                 continue
             if char_is_alpha(c):
                 tokens.push(self.read_ident())
+                self.token_lines.push(self.line)
                 continue
 
             self.advance()
             if c == 61:
-                if self.peek() == 61: 
-                    self.advance(); tokens.push(Token.EqEq)
-                elif self.peek() == 62: 
-                    self.advance(); tokens.push(Token.FatArrow)
-                else: 
+                mut nc = self.peek()
+                if nc == 61:
+                    self.advance()
+                    tokens.push(Token.EqEq)
+                elif nc == 62:
+                    self.advance()
+                    tokens.push(Token.FatArrow)
+                else:
                     tokens.push(Token.Eq)
             elif c == 33:
-                if self.peek() == 61: 
-                    self.advance(); tokens.push(Token.NotEq)
-                else: 
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.NotEq)
+                else:
                     tokens.push(Token.Error("!"))
             elif c == 60:
-                if self.peek() == 61: 
-                    self.advance(); tokens.push(Token.LtEq)
-                elif self.peek() == 60:
+                mut nc = self.peek()
+                if nc == 61:
                     self.advance()
-                    if self.peek() == 61: 
-                        self.advance(); tokens.push(Token.LtLtEq)
-                    else: 
+                    tokens.push(Token.LtEq)
+                elif nc == 60:
+                    self.advance()
+                    if self.peek() == 61:
+                        self.advance()
+                        tokens.push(Token.LtLtEq)
+                    else:
                         tokens.push(Token.LtLt)
-                else: 
+                else:
                     tokens.push(Token.Lt)
             elif c == 62:
-                if self.peek() == 61: 
-                    self.advance(); tokens.push(Token.GtEq)
-                elif self.peek() == 62:
+                mut nc = self.peek()
+                if nc == 61:
                     self.advance()
-                    if self.peek() == 61: 
-                        self.advance(); tokens.push(Token.GtGtEq)
-                    else: 
+                    tokens.push(Token.GtEq)
+                elif nc == 62:
+                    self.advance()
+                    if self.peek() == 61:
+                        self.advance()
+                        tokens.push(Token.GtGtEq)
+                    else:
                         tokens.push(Token.GtGt)
-                else: 
+                else:
                     tokens.push(Token.Gt)
             elif c == 43:
-                if self.peek() == 61: 
-                    self.advance(); tokens.push(Token.PlusEq)
-                else: 
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.PlusEq)
+                else:
                     tokens.push(Token.Plus)
             elif c == 45:
-                if self.peek() == 62: 
-                    self.advance(); tokens.push(Token.Arrow)
-                elif self.peek() == 61: 
-                    self.advance(); tokens.push(Token.MinusEq)
-                else: 
+                mut nc = self.peek()
+                if nc == 62:
+                    self.advance()
+                    tokens.push(Token.Arrow)
+                elif nc == 61:
+                    self.advance()
+                    tokens.push(Token.MinusEq)
+                else:
                     tokens.push(Token.Minus)
             elif c == 42:
                 if self.peek() == 42:
                     self.advance()
                     if self.peek() == 61:
-                        self.advance(); tokens.push(Token.StarStarEq)
+                        self.advance()
+                        tokens.push(Token.StarStarEq)
                     else:
                         tokens.push(Token.StarStar)
                 elif self.peek() == 61:
-                    self.advance(); tokens.push(Token.StarEq)
+                    self.advance()
+                    tokens.push(Token.StarEq)
                 else:
                     tokens.push(Token.Star)
             elif c == 47:
                 if self.peek() == 47:
                     self.advance()
                     if self.peek() == 61:
-                        self.advance(); tokens.push(Token.FloorDivEq)
+                        self.advance()
+                        tokens.push(Token.FloorDivEq)
                     else:
                         tokens.push(Token.FloorDiv)
                 elif self.peek() == 61:
-                    self.advance(); tokens.push(Token.SlashEq)
+                    self.advance()
+                    tokens.push(Token.SlashEq)
                 else:
                     tokens.push(Token.Slash)
             elif c == 37:
-                if self.peek() == 61: 
-                    self.advance(); tokens.push(Token.PercentEq)
-                else: 
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.PercentEq)
+                else:
                     tokens.push(Token.Percent)
             elif c == 46:
                 if self.peek() == 46:
                     self.advance()
-                    if self.peek() == 46: 
-                        self.advance(); tokens.push(Token.DotDotDot)
+                    if self.peek() == 46:
+                        self.advance()
+                        tokens.push(Token.DotDotDot)
                     elif self.peek() == 61:
-                        self.advance(); tokens.push(Token.DotDotEq)
-                    else: 
+                        self.advance()
+                        tokens.push(Token.DotDotEq)
+                    else:
                         tokens.push(Token.DotDot)
-                else: 
+                else:
                     tokens.push(Token.Dot)
             elif c == 40:
                 tokens.push(Token.LParen)
@@ -558,26 +593,33 @@ pub class Lexer:
             elif c == 63: tokens.push(Token.Question)
             elif c == 126: tokens.push(Token.Tilde)
             elif c == 38:
-                if self.peek() == 61: 
-                    self.advance(); tokens.push(Token.AmpEq)
-                else: 
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.AmpEq)
+                else:
                     tokens.push(Token.Amp)
             elif c == 124:
-                if self.peek() == 61: 
-                    self.advance(); tokens.push(Token.PipeEq)
-                else: 
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.PipeEq)
+                else:
                     tokens.push(Token.Pipe)
             elif c == 94:
-                if self.peek() == 61: 
-                    self.advance(); tokens.push(Token.CaretEq)
-                else: 
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.CaretEq)
+                else:
                     tokens.push(Token.Caret)
             else:
                 self.advance()
                 tokens.push(Token.Error("?"))
+            self.token_lines.push(self.line)
 
         while self.indent_stack.len > 1:
             self.indent_stack.len = self.indent_stack.len - 1
             tokens.push(Token.Dedent)
+            self.token_lines.push(self.line)
         tokens.push(Token.Eof)
+        self.token_lines.push(self.line)
         return tokens
+
