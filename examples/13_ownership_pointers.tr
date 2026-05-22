@@ -26,27 +26,27 @@ extend Point:
         return self.x * self.x + self.y * self.y
 
 class Buffer:
-    pub data: Vec[int]
+    pub data: List[int]
     pub capacity: int
 
 extend Buffer:
     pub def init(cap: int) -> Buffer:
         mut b = Buffer()
-        b.data = Vec[int].init(cap)
+        b.data = []
         b.capacity = cap
         return b
 
     pub def push(self, v: int) -> void:
-        self.data.push(v)
+        self.data.append(v)
 
     pub def get(self, i: int) -> int:
-        return self.data.get(i)
+        return self.data[i]
 
     pub def length(self) -> int:
-        return self.data.len
+        return len(self.data)
 
     pub def describe(self) -> void:
-        print(f"Buffer(len={self.data.len}, cap={self.capacity})")
+        print(f"Buffer(len={len(self.data)}, cap={self.capacity})")
 
 # ---- Ownership via simple struct assignment ------------------------------------
 

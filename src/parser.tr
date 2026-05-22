@@ -2,8 +2,8 @@
 
 from core.vec import Vec
 from core.alloc import alloc, dealloc
-from compiler.src.token import Token
-from compiler.src.ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart
+from token import Token
+from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 

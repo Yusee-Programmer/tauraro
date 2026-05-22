@@ -16,9 +16,9 @@ from core.io import read_file, file_exists
 from core.vec import Vec
 from core.map import Map
 from core.string import StringBuilder
-from compiler.src.lexer import Lexer
-from compiler.src.parser import Parser
-from compiler.src.ast import Program, Decl, FunctionDef, ClassDef, EnumDef, InterfaceDef, ImportItem
+from lexer import Lexer
+from parser import Parser
+from ast import Program, Decl, FunctionDef, ClassDef, EnumDef, InterfaceDef, ImportItem
 
 # ─── Visibility helper ────────────────────────────────────────────────────────
 
@@ -75,6 +75,26 @@ extend ModuleResolver:
 
     # Entry point.  The root file's private declarations ARE included.
     pub def resolve_main(self, main_path: str) -> Program:
+        # Add the directory of main_path to search paths so that sibling
+        # modules (e.g. "from resolver import ...") are found by the resolver.
+        # We find the last '/' or '\' in the path and keep that prefix.
+        # Note: we build via char-by-char string concat to avoid the spurious-free
+        # bug that occurs with StringBuilder.to_string().as_str() (the sb's buffer
+        # is freed when sb goes out of scope, leaving a dangling char*).
+        mut dir_end = 0
+        mut ci = 0
+        mut mp = main_path as Pointer[char]
+        while mp.offset(ci).read() as int != 0:
+            mut ch = mp.offset(ci).read() as int
+            if ch == 47 or ch == 92:  # '/' or '\'
+                dir_end = ci
+            ci = ci + 1
+        if dir_end > 0:
+            # Use unsafe slice to copy the directory prefix without a StringBuilder.
+            mut dir_str = ""
+            unsafe:
+                dir_str = _tr_str_slice(main_path, 0, dir_end)
+            self.search_paths.push(dir_str)
         self.resolve_file(main_path, true)
         mut p = Program.init()
         mut i = 0

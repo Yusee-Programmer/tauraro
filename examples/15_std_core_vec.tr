@@ -21,10 +21,6 @@ def main():
     print("Vec[str][0]: " + sv.get(0))
     print("Vec[str][1]: " + sv.get(1))
 
-    # contains test
-    print("contains 20: " + v.contains(20).to_str())
-    print("contains 99: " + v.contains(99).to_str())
-
     # pop test
     mut popped = v.pop()
     print("popped: " + popped.to_str())
