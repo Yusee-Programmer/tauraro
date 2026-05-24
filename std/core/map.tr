@@ -41,7 +41,7 @@ extend Map[V]:
         while p < cap2: p = p * 2
         cap2 = p
         mut m = Map[V]()
-        mut sz = cap2 * sizeof[MapEntry[V]]
+        mut sz = cap2 * sizeof(MapEntry[V])
         m.buckets  = _tr_checked_alloc(sz)
         _tr_c_memset(m.buckets, 0, sz)
         m.count    = 0
@@ -86,6 +86,8 @@ extend Map[V]:
             if _tr_str_eq(entry.read().key, key):
                 return entry.read().val
             i = (i + 1) % self.capacity
+        mut dummy = MapEntry[V]()
+        return dummy.val
 
     pub def contains(self, key: str) -> bool:
         mut h = _map_hash(key, self.capacity)
@@ -95,6 +97,7 @@ extend Map[V]:
             if not entry.read().used: return false
             if _tr_str_eq(entry.read().key, key): return true
             i = (i + 1) % self.capacity
+        return false
 
     pub def remove(self, key: str):
         mut h = _map_hash(key, self.capacity)
@@ -118,7 +121,7 @@ extend Map[V]:
 
     pub def _rehash(self):
         mut new_cap = self.capacity * 2
-        mut new_sz = new_cap * sizeof[MapEntry[V]]
+        mut new_sz = new_cap * sizeof(MapEntry[V])
         mut new_bkt = _tr_checked_alloc(new_sz)
         _tr_c_memset(new_bkt, 0, new_sz)
         mut old_bkt = self.buckets

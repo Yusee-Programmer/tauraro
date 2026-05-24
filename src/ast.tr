@@ -297,6 +297,7 @@ pub class ClassDef:
     pub decorators: Vec[Decorator]
     pub constraints: Vec[GenericConstraint]
     pub is_public: bool
+    pub is_class: bool
     pub line: int
 
 extend ClassDef:
@@ -311,6 +312,7 @@ extend ClassDef:
         c.decorators = Vec[Decorator].init(0)
         c.constraints = Vec[GenericConstraint].init(0)
         c.is_public = false
+        c.is_class = true
         c.line = 0
         return c
 

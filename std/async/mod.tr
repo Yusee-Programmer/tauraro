@@ -1,12 +1,30 @@
-# std.async — Package index.
+# std.async — Production async / concurrency primitives.
 #
+# All primitives are backed by OS threading (Win32 or POSIX pthreads).
+# Zero fake synchronous implementations.
+#
+# Quick import:
 #   from std.async import Task, Future, Channel, TaskGroup
+#   from std.async import Mutex, RWLock, Semaphore, WaitGroup, Barrier, Once
+#   from std.async import Timer, Ticker
 #
-# Sub-modules:
-#   from std.async.task    import Task, Future
-#   from std.async.channel import Channel
-#   from std.async.group   import TaskGroup
+# Or per-module:
+#   from std.async.task      import Task, Future
+#   from std.async.channel   import Channel
+#   from std.async.group     import TaskGroup
+#   from std.async.mutex     import Mutex, RWLock
+#   from std.async.semaphore import Semaphore
+#   from std.async.waitgroup import WaitGroup
+#   from std.async.barrier   import Barrier
+#   from std.async.once      import Once
+#   from std.async.timer     import Timer, Ticker
 
-from std.async.task    import Task, Future
-from std.async.channel import Channel
-from std.async.group   import TaskGroup
+from std.async.task      import Task, Future
+from std.async.channel   import Channel
+from std.async.group     import TaskGroup
+from std.async.mutex     import Mutex, RWLock
+from std.async.semaphore import Semaphore
+from std.async.waitgroup import WaitGroup
+from std.async.barrier   import Barrier
+from std.async.once      import Once
+from std.async.timer     import Timer, Ticker

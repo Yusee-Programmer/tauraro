@@ -1,37 +1,56 @@
-# std.iter.range — Range construction and step utilities for Vec[int].
+# std.iter.range — Range construction via the Range class.
 
 from std.core.vec import Vec
 
-# Build a Vec[int] containing [start, end).
-pub def range_vec(start: int, end: int) -> Vec[int]:
-    mut cap = end - start
-    if cap < 0: cap = 0
-    mut v = Vec[int].init(cap + 4)
-    mut i = start
-    while i < end:
-        v.push(i)
-        i = i + 1
-    return v
+pub class Range:
+    pub start:     int
+    pub end:       int
+    pub step_size: int
 
-# Build a Vec[int] with a custom step.
-pub def range_step(start: int, end: int, step: int) -> Vec[int]:
-    if step == 0: return Vec[int].init(0)
-    mut v = Vec[int].init(16)
-    mut i = start
-    if step > 0:
-        while i < end:
-            v.push(i)
-            i = i + step
-    else:
-        while i > end:
-            v.push(i)
-            i = i + step
-    return v
+extend Range:
+    # Create a Range [start, end) with step 1.
+    pub def init(start: int, end: int) -> Range:
+        mut r = Range()
+        r.start     = start
+        r.end       = end
+        r.step_size = 1
+        return r
 
-# Build a Vec[int] with n elements starting from start.
-pub def range_n(start: int, n: int) -> Vec[int]:
-    return range_vec(start, start + n)
+    # Return a new Range with the given step size.
+    pub def step(self, n: int) -> Range:
+        mut r = Range()
+        r.start     = self.start
+        r.end       = self.end
+        r.step_size = n
+        return r
 
-# Build a Vec[int] from 0 to n-1.
-pub def iota(n: int) -> Vec[int]:
-    return range_vec(0, n)
+    # Materialise the range into a Vec[int].
+    pub def to_vec(self) -> Vec[int]:
+        if self.step_size == 0:
+            return Vec[int].init(0)
+        mut cap = (self.end - self.start) / self.step_size
+        if cap < 0: cap = 0
+        mut v = Vec[int].init(cap + 4)
+        mut i = self.start
+        if self.step_size > 0:
+            while i < self.end:
+                v.push(i)
+                i = i + self.step_size
+        else:
+            while i > self.end:
+                v.push(i)
+                i = i + self.step_size
+        return v
+
+    # ── Static convenience helpers ────────────────────────────────────────────
+
+    # Vec[int] from 0 to n-1.
+    pub def iota(n: int) -> Vec[int]:
+        mut r = Range.init(0, n)
+        return r.to_vec()
+
+    # Vec[int] [start, end) with step.
+    pub def stepped(start: int, end: int, step: int) -> Vec[int]:
+        mut r = Range.init(start, end)
+        mut rs = r.step(step)
+        return rs.to_vec()

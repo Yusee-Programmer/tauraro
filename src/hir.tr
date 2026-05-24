@@ -153,6 +153,7 @@ pub class HirClass:
     pub methods: Vec[HirFunction]
     pub decorators: Vec[Decorator]
     pub is_public: bool
+    pub is_class: bool
 
 pub class HirVariant:
     pub name: str

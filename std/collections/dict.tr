@@ -4,15 +4,6 @@
 
 from std.core.map import Map
 
-pub def dict_str_int(cap: int) -> Map[int]:
-    return Map[int].init(cap)
-
-pub def dict_str_str(cap: int) -> Map[str]:
-    return Map[str].init(cap)
-
-pub def dict_str_bool(cap: int) -> Map[bool]:
-    return Map[bool].init(cap)
-
 # ─── MultiDict ────────────────────────────────────────────────────────────────
 
 pub class MultiDict:
@@ -27,8 +18,9 @@ extend MultiDict:
         return d
 
     pub def set(self, key: str, value: str):
+        if not self.data.contains(key):
+            self.count = self.count + 1
         self.data.insert(key, value)
-        self.count = self.count + 1
 
     pub def get(self, key: str) -> str:
         if self.data.contains(key):
@@ -43,5 +35,5 @@ extend MultiDict:
             self.data.remove(key)
             self.count = self.count - 1
 
-    pub def size(self) -> int:
+    pub def len(self) -> int:
         return self.count
