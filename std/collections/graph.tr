@@ -1,0 +1,139 @@
+# std.collections.graph — Directed/undirected graph with adjacency list + algorithms.
+
+from std.core.vec import Vec
+from std.core.map import Map
+
+pub class GraphEdge:
+    pub to:     int
+    pub weight: int
+
+extend GraphEdge:
+    pub def init(to: int, weight: int) -> GraphEdge:
+        mut e = GraphEdge()
+        e.to     = to
+        e.weight = weight
+        return e
+
+pub class Graph:
+    pub node_count: int
+    pub edge_count: int
+    pub directed:   bool
+    pub _adj:       Vec[int]
+    pub _adj_to:    Vec[int]
+    pub _adj_w:     Vec[int]
+    pub _adj_from:  Vec[int]
+    pub _node_start: Vec[int]
+    pub _max_nodes: int
+
+extend Graph:
+    # Create a graph for up to max_nodes nodes.
+    # directed=true for directed graph; false for undirected (edges added both ways).
+    pub def init(max_nodes: int, directed: bool) -> Graph:
+        mut g = Graph()
+        g.node_count  = 0
+        g.edge_count  = 0
+        g.directed    = directed
+        g._max_nodes  = max_nodes
+        g._adj_from   = Vec[int].init(max_nodes * 4)
+        g._adj_to     = Vec[int].init(max_nodes * 4)
+        g._adj_w      = Vec[int].init(max_nodes * 4)
+        g._adj        = Vec[int].init(max_nodes * 4)
+        g._node_start = Vec[int].init(max_nodes + 4)
+        mut i = 0
+        while i <= max_nodes:
+            g._node_start.push(0)
+            i = i + 1
+        return g
+
+    # Add a directed edge src -> to with the given weight (default 1).
+    pub def add_edge(self, src: int, to: int, weight: int):
+        self._adj_from.push(src)
+        self._adj_to.push(to)
+        self._adj_w.push(weight)
+        self.edge_count = self.edge_count + 1
+        if src >= self.node_count: self.node_count = src + 1
+        if to  >= self.node_count: self.node_count = to + 1
+        if not self.directed:
+            self._adj_from.push(to)
+            self._adj_to.push(src)
+            self._adj_w.push(weight)
+            self.edge_count = self.edge_count + 1
+
+    # Return Vec of node IDs reachable from start using BFS (level order).
+    pub def bfs(self, start: int) -> Vec[int]:
+        mut visited = Vec[int].init(self.node_count + 4)
+        mut queue   = Vec[int].init(self.node_count + 4)
+        mut result  = Vec[int].init(self.node_count + 4)
+        mut head    = 0
+        visited.push(start)
+        queue.push(start)
+        while head < queue.len:
+            mut cur = queue.get(head)
+            head = head + 1
+            result.push(cur)
+            mut i = 0
+            while i < self._adj_from.len:
+                if self._adj_from.get(i) == cur:
+                    mut nb = self._adj_to.get(i)
+                    if not visited.contains(nb):
+                        visited.push(nb)
+                        queue.push(nb)
+                i = i + 1
+        return result
+
+    # Return Vec of node IDs reachable from start using DFS (pre-order).
+    pub def dfs(self, start: int) -> Vec[int]:
+        mut visited = Vec[int].init(self.node_count + 4)
+        mut result  = Vec[int].init(self.node_count + 4)
+        Graph._dfs_inner(self, start, visited, result)
+        return result
+
+    def _dfs_inner(self, node: int, visited: Vec[int], result: Vec[int]):
+        if visited.contains(node): return
+        visited.push(node)
+        result.push(node)
+        mut i = 0
+        while i < self._adj_from.len:
+            if self._adj_from.get(i) == node:
+                Graph._dfs_inner(self, self._adj_to.get(i), visited, result)
+            i = i + 1
+
+    # True when there is any path from src to dst.
+    pub def has_path(self, src: int, dst: int) -> bool:
+        mut visited = self.bfs(src)
+        return visited.contains(dst)
+
+    # Return all direct neighbours of node.
+    pub def neighbors(self, node: int) -> Vec[int]:
+        mut out = Vec[int].init(8)
+        mut i   = 0
+        while i < self._adj_from.len:
+            if self._adj_from.get(i) == node:
+                out.push(self._adj_to.get(i))
+            i = i + 1
+        return out
+
+    # Return the weight of the edge src -> to, or -1 if none.
+    pub def edge_weight(self, src: int, to: int) -> int:
+        mut i = 0
+        while i < self._adj_from.len:
+            if self._adj_from.get(i) == src and self._adj_to.get(i) == to:
+                return self._adj_w.get(i)
+            i = i + 1
+        return -1
+
+    pub def in_degree(self, node: int) -> int:
+        mut n = 0
+        mut i = 0
+        while i < self._adj_to.len:
+            if self._adj_to.get(i) == node: n = n + 1
+            i = i + 1
+        return n
+
+    pub def out_degree(self, node: int) -> int:
+        mut n = 0
+        mut i = 0
+        while i < self._adj_from.len:
+            if self._adj_from.get(i) == node: n = n + 1
+            i = i + 1
+        return n

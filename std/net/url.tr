@@ -1,6 +1,7 @@
 # std.net.url — URL parsing and building.
 
 from std.core.string import StringBuilder
+from std.string import int_to_str
 from std.string.str import str_len, str_char_at, str_contains_char, str_slice
 
 pub class Url:
@@ -35,17 +36,12 @@ extend Url:
         sb.append(self.host)
         if self.port != 80 and self.port != 443 and self.port != 0:
             sb.append(":")
-            mut p = self.port
-            if p == 8080: sb.append("8080")
-            elif p == 8443: sb.append("8443")
-            elif p == 3000: sb.append("3000")
-            elif p == 5000: sb.append("5000")
-            else: sb.append("????")
+            sb.append(int_to_str(self.port))
         sb.append(self.path)
         if str_len(self.query) > 0:
             sb.append("?")
             sb.append(self.query)
-        return sb.to_string().as_str()
+        return sb.to_string()
 
     pub def is_https(self) -> bool:
         return self.scheme == "https"

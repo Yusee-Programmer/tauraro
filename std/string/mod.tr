@@ -1,21 +1,8 @@
 # std.string — Package index.
 #
-#   from std.string import str_len, str_contains, str_trim, int_to_str
-#
 # Sub-modules:
-#   from std.string.str import str_len, str_contains, str_trim, str_slice …
-#   from std.string.fmt import int_to_str, int_to_hex, zero_pad, str_pad_left …
+#   from std.string.str import Str
+#   from std.string.fmt import Fmt
 
-from std.string.str import [
-    str_len, str_starts_with, str_ends_with,
-    str_contains_char, str_contains, str_eq,
-    str_slice, str_repeat, str_reverse,
-    str_to_upper, str_to_lower,
-    str_trim_left, str_trim_right, str_trim,
-    str_char_at,
-]
-
-from std.string.fmt import [
-    int_to_str, int_to_hex, int_to_bin,
-    str_pad_left, str_pad_right, zero_pad,
-]
+from std.string.str import Str
+from std.string.fmt import Fmt

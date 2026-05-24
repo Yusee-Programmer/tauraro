@@ -1,41 +1,36 @@
 # std.collections.set — Hash set of string keys.
 #
-# Backed by Map[str, bool] — the value is always true; presence of a key
-# means membership.  O(1) average insert/contains/remove.
+# Backed by Map[bool] — key presence means membership.
+# O(1) average insert/contains/remove.
 
 from std.core.map import Map
 
 pub class Set:
-    pub data: Map[bool]
-    pub size: int
+    pub data:  Map[bool]
+    pub count: int
 
 extend Set:
     pub def init(cap: int) -> Set:
         mut s = Set()
-        s.data = Map[bool].init(cap)
-        s.size = 0
+        s.data  = Map[bool].init(cap)
+        s.count = 0
         return s
 
-    # Add key to the set.  No-op if already present.
     pub def add(self, key: str):
         if not self.data.contains(key):
             self.data.insert(key, true)
-            self.size = self.size + 1
+            self.count = self.count + 1
 
-    # Remove key from the set.  No-op if absent.
     pub def remove(self, key: str):
         if self.data.contains(key):
             self.data.remove(key)
-            self.size = self.size - 1
+            self.count = self.count - 1
 
-    # Return True when key is in the set.
     pub def contains(self, key: str) -> bool:
         return self.data.contains(key)
 
-    # Return True when the set has no elements.
     pub def is_empty(self) -> bool:
-        return self.size == 0
+        return self.count == 0
 
-    # Return the number of elements.
     pub def len(self) -> int:
-        return self.size
+        return self.count

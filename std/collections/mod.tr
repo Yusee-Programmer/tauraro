@@ -1,23 +1,26 @@
 # std.collections — Package index.
 #
-# Importing this package gives access to all collection types without
-# specifying the sub-module:
-#
-#   from std.collections import Vec, Stack, Queue, LinkedList, Set, Counter
-#   from std.collections import Deque, Pair, StrPair, Triple, MultiDict
-#
 # Individual sub-modules can also be imported directly:
 #
-#   from std.collections.vec   import Vec
-#   from std.collections.stack import Stack
-#   from std.collections.set   import Set
+#   from std.collections.vec      import Vec
+#   from std.collections.stack    import Stack
+#   from std.collections.set      import Set
+#   from std.collections.heap     import MinHeap, MaxHeap
+#   from std.collections.graph    import Graph, GraphEdge
 
 from std.collections.vec     import Vec
-from std.collections.list    import LinkedList, ListNode
-from std.collections.dict    import MultiDict, dict_str_int, dict_str_str, dict_str_bool
+from std.collections.list    import LinkedList
+from std.collections.list    import ListNode
+from std.collections.dict    import MultiDict
 from std.collections.set     import Set
-from std.collections.tuple   import Pair, StrPair, Triple
+from std.collections.tuple   import Pair
+from std.collections.tuple   import StrPair
+from std.collections.tuple   import Triple
 from std.collections.stack   import Stack
 from std.collections.queue   import Queue
 from std.collections.deque   import Deque
 from std.collections.counter import Counter
+from std.collections.heap    import MinHeap
+from std.collections.heap    import MaxHeap
+from std.collections.graph   import Graph
+from std.collections.graph   import GraphEdge
