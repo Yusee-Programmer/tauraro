@@ -1,40 +1,58 @@
-# std.async.group — TaskGroup: spawn and join multiple tasks together.
+# std.async.group — TaskGroup: launch and join multiple concurrent tasks.
 #
-# The `taskgroup:` language keyword desugars to the runtime's
-# _tr_taskgroup_wait; this class provides a higher-level API that
-# works today via synchronous completion.
+# Typical pattern:
+#   let tg = TaskGroup.new()
+#   let t1 = tg.add("worker-1")
+#   let t2 = tg.add("worker-2")
+#   spawn: t1.complete(work1())
+#   spawn: t2.complete(work2())
+#   tg.wait_all()          # blocks until every task is done
 
-from std.core.vec import Vec
 from std.async.task import Task
+from std.core.vec import Vec
 
 pub class TaskGroup:
     pub tasks: Vec[Task]
 
 extend TaskGroup:
-    pub def init() -> TaskGroup:
+    pub def new() -> TaskGroup:
         mut tg = TaskGroup()
         tg.tasks = Vec[Task].init(8)
         return tg
 
-    # Register a new named task in the group.
-    pub def spawn(self, name: str) -> Task:
-        mut t = Task.init(name)
+    # Create and register a new named task.  Caller must complete it.
+    pub def add(self, name: str) -> Task:
+        mut t = Task.new(name)
         self.tasks.push(t)
         return t
 
-    # Mark all tasks complete (synchronous simulation).
-    # Real impl: block until all spawned coroutines resolve.
+    # Block until every task in the group has completed (or been cancelled).
     pub def wait_all(self):
-        taskgroup:
-            mut i = 0
-            while i < self.tasks.len:
-                mut t = self.tasks.get(i)
-                if not t.is_done():
-                    spawn t.complete(0)
-                self.tasks.set(i, t)
-                i = i + 1
+        mut i = 0
+        while i < self.tasks.len:
+            self.tasks.get(i).await_()
+            i = i + 1
 
-    # Return True when every task in the group has completed.
+    # Wait with per-task timeout (ms).  Returns false if any task timed out.
+    pub def wait_all_timeout(self, ms: int) -> bool:
+        mut all_ok = true
+        mut i = 0
+        while i < self.tasks.len:
+            if not self.tasks.get(i).await_timeout(ms):
+                all_ok = false
+            i = i + 1
+        return all_ok
+
+    # Cancel all tasks that are not yet done.
+    pub def cancel_all(self):
+        mut i = 0
+        while i < self.tasks.len:
+            mut t = self.tasks.get(i)
+            if not t.is_done():
+                t.cancel()
+            i = i + 1
+
+    # True when every task has completed (or been cancelled/failed).
     pub def all_done(self) -> bool:
         mut i = 0
         while i < self.tasks.len:
@@ -42,7 +60,7 @@ extend TaskGroup:
             i = i + 1
         return true
 
-    # Return the number of tasks that have not yet completed.
+    # Number of tasks not yet done.
     pub def pending_count(self) -> int:
         mut n = 0
         mut i = 0
@@ -50,3 +68,13 @@ extend TaskGroup:
             if not self.tasks.get(i).is_done(): n = n + 1
             i = i + 1
         return n
+
+    pub def len(self) -> int:
+        return self.tasks.len
+
+    # Free all task handles.
+    pub def free(self):
+        mut i = 0
+        while i < self.tasks.len:
+            self.tasks.get(i).free()
+            i = i + 1

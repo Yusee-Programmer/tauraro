@@ -1,61 +1,84 @@
-# std.async.channel — Bounded channel for integer messages.
+# std.async.channel — Production bounded MPMC channel.
 #
-# Backed by a ring buffer.  send() drops when full; recv() returns -1 when
-# empty.  Thread safety requires the runtime mutex (future work).
+# Backed by a ring buffer with mutex + two condition variables.
+# send() blocks when full; recv() blocks when empty.
+# Fully thread-safe: Win32 CriticalSection / POSIX pthread_mutex.
+#
+# Usage:
+#   let ch = Channel.new(16)
+#   ch.send(42)
+#   let v = ch.recv()
+#   ch.close()
 
-from std.core.vec import Vec
+extern "C":
+    def _tr_chan_new_h(cap: int) -> Pointer[char]
+    def _tr_chan_send_h(ch: Pointer[char], val: int)
+    def _tr_chan_recv_h(ch: Pointer[char]) -> int
+    def _tr_chan_try_send_h(ch: Pointer[char], val: int) -> bool
+    def _tr_chan_try_recv_val_h(ch: Pointer[char]) -> int
+    def _tr_chan_send_timeout_h(ch: Pointer[char], val: int, ms: int) -> bool
+    def _tr_chan_recv_timeout_val_h(ch: Pointer[char], ms: int) -> int
+    def _tr_chan_close_h(ch: Pointer[char])
+    def _tr_chan_is_closed_h(ch: Pointer[char]) -> bool
+    def _tr_chan_len_h(ch: Pointer[char]) -> int
+    def _tr_chan_cap_h(ch: Pointer[char]) -> int
+    def _tr_chan_free_h(ch: Pointer[char])
 
 pub class Channel:
-    pub buf:      Vec[int]
-    pub head:     int
-    pub tail:     int
-    pub count:    int
-    pub capacity: int
-    pub closed:   bool
+    pub handle: Pointer[char]
 
 extend Channel:
-    pub def init(cap: int) -> Channel:
+    # Create a new bounded channel with capacity cap (minimum 1).
+    pub def new(cap: int) -> Channel:
         mut real_cap = cap
-        if real_cap < 2: real_cap = 2
+        if real_cap < 1: real_cap = 1
         mut c = Channel()
-        c.buf      = Vec[int].init(real_cap)
-        mut i = 0
-        while i < real_cap:
-            c.buf.push(0)
-            i = i + 1
-        c.head     = 0
-        c.tail     = 0
-        c.count    = 0
-        c.capacity = real_cap
-        c.closed   = false
+        c.handle = _tr_chan_new_h(real_cap)
         return c
 
-    # Send value.  Returns True on success; False when full or closed.
-    pub def send(self, value: int) -> bool:
-        if self.closed: return false
-        if self.count >= self.capacity: return false
-        self.buf.set(self.tail, value)
-        self.tail  = (self.tail + 1) % self.capacity
-        self.count = self.count + 1
-        return true
+    # Block until value is sent or channel is closed.
+    pub def send(self, val: int):
+        _tr_chan_send_h(self.handle, val)
 
-    # Receive a value.  Returns -1 when empty or closed.
+    # Block until a value is available.  Returns 0 on closed empty channel.
     pub def recv(self) -> int:
-        if self.count == 0: return -1
-        mut val   = self.buf.get(self.head)
-        self.head  = (self.head + 1) % self.capacity
-        self.count = self.count - 1
-        return val
+        return _tr_chan_recv_h(self.handle)
 
-    # Close the channel — no more sends allowed.
+    # Non-blocking send.  Returns false when full or closed.
+    pub def try_send(self, val: int) -> bool:
+        return _tr_chan_try_send_h(self.handle, val)
+
+    # Non-blocking recv.  Returns LLONG_MIN sentinel when empty or closed.
+    pub def try_recv(self) -> int:
+        return _tr_chan_try_recv_val_h(self.handle)
+
+    # Send with timeout.  Returns false when timeout elapses.
+    pub def send_timeout(self, val: int, ms: int) -> bool:
+        return _tr_chan_send_timeout_h(self.handle, val, ms)
+
+    # Recv with timeout.  Returns LLONG_MIN sentinel on timeout.
+    pub def recv_timeout(self, ms: int) -> int:
+        return _tr_chan_recv_timeout_val_h(self.handle, ms)
+
+    # Close: unblocks all waiting senders and receivers.
     pub def close(self):
-        self.closed = true
+        _tr_chan_close_h(self.handle)
 
-    pub def is_empty(self) -> bool:
-        return self.count == 0
-
-    pub def is_full(self) -> bool:
-        return self.count >= self.capacity
+    pub def is_closed(self) -> bool:
+        return _tr_chan_is_closed_h(self.handle)
 
     pub def len(self) -> int:
-        return self.count
+        return _tr_chan_len_h(self.handle)
+
+    pub def cap(self) -> int:
+        return _tr_chan_cap_h(self.handle)
+
+    pub def is_empty(self) -> bool:
+        return _tr_chan_len_h(self.handle) == 0
+
+    pub def is_full(self) -> bool:
+        return _tr_chan_len_h(self.handle) >= _tr_chan_cap_h(self.handle)
+
+    # Free underlying OS resources.  Do not use after calling free().
+    pub def free(self):
+        _tr_chan_free_h(self.handle)

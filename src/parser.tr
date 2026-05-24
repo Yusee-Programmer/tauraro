@@ -115,8 +115,35 @@ extend Parser:
             case Token.KwVoid:
                 self.pos = self.pos + 1
                 return "void"
+            # Keywords that are valid method/function names in user code
+            case Token.KwExtend:
+                self.pos = self.pos + 1
+                return "extend"
             case _:
                 pass
+        return ""
+
+    # Like consume_ident but also accepts keyword tokens that may appear as
+    # directory/module names in dotted import paths (e.g. std.async.task).
+    pub def consume_module_ident(self) -> str:
+        match self.peek():
+            case Token.KwAsync:
+                self.pos = self.pos + 1
+                return "async"
+            case Token.KwMatch:
+                self.pos = self.pos + 1
+                return "match"
+            case Token.KwFor:
+                self.pos = self.pos + 1
+                return "for"
+            case Token.KwIn:
+                self.pos = self.pos + 1
+                return "in"
+            case Token.KwIs:
+                self.pos = self.pos + 1
+                return "is"
+            case _:
+                return self.consume_ident()
         return ""
 
     # ── Type parsing ──────────────────────────────────────────────────────────
@@ -1293,6 +1320,7 @@ extend Parser:
                     case Decl.DClass(c):
                         c.line = _cline
                         c.is_public = is_public
+                        c.is_class = true
                         c.decorators = decorators
                         c_ptr.write(Decl.DClass(c))
                 return c_ptr
@@ -1342,10 +1370,10 @@ extend Parser:
     #   ]
     pub def parse_from_import(self) -> Pointer[Decl]:
         self.pos = self.pos + 1
-        mut path = self.consume_ident()
+        mut path = self.consume_module_ident()
         while self.peek() == Token.Dot:
             self.pos = self.pos + 1
-            path = path + "." + self.consume_ident()
+            path = path + "." + self.consume_module_ident()
         match self.peek():
             case Token.KwImport:
                 self.pos = self.pos + 1
@@ -1394,10 +1422,10 @@ extend Parser:
 
     pub def parse_import(self) -> Pointer[Decl]:
         self.pos = self.pos + 1
-        mut path = self.consume_ident()
+        mut path = self.consume_module_ident()
         while self.peek() == Token.Dot:
             self.pos = self.pos + 1
-            path = path + "." + self.consume_ident()
+            path = path + "." + self.consume_module_ident()
         mut alias = ""
         if self.peek() == Token.KwAs:
             self.pos = self.pos + 1

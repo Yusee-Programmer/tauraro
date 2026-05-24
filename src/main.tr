@@ -4,6 +4,7 @@
 from core.io import read_file, write_file, file_exists
 from core.vec import Vec
 from core.map import Map
+from core.string import StringObj
 from resolver import ModuleResolver
 from lexer import Lexer
 from parser import Parser
@@ -11,6 +12,10 @@ from sema import Sema
 from ast import Decl
 from codegen.c import CGenerator
 from codegen.llvm import LlvmGenerator
+
+extern "C":
+    def _tr_is_windows() -> bool
+    def _tr_file_delete(path: str) -> int
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -68,9 +73,12 @@ pub def str_starts_with(s: str, prefix: str) -> bool:
     return true
 
 pub def detect_c_compiler() -> str:
-    if _tr_system("gcc --version >nul 2>&1") == 0: return "gcc"
-    if _tr_system("clang --version >nul 2>&1") == 0: return "clang"
-    if _tr_system("cc --version >nul 2>&1") == 0: return "cc"
+    mut null_dev = "/dev/null"
+    if _tr_is_windows():
+        null_dev = "nul"
+    if _tr_system("gcc --version >" + null_dev + " 2>&1") == 0: return "gcc"
+    if _tr_system("clang --version >" + null_dev + " 2>&1") == 0: return "clang"
+    if _tr_system("cc --version >" + null_dev + " 2>&1") == 0: return "cc"
     return "gcc"
 
 pub def dir_of_path(path: str) -> str:
@@ -85,9 +93,13 @@ pub def dir_of_path(path: str) -> str:
     return "./"
 
 pub def read_runtime_header(bin_path: str) -> str:
+    # tauraro/runtime/ is the canonical self-hosted runtime — check it first.
+    if file_exists("tauraro/runtime/tauraro_rt.h"): return read_file("tauraro/runtime/tauraro_rt.h")
+    # Fallback: header placed next to the compiler binary (e.g. tau5.exe).
     mut bin_dir = dir_of_path(bin_path)
     mut src1 = bin_dir + "tauraro_rt.h"
     if file_exists(src1): return read_file(src1)
+    # Last resort: bootstrap runtime.
     if file_exists("runtime/tauraro_rt.h"): return read_file("runtime/tauraro_rt.h")
     return ""
 
@@ -99,8 +111,9 @@ pub def ensure_runtime_header(out_dir: str, bin_path: str):
         write_file(dest, content)
 
 pub def sync_headers_to_runtime(rt_content: str, types_content: str):
-    write_file("runtime/tauraro_rt.h", rt_content)
-    write_file("runtime/tauraro_types.h", types_content)
+    # tauraro/runtime/tauraro_rt.h is the canonical hand-written runtime — keep it in sync.
+    # tauraro_types.h is program-specific and generated fresh each compilation; don't sync it.
+    write_file("tauraro/runtime/tauraro_rt.h", rt_content)
 
 pub def strip_trailing_sep(s: str) -> str:
     mut n = 0
@@ -163,19 +176,72 @@ pub def get_filename(path: str) -> str:
     if last_sep < 0: return path
     return _tr_str_slice(path, last_sep + 1, n)
 
-# True if dotted path starts with "core." or is exactly "core"
+# Count dots to get depth
+pub def get_dot_depth(dot_path: str) -> int:
+    mut p = dot_path as Pointer[char]
+    mut dots = 0
+    mut i = 0
+    while True:
+        mut c = p.offset(i).read() as int
+        if c == 0: break
+        if c == 46: dots = dots + 1
+        i = i + 1
+    return dots + 1
+
+# Create standard package directories under build/include/ recursively
+pub def ensure_builtin_dirs(build_dir: str, dot_path: str) -> str:
+    mut current = build_dir + "include/"
+    make_dir(current)
+    
+    # Split by '.'
+    mut p = dot_path as Pointer[char]
+    mut start = 0
+    mut i = 0
+    while True:
+        mut c = p.offset(i).read() as int
+        if c == 0:
+            # Last segment is the file name
+            mut last_seg = _tr_str_slice(dot_path, start, i)
+            return current + last_seg + ".c"
+        if c == 46: # '.'
+            mut seg = _tr_str_slice(dot_path, start, i)
+            current = current + seg + "/"
+            make_dir(current)
+            start = i + 1
+        i = i + 1
+    return ""
+
+# True if dotted path starts with "core" or "std"
 pub def is_builtin_mod(dot_path: str) -> bool:
     mut p = dot_path as Pointer[char]
-    if p.offset(0).read() as int != 99: return false   # 'c'
-    if p.offset(1).read() as int != 111: return false  # 'o'
-    if p.offset(2).read() as int != 114: return false  # 'r'
-    if p.offset(3).read() as int != 101: return false  # 'e'
-    mut c5 = p.offset(4).read() as int
-    return c5 == 0 or c5 == 46  # "" or '.'
+    
+    # Check "core"
+    mut is_core = true
+    if p.offset(0).read() as int != 99: is_core = false   # 'c'
+    if p.offset(1).read() as int != 111: is_core = false  # 'o'
+    if p.offset(2).read() as int != 114: is_core = false  # 'r'
+    if p.offset(3).read() as int != 101: is_core = false  # 'e'
+    if is_core:
+        mut c5 = p.offset(4).read() as int
+        if c5 == 0 or c5 == 46: return true
+        
+    # Check "std"
+    mut is_std = true
+    if p.offset(0).read() as int != 115: is_std = false   # 's'
+    if p.offset(1).read() as int != 116: is_std = false   # 't'
+    if p.offset(2).read() as int != 100: is_std = false   # 'd'
+    if is_std:
+        mut c4 = p.offset(3).read() as int
+        if c4 == 0 or c4 == 46: return true
+        
+    return false
 
-# Create a directory (Windows cmd: mkdir silences "already exists" error).
+# Create a directory; cross-platform via _tr_mkdir (single level) or shell fallback.
 pub def make_dir(path: str):
-    _tr_system("mkdir \"" + path_to_native(path) + "\" 2>nul >nul")
+    if _tr_is_windows():
+        _tr_system("mkdir \"" + path_to_native(path) + "\" 2>nul >nul")
+    else:
+        _tr_system("mkdir -p \"" + path + "\" 2>/dev/null")
 
 # Compile a list of C files into a single exe.
 # link_paths: path-based files (.c/.o/.a/.dll/.lib) — quoted in the command.
@@ -184,7 +250,7 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
                       link_paths: Vec[str], lib_flags: Vec[str],
                       opt_level: str, verbose: bool) -> int:
     mut cc = detect_c_compiler()
-    mut cmd = cc + " -O" + opt_level + " \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
+    mut cmd = cc + " -O" + opt_level + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
     mut i = 0
     while i < c_files.len:
         cmd = cmd + " \"" + c_files.get(i) + "\""
@@ -198,6 +264,17 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
         cmd = cmd + " " + lib_flags.get(i)
         i = i + 1
     cmd = cmd + " -lm"
+    # On Windows: link Winsock2 when any networking module is present
+    if _tr_is_windows():
+        mut need_wsa: bool = false
+        mut wi = 0
+        while wi < c_files.len:
+            mut cf = c_files.get(wi)
+            if _tr_str_contains(cf, "tcp.c") or _tr_str_contains(cf, "/net/"):
+                need_wsa = true
+            wi = wi + 1
+        if need_wsa:
+            cmd = cmd + " -lws2_32 -mconsole"
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 
@@ -205,7 +282,7 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     mut cc = detect_c_compiler()
     mut opt_flag = "-O" + opt_level
     mut out_dir = strip_trailing_sep(dir_of_path(c_path))
-    mut cmd = cc + " " + opt_flag + " \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
+    mut cmd = cc + " " + opt_flag + " -DTAURARO_NO_RT_HELPERS \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 
@@ -250,7 +327,7 @@ pub def main(args: Vec[str]):
             link_paths.push(args.get(i))
         elif arg == "-l" and i + 1 < args.len:
             i = i + 1
-            lib_flags.push("-l" + args.get(i))
+            lib_flags.push(StringObj.init("-l" + args.get(i)).as_str())
         elif str_starts_with(arg, "-l") and arg != "-l":
             lib_flags.push(arg)
         elif arg == "-O0": opt_level = "0"
@@ -362,18 +439,15 @@ pub def main(args: Vec[str]):
         mut c_path = ""
         mut depth  = 0
         if is_builtin_mod(dot_path):
-            mut sub_dir = build_dir + "include/"
-            make_dir(sub_dir)
-            mut last_seg = dot_last_seg(dot_path)
-            c_path = sub_dir + last_seg + ".c"
-            depth  = 2  # include/core/ → ../../tauraro_types.h
+            c_path = ensure_builtin_dirs(build_dir, dot_path)
+            depth  = get_dot_depth(dot_path)
         else:
             c_path = build_dir + "module_" + dot_to_safe(dot_path) + ".c"
             depth  = 0
 
         mut mod_c = c_gen.generate_module_c(hir, class_set, fn_set, depth)
         write_file(c_path, mod_c)
-        all_c_files.push(c_path)
+        all_c_files.push(StringObj.init(c_path).as_str())
         mi = mi + 1
 
     # ── Main module C file (main.c) ───────────────────────────────────────────
@@ -399,7 +473,7 @@ pub def main(args: Vec[str]):
     mut main_c      = c_gen.generate_main_c(hir, main_class_set, main_fn_set)
     mut main_c_path = build_dir + "main.c"
     write_file(main_c_path, main_c)
-    all_c_files.push(main_c_path)
+    all_c_files.push(StringObj.init(main_c_path).as_str())
 
     if emit_mode == "c":
         print("Modular C output written to: " + build_dir)
@@ -420,18 +494,21 @@ pub def main(args: Vec[str]):
         exe_name = strip_extension(get_filename(input_path))
     if exe_name == "": exe_name = "a"
 
-    # Strip .exe if user already supplied it
+    # Strip .exe suffix so we append the correct platform extension ourselves
     mut en_len = 0
     mut en_p = exe_name as Pointer[char]
     while en_p.offset(en_len).read() as int != 0: en_len = en_len + 1
     if en_len > 4:
-        if en_p.offset(en_len - 4).read() as int == 46:   # '.'
-            if en_p.offset(en_len - 3).read() as int == 101: # 'e'
-                if en_p.offset(en_len - 2).read() as int == 120: # 'x'
-                    if en_p.offset(en_len - 1).read() as int == 101: # 'e'
+        if en_p.offset(en_len - 4).read() as int == 46:
+            if en_p.offset(en_len - 3).read() as int == 101:
+                if en_p.offset(en_len - 2).read() as int == 120:
+                    if en_p.offset(en_len - 1).read() as int == 101:
                         exe_name = _tr_str_slice(exe_name, 0, en_len - 4)
 
-    mut exe_path = build_dir + exe_name + ".exe"
+    mut exe_ext = ".exe"
+    if not _tr_is_windows():
+        exe_ext = ""
+    mut exe_path = build_dir + exe_name + exe_ext
 
     if verbose: print("[5/5] Linking " + str(all_c_files.len) + " modules → " + exe_path)
     mut rc = compile_all_c(all_c_files, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose)
@@ -443,11 +520,16 @@ pub def main(args: Vec[str]):
     if output_path != "":
         mut di = 0
         while di < all_c_files.len:
-            _tr_system("del /Q \"" + path_to_native(all_c_files.get(di)) + "\" 2>nul >nul")
+            if _tr_is_windows():
+                _tr_system("del /Q \"" + path_to_native(all_c_files.get(di)) + "\" 2>nul >nul")
+            else:
+                _tr_system("rm -f \"" + all_c_files.get(di) + "\"")
             di = di + 1
 
     if verbose: print("Done: " + exe_path)
 
     if run_after:
-        mut run_rc = _tr_system("\"" + path_to_native(exe_path) + "\"")
+        mut run_path = exe_path
+        if _tr_is_windows(): run_path = path_to_native(exe_path)
+        mut run_rc = _tr_system("\"" + run_path + "\"")
         _tr_exit(run_rc)

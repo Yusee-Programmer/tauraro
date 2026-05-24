@@ -27,5 +27,5 @@ extend Stack:
     pub def is_empty(self) -> bool:
         return self.data.len == 0
 
-    pub def size(self) -> int:
+    pub def len(self) -> int:
         return self.data.len
