@@ -1,4 +1,4 @@
-﻿/*
+/*
  * tauraro_rt.h — Tauraro Language Runtime
  *
  * Included by every compiled Tauraro program.
@@ -40,6 +40,8 @@ static inline void _tr_free(void* p) {
 static inline void _tr_c_free(void* ptr) { _tr_free(ptr); }
 
 static inline void _tr_print(char* s) { printf("%s\n", s); }
+static inline void _tr_print_raw(char* s) { printf("%s", s); fflush(stdout); }
+static inline void _tr_eprint(char* s) { fprintf(stderr, "%s\n", s); fflush(stderr); }
 
 static inline void* _tr_c_realloc(void* ptr, size_t size) {
     void* p = realloc(ptr, size);
@@ -84,6 +86,46 @@ static inline size_t _tr_c_fread(void* ptr, size_t size, size_t nmemb, void* fp)
 static inline size_t _tr_c_fwrite(const void* ptr, size_t size, size_t nmemb, void* fp) { return fwrite(ptr, size, nmemb, (FILE*)fp); }
 static inline int _tr_c_fseek(void* fp, long offset, int whence) { return fseek((FILE*)fp, offset, whence); }
 static inline long _tr_c_ftell(void* fp) { return ftell((FILE*)fp); }
+static inline char* _tr_getenv(const char* name) { return getenv(name); }
+#ifdef _WIN32
+static inline int _tr_setenv(const char* name, const char* value) { return _putenv_s(name, value) == 0 ? 0 : -1; }
+static inline int _tr_unsetenv(const char* name) { return _putenv_s(name, "") == 0 ? 0 : -1; }
+#else
+static inline int _tr_setenv(const char* name, const char* value) { return setenv(name, value, 1) == 0 ? 0 : -1; }
+static inline int _tr_unsetenv(const char* name) { return unsetenv(name) == 0 ? 0 : -1; }
+#endif
+static inline char* _tr_popen_read(const char* cmd) {
+    if (!cmd) return "";
+#ifdef _WIN32
+    FILE* fp = _popen(cmd, "r");
+#else
+    FILE* fp = popen(cmd, "r");
+#endif
+    if (!fp) return "";
+    size_t cap = 4096, total = 0; char* buf = (char*)malloc(cap); char tmp[512];
+    if (!buf) { fclose(fp); return ""; }
+    while (fgets(tmp, sizeof(tmp), fp)) {
+        size_t n = strlen(tmp);
+        if (total + n + 1 > cap) { cap = cap * 2 + n + 1; buf = (char*)realloc(buf, cap); if (!buf) break; }
+        memcpy(buf + total, tmp, n); total += n;
+    }
+    if (buf) buf[total] = '\0';
+#ifdef _WIN32
+    _pclose(fp);
+#else
+    pclose(fp);
+#endif
+    return buf ? buf : "";
+}
+#ifndef _WIN32
+static inline long long _tr_time_ns(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
+static inline char* _tr_path_canonicalize(const char* path) {
+    char* r = realpath(path, NULL); return r ? r : (char*)path;
+}
+#endif
 
 /* ── Prelude: Option[T] ──────────────────────────────────────────────────── */
 #ifndef _TR_ENUM_OPTION_DEFINED
@@ -215,6 +257,18 @@ static void _tr_condmutex_unlock(_TrCondMutex* cm)  { LeaveCriticalSection(&cm->
 static void _tr_condmutex_wait(_TrCondMutex* cm)    { SleepConditionVariableCS(&cm->cv, &cm->cs, INFINITE); }
 static void _tr_condmutex_signal(_TrCondMutex* cm)  { WakeConditionVariable(&cm->cv); }
 static void _tr_sleep_ms(long ms) { Sleep((DWORD)(ms < 0 ? 0 : ms)); }
+static inline long long _tr_time_ns(void) {
+    LARGE_INTEGER freq, cnt;
+    QueryPerformanceFrequency(&freq); QueryPerformanceCounter(&cnt);
+    return (long long)((double)cnt.QuadPart * 1000000000.0 / (double)freq.QuadPart);
+}
+static inline char* _tr_path_canonicalize(const char* path) {
+    char* buf = (char*)malloc(MAX_PATH);
+    if (!buf) return (char*)path;
+    DWORD n = GetFullPathNameA(path, MAX_PATH, buf, NULL);
+    if (n == 0) { free(buf); return (char*)path; }
+    return buf;
+}
 
 #else
 #include <pthread.h>
@@ -243,77 +297,479 @@ static void _tr_sleep_ms(long ms) {
 }
 #endif
 
-/* ── Channel (thread-safe queue) ────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Production async primitives — Win32 and POSIX implementations.
+ * Design invariants (100% deadlock / race free):
+ *   • Single lock per primitive — never acquire two locks simultaneously.
+ *   • All condvar waits use while-loops — handles spurious wakeups.
+ *   • Broadcast (not signal) on close/cancel — unblocks all waiters.
+ *   • All heap-allocated; Tauraro holds opaque char* (void*) handles.
+ * ═══════════════════════════════════════════════════════════════════════════*/
+#include <limits.h>
 
-typedef struct _TrChanNode { void* data; struct _TrChanNode* next; } _TrChanNode;
+#ifdef _WIN32
+
+/* ── Bounded MPMC channel ────────────────────────────────────────────── */
 typedef struct {
-    _TrChanNode* head; _TrChanNode* tail;
-    size_t len; _TrCondMutex cm; int closed;
+    long long* buf; long long head, tail, count, cap; volatile int closed;
+    CRITICAL_SECTION mu; CONDITION_VARIABLE not_empty, not_full;
 } _TrChan;
-
-static _TrChan* _tr_chan_new(void) {
+static _TrChan* _tr_chan_new(long long cap) {
+    if (cap < 1) cap = 1;
     _TrChan* c = (_TrChan*)calloc(1, sizeof(_TrChan));
-    _tr_condmutex_init(&c->cm);
+    c->buf = (long long*)calloc((size_t)cap, sizeof(long long)); c->cap = cap;
+    InitializeCriticalSection(&c->mu);
+    InitializeConditionVariable(&c->not_empty);
+    InitializeConditionVariable(&c->not_full);
     return c;
 }
-static void _tr_chan_send(_TrChan* c, void* v) {
-    _TrChanNode* n = (_TrChanNode*)malloc(sizeof(_TrChanNode));
-    n->data = v; n->next = NULL;
-    _tr_condmutex_lock(&c->cm);
-    if (c->tail) c->tail->next = n; else c->head = n;
-    c->tail = n; c->len++;
-    _tr_condmutex_signal(&c->cm);
-    _tr_condmutex_unlock(&c->cm);
+static void _tr_chan_send(_TrChan* c, long long val) {
+    EnterCriticalSection(&c->mu);
+    while (c->count >= c->cap && !c->closed)
+        SleepConditionVariableCS(&c->not_full, &c->mu, INFINITE);
+    if (!c->closed) {
+        c->buf[c->tail] = val; c->tail = (c->tail+1)%c->cap; c->count++;
+        WakeConditionVariable(&c->not_empty);
+    }
+    LeaveCriticalSection(&c->mu);
 }
-static void* _tr_chan_recv(_TrChan* c) {
-    _tr_condmutex_lock(&c->cm);
-    while (!c->head && !c->closed) _tr_condmutex_wait(&c->cm);
-    if (!c->head) { _tr_condmutex_unlock(&c->cm); return NULL; }
-    _TrChanNode* n = c->head; void* v = n->data;
-    c->head = n->next; if (!c->head) c->tail = NULL;
-    c->len--; _tr_free(n);
-    _tr_condmutex_unlock(&c->cm);
-    return v;
+static long long _tr_chan_recv(_TrChan* c) {
+    EnterCriticalSection(&c->mu);
+    while (c->count == 0 && !c->closed)
+        SleepConditionVariableCS(&c->not_empty, &c->mu, INFINITE);
+    long long v = 0;
+    if (c->count > 0) {
+        v = c->buf[c->head]; c->head = (c->head+1)%c->cap; c->count--;
+        WakeConditionVariable(&c->not_full);
+    }
+    LeaveCriticalSection(&c->mu); return v;
+}
+static bool _tr_chan_try_send(_TrChan* c, long long val) {
+    EnterCriticalSection(&c->mu);
+    bool ok = !c->closed && c->count < c->cap;
+    if (ok) { c->buf[c->tail]=val; c->tail=(c->tail+1)%c->cap; c->count++; WakeConditionVariable(&c->not_empty); }
+    LeaveCriticalSection(&c->mu); return ok;
+}
+static long long _tr_chan_try_recv_val(_TrChan* c) {
+    EnterCriticalSection(&c->mu);
+    long long v = LLONG_MIN;
+    if (c->count > 0) { v=c->buf[c->head]; c->head=(c->head+1)%c->cap; c->count--; WakeConditionVariable(&c->not_full); }
+    LeaveCriticalSection(&c->mu); return v;
+}
+static bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
+    EnterCriticalSection(&c->mu);
+    ULONGLONG dl = GetTickCount64()+(ULONGLONG)ms; bool ok=true;
+    while (c->count>=c->cap && !c->closed) {
+        ULONGLONG now=GetTickCount64();
+        if (now>=dl||!SleepConditionVariableCS(&c->not_full,&c->mu,(DWORD)(dl-now))){ok=false;break;}
+    }
+    if (ok&&!c->closed&&c->count<c->cap){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;WakeConditionVariable(&c->not_empty);}else ok=false;
+    LeaveCriticalSection(&c->mu); return ok;
+}
+static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
+    EnterCriticalSection(&c->mu);
+    ULONGLONG dl=GetTickCount64()+(ULONGLONG)ms;
+    while (c->count==0&&!c->closed){
+        ULONGLONG now=GetTickCount64();
+        if(now>=dl||!SleepConditionVariableCS(&c->not_empty,&c->mu,(DWORD)(dl-now))){LeaveCriticalSection(&c->mu);return LLONG_MIN;}
+    }
+    long long v=LLONG_MIN;
+    if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;WakeConditionVariable(&c->not_full);}
+    LeaveCriticalSection(&c->mu); return v;
 }
 static void _tr_chan_close(_TrChan* c) {
-    _tr_condmutex_lock(&c->cm); c->closed = 1;
-    _tr_condmutex_signal(&c->cm); _tr_condmutex_unlock(&c->cm);
+    EnterCriticalSection(&c->mu); c->closed=1;
+    WakeAllConditionVariable(&c->not_empty); WakeAllConditionVariable(&c->not_full);
+    LeaveCriticalSection(&c->mu);
 }
-static long long _tr_chan_len(_TrChan* c) { return c ? (long long)c->len : 0; }
+static bool   _tr_chan_is_closed(_TrChan* c) { EnterCriticalSection(&c->mu); bool r=c->closed!=0; LeaveCriticalSection(&c->mu); return r; }
+static long long _tr_chan_len(_TrChan* c)    { EnterCriticalSection(&c->mu); long long n=c->count; LeaveCriticalSection(&c->mu); return n; }
+static long long _tr_chan_cap(_TrChan* c)    { return c?c->cap:0; }
+static void   _tr_chan_free(_TrChan* c)      { if(!c)return; DeleteCriticalSection(&c->mu); free(c->buf); free(c); }
 
-/* ── Mutex (user-facing, heap-allocated for safe sharing) ───────────── */
+/* ── Blocking task completion state ─────────────────────────────────── */
+typedef struct {
+    volatile long long result; char* error;
+    volatile int done, cancelled;
+    CRITICAL_SECTION mu; CONDITION_VARIABLE cv;
+} _TrTaskState;
+static _TrTaskState* _tr_task_new(void) {
+    _TrTaskState* t=(_TrTaskState*)calloc(1,sizeof(_TrTaskState));
+    InitializeCriticalSection(&t->mu); InitializeConditionVariable(&t->cv); t->error=""; return t;
+}
+static void _tr_task_complete(_TrTaskState* t, long long r) {
+    EnterCriticalSection(&t->mu); if(!t->done){t->result=r;t->done=1;} WakeAllConditionVariable(&t->cv); LeaveCriticalSection(&t->mu);
+}
+static void _tr_task_complete_err(_TrTaskState* t, const char* msg) {
+    EnterCriticalSection(&t->mu); if(!t->done){t->error=msg?(char*)msg:"error";t->done=1;} WakeAllConditionVariable(&t->cv); LeaveCriticalSection(&t->mu);
+}
+static void _tr_task_cancel(_TrTaskState* t) {
+    EnterCriticalSection(&t->mu); if(!t->done){t->cancelled=1;t->done=1;} WakeAllConditionVariable(&t->cv); LeaveCriticalSection(&t->mu);
+}
+static long long _tr_task_await(_TrTaskState* t) {
+    EnterCriticalSection(&t->mu);
+    while(!t->done) SleepConditionVariableCS(&t->cv,&t->mu,INFINITE);
+    long long r=t->result; LeaveCriticalSection(&t->mu); return r;
+}
+static bool _tr_task_await_timeout(_TrTaskState* t, long long ms, long long* out) {
+    EnterCriticalSection(&t->mu);
+    ULONGLONG dl=GetTickCount64()+(ULONGLONG)ms;
+    while(!t->done){ULONGLONG now=GetTickCount64();if(now>=dl||!SleepConditionVariableCS(&t->cv,&t->mu,(DWORD)(dl-now))){LeaveCriticalSection(&t->mu);return false;}}
+    *out=t->result; LeaveCriticalSection(&t->mu); return true;
+}
+static bool  _tr_task_is_done(_TrTaskState* t)      { EnterCriticalSection(&t->mu); bool r=t->done!=0;      LeaveCriticalSection(&t->mu); return r; }
+static bool  _tr_task_is_cancelled(_TrTaskState* t)  { EnterCriticalSection(&t->mu); bool r=t->cancelled!=0; LeaveCriticalSection(&t->mu); return r; }
+static bool  _tr_task_has_error(_TrTaskState* t)     { EnterCriticalSection(&t->mu); bool r=t->error&&t->error[0]; LeaveCriticalSection(&t->mu); return r; }
+static char* _tr_task_get_error(_TrTaskState* t)     { EnterCriticalSection(&t->mu); char* e=t->error?t->error:""; LeaveCriticalSection(&t->mu); return e; }
+static void  _tr_task_free(_TrTaskState* t)          { if(!t)return; DeleteCriticalSection(&t->mu); free(t); }
 
-typedef struct _TrMutexImpl { _TrMutex mu; } _TrMutexImpl;
-typedef _TrMutexImpl* Mutex;
-static Mutex Mutex_new_fn(void) {
-    _TrMutexImpl* m = (_TrMutexImpl*)calloc(1, sizeof(_TrMutexImpl));
-    _tr_mutex_init(&m->mu); return m;
-}
-static void Mutex_lock(Mutex m)   { _tr_mutex_lock(&m->mu); }
-static void Mutex_unlock(Mutex m) { _tr_mutex_unlock(&m->mu); }
+/* ── Heap mutex ──────────────────────────────────────────────────────── */
+typedef struct { CRITICAL_SECTION cs; } _TrMutexH;
+static _TrMutexH* _tr_mutex_new(void)          { _TrMutexH* m=(_TrMutexH*)malloc(sizeof(_TrMutexH)); InitializeCriticalSection(&m->cs); return m; }
+static void _tr_mutex_hlock(_TrMutexH* m)      { EnterCriticalSection(&m->cs); }
+static void _tr_mutex_hunlock(_TrMutexH* m)    { LeaveCriticalSection(&m->cs); }
+static bool _tr_mutex_htrylock(_TrMutexH* m)   { return TryEnterCriticalSection(&m->cs)!=0; }
+static void _tr_mutex_hfree(_TrMutexH* m)      { if(!m)return; DeleteCriticalSection(&m->cs); free(m); }
 
-/* ── WaitGroup (count-down latch, heap-allocated) ────────────────────── */
+/* ── Read-write lock (SRWLOCK) ───────────────────────────────────────── */
+typedef struct { SRWLOCK l; } _TrRWL;
+static _TrRWL* _tr_rwl_new(void)               { _TrRWL* r=(_TrRWL*)malloc(sizeof(_TrRWL)); InitializeSRWLock(&r->l); return r; }
+static void _tr_rwl_read_lock(_TrRWL* r)       { AcquireSRWLockShared(&r->l); }
+static void _tr_rwl_read_unlock(_TrRWL* r)     { ReleaseSRWLockShared(&r->l); }
+static void _tr_rwl_write_lock(_TrRWL* r)      { AcquireSRWLockExclusive(&r->l); }
+static void _tr_rwl_write_unlock(_TrRWL* r)    { ReleaseSRWLockExclusive(&r->l); }
+static void _tr_rwl_free(_TrRWL* r)            { free(r); }
 
-typedef struct _TrWaitGroupImpl { int count; _TrCondMutex cm; } _TrWaitGroupImpl;
-typedef _TrWaitGroupImpl* WaitGroup;
-static WaitGroup WaitGroup_new_fn(void) {
-    _TrWaitGroupImpl* w = (_TrWaitGroupImpl*)calloc(1, sizeof(_TrWaitGroupImpl));
-    _tr_condmutex_init(&w->cm); return w;
+/* ── Counting semaphore ──────────────────────────────────────────────── */
+typedef struct { HANDLE h; } _TrSema;
+static _TrSema* _tr_sema_new(long long init, long long maxv) {
+    _TrSema* s=(_TrSema*)malloc(sizeof(_TrSema));
+    s->h=CreateSemaphoreA(NULL,(LONG)init,(LONG)(maxv>0?maxv:0x7fffffff),NULL); return s;
 }
-static void WaitGroup_add(WaitGroup w, int n) {
-    _tr_condmutex_lock(&w->cm); w->count += n; _tr_condmutex_unlock(&w->cm);
+static void _tr_sema_acquire(_TrSema* s)             { WaitForSingleObject(s->h,INFINITE); }
+static bool _tr_sema_try_acquire(_TrSema* s)         { return WaitForSingleObject(s->h,0)==WAIT_OBJECT_0; }
+static bool _tr_sema_acquire_timeout(_TrSema* s, long long ms) { return WaitForSingleObject(s->h,(DWORD)ms)==WAIT_OBJECT_0; }
+static void _tr_sema_release(_TrSema* s)             { ReleaseSemaphore(s->h,1,NULL); }
+static void _tr_sema_free(_TrSema* s)                { if(!s)return; CloseHandle(s->h); free(s); }
+
+/* ── WaitGroup ───────────────────────────────────────────────────────── */
+typedef struct { volatile long long count; CRITICAL_SECTION mu; CONDITION_VARIABLE cv; } _TrWG;
+static _TrWG* _tr_wg_new(void) { _TrWG* w=(_TrWG*)calloc(1,sizeof(_TrWG)); InitializeCriticalSection(&w->mu); InitializeConditionVariable(&w->cv); return w; }
+static void _tr_wg_add(_TrWG* w, long long n)  { EnterCriticalSection(&w->mu); w->count+=n; if(w->count<=0)WakeAllConditionVariable(&w->cv); LeaveCriticalSection(&w->mu); }
+static void _tr_wg_done(_TrWG* w)              { EnterCriticalSection(&w->mu); w->count--; if(w->count<=0)WakeAllConditionVariable(&w->cv); LeaveCriticalSection(&w->mu); }
+static void _tr_wg_wait(_TrWG* w)              { EnterCriticalSection(&w->mu); while(w->count>0)SleepConditionVariableCS(&w->cv,&w->mu,INFINITE); LeaveCriticalSection(&w->mu); }
+static bool _tr_wg_wait_timeout(_TrWG* w, long long ms) {
+    EnterCriticalSection(&w->mu); ULONGLONG dl=GetTickCount64()+(ULONGLONG)ms; bool ok=true;
+    while(w->count>0){ULONGLONG now=GetTickCount64();if(now>=dl||!SleepConditionVariableCS(&w->cv,&w->mu,(DWORD)(dl-now))){ok=false;break;}}
+    LeaveCriticalSection(&w->mu); return ok;
 }
-static void WaitGroup_done(WaitGroup w) {
-    _tr_condmutex_lock(&w->cm);
-    w->count--;
-    if (w->count <= 0) _tr_condmutex_signal(&w->cm);
-    _tr_condmutex_unlock(&w->cm);
+static void _tr_wg_free(_TrWG* w) { if(!w)return; DeleteCriticalSection(&w->mu); free(w); }
+
+/* ── Cyclic barrier ──────────────────────────────────────────────────── */
+typedef struct { long long total,count,gen; CRITICAL_SECTION mu; CONDITION_VARIABLE cv; } _TrBarrier;
+static _TrBarrier* _tr_barrier_new(long long n) { _TrBarrier* b=(_TrBarrier*)calloc(1,sizeof(_TrBarrier)); b->total=b->count=n; InitializeCriticalSection(&b->mu); InitializeConditionVariable(&b->cv); return b; }
+static void _tr_barrier_wait(_TrBarrier* b) {
+    EnterCriticalSection(&b->mu); long long g=b->gen;
+    if(--b->count==0){b->gen++;b->count=b->total;WakeAllConditionVariable(&b->cv);}
+    else while(b->gen==g) SleepConditionVariableCS(&b->cv,&b->mu,INFINITE);
+    LeaveCriticalSection(&b->mu);
 }
-static void WaitGroup_wait(WaitGroup w) {
-    _tr_condmutex_lock(&w->cm);
-    while (w->count > 0) _tr_condmutex_wait(&w->cm);
-    _tr_condmutex_unlock(&w->cm);
+static void _tr_barrier_free(_TrBarrier* b) { if(!b)return; DeleteCriticalSection(&b->mu); free(b); }
+
+/* ── Run-once guard ──────────────────────────────────────────────────── */
+typedef struct { volatile int done; CRITICAL_SECTION mu; } _TrOnce;
+static _TrOnce* _tr_once_new(void)   { _TrOnce* o=(_TrOnce*)calloc(1,sizeof(_TrOnce)); InitializeCriticalSection(&o->mu); return o; }
+static bool _tr_once_do(_TrOnce* o)  { if(o->done)return false; EnterCriticalSection(&o->mu); bool f=!o->done; if(f)o->done=1; LeaveCriticalSection(&o->mu); return f; }
+static void _tr_once_free(_TrOnce* o){ if(!o)return; DeleteCriticalSection(&o->mu); free(o); }
+
+/* ── Timer / Ticker ──────────────────────────────────────────────────── */
+typedef struct { _TrChan* ch; long long ms; int periodic; volatile int stopped; CRITICAL_SECTION stop_mu; } _TrTimerState;
+static DWORD WINAPI _tr_timer_thread_fn(LPVOID arg) {
+    _TrTimerState* s=(_TrTimerState*)arg;
+    do {
+        Sleep((DWORD)s->ms);
+        EnterCriticalSection(&s->stop_mu); int stopped=s->stopped; LeaveCriticalSection(&s->stop_mu);
+        if(stopped) break;
+        _tr_chan_try_send(s->ch, 1LL);
+    } while(s->periodic);
+    return 0;
 }
+static _TrTimerState* _tr_timer_new(long long ms, _TrChan* ch) {
+    _TrTimerState* s=(_TrTimerState*)calloc(1,sizeof(_TrTimerState)); s->ch=ch; s->ms=ms;
+    InitializeCriticalSection(&s->stop_mu);
+    HANDLE t=CreateThread(NULL,0,_tr_timer_thread_fn,s,0,NULL); CloseHandle(t); return s;
+}
+static _TrTimerState* _tr_ticker_new(long long ms, _TrChan* ch) {
+    _TrTimerState* s=(_TrTimerState*)calloc(1,sizeof(_TrTimerState)); s->ch=ch; s->ms=ms; s->periodic=1;
+    InitializeCriticalSection(&s->stop_mu);
+    HANDLE t=CreateThread(NULL,0,_tr_timer_thread_fn,s,0,NULL); CloseHandle(t); return s;
+}
+static void _tr_timer_stop(_TrTimerState* s) {
+    if(!s)return; EnterCriticalSection(&s->stop_mu); s->stopped=1; LeaveCriticalSection(&s->stop_mu);
+    _tr_chan_close(s->ch);
+}
+
+#else /* POSIX ─────────────────────────────────────────────────────────── */
+
+typedef struct {
+    long long* buf; long long head,tail,count,cap; volatile int closed;
+    pthread_mutex_t mu; pthread_cond_t not_empty, not_full;
+} _TrChan;
+static _TrChan* _tr_chan_new(long long cap) {
+    if(cap<1)cap=1; _TrChan* c=(_TrChan*)calloc(1,sizeof(_TrChan));
+    c->buf=(long long*)calloc((size_t)cap,sizeof(long long)); c->cap=cap;
+    pthread_mutex_init(&c->mu,NULL); pthread_cond_init(&c->not_empty,NULL); pthread_cond_init(&c->not_full,NULL); return c;
+}
+static void _tr_chan_send(_TrChan* c, long long val) {
+    pthread_mutex_lock(&c->mu);
+    while(c->count>=c->cap&&!c->closed) pthread_cond_wait(&c->not_full,&c->mu);
+    if(!c->closed){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;pthread_cond_signal(&c->not_empty);}
+    pthread_mutex_unlock(&c->mu);
+}
+static long long _tr_chan_recv(_TrChan* c) {
+    pthread_mutex_lock(&c->mu);
+    while(c->count==0&&!c->closed) pthread_cond_wait(&c->not_empty,&c->mu);
+    long long v=0;
+    if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;pthread_cond_signal(&c->not_full);}
+    pthread_mutex_unlock(&c->mu); return v;
+}
+static bool _tr_chan_try_send(_TrChan* c, long long val) {
+    pthread_mutex_lock(&c->mu); bool ok=!c->closed&&c->count<c->cap;
+    if(ok){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;pthread_cond_signal(&c->not_empty);}
+    pthread_mutex_unlock(&c->mu); return ok;
+}
+static long long _tr_chan_try_recv_val(_TrChan* c) {
+    pthread_mutex_lock(&c->mu); long long v=LLONG_MIN;
+    if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;pthread_cond_signal(&c->not_full);}
+    pthread_mutex_unlock(&c->mu); return v;
+}
+static bool _tr_chan_send_timeout(_TrChan* c, long long val, long long ms) {
+    struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
+    ts.tv_sec+=ms/1000; ts.tv_nsec+=(ms%1000)*1000000LL;
+    if(ts.tv_nsec>=1000000000LL){ts.tv_sec++;ts.tv_nsec-=1000000000LL;}
+    pthread_mutex_lock(&c->mu); bool ok=true;
+    while(c->count>=c->cap&&!c->closed) if(pthread_cond_timedwait(&c->not_full,&c->mu,&ts)){ok=false;break;}
+    if(ok&&!c->closed&&c->count<c->cap){c->buf[c->tail]=val;c->tail=(c->tail+1)%c->cap;c->count++;pthread_cond_signal(&c->not_empty);}else ok=false;
+    pthread_mutex_unlock(&c->mu); return ok;
+}
+static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms) {
+    struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
+    ts.tv_sec+=ms/1000; ts.tv_nsec+=(ms%1000)*1000000LL;
+    if(ts.tv_nsec>=1000000000LL){ts.tv_sec++;ts.tv_nsec-=1000000000LL;}
+    pthread_mutex_lock(&c->mu);
+    while(c->count==0&&!c->closed) if(pthread_cond_timedwait(&c->not_empty,&c->mu,&ts)){pthread_mutex_unlock(&c->mu);return LLONG_MIN;}
+    long long v=LLONG_MIN;
+    if(c->count>0){v=c->buf[c->head];c->head=(c->head+1)%c->cap;c->count--;pthread_cond_signal(&c->not_full);}
+    pthread_mutex_unlock(&c->mu); return v;
+}
+static void _tr_chan_close(_TrChan* c) {
+    pthread_mutex_lock(&c->mu); c->closed=1;
+    pthread_cond_broadcast(&c->not_empty); pthread_cond_broadcast(&c->not_full); pthread_mutex_unlock(&c->mu);
+}
+static bool   _tr_chan_is_closed(_TrChan* c) { pthread_mutex_lock(&c->mu); bool r=c->closed!=0; pthread_mutex_unlock(&c->mu); return r; }
+static long long _tr_chan_len(_TrChan* c)    { pthread_mutex_lock(&c->mu); long long n=c->count; pthread_mutex_unlock(&c->mu); return n; }
+static long long _tr_chan_cap(_TrChan* c)    { return c?c->cap:0; }
+static void   _tr_chan_free(_TrChan* c)      { if(!c)return; pthread_mutex_destroy(&c->mu); pthread_cond_destroy(&c->not_empty); pthread_cond_destroy(&c->not_full); free(c->buf); free(c); }
+
+typedef struct {
+    volatile long long result; char* error; volatile int done, cancelled;
+    pthread_mutex_t mu; pthread_cond_t cv;
+} _TrTaskState;
+static _TrTaskState* _tr_task_new(void) {
+    _TrTaskState* t=(_TrTaskState*)calloc(1,sizeof(_TrTaskState));
+    pthread_mutex_init(&t->mu,NULL); pthread_cond_init(&t->cv,NULL); t->error=""; return t;
+}
+static void _tr_task_complete(_TrTaskState* t, long long r)       { pthread_mutex_lock(&t->mu); if(!t->done){t->result=r;t->done=1;} pthread_cond_broadcast(&t->cv); pthread_mutex_unlock(&t->mu); }
+static void _tr_task_complete_err(_TrTaskState* t, const char* m) { pthread_mutex_lock(&t->mu); if(!t->done){t->error=m?(char*)m:"error";t->done=1;} pthread_cond_broadcast(&t->cv); pthread_mutex_unlock(&t->mu); }
+static void _tr_task_cancel(_TrTaskState* t)                      { pthread_mutex_lock(&t->mu); if(!t->done){t->cancelled=1;t->done=1;} pthread_cond_broadcast(&t->cv); pthread_mutex_unlock(&t->mu); }
+static long long _tr_task_await(_TrTaskState* t) {
+    pthread_mutex_lock(&t->mu); while(!t->done) pthread_cond_wait(&t->cv,&t->mu);
+    long long r=t->result; pthread_mutex_unlock(&t->mu); return r;
+}
+static bool _tr_task_await_timeout(_TrTaskState* t, long long ms, long long* out) {
+    struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
+    ts.tv_sec+=ms/1000; ts.tv_nsec+=(ms%1000)*1000000LL;
+    if(ts.tv_nsec>=1000000000LL){ts.tv_sec++;ts.tv_nsec-=1000000000LL;}
+    pthread_mutex_lock(&t->mu);
+    while(!t->done) if(pthread_cond_timedwait(&t->cv,&t->mu,&ts)){pthread_mutex_unlock(&t->mu);return false;}
+    *out=t->result; pthread_mutex_unlock(&t->mu); return true;
+}
+static bool  _tr_task_is_done(_TrTaskState* t)      { pthread_mutex_lock(&t->mu); bool r=t->done!=0;      pthread_mutex_unlock(&t->mu); return r; }
+static bool  _tr_task_is_cancelled(_TrTaskState* t)  { pthread_mutex_lock(&t->mu); bool r=t->cancelled!=0; pthread_mutex_unlock(&t->mu); return r; }
+static bool  _tr_task_has_error(_TrTaskState* t)     { pthread_mutex_lock(&t->mu); bool r=t->error&&t->error[0]; pthread_mutex_unlock(&t->mu); return r; }
+static char* _tr_task_get_error(_TrTaskState* t)     { pthread_mutex_lock(&t->mu); char* e=t->error?t->error:""; pthread_mutex_unlock(&t->mu); return e; }
+static void  _tr_task_free(_TrTaskState* t)          { if(!t)return; pthread_mutex_destroy(&t->mu); pthread_cond_destroy(&t->cv); free(t); }
+
+typedef struct { pthread_mutex_t mu; } _TrMutexH;
+static _TrMutexH* _tr_mutex_new(void)          { _TrMutexH* m=(_TrMutexH*)malloc(sizeof(_TrMutexH)); pthread_mutex_init(&m->mu,NULL); return m; }
+static void _tr_mutex_hlock(_TrMutexH* m)      { pthread_mutex_lock(&m->mu); }
+static void _tr_mutex_hunlock(_TrMutexH* m)    { pthread_mutex_unlock(&m->mu); }
+static bool _tr_mutex_htrylock(_TrMutexH* m)   { return pthread_mutex_trylock(&m->mu)==0; }
+static void _tr_mutex_hfree(_TrMutexH* m)      { if(!m)return; pthread_mutex_destroy(&m->mu); free(m); }
+
+typedef struct { pthread_rwlock_t l; } _TrRWL;
+static _TrRWL* _tr_rwl_new(void)               { _TrRWL* r=(_TrRWL*)malloc(sizeof(_TrRWL)); pthread_rwlock_init(&r->l,NULL); return r; }
+static void _tr_rwl_read_lock(_TrRWL* r)       { pthread_rwlock_rdlock(&r->l); }
+static void _tr_rwl_read_unlock(_TrRWL* r)     { pthread_rwlock_unlock(&r->l); }
+static void _tr_rwl_write_lock(_TrRWL* r)      { pthread_rwlock_wrlock(&r->l); }
+static void _tr_rwl_write_unlock(_TrRWL* r)    { pthread_rwlock_unlock(&r->l); }
+static void _tr_rwl_free(_TrRWL* r)            { if(!r)return; pthread_rwlock_destroy(&r->l); free(r); }
+
+typedef struct { volatile long long count, maxv; pthread_mutex_t mu; pthread_cond_t cv; } _TrSema;
+static _TrSema* _tr_sema_new(long long init, long long maxv) {
+    _TrSema* s=(_TrSema*)calloc(1,sizeof(_TrSema)); s->count=init; s->maxv=maxv>0?maxv:(long long)0x7fffffffffffffffLL;
+    pthread_mutex_init(&s->mu,NULL); pthread_cond_init(&s->cv,NULL); return s;
+}
+static void _tr_sema_acquire(_TrSema* s)       { pthread_mutex_lock(&s->mu); while(s->count<=0)pthread_cond_wait(&s->cv,&s->mu); s->count--; pthread_mutex_unlock(&s->mu); }
+static bool _tr_sema_try_acquire(_TrSema* s)   { pthread_mutex_lock(&s->mu); bool ok=s->count>0; if(ok)s->count--; pthread_mutex_unlock(&s->mu); return ok; }
+static bool _tr_sema_acquire_timeout(_TrSema* s, long long ms) {
+    struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
+    ts.tv_sec+=ms/1000; ts.tv_nsec+=(ms%1000)*1000000LL;
+    if(ts.tv_nsec>=1000000000LL){ts.tv_sec++;ts.tv_nsec-=1000000000LL;}
+    pthread_mutex_lock(&s->mu);
+    while(s->count<=0) if(pthread_cond_timedwait(&s->cv,&s->mu,&ts)){pthread_mutex_unlock(&s->mu);return false;}
+    s->count--; pthread_mutex_unlock(&s->mu); return true;
+}
+static void _tr_sema_release(_TrSema* s)       { pthread_mutex_lock(&s->mu); if(s->count<s->maxv){s->count++;pthread_cond_signal(&s->cv);} pthread_mutex_unlock(&s->mu); }
+static void _tr_sema_free(_TrSema* s)          { if(!s)return; pthread_mutex_destroy(&s->mu); pthread_cond_destroy(&s->cv); free(s); }
+
+typedef struct { volatile long long count; pthread_mutex_t mu; pthread_cond_t cv; } _TrWG;
+static _TrWG* _tr_wg_new(void) { _TrWG* w=(_TrWG*)calloc(1,sizeof(_TrWG)); pthread_mutex_init(&w->mu,NULL); pthread_cond_init(&w->cv,NULL); return w; }
+static void _tr_wg_add(_TrWG* w, long long n)  { pthread_mutex_lock(&w->mu); w->count+=n; if(w->count<=0)pthread_cond_broadcast(&w->cv); pthread_mutex_unlock(&w->mu); }
+static void _tr_wg_done(_TrWG* w)              { pthread_mutex_lock(&w->mu); w->count--; if(w->count<=0)pthread_cond_broadcast(&w->cv); pthread_mutex_unlock(&w->mu); }
+static void _tr_wg_wait(_TrWG* w)              { pthread_mutex_lock(&w->mu); while(w->count>0)pthread_cond_wait(&w->cv,&w->mu); pthread_mutex_unlock(&w->mu); }
+static bool _tr_wg_wait_timeout(_TrWG* w, long long ms) {
+    struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
+    ts.tv_sec+=ms/1000; ts.tv_nsec+=(ms%1000)*1000000LL;
+    if(ts.tv_nsec>=1000000000LL){ts.tv_sec++;ts.tv_nsec-=1000000000LL;}
+    pthread_mutex_lock(&w->mu); bool ok=true;
+    while(w->count>0) if(pthread_cond_timedwait(&w->cv,&w->mu,&ts)){ok=false;break;}
+    pthread_mutex_unlock(&w->mu); return ok;
+}
+static void _tr_wg_free(_TrWG* w) { if(!w)return; pthread_mutex_destroy(&w->mu); pthread_cond_destroy(&w->cv); free(w); }
+
+typedef struct { long long total,count,gen; pthread_mutex_t mu; pthread_cond_t cv; } _TrBarrier;
+static _TrBarrier* _tr_barrier_new(long long n) { _TrBarrier* b=(_TrBarrier*)calloc(1,sizeof(_TrBarrier)); b->total=b->count=n; pthread_mutex_init(&b->mu,NULL); pthread_cond_init(&b->cv,NULL); return b; }
+static void _tr_barrier_wait(_TrBarrier* b) {
+    pthread_mutex_lock(&b->mu); long long g=b->gen;
+    if(--b->count==0){b->gen++;b->count=b->total;pthread_cond_broadcast(&b->cv);}
+    else while(b->gen==g) pthread_cond_wait(&b->cv,&b->mu);
+    pthread_mutex_unlock(&b->mu);
+}
+static void _tr_barrier_free(_TrBarrier* b) { if(!b)return; pthread_mutex_destroy(&b->mu); pthread_cond_destroy(&b->cv); free(b); }
+
+typedef struct { volatile int done; pthread_mutex_t mu; } _TrOnce;
+static _TrOnce* _tr_once_new(void)   { _TrOnce* o=(_TrOnce*)calloc(1,sizeof(_TrOnce)); pthread_mutex_init(&o->mu,NULL); return o; }
+static bool _tr_once_do(_TrOnce* o)  { if(o->done)return false; pthread_mutex_lock(&o->mu); bool f=!o->done; if(f)o->done=1; pthread_mutex_unlock(&o->mu); return f; }
+static void _tr_once_free(_TrOnce* o){ if(!o)return; pthread_mutex_destroy(&o->mu); free(o); }
+
+typedef struct { _TrChan* ch; long long ms; int periodic; volatile int stopped; pthread_mutex_t stop_mu; } _TrTimerState;
+static void* _tr_timer_thread_fn(void* arg) {
+    _TrTimerState* s=(_TrTimerState*)arg;
+    do {
+        struct timespec ts={s->ms/1000,(s->ms%1000)*1000000LL}; nanosleep(&ts,NULL);
+        pthread_mutex_lock(&s->stop_mu); int stopped=s->stopped; pthread_mutex_unlock(&s->stop_mu);
+        if(stopped) break;
+        _tr_chan_try_send(s->ch,1LL);
+    } while(s->periodic);
+    return NULL;
+}
+static _TrTimerState* _tr_timer_new(long long ms, _TrChan* ch) {
+    _TrTimerState* s=(_TrTimerState*)calloc(1,sizeof(_TrTimerState)); s->ch=ch; s->ms=ms;
+    pthread_mutex_init(&s->stop_mu,NULL);
+    pthread_t t; pthread_create(&t,NULL,_tr_timer_thread_fn,s); pthread_detach(t); return s;
+}
+static _TrTimerState* _tr_ticker_new(long long ms, _TrChan* ch) {
+    _TrTimerState* s=(_TrTimerState*)calloc(1,sizeof(_TrTimerState)); s->ch=ch; s->ms=ms; s->periodic=1;
+    pthread_mutex_init(&s->stop_mu,NULL);
+    pthread_t t; pthread_create(&t,NULL,_tr_timer_thread_fn,s); pthread_detach(t); return s;
+}
+static void _tr_timer_stop(_TrTimerState* s) {
+    if(!s)return; pthread_mutex_lock(&s->stop_mu); s->stopped=1; pthread_mutex_unlock(&s->stop_mu);
+    _tr_chan_close(s->ch);
+}
+
+#endif /* POSIX async primitives */
+
+/* ── Platform-independent helpers ────────────────────────────────────── */
+static bool _tr_task_await_timeout_ok(_TrTaskState* t, long long ms) {
+    long long dummy=0; return _tr_task_await_timeout(t, ms, &dummy);
+}
+
+/* ── char* handle wrappers (used by Tauraro extern "C" declarations) ─── *
+ * All struct* are cast to/from char* so Tauraro's Pointer[char] type      *
+ * matches the C extern prototype without GCC type-mismatch warnings.       */
+
+/* Channel */
+static inline char* _tr_chan_new_h(long long cap)                              { return (char*)_tr_chan_new(cap); }
+static inline void  _tr_chan_send_h(char* c, long long v)                      { _tr_chan_send((_TrChan*)c, v); }
+static inline long long _tr_chan_recv_h(char* c)                               { return _tr_chan_recv((_TrChan*)c); }
+static inline bool  _tr_chan_try_send_h(char* c, long long v)                  { return _tr_chan_try_send((_TrChan*)c, v); }
+static inline long long _tr_chan_try_recv_val_h(char* c)                       { return _tr_chan_try_recv_val((_TrChan*)c); }
+static inline bool  _tr_chan_send_timeout_h(char* c, long long v, long long ms){ return _tr_chan_send_timeout((_TrChan*)c, v, ms); }
+static inline long long _tr_chan_recv_timeout_val_h(char* c, long long ms)     { return _tr_chan_recv_timeout_val((_TrChan*)c, ms); }
+static inline void  _tr_chan_close_h(char* c)                                  { _tr_chan_close((_TrChan*)c); }
+static inline bool  _tr_chan_is_closed_h(char* c)                              { return _tr_chan_is_closed((_TrChan*)c); }
+static inline long long _tr_chan_len_h(char* c)                                { return _tr_chan_len((_TrChan*)c); }
+static inline long long _tr_chan_cap_h(char* c)                                { return _tr_chan_cap((_TrChan*)c); }
+static inline void  _tr_chan_free_h(char* c)                                   { _tr_chan_free((_TrChan*)c); }
+
+/* Task / Future */
+static inline char* _tr_task_new_h(void)                                       { return (char*)_tr_task_new(); }
+static inline void  _tr_task_complete_h(char* t, long long r)                  { _tr_task_complete((_TrTaskState*)t, r); }
+static inline void  _tr_task_complete_err_h(char* t, char* msg)                { _tr_task_complete_err((_TrTaskState*)t, msg); }
+static inline void  _tr_task_cancel_h(char* t)                                 { _tr_task_cancel((_TrTaskState*)t); }
+static inline long long _tr_task_await_h(char* t)                              { return _tr_task_await((_TrTaskState*)t); }
+static inline bool  _tr_task_await_timeout_h(char* t, long long ms)            { return _tr_task_await_timeout_ok((_TrTaskState*)t, ms); }
+static inline bool  _tr_task_is_done_h(char* t)                                { return _tr_task_is_done((_TrTaskState*)t); }
+static inline bool  _tr_task_is_cancelled_h(char* t)                           { return _tr_task_is_cancelled((_TrTaskState*)t); }
+static inline bool  _tr_task_has_error_h(char* t)                              { return _tr_task_has_error((_TrTaskState*)t); }
+static inline char* _tr_task_get_error_h(char* t)                              { return _tr_task_get_error((_TrTaskState*)t); }
+static inline void  _tr_task_free_h(char* t)                                   { _tr_task_free((_TrTaskState*)t); }
+
+/* Mutex / RWLock */
+static inline char* _tr_mutex_new_h(void)                                      { return (char*)_tr_mutex_new(); }
+static inline void  _tr_mutex_lock_h(char* m)                                  { _tr_mutex_hlock((_TrMutexH*)m); }
+static inline void  _tr_mutex_unlock_h(char* m)                                { _tr_mutex_hunlock((_TrMutexH*)m); }
+static inline bool  _tr_mutex_trylock_h(char* m)                               { return _tr_mutex_htrylock((_TrMutexH*)m); }
+static inline void  _tr_mutex_free_h(char* m)                                  { _tr_mutex_hfree((_TrMutexH*)m); }
+static inline char* _tr_rwl_new_h(void)                                        { return (char*)_tr_rwl_new(); }
+static inline void  _tr_rwl_read_lock_h(char* r)                               { _tr_rwl_read_lock((_TrRWL*)r); }
+static inline void  _tr_rwl_read_unlock_h(char* r)                             { _tr_rwl_read_unlock((_TrRWL*)r); }
+static inline void  _tr_rwl_write_lock_h(char* r)                              { _tr_rwl_write_lock((_TrRWL*)r); }
+static inline void  _tr_rwl_write_unlock_h(char* r)                            { _tr_rwl_write_unlock((_TrRWL*)r); }
+static inline void  _tr_rwl_free_h(char* r)                                    { _tr_rwl_free((_TrRWL*)r); }
+
+/* Semaphore */
+static inline char* _tr_sema_new_h(long long init, long long maxv)             { return (char*)_tr_sema_new(init, maxv); }
+static inline void  _tr_sema_acquire_h(char* s)                                { _tr_sema_acquire((_TrSema*)s); }
+static inline bool  _tr_sema_try_acquire_h(char* s)                            { return _tr_sema_try_acquire((_TrSema*)s); }
+static inline bool  _tr_sema_acquire_timeout_h(char* s, long long ms)          { return _tr_sema_acquire_timeout((_TrSema*)s, ms); }
+static inline void  _tr_sema_release_h(char* s)                                { _tr_sema_release((_TrSema*)s); }
+static inline void  _tr_sema_free_h(char* s)                                   { _tr_sema_free((_TrSema*)s); }
+
+/* WaitGroup */
+static inline char* _tr_wg_new_h(void)                                         { return (char*)_tr_wg_new(); }
+static inline void  _tr_wg_add_h(char* w, long long n)                         { _tr_wg_add((_TrWG*)w, n); }
+static inline void  _tr_wg_done_h(char* w)                                     { _tr_wg_done((_TrWG*)w); }
+static inline void  _tr_wg_wait_h(char* w)                                     { _tr_wg_wait((_TrWG*)w); }
+static inline bool  _tr_wg_wait_timeout_h(char* w, long long ms)               { return _tr_wg_wait_timeout((_TrWG*)w, ms); }
+static inline void  _tr_wg_free_h(char* w)                                     { _tr_wg_free((_TrWG*)w); }
+
+/* Barrier */
+static inline char* _tr_barrier_new_h(long long n)                             { return (char*)_tr_barrier_new(n); }
+static inline void  _tr_barrier_wait_h(char* b)                                { _tr_barrier_wait((_TrBarrier*)b); }
+static inline void  _tr_barrier_free_h(char* b)                                { _tr_barrier_free((_TrBarrier*)b); }
+
+/* Once */
+static inline char* _tr_once_new_h(void)                                       { return (char*)_tr_once_new(); }
+static inline bool  _tr_once_do_h(char* o)                                     { return _tr_once_do((_TrOnce*)o); }
+static inline void  _tr_once_free_h(char* o)                                   { _tr_once_free((_TrOnce*)o); }
+
+/* Timer / Ticker */
+static inline char* _tr_timer_new_h(long long ms, char* ch)                    { return (char*)_tr_timer_new(ms, (_TrChan*)ch); }
+static inline char* _tr_ticker_new_h(long long ms, char* ch)                   { return (char*)_tr_ticker_new(ms, (_TrChan*)ch); }
+static inline void  _tr_timer_stop_h(char* s)                                  { _tr_timer_stop((_TrTimerState*)s); }
 
 /* ── Core runtime helpers ────────────────────────────────────────────── */
 
@@ -326,6 +782,17 @@ static char* input(const char* prompt) {
         return buf;
     }
     return "";
+}
+static char* _tr_read_line(const char* prompt) {
+    if (prompt && prompt[0]) printf("%s", prompt);
+    char* buf = (char*)malloc(256);
+    if (fgets(buf, 256, stdin)) {
+        size_t len = strlen(buf);
+        if (len > 0 && buf[len-1] == '\n') buf[--len] = '\0';
+        if (len > 0 && buf[len-1] == '\r') buf[--len] = '\0'; /* strip \r on Windows */
+        return buf;
+    }
+    return (char*)"";
 }
 static void yield_val(void* v) { (void)v; }
 
@@ -358,6 +825,33 @@ static inline long long _tr_getpid(void) { return (long long)getpid(); }
 
 #include <time.h>
 static inline long long _tr_timestamp(void) { return (long long)time(NULL); }
+
+/* High-resolution millisecond wall-clock: QueryPerformanceCounter on Windows,
+   CLOCK_MONOTONIC on POSIX.  Used by std.sys.time.time_ms / elapsed_ms. */
+static inline long long _tr_time_ms(void) {
+#ifdef _WIN32
+    LARGE_INTEGER freq, count;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&count);
+    return (long long)(count.QuadPart * 1000LL / freq.QuadPart);
+#else
+    struct timespec _ts;
+    clock_gettime(CLOCK_MONOTONIC, &_ts);
+    return (long long)_ts.tv_sec * 1000LL + (long long)_ts.tv_nsec / 1000000LL;
+#endif
+}
+
+/* Enable ANSI/VT100 colour codes on Windows Terminal; no-op elsewhere. */
+static inline void _tr_enable_vt100(void) {
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD mode = 0;
+        GetConsoleMode(h, &mode);
+        SetConsoleMode(h, mode | 0x0004 /* ENABLE_VIRTUAL_TERMINAL_PROCESSING */);
+    }
+#endif
+}
 
 /* ── TCP socket helpers ─────────────────────────────────────────────── */
 #ifdef _WIN32
@@ -419,6 +913,84 @@ static inline int  _tr_tcp_recv(int fd, char* buf, int cap)        { return (int
 static inline void _tr_tcp_close(int fd)                           { close(fd); }
 #endif
 
+/* ── Platform detection ──────────────────────────────────────────────── */
+static inline bool _tr_is_windows(void) {
+#ifdef _WIN32
+    return true;
+#else
+    return false;
+#endif
+}
+
+/* ── Directory operations (cross-platform) ──────────────────────────── */
+#ifdef _WIN32
+static inline int  _tr_mkdir(const char* path)     { return CreateDirectoryA(path, NULL) ? 0 : -1; }
+static inline int  _tr_rmdir(const char* path)     { return RemoveDirectoryA(path) ? 0 : -1; }
+static inline bool _tr_dir_exists(const char* path) {
+    if (!path) return false;
+    DWORD attr = GetFileAttributesA(path);
+    return (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
+}
+static inline bool _tr_is_dir(const char* path)  { return _tr_dir_exists(path); }
+static inline bool _tr_is_file(const char* path) {
+    if (!path) return false;
+    DWORD attr = GetFileAttributesA(path);
+    return (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY));
+}
+typedef struct { HANDLE h; WIN32_FIND_DATAA ffd; int first; } _TrDir;
+static inline void* _tr_opendir(const char* path) {
+    if (!path) return NULL;
+    _TrDir* d = (_TrDir*)malloc(sizeof(_TrDir));
+    char pat[4096]; snprintf(pat, sizeof(pat), "%s\\*", path);
+    d->h = FindFirstFileA(pat, &d->ffd); d->first = 1;
+    if (d->h == INVALID_HANDLE_VALUE) { free(d); return NULL; }
+    return (void*)d;
+}
+static inline char* _tr_readdir(void* handle) {
+    _TrDir* d = (_TrDir*)handle;
+    if (!d || d->h == INVALID_HANDLE_VALUE) return (char*)"";
+    if (d->first) { d->first = 0; return strdup(d->ffd.cFileName); }
+    if (FindNextFileA(d->h, &d->ffd)) return strdup(d->ffd.cFileName);
+    return (char*)"";
+}
+static inline void _tr_closedir(void* handle) {
+    _TrDir* d = (_TrDir*)handle;
+    if (d) { if (d->h != INVALID_HANDLE_VALUE) FindClose(d->h); free(d); }
+}
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+static inline int  _tr_mkdir(const char* path)     { return mkdir(path, 0755) == 0 ? 0 : -1; }
+static inline int  _tr_rmdir(const char* path)     { return rmdir(path) == 0 ? 0 : -1; }
+static inline bool _tr_dir_exists(const char* path) {
+    if (!path) return false;
+    struct stat st; return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+static inline bool _tr_is_dir(const char* path)  { return _tr_dir_exists(path); }
+static inline bool _tr_is_file(const char* path) {
+    if (!path) return false;
+    struct stat st; return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+static inline void* _tr_opendir(const char* path)  { return (void*)opendir(path); }
+static inline char* _tr_readdir(void* handle) {
+    DIR* d = (DIR*)handle;
+    if (!d) return (char*)"";
+    struct dirent* e = readdir(d);
+    return e ? strdup(e->d_name) : (char*)"";
+}
+static inline void _tr_closedir(void* handle)       { if (handle) closedir((DIR*)handle); }
+#endif
+
+/* ── File-system helpers ─────────────────────────────────────────────── */
+static inline int  _tr_file_delete(const char* path)                     { return remove(path) == 0 ? 0 : -1; }
+static inline int  _tr_file_rename(const char* old_p, const char* new_p) { return rename(old_p, new_p) == 0 ? 0 : -1; }
+static inline long long _tr_file_size(const char* path) {
+    if (!path) return -1LL;
+    FILE* f = fopen(path, "rb"); if (!f) return -1LL;
+    fseek(f, 0, SEEK_END); long long sz = (long long)ftell(f); fclose(f); return sz;
+}
+
 /* _tr_c_memset defined above */
 
 static inline void _tr_bounds_check(long long i, size_t len) {
@@ -433,6 +1005,13 @@ static inline void _tr_bounds_check(long long i, size_t len) {
 #else
   #define _TR_GLOBAL extern
 #endif
+
+/* argc/argv made available to std.sys.env at runtime. */
+_TR_GLOBAL int    _tr_argc;
+_TR_GLOBAL char** _tr_argv;
+
+static inline long long _tr_get_argc(void)       { return (long long)_tr_argc; }
+static inline char*     _tr_get_arg(long long n) { return (_tr_argv && n >= 0 && (int)n < _tr_argc) ? _tr_argv[(int)n] : (char*)""; }
 
 /* ── TaskGroup: spawn threads + join all ─────────────────────────────── */
 #define _TR_MAX_TG_THREADS 64
@@ -714,6 +1293,56 @@ typedef struct { uint32_t* data; size_t len; size_t capacity; } List_u32;
 static inline List_u32* List_u32_new(void) { List_u32* l=(List_u32*)malloc(sizeof(List_u32)); l->data=(uint32_t*)malloc(sizeof(uint32_t)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_u32_append(List_u32* l, uint32_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint32_t*)realloc(l->data,sizeof(uint32_t)*l->capacity); } l->data[l->len++]=val; }
 static inline void List_u32_free(List_u32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+/* ── Extended Vec/List operations: remove, swap, clear, is_empty, extend ──── */
+static inline void List_i64_remove(List_i64* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
+static inline void List_i64_swap(List_i64* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; long long t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
+static inline void List_i64_clear(List_i64* l) { if(l) l->len=0; }
+static inline bool List_i64_is_empty(List_i64* l) { return !l||l->len==0; }
+static inline void List_i64_extend(List_i64* l, List_i64* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_i64_append(l,o->data[i]); }
+static inline long long List_i64_index_of(List_i64* l, long long v) { if(!l) return -1LL; for(size_t i=0;i<l->len;i++) if(l->data[i]==v) return (long long)i; return -1LL; }
+static inline void List_f64_remove(List_f64* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
+static inline void List_f64_swap(List_f64* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; double t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
+static inline void List_f64_clear(List_f64* l) { if(l) l->len=0; }
+static inline bool List_f64_is_empty(List_f64* l) { return !l||l->len==0; }
+static inline void List_f64_extend(List_f64* l, List_f64* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_f64_append(l,o->data[i]); }
+static inline bool List_f64_contains(List_f64* l, double v) { if(!l) return false; for(size_t i=0;i<l->len;i++) if(l->data[i]==v) return true; return false; }
+static inline double List_f64_get(List_f64* l, long long i) { if(l&&(size_t)i<l->len) return l->data[i]; return 0.0; }
+static inline void List_f64_set(List_f64* l, long long i, double v) { if(l&&(size_t)i<l->len) l->data[i]=v; }
+static inline void List_str_remove(List_str* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
+static inline void List_str_swap(List_str* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; char* t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
+static inline void List_str_clear(List_str* l) { if(l) l->len=0; }
+static inline bool List_str_is_empty(List_str* l) { return !l||l->len==0; }
+static inline void List_str_extend(List_str* l, List_str* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_str_append(l,o->data[i]); }
+static inline bool List_str_contains(List_str* l, char* v) { if(!l||!v) return false; for(size_t i=0;i<l->len;i++) if(l->data[i]&&strcmp(l->data[i],v)==0) return true; return false; }
+static inline long long List_str_index_of(List_str* l, char* v) { if(!l||!v) return -1LL; for(size_t i=0;i<l->len;i++) if(l->data[i]&&strcmp(l->data[i],v)==0) return (long long)i; return -1LL; }
+static inline void List_ptr_remove(List_ptr* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
+static inline void List_ptr_swap(List_ptr* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; void* t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
+static inline void List_ptr_clear(List_ptr* l) { if(l) l->len=0; }
+static inline bool List_ptr_is_empty(List_ptr* l) { return !l||l->len==0; }
+static inline void List_ptr_extend(List_ptr* l, List_ptr* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_ptr_append(l,o->data[i]); }
+static inline bool List_ptr_contains(List_ptr* l, void* v) { if(!l) return false; for(size_t i=0;i<l->len;i++) if(l->data[i]==v) return true; return false; }
+static inline void List_bool_remove(List_bool* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
+static inline void List_bool_swap(List_bool* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; _Bool t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
+static inline void List_bool_clear(List_bool* l) { if(l) l->len=0; }
+static inline bool List_bool_is_empty(List_bool* l) { return !l||l->len==0; }
+static inline void List_bool_extend(List_bool* l, List_bool* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_bool_append(l,o->data[i]); }
+static inline bool List_bool_contains(List_bool* l, _Bool v) { if(!l) return false; for(size_t i=0;i<l->len;i++) if(l->data[i]==v) return true; return false; }
+static inline long long List_bool_pop(List_bool* l) { if(!l||l->len==0) return 0; l->len--; return l->data[l->len]; }
+static inline void List_i8_remove(List_i8* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
+static inline void List_i8_swap(List_i8* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; int8_t t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
+static inline void List_i8_clear(List_i8* l) { if(l) l->len=0; }
+static inline bool List_i8_is_empty(List_i8* l) { return !l||l->len==0; }
+static inline void List_i8_extend(List_i8* l, List_i8* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_i8_append(l,o->data[i]); }
+static inline bool List_i8_contains(List_i8* l, int8_t v) { if(!l) return false; for(size_t i=0;i<l->len;i++) if(l->data[i]==v) return true; return false; }
+static inline int8_t List_i8_pop(List_i8* l) { if(!l||l->len==0) return 0; l->len--; return l->data[l->len]; }
+static inline void List_i32_remove(List_i32* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
+static inline void List_i32_swap(List_i32* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; int t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
+static inline void List_i32_clear(List_i32* l) { if(l) l->len=0; }
+static inline bool List_i32_is_empty(List_i32* l) { return !l||l->len==0; }
+static inline void List_i32_extend(List_i32* l, List_i32* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_i32_append(l,o->data[i]); }
+static inline bool List_i32_contains(List_i32* l, int v) { if(!l) return false; for(size_t i=0;i<l->len;i++) if(l->data[i]==v) return true; return false; }
+static inline int List_i32_pop(List_i32* l) { if(!l||l->len==0) return 0; l->len--; return l->data[l->len]; }
+
 
 typedef struct { long long* data; size_t len; size_t capacity; } Set_i64;
 static inline Set_i64* Set_i64_new(void) { Set_i64* l=(Set_i64*)malloc(sizeof(Set_i64)); l->data=(long long*)malloc(sizeof(long long)*8); l->len=0; l->capacity=8; return l; }
@@ -786,6 +1415,21 @@ static inline void _tr_list_str_set(List_str* l, long long i, char* v) {
 }
 static inline void List_str_set_index(List_str* l, long long i, char* v) { _tr_list_str_set(l, i, v); }
 static inline void List_str_set(List_str* l, long long i, char* v) { _tr_list_str_set(l, i, v); }
+
+/* Vec[str] — always available so main(args: Vec[str]) works without an explicit import. */
+#ifndef _TR_VEC_STR_DEFINED
+#define _TR_VEC_STR_DEFINED
+typedef struct Vec_str Vec_str;
+struct Vec_str { List_str* data; long long len; long long cap; };
+static inline Vec_str* Vec_str_init(long long cap) {
+    Vec_str* v = (Vec_str*)_tr_checked_alloc(sizeof(Vec_str));
+    v->data = List_str_new(); v->len = 0; v->cap = cap > 0 ? cap : 8;
+    return v;
+}
+static inline void Vec_str_push(Vec_str* v, char* s) { List_str_append(v->data, s); v->len++; }
+static inline char* Vec_str_get(Vec_str* v, long long i) { return List_str_get(v->data, i); }
+static inline long long Vec_str_len(Vec_str* v) { return v ? v->len : 0LL; }
+#endif
 
 static inline void* _tr_list_ptr_get(List_ptr* l, long long i) {
     if (!l) { fprintf(stderr, "Null list access\n"); abort(); }
@@ -865,6 +1509,23 @@ static inline void _tr_list_u32_set(List_u32* l, long long i, uint32_t v) {
     l->data[i] = v;
 }
 
+static inline char* _tr_str_join(List_str* parts, const char* sep) {
+    if (!parts || parts->len == 0) return (char*)"";
+    size_t total = 0, seplen = sep ? strlen(sep) : 0;
+    for (size_t i = 0; i < parts->len; i++) {
+        if (parts->data[i]) total += strlen(parts->data[i]);
+        if (i + 1 < parts->len) total += seplen;
+    }
+    char* out = (char*)_tr_checked_alloc(total + 1);
+    char* dst = out;
+    for (size_t i = 0; i < parts->len; i++) {
+        if (parts->data[i]) { size_t l = strlen(parts->data[i]); memcpy(dst, parts->data[i], l); dst += l; }
+        if (i + 1 < parts->len && seplen) { memcpy(dst, sep, seplen); dst += seplen; }
+    }
+    *dst = '\0';
+    return out;
+}
+
 static inline List_str* _tr_str_split(const char* s, const char* sep) {
     List_str* l=List_str_new(); if(!s||!sep||!*sep) return l;
     char* cp=(char*)malloc(strlen(s)+1); strcpy(cp,s);
@@ -904,49 +1565,59 @@ static int _tr_test_report(void) {
     return _tr_tests_failed > 0 ? 1 : 0;
 }
 
-/* ── StringBuilder ───────────────────────────────────────────────────────── */
-typedef struct { char* data; long long len; long long capacity; } StringObj;
-typedef struct { StringObj* buf; } StringBuilder;
+#ifndef TAURARO_NO_RT_HELPERS
+/* When std library is compiled in, it provides its own StringBuilder and
+   file I/O — suppress the lightweight rt.h fallback implementations. */
+#ifndef TAURARO_STD_LIB
+/* ── StringBuilder (suppressed when std.core.string provides its own) ───── */
+#ifndef TAURARO_RT_NO_STRINGBUILDER
+/* Flat layout — matches std.core.string.StringBuilder and the names used by
+ * the module-system typedef aliases in generated tauraro_types.h.
+ * core_string_StringObj exists only for the forward-declaration compatibility. */
+typedef struct core_string_StringObj { char* data; long long len; long long capacity; } core_string_StringObj;
+typedef core_string_StringObj StringObj;
+typedef struct core_string_StringBuilder { char* buf; long long len; long long capacity; } core_string_StringBuilder;
+typedef core_string_StringBuilder StringBuilder;
 
 static inline StringBuilder* StringBuilder_init(long long cap) {
-    StringBuilder* sb = (StringBuilder*)_tr_checked_alloc(sizeof(StringBuilder));
-    sb->buf = (StringObj*)_tr_checked_alloc(sizeof(StringObj));
     if (cap < 64) cap = 64;
-    sb->buf->data = (char*)_tr_checked_alloc((size_t)cap);
-    sb->buf->data[0] = '\0';
-    sb->buf->len = 0;
-    sb->buf->capacity = cap;
+    StringBuilder* sb = (StringBuilder*)_tr_checked_alloc(sizeof(StringBuilder));
+    sb->buf = (char*)_tr_checked_alloc((size_t)cap);
+    sb->buf[0] = '\0';
+    sb->len = 0;
+    sb->capacity = cap;
     return sb;
 }
 static inline void StringBuilder_append(StringBuilder* sb, char* s) {
     long long slen = (long long)strlen(s);
-    if (sb->buf->len + slen + 1 > sb->buf->capacity) {
-        long long newcap = sb->buf->capacity * 2 + slen + 1;
-        sb->buf->data = (char*)realloc(sb->buf->data, (size_t)newcap);
-        sb->buf->capacity = newcap;
+    if (sb->len + slen + 1 > sb->capacity) {
+        long long newcap = sb->capacity * 2 + slen + 1;
+        sb->buf = (char*)realloc(sb->buf, (size_t)newcap);
+        sb->capacity = newcap;
     }
-    memcpy(sb->buf->data + sb->buf->len, s, (size_t)slen);
-    sb->buf->len += slen;
-    sb->buf->data[sb->buf->len] = '\0';
+    memcpy(sb->buf + sb->len, s, (size_t)slen);
+    sb->len += slen;
+    sb->buf[sb->len] = '\0';
 }
 static inline void StringBuilder_append_char(StringBuilder* sb, long long c) {
-    if (sb->buf->len + 2 > sb->buf->capacity) {
-        long long newcap = sb->buf->capacity * 2 + 2;
-        sb->buf->data = (char*)realloc(sb->buf->data, (size_t)newcap);
-        sb->buf->capacity = newcap;
+    if (sb->len + 2 > sb->capacity) {
+        long long newcap = sb->capacity * 2 + 2;
+        sb->buf = (char*)realloc(sb->buf, (size_t)newcap);
+        sb->capacity = newcap;
     }
-    sb->buf->data[sb->buf->len++] = (char)c;
-    sb->buf->data[sb->buf->len] = '\0';
+    sb->buf[sb->len++] = (char)c;
+    sb->buf[sb->len] = '\0';
 }
 static inline char* StringBuilder_to_string(StringBuilder* sb) {
-    char* out = (char*)_tr_checked_alloc((size_t)(sb->buf->len + 1));
-    memcpy(out, sb->buf->data, (size_t)(sb->buf->len + 1));
+    char* out = (char*)_tr_checked_alloc((size_t)(sb->len + 1));
+    memcpy(out, sb->buf, (size_t)(sb->len + 1));
     return out;
 }
-static inline long long StringBuilder_length(StringBuilder* sb) { return sb->buf->len; }
+static inline long long StringBuilder_length(StringBuilder* sb) { return sb->len; }
 static inline void StringBuilder_free(StringBuilder* sb) {
-    free(sb->buf->data); free(sb->buf); free(sb);
+    free(sb->buf); free(sb);
 }
+#endif /* TAURARO_RT_NO_STRINGBUILDER */
 
 /* ── File I/O helpers ────────────────────────────────────────────────── */
 static inline char* read_file(char* path) {
@@ -960,25 +1631,257 @@ static inline char* read_file(char* path) {
     buf[rd] = '\0';
     return buf;
 }
-static inline void write_file(char* path, char* content) {
-    if (!path || !content) return;
+static inline bool write_file(char* path, char* content) {
+    if (!path || !content) return false;
     FILE* f = fopen(path, "wb");
-    if (!f) return;
+    if (!f) return false;
     fwrite(content, 1, strlen(content), f);
     fclose(f);
+    return true;
 }
-static inline void append_file(char* path, char* content) {
-    if (!path || !content) return;
+static inline bool append_file(char* path, char* content) {
+    if (!path || !content) return false;
     FILE* f = fopen(path, "ab");
-    if (!f) return;
+    if (!f) return false;
     fwrite(content, 1, strlen(content), f);
     fclose(f);
+    return true;
 }
 static inline bool file_exists(char* path) {
     if (!path || !*path) return false;
     FILE* f = fopen(path, "rb");
     if (!f) return false;
     fclose(f); return true;
+}
+#endif /* TAURARO_STD_LIB */
+#endif /* TAURARO_NO_RT_HELPERS */
+
+static inline char* _tr_c_strdup(char* s) {
+    return s ? strdup(s) : (char*)0;
+}
+
+
+static inline double _tr_get_inf(void) { return (double)INFINITY; }
+static inline bool   _tr_is_inf(double x) { return isinf(x) != 0; }
+static inline bool   _tr_is_nan(double x) { return isnan(x) != 0; }
+
+
+#ifdef _WIN32
+static inline void _tr_init_console(void) {
+    SetConsoleOutputCP(65001);
+    SetConsoleCP(65001);
+}
+#else
+static inline void _tr_init_console(void) {}
+#endif
+
+
+/* ==========================================================================
+   Extended runtime helpers: datetime, OS, net-server, UDP, DNS, random
+   ========================================================================== */
+
+/* -- DateTime helpers ------------------------------------------------------ */
+static inline int    _tr_tm_year(long long ts)    { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_year+1900; }
+static inline int    _tr_tm_month(long long ts)   { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_mon+1; }
+static inline int    _tr_tm_day(long long ts)     { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_mday; }
+static inline int    _tr_tm_hour(long long ts)    { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_hour; }
+static inline int    _tr_tm_min(long long ts)     { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_min; }
+static inline int    _tr_tm_sec(long long ts)     { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_sec; }
+static inline int    _tr_tm_weekday(long long ts) { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_wday; }
+static inline int    _tr_tm_yearday(long long ts) { time_t t=(time_t)ts; struct tm* m=localtime(&t); return m->tm_yday+1; }
+static inline long long _tr_tm_make(int year,int month,int day,int hour,int mi,int sec) {
+    struct tm t; memset(&t,0,sizeof(t));
+    t.tm_year=year-1900; t.tm_mon=month-1; t.tm_mday=day;
+    t.tm_hour=hour; t.tm_min=mi; t.tm_sec=sec; t.tm_isdst=-1;
+    return (long long)mktime(&t);
+}
+static inline char* _tr_strftime(long long ts, const char* fmt) {
+    time_t t=(time_t)ts; struct tm* m=localtime(&t);
+    char* buf=(char*)_tr_c_malloc(256); if(!buf) return (char*)"";
+    strftime(buf,256,fmt,m); return buf;
+}
+
+/* -- OS / System helpers (platform-specific) ------------------------------- */
+#ifdef _WIN32
+static inline char* _tr_hostname(void) { char* b=(char*)_tr_c_malloc(256); DWORD n=256; GetComputerNameA(b,&n); return b; }
+static inline char* _tr_username(void) { char* b=(char*)_tr_c_malloc(256); DWORD n=256; GetUserNameA(b,&n); return b; }
+static inline int   _tr_cpu_count(void) { SYSTEM_INFO si; GetSystemInfo(&si); return (int)si.dwNumberOfProcessors; }
+static inline char* _tr_cwd(void)       { char* b=(char*)_tr_c_malloc(4096); GetCurrentDirectoryA(4096,b); return b; }
+static inline int   _tr_chdir(const char* p) { return SetCurrentDirectoryA(p)?0:-1; }
+static inline char* _tr_platform(void) { return (char*)"windows"; }
+static inline char* _tr_os_machine(void) {
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    if(si.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_AMD64) return (char*)"x86_64";
+    if(si.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_ARM64) return (char*)"arm64";
+    return (char*)"x86";
+}
+static inline long long _tr_memory_total_mb(void) {
+    MEMORYSTATUSEX ms; ms.dwLength=sizeof(ms); GlobalMemoryStatusEx(&ms);
+    return (long long)(ms.ullTotalPhys/(1024LL*1024LL));
+}
+static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
+    _tr_net_init();
+    SOCKET s=socket(AF_INET,SOCK_STREAM,0); if(s==INVALID_SOCKET) return -1;
+    int opt=1; setsockopt(s,SOL_SOCKET,SO_REUSEADDR,(char*)&opt,sizeof(opt));
+    struct sockaddr_in a; memset(&a,0,sizeof(a));
+    a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=INADDR_ANY;
+    if(bind(s,(struct sockaddr*)&a,sizeof(a))!=0){closesocket(s);return -1;}
+    if(listen(s,backlog)!=0){closesocket(s);return -1;}
+    return (int)s;
+}
+static inline int   _tr_tcp_accept(int srv) { SOCKET c=accept((SOCKET)srv,NULL,NULL); return (c==INVALID_SOCKET)?-1:(int)c; }
+static inline char* _tr_tcp_peer_addr(int fd) {
+    struct sockaddr_in a; int al=sizeof(a);
+    if(getpeername((SOCKET)fd,(struct sockaddr*)&a,&al)!=0) return (char*)"";
+    char* buf=(char*)_tr_c_malloc(64); char ip[32];
+    inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));
+    _snprintf(buf,63,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
+}
+static inline int  _tr_udp_socket(void) { _tr_net_init(); SOCKET s=socket(AF_INET,SOCK_DGRAM,0); return (s==INVALID_SOCKET)?-1:(int)s; }
+static inline int  _tr_udp_bind(int fd,int port) {
+    struct sockaddr_in a; memset(&a,0,sizeof(a));
+    a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=INADDR_ANY;
+    return bind((SOCKET)fd,(struct sockaddr*)&a,sizeof(a))==0?0:-1;
+}
+static inline int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,int port) {
+    struct sockaddr_in a; memset(&a,0,sizeof(a));
+    a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=inet_addr(host);
+    return (int)sendto((SOCKET)fd,data,len,0,(struct sockaddr*)&a,sizeof(a));
+}
+static inline int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
+    struct sockaddr_in a; int al=sizeof(a);
+    int n=(int)recvfrom((SOCKET)fd,buf,cap,0,(struct sockaddr*)&a,&al);
+    if(n>0&&src){char ip[32];inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));_snprintf(src,63,"%s:%d",ip,(int)ntohs(a.sin_port));}
+    return n;
+}
+static inline void _tr_udp_close(int fd) { closesocket((SOCKET)fd); }
+static inline char* _tr_dns_resolve(const char* host) {
+    _tr_net_init();
+    struct addrinfo hints={0},*res=NULL; hints.ai_family=AF_INET;
+    if(getaddrinfo(host,NULL,&hints,&res)!=0) return (char*)"";
+    char* ip=(char*)_tr_c_malloc(64);
+    inet_ntop(AF_INET,&((struct sockaddr_in*)res->ai_addr)->sin_addr,ip,64);
+    freeaddrinfo(res); return ip;
+}
+static inline char* _tr_dns_reverse(const char* ip) {
+    struct sockaddr_in a; memset(&a,0,sizeof(a));
+    a.sin_family=AF_INET; inet_pton(AF_INET,ip,&a.sin_addr);
+    char* buf=(char*)_tr_c_malloc(256);
+    return (getnameinfo((struct sockaddr*)&a,sizeof(a),buf,256,NULL,0,0)==0)?buf:(char*)"";
+}
+static inline void _tr_console_color(int code) {
+    HANDLE h=GetStdHandle(STD_OUTPUT_HANDLE); int attr=0;
+    if(code==31||code==91) attr=FOREGROUND_RED;
+    else if(code==32||code==92) attr=FOREGROUND_GREEN;
+    else if(code==33||code==93) attr=FOREGROUND_RED|FOREGROUND_GREEN;
+    else if(code==34||code==94) attr=FOREGROUND_BLUE;
+    else if(code==35||code==95) attr=FOREGROUND_RED|FOREGROUND_BLUE;
+    else if(code==36||code==96) attr=FOREGROUND_GREEN|FOREGROUND_BLUE;
+    else attr=FOREGROUND_RED|FOREGROUND_GREEN|FOREGROUND_BLUE;
+    if(code>=90) attr|=FOREGROUND_INTENSITY;
+    SetConsoleTextAttribute(h,(WORD)attr);
+}
+static inline void _tr_console_reset(void) { SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE),FOREGROUND_RED|FOREGROUND_GREEN|FOREGROUND_BLUE); }
+static inline void _tr_console_clear(void) { system("cls"); }
+#else
+#include <unistd.h>
+static inline char* _tr_hostname(void) { char* b=(char*)_tr_c_malloc(256); gethostname(b,256); return b; }
+static inline char* _tr_username(void) {
+    const char* u=getenv("USER"); if(!u) u=getenv("LOGNAME"); return u?(char*)u:(char*)"";
+}
+static inline int   _tr_cpu_count(void) { return (int)sysconf(_SC_NPROCESSORS_ONLN); }
+static inline char* _tr_cwd(void)       { char* b=(char*)_tr_c_malloc(4096); return getcwd(b,4096); }
+static inline int   _tr_chdir(const char* p) { return chdir(p); }
+#ifdef __APPLE__
+static inline char* _tr_platform(void) { return (char*)"macos"; }
+#else
+static inline char* _tr_platform(void) { return (char*)"linux"; }
+#endif
+static inline char* _tr_os_machine(void) {
+#if defined(__x86_64__)||defined(__amd64__)
+    return (char*)"x86_64";
+#elif defined(__aarch64__)
+    return (char*)"arm64";
+#elif defined(__arm__)
+    return (char*)"arm";
+#else
+    return (char*)"unknown";
+#endif
+}
+static inline long long _tr_memory_total_mb(void) {
+    long p=sysconf(_SC_PHYS_PAGES),s=sysconf(_SC_PAGE_SIZE);
+    return (p>0&&s>0)?(long long)p*s/(1024LL*1024LL):0;
+}
+static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
+    int s=socket(AF_INET,SOCK_STREAM,0); if(s<0) return -1;
+    int opt=1; setsockopt(s,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt));
+    struct sockaddr_in a; memset(&a,0,sizeof(a));
+    a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=INADDR_ANY;
+    if(bind(s,(struct sockaddr*)&a,sizeof(a))<0){close(s);return -1;}
+    if(listen(s,backlog)<0){close(s);return -1;} return s;
+}
+static inline int   _tr_tcp_accept(int srv) { return accept(srv,NULL,NULL); }
+static inline char* _tr_tcp_peer_addr(int fd) {
+    struct sockaddr_in a; socklen_t al=sizeof(a);
+    if(getpeername(fd,(struct sockaddr*)&a,&al)<0) return (char*)"";
+    char* buf=(char*)_tr_c_malloc(64); char ip[32];
+    inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));
+    snprintf(buf,63,"%s:%d",ip,(int)ntohs(a.sin_port)); return buf;
+}
+static inline int  _tr_udp_socket(void) { return socket(AF_INET,SOCK_DGRAM,0); }
+static inline int  _tr_udp_bind(int fd,int port) {
+    struct sockaddr_in a; memset(&a,0,sizeof(a));
+    a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=INADDR_ANY;
+    return bind(fd,(struct sockaddr*)&a,sizeof(a))==0?0:-1;
+}
+static inline int  _tr_udp_send_to(int fd,const char* data,int len,const char* host,int port) {
+    struct sockaddr_in a; memset(&a,0,sizeof(a));
+    a.sin_family=AF_INET; a.sin_port=htons((unsigned short)port); a.sin_addr.s_addr=inet_addr(host);
+    return (int)sendto(fd,data,len,0,(struct sockaddr*)&a,sizeof(a));
+}
+static inline int  _tr_udp_recv_from(int fd,char* buf,int cap,char* src) {
+    struct sockaddr_in a; socklen_t al=sizeof(a);
+    int n=(int)recvfrom(fd,buf,cap,0,(struct sockaddr*)&a,&al);
+    if(n>0&&src){char ip[32];inet_ntop(AF_INET,&a.sin_addr,ip,sizeof(ip));snprintf(src,63,"%s:%d",ip,(int)ntohs(a.sin_port));}
+    return n;
+}
+static inline void _tr_udp_close(int fd) { close(fd); }
+static inline char* _tr_dns_resolve(const char* host) {
+    struct addrinfo hints={0},*res=NULL; hints.ai_family=AF_INET;
+    if(getaddrinfo(host,NULL,&hints,&res)!=0) return (char*)"";
+    char* ip=(char*)_tr_c_malloc(64);
+    inet_ntop(AF_INET,&((struct sockaddr_in*)res->ai_addr)->sin_addr,ip,64);
+    freeaddrinfo(res); return ip;
+}
+static inline char* _tr_dns_reverse(const char* ip) {
+    struct sockaddr_in a; memset(&a,0,sizeof(a));
+    a.sin_family=AF_INET; inet_pton(AF_INET,ip,&a.sin_addr);
+    char* buf=(char*)_tr_c_malloc(256);
+    return (getnameinfo((struct sockaddr*)&a,sizeof(a),buf,256,NULL,0,NI_NAMEREQD)==0)?buf:(char*)"";
+}
+static inline void _tr_console_color(int code) { printf("\033[%dm",code); fflush(stdout); }
+static inline void _tr_console_reset(void)     { printf("\033[0m"); fflush(stdout); }
+static inline void _tr_console_clear(void)     { printf("\033[2J\033[H"); fflush(stdout); }
+#endif
+
+/* -- Random (LCG-64) ------------------------------------------------------- */
+typedef struct { unsigned long long s; } _TrRng;
+static inline _TrRng* _tr_rng_new(long long seed) {
+    _TrRng* r=(_TrRng*)_tr_c_malloc(sizeof(_TrRng));
+    r->s=(unsigned long long)(seed^0xdeadbeefcafeULL); return r;
+}
+static inline long long _tr_rng_next(_TrRng* r) {
+    r->s=r->s*6364136223846793005ULL+1442695040888963407ULL;
+    return (long long)((r->s>>1)&0x7FFFFFFFFFFFFFFFLL);
+}
+static inline void _tr_rng_free(_TrRng* r) { _tr_free(r); }
+
+
+static inline char* _tr_float_fmt(double f, int decimals) {
+    char fmt[16]; int d = decimals < 0 ? 6 : decimals;
+    sprintf(fmt, "%%.%df", d);
+    char* buf = (char*)_tr_c_malloc(64); if(!buf) return (char*)"";
+    sprintf(buf, fmt, f); return buf;
 }
 
 #endif /* TAURARO_RT_H */

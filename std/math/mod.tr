@@ -1,35 +1,14 @@
 # std.math — Package index.
 #
-# Import the whole math package:
-#   from std.math import abs_int, f_sin, f_sqrt, pi, popcount
-#
-# Or individual sub-modules:
-#   from std.math.int   import gcd, is_prime, factorial
-#   from std.math.float import f_sin, f_sqrt, pi, f_lerp
-#   from std.math.bits  import popcount, next_pow2, log2_floor
+# Sub-modules:
+#   from std.math.int    import Math
+#   from std.math.float  import FloatMath
+#   from std.math.bits   import Bits
+#   from std.math.random import Random
+#   from std.math.stats  import Stats
 
-from std.math.int   import [
-    abs_int, min_int, max_int, clamp, sign,
-    pow_int, isqrt,
-    gcd, lcm, is_prime,
-    factorial, choose,
-    mod_pos, div_ceil,
-]
-
-from std.math.float import [
-    pi, tau, e, inf,
-    f_sin, f_cos, f_tan, f_asin, f_acos, f_atan, f_atan2,
-    f_sinh, f_cosh, f_tanh,
-    f_sqrt, f_cbrt, f_pow, f_exp, f_exp2,
-    f_log, f_log2, f_log10,
-    f_floor, f_ceil, f_round, f_trunc,
-    f_abs, f_mod, f_hypot,
-    deg_to_rad, rad_to_deg,
-    f_clamp, f_lerp, f_is_nan, f_is_inf,
-]
-
-from std.math.bits import [
-    popcount, is_pow2, next_pow2,
-    log2_floor, rotl64, rotr64,
-    bswap32, bit_field,
-]
+from std.math.int    import Math
+from std.math.float  import FloatMath
+from std.math.bits   import Bits
+from std.math.random import Random
+from std.math.stats  import Stats

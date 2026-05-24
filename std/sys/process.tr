@@ -1,13 +1,54 @@
-# std.sys.process — Process control via extern "C" runtime bindings.
+# std.sys.process — Process control via the Process static-method class.
 
 extern "C":
     def _tr_exit(code: int)
     def _tr_getpid() -> int
+    def _tr_system(cmd: str) -> int
+    def _tr_popen_read(cmd: str) -> str
+    def _tr_hostname() -> str
+    def _tr_username() -> str
+    def _tr_sleep_ms(ms: int)
 
-# Terminate the process.  0 = success, non-zero = failure.
-pub def exit(code: int):
-    _tr_exit(code)
+pub class Process:
+    _dummy: int
 
-# Return the OS process identifier of the running program.
-pub def get_pid() -> int:
-    return _tr_getpid()
+extend Process:
+    # ── Control ───────────────────────────────────────────────────────────────
+
+    # Terminate the process.  0 = success, non-zero = failure.
+    pub def exit(code: int):
+        _tr_exit(code)
+
+    # Return the OS process identifier of the running program.
+    pub def get_pid() -> int:
+        return _tr_getpid()
+
+    # ── Shell execution ───────────────────────────────────────────────────────
+
+    # Run cmd in the system shell.  Returns the exit code (0 = success).
+    pub def system(cmd: str) -> int:
+        return _tr_system(cmd)
+
+    # Run cmd and capture its stdout output as a string.
+    pub def shell_output(cmd: str) -> str:
+        return _tr_popen_read(cmd)
+
+    # Run cmd and return true when the exit code is 0.
+    pub def check_call(cmd: str) -> bool:
+        return _tr_system(cmd) == 0
+
+    # ── Identity ──────────────────────────────────────────────────────────────
+
+    # Network hostname of this machine.
+    pub def hostname() -> str:
+        return _tr_hostname()
+
+    # Logged-in username running this process.
+    pub def username() -> str:
+        return _tr_username()
+
+    # ── Timing ────────────────────────────────────────────────────────────────
+
+    # Sleep for at least ms milliseconds.
+    pub def sleep_ms(ms: int):
+        _tr_sleep_ms(ms)

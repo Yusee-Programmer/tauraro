@@ -435,7 +435,7 @@ pub class Lexer:
                 self.token_lines.push(self.line)
                 continue
             if c == 34 or c == 39:
-                if c == 39 and self.peek_at(2) == 39:
+                if c == 39 and (self.peek_at(2) == 39 or self.peek_at(1) == 92):
                     tokens.push(self.read_char())
                     self.token_lines.push(self.line)
                 else:

@@ -65,8 +65,25 @@ pub class Sema:
     pub in_async_fn:        bool
     pub assign_froms:       Map[str, int] # block-local last use tracking
     pub current_line:       int
+    pub current_func_generics: Vec[str]
 
 extend Sema:
+    pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
+        if e as usize == 0 as usize: return Pointer[AstType](0)
+        match e.read():
+            case Expr.EIdent(n):
+                return box_asttype(AstType.init(n))
+            case Expr.EIndex(obj, idx):
+                match obj.read():
+                    case Expr.EIdent(on):
+                        mut at = AstType.init(on)
+                        at.args = Vec[Pointer[AstType]].init(1)
+                        at.args.push(self.build_ast_type(idx))
+                        return box_asttype(at)
+                    case _: pass
+            case _: pass
+        return box_asttype(AstType.init("void"))
+
     pub def init() -> Sema:
         mut s = Sema()
         s.globals            = Map[str, Symbol].init(1024)
@@ -82,6 +99,7 @@ extend Sema:
         s.in_async_fn        = false
         s.assign_froms       = Map[str, int].init(32)
         s.current_line       = 0
+        s.current_func_generics = Vec[str].init(0)
 
         # ── Built-in functions ─────────────────────────────────────────────────
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -296,6 +314,8 @@ extend Sema:
         mut saved_async = self.in_async_fn
         self.in_async_fn = f.is_async
         self.current_func_name = f.name
+        mut saved_func_generics = self.current_func_generics
+        self.current_func_generics = f.generics
         self.enter_scope()
 
         mut hparams = Vec[HirParam].init(4)
@@ -351,6 +371,7 @@ extend Sema:
         # Restore async context
         self.in_async_fn = saved_async
         self.current_func_name = ""
+        self.current_func_generics = saved_func_generics
         return hf
 
     pub def lower_class(self, c: ClassDef) -> HirClass:
@@ -384,7 +405,8 @@ extend Sema:
         hc.iface_names = c.iface_names
         hc.decorators = c.decorators
         hc.is_public = c.is_public
-        
+        hc.is_class = c.is_class
+
         self.current_class_name = ""
         return hc
 
@@ -569,8 +591,14 @@ extend Sema:
                 return box_hirstmt(HirStmt.SWith(h_items, aliases, self.lower_block(body)))
             case Stmt.SAsm(code, outputs, inputs, clobbers):
                 return box_hirstmt(HirStmt.SAsm(code, outputs, inputs, clobbers))
-            case Stmt.SSpawn(e): return box_hirstmt(HirStmt.SSpawn(self.lower_expr(e)))
-            case Stmt.STaskGroup(body): return box_hirstmt(HirStmt.STaskGroup(self.lower_block(body)))
+            case Stmt.SSpawn(e):
+                if not self.in_async_fn:
+                    self.error("[C-5] 'spawn:' used outside an async function. FIX: Declare '" + self.current_func_name + "' as 'async def " + self.current_func_name + "(...)' to use spawn inside it.")
+                return box_hirstmt(HirStmt.SSpawn(self.lower_expr(e)))
+            case Stmt.STaskGroup(body):
+                if not self.in_async_fn:
+                    self.error("[C-6] 'taskgroup:' used outside an async function. FIX: Declare '" + self.current_func_name + "' as 'async def " + self.current_func_name + "(...)' to use taskgroup inside it.")
+                return box_hirstmt(HirStmt.STaskGroup(self.lower_block(body)))
             case Stmt.SGpuBlock(body): return box_hirstmt(HirStmt.SGpuBlock(self.lower_block(body)))
             case Stmt.SBreak: return box_hirstmt(HirStmt.SBreak)
             case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
@@ -644,6 +672,8 @@ extend Sema:
                 mut hright = self.lower_expr(right)
                 mut bin_ty = hir_expr_type(hleft)
                 if bin_ty.name == "void": bin_ty = hir_expr_type(hright)
+                if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "&&" or op == "||":
+                    bin_ty = AstType.init("bool")
                 return box_hirexpr(HirExpr.EBinOp(op, hleft, hright, bin_ty))
             case Expr.EUnaryOp(op, expr):
                 mut hexpr_inner = self.lower_expr(expr)
@@ -821,17 +851,27 @@ extend Sema:
                     return hexpr_obj
                 match index.read():
                     case Expr.EIdent(iname):
-                        if self.is_primitive_name(iname):
-                            is_generic = true
-                            generic_arg_n = iname
-                        elif iname == "str" or iname == "Str":
-                            is_generic = true
-                            generic_arg_n = iname
-                        elif self.classes.contains(iname) or iname == "StringObj" or iname == "StringBuilder" or self.enums.contains(iname) or iname == "Vec" or iname == "List" or iname == "Map":
+                        mut is_param = false
+                        if self.current_class_name != "":
+                            if self.classes.contains(self.current_class_name):
+                                mut cc = self.classes.get(self.current_class_name)
+                                mut ci = 0
+                                while ci < cc.generics.len:
+                                    if cc.generics.get(ci) == iname: is_param = true
+                                    ci = ci + 1
+                        mut fi = 0
+                        while fi < self.current_func_generics.len:
+                            if self.current_func_generics.get(fi) == iname: is_param = true
+                            fi = fi + 1
+
+                        if self.is_primitive_name(iname) or iname == "str" or iname == "Str" or is_param or _tr_strlen(iname) == 1 or self.classes.contains(iname) or iname == "StringObj" or iname == "StringBuilder" or self.enums.contains(iname) or iname == "Vec" or iname == "List" or iname == "Map":
                             is_generic = true
                             generic_arg_n = iname
                     case Expr.EIndex(_, _):
                         is_generic = true
+                        mut nested_ty = self.build_ast_type(index)
+                        if nested_ty as usize != 0 as usize:
+                            generic_arg_n = nested_ty.read().name
                     case _: pass
                 if is_generic:
                     # For Vec[T] or List[T] — return the base expr but annotate its type with the generic arg

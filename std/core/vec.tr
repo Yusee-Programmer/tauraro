@@ -23,7 +23,7 @@ extend Vec[T]:
         mut cap2 = cap
         if cap2 < 4: cap2 = 4
         mut v = Vec[T]()
-        v.data     = _tr_checked_alloc(cap2 * sizeof[T])
+        v.data     = _tr_checked_alloc(cap2 * sizeof(T))
         v.len   = 0
         v.capacity = cap2
         return v
@@ -31,7 +31,7 @@ extend Vec[T]:
     pub def push(self, val: T):
         if self.len >= self.capacity:
             self.capacity = self.capacity * 2
-            self.data = _tr_c_realloc(self.data, self.capacity * sizeof[T])
+            self.data = _tr_c_realloc(self.data, self.capacity * sizeof(T))
         unsafe:
             (self.data as Pointer[T]).offset(self.len).write(val)
         self.len = self.len + 1
@@ -71,7 +71,7 @@ extend Vec[T]:
         unsafe:
             mut dst = (self.data as Pointer[T]).offset(i)
             mut src = (self.data as Pointer[T]).offset(i + 1)
-            mut _nbytes = (self.len - i - 1) * sizeof[T]
+            mut _nbytes = (self.len - i - 1) * sizeof(T)
             _tr_c_memcpy(dst as Pointer[char], src as Pointer[char], _nbytes)
         self.len = self.len - 1
 

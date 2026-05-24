@@ -30,7 +30,7 @@ extend LinkedList:
         return l
 
     pub def prepend(self, value: int):
-        mut node = _tr_checked_alloc(sizeof[ListNode]) as Pointer[ListNode]
+        mut node = _tr_checked_alloc(sizeof(ListNode)) as Pointer[ListNode]
         node.write(ListNode.init(value))
         mut n = node.read()
         n.next = self.head
@@ -39,7 +39,7 @@ extend LinkedList:
         self.len = self.len + 1
 
     pub def append(self, value: int):
-        mut node = _tr_checked_alloc(sizeof[ListNode]) as Pointer[ListNode]
+        mut node = _tr_checked_alloc(sizeof(ListNode)) as Pointer[ListNode]
         node.write(ListNode.init(value))
         if self.head as int == 0:
             self.head = node

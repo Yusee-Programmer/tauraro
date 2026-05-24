@@ -36,7 +36,7 @@ extend Queue:
     pub def is_empty(self) -> bool:
         return self.head >= self.tail
 
-    pub def size(self) -> int:
+    pub def len(self) -> int:
         mut sz = self.tail - self.head
         if sz < 0: return 0
         return sz

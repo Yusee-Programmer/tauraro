@@ -15,7 +15,7 @@
 from core.io import read_file, file_exists
 from core.vec import Vec
 from core.map import Map
-from core.string import StringBuilder
+from core.string import StringObj, StringBuilder
 from lexer import Lexer
 from parser import Parser
 from ast import Program, Decl, FunctionDef, ClassDef, EnumDef, InterfaceDef, ImportItem
@@ -66,6 +66,7 @@ extend ModuleResolver:
         r.all_decl_modules = Vec[str].init(1024)
         r.current_mod      = ""
         r.search_paths.push(".")
+        r.search_paths.push("tauraro")
         r.search_paths.push("..")
         r.search_paths.push("../..")
         return r
@@ -158,29 +159,16 @@ extend ModuleResolver:
     #   1. <base>/<dir>/mod.tr   ← package with index file
     #   2. <base>/<dir>.tr       ← single-file module
     pub def resolve_module_path(self, mod_path: str):
-        # core.* is always a runtime built-in; never load from disk.
-        mut _mp = mod_path as Pointer[char]
-        mut _is_core = false
-        if _mp.offset(0).read() as int == 99:    # 'c'
-            if _mp.offset(1).read() as int == 111: # 'o'
-                if _mp.offset(2).read() as int == 114: # 'r'
-                    if _mp.offset(3).read() as int == 101: # 'e'
-                        _is_core = true
-        if _is_core: return
-
         # Build directory path: dots → slashes (no extension yet)
-        mut sb  = StringBuilder.init(64)
-        mut p   = mod_path as Pointer[char]
-        mut i   = 0
-        while True:
-            mut c = p.offset(i).read() as int
-            if c == 0: break
-            if c == 46:          # '.'
-                sb.append_char(47) # '/'
-            else:
-                sb.append_char(c)
-            i = i + 1
-        mut dir_path = sb.to_string().as_str()
+        mut n = 0
+        mut p = mod_path as Pointer[char]
+        while p.offset(n).read() as int != 0: n = n + 1
+        mut dir_path = _tr_str_slice(mod_path, 0, n)
+        mut bp = dir_path as Pointer[char]
+        mut j = 0
+        while j < n:
+            if bp.offset(j).read() as int == 46: bp.offset(j).write(47 as char)  # '.' → '/'
+            j = j + 1
 
         # Save/restore current_mod so recursive resolution doesn't corrupt parent tracking.
         mut saved_mod = self.current_mod
@@ -198,10 +186,10 @@ extend ModuleResolver:
                 self.resolve_file(pkg_path, false)
                 if not already:
                     self.mod_dot_paths.push(mod_path)
-                    self.mod_file_paths.push(pkg_path)
+                    self.mod_file_paths.push(StringObj.init(pkg_path).as_str())
                 self.current_mod = saved_mod
                 return
-
+ 
             # 2. Single-file module: <base>/<dir>.tr
             mut flat_path = base + "/" + dir_path + ".tr"
             if file_exists(flat_path):
@@ -209,7 +197,7 @@ extend ModuleResolver:
                 self.resolve_file(flat_path, false)
                 if not already:
                     self.mod_dot_paths.push(mod_path)
-                    self.mod_file_paths.push(flat_path)
+                    self.mod_file_paths.push(StringObj.init(flat_path).as_str())
                 self.current_mod = saved_mod
                 return
 

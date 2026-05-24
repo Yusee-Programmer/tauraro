@@ -1,10 +1,9 @@
-# std.math.float — Floating-point math via extern "C" bindings to <math.h>.
-#
-# tauraro_rt.h includes <math.h> so all standard C math functions are
-# available without a separate link flag.  We bind them here and expose
-# idiomatic Tauraro wrappers.
+# std.math.float — Floating-point math via the FloatMath static-method class.
 
 extern "C":
+    def _tr_get_inf() -> float
+    def _tr_is_inf(x: float) -> bool
+    def _tr_is_nan(x: float) -> bool
     def sin(x: float)   -> float
     def cos(x: float)   -> float
     def tan(x: float)   -> float
@@ -31,73 +30,77 @@ extern "C":
     def fmod(x: float, y: float) -> float
     def hypot(x: float, y: float) -> float
 
-# ─── Constants (computed via C math.h at link time) ──────────────────────────
+pub class FloatMath:
+    _dummy: int
 
-pub def pi() -> float:
-    return 3.14159265358979323846
+extend FloatMath:
+    # ── Constants ─────────────────────────────────────────────────────────────
 
-pub def tau() -> float:
-    return 6.28318530717958647692
+    pub def pi() -> float:
+        return 3.14159265358979323846
 
-pub def e() -> float:
-    return 2.71828182845904523536
+    pub def tau() -> float:
+        return 6.28318530717958647692
 
-pub def inf() -> float:
-    return 1.0 / 0.0
+    pub def e() -> float:
+        return 2.71828182845904523536
 
-# ─── Trigonometry ─────────────────────────────────────────────────────────────
+    pub def inf() -> float:
+        return _tr_get_inf()
 
-pub def f_sin(x: float)   -> float: return sin(x)
-pub def f_cos(x: float)   -> float: return cos(x)
-pub def f_tan(x: float)   -> float: return tan(x)
-pub def f_asin(x: float)  -> float: return asin(x)
-pub def f_acos(x: float)  -> float: return acos(x)
-pub def f_atan(x: float)  -> float: return atan(x)
-pub def f_atan2(y: float, x: float) -> float: return atan2(y, x)
-pub def f_sinh(x: float)  -> float: return sinh(x)
-pub def f_cosh(x: float)  -> float: return cosh(x)
-pub def f_tanh(x: float)  -> float: return tanh(x)
+    # ── Trigonometry ──────────────────────────────────────────────────────────
 
-# ─── Exponentials & logarithms ────────────────────────────────────────────────
+    pub def sin(x: float)   -> float: return sin(x)
+    pub def cos(x: float)   -> float: return cos(x)
+    pub def tan(x: float)   -> float: return tan(x)
+    pub def asin(x: float)  -> float: return asin(x)
+    pub def acos(x: float)  -> float: return acos(x)
+    pub def atan(x: float)  -> float: return atan(x)
+    pub def atan2(y: float, x: float) -> float: return atan2(y, x)
+    pub def sinh(x: float)  -> float: return sinh(x)
+    pub def cosh(x: float)  -> float: return cosh(x)
+    pub def tanh(x: float)  -> float: return tanh(x)
 
-pub def f_sqrt(x: float)  -> float: return sqrt(x)
-pub def f_cbrt(x: float)  -> float: return cbrt(x)
-pub def f_pow(base: float, exp: float) -> float: return pow(base, exp)
-pub def f_exp(x: float)   -> float: return exp(x)
-pub def f_exp2(x: float)  -> float: return exp2(x)
-pub def f_log(x: float)   -> float: return log(x)
-pub def f_log2(x: float)  -> float: return log2(x)
-pub def f_log10(x: float) -> float: return log10(x)
+    # ── Exponentials & logarithms ─────────────────────────────────────────────
 
-# ─── Rounding ─────────────────────────────────────────────────────────────────
+    pub def sqrt(x: float)  -> float: return sqrt(x)
+    pub def cbrt(x: float)  -> float: return cbrt(x)
+    pub def pow(base: float, exp: float) -> float: return pow(base, exp)
+    pub def exp(x: float)   -> float: return exp(x)
+    pub def exp2(x: float)  -> float: return exp2(x)
+    pub def log(x: float)   -> float: return log(x)
+    pub def log2(x: float)  -> float: return log2(x)
+    pub def log10(x: float) -> float: return log10(x)
 
-pub def f_floor(x: float) -> float: return floor(x)
-pub def f_ceil(x: float)  -> float: return ceil(x)
-pub def f_round(x: float) -> float: return round(x)
-pub def f_trunc(x: float) -> float: return trunc(x)
+    # ── Rounding ──────────────────────────────────────────────────────────────
 
-# ─── Misc ─────────────────────────────────────────────────────────────────────
+    pub def floor(x: float) -> float: return floor(x)
+    pub def ceil(x: float)  -> float: return ceil(x)
+    pub def round(x: float) -> float: return round(x)
+    pub def trunc(x: float) -> float: return trunc(x)
 
-pub def f_abs(x: float)           -> float: return fabs(x)
-pub def f_mod(x: float, y: float) -> float: return fmod(x, y)
-pub def f_hypot(x: float, y: float) -> float: return hypot(x, y)
+    # ── Misc ──────────────────────────────────────────────────────────────────
 
-pub def deg_to_rad(deg: float) -> float:
-    return deg * 3.14159265358979323846 / 180.0
+    pub def abs(x: float)           -> float: return fabs(x)
+    pub def mod(x: float, y: float) -> float: return fmod(x, y)
+    pub def hypot(x: float, y: float) -> float: return hypot(x, y)
 
-pub def rad_to_deg(rad: float) -> float:
-    return rad * 180.0 / 3.14159265358979323846
+    pub def deg_to_rad(deg: float) -> float:
+        return deg * 3.14159265358979323846 / 180.0
 
-pub def f_clamp(v: float, lo: float, hi: float) -> float:
-    if v < lo: return lo
-    if v > hi: return hi
-    return v
+    pub def rad_to_deg(rad: float) -> float:
+        return rad * 180.0 / 3.14159265358979323846
 
-pub def f_lerp(a: float, b: float, t: float) -> float:
-    return a + (b - a) * t
+    pub def clamp(v: float, lo: float, hi: float) -> float:
+        if v < lo: return lo
+        if v > hi: return hi
+        return v
 
-pub def f_is_nan(x: float) -> bool:
-    return x != x
+    pub def lerp(a: float, b: float, t: float) -> float:
+        return a + (b - a) * t
 
-pub def f_is_inf(x: float) -> bool:
-    return x > 1.0e308 or x < -1.0e308
+    pub def is_nan(x: float) -> bool:
+        return _tr_is_nan(x)
+
+    pub def is_inf(x: float) -> bool:
+        return _tr_is_inf(x)

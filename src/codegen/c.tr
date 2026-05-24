@@ -56,10 +56,44 @@ pub def _is_float_type(n: str) -> bool:
     return n == "float" or n == "f64" or n == "f32" or n == "double"
 
 pub def _is_c_keyword(n: str) -> bool:
+    # C language keywords
     if n == "double" or n == "float" or n == "int" or n == "char": return true
     if n == "long" or n == "short" or n == "void" or n == "unsigned": return true
     if n == "signed" or n == "register" or n == "inline" or n == "auto": return true
     if n == "struct" or n == "union" or n == "enum" or n == "extern": return true
+    if n == "static" or n == "volatile" or n == "const" or n == "restrict": return true
+    if n == "typedef" or n == "sizeof" or n == "alignof" or n == "typeof": return true
+    if n == "goto" or n == "switch" or n == "case" or n == "default": return true
+    if n == "do" or n == "for" or n == "while" or n == "if" or n == "else": return true
+    if n == "break" or n == "continue" or n == "return": return true
+    # C stdlib / POSIX names that conflict with common method names
+    if n == "exit" or n == "abort" or n == "remove" or n == "rename": return true
+    if n == "read" or n == "write" or n == "open" or n == "close": return true
+    if n == "send" or n == "recv" or n == "bind" or n == "connect": return true
+    if n == "accept" or n == "listen" or n == "socket": return true
+    if n == "time" or n == "sleep" or n == "signal" or n == "raise": return true
+    if n == "stat" or n == "mkdir" or n == "rmdir" or n == "unlink": return true
+    if n == "malloc" or n == "free" or n == "calloc" or n == "realloc": return true
+    if n == "printf" or n == "scanf" or n == "puts" or n == "gets": return true
+    if n == "strlen" or n == "strcpy" or n == "strcat" or n == "strcmp": return true
+    if n == "system" or n == "getenv" or n == "setenv" or n == "putenv": return true
+    if n == "fopen" or n == "fclose" or n == "fread" or n == "fwrite": return true
+    if n == "fseek" or n == "ftell" or n == "rewind" or n == "feof": return true
+    if n == "index" or n == "count" or n == "new" or n == "delete": return true
+    return false
+
+pub def _starts_with_tr(s: str) -> bool:
+    mut p = s as Pointer[char]
+    if p as int == 0: return false
+    if p.offset(0).read() as int == 0: return false
+    if p.offset(0).read() as int == 95: # '_'
+        if p.offset(1).read() as int == 0: return false
+        if p.offset(1).read() as int == 116: # 't'
+            if p.offset(2).read() as int == 0: return false
+            if p.offset(2).read() as int == 114: # 'r'
+                if p.offset(3).read() as int == 0: return false
+                if p.offset(3).read() as int == 95: # '_'
+                    return true
     return false
 
 pub def _is_primitive(n: str) -> bool:
@@ -112,6 +146,7 @@ pub class CGenerator:
     pub cur_throws_ty:   str              # non-empty = current function has throws annotation
     pub in_task_group:   int              # depth counter for task_group nesting
     pub in_gpu_block:    int              # depth counter for gpu: block nesting
+    pub value_types:     Map[str, bool]  # classes with is_class=false — no * in C type
 
     pub def init() -> CGenerator:
         mut g = CGenerator()
@@ -141,6 +176,7 @@ pub class CGenerator:
         g.cur_throws_ty  = ""
         g.in_task_group  = 0
         g.in_gpu_block   = 0
+        g.value_types    = Map[str, bool].init(32)
         return g
 
     pub def next_temp(self) -> str:
@@ -234,6 +270,23 @@ pub class CGenerator:
                     if f.generics.get(gi) == n: return "void*"
                     gi = gi + 1
 
+        # Check if it's a generic type parameter in the current class
+        if self.cur_class != "":
+            mut base_cls_n = self.cur_class
+            mut u_idx = 0
+            mut cp = self.cur_class as Pointer[char]
+            while cp.offset(u_idx).read() as int != 0:
+                if cp.offset(u_idx).read() as int == 95: # '_'
+                    base_cls_n = _tr_str_slice(self.cur_class, 0, u_idx)
+                    break
+                u_idx = u_idx + 1
+            if self.classes.contains(base_cls_n):
+                mut cls_def = self.classes.get(base_cls_n)
+                mut gi = 0
+                while gi < cls_def.generics.len:
+                    if cls_def.generics.get(gi) == n: return "void*"
+                    gi = gi + 1
+
         if n == "Pointer":
             if ty.args.len > 0:
                 mut inner = ty.args.get(0).read()
@@ -243,12 +296,21 @@ pub class CGenerator:
             return "void*"
 
         # User-defined generic class takes precedence over built-in Vec/Map/List
-        if self.classes.contains(n):
+        if self.classes.contains(n) and n != "Vec" and n != "Map" and n != "Dict" and n != "List":
             mut ucls = self.classes.get(n)
+            mut is_val = self.value_types.contains(n)
             if ucls.generics.len > 0 and ty.args.len > 0:
                 mut sfx = self.type_args_suffix(ty.args)
                 self.ensure_mono(ucls, ty.args)
+                if is_val: return n + "_" + sfx
                 return n + "_" + sfx + "*"
+            # Inside a monomorphized body, synthesize suffix from active type_subst
+            if ucls.generics.len > 0:
+                mut sfx2 = self.synth_class_suffix(ucls)
+                if sfx2 != "":
+                    if is_val: return n + "_" + sfx2
+                    return n + "_" + sfx2 + "*"
+            if is_val: return n
             return n + "*"
 
         if n == "List":
@@ -290,6 +352,12 @@ pub class CGenerator:
         if n == "bool": return "bool"
         if n == "char": return "char"
         if _is_str_type(n): return "str"
+        mut np = n as Pointer[char]
+        mut nlen = 0
+        while np.offset(nlen).read() as int != 0: nlen = nlen + 1
+        if nlen > 0:
+            if np.offset(nlen - 1).read() as int == 42: # '*'
+                return _tr_str_slice(n, 0, nlen - 1) + "_ptr"
         return n
 
     pub def list_elem_suffix(self, n: str) -> str:
@@ -329,6 +397,32 @@ pub class CGenerator:
             i = i + 1
         return sfx
 
+    # Synthesize a monomorphized suffix for a generic class using active type_subst.
+    # Returns "" when not all generics are covered by type_subst (non-mono context).
+    pub def synth_class_suffix(self, ucls: HirClass) -> str:
+        mut sfx = ""
+        mut gi = 0
+        while gi < ucls.generics.len:
+            mut gp = ucls.generics.get(gi)
+            if not self.type_subst.contains(gp): return ""
+            if gi > 0: sfx = sfx + "_"
+            mut cv = self.type_subst.get(gp)
+            mut tn = cv
+            if cv == "long long": tn = "int"
+            elif cv == "double": tn = "float"
+            elif cv == "char*": tn = "str"
+            elif cv == "bool": tn = "bool"
+            elif cv == "char": tn = "char"
+            elif cv == "unsigned long long": tn = "u64"
+            elif cv == "unsigned int": tn = "u32"
+            elif cv == "int": tn = "i32"
+            elif cv == "short": tn = "i16"
+            elif cv == "signed char": tn = "i8"
+            elif cv == "float": tn = "f32"
+            sfx = sfx + self.type_suffix(tn)
+            gi = gi + 1
+        return sfx
+
     # Ensure a monomorphized version of cls is generated into mono_buf.
     # Safe to call multiple times — guarded by mono_done map.
     pub def ensure_mono(self, cls: HirClass, type_args: Vec[Pointer[AstType]]):
@@ -339,13 +433,20 @@ pub class CGenerator:
 
         mut mono_name = cls.name + "_" + sfx
 
-        # Set up type substitution: generic param → concrete C type
+        # Pre-resolve type arguments using active parent substitutions
+        mut resolved_args = Vec[str].init(type_args.len)
+        mut i = 0
+        while i < type_args.len:
+            resolved_args.push(self.type_to_c(type_args.get(i).read()))
+            i = i + 1
+
+        # Set up type substitution: generic param -> concrete C type
         mut old_subst = self.type_subst
         self.type_subst = Map[str, str].init(8)
-        mut i = 0
-        while i < cls.generics.len and i < type_args.len:
+        i = 0
+        while i < cls.generics.len and i < resolved_args.len:
             mut param = cls.generics.get(i)
-            mut concrete = self.type_to_c(type_args.get(i).read())
+            mut concrete = resolved_args.get(i)
             self.type_subst.insert(param, concrete)
             i = i + 1
 
@@ -624,7 +725,12 @@ pub class CGenerator:
             case HirExpr.EPropAccess(o, p, _): return self.gen_prop_access(o, p)
             case HirExpr.EIndex(o, idx, _): return self.gen_index(o, idx)
             case HirExpr.ESizeOf(target_ty, _):
-                return "((long long)sizeof(" + self.type_to_c(target_ty) + "))"
+                mut sizeof_cty = self.type_to_c(target_ty)
+                mut sizeof_len = _tr_str_len(sizeof_cty)
+                if sizeof_len > 0:
+                    if (sizeof_cty as Pointer[char]).offset(sizeof_len - 1).read() as int == 42:
+                        sizeof_cty = _tr_str_slice(sizeof_cty, 0, sizeof_len - 1)
+                return "((long long)sizeof(" + sizeof_cty + "))"
             case HirExpr.ECast(expr, target_ty):
                 return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
             case HirExpr.EFString(parts, _): return self.gen_fstring(parts)
@@ -753,22 +859,41 @@ pub class CGenerator:
         mut is_idx = self.gen_expr(idx)
         mut ty_n: str = hir_expr_type(o).name
         if ty_n == "Pointer": return os + "[" + is_idx + "]"
-        if ty_n == "List": return os + "->data[" + is_idx + "]"
-        if self.classes.contains(ty_n):
+        if ty_n == "List" or ty_n == "Vec": return os + "->data[" + is_idx + "]"
+        if self.classes.contains(ty_n) and ty_n != "Vec" and ty_n != "List" and ty_n != "Map" and ty_n != "Dict":
             return ty_n + "_get_index(" + os + ", " + is_idx + ")"
         return os + "[" + is_idx + "]"
 
     pub def gen_call(self, callee: Pointer[HirExpr], args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
         mut callee_s = self.gen_expr(callee)
+        
+        # Check if callee is a generic built-in call target like alloc[T] or dealloc[T]
+        mut base_callee = callee_s
+        mut has_generic = false
+        mut generic_ty = AstType.init("void")
+        match callee.read():
+            case HirExpr.EIndex(base_expr, idx_expr, idx_ty):
+                match base_expr.read():
+                    case HirExpr.EIdent(n, _, _):
+                        if n == "alloc" or n == "core_alloc_alloc" or n == "dealloc" or n == "Pointer" or n == "resize" or n == "core_alloc_resize" or n == "copy" or n == "core_alloc_copy":
+                            base_callee = n
+                            has_generic = true
+                            match idx_expr.read():
+                                case HirExpr.EIdent(tname, _, _):
+                                    generic_ty = AstType.init(tname)
+                                case _: pass
+                    case _: pass
+            case _: pass
+
         # Mangle C reserved keywords used as call targets
-        if _is_c_keyword(callee_s): callee_s = "_tr_fn_" + callee_s
+        if _is_c_keyword(base_callee): base_callee = "_tr_fn_" + base_callee
 
         # print / buga builtins
-        if callee_s == "print" or callee_s == "buga":
+        if base_callee == "print" or base_callee == "buga":
             return self.gen_print_call(args)
 
         # len builtin
-        if callee_s == "len":
+        if base_callee == "len":
             if args.len > 0:
                 mut arg0 = args.get(0)
                 if _is_str_type(hir_expr_type(arg0).name): return "_tr_strlen(" + self.gen_expr(arg0) + ")"
@@ -776,7 +901,7 @@ pub class CGenerator:
             return "0LL"
 
         # range builtin (used in for loops – returns range struct)
-        if callee_s == "range":
+        if base_callee == "range":
             if args.len == 1:
                 return "_tr_range(0, " + self.gen_expr(args.get(0)) + ", 1)"
             elif args.len == 2:
@@ -786,20 +911,20 @@ pub class CGenerator:
             return "_tr_range(0, 0, 1)"
 
         # _tr_exit
-        if callee_s == "_tr_exit":
+        if base_callee == "_tr_exit":
             if args.len > 0: return "exit((int)(" + self.gen_expr(args.get(0)) + "))"
             return "exit(0)"
 
         # ord / chr — character conversions
-        if callee_s == "ord":
+        if base_callee == "ord":
             if args.len > 0: return "((long long)(unsigned char)(" + self.gen_expr(args.get(0)) + ")[0])"
             return "0LL"
-        if callee_s == "chr":
+        if base_callee == "chr":
             if args.len > 0: return "((char)(" + self.gen_expr(args.get(0)) + "))"
             return "'\\0'"
 
         # abs — absolute value
-        if callee_s == "abs":
+        if base_callee == "abs":
             if args.len > 0:
                 mut abs_a = self.gen_expr(args.get(0))
                 mut abs_t_n: str = hir_expr_type(args.get(0)).name
@@ -808,13 +933,13 @@ pub class CGenerator:
             return "0LL"
 
         # max / min — pairwise comparisons
-        if callee_s == "max":
+        if base_callee == "max":
             if args.len == 2:
                 mut ma = self.next_temp()
                 mut mb = self.next_temp()
                 return "({ __auto_type " + ma + " = " + self.gen_expr(args.get(0)) + "; __auto_type " + mb + " = " + self.gen_expr(args.get(1)) + "; " + ma + " > " + mb + " ? " + ma + " : " + mb + "; })"
             return "0LL"
-        if callee_s == "min":
+        if base_callee == "min":
             if args.len == 2:
                 mut mna = self.next_temp()
                 mut mnb = self.next_temp()
@@ -822,12 +947,12 @@ pub class CGenerator:
             return "0LL"
 
         # round — rounding a float
-        if callee_s == "round":
+        if base_callee == "round":
             if args.len > 0: return "(double)round((double)(" + self.gen_expr(args.get(0)) + "))"
             return "0.0"
 
         # str() — convert to string
-        if callee_s == "str":
+        if base_callee == "str":
             if args.len > 0:
                 mut str_arg = args.get(0)
                 mut str_t_n: str = hir_expr_type(str_arg).name
@@ -838,27 +963,27 @@ pub class CGenerator:
             return "\"\""
 
         # int() / float() / bool() — type coercions
-        if callee_s == "int":
+        if base_callee == "int":
             if args.len > 0: return "(long long)(" + self.gen_expr(args.get(0)) + ")"
             return "0LL"
-        if callee_s == "float" or callee_s == "_tr_fn_float":
+        if base_callee == "float" or base_callee == "_tr_fn_float":
             if args.len > 0: return "(double)(" + self.gen_expr(args.get(0)) + ")"
             return "0.0"
-        if callee_s == "bool":
+        if base_callee == "bool":
             if args.len > 0: return "(_Bool)(" + self.gen_expr(args.get(0)) + ")"
             return "0"
 
         # type() — returns a string representation of the type
-        if callee_s == "type":
+        if base_callee == "type":
             return "\"<object>\""
 
         # iter / enumerate / sorted / reversed — identity for now
-        if callee_s == "iter" or callee_s == "enumerate" or callee_s == "sorted" or callee_s == "reversed":
+        if base_callee == "iter" or base_callee == "enumerate" or base_callee == "sorted" or base_callee == "reversed":
             if args.len > 0: return self.gen_expr(args.get(0))
             return "NULL"
 
         # sum — sum all elements of a list
-        if callee_s == "sum":
+        if base_callee == "sum":
             if args.len > 0:
                 mut sum_tmp = self.next_temp()
                 mut sum_l = self.next_temp()
@@ -866,35 +991,36 @@ pub class CGenerator:
             return "0LL"
 
         # any / all — short-circuit list scan
-        if callee_s == "any":
+        if base_callee == "any":
             if args.len > 0:
                 mut any_l = self.next_temp()
                 return "({ _Bool _any_r = 0; __auto_type " + any_l + " = " + self.gen_expr(args.get(0)) + "; for (long long _ai = 0; _ai < " + any_l + "->len; _ai++) if (" + any_l + "->data[_ai]) { _any_r = 1; break; } _any_r; })"
             return "0"
-        if callee_s == "all":
+        if base_callee == "all":
             if args.len > 0:
                 mut all_l = self.next_temp()
                 return "({ _Bool _all_r = 1; __auto_type " + all_l + " = " + self.gen_expr(args.get(0)) + "; for (long long _ai = 0; _ai < " + all_l + "->len; _ai++) if (!" + all_l + "->data[_ai]) { _all_r = 0; break; } _all_r; })"
             return "1"
 
         # Option / Result constructors
-        if callee_s == "Some":
+        if base_callee == "Some":
             if args.len > 0: return "_tr_option_some((void*)(" + self.gen_expr(args.get(0)) + "))"
             return "_tr_option_none()"
-        if callee_s == "Ok":
+        if base_callee == "Ok":
             if args.len > 0: return "_tr_result_ok((void*)(" + self.gen_expr(args.get(0)) + "))"
             return "_tr_result_ok(NULL)"
-        if callee_s == "Err":
+        if base_callee == "Err":
             if args.len > 0: return "_tr_result_err((void*)(" + self.gen_expr(args.get(0)) + "))"
             return "_tr_result_err(NULL)"
 
         # Intercept alloc
-        if callee_s == "alloc" or callee_s == "core_alloc_alloc":
+        if base_callee == "alloc" or base_callee == "core_alloc_alloc":
             mut count_s = "1LL"
             if args.len > 0: count_s = self.gen_expr(args.get(0))
             mut alloc_ty = "void"
-            # Use the call's return type Pointer[T] to determine T
-            if call_ty.name == "Pointer" and call_ty.args.len > 0:
+            if has_generic and generic_ty.name != "void":
+                alloc_ty = self.type_to_c(generic_ty)
+            elif call_ty.name == "Pointer" and call_ty.args.len > 0:
                 alloc_ty = self.type_to_c(call_ty.args.get(0).read())
             else:
                 match callee.read():
@@ -906,15 +1032,51 @@ pub class CGenerator:
                 return "malloc((size_t)(" + count_s + "))"
             return "((" + alloc_ty + "*)_tr_c_calloc((size_t)(" + count_s + "), sizeof(" + alloc_ty + ")))"
 
+        # Intercept dealloc
+        if base_callee == "dealloc":
+            if args.len > 0:
+                return "_tr_free((void*)(" + self.gen_expr(args.get(0)) + "))"
+            return ""
+
+        # Intercept resize[T](ptr, n) → _tr_c_realloc
+        if base_callee == "resize" or base_callee == "core_alloc_resize":
+            if args.len >= 2:
+                mut rptr_s = self.gen_expr(args.get(0))
+                mut rcnt_s = self.gen_expr(args.get(1))
+                mut resize_ty = "void"
+                if has_generic and generic_ty.name != "void":
+                    resize_ty = self.type_to_c(generic_ty)
+                if resize_ty == "void" or resize_ty == "void*":
+                    return "(void*)_tr_c_realloc((void*)(" + rptr_s + "), (size_t)(" + rcnt_s + "))"
+                return "((" + resize_ty + "*)_tr_c_realloc((void*)(" + rptr_s + "), (size_t)(" + rcnt_s + ") * sizeof(" + resize_ty + ")))"
+            return "NULL"
+
+        # Intercept copy[T](dst, src, n) → _tr_c_memcpy
+        if base_callee == "copy" or base_callee == "core_alloc_copy":
+            if args.len >= 3:
+                mut cdst_s = self.gen_expr(args.get(0))
+                mut csrc_s = self.gen_expr(args.get(1))
+                mut ccnt_s = self.gen_expr(args.get(2))
+                mut copy_ty = "void"
+                if has_generic and generic_ty.name != "void":
+                    copy_ty = self.type_to_c(generic_ty)
+                if copy_ty == "void" or copy_ty == "void*":
+                    return "_tr_c_memcpy((void*)(" + cdst_s + "), (void*)(" + csrc_s + "), (size_t)(" + ccnt_s + "))"
+                return "_tr_c_memcpy((void*)(" + cdst_s + "), (void*)(" + csrc_s + "), (size_t)(" + ccnt_s + ") * sizeof(" + copy_ty + "))"
+            return ""
+
         # input() — read a line from stdin
-        if callee_s == "input":
+        if base_callee == "input":
             if args.len > 0: return "_tr_input(" + self.gen_expr(args.get(0)) + ")"
             return "_tr_input(NULL)"
 
         # Pointer[T](addr) → (T*)addr  (null pointer construction)
-        if callee_s == "Pointer":
+        if base_callee == "Pointer":
             if args.len > 0:
                 mut ptr_arg = self.gen_expr(args.get(0))
+                if has_generic and generic_ty.name != "void":
+                    mut ct = self.type_to_c(generic_ty)
+                    return "(" + ct + "*)(" + ptr_arg + ")"
                 match callee.read():
                     case HirExpr.EIdent(_, ident_ty, _):
                         if ident_ty.args.len > 0:
@@ -928,13 +1090,19 @@ pub class CGenerator:
         # Class constructor call: ClassName() or GenericClass[T]()
         match callee.read():
             case HirExpr.EIdent(n, ident_ty, _):
-                if self.classes.contains(n):
+                if self.classes.contains(n) and n != "Vec" and n != "Map" and n != "Dict" and n != "List":
                     mut ucls = self.classes.get(n)
                     if ucls.generics.len > 0 and ident_ty.args.len > 0:
                         mut sfx = self.type_args_suffix(ident_ty.args)
                         self.ensure_mono(ucls, ident_ty.args)
                         mut mn = n + "_" + sfx
                         return "((" + mn + "*)_tr_checked_alloc(sizeof(" + mn + ")))"
+                    # Synthesize mono name from active type_subst when args absent in HIR
+                    if ucls.generics.len > 0:
+                        mut sfx2 = self.synth_class_suffix(ucls)
+                        if sfx2 != "":
+                            mut mn2 = n + "_" + sfx2
+                            return "((" + mn2 + "*)_tr_checked_alloc(sizeof(" + mn2 + ")))"
                     return "((" + n + "*)_tr_checked_alloc(sizeof(" + n + ")))"
                 if self.enums.contains(n):
                     return "(" + n + "){.tag=" + n + "_" + n + "}"
@@ -1025,6 +1193,24 @@ pub class CGenerator:
         mut obj_s = self.gen_expr(obj)
         mut t_n: str = hir_expr_type(obj).name
 
+        # Fallback: when HIR stores void for an EPropAccess type (cross-module field lookup),
+        # recover the actual type from the parent class field declaration
+        if t_n == "void" or t_n == "":
+            match obj.read():
+                case HirExpr.EPropAccess(inner_obj_fb, field_name_fb, _):
+                    mut inner_t_n_fb: str = hir_expr_type(inner_obj_fb).name
+                    if inner_t_n_fb == "void" or inner_t_n_fb == "":
+                        inner_t_n_fb = self.cur_class
+                    if self.classes.contains(inner_t_n_fb):
+                        mut parent_cls_fb = self.classes.get(inner_t_n_fb)
+                        mut fi_fb = 0
+                        while fi_fb < parent_cls_fb.fields.len:
+                            mut fld_fb = parent_cls_fb.fields.get(fi_fb)
+                            if fld_fb.name == field_name_fb and fld_fb.ty.name != "" and fld_fb.ty.name != "void":
+                                t_n = fld_fb.ty.name
+                            fi_fb = fi_fb + 1
+                case _: pass
+
         # Shared var: unwrap _TrSharedBox* → (TypeName*)obj->data for method dispatch
         if self.shared_vars.contains(obj_s):
             mut sh_ty = self.shared_vars.get(obj_s)
@@ -1085,8 +1271,16 @@ pub class CGenerator:
                 opt_extra = ", " + self.gen_args(args)
             return "Option_" + method + "(" + obj_s + opt_extra + ")"
 
-        # Pointer method calls (force intercept since type info might be lost for lhs)
-        if t_n == "Pointer" or method == "offset" or method == "read" or method == "write" or method == "as_ptr":
+        # Pointer method calls — intercept when:
+        #   (a) receiver is explicitly Pointer[T], or
+        #   (b) method is "offset" (only valid on pointers), or
+        #   (c) method is read/write/as_ptr AND receiver is NOT a known user-defined class
+        #       (handles chained results of .offset() whose HIR type is void/unknown).
+        mut _ptr_intercept = t_n == "Pointer" or method == "offset"
+        if not _ptr_intercept and (method == "read" or method == "write" or method == "as_ptr"):
+            if not self.classes.contains(t_n):
+                _ptr_intercept = true
+        if _ptr_intercept:
             if method == "offset": return "(" + obj_s + " + " + self.gen_expr(args.get(0)) + ")"
             if method == "read": return "(*" + obj_s + ")"
             if method == "write": return "(*" + obj_s + " = " + self.gen_expr(args.get(0)) + ")"
@@ -1099,20 +1293,27 @@ pub class CGenerator:
             if t_n == "bool": return "((" + obj_s + ") ? \"true\" : \"false\")"
             if t_n == "char": return "_tr_char_to_str_alloc(" + obj_s + ")"
             # Fall through for class types (StringBuilder, user classes) so they hit their own branch
-            if not self.classes.contains(t_n) and t_n != "StringBuilder":
+            if not (self.classes.contains(t_n) and t_n != "Vec" and t_n != "Map" and t_n != "Dict" and t_n != "List") and t_n != "StringBuilder":
                 return obj_s
         if method == "to_float": return "(double)(" + obj_s + ")"
         if method == "to_int": return "(long long)(" + obj_s + ")"
-        if method == "as_str": return "(char*)(" + obj_s + ")"
-        if method == "starts_with" and args.len > 0:
+        if method == "as_str":
+            if t_n == "StringObj": return "StringObj_as_str(" + obj_s + ")"
+            return "(char*)(" + obj_s + ")"
+        if method == "starts_with" and args.len > 0 and _is_str_type(t_n):
             return "_tr_str_starts_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
-        if method == "ends_with" and args.len > 0:
+        if method == "ends_with" and args.len > 0 and _is_str_type(t_n):
             return "_tr_str_ends_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
         if method == "contains" and args.len > 0 and _is_str_type(t_n):
             return "_tr_str_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
 
         mut class_name: str = t_n
         if _is_str_type(class_name): class_name = "TrStr"
+
+        # Static call: Task.init(...) — obj is a type-name ident, hir_expr_type returns void/empty.
+        # Recover class_name from obj_s when it matches a known user class.
+        if (class_name == "void" or class_name == "") and self.classes.contains(obj_s):
+            class_name = obj_s
 
         # StringBuilder special handling (must be before len/length shortcut)
         if class_name == "StringBuilder":
@@ -1124,12 +1325,12 @@ pub class CGenerator:
             if method == "free": return "StringBuilder_free(" + obj_s + ")"
 
         # len/length — only shortcut for non-user-class types
-        if (method == "len" or method == "__len__" or method == "length") and not self.classes.contains(t_n) and not self.enums.contains(t_n):
+        if (method == "len" or method == "__len__" or method == "length") and not (self.classes.contains(t_n) and t_n != "Vec" and t_n != "Map" and t_n != "Dict" and t_n != "List") and not self.enums.contains(t_n):
             if _is_str_type(t_n): return "_tr_strlen(" + obj_s + ")"
             return "((long long)" + obj_s + "->len)"
 
         # User-defined generic class: dispatch through monomorphized name
-        if self.classes.contains(class_name):
+        if self.classes.contains(class_name) and class_name != "Vec" and class_name != "Map" and class_name != "Dict" and class_name != "List":
             mut ucls = self.classes.get(class_name)
             if ucls.generics.len > 0:
                 if hir_expr_type(obj).args.len > 0:
@@ -1145,9 +1346,48 @@ pub class CGenerator:
                     mut ms = mono_name + "_" + gmethod_c + "(" + obj_s
                     if args.len > 0: ms = ms + ", " + self.gen_args(args)
                     return ms + ")"
+                # Recover type args from the parent class field declaration when HIR type args
+                # are absent (bootstrap stores AstType* that can point to freed stack memory).
+                match obj.read():
+                    case HirExpr.EPropAccess(inner_obj2, fld_name2, _):
+                        mut parent_ty_n2 = hir_expr_type(inner_obj2).name
+                        if self.classes.contains(parent_ty_n2):
+                            mut parent_cls2 = self.classes.get(parent_ty_n2)
+                            mut fld_i2 = 0
+                            while fld_i2 < parent_cls2.fields.len:
+                                mut fld2 = parent_cls2.fields.get(fld_i2)
+                                if fld2.name == fld_name2 and fld2.ty.name == class_name and fld2.ty.args.len > 0:
+                                    mut sfx3 = self.type_args_suffix(fld2.ty.args)
+                                    mut mn3 = class_name + "_" + sfx3
+                                    self.ensure_mono(ucls, fld2.ty.args)
+                                    mut method_c3 = method
+                                    if _is_c_keyword(method_c3): method_c3 = "_tr_fn_" + method_c3
+                                    if method == "init" or method == "new":
+                                        return mn3 + "_" + method_c3 + "(" + self.gen_args(args) + ")"
+                                    if obj_s == class_name:
+                                        return mn3 + "_" + method_c3 + "(" + self.gen_args(args) + ")"
+                                    mut ms3 = mn3 + "_" + method_c3 + "(" + obj_s
+                                    if args.len > 0: ms3 = ms3 + ", " + self.gen_args(args)
+                                    return ms3 + ")"
+                                fld_i2 = fld_i2 + 1
+                    case _: pass
+                # self param has no type args in HIR (sema stores class_name without generics).
+                # When inside a monomorphized body, use cur_class as the dispatch prefix.
+                if self.cur_class != "":
+                    mut method_c_g: str = method
+                    if _is_c_keyword(method_c_g):
+                        method_c_g = "_tr_fn_" + method_c_g
+                    if method == "init" or method == "new":
+                        return self.cur_class + "_" + method_c_g + "(" + self.gen_args(args) + ")"
+                    if obj_s == class_name:
+                        return self.cur_class + "_" + method_c_g + "(" + self.gen_args(args) + ")"
+                    mut ms_g = self.cur_class + "_" + method_c_g + "(" + obj_s
+                    if args.len > 0:
+                        ms_g = ms_g + ", " + self.gen_args(args)
+                    return ms_g + ")"
 
         # Non-generic user class dispatch
-        if self.classes.contains(class_name):
+        if self.classes.contains(class_name) and class_name != "Vec" and class_name != "Map" and class_name != "Dict" and class_name != "List":
             mut method_c: str = method
             if _is_c_keyword(method_c): method_c = "_tr_fn_" + method_c
             if method == "init" or method == "new":
@@ -1188,14 +1428,23 @@ pub class CGenerator:
             case _: pass
 
         # List[T] / Vec[T] method dispatch (Vec maps to List in the C runtime)
-        if class_name == "List" or class_name == "Vec" or (class_name == "int" and (method == "append" or method == "push" or method == "pop" or method == "set" or method == "get" or method == "free" or method == "contains")):
+        mut is_list_vec: bool = class_name == "List" or class_name == "Vec" or (class_name == "int" and (method == "append" or method == "push" or method == "pop" or method == "set" or method == "get" or method == "free" or method == "contains"))
+        if not is_list_vec and class_name as usize != 0 as usize:
+            mut cp2 = class_name as Pointer[char]
+            if cp2.offset(0).read() as int == 86 and cp2.offset(1).read() as int == 101 and cp2.offset(2).read() as int == 99 and cp2.offset(3).read() as int == 95:
+                is_list_vec = true
+            elif cp2.offset(0).read() as int == 76 and cp2.offset(1).read() as int == 105 and cp2.offset(2).read() as int == 115 and cp2.offset(3).read() as int == 116 and cp2.offset(4).read() as int == 95:
+                is_list_vec = true
+ 
+        if is_list_vec:
             if method == "append" or method == "push":
                 return "List_" + elem_sfx + "_append(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "free": return "List_" + elem_sfx + "_free(" + obj_s + ")"
             if method == "pop":
                 mut pop_r = "List_" + elem_sfx + "_pop(" + obj_s + ")"
                 if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer":
-                    return "((" + call_ty.name + "*)" + pop_r + ")"
+                    if _tr_strlen(call_ty.name) > 1:
+                        return "((" + call_ty.name + "*)" + pop_r + ")"
                 return pop_r
             if method == "set":
                 return "List_" + elem_sfx + "_set(" + obj_s + ", " + self.gen_args(args) + ")"
@@ -1207,19 +1456,41 @@ pub class CGenerator:
                     mut inner_ct = self.type_to_c(call_ty.args.get(0).read())
                     return "((" + inner_ct + "*)" + get_r + ")"
                 if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer" and call_ty.name != "List" and call_ty.name != "Vec" and call_ty.name != "Map" and call_ty.name != "Dict" and call_ty.name != "str":
-                    return "((" + call_ty.name + "*)" + get_r + ")"
+                    if _tr_strlen(call_ty.name) > 1:
+                        return "((" + call_ty.name + "*)" + get_r + ")"
                 return get_r
             if method == "len" or method == "length": return "((long long)" + obj_s + "->len)"
             if method == "new" or method == "init":
                 return "List_" + elem_sfx + "_new()"
+            if method == "remove":
+                return "List_" + elem_sfx + "_remove(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "swap":
+                return "List_" + elem_sfx + "_swap(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "clear":
+                return "List_" + elem_sfx + "_clear(" + obj_s + ")"
+            if method == "is_empty":
+                return "List_" + elem_sfx + "_is_empty(" + obj_s + ")"
+            if method == "extend":
+                return "List_" + elem_sfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "index_of":
+                return "List_" + elem_sfx + "_index_of(" + obj_s + ", " + self.gen_args(args) + ")"
 
         # Map/Dict method dispatch
-        if class_name == "Map" or class_name == "Dict":
+        mut is_map_dict: bool = class_name == "Map" or class_name == "Dict" or class_name == "TrMap"
+        if not is_map_dict and class_name as usize != 0 as usize:
+            mut cp = class_name as Pointer[char]
+            if cp.offset(0).read() as int == 77 and cp.offset(1).read() as int == 97 and cp.offset(2).read() as int == 112 and cp.offset(3).read() as int == 95:
+                is_map_dict = true
+            elif cp.offset(0).read() as int == 68 and cp.offset(1).read() as int == 105 and cp.offset(2).read() as int == 99 and cp.offset(3).read() as int == 116 and cp.offset(4).read() as int == 95:
+                is_map_dict = true
+
+        if is_map_dict:
             if method == "init" or method == "new": return "_tr_dict_new(" + self.gen_args(args) + ")"
             if method == "get":
                 mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.gen_args(args) + ")"
-                if self.classes.contains(call_ty.name):
-                    return "((" + call_ty.name + "*)" + mget_r + ")"
+                mut c_ty_c = self.type_to_c(call_ty)
+                if c_ty_c != "void":
+                    return "((" + c_ty_c + ")" + mget_r + ")"
                 return mget_r
             if method == "set" or method == "insert": return "_tr_dict_set(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "contains": return "_tr_dict_contains(" + obj_s + ", " + self.gen_args(args) + ")"
@@ -1229,7 +1500,15 @@ pub class CGenerator:
         mut extra_args = ""
         if args.len > 0:
             extra_args = ", " + self.gen_args(args)
-        return method + "(" + obj_s + extra_args + ")"
+        # Fallback: when class_name is known but the method wasn't handled above,
+        # emit ClassNme_method(obj, ...) — prevents bare calls that collide with C stdlib.
+        # Only skip the prefix for truly primitive/unresolvable types.
+        mut safe_method = method
+        if _is_c_keyword(safe_method): safe_method = "_tr_fn_" + safe_method
+        if class_name != "" and class_name != "void" and class_name != "int" and class_name != "float" and class_name != "bool" and class_name != "char" and class_name != "str":
+            if not _is_primitive(class_name) and not _is_str_type(class_name):
+                return class_name + "_" + safe_method + "(" + obj_s + extra_args + ")"
+        return safe_method + "(" + obj_s + extra_args + ")"
 
     pub def gen_fstring(self, parts: Vec[HirFStringPart]) -> str:
         if parts.len == 0: return "\"\""
@@ -1878,6 +2157,8 @@ pub class CGenerator:
         mut i = 0
         while i < prog.classes.len:
             self.classes.insert(prog.classes.get(i).name, prog.classes.get(i))
+            if not prog.classes.get(i).is_class:
+                self.value_types.insert(prog.classes.get(i).name, true)
             i = i + 1
         i = 0
         while i < prog.enums.len:
@@ -1901,7 +2182,7 @@ pub class CGenerator:
         while i < ty.args.len:
             self.scan_mono_ty(ty.args.get(i).read())
             i = i + 1
-        if ty.args.len > 0 and self.classes.contains(ty.name):
+        if ty.args.len > 0 and self.classes.contains(ty.name) and ty.name != "Vec" and ty.name != "Map" and ty.name != "Dict" and ty.name != "List":
             mut ucls = self.classes.get(ty.name)
             if ucls.generics.len > 0:
                 self.ensure_mono(ucls, ty.args)
@@ -1977,6 +2258,7 @@ pub class CGenerator:
                 if self.classes.contains(fn.class_name):
                     mut owner = self.classes.get(fn.class_name)
                     if owner.generics.len > 0: skip = true
+            if fn.generics.len > 0: skip = true
             if not skip: self.scan_mono_func(fn)
             i = i + 1
         # Scan top-level stmts
@@ -2019,20 +2301,21 @@ pub class CGenerator:
             mut ef = prog.extern_funcs.get(i)
             mut ef_ret = self.type_to_c(ef.ret_ty)
             mut ef_name = ef.name
-            self.w("extern " + ef_ret + " " + ef_name + "(")
-            mut ef_first = true
-            mut epi = 0
-            while epi < ef.params.len:
-                mut ep = ef.params.get(epi)
-                if ep.name != "self":
+            if not _starts_with_tr(ef_name):
+                self.w("extern " + ef_ret + " " + ef_name + "(")
+                mut ef_first = true
+                mut epi = 0
+                while epi < ef.params.len:
+                    mut ep = ef.params.get(epi)
+                    if ep.name != "self":
+                        if not ef_first: self.w(", ")
+                        self.w(self.type_to_c(ep.ty) + " " + ep.name)
+                        ef_first = false
+                    epi = epi + 1
+                if ef.is_variadic:
                     if not ef_first: self.w(", ")
-                    self.w(self.type_to_c(ep.ty) + " " + ep.name)
-                    ef_first = false
-                epi = epi + 1
-            if ef.is_variadic:
-                if not ef_first: self.w(", ")
-                self.w("...")
-            self.w(");\n")
+                    self.w("...")
+                self.w(");\n")
             i = i + 1
         if prog.extern_funcs.len > 0: self.w("\n")
 
@@ -2094,10 +2377,8 @@ pub class CGenerator:
             mut f = prog.functions.get(i)
             if f.name != "main" and not f.is_extern:
                 mut skip4 = false
-                if f.class_name != "" and self.classes.contains(f.class_name):
-                    skip4 = true  # class methods already emitted from prog.classes loop
-                elif f.class_name != "" and self.enums.contains(f.class_name):
-                    skip4 = true  # enum methods already emitted from prog.enums loop
+                if f.class_name != "":
+                    skip4 = true   # class/enum methods handled in per-class loops or mono_buf
                 if not skip4:
                     if not self.emitted_fns.contains("p_" + f.name):
                         self.emitted_fns.insert("p_" + f.name, true)
@@ -2159,10 +2440,8 @@ pub class CGenerator:
             mut f = prog.functions.get(i)
             if f.name != "main" and not f.is_extern:
                 mut skip6 = false
-                if f.class_name != "" and self.classes.contains(f.class_name):
-                    skip6 = true  # class methods already emitted from prog.classes loop
-                elif f.class_name != "" and self.enums.contains(f.class_name):
-                    skip6 = true  # enum methods already emitted from prog.enums loop
+                if f.class_name != "":
+                    skip6 = true   # class/enum methods handled in per-class loops or mono_buf
                 # Skip duplicate free-standing functions (same name from multiple modules)
                 if not skip6:
                     if self.emitted_fns.contains("i_" + f.name):
@@ -2186,6 +2465,8 @@ pub class CGenerator:
 
         # ── Phase 7: C main entry point ───────────────────────────────────────
         self.w("__attribute__((hot,optimize(\"O3,unroll-loops\"))) int main(int argc, char** argv) {\n")
+        self.w("    _tr_argc = argc; _tr_argv = argv;\n")
+        self.w("    _tr_init_console();\n")
         # Set up args list only when main() takes a parameter
         mut main_has_args = false
         mut main_args_name = "args"
@@ -2248,6 +2529,30 @@ pub class CGenerator:
 
         mut out = StringBuilder.init(65536)
         out.append("#pragma once\n")
+        # Suppress rt.h helper fallbacks (StringBuilder, file I/O) when the std library
+        # provides its own canonical implementations.  Detect by checking if "StringBuilder"
+        # class or "read_file" / "write_file" functions appear in the compiled program.
+        mut has_std_lib = false
+        mut sbi = 0
+        while sbi < prog.classes.len:
+            mut sbc = prog.classes.get(sbi)
+            if not _is_invalid_ptr(sbc as usize):
+                if sbc.name == "StringBuilder":
+                    has_std_lib = true
+                    break
+            sbi = sbi + 1
+        if not has_std_lib:
+            mut fi2 = 0
+            while fi2 < prog.functions.len:
+                mut fc = prog.functions.get(fi2)
+                if not _is_invalid_ptr(fc as usize):
+                    if fc.name == "read_file" or fc.name == "write_file":
+                        has_std_lib = true
+                        break
+                fi2 = fi2 + 1
+        if has_std_lib:
+            out.append("#define TAURARO_STD_LIB\n")
+            out.append("#define TAURARO_RT_NO_STRINGBUILDER\n")
         out.append("#include \"tauraro_rt.h\"\n\n")
 
         # ── Forward declarations ──────────────────────────────────────────────
@@ -2281,22 +2586,49 @@ pub class CGenerator:
             while i < prog.extern_funcs.len:
                 mut ef = prog.extern_funcs.get(i)
                 if not _is_invalid_ptr(ef as usize):
-                    mut ef_s = "extern " + self.type_to_c(ef.ret_ty) + " " + ef.name + "("
-                    mut ef_first = true
-                    mut epi = 0
-                    while epi < ef.params.len:
-                        mut ep = ef.params.get(epi)
-                        if ep.name != "self":
+                    if not _starts_with_tr(ef.name):
+                        mut ef_s = "extern " + self.type_to_c(ef.ret_ty) + " " + ef.name + "("
+                        mut ef_first = true
+                        mut epi = 0
+                        while epi < ef.params.len:
+                            mut ep = ef.params.get(epi)
+                            if ep.name != "self":
+                                if not ef_first: ef_s = ef_s + ", "
+                                ef_s = ef_s + self.type_to_c(ep.ty) + " " + ep.name
+                                ef_first = false
+                            epi = epi + 1
+                        if ef.is_variadic:
                             if not ef_first: ef_s = ef_s + ", "
-                            ef_s = ef_s + self.type_to_c(ep.ty) + " " + ep.name
-                            ef_first = false
-                        epi = epi + 1
-                    if ef.is_variadic:
-                        if not ef_first: ef_s = ef_s + ", "
-                        ef_s = ef_s + "..."
-                    out.append(ef_s + ");\n")
+                            ef_s = ef_s + "..."
+                        out.append(ef_s + ");\n")
                 i = i + 1
             if prog.extern_funcs.len > 0: out.append("\n")
+
+        # ── Freestanding Function Prototypes (so generic monomorphization can call them) ──
+        i = 0
+        while i < prog.functions.len:
+            mut f4 = prog.functions.get(i)
+            if not _is_invalid_ptr(f4 as usize):
+                if f4.name != "main" and not f4.is_extern:
+                    if f4.class_name != "":
+                        # Extend-block methods: emit prototype with class prefix.
+                        # Skip generic classes (Vec, Map, etc.) – monomorphized variants handle their own prototypes.
+                        mut skip4_generic = false
+                        if self.classes.contains(f4.class_name):
+                            mut cls4g = self.classes.get(f4.class_name)
+                            if cls4g.generics.len > 0:
+                                skip4_generic = true
+                        if not skip4_generic:
+                            mut ep_key = "p_" + f4.class_name + "_" + f4.name
+                            if not self.emitted_fns.contains(ep_key):
+                                self.emitted_fns.insert(ep_key, true)
+                                out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
+                    else:
+                        if not self.emitted_fns.contains("p_" + f4.name):
+                            self.emitted_fns.insert("p_" + f4.name, true)
+                            out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
+            i = i + 1
+        out.append("\n")
 
         # ── Monomorphized generic types ───────────────────────────────────────
         mut mono = self.mono_buf.to_string().as_str()
@@ -2357,10 +2689,20 @@ pub class CGenerator:
             mut f4 = prog.functions.get(i)
             if not _is_invalid_ptr(f4 as usize):
                 if f4.name != "main" and not f4.is_extern:
-                    mut skip4 = false
-                    if f4.class_name != "" and self.classes.contains(f4.class_name): skip4 = true
-                    elif f4.class_name != "" and self.enums.contains(f4.class_name): skip4 = true
-                    if not skip4:
+                    if f4.class_name != "":
+                        # Extend-block methods: emit prototype with class prefix.
+                        # Skip generic classes (Vec, Map, etc.) – monomorphized variants handle their own prototypes.
+                        mut skip4b_generic = false
+                        if self.classes.contains(f4.class_name):
+                            mut cls4bg = self.classes.get(f4.class_name)
+                            if cls4bg.generics.len > 0:
+                                skip4b_generic = true
+                        if not skip4b_generic:
+                            mut ep_key2 = "p_" + f4.class_name + "_" + f4.name
+                            if not self.emitted_fns.contains(ep_key2):
+                                self.emitted_fns.insert(ep_key2, true)
+                                out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
+                    else:
                         if not self.emitted_fns.contains("p_" + f4.name):
                             self.emitted_fns.insert("p_" + f4.name, true)
                             out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
@@ -2407,8 +2749,12 @@ pub class CGenerator:
         mut out = "\n/* === Module-prefixed typedef aliases (auto-generated) === */\n"
         out = out + "/* Maps module-qualified C names to short-name types in tauraro_types.h */\n\n"
 
-        out = out + "typedef StringObj core_string_StringObj;\n"
-        out = out + "typedef StringBuilder core_string_StringBuilder;\n\n"
+        out = out + "#ifndef TAURARO_RT_NO_STRINGBUILDER\n"
+        out = out + "typedef struct core_string_StringObj core_string_StringObj;\n"
+        out = out + "typedef core_string_StringObj StringObj;\n"
+        out = out + "typedef struct core_string_StringBuilder core_string_StringBuilder;\n"
+        out = out + "typedef core_string_StringBuilder StringBuilder;\n"
+        out = out + "#endif\n\n"
 
         mut seen = Map[str, bool].init(128)
         mut i = 0
@@ -2527,6 +2873,8 @@ pub class CGenerator:
                     mut mi = 0
                     while mi < c.methods.len:
                         mut m = c.methods.get(mi)
+                        # Mark with the per-method key so loop-2 (prog.functions) won't re-emit.
+                        self.emitted_fns.insert("i_" + c.name + "_" + m.name, true)
                         self.cur_class = c.name
                         self.cur_func  = m.name
                         self.decl_vars = Map[str, bool].init(64)
@@ -2568,11 +2916,17 @@ pub class CGenerator:
                 if f.class_name == "" and fn_set.contains(f.name):
                     in_mod = true
                 elif f.class_name != "" and class_set.contains(f.class_name):
-                    if not self.classes.contains(f.class_name) and not self.enums.contains(f.class_name):
-                        in_mod = true  # extend method on a non-user-defined type
+                    # Skip generic class extend methods — only monomorphized instances are emitted.
+                    mut is_generic_cls = false
+                    if self.classes.contains(f.class_name):
+                        if self.classes.get(f.class_name).generics.len > 0:
+                            is_generic_cls = true
+                    if not is_generic_cls:
+                        in_mod = true  # extend method belonging to this module
                 if in_mod:
-                    if not self.emitted_fns.contains("i_" + f.name):
-                        self.emitted_fns.insert("i_" + f.name, true)
+                    mut em_key = "i_" + f.class_name + "_" + f.name
+                    if not self.emitted_fns.contains(em_key):
+                        self.emitted_fns.insert(em_key, true)
                         self.cur_func  = f.name
                         self.cur_class = f.class_name
                         self.decl_vars = Map[str, bool].init(64)
@@ -2612,6 +2966,8 @@ pub class CGenerator:
                                 while mi < c.methods.len:
                                     mut m = c.methods.get(mi)
                                     if not _is_invalid_ptr(m as usize):
+                                        # Mark with per-method key so loop-2 won't re-emit.
+                                        self.emitted_fns.insert("i_" + c.name + "_" + m.name, true)
                                         self.cur_class = c.name
                                         self.cur_func  = m.name
                                         self.cur_throws_ty = m.throws_ty.name
@@ -2665,11 +3021,17 @@ pub class CGenerator:
                         if f.class_name == "" and fn_set.contains(f.name):
                             in_mod = true
                         elif f.class_name != "" and class_set.contains(f.class_name):
-                            if not self.classes.contains(f.class_name) and not self.enums.contains(f.class_name):
-                                in_mod = true
+                            # Skip generic class extend methods — only monomorphized instances are emitted.
+                            mut is_generic_cls2 = false
+                            if self.classes.contains(f.class_name):
+                                if self.classes.get(f.class_name).generics.len > 0:
+                                    is_generic_cls2 = true
+                            if not is_generic_cls2:
+                                in_mod = true  # extend method belonging to this module
                         if in_mod:
-                            if not self.emitted_fns.contains("i_" + f.name):
-                                self.emitted_fns.insert("i_" + f.name, true)
+                            mut em_key2 = "i_" + f.class_name + "_" + f.name
+                            if not self.emitted_fns.contains(em_key2):
+                                self.emitted_fns.insert(em_key2, true)
                                 self.cur_func  = f.name
                                 self.cur_class = f.class_name
                                 self.cur_throws_ty = f.throws_ty.name
@@ -2686,6 +3048,8 @@ pub class CGenerator:
 
         # C main() entry point
         self.w("__attribute__((hot,optimize(\"O3,unroll-loops\"))) int main(int argc, char** argv) {\n")
+        self.w("    _tr_argc = argc; _tr_argv = argv;\n")
+        self.w("    _tr_init_console();\n")
         mut main_has_args = false
         mut main_args_name = "args"
         mut mi2 = 0
