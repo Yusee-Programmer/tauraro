@@ -371,9 +371,13 @@ pub def main(args: Vec[str]):
     if verbose: print("[1/5] Resolving modules: " + input_path)
 
     mut resolver = ModuleResolver.init()
-    # Add the binary's own directory so that core/ placed next to the exe is always found,
-    # regardless of CWD. This is the standard distributed-binary search path.
-    resolver.add_search_path(strip_trailing_sep_inline(dir_of_path(args.get(0))))
+    # Binary-relative search paths: core/ (bootstrap stdlib), std/ (OOP stdlib),
+    # packages/ (future third-party packages). All resolved relative to the binary's
+    # own directory so the distribution works regardless of CWD.
+    mut bin_dir = strip_trailing_sep_inline(dir_of_path(args.get(0)))
+    resolver.add_search_path(bin_dir)
+    resolver.add_search_path(bin_dir + "/std")
+    resolver.add_search_path(bin_dir + "/packages")
     mut prog = resolver.resolve_main(input_path)
 
     if emit_mode == "ast":

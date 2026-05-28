@@ -81,7 +81,7 @@ extend BufReader:
                     done = true
                 else:
                     sb.append_char(ch)
-        return sb.to_string()
+        return sb.to_owned()
 
     pub def close(self):
         if self.open:
@@ -135,7 +135,7 @@ extend BufWriter:
         if not self.open: return
         mut n = self._buf.len
         if n > 0:
-            mut content: str = self._buf.to_string()
+            mut content: str = self._buf.to_owned()
             mut p = content as Pointer[char]
             _tr_c_fwrite(p, 1, n, self._fp)
         self._buf.clear()

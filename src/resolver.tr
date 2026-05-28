@@ -69,6 +69,7 @@ extend ModuleResolver:
         r.search_paths.push("tauraro")
         r.search_paths.push("..")
         r.search_paths.push("../..")
+        r.search_paths.push("std")
         return r
 
     pub def add_search_path(self, p: str):

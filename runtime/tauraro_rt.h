@@ -1582,51 +1582,57 @@ static int _tr_test_report(void) {
 #ifndef TAURARO_STD_LIB
 /* ── StringBuilder (suppressed when std.core.string provides its own) ───── */
 #ifndef TAURARO_RT_NO_STRINGBUILDER
-/* Flat layout — matches std.core.string.StringBuilder and the names used by
- * the module-system typedef aliases in generated tauraro_types.h.
- * core_string_StringObj exists only for the forward-declaration compatibility. */
+/* OOP layout — matches std.core.string.StringBuilder: buf is StringObj* so that
+ * the c.tr codegen's sb->buf->len accesses compile correctly. */
 typedef struct core_string_StringObj { char* data; long long len; long long capacity; } core_string_StringObj;
 typedef core_string_StringObj StringObj;
-typedef struct core_string_StringBuilder { char* buf; long long len; long long capacity; } core_string_StringBuilder;
+static inline StringObj* StringObj_init(char* s) {
+    StringObj* obj = (StringObj*)_tr_checked_alloc(sizeof(StringObj));
+    long long slen = s ? (long long)strlen(s) : 0LL;
+    obj->len = slen; obj->capacity = slen + 8;
+    obj->data = (char*)_tr_checked_alloc((size_t)(obj->capacity));
+    if (slen > 0) memcpy(obj->data, s, (size_t)slen);
+    obj->data[slen] = '\0';
+    return obj;
+}
+static inline char* StringObj_as_str(StringObj* obj) { return obj->data; }
+typedef struct core_string_StringBuilder { StringObj* buf; } core_string_StringBuilder;
 typedef core_string_StringBuilder StringBuilder;
 
 static inline StringBuilder* StringBuilder_init(long long cap) {
-    if (cap < 64) cap = 64;
+    if (cap < 16) cap = 16;
     StringBuilder* sb = (StringBuilder*)_tr_checked_alloc(sizeof(StringBuilder));
-    sb->buf = (char*)_tr_checked_alloc((size_t)cap);
-    sb->buf[0] = '\0';
-    sb->len = 0;
-    sb->capacity = cap;
+    sb->buf = (StringObj*)_tr_checked_alloc(sizeof(StringObj));
+    sb->buf->len = 0; sb->buf->capacity = cap + 1;
+    sb->buf->data = (char*)_tr_checked_alloc((size_t)(sb->buf->capacity));
+    sb->buf->data[0] = '\0';
     return sb;
 }
 static inline void StringBuilder_append(StringBuilder* sb, char* s) {
     long long slen = (long long)strlen(s);
-    if (sb->len + slen + 1 > sb->capacity) {
-        long long newcap = sb->capacity * 2 + slen + 1;
-        sb->buf = (char*)realloc(sb->buf, (size_t)newcap);
-        sb->capacity = newcap;
+    if (slen <= 0) return;
+    if (sb->buf->len + slen >= sb->buf->capacity) {
+        sb->buf->capacity = (sb->buf->len + slen) * 2 + 8;
+        sb->buf->data = (char*)realloc(sb->buf->data, (size_t)sb->buf->capacity);
     }
-    memcpy(sb->buf + sb->len, s, (size_t)slen);
-    sb->len += slen;
-    sb->buf[sb->len] = '\0';
+    memcpy(sb->buf->data + sb->buf->len, s, (size_t)slen);
+    sb->buf->len += slen;
+    sb->buf->data[sb->buf->len] = '\0';
 }
 static inline void StringBuilder_append_char(StringBuilder* sb, long long c) {
-    if (sb->len + 2 > sb->capacity) {
-        long long newcap = sb->capacity * 2 + 2;
-        sb->buf = (char*)realloc(sb->buf, (size_t)newcap);
-        sb->capacity = newcap;
+    if (sb->buf->len + 1 >= sb->buf->capacity) {
+        sb->buf->capacity = sb->buf->capacity * 2 + 8;
+        sb->buf->data = (char*)realloc(sb->buf->data, (size_t)sb->buf->capacity);
     }
-    sb->buf[sb->len++] = (char)c;
-    sb->buf[sb->len] = '\0';
+    sb->buf->data[sb->buf->len++] = (char)c;
+    sb->buf->data[sb->buf->len] = '\0';
 }
-static inline char* StringBuilder_to_string(StringBuilder* sb) {
-    char* out = (char*)_tr_checked_alloc((size_t)(sb->len + 1));
-    memcpy(out, sb->buf, (size_t)(sb->len + 1));
-    return out;
+static inline StringObj* StringBuilder_to_string(StringBuilder* sb) {
+    return StringObj_init(sb->buf->data);
 }
-static inline long long StringBuilder_length(StringBuilder* sb) { return sb->len; }
+static inline long long StringBuilder_length(StringBuilder* sb) { return sb->buf->len; }
 static inline void StringBuilder_free(StringBuilder* sb) {
-    free(sb->buf); free(sb);
+    free(sb->buf->data); free(sb->buf); free(sb);
 }
 #endif /* TAURARO_RT_NO_STRINGBUILDER */
 

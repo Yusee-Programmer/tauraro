@@ -66,7 +66,7 @@ extend TimeDelta:
         sb.append(Fmt.zero_pad(mi, 2))
         sb.append(":")
         sb.append(Fmt.zero_pad(s, 2))
-        return sb.to_string()
+        return sb.to_owned()
 
 # ─── DateTime ─────────────────────────────────────────────────────────────────
 
@@ -217,7 +217,7 @@ extend DateTime:
         sb.append(Fmt.zero_pad(self.minute, 2))
         sb.append(":")
         sb.append(Fmt.zero_pad(self.second, 2))
-        return sb.to_string()
+        return sb.to_owned()
 
     # ISO 8601 date-only string: "YYYY-MM-DD"
     pub def date_str(self) -> str:
@@ -227,7 +227,7 @@ extend DateTime:
         sb.append(Fmt.zero_pad(self.month, 2))
         sb.append("-")
         sb.append(Fmt.zero_pad(self.day, 2))
-        return sb.to_string()
+        return sb.to_owned()
 
     # Time-only string: "HH:MM:SS"
     pub def time_str(self) -> str:
@@ -237,7 +237,7 @@ extend DateTime:
         sb.append(Fmt.zero_pad(self.minute, 2))
         sb.append(":")
         sb.append(Fmt.zero_pad(self.second, 2))
-        return sb.to_string()
+        return sb.to_owned()
 
 # ─── Date ─────────────────────────────────────────────────────────────────────
 
@@ -270,7 +270,7 @@ extend Date:
         sb.append(Fmt.zero_pad(self.month, 2))
         sb.append("-")
         sb.append(Fmt.zero_pad(self.day, 2))
-        return sb.to_string()
+        return sb.to_owned()
 
     pub def to_datetime(self) -> DateTime:
         return DateTime.init(self.year, self.month, self.day, 0, 0, 0)
@@ -317,7 +317,7 @@ extend Time:
         sb.append(Fmt.zero_pad(self.minute, 2))
         sb.append(":")
         sb.append(Fmt.zero_pad(self.second, 2))
-        return sb.to_string()
+        return sb.to_owned()
 
     pub def total_seconds(self) -> int:
         return self.hour * 3600 + self.minute * 60 + self.second

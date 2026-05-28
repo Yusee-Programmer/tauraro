@@ -1,10 +1,10 @@
 # std.core.alloc — Low-level memory management via extern "C" bindings.
 #
-# All allocations go through the runtime's checked allocator which aborts on
-# OOM.  raw_alloc / raw_realloc / raw_free are thin wrappers so callers never
-# import from the bootstrap compiler's core.alloc module.
+# Exports both the raw_* helpers (used by other std.core modules) and the
+# generic alloc[T]/dealloc[T]/resize[T]/copy[T] interface (used by src/*.tr).
 
 extern "C":
+    def _tr_c_calloc(count: int, size: int) -> Pointer[char]
     def _tr_c_malloc(size: int) -> Pointer[char]
     def _tr_c_realloc(ptr: Pointer[char], size: int) -> Pointer[char]
     def _tr_c_free(ptr: Pointer[char])
@@ -12,6 +12,8 @@ extern "C":
     def _tr_c_memset(ptr: Pointer[char], val: int, n: int)
     def _tr_c_memmove(dst: Pointer[char], src: Pointer[char], n: int)
     def _tr_checked_alloc(size: int) -> Pointer[char]
+
+# ── Raw helpers (used internally by std.core.*) ───────────────────────────
 
 pub def raw_alloc(size: int) -> Pointer[char]:
     return _tr_checked_alloc(size)
@@ -30,3 +32,24 @@ pub def raw_zero(ptr: Pointer[char], n: int):
 
 pub def raw_move(dst: Pointer[char], src: Pointer[char], n: int):
     _tr_c_memmove(dst, src, n)
+
+# ── Generic allocators (used by src/*.tr: alloc[T], dealloc[T], etc.) ────
+
+pub def alloc[T](count: int) -> Pointer[T]:
+    unsafe:
+        sz = sizeof(T)
+        mut ptr = _tr_c_calloc(count, sz) as Pointer[T]
+        return ptr
+
+pub def dealloc[T](ptr: Pointer[T]):
+    _tr_c_free(ptr as Pointer[char])
+
+pub def resize[T](ptr: Pointer[T], new_count: int) -> Pointer[T]:
+    unsafe:
+        sz = sizeof(T)
+        return _tr_c_realloc(ptr as Pointer[char], new_count * sz) as Pointer[T]
+
+pub def copy[T](dst: Pointer[T], src: Pointer[T], count: int):
+    unsafe:
+        sz = sizeof(T)
+        _tr_c_memcpy(dst as Pointer[char], src as Pointer[char], count * sz)
