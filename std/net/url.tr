@@ -41,7 +41,7 @@ extend Url:
         if str_len(self.query) > 0:
             sb.append("?")
             sb.append(self.query)
-        return sb.to_string()
+        return sb.to_owned()
 
     pub def is_https(self) -> bool:
         return self.scheme == "https"
