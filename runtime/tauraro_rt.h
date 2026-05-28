@@ -10,12 +10,23 @@
 #ifndef TAURARO_RT_H
 #define TAURARO_RT_H
 
+/* Must be defined before any system header to expose full POSIX/platform extensions:
+ * pthread_rwlock_t, setenv, strdup, struct addrinfo, NI_NAMEREQD, clock_gettime, etc. */
+#if defined(__linux__)
+#  define _GNU_SOURCE
+#elif defined(__APPLE__)
+#  define _DARWIN_C_SOURCE
+#elif defined(__unix__)
+#  define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdarg.h>
+#include <time.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <setjmp.h>

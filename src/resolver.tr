@@ -96,6 +96,33 @@ extend ModuleResolver:
             unsafe:
                 dir_str = _tr_str_slice(main_path, 0, dir_end)
             self.search_paths.push(dir_str)
+            # Also add parent and grandparent of the source file directory.
+            # This allows finding the repo-root std lib (e.g. core/) when the
+            # binary is run from a different CWD with an absolute source path.
+            mut par_end = 0
+            mut pj = 0
+            mut dp = dir_str as Pointer[char]
+            while dp.offset(pj).read() as int != 0:
+                mut dch = dp.offset(pj).read() as int
+                if dch == 47 or dch == 92: par_end = pj
+                pj = pj + 1
+            if par_end > 0:
+                mut parent_dir = ""
+                unsafe:
+                    parent_dir = _tr_str_slice(dir_str, 0, par_end)
+                self.search_paths.push(parent_dir)
+                mut gp_end = 0
+                mut gj = 0
+                mut gp_p = parent_dir as Pointer[char]
+                while gp_p.offset(gj).read() as int != 0:
+                    mut gch = gp_p.offset(gj).read() as int
+                    if gch == 47 or gch == 92: gp_end = gj
+                    gj = gj + 1
+                if gp_end > 0:
+                    mut gp_dir = ""
+                    unsafe:
+                        gp_dir = _tr_str_slice(parent_dir, 0, gp_end)
+                    self.search_paths.push(gp_dir)
         self.resolve_file(main_path, true)
         mut p = Program.init()
         mut i = 0

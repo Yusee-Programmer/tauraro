@@ -92,21 +92,41 @@ pub def dir_of_path(path: str) -> str:
         end = end - 1
     return "./"
 
-pub def read_runtime_header(bin_path: str) -> str:
-    # tauraro/runtime/ is the canonical self-hosted runtime — check it first.
+pub def strip_trailing_sep_inline(s: str) -> str:
+    mut n = 0
+    mut p = s as Pointer[char]
+    while p.offset(n).read() as int != 0: n = n + 1
+    if n == 0: return s
+    mut last = p.offset(n - 1).read() as int
+    if last == 47 or last == 92: return _tr_str_slice(s, 0, n - 1)
+    return s
+
+pub def read_runtime_header(bin_path: str, input_path: str) -> str:
+    # 1. Canonical repo location relative to CWD.
     if file_exists("tauraro/runtime/tauraro_rt.h"): return read_file("tauraro/runtime/tauraro_rt.h")
-    # Fallback: header placed next to the compiler binary (e.g. tau5.exe).
+    # 2. Next to the compiler binary (e.g. distributed package).
     mut bin_dir = dir_of_path(bin_path)
     mut src1 = bin_dir + "tauraro_rt.h"
     if file_exists(src1): return read_file(src1)
-    # Last resort: bootstrap runtime.
+    # 3. Relative to the input source file — works even when the binary is moved.
+    #    Walk up: src_dir → parent → grandparent, checking for runtime/tauraro_rt.h at each level.
+    if input_path != "":
+        mut src_dir = dir_of_path(input_path)
+        if file_exists(src_dir + "tauraro_rt.h"): return read_file(src_dir + "tauraro_rt.h")
+        mut parent = dir_of_path(strip_trailing_sep_inline(src_dir))
+        if file_exists(parent + "runtime/tauraro_rt.h"): return read_file(parent + "runtime/tauraro_rt.h")
+        if file_exists(parent + "tauraro_rt.h"): return read_file(parent + "tauraro_rt.h")
+        mut gp = dir_of_path(strip_trailing_sep_inline(parent))
+        if file_exists(gp + "runtime/tauraro_rt.h"): return read_file(gp + "runtime/tauraro_rt.h")
+        if file_exists(gp + "tauraro_rt.h"): return read_file(gp + "tauraro_rt.h")
+    # 4. Last resort relative to CWD.
     if file_exists("runtime/tauraro_rt.h"): return read_file("runtime/tauraro_rt.h")
     return ""
 
-pub def ensure_runtime_header(out_dir: str, bin_path: str):
+pub def ensure_runtime_header(out_dir: str, bin_path: str, input_path: str):
     mut dest = out_dir + "tauraro_rt.h"
     if file_exists(dest): return
-    mut content = read_runtime_header(bin_path)
+    mut content = read_runtime_header(bin_path, input_path)
     if content != "":
         write_file(dest, content)
 
@@ -351,6 +371,9 @@ pub def main(args: Vec[str]):
     if verbose: print("[1/5] Resolving modules: " + input_path)
 
     mut resolver = ModuleResolver.init()
+    # Add the binary's own directory so that core/ placed next to the exe is always found,
+    # regardless of CWD. This is the standard distributed-binary search path.
+    resolver.add_search_path(strip_trailing_sep_inline(dir_of_path(args.get(0))))
     mut prog = resolver.resolve_main(input_path)
 
     if emit_mode == "ast":
@@ -390,7 +413,7 @@ pub def main(args: Vec[str]):
 
     # ── C backend — modular output into build/ ────────────────────────────────
     mut c_gen  = CGenerator.init()
-    mut rt_h   = read_runtime_header(args.get(0))
+    mut rt_h   = read_runtime_header(args.get(0), input_path)
 
     c_gen.register_program(hir)
     c_gen.scan_mono_prog(hir)
@@ -508,7 +531,22 @@ pub def main(args: Vec[str]):
     mut exe_ext = ".exe"
     if not _tr_is_windows():
         exe_ext = ""
-    mut exe_path = build_dir + exe_name + exe_ext
+    # If the caller gave an explicit path with separators (absolute or relative dir),
+    # use it directly instead of placing the exe inside build_dir.
+    mut has_sep = false
+    mut sep_p = exe_name as Pointer[char]
+    mut sep_i = 0
+    while sep_p.offset(sep_i).read() as int != 0:
+        mut sep_c = sep_p.offset(sep_i).read() as int
+        if sep_c == 47 or sep_c == 92:
+            has_sep = true
+            break
+        sep_i = sep_i + 1
+    mut exe_path = ""
+    if has_sep:
+        exe_path = exe_name + exe_ext
+    else:
+        exe_path = build_dir + exe_name + exe_ext
 
     if verbose: print("[5/5] Linking " + str(all_c_files.len) + " modules → " + exe_path)
     mut rc = compile_all_c(all_c_files, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose)
