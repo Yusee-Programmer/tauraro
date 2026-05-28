@@ -162,3 +162,17 @@ extend File:
         mut sz = _tr_c_ftell(fp)
         _tr_c_fclose(fp)
         return sz
+
+# ── Module-level standalone helpers (mirrors core.io interface) ───────────────
+
+pub def read_file(path: str) -> str:
+    return File.read_text(path)
+
+pub def write_file(path: str, data: str) -> bool:
+    return File.write_text(path, data)
+
+pub def append_file(path: str, data: str) -> bool:
+    return File.append_text(path, data)
+
+pub def file_exists(path: str) -> bool:
+    return File.file_exists(path)
