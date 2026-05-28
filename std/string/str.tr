@@ -162,7 +162,7 @@ extend Str:
         while i < real_e:
             sb.append_char(p.offset(i).read() as int)
             i = i + 1
-        return sb.to_string()
+        return sb.to_owned()
 
     pub def repeat(s: str, n: int) -> str:
         if n <= 0: return ""
@@ -171,7 +171,7 @@ extend Str:
         while i < n:
             sb.append(s)
             i = i + 1
-        return sb.to_string()
+        return sb.to_owned()
 
     pub def reverse(s: str) -> str:
         mut slen = Str.len(s)
@@ -181,7 +181,7 @@ extend Str:
         while i >= 0:
             sb.append_char(p.offset(i).read() as int)
             i = i - 1
-        return sb.to_string()
+        return sb.to_owned()
 
     # ── Case conversion ──────────────────────────────────────────────────────
 
@@ -195,7 +195,7 @@ extend Str:
             if ch >= 97 and ch <= 122: ch = ch - 32
             sb.append_char(ch)
             i = i + 1
-        return sb.to_string()
+        return sb.to_owned()
 
     pub def to_lower(s: str) -> str:
         mut slen = Str.len(s)
@@ -207,7 +207,7 @@ extend Str:
             if ch >= 65 and ch <= 90: ch = ch + 32
             sb.append_char(ch)
             i = i + 1
-        return sb.to_string()
+        return sb.to_owned()
 
     # Capitalize: first letter upper, rest lower.
     pub def capitalize(s: str) -> str:
@@ -236,7 +236,7 @@ extend Str:
                 sb.append_char(ch)
             prev = ch
             i = i + 1
-        return sb.to_string()
+        return sb.to_owned()
 
     # ── Trimming ─────────────────────────────────────────────────────────────
 
@@ -280,7 +280,7 @@ extend Str:
             sb.append_char(pad_char)
             i = i + 1
         sb.append(s)
-        return sb.to_string()
+        return sb.to_owned()
 
     # Right-pad s to width using pad_char.
     pub def rpad(s: str, width: int, pad_char: int) -> str:
@@ -292,7 +292,7 @@ extend Str:
         while i < width:
             sb.append_char(pad_char)
             i = i + 1
-        return sb.to_string()
+        return sb.to_owned()
 
     # Center s within width, padding with spaces.
     pub def center(s: str, width: int) -> str:
@@ -311,7 +311,7 @@ extend Str:
         while i < right:
             sb.append_char(32)
             i = i + 1
-        return sb.to_string()
+        return sb.to_owned()
 
     # ── Search ───────────────────────────────────────────────────────────────
 
@@ -400,7 +400,7 @@ extend Str:
             else:
                 result.append_char(sp.offset(i).read() as int)
                 i = i + 1
-        return result.to_string()
+        return result.to_owned()
 
     # Replace only the first occurrence of old.
     pub def replace_first(s: str, old: str, new_: str) -> str:
@@ -410,7 +410,7 @@ extend Str:
         sb.append(Str.slice(s, 0, pos))
         sb.append(new_)
         sb.append(Str.slice(s, pos + Str.len(old), Str.len(s)))
-        return sb.to_string()
+        return sb.to_owned()
 
     # Simple positional format: replaces each "{}" in template with the next value.
     pub def format(template: str, values: Vec[str]) -> str:

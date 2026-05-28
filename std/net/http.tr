@@ -64,7 +64,7 @@ extend HttpResponse:
             sb.append(" Unknown")
         sb.append("\n")
         sb.append(self.body)
-        return sb.to_string()
+        return sb.to_owned()
 
 pub class HttpClient:
     pub host:      str
@@ -95,7 +95,7 @@ extend HttpClient:
         sb.append("Host: ")
         sb.append(self.host)
         sb.append("\r\nConnection: close\r\n")
-        return sb.to_string()
+        return sb.to_owned()
 
     # Parse HTTP status line "HTTP/1.x NNN ..." → int; 0 on failure.
     def _parse_status(self, raw: str) -> int:
@@ -126,7 +126,7 @@ extend HttpClient:
         sb.append(" HTTP/1.0\r\n")
         sb.append(self._build_headers())
         sb.append("\r\n")
-        stream.send(sb.to_string())
+        stream.send(sb.to_owned())
         mut raw  = stream.recv(65536)
         stream.close()
         mut code = self._parse_status(raw)
@@ -149,7 +149,7 @@ extend HttpClient:
         else: sb.append(Fmt.int_to_str(clen))
         sb.append("\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\n")
         sb.append(data)
-        stream.send(sb.to_string())
+        stream.send(sb.to_owned())
         mut raw  = stream.recv(65536)
         stream.close()
         mut code = self._parse_status(raw)
@@ -172,7 +172,7 @@ extend HttpClient:
         else: sb.append(Fmt.int_to_str(clen))
         sb.append("\r\n\r\n")
         sb.append(data)
-        stream.send(sb.to_string())
+        stream.send(sb.to_owned())
         mut raw  = stream.recv(65536)
         stream.close()
         mut code = self._parse_status(raw)
@@ -190,7 +190,7 @@ extend HttpClient:
         sb.append(" HTTP/1.0\r\n")
         sb.append(self._build_headers())
         sb.append("\r\n")
-        stream.send(sb.to_string())
+        stream.send(sb.to_owned())
         mut raw  = stream.recv(65536)
         stream.close()
         mut code = self._parse_status(raw)

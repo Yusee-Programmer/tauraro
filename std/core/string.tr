@@ -1,7 +1,8 @@
-# std.core.string — StringBuilder: fast growable string buffer.
+# std.core.string — StringObj and StringBuilder for self-hosted Tauraro.
 #
-# Uses a raw Pointer[char] buffer with malloc/realloc.
-# No dependency on the bootstrap compiler's core.string module.
+# StringObj: heap-owned string view (data: Pointer[char], len, capacity).
+# StringBuilder: growable string builder backed by a StringObj buffer.
+# Layout matches core/string.tr so the c.tr codegen's ->buf->len accesses work.
 
 extern "C":
     def _tr_checked_alloc(size: int) -> Pointer[char]
@@ -10,42 +11,67 @@ extern "C":
     def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
     def _tr_strlen(s: str) -> int
 
-pub class StringBuilder:
-    pub buf:      Pointer[char]
-    pub len:      int
+pub class StringObj:
+    pub data: Pointer[char]
+    pub len:  int
     pub capacity: int
 
+extend StringObj:
+    pub def init(s: str) -> StringObj:
+        mut obj = StringObj()
+        mut slen = _tr_strlen(s)
+        obj.len = slen
+        obj.capacity = slen + 8
+        obj.data = _tr_checked_alloc(obj.capacity)
+        if slen > 0:
+            _tr_c_memcpy(obj.data, s as Pointer[char], slen)
+        unsafe: obj.data.offset(slen).write('\0')
+        return obj
+
+    pub def as_str(self) -> str:
+        return self.data as str
+
+    pub def append(self, other: str):
+        mut slen = _tr_strlen(other)
+        if slen <= 0: return
+        if self.len + slen >= self.capacity:
+            self.capacity = (self.len + slen) * 2 + 8
+            self.data = _tr_c_realloc(self.data, self.capacity)
+        _tr_c_memcpy(self.data.offset(self.len), other as Pointer[char], slen)
+        self.len = self.len + slen
+        unsafe: self.data.offset(self.len).write('\0')
+
+    pub def destroy(self):
+        _tr_c_free(self.data)
+        self.data = 0 as Pointer[char]
+        self.len = 0
+        self.capacity = 0
+
+pub class StringBuilder:
+    pub buf: StringObj
+
 extend StringBuilder:
-    pub def init(cap: int) -> StringBuilder:
-        mut cap2 = cap
-        if cap2 < 64: cap2 = 64
+    pub def init(initial_capacity: int) -> StringBuilder:
+        mut cap = initial_capacity
+        if cap < 16: cap = 16
         mut sb = StringBuilder()
-        sb.buf      = _tr_checked_alloc(cap2)
-        sb.len      = 0
-        sb.capacity = cap2
-        unsafe: sb.buf.offset(0).write('\0')
+        sb.buf = StringObj()
+        sb.buf.len = 0
+        sb.buf.capacity = cap + 1
+        sb.buf.data = _tr_checked_alloc(sb.buf.capacity)
+        unsafe: sb.buf.data.offset(0).write('\0')
         return sb
 
-    pub def _grow(self, needed: int):
-        if self.len + needed < self.capacity: return
-        mut new_cap = self.capacity * 2
-        while new_cap < self.len + needed + 1: new_cap = new_cap * 2
-        self.buf      = _tr_c_realloc(self.buf, new_cap)
-        self.capacity = new_cap
-
     pub def append(self, s: str):
-        mut slen = _tr_strlen(s)
-        if slen <= 0: return
-        self._grow(slen)
-        _tr_c_memcpy(self.buf.offset(self.len), s as Pointer[char], slen)
-        self.len = self.len + slen
-        unsafe: self.buf.offset(self.len).write('\0')
+        self.buf.append(s)
 
     pub def append_char(self, c: int):
-        self._grow(1)
-        unsafe: self.buf.offset(self.len).write(c as char)
-        self.len = self.len + 1
-        unsafe: self.buf.offset(self.len).write('\0')
+        if self.buf.len + 1 >= self.buf.capacity:
+            self.buf.capacity = self.buf.capacity * 2 + 8
+            self.buf.data = _tr_c_realloc(self.buf.data, self.buf.capacity)
+        unsafe: self.buf.data.offset(self.buf.len).write(c as char)
+        self.buf.len = self.buf.len + 1
+        unsafe: self.buf.data.offset(self.buf.len).write('\0')
 
     pub def append_int(self, n: int):
         mut neg = false
@@ -56,21 +82,20 @@ extend StringBuilder:
         if x < 0:
             neg = true
             x = 0 - x
-        mut start = self.len
+        mut start = self.buf.len
         while x > 0:
             mut d = x - (x / 10) * 10
             self.append_char(48 + d)
             x = x / 10
         if neg: self.append_char(45)
-        # reverse the digits just written
         mut lo = start
-        mut hi = self.len - 1
+        mut hi = self.buf.len - 1
         while lo < hi:
             unsafe:
-                mut a = self.buf.offset(lo).read()
-                mut b = self.buf.offset(hi).read()
-                self.buf.offset(lo).write(b)
-                self.buf.offset(hi).write(a)
+                mut a = self.buf.data.offset(lo).read()
+                mut b = self.buf.data.offset(hi).read()
+                self.buf.data.offset(lo).write(b)
+                self.buf.data.offset(hi).write(a)
             lo = lo + 1
             hi = hi - 1
 
@@ -78,26 +103,24 @@ extend StringBuilder:
         mut s = f.to_str()
         self.append(s)
 
-    # Return the built string (pointer into our buffer — valid until next mutation).
-    pub def to_string(self) -> str:
-        return self.buf as str
+    pub def len(self) -> int:
+        return self.buf.len
 
-    # Return a fresh heap copy of the built string.
+    pub def to_string(self) -> StringObj:
+        return StringObj.init(self.buf.as_str())
+
     pub def to_owned(self) -> str:
-        mut sz = self.len + 1
+        mut sz = self.buf.len + 1
         mut out = _tr_checked_alloc(sz)
-        _tr_c_memcpy(out, self.buf, sz)
+        _tr_c_memcpy(out, self.buf.data, sz)
         return out as str
 
     pub def as_str(self) -> str:
-        return self.buf as str
+        return self.buf.as_str()
 
     pub def clear(self):
-        self.len = 0
-        unsafe: self.buf.offset(0).write('\0')
+        self.buf.len = 0
+        unsafe: self.buf.data.offset(0).write('\0')
 
     pub def free(self):
-        _tr_c_free(self.buf)
-        self.buf      = 0 as Pointer[char]
-        self.len      = 0
-        self.capacity = 0
+        self.buf.destroy()
