@@ -47,35 +47,93 @@ jobs:
         run: |
           DEST="bootstrap/tauraroc-${{ matrix.platform }}"
           mkdir -p "$DEST"
+          DOWNLOADED=false
 
-          if gh release download \
-               --repo "${{ github.repository }}" \
-               --pattern "tauraroc-${{ matrix.platform }}.zip" \
-               --dir bootstrap/ \
-               --clobber 2>/dev/null; then
-            echo "==> Downloaded tauraroc-${{ matrix.platform }}.zip from latest release"
-            unzip "bootstrap/tauraroc-${{ matrix.platform }}.zip" -d "$DEST/"
+          # ── Try latest GitHub Release ────────────────────────────────
+          # List all assets so we can match regardless of how the release
+          # was created (automated zip, manual zip, or raw binary upload).
+          ASSET_LIST=$(gh release view \
+                         --repo "${{ github.repository }}" \
+                         --json assets \
+                         -q '.assets[].name' 2>/dev/null || true)
+
+          if [ -n "$ASSET_LIST" ]; then
+            echo "==> Release assets found: $(echo "$ASSET_LIST" | tr '\n' ' ')"
+
+            # Candidates tried in preference order:
+            #  1. our automated zip name  (tauraroc-linux-x64.zip)
+            #  2. legacy seed-dir zip     (tauraroc-Linux-X64.zip)
+            #  3. raw binary              (tauraroc / tauraroc.exe)
+            #  4. platform-named binary   (tauraroc-Linux-X64 / tauraroc-Windows-X64.exe)
+            for CANDIDATE in \
+                "tauraroc-${{ matrix.platform }}.zip" \
+                "${{ matrix.seed_dir }}.zip" \
+                "tauraroc${{ matrix.ext }}" \
+                "${{ matrix.seed_dir }}${{ matrix.ext }}"; do
+
+              if echo "$ASSET_LIST" | grep -Fxq "$CANDIDATE"; then
+                echo "==> Downloading: $CANDIDATE"
+                gh release download \
+                  --repo "${{ github.repository }}" \
+                  --pattern "$CANDIDATE" \
+                  --dir bootstrap/ \
+                  --clobber
+
+                if [[ "$CANDIDATE" == *.zip ]]; then
+                  # Unzip into a temp dir, then locate the binary inside
+                  # (handles both flat zip and nested folder zip)
+                  rm -rf bootstrap/unzipped
+                  unzip -o "bootstrap/$CANDIDATE" -d bootstrap/unzipped/
+                  BIN=$(find bootstrap/unzipped -name "tauraroc${{ matrix.ext }}" \
+                              ! -path "*/src/*" | head -1)
+                  [ -z "$BIN" ] && BIN=$(find bootstrap/unzipped \
+                              -name "tauraroc${{ matrix.ext }}" | head -1)
+                  if [ -z "$BIN" ]; then
+                    echo "ERROR: zip $CANDIDATE contained no tauraroc${{ matrix.ext }}"
+                    exit 1
+                  fi
+                  cp "$BIN" "$DEST/tauraroc${{ matrix.ext }}"
+                  rm -rf bootstrap/unzipped
+                else
+                  # Raw binary — rename to the canonical local name
+                  mv "bootstrap/$CANDIDATE" "$DEST/tauraroc${{ matrix.ext }}"
+                fi
+
+                DOWNLOADED=true
+                break
+              fi
+            done
+
+            if [ "$DOWNLOADED" = "false" ]; then
+              echo "==> No matching asset found in the release."
+              echo "    Available: $(echo "$ASSET_LIST" | tr '\n' ' ')"
+              echo "    Expected one of: tauraroc-${{ matrix.platform }}.zip | ${{ matrix.seed_dir }}.zip | tauraroc${{ matrix.ext }} | ${{ matrix.seed_dir }}${{ matrix.ext }}"
+            fi
           else
-            echo "==> No release found — using committed seed binary from ${{ matrix.seed_dir }}/"
+            echo "==> No published release found."
+          fi
+
+          # ── Fallback: committed seed binary ──────────────────────────
+          if [ "$DOWNLOADED" = "false" ]; then
+            echo "==> Falling back to committed seed binary in ${{ matrix.seed_dir }}/"
             if [ ! -f "${{ matrix.seed_dir }}/tauraroc${{ matrix.ext }}" ]; then
-              echo "ERROR: seed binary not found at ${{ matrix.seed_dir }}/tauraroc${{ matrix.ext }}"
-              echo "Either create a GitHub Release with tauraroc-${{ matrix.platform }}.zip"
-              echo "or commit the seed binary folder ${{ matrix.seed_dir }}/ to the repo."
+              echo "ERROR: no release asset matched AND no seed binary at ${{ matrix.seed_dir }}/tauraroc${{ matrix.ext }}"
               exit 1
             fi
             cp "${{ matrix.seed_dir }}/tauraroc${{ matrix.ext }}" "$DEST/"
           fi
 
+          # ── Finalise BOOTSTRAP_BIN ────────────────────────────────────
           BOOTSTRAP="$(pwd)/$DEST/tauraroc${{ matrix.ext }}"
           chmod +x "$BOOTSTRAP" 2>/dev/null || true
-          # PowerShell requires a native Windows path; cygpath -w converts /d/a/... → D:\a\...
+          # PowerShell needs a native Windows path; cygpath -w converts /d/a/... → D:\a\...
           if [ "$RUNNER_OS" = "Windows" ]; then
             BOOTSTRAP=$(cygpath -w "$BOOTSTRAP")
           fi
           echo "BOOTSTRAP_BIN=$BOOTSTRAP" >> "$GITHUB_ENV"
 
       # -------------------------------------------------------
-      # Single compilation pass — output lands in tauraro/src/build/
+      # Single compilation pass — output lands in src/build/
       # -------------------------------------------------------
       - name: Build (Linux / macOS)
         if: runner.os != 'Windows'
