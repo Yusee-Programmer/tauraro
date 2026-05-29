@@ -1,0 +1,8 @@
+# std.iter — Package index.
+#
+# Sub-modules:
+#   from std.iter.range     import Range
+#   from std.iter.transform import Transform
+
+from std.iter.range     import Range
+from std.iter.transform import Transform

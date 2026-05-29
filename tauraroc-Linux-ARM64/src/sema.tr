@@ -1,0 +1,1052 @@
+# compiler/sema.tr — Semantic analyzer for the Tauraro self-hosted compiler.
+
+from core.vec import Vec
+from core.map import Map
+from core.alloc import alloc, dealloc
+from core.io import _tr_exit, write_file, append_file
+from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension
+from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type
+
+
+pub enum SymbolKind:
+    SFunction
+    SClass
+    SEnum
+    SVariable
+    SInterface
+
+pub class Symbol:
+    pub name: str
+    pub kind: SymbolKind
+    pub ty: Pointer[AstType]
+    pub scope_depth: int
+    pub is_mut: bool
+    pub is_const: bool
+    pub is_shared: bool
+    pub is_moved: bool
+    pub active_borrows: int
+    pub borrowed_by: Vec[str]
+
+extend Symbol:
+    pub def init(name: str, kind: SymbolKind, ty: Pointer[AstType]) -> Symbol:
+        mut s = Symbol()
+        s.name = name
+        s.kind = kind
+        s.ty = ty
+        s.scope_depth = 0
+        s.is_mut = false
+        s.is_const = false
+        s.is_shared = false
+        s.is_moved = false
+        s.active_borrows = 0
+        s.borrowed_by = Vec[str].init(0)
+        return s
+
+pub class Scope:
+    pub variables: Map[str, Symbol]
+
+extend Scope:
+    pub def init() -> Scope:
+        mut s = Scope()
+        s.variables = Map[str, Symbol].init(32)
+        return s
+
+pub class Sema:
+    pub globals:            Map[str, Symbol]
+    pub scopes:             Vec[Scope]
+    pub errors:             Vec[str]
+    pub warnings:           Vec[str]
+    pub classes:            Map[str, ClassDef]
+    pub enums:              Map[str, EnumDef]
+    pub interfaces:         Map[str, InterfaceDef]
+    pub current_func_name:  str
+    pub current_class_name: str
+    pub current_scope_depth: int
+    pub in_async_fn:        bool
+    pub assign_froms:       Map[str, int] # block-local last use tracking
+    pub current_line:       int
+    pub current_func_generics: Vec[str]
+
+extend Sema:
+    pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
+        if e as usize == 0 as usize: return Pointer[AstType](0)
+        match e.read():
+            case Expr.EIdent(n):
+                return box_asttype(AstType.init(n))
+            case Expr.EIndex(obj, idx):
+                match obj.read():
+                    case Expr.EIdent(on):
+                        mut at = AstType.init(on)
+                        at.args = Vec[Pointer[AstType]].init(1)
+                        at.args.push(self.build_ast_type(idx))
+                        return box_asttype(at)
+                    case _: pass
+            case _: pass
+        return box_asttype(AstType.init("void"))
+
+    pub def init() -> Sema:
+        mut s = Sema()
+        s.globals            = Map[str, Symbol].init(1024)
+        s.scopes             = Vec[Scope].init(16)
+        s.errors             = Vec[str].init(16)
+        s.warnings           = Vec[str].init(8)
+        s.classes            = Map[str, ClassDef].init(128)
+        s.enums              = Map[str, EnumDef].init(64)
+        s.interfaces         = Map[str, InterfaceDef].init(32)
+        s.current_func_name  = ""
+        s.current_class_name = ""
+        s.current_scope_depth = 0
+        s.in_async_fn        = false
+        s.assign_froms       = Map[str, int].init(32)
+        s.current_line       = 0
+        s.current_func_generics = Vec[str].init(0)
+
+        # ── Built-in functions ─────────────────────────────────────────────────
+        s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("buga",     Symbol.init("buga",     SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("input",    Symbol.init("input",    SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        s.globals.insert("len",      Symbol.init("len",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
+        s.globals.insert("range",    Symbol.init("range",    SymbolKind.SFunction, box_asttype(AstType.init("List"))))
+        s.globals.insert("type",     Symbol.init("type",     SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        s.globals.insert("str",      Symbol.init("str",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        s.globals.insert("int",      Symbol.init("int",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
+        s.globals.insert("float",    Symbol.init("float",    SymbolKind.SFunction, box_asttype(AstType.init("float"))))
+        s.globals.insert("bool",     Symbol.init("bool",     SymbolKind.SFunction, box_asttype(AstType.init("bool"))))
+        s.globals.insert("ord",      Symbol.init("ord",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
+        s.globals.insert("chr",      Symbol.init("chr",      SymbolKind.SFunction, box_asttype(AstType.init("char"))))
+        s.globals.insert("abs",      Symbol.init("abs",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
+        s.globals.insert("max",      Symbol.init("max",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
+        s.globals.insert("min",      Symbol.init("min",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
+        s.globals.insert("sum",      Symbol.init("sum",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
+        s.globals.insert("round",    Symbol.init("round",    SymbolKind.SFunction, box_asttype(AstType.init("float"))))
+        s.globals.insert("sorted",   Symbol.init("sorted",   SymbolKind.SFunction, box_asttype(AstType.init("List"))))
+        s.globals.insert("reversed", Symbol.init("reversed", SymbolKind.SFunction, box_asttype(AstType.init("List"))))
+        s.globals.insert("iter",     Symbol.init("iter",     SymbolKind.SFunction, box_asttype(AstType.init("List"))))
+        s.globals.insert("enumerate",Symbol.init("enumerate",SymbolKind.SFunction, box_asttype(AstType.init("List"))))
+        s.globals.insert("zip",      Symbol.init("zip",      SymbolKind.SFunction, box_asttype(AstType.init("List"))))
+        s.globals.insert("map",      Symbol.init("map",      SymbolKind.SFunction, box_asttype(AstType.init("List"))))
+        s.globals.insert("filter",   Symbol.init("filter",   SymbolKind.SFunction, box_asttype(AstType.init("List"))))
+        s.globals.insert("all",      Symbol.init("all",      SymbolKind.SFunction, box_asttype(AstType.init("bool"))))
+        s.globals.insert("any",      Symbol.init("any",      SymbolKind.SFunction, box_asttype(AstType.init("bool"))))
+        s.globals.insert("assert",   Symbol.init("assert",   SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("Some",     Symbol.init("Some",     SymbolKind.SFunction, box_asttype(AstType.init("Option"))))
+        s.globals.insert("Ok",       Symbol.init("Ok",       SymbolKind.SFunction, box_asttype(AstType.init("Result"))))
+        s.globals.insert("Err",      Symbol.init("Err",      SymbolKind.SFunction, box_asttype(AstType.init("Result"))))
+        s.globals.insert("_tr_exit",   Symbol.init("_tr_exit",   SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("_tr_strlen", Symbol.init("_tr_strlen", SymbolKind.SFunction, box_asttype(AstType.init("int"))))
+        s.globals.insert("read_file",  Symbol.init("read_file",  SymbolKind.SFunction, box_asttype(AstType.init("str"))))
+        s.globals.insert("write_file", Symbol.init("write_file", SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("file_exists",Symbol.init("file_exists",SymbolKind.SFunction, box_asttype(AstType.init("bool"))))
+        s.globals.insert("_tr_system", Symbol.init("_tr_system", SymbolKind.SFunction, box_asttype(AstType.init("int"))))
+
+        # ── Built-in container classes ──────────────────────────────────────────
+        s.globals.insert("List",         Symbol.init("List",         SymbolKind.SClass, box_asttype(AstType.init("List"))))
+        s.globals.insert("Vec",          Symbol.init("Vec",          SymbolKind.SClass, box_asttype(AstType.init("Vec"))))
+        s.globals.insert("Pointer",      Symbol.init("Pointer",      SymbolKind.SClass, box_asttype(AstType.init("Pointer"))))
+        s.globals.insert("StringBuilder",Symbol.init("StringBuilder",SymbolKind.SClass, box_asttype(AstType.init("StringBuilder"))))
+        s.globals.insert("StringObj",    Symbol.init("StringObj",    SymbolKind.SClass, box_asttype(AstType.init("StringObj"))))
+        s.globals.insert("Map",          Symbol.init("Map",          SymbolKind.SClass, box_asttype(AstType.init("Map"))))
+        s.globals.insert("Dict",         Symbol.init("Dict",         SymbolKind.SClass, box_asttype(AstType.init("Dict"))))
+        s.globals.insert("Set",          Symbol.init("Set",          SymbolKind.SClass, box_asttype(AstType.init("Set"))))
+        s.globals.insert("Box",          Symbol.init("Box",          SymbolKind.SClass, box_asttype(AstType.init("Box"))))
+
+        # ── Result / Option enums ───────────────────────────────────────────────
+        s.globals.insert("Option", Symbol.init("Option", SymbolKind.SEnum, box_asttype(AstType.init("Option"))))
+        s.globals.insert("Result", Symbol.init("Result", SymbolKind.SEnum, box_asttype(AstType.init("Result"))))
+
+        # ── Exception hierarchy ─────────────────────────────────────────────────
+        s.globals.insert("Exception",  Symbol.init("Exception",  SymbolKind.SClass, box_asttype(AstType.init("Exception"))))
+        s.globals.insert("Error",      Symbol.init("Error",      SymbolKind.SClass, box_asttype(AstType.init("Error"))))
+        s.globals.insert("ValueError", Symbol.init("ValueError", SymbolKind.SClass, box_asttype(AstType.init("ValueError"))))
+        s.globals.insert("TypeError",  Symbol.init("TypeError",  SymbolKind.SClass, box_asttype(AstType.init("TypeError"))))
+        s.globals.insert("IndexError", Symbol.init("IndexError", SymbolKind.SClass, box_asttype(AstType.init("IndexError"))))
+        s.globals.insert("IOError",    Symbol.init("IOError",    SymbolKind.SClass, box_asttype(AstType.init("IOError"))))
+        s.globals.insert("KeyError",   Symbol.init("KeyError",   SymbolKind.SClass, box_asttype(AstType.init("KeyError"))))
+
+        # ── Concurrency / async types ───────────────────────────────────────────
+        s.globals.insert("Task",      Symbol.init("Task",      SymbolKind.SClass, box_asttype(AstType.init("Task"))))
+        s.globals.insert("Future",    Symbol.init("Future",    SymbolKind.SClass, box_asttype(AstType.init("Future"))))
+        s.globals.insert("Channel",   Symbol.init("Channel",   SymbolKind.SClass, box_asttype(AstType.init("Channel"))))
+        s.globals.insert("Mutex",     Symbol.init("Mutex",     SymbolKind.SClass, box_asttype(AstType.init("Mutex"))))
+        s.globals.insert("Arc",       Symbol.init("Arc",       SymbolKind.SClass, box_asttype(AstType.init("Arc"))))
+        s.globals.insert("Rc",        Symbol.init("Rc",        SymbolKind.SClass, box_asttype(AstType.init("Rc"))))
+        s.globals.insert("WaitGroup", Symbol.init("WaitGroup", SymbolKind.SClass, box_asttype(AstType.init("WaitGroup"))))
+
+        return s
+
+    pub def error(self, msg: str):
+        if self.current_line > 0:
+            self.errors.push("line " + str(self.current_line) + ": " + msg)
+        else:
+            self.errors.push(msg)
+
+    pub def enter_scope(self):
+        mut s_obj = Scope.init()
+        self.scopes.push(s_obj)
+        self.current_scope_depth = self.current_scope_depth + 1
+
+    pub def exit_scope(self):
+        self.scopes.pop()
+        self.current_scope_depth = self.current_scope_depth - 1
+
+    pub def declare(self, name: str, kind: SymbolKind, ty: Pointer[AstType], is_mut: bool):
+        # Rule N-1: Reserved name protection (skip 'self', internal '_*' names, short generics)
+        if name != "self" and name != "_" and _tr_strlen(name) > 1:
+            mut cat = self.is_reserved_error(name)
+            if cat != "":
+                self.error("[N-1] '" + name + "' is a " + cat + " and cannot be used as a variable name. Choose a different name (e.g. 'my_" + name + "').")
+            else:
+                mut wcat = self.is_reserved_warn(name)
+                if wcat != "":
+                    self.warnings.push("[N-1] '" + name + "' shadows the built-in " + wcat + ". Choose a different name to avoid confusion.")
+        mut sym = Symbol.init(name, kind, ty)
+        sym.scope_depth = self.current_scope_depth
+        sym.is_mut = is_mut
+
+        if self.scopes.len > 0:
+            self.scopes.get(self.scopes.len - 1).variables.insert(name, sym)
+        else:
+            self.globals.insert(name, sym)
+
+    pub def resolve(self, name: str) -> Symbol:
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            mut scope = self.scopes.get(i)
+            if scope.variables.contains(name):
+                return scope.variables.get(name)
+            i = i - 1
+        
+        if self.globals.contains(name):
+            return self.globals.get(name)
+        
+        return Symbol.init("", SymbolKind.SVariable, box_asttype(AstType.init("void")))
+
+    pub def analyze(self, prog: Program) -> HirProgram:
+        mut hp = HirProgram.init()
+
+        mut i = 0
+        while i < prog.decls.len:
+            self.register_decl(prog.decls.get(i))
+            i = i + 1
+
+        i = 0
+        while i < prog.decls.len:
+            mut d = prog.decls.get(i)
+            match d.read():
+                case Decl.DFunction(f):
+                    hp.functions.push(self.lower_func(f))
+                case Decl.DClass(c):
+                    hp.classes.push(self.lower_class(c))
+                case Decl.DActor(c):
+                    hp.classes.push(self.lower_class(c))
+                case Decl.DEnum(e):
+                    hp.enums.push(self.lower_enum(e))
+                case Decl.DInterface(i_def):
+                    hp.interfaces.push(self.lower_interface(i_def))
+                case Decl.DExtend(target, methods):
+                    self.current_class_name = target
+                    mut hi = 0
+                    while hi < methods.len:
+                        mut f = methods.get(hi)
+                        hp.functions.push(self.lower_func(f))
+                        hi = hi + 1
+                    self.current_class_name = ""
+                case Decl.DTopLevelStmt(s):
+                    hp.top_level_stmts.push(self.lower_stmt(s))
+                case Decl.DExtern(abi, functions):
+                    mut ei = 0
+                    while ei < functions.len:
+                        mut ef = functions.get(ei)
+                        mut hef = self.lower_func(ef)
+                        hef.is_extern = true
+                        hp.extern_funcs.push(hef)
+                        ei = ei + 1
+                case _: pass
+            i = i + 1
+        return hp
+
+    pub def register_decl(self, d: Pointer[Decl]):
+        match d.read():
+            case Decl.DFunction(f):
+                mut _f_ret = box_asttype(AstType.init("void"))
+                if f.ret_ty as usize != 0 as usize: _f_ret = f.ret_ty
+                self.declare(f.name, SymbolKind.SFunction, _f_ret, false)
+            case Decl.DClass(c):
+                self.declare(c.name, SymbolKind.SClass, box_asttype(AstType.init(c.name)), false)
+                self.classes.insert(c.name, c)
+            case Decl.DActor(c):
+                self.declare(c.name, SymbolKind.SClass, box_asttype(AstType.init(c.name)), false)
+                self.classes.insert(c.name, c)
+            case Decl.DEnum(e):
+                self.declare(e.name, SymbolKind.SEnum, box_asttype(AstType.init(e.name)), false)
+                self.enums.insert(e.name, e)
+            case Decl.DInterface(i):
+                self.declare(i.name, SymbolKind.SInterface, box_asttype(AstType.init(i.name)), false)
+                self.interfaces.insert(i.name, i)
+            case Decl.DExtend(target, methods):
+                mut hi = 0
+                while hi < methods.len:
+                    mut f = methods.get(hi)
+                    mut _m_ret = box_asttype(AstType.init("void"))
+                    if f.ret_ty as usize != 0 as usize: _m_ret = f.ret_ty
+                    self.declare(target + "_" + f.name, SymbolKind.SFunction, _m_ret, false)
+                    if self.classes.contains(target):
+                        self.classes.get(target).methods.push(f)
+                    hi = hi + 1
+            case Decl.DExtern(abi, functions):
+                mut ei = 0
+                while ei < functions.len:
+                    mut f = functions.get(ei)
+                    mut _e_ret = box_asttype(AstType.init("void"))
+                    if f.ret_ty as usize != 0 as usize: _e_ret = f.ret_ty
+                    self.declare(f.name, SymbolKind.SFunction, _e_ret, false)
+                    ei = ei + 1
+            case _: pass
+
+    pub def lower_func(self, f: FunctionDef) -> HirFunction:
+        self.current_line = f.line
+        # Rule N-1: Function name check
+        if f.name != "main" and f.name != "" and _tr_strlen(f.name) > 1:
+            mut fn_cat = self.is_reserved_error(f.name)
+            if fn_cat != "":
+                self.error("[N-1] '" + f.name + "' is a " + fn_cat + " and cannot be used as a function name.")
+        # Save async context, set function context
+        mut saved_async = self.in_async_fn
+        self.in_async_fn = f.is_async
+        self.current_func_name = f.name
+        mut saved_func_generics = self.current_func_generics
+        self.current_func_generics = f.generics
+        self.enter_scope()
+
+        mut hparams = Vec[HirParam].init(4)
+        mut j = 0
+        while j < f.params.len:
+            mut p = f.params.get(j)
+            mut p_ty = AstType.init("int")
+            if p.ty as usize != 0 as usize: 
+                p_ty = p.ty.read()
+            elif p.name == "self" and self.current_class_name != "":
+                p_ty = AstType.init(self.current_class_name)
+            
+            self.declare(p.name, SymbolKind.SVariable, box_asttype(p_ty), false)
+            
+            mut hp = HirParam()
+            hp.name = p.name
+            hp.ty = p_ty
+            hparams.push(hp)
+            j = j + 1
+
+        mut hf = HirFunction()
+        hf.name = f.name
+        hf.class_name = self.current_class_name
+        hf.generics = f.generics
+        hf.params = hparams
+        hf.ret_ty = AstType.init("None")
+        if f.ret_ty as usize != 0 as usize: hf.ret_ty = f.ret_ty.read()
+        hf.throws_ty = AstType.init("")
+        if f.throws_ty as usize != 0 as usize: hf.throws_ty = f.throws_ty.read()
+        hf.body = self.lower_block(f.body)
+        hf.decorators = f.decorators
+        hf.is_async = f.is_async
+        hf.is_extern = f.is_extern
+        hf.is_public = f.is_public
+        mut _has_self = false
+        mut _si = 0
+        while _si < hparams.len:
+            if hparams.get(_si).name == "self": _has_self = true
+            _si = _si + 1
+        hf.is_static = self.current_class_name != "" and not _has_self
+        hf.is_variadic = f.is_variadic
+
+        # Rule F-3: Definite return check for non-void, non-extern functions
+        # Skip for interface method signatures (empty body = no stmts)
+        if not f.is_extern and f.body.stmts.len > 0 and f.ret_ty as usize != 0 as usize:
+            mut ret_nm = f.ret_ty.read().name
+            if ret_nm != "void" and ret_nm != "None" and ret_nm != "" and f.name != "init" and f.name != "new":
+                if not self.block_returns(f.body):
+                    self.current_line = f.line
+                    self.error("[F-3] Function '" + f.name + "' returns '" + ret_nm + "' but is missing a return statement on at least one code path. FIX: Add a return at the end, or ensure all if/elif/else branches return.")
+
+        self.exit_scope()
+        # Restore async context
+        self.in_async_fn = saved_async
+        self.current_func_name = ""
+        self.current_func_generics = saved_func_generics
+        return hf
+
+    pub def lower_class(self, c: ClassDef) -> HirClass:
+        self.current_line = c.line
+        self.current_class_name = c.name
+        mut hfields = Vec[HirField].init(4)
+        mut i = 0
+        while i < c.fields.len:
+            mut f = c.fields.get(i)
+            mut hf = HirField()
+            hf.name = f.name
+            mut f_ty = AstType.init("int")
+            if f.ty as usize != 0 as usize: f_ty = f.ty.read()
+            hf.ty = f_ty
+            hfields.push(hf)
+            i = i + 1
+            
+        mut hmethods = Vec[HirFunction].init(4)
+        i = 0
+        while i < c.methods.len:
+            mut hm = self.lower_func(c.methods.get(i))
+            hmethods.push(hm)
+            i = i + 1
+            
+        mut hc = HirClass()
+        hc.name = c.name
+        hc.generics = c.generics
+        hc.fields = hfields
+        hc.methods = hmethods
+        hc.base_classes = c.iface_names
+        hc.iface_names = c.iface_names
+        hc.decorators = c.decorators
+        hc.is_public = c.is_public
+        hc.is_class = c.is_class
+
+        self.current_class_name = ""
+        return hc
+
+    pub def lower_enum(self, e: EnumDef) -> HirEnum:
+        self.current_class_name = e.name
+        mut hvariants = Vec[HirVariant].init(4)
+        mut i = 0
+        while i < e.variants.len:
+            mut v = e.variants.get(i)
+            mut hfields = Vec[HirParam].init(4)
+            mut j = 0
+            while j < v.fields.len:
+                mut p = v.fields.get(j)
+                mut hp = HirParam()
+                hp.name = p.name
+                mut p_ty = AstType.init("int")
+                if p.ty as usize != 0 as usize: p_ty = p.ty.read()
+                hp.ty = p_ty
+                hfields.push(hp)
+                j = j + 1
+                
+            mut hv = HirVariant()
+            hv.name = v.name
+            hv.fields = hfields
+            hvariants.push(hv)
+            i = i + 1
+            
+        mut hmethods = Vec[HirFunction].init(4)
+        i = 0
+        while i < e.methods.len:
+            mut hm = self.lower_func(e.methods.get(i))
+            hmethods.push(hm)
+            i = i + 1
+            
+        mut he = HirEnum()
+        he.name = e.name
+        he.variants = hvariants
+        he.methods = hmethods
+        he.iface_names = e.iface_names
+        he.decorators = e.decorators
+        he.is_public = e.is_public
+        
+        self.current_class_name = ""
+        return he
+
+    pub def lower_interface(self, i_def: InterfaceDef) -> HirInterface:
+        mut hmethods = Vec[HirFunction].init(4)
+        mut i = 0
+        while i < i_def.methods.len:
+            mut hm = self.lower_func(i_def.methods.get(i))
+            hmethods.push(hm)
+            i = i + 1
+            
+        mut hi = HirInterface()
+        hi.name = i_def.name
+        hi.generics = i_def.generics
+        hi.methods = hmethods
+        return hi
+
+    pub def lower_block(self, b: Block) -> HirBlock:
+        mut hb = HirBlock.init()
+        mut i = 0
+        while i < b.stmts.len:
+            mut _hs = self.lower_stmt(b.stmts.get(i))
+            hb.push(_hs)
+            i = i + 1
+        return hb
+
+    pub def lower_stmt(self, s_ptr: Pointer[Stmt]) -> Pointer[HirStmt]:
+        if s_ptr as usize == 0 as usize: return Pointer[HirStmt](0)
+        s = s_ptr.read()
+        match s:
+            case Stmt.SExpr(e):
+                mut h_s_expr = box_hirstmt(HirStmt.SExpr(self.lower_expr(e)))
+                # Rule T-4: Result returned by throws-function must be handled
+                if e as usize != 0 as usize:
+                    match e.read():
+                        case Expr.ECall(callee, args):
+                            if callee as usize != 0 as usize:
+                                match callee.read():
+                                    case Expr.EIdent(fn_name):
+                                        mut fn_sym = self.resolve(fn_name)
+                                        if fn_sym.kind == SymbolKind.SFunction and fn_sym.ty.read().name == "Result":
+                                            self.error("[T-4] '" + fn_name + "()' returns a Result and its error must be handled. FIX: Assign the result and match on it, use '?' to propagate, or '_ = " + fn_name + "(...)' to explicitly discard.")
+                                    case _: pass
+                        case _: pass
+                return h_s_expr
+            case Stmt.SReturn(e): return box_hirstmt(HirStmt.SReturn(self.lower_expr(e)))
+            case Stmt.SLet(name, ownership, is_mut, is_const, is_shared, ty_ptr, val_ptr):
+                # Rule M-7: none must not be assigned to a non-Optional type
+                if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize:
+                    match val_ptr.read():
+                        case Expr.ELitNone:
+                            mut m7_ty_name = ty_ptr.read().name
+                            if m7_ty_name != "Option" and m7_ty_name != "None" and m7_ty_name != "void" and m7_ty_name != "":
+                                self.error("[M-7] Cannot assign 'none' to '" + name + "' which has type '" + m7_ty_name + "'. Only Option[T] can hold 'none'. FIX: Use 'Option[" + m7_ty_name + "]' as the type, or give '" + name + "' a real initial value.")
+                        case _: pass
+                mut ty = AstType.init("void")
+                if ty_ptr as usize != 0 as usize: ty = ty_ptr.read()
+                mut hval = self.lower_expr(val_ptr)
+                if ty.name == "void" or ty.name == "None": ty = hir_expr_type(hval)
+                self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
+                return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, hval))
+            case Stmt.SAssign(target, val):
+                mut htgt = self.lower_expr(target)
+                mut hv = self.lower_expr(val)
+                return box_hirstmt(HirStmt.SAssign(htgt, hv))
+            case Stmt.SIf(cond, then_b, elifs, else_b):
+                # Rule T-5: numeric variable used directly as boolean condition
+                if cond as usize != 0 as usize:
+                    match cond.read():
+                        case Expr.EIdent(t5_name):
+                            mut t5_sym = self.resolve(t5_name)
+                            mut t5_ty = t5_sym.ty.read().name
+                            if t5_ty == "int" or t5_ty == "i64" or t5_ty == "i32" or t5_ty == "float" or t5_ty == "f64":
+                                self.error("[T-5] '" + t5_name + "' is a number (" + t5_ty + ") and cannot be used as an 'if' condition. FIX: Write 'if " + t5_name + " != 0:' to explicitly check for non-zero.")
+                        case _: pass
+                # Lower if/elif/else chain into nested SIf nodes
+                mut hcond = self.lower_expr(cond)
+                mut hthen = self.lower_block(then_b)
+                mut helse = HirBlock.init()
+                # Process elifs: build a chain of nested if-else blocks
+                if elifs.len > 0:
+                    # Build from the last elif backwards
+                    mut base_else = self.lower_block(else_b)
+                    mut chain = base_else
+                    mut k = elifs.len - 1
+                    while k >= 0:
+                        mut elif_c = elifs.get(k)
+                        mut elif_cond = self.lower_expr(elif_c.cond)
+                        mut elif_body = self.lower_block(elif_c.body.read())
+                        mut nested = HirBlock.init()
+                        nested.push(box_hirstmt(HirStmt.SIf(elif_cond, elif_body, chain)))
+                        chain = nested
+                        k = k - 1
+                    helse = chain
+                else:
+                    helse = self.lower_block(else_b)
+                return box_hirstmt(HirStmt.SIf(hcond, hthen, helse))
+            case Stmt.SWhile(cond, body, decorators):
+                return box_hirstmt(HirStmt.SWhile(self.lower_expr(cond), self.lower_block(body)))
+            case Stmt.SFor(var, iter, body, decorators):
+                self.enter_scope()
+                self.declare(var, SymbolKind.SVariable, box_asttype(AstType.init("int")), false)
+                mut hstmt = box_hirstmt(HirStmt.SFor(var, self.lower_expr(iter), self.lower_block(body)))
+                self.exit_scope()
+                return hstmt
+            case Stmt.SMatch(subj, arms):
+                mut h_arms = Vec[HirMatchArm].init(4)
+                mut k = 0
+                while k < arms.len:
+                    mut arm = arms.get(k)
+                    self.enter_scope()
+                    self.declare_pattern_binds(arm.pat)
+                    h_arms.push(HirMatchArm.init(arm.pat, self.lower_block(arm.body.read())))
+                    self.exit_scope()
+                    k = k + 1
+                return box_hirstmt(HirStmt.SMatch(self.lower_expr(subj), h_arms))
+            case Stmt.STry(try_body, catches, finally_b):
+                mut h_catches = Vec[Pointer[HirCatchClause]].init(catches.len)
+                mut k = 0
+                while k < catches.len:
+                    mut cc = catches.get(k).read()
+                    mut hcc = alloc[HirCatchClause](1)
+                    mut hcc_val = HirCatchClause()
+                    hcc_val.err_name = cc.err_name
+                    hcc_val.err_type = AstType.init("str")
+                    if cc.err_type as usize != 0 as usize: hcc_val.err_type = cc.err_type.read()
+                    hcc_val.body = self.lower_block(cc.body.read())
+                    hcc.write(hcc_val)
+                    h_catches.push(hcc)
+                    k = k + 1
+                return box_hirstmt(HirStmt.STry(self.lower_block(try_body), h_catches, self.lower_block(finally_b)))
+            case Stmt.SRaise(e): return box_hirstmt(HirStmt.SRaise(self.lower_expr(e)))
+            case Stmt.SAssert(cond, msg): return box_hirstmt(HirStmt.SAssert(self.lower_expr(cond), self.lower_expr(msg)))
+            case Stmt.SWith(items, aliases, body):
+                mut h_items = Vec[Pointer[HirExpr]].init(items.len)
+                mut k = 0
+                while k < items.len:
+                    h_items.push(self.lower_expr(items.get(k)))
+                    k = k + 1
+                return box_hirstmt(HirStmt.SWith(h_items, aliases, self.lower_block(body)))
+            case Stmt.SAsm(code, outputs, inputs, clobbers):
+                return box_hirstmt(HirStmt.SAsm(code, outputs, inputs, clobbers))
+            case Stmt.SSpawn(e):
+                if not self.in_async_fn:
+                    self.error("[C-5] 'spawn:' used outside an async function. FIX: Declare '" + self.current_func_name + "' as 'async def " + self.current_func_name + "(...)' to use spawn inside it.")
+                return box_hirstmt(HirStmt.SSpawn(self.lower_expr(e)))
+            case Stmt.STaskGroup(body):
+                if not self.in_async_fn:
+                    self.error("[C-6] 'taskgroup:' used outside an async function. FIX: Declare '" + self.current_func_name + "' as 'async def " + self.current_func_name + "(...)' to use taskgroup inside it.")
+                return box_hirstmt(HirStmt.STaskGroup(self.lower_block(body)))
+            case Stmt.SGpuBlock(body): return box_hirstmt(HirStmt.SGpuBlock(self.lower_block(body)))
+            case Stmt.SBreak: return box_hirstmt(HirStmt.SBreak)
+            case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
+            case Stmt.SPass: return box_hirstmt(HirStmt.SPass)
+            case Stmt.SUnsafe(body): return box_hirstmt(HirStmt.SUnsafe(self.lower_block(body)))
+            case Stmt.SLine(n):
+                self.current_line = n
+                return box_hirstmt(HirStmt.SPass)
+            case _: return box_hirstmt(HirStmt.SPass)
+
+    pub def variant_field_ty(self, type_name: str, variant_name: str, field_idx: int) -> AstType:
+        if self.enums.contains(type_name):
+            mut enm = self.enums.get(type_name)
+            mut vi = 0
+            while vi < enm.variants.len:
+                mut v = enm.variants.get(vi)
+                if v.name == variant_name:
+                    if field_idx < v.fields.len:
+                        mut fp = v.fields.get(field_idx)
+                        if fp.ty as usize != 0 as usize: return fp.ty.read()
+                    return AstType.init("void")
+                vi = vi + 1
+        return AstType.init("void")
+
+    pub def declare_pattern_binds(self, pat: Pattern):
+        match pat:
+            case Pattern.PBind(name): self.declare(name, SymbolKind.SVariable, box_asttype(AstType.init("int")), false)
+            case Pattern.PVariantBind(type_name, variant_name, field):
+                mut fty = self.variant_field_ty(type_name, variant_name, 0)
+                if fty.name == "void": fty = AstType.init("int")
+                self.declare(field, SymbolKind.SVariable, box_asttype(fty), false)
+            case Pattern.PVariantBindMany(type_name, variant_name, fields):
+                mut _pi = 0
+                while _pi < fields.len:
+                    mut _pf = fields.get(_pi)
+                    if _pf != "_":
+                        mut fty = self.variant_field_ty(type_name, variant_name, _pi)
+                        if fty.name == "void": fty = AstType.init("int")
+                        self.declare(_pf, SymbolKind.SVariable, box_asttype(fty), false)
+                    _pi = _pi + 1
+            case Pattern.PTuple(first, second):
+                self.declare(first, SymbolKind.SVariable, box_asttype(AstType.init("int")), false)
+                self.declare(second, SymbolKind.SVariable, box_asttype(AstType.init("int")), false)
+            case Pattern.POr(pats):
+                mut i = 0
+                while i < pats.len:
+                    self.declare_pattern_binds(pats.get(i))
+                    i = i + 1
+            case _: pass
+
+    pub def lower_expr(self, e_ptr: Pointer[Expr]) -> Pointer[HirExpr]:
+        if e_ptr as usize == 0 as usize: return Pointer[HirExpr](0)
+        e = e_ptr.read()
+        match e:
+            case Expr.ELitInt(v): return box_hirexpr(HirExpr.ELitInt(v, AstType.init("int")))
+            case Expr.ELitFloat(v): return box_hirexpr(HirExpr.ELitFloat(v, AstType.init("float")))
+            case Expr.ELitStr(v): return box_hirexpr(HirExpr.ELitStr(v, AstType.init("str")))
+            case Expr.ERawStr(v): return box_hirexpr(HirExpr.ERawStr(v, AstType.init("str")))
+            case Expr.ELitBytes(v): return box_hirexpr(HirExpr.ELitBytes(v, AstType.init("Bytes")))
+            case Expr.ELitBool(v): return box_hirexpr(HirExpr.ELitBool(v, AstType.init("bool")))
+            case Expr.ELitChar(v): return box_hirexpr(HirExpr.ELitChar(v, AstType.init("char")))
+            case Expr.ELitNone: return box_hirexpr(HirExpr.ELitNone(AstType.init("None")))
+            case Expr.EIdent(name):
+                mut sym = self.resolve(name)
+                mut ty = sym.ty.read()
+                mut is_move = false
+                if self.assign_froms.contains(name) and not self.is_primitive(ty): is_move = true
+                return box_hirexpr(HirExpr.EIdent(name, ty, is_move))
+            case Expr.EBinOp(op, left, right):
+                mut hleft = self.lower_expr(left)
+                mut hright = self.lower_expr(right)
+                mut bin_ty = hir_expr_type(hleft)
+                if bin_ty.name == "void": bin_ty = hir_expr_type(hright)
+                if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "&&" or op == "||":
+                    bin_ty = AstType.init("bool")
+                return box_hirexpr(HirExpr.EBinOp(op, hleft, hright, bin_ty))
+            case Expr.EUnaryOp(op, expr):
+                mut hexpr_inner = self.lower_expr(expr)
+                return box_hirexpr(HirExpr.EUnaryOp(op, hexpr_inner, hir_expr_type(hexpr_inner)))
+            case Expr.ECall(callee, args):
+                mut hl = Vec[Pointer[HirExpr]].init(4)
+                mut k = 0
+                while k < args.len:
+                    hl.push(self.lower_expr(args.get(k)))
+                    k = k + 1
+                mut hcallee = self.lower_expr(callee)
+                mut ret_ty = AstType.init("void")
+                if callee as usize == 0 as usize: return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
+                match callee.read():
+                    case Expr.EIdent(n):
+                        if n == "main":
+                            self.error("[E-1] Explicit call to 'main()' is forbidden. The compiler automatically invokes main() as the program entry point. Remove the 'main()' call from your source.")
+                            return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
+                        if self.classes.contains(n) or n == "StringObj" or n == "StringBuilder" or n == "List" or n == "Vec" or n == "Pointer" or n == "Map" or n == "Dict":
+                            ret_ty = AstType.init(n)
+                        elif self.enums.contains(n):
+                            ret_ty = AstType.init(n)
+                        elif n == "alloc" or n == "dealloc":
+                            ret_ty = AstType.init("Pointer")
+                        else:
+                            mut _fsym = self.resolve(n)
+                            ret_ty = _fsym.ty.read()
+                    case Expr.EIndex(base, idx):
+                        match base.read():
+                            case Expr.EIdent(gn):
+                                if gn == "alloc" or gn == "dealloc":
+                                    match idx.read():
+                                        case Expr.EIdent(tn):
+                                            ret_ty = AstType.init("Pointer")
+                                            ret_ty.args.push(box_asttype(AstType.init(tn)))
+                                        case _:
+                                            ret_ty = AstType.init("Pointer")
+                                elif gn == "Pointer" or gn == "List" or gn == "Vec" or gn == "Map" or gn == "Dict":
+                                    match idx.read():
+                                        case Expr.EIdent(tn):
+                                            ret_ty = AstType.init(gn)
+                                            ret_ty.args.push(box_asttype(AstType.init(tn)))
+                                        case _:
+                                            ret_ty = AstType.init(gn)
+                                elif self.classes.contains(gn):
+                                    ret_ty = AstType.init(gn)
+                            case _: pass
+                    case Expr.EPropAccess(obj, variant):
+                        match obj.read():
+                            case Expr.EIdent(type_name):
+                                if self.enums.contains(type_name):
+                                    ret_ty = AstType.init(type_name)
+                                elif variant == "init" or variant == "new":
+                                    if type_name == "Pointer" or type_name == "List" or type_name == "Vec" or type_name == "Map" or type_name == "Dict":
+                                        ret_ty = AstType.init(type_name)
+                                    elif self.classes.contains(type_name):
+                                        ret_ty = AstType.init(type_name)
+                            case Expr.EIndex(base2, idx2):
+                                if variant == "init" or variant == "new":
+                                    match base2.read():
+                                        case Expr.EIdent(gn2):
+                                            if gn2 == "Pointer" or gn2 == "List" or gn2 == "Vec" or gn2 == "Map" or gn2 == "Dict":
+                                                match idx2.read():
+                                                    case Expr.EIdent(tn2):
+                                                        ret_ty = AstType.init(gn2)
+                                                        ret_ty.args.push(box_asttype(AstType.init(tn2)))
+                                                    case _:
+                                                        ret_ty = AstType.init(gn2)
+                                            elif self.classes.contains(gn2):
+                                                ret_ty = AstType.init(gn2)
+                                        case _: pass
+                            case _: pass
+                    case _: pass
+                return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
+            case Expr.EMethodCall(obj, method, args):
+                if method == "__index__" and args.len > 0:
+                    return self.lower_expr(box_expr(Expr.EIndex(obj, args.get(0))))
+                mut hl = Vec[Pointer[HirExpr]].init(4)
+                mut k = 0
+                while k < args.len:
+                    hl.push(self.lower_expr(args.get(k)))
+                    k = k + 1
+                mut hobj = self.lower_expr(obj)
+                mut hobj_ty = hir_expr_type(hobj)
+                mut ret_ty = AstType.init("void")
+                if method == "init" or method == "new":
+                    # Preserve generic args so Vec[T].init(n) keeps the T info
+                    ret_ty = hobj_ty
+                elif method == "offset": ret_ty = hobj_ty
+                elif method == "read":
+                    if hobj_ty.name == "Pointer" and hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                    else: ret_ty = AstType.init("int")
+                elif method == "as_str" or method == "to_str": ret_ty = AstType.init("str")
+                elif method == "len" or method == "__len__": ret_ty = AstType.init("int")
+                elif method == "get" or method == "pop":
+                    if (hobj_ty.name == "List" or hobj_ty.name == "Vec") and hobj_ty.args.len > 0:
+                        ret_ty = hobj_ty.args.get(0).read()
+                    elif (hobj_ty.name == "Map" or hobj_ty.name == "Dict") and hobj_ty.args.len > 1:
+                        ret_ty = hobj_ty.args.get(1).read()
+                    elif hobj_ty.args.len > 0:
+                        ret_ty = hobj_ty.args.get(0).read()
+                    elif self.classes.contains(hobj_ty.name):
+                        mut _gcls = self.classes.get(hobj_ty.name)
+                        mut _gmi = 0
+                        while _gmi < _gcls.methods.len:
+                            mut _gmdef = _gcls.methods.get(_gmi)
+                            if _gmdef.name == method:
+                                if _gmdef.ret_ty as usize != 0 as usize:
+                                    ret_ty = _gmdef.ret_ty.read()
+                            _gmi = _gmi + 1
+                elif method == "alloc": ret_ty = hobj_ty
+                elif method == "contains": ret_ty = AstType.init("bool")
+                elif hobj_ty.name == "StringBuilder" and method == "to_string": ret_ty = AstType.init("StringObj")
+                elif self.interfaces as usize != 0 as usize and self.interfaces.contains(hobj_ty.name):
+                    mut _iface_def = self.interfaces.get(hobj_ty.name)
+                    mut _imi = 0
+                    while _imi < _iface_def.methods.len:
+                        mut _imdef = _iface_def.methods.get(_imi)
+                        if _imdef.name == method:
+                            if _imdef.ret_ty as usize != 0 as usize:
+                                ret_ty = _imdef.ret_ty.read()
+                        _imi = _imi + 1
+                elif self.enums.contains(hobj_ty.name):
+                    ret_ty = AstType.init(hobj_ty.name)
+                elif self.classes.contains(hobj_ty.name):
+                    mut _cls = self.classes.get(hobj_ty.name)
+                    mut _mi = 0
+                    while _mi < _cls.methods.len:
+                        mut _mdef = _cls.methods.get(_mi)
+                        if _mdef.name == method:
+                            if _mdef.ret_ty as usize != 0 as usize:
+                                ret_ty = _mdef.ret_ty.read()
+                        _mi = _mi + 1
+                return box_hirexpr(HirExpr.EMethodCall(hobj, method, hl, ret_ty))
+            case Expr.EPropAccess(obj, prop):
+                mut hobj = self.lower_expr(obj)
+                mut hobj_ty_n: str = hir_expr_type(hobj).name
+                mut hobj_ty_full = hir_expr_type(hobj)
+                mut ret_ty = AstType.init("void")
+                if hobj_ty_n == "Result":
+                    if prop == "is_err" or prop == "is_ok": ret_ty = AstType.init("bool")
+                    elif prop == "ok" and hobj_ty_full.args.len > 0: ret_ty = hobj_ty_full.args.get(0).read()
+                    elif prop == "err" and hobj_ty_full.args.len > 1: ret_ty = hobj_ty_full.args.get(1).read()
+                elif hobj_ty_n == "Option":
+                    if prop == "is_some" or prop == "is_none": ret_ty = AstType.init("bool")
+                    elif (prop == "value" or prop == "val") and hobj_ty_full.args.len > 0: ret_ty = hobj_ty_full.args.get(0).read()
+                elif hobj_ty_n == "StringObj":
+                    if prop == "data": ret_ty = AstType.init("Pointer")
+                    elif prop == "length" or prop == "capacity": ret_ty = AstType.init("int")
+                elif hobj_ty_n == "StringBuilder":
+                    if prop == "buf": ret_ty = AstType.init("StringObj")
+                elif hobj_ty_n == "Vec" or hobj_ty_n == "List":
+                    if prop == "len" or prop == "length" or prop == "capacity": ret_ty = AstType.init("int")
+                    elif prop == "data": ret_ty = AstType.init("Pointer")
+                elif hobj_ty_n == "Map" or hobj_ty_n == "Dict" or hobj_ty_n == "Set":
+                    if prop == "len" or prop == "length" or prop == "capacity": ret_ty = AstType.init("int")
+                elif self.classes.contains(hobj_ty_n):
+                    mut _cls = self.classes.get(hobj_ty_n)
+                    mut _fi = 0
+                    while _fi < _cls.fields.len:
+                        mut _fld = _cls.fields.get(_fi)
+                        if _fld.name == prop:
+                            if _fld.ty as usize != 0 as usize: ret_ty = _fld.ty.read()
+                        _fi = _fi + 1
+                if ret_ty.name == "void" and (prop == "len" or prop == "length" or prop == "capacity"):
+                    ret_ty = AstType.init("int")
+                return box_hirexpr(HirExpr.EPropAccess(hobj, prop, ret_ty))
+            case Expr.EIndex(obj, index):
+                mut hexpr_obj = self.lower_expr(obj)
+                mut obj_ty_n: str = hir_expr_type(hexpr_obj).name
+                mut obj_name = ""
+                match obj.read():
+                    case Expr.EIdent(n): obj_name = n
+                    case _: pass
+                mut is_generic = false
+                mut generic_arg_n: str = ""
+                if index as usize == 0 as usize:
+                    return hexpr_obj
+                match index.read():
+                    case Expr.EIdent(iname):
+                        mut is_param = false
+                        if self.current_class_name != "":
+                            if self.classes.contains(self.current_class_name):
+                                mut cc = self.classes.get(self.current_class_name)
+                                mut ci = 0
+                                while ci < cc.generics.len:
+                                    if cc.generics.get(ci) == iname: is_param = true
+                                    ci = ci + 1
+                        mut fi = 0
+                        while fi < self.current_func_generics.len:
+                            if self.current_func_generics.get(fi) == iname: is_param = true
+                            fi = fi + 1
+
+                        if self.is_primitive_name(iname) or iname == "str" or iname == "Str" or is_param or _tr_strlen(iname) == 1 or self.classes.contains(iname) or iname == "StringObj" or iname == "StringBuilder" or self.enums.contains(iname) or iname == "Vec" or iname == "List" or iname == "Map":
+                            is_generic = true
+                            generic_arg_n = iname
+                    case Expr.EIndex(_, _):
+                        is_generic = true
+                        mut nested_ty = self.build_ast_type(index)
+                        if nested_ty as usize != 0 as usize:
+                            generic_arg_n = nested_ty.read().name
+                    case _: pass
+                if is_generic:
+                    # For Vec[T] or List[T] — return the base expr but annotate its type with the generic arg
+                    if (obj_ty_n == "Vec" or obj_ty_n == "List" or obj_ty_n == "Map" or obj_ty_n == "Pointer") and generic_arg_n != "":
+                        mut container_ty = AstType.init(obj_ty_n)
+                        container_ty.args = Vec[Pointer[AstType]].init(1)
+                        container_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
+                        if obj_name == "alloc" or obj_name == "dealloc" or obj_name == "resize" or obj_name == "copy":
+                             return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(index), container_ty))
+                        return box_hirexpr(HirExpr.EIdent(obj_ty_n, container_ty, false))
+                    return hexpr_obj
+                if not self.is_primitive_name(obj_ty_n) and obj_ty_n != "str" and obj_ty_n != "Pointer" and obj_ty_n != "List" and obj_ty_n != "Vec":
+                    mut call_args = Vec[Pointer[HirExpr]].init(1)
+                    call_args.push(self.lower_expr(index))
+                    return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", call_args, AstType.init("void")))
+                # EIndex type is the element type, not the container type
+                mut elem_ty = AstType.init("void")
+                if obj_ty_n == "List" or obj_ty_n == "Vec":
+                    if hir_expr_type(hexpr_obj).args.len > 0:
+                        elem_ty = hir_expr_type(hexpr_obj).args.get(0).read()
+                elif obj_ty_n == "Pointer":
+                    if hir_expr_type(hexpr_obj).args.len > 0:
+                        elem_ty = hir_expr_type(hexpr_obj).args.get(0).read()
+                elif obj_ty_n == "str": elem_ty = AstType.init("char")
+                return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(index), elem_ty))
+            case Expr.ESizeOf(ty):
+                if ty as usize == 0 as usize: return box_hirexpr(HirExpr.ESizeOf(AstType.init("void"), AstType.init("int")))
+                return box_hirexpr(HirExpr.ESizeOf(ty.read(), AstType.init("int")))
+            case Expr.ECast(expr, ty):
+                if ty as usize == 0 as usize: return self.lower_expr(expr)
+                return box_hirexpr(HirExpr.ECast(self.lower_expr(expr), ty.read()))
+            case Expr.EFString(parts):
+                mut hparts = Vec[HirFStringPart].init(4)
+                mut m = 0
+                while m < parts.len:
+                    mut p_ast = parts.get(m)
+                    mut hp = HirFStringPart.init()
+                    hp.is_expr = p_ast.is_expr
+                    hp.text = p_ast.text
+                    hp.expr = self.lower_expr(p_ast.expr)
+                    hparts.push(hp)
+                    m = m + 1
+                return box_hirexpr(HirExpr.EFString(hparts, AstType.init("str")))
+            case Expr.ETuple(items):
+                mut hitems = Vec[Pointer[HirExpr]].init(items.len)
+                mut n = 0
+                while n < items.len:
+                    hitems.push(self.lower_expr(items.get(n)))
+                    n = n + 1
+                return box_hirexpr(HirExpr.ETuple(hitems, AstType.init("tuple")))
+            case Expr.EList(items):
+                mut hitems = Vec[Pointer[HirExpr]].init(items.len)
+                mut n = 0
+                while n < items.len:
+                    hitems.push(self.lower_expr(items.get(n)))
+                    n = n + 1
+                mut list_ty = AstType.init("List")
+                if hitems.len > 0:
+                    list_ty.args = Vec[Pointer[AstType]].init(1)
+                    list_ty.args.push(box_asttype(hir_expr_type(hitems.get(0))))
+                return box_hirexpr(HirExpr.EList(hitems, list_ty))
+            case Expr.EClosure(params, ret_ty, body, is_async):
+                self.enter_scope()
+                mut hparams = Vec[HirParam].init(params.len)
+                mut l = 0
+                while l < params.len:
+                    mut pa = params.get(l)
+                    mut pa_ty = AstType.init("int")
+                    if pa.ty as usize != 0 as usize: pa_ty = pa.ty.read()
+                    self.declare(pa.name, SymbolKind.SVariable, box_asttype(pa_ty), false)
+                    mut hpa = HirParam()
+                    hpa.name = pa.name
+                    hpa.ty = pa_ty
+                    hparams.push(hpa)
+                    l = l + 1
+                mut r_ty = AstType.init("void")
+                if ret_ty as usize != 0 as usize: r_ty = ret_ty.read()
+                mut hexpr = HirExpr.EClosure(hparams, r_ty, self.lower_block(body), is_async)
+                self.exit_scope()
+                return box_hirexpr(hexpr)
+            case Expr.EIfElse(cond, then_e, else_e):
+                mut hcond = self.lower_expr(cond)
+                mut hthen = self.lower_expr(then_e)
+                mut helse = self.lower_expr(else_e)
+                mut ite_ty = hir_expr_type(hthen)
+                return box_hirexpr(HirExpr.EIfElse(hcond, hthen, helse, ite_ty))
+            case Expr.ETryExpr(inner):
+                mut hinner = self.lower_expr(inner)
+                mut inner_ty = hir_expr_type(hinner)
+                # ? extracts the Ok type from a Result[T,E]
+                mut ok_ty = AstType.init("void")
+                if inner_ty.name == "Result" and inner_ty.args.len > 0:
+                    ok_ty = inner_ty.args.get(0).read()
+                elif inner_ty.name != "void":
+                    ok_ty = inner_ty
+                return box_hirexpr(HirExpr.ETryExpr(hinner, ok_ty))
+            case Expr.EAwait(inner_await):
+                # Rule C-4: await only valid inside async def
+                if not self.in_async_fn:
+                    self.error("[C-4] 'await' used outside an async function. FIX: Declare '" + self.current_func_name + "' as 'async def " + self.current_func_name + "(...)' to use await inside it.")
+                mut hinner_await = self.lower_expr(inner_await)
+                mut await_ty = hir_expr_type(hinner_await)
+                return box_hirexpr(HirExpr.EAwait(hinner_await, await_ty))
+            case _: return box_hirexpr(HirExpr.ELitNone(AstType.init("None")))
+
+    # ── Rule N-1: Reserved name helpers ───────────────────────────────────────
+    pub def is_reserved_error(self, name: str) -> str:
+        if name == "true" or name == "True" or name == "gaskiya": return "built-in boolean constant 'true'"
+        if name == "false" or name == "False" or name == "karya": return "built-in boolean constant 'false'"
+        if name == "none" or name == "None" or name == "babu": return "built-in null constant 'none'"
+        if name == "Some": return "built-in Option constructor 'Some'"
+        if name == "Ok": return "built-in Result constructor 'Ok'"
+        if name == "Err": return "built-in Result constructor 'Err'"
+        return ""
+
+    pub def is_reserved_warn(self, name: str) -> str:
+        if name == "print" or name == "buga": return "built-in print function"
+        if name == "input": return "built-in input function"
+        if name == "range": return "built-in range function"
+        if name == "len" or name == "tsawon": return "built-in len function"
+        if name == "type" or name == "zuwa_rubutu": return "built-in type/str function"
+        if name == "abs" or name == "max" or name == "min" or name == "sum": return "built-in math function"
+        if name == "str" or name == "int" or name == "float" or name == "bool": return "built-in type-conversion function"
+        if name == "List" or name == "Dict" or name == "Vec": return "built-in container type"
+        if name == "Option" or name == "Result": return "built-in enum type"
+        if name == "Exception" or name == "Error": return "built-in exception class"
+        return ""
+
+    # ── Rule F-3: Definite return check ───────────────────────────────────────
+    pub def block_returns(self, b: Block) -> bool:
+        if b.stmts.len == 0: return false
+        mut last_s = b.stmts.get(b.stmts.len - 1)
+        if last_s as usize == 0 as usize: return false
+        match last_s.read():
+            case Stmt.SReturn(_): return true
+            case Stmt.SRaise(_): return true
+            case Stmt.SUnsafe(body): return self.block_returns(body)
+            case Stmt.SIf(cond, then_b, elifs, else_b):
+                if else_b.stmts.len == 0: return false
+                return self.block_returns(then_b) and self.block_returns(else_b)
+            case Stmt.SMatch(subj, arms):
+                # Exhaustive if there is a wildcard/bind arm and every arm body returns.
+                mut has_wild = false
+                mut all_ret = true
+                mut mi = 0
+                while mi < arms.len:
+                    mut arm = arms.get(mi)
+                    match arm.pat:
+                        case Pattern.PWild: has_wild = true
+                        case Pattern.PBind(_): has_wild = true
+                        case _: pass
+                    if arm.body as usize != 0 as usize:
+                        if not self.block_returns(arm.body.read()):
+                            all_ret = false
+                    mi = mi + 1
+                return has_wild and all_ret
+            case _: return false
+
+    pub def is_primitive(self, ty: AstType) -> bool: return self.is_primitive_name(ty.name)
+    pub def is_primitive_name(self, name: str) -> bool:
+        if name == "int" or name == "float" or name == "bool" or name == "char" or name == "void" or name == "None": return true
+        if name == "i64" or name == "i32" or name == "i16" or name == "i8": return true
+        if name == "u64" or name == "u32" or name == "u16" or name == "u8" or name == "usize": return true     
+        if name == "f64" or name == "f32" or name == "lambda": return true
+        return false
+
+pub def box_asttype(t: AstType) -> Pointer[AstType]:
+    mut p = alloc[AstType](1)
+    p.write(t)
+    return p
+
+pub def box_symbol(s: Symbol) -> Pointer[Symbol]:
+    mut p = alloc[Symbol](1)
+    p.write(s)
+    return p

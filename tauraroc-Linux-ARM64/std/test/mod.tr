@@ -1,0 +1,137 @@
+# std.test — Lightweight unit-testing framework.
+#
+# Usage:
+#   from std.test import TestRunner
+#
+#   def main():
+#       mut t = TestRunner.init("my tests")
+#       t.assert_eq_int(1 + 1, 2, "basic addition")
+#       t.assert_eq_str("hello", "hello", "string equal")
+#       t.assert_true(3 > 2, "three is greater than two")
+#       if not t.summary(): return   # non-zero exit on failure
+
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+    def _tr_float_to_str(n: float) -> str
+
+# ─── TestRunner ────────────────────────────────────────────────────────────────
+
+pub class TestRunner:
+    pub name:   str
+    pub passed: int
+    pub failed: int
+
+extend TestRunner:
+    pub def init(suite_name: str) -> TestRunner:
+        mut r = TestRunner()
+        r.name   = suite_name
+        r.passed = 0
+        r.failed = 0
+        return r
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    pub def _pass(self):
+        self.passed = self.passed + 1
+
+    pub def _fail(self, msg: str):
+        self.failed = self.failed + 1
+        print(f"  FAIL: {msg}")
+
+    # ── Boolean assertions ────────────────────────────────────────────────────
+
+    pub def assert_true(self, cond: bool, msg: str):
+        if cond:
+            self._pass()
+        else:
+            self._fail(f"{msg} — expected true, got false")
+
+    pub def assert_false(self, cond: bool, msg: str):
+        if not cond:
+            self._pass()
+        else:
+            self._fail(f"{msg} — expected false, got true")
+
+    # ── Integer assertions ────────────────────────────────────────────────────
+
+    pub def assert_eq_int(self, got: int, want: int, msg: str):
+        if got == want:
+            self._pass()
+        else:
+            self._fail(f"{msg} — expected {_tr_int_to_str(want)}, got {_tr_int_to_str(got)}")
+
+    pub def assert_ne_int(self, a: int, b: int, msg: str):
+        if a != b:
+            self._pass()
+        else:
+            self._fail(f"{msg} — expected values to differ (both are {_tr_int_to_str(a)})")
+
+    pub def assert_gt_int(self, a: int, b: int, msg: str):
+        if a > b:
+            self._pass()
+        else:
+            self._fail(f"{msg} — expected {_tr_int_to_str(a)} > {_tr_int_to_str(b)}")
+
+    pub def assert_lt_int(self, a: int, b: int, msg: str):
+        if a < b:
+            self._pass()
+        else:
+            self._fail(f"{msg} — expected {_tr_int_to_str(a)} < {_tr_int_to_str(b)}")
+
+    # ── String assertions ─────────────────────────────────────────────────────
+
+    pub def assert_eq_str(self, got: str, want: str, msg: str):
+        if got == want:
+            self._pass()
+        else:
+            self._fail(f"{msg} — expected \"{want}\", got \"{got}\"")
+
+    pub def assert_ne_str(self, a: str, b: str, msg: str):
+        if a != b:
+            self._pass()
+        else:
+            self._fail(f"{msg} — expected strings to differ, both are \"{a}\"")
+
+    # ── Float assertions ──────────────────────────────────────────────────────
+
+    # Pass if |a - b| <= eps.
+    pub def assert_eq_float(self, got: float, want: float, eps: float, msg: str):
+        mut diff = got - want
+        if diff < 0.0: diff = 0.0 - diff
+        if diff <= eps:
+            self._pass()
+        else:
+            self._fail(f"{msg} — floats not equal within epsilon {_tr_float_to_str(eps)}")
+
+    # Pass if |a - b| > eps.
+    pub def assert_ne_float(self, a: float, b: float, eps: float, msg: str):
+        mut diff = a - b
+        if diff < 0.0: diff = 0.0 - diff
+        if diff > eps:
+            self._pass()
+        else:
+            self._fail(f"{msg} — expected floats to differ by more than {_tr_float_to_str(eps)}")
+
+    # ── Unconditional failure ─────────────────────────────────────────────────
+
+    # Always records a failure — useful in unreachable branches.
+    pub def fail(self, msg: str):
+        self._fail(msg)
+
+    # ── Grouping helpers ──────────────────────────────────────────────────────
+
+    # Print a section header (cosmetic only, no effect on pass/fail counts).
+    pub def section(self, label: str):
+        print(f"  [{label}]")
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+
+    # Print a one-line summary and return true iff all assertions passed.
+    pub def summary(self) -> bool:
+        mut total = self.passed + self.failed
+        if self.failed == 0:
+            print(f"{self.name}: all {_tr_int_to_str(total)} tests passed.")
+            return true
+        else:
+            print(f"{self.name}: {_tr_int_to_str(self.failed)}/{_tr_int_to_str(total)} tests FAILED.")
+            return false

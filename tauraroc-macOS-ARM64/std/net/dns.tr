@@ -1,0 +1,39 @@
+# std.net.dns — DNS resolution via the Dns static-method class.
+
+extern "C":
+    def _tr_dns_resolve(hostname: str) -> str
+    def _tr_dns_reverse(ip: str) -> str
+
+pub class Dns:
+    _dummy: int
+
+extend Dns:
+    # Resolve a hostname to its IPv4 address string.
+    # Returns "" when resolution fails.
+    pub def resolve(hostname: str) -> str:
+        return _tr_dns_resolve(hostname)
+
+    # Reverse-lookup an IPv4 address to its canonical hostname.
+    # Returns "" on failure.
+    pub def reverse(ip: str) -> str:
+        return _tr_dns_reverse(ip)
+
+    # True when the string looks like an IPv4 address (w.x.y.z).
+    pub def is_ipv4(s: str) -> bool:
+        mut p     = s as Pointer[char]
+        mut dots  = 0
+        mut digit = 0
+        mut i     = 0
+        while True:
+            mut c = p.offset(i).read() as int
+            if c == 0: break
+            if c == 46:
+                if digit == 0: return false
+                dots  = dots + 1
+                digit = 0
+            elif c >= 48 and c <= 57:
+                digit = digit + 1
+            else:
+                return false
+            i = i + 1
+        return dots == 3 and digit > 0

@@ -1,0 +1,339 @@
+# std.iter.transform — Filter, map, reduce, zip, enumerate and more.
+
+from std.core.vec import Vec
+from std.collections.tuple import Pair
+
+pub class Transform:
+    _dummy: int
+
+extend Transform:
+    # ── Filters ───────────────────────────────────────────────────────────────
+
+    pub def filter_gt(v: Vec[int], threshold: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) > threshold: out.push(v.get(i))
+            i = i + 1
+        return out
+
+    pub def filter_lt(v: Vec[int], threshold: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) < threshold: out.push(v.get(i))
+            i = i + 1
+        return out
+
+    pub def filter_ge(v: Vec[int], threshold: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) >= threshold: out.push(v.get(i))
+            i = i + 1
+        return out
+
+    pub def filter_le(v: Vec[int], threshold: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) <= threshold: out.push(v.get(i))
+            i = i + 1
+        return out
+
+    pub def filter_eq(v: Vec[int], target: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) == target: out.push(v.get(i))
+            i = i + 1
+        return out
+
+    pub def filter_ne(v: Vec[int], target: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) != target: out.push(v.get(i))
+            i = i + 1
+        return out
+
+    # ── Maps ──────────────────────────────────────────────────────────────────
+
+    pub def map_add(v: Vec[int], delta: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            out.push(v.get(i) + delta)
+            i = i + 1
+        return out
+
+    pub def map_mul(v: Vec[int], factor: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            out.push(v.get(i) * factor)
+            i = i + 1
+        return out
+
+    pub def map_sub(v: Vec[int], delta: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            out.push(v.get(i) - delta)
+            i = i + 1
+        return out
+
+    pub def map_div(v: Vec[int], divisor: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if divisor != 0: out.push(v.get(i) / divisor)
+            else: out.push(0)
+            i = i + 1
+        return out
+
+    pub def map_abs(v: Vec[int]) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            mut x = v.get(i)
+            if x < 0: x = 0 - x
+            out.push(x)
+            i = i + 1
+        return out
+
+    pub def clamp_vec(v: Vec[int], lo: int, hi: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            mut x = v.get(i)
+            if x < lo: x = lo
+            if x > hi: x = hi
+            out.push(x)
+            i = i + 1
+        return out
+
+    # ── Reductions ────────────────────────────────────────────────────────────
+
+    pub def sum(v: Vec[int]) -> int:
+        mut total = 0
+        mut i     = 0
+        while i < v.len:
+            total = total + v.get(i)
+            i = i + 1
+        return total
+
+    pub def max(v: Vec[int]) -> int:
+        if v.len == 0: return 0
+        mut best = v.get(0)
+        mut i    = 1
+        while i < v.len:
+            if v.get(i) > best: best = v.get(i)
+            i = i + 1
+        return best
+
+    pub def min(v: Vec[int]) -> int:
+        if v.len == 0: return 0
+        mut best = v.get(0)
+        mut i    = 1
+        while i < v.len:
+            if v.get(i) < best: best = v.get(i)
+            i = i + 1
+        return best
+
+    pub def product(v: Vec[int]) -> int:
+        mut p = 1
+        mut i = 0
+        while i < v.len:
+            p = p * v.get(i)
+            i = i + 1
+        return p
+
+    pub def count(v: Vec[int]) -> int:
+        return v.len
+
+    pub def mean(v: Vec[int]) -> int:
+        if v.len == 0: return 0
+        return Transform.sum(v) / v.len
+
+    pub def count_eq(v: Vec[int], target: int) -> int:
+        mut n = 0
+        mut i = 0
+        while i < v.len:
+            if v.get(i) == target: n = n + 1
+            i = i + 1
+        return n
+
+    pub def any_eq(v: Vec[int], target: int) -> bool:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) == target: return true
+            i = i + 1
+        return false
+
+    pub def all_eq(v: Vec[int], target: int) -> bool:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) != target: return false
+            i = i + 1
+        return true
+
+    # ── Slicing ───────────────────────────────────────────────────────────────
+
+    # Return the first n elements.
+    pub def take(v: Vec[int], n: int) -> Vec[int]:
+        mut out  = Vec[int].init(n + 4)
+        mut limit = n
+        if limit > v.len: limit = v.len
+        mut i    = 0
+        while i < limit:
+            out.push(v.get(i))
+            i = i + 1
+        return out
+
+    # Return all elements after skipping the first n.
+    pub def drop(v: Vec[int], n: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = n
+        while i < v.len:
+            out.push(v.get(i))
+            i = i + 1
+        return out
+
+    # Return elements as long as they are less than threshold.
+    pub def take_while_lt(v: Vec[int], threshold: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) >= threshold: break
+            out.push(v.get(i))
+            i = i + 1
+        return out
+
+    # Return elements as long as they are greater than threshold.
+    pub def take_while_gt(v: Vec[int], threshold: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) <= threshold: break
+            out.push(v.get(i))
+            i = i + 1
+        return out
+
+    # ── Combine ───────────────────────────────────────────────────────────────
+
+    # Element-wise sum of two equal-length vectors.
+    pub def zip_sum(a: Vec[int], b: Vec[int]) -> Vec[int]:
+        mut n   = a.len
+        if b.len < n: n = b.len
+        mut out = Vec[int].init(n + 4)
+        mut i   = 0
+        while i < n:
+            out.push(a.get(i) + b.get(i))
+            i = i + 1
+        return out
+
+    # Pair up elements from two vectors: [(a[0],b[0]), (a[1],b[1]), ...].
+    pub def zip(a: Vec[int], b: Vec[int]) -> Vec[Pair]:
+        mut n   = a.len
+        if b.len < n: n = b.len
+        mut out = Vec[Pair].init(n + 4)
+        mut i   = 0
+        while i < n:
+            out.push(Pair.init(a.get(i), b.get(i)))
+            i = i + 1
+        return out
+
+    # Pair each element with its index: [(0,v[0]), (1,v[1]), ...].
+    pub def enumerate(v: Vec[int]) -> Vec[Pair]:
+        mut out = Vec[Pair].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            out.push(Pair.init(i, v.get(i)))
+            i = i + 1
+        return out
+
+    # Concatenate two vectors.
+    pub def chain(a: Vec[int], b: Vec[int]) -> Vec[int]:
+        mut out = Vec[int].init(a.len + b.len + 4)
+        mut i   = 0
+        while i < a.len:
+            out.push(a.get(i))
+            i = i + 1
+        i = 0
+        while i < b.len:
+            out.push(b.get(i))
+            i = i + 1
+        return out
+
+    # ── Ordering ──────────────────────────────────────────────────────────────
+
+    pub def sort_asc(v: Vec[int]) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            out.push(v.get(i))
+            i = i + 1
+        mut n = out.len
+        mut j = 1
+        while j < n:
+            mut key = out.get(j)
+            mut k   = j - 1
+            while k >= 0 and out.get(k) > key:
+                out.set(k + 1, out.get(k))
+                k = k - 1
+            out.set(k + 1, key)
+            j = j + 1
+        return out
+
+    pub def sort_desc(v: Vec[int]) -> Vec[int]:
+        mut out = Transform.sort_asc(v)
+        mut lo  = 0
+        mut hi  = out.len - 1
+        while lo < hi:
+            mut tmp = out.get(lo)
+            out.set(lo, out.get(hi))
+            out.set(hi, tmp)
+            lo = lo + 1
+            hi = hi - 1
+        return out
+
+    pub def reverse(v: Vec[int]) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut i   = v.len - 1
+        while i >= 0:
+            out.push(v.get(i))
+            i = i - 1
+        return out
+
+    pub def unique(v: Vec[int]) -> Vec[int]:
+        mut out  = Vec[int].init(v.len + 4)
+        mut seen = Vec[int].init(v.len + 4)
+        mut i    = 0
+        while i < v.len:
+            mut val = v.get(i)
+            if not seen.contains(val):
+                out.push(val)
+                seen.push(val)
+            i = i + 1
+        return out
+
+    # Sliding window of size w; returns starts of each window as indices.
+    pub def windows(v: Vec[int], w: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        if w <= 0 or w > v.len: return out
+        mut i = 0
+        while i <= v.len - w:
+            out.push(v.get(i))
+            i = i + 1
+        return out
+
+    # Chunk indices: starting indices of each chunk of size w.
+    pub def chunks(v: Vec[int], w: int) -> Vec[int]:
+        mut out = Vec[int].init(v.len / w + 4)
+        if w <= 0: return out
+        mut i = 0
+        while i < v.len:
+            out.push(i)
+            i = i + w
+        return out

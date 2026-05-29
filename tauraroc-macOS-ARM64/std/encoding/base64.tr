@@ -1,0 +1,125 @@
+# std.encoding.base64 — Base64 encode and decode (RFC 4648).
+#
+# Usage:
+#   from std.encoding.base64 import Base64
+#
+#   mut encoded = Base64.encode("Hello, World!")       # → "SGVsbG8sIFdvcmxkIQ=="
+#   mut decoded = Base64.decode("SGVsbG8sIFdvcmxkIQ==")  # → "Hello, World!"
+
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_strlen(s: str) -> int
+
+# Lookup character index → base64 character (integer code point).
+pub def _b64_char_at(idx: int) -> int:
+    mut alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    return (alpha as Pointer[char]).offset(idx).read() as int
+
+# Decode one base64 character to its 6-bit value.  Returns -1 for '=' or invalid.
+pub def _b64_decode_char(c: int) -> int:
+    if c >= 65 and c <= 90:  return c - 65      # A-Z → 0-25
+    if c >= 97 and c <= 122: return c - 71      # a-z → 26-51
+    if c >= 48 and c <= 57:  return c + 4       # 0-9 → 52-61
+    if c == 43: return 62    # '+'
+    if c == 47: return 63    # '/'
+    return -1                # '=' padding or invalid
+
+# ─── Base64 ───────────────────────────────────────────────────────────────────
+
+pub class Base64:
+    _dummy: int
+
+extend Base64:
+    # Encode a byte string to standard Base64.
+    pub def encode(s: str) -> str:
+        mut p = s as Pointer[char]
+        mut n = _tr_strlen(s)
+        mut sb = StringBuilder.init((n / 3) * 4 + 8)
+        mut i = 0
+        while i + 2 < n:
+            mut b0 = p.offset(i).read() as int
+            mut b1 = p.offset(i + 1).read() as int
+            mut b2 = p.offset(i + 2).read() as int
+            sb.append_char(_b64_char_at((b0 >> 2) % 64))
+            sb.append_char(_b64_char_at(((b0 % 4) << 4) | ((b1 >> 4) % 16)))
+            sb.append_char(_b64_char_at(((b1 % 16) << 2) | ((b2 >> 6) % 4)))
+            sb.append_char(_b64_char_at(b2 % 64))
+            i = i + 3
+        mut rem = n - i
+        if rem == 1:
+            mut b0 = p.offset(i).read() as int
+            sb.append_char(_b64_char_at((b0 >> 2) % 64))
+            sb.append_char(_b64_char_at((b0 % 4) << 4))
+            sb.append_char(61)   # '='
+            sb.append_char(61)   # '='
+        elif rem == 2:
+            mut b0 = p.offset(i).read() as int
+            mut b1 = p.offset(i + 1).read() as int
+            sb.append_char(_b64_char_at((b0 >> 2) % 64))
+            sb.append_char(_b64_char_at(((b0 % 4) << 4) | ((b1 >> 4) % 16)))
+            sb.append_char(_b64_char_at((b1 % 16) << 2))
+            sb.append_char(61)   # '='
+        return sb.to_string().as_str()
+
+    # Decode a standard Base64 string.  Padding ('=') is handled automatically.
+    # Note: binary data containing null bytes will be truncated by C-string semantics.
+    pub def decode(s: str) -> str:
+        mut p = s as Pointer[char]
+        mut n = _tr_strlen(s)
+        if n == 0: return ""
+        mut sb = StringBuilder.init((n / 4) * 3 + 4)
+        mut i = 0
+        while i + 3 < n:
+            mut v0 = _b64_decode_char(p.offset(i).read() as int)
+            mut v1 = _b64_decode_char(p.offset(i + 1).read() as int)
+            mut v2 = _b64_decode_char(p.offset(i + 2).read() as int)
+            mut v3 = _b64_decode_char(p.offset(i + 3).read() as int)
+            if v0 < 0 or v1 < 0: break
+            sb.append_char(((v0 << 2) | (v1 >> 4)) % 256)
+            if v2 >= 0:
+                sb.append_char((((v1 % 16) << 4) | (v2 >> 2)) % 256)
+            if v3 >= 0:
+                sb.append_char((((v2 % 4) << 6) | v3) % 256)
+            i = i + 4
+        return sb.to_string().as_str()
+
+    # URL-safe variant: encodes using '-' and '_' instead of '+' and '/'.
+    # No padding characters are emitted.
+    pub def encode_url(s: str) -> str:
+        mut encoded = Base64.encode(s)
+        mut result = StringBuilder.init(_tr_strlen(encoded) + 4)
+        mut p = encoded as Pointer[char]
+        mut n = _tr_strlen(encoded)
+        mut i = 0
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if c == 43: result.append_char(45)    # '+' → '-'
+            elif c == 47: result.append_char(95)  # '/' → '_'
+            elif c == 61: i = i + 1               # skip '=' padding; continue directly
+            else: result.append_char(c)
+            if c != 61: i = i + 1
+        return result.to_string().as_str()
+
+    # Decode URL-safe Base64 (no padding required).
+    pub def decode_url(s: str) -> str:
+        mut p = s as Pointer[char]
+        mut n = _tr_strlen(s)
+        mut sb_pad = StringBuilder.init(n + 4)
+        mut i = 0
+        while i < n:
+            mut c = p.offset(i).read() as int
+            if c == 45: sb_pad.append_char(43)    # '-' → '+'
+            elif c == 95: sb_pad.append_char(47)  # '_' → '/'
+            else: sb_pad.append_char(c)
+            i = i + 1
+        mut padded = sb_pad.to_string().as_str()
+        mut plen = _tr_strlen(padded)
+        mut rem = plen % 4
+        if rem == 2:
+            sb_pad.append("==")
+            padded = sb_pad.to_string().as_str()
+        elif rem == 3:
+            sb_pad.append_char(61)
+            padded = sb_pad.to_string().as_str()
+        return Base64.decode(padded)
