@@ -1,5 +1,14 @@
+# Compiled binaries and debug info
 *.exe
-*.c
-build
 *.pdb
-benchmarks/*/*.exe
+
+# Generated build directories (tauraroc output, cargo, etc.)
+build/
+target/
+
+# Runtime headers copied into benchmark build dirs
+**/tauraro_rt.h
+**/tauraro_types.h
+
+# Bootstrap download directory
+bootstrap/
