@@ -1,0 +1,56 @@
+# std.async.timer — One-shot Timer and repeating Ticker.
+#
+# Both use a background thread that sends ticks on a Channel.
+#
+# Timer fires exactly once after ms milliseconds.
+# Ticker fires every ms milliseconds until stopped.
+#
+# Usage:
+#   let ch = Channel.new(1)
+#   let t = Timer.new(500, ch)       # fires once after 500 ms
+#   ch.recv()                        # blocks until the tick arrives
+#   t.stop()
+#
+#   let ch2 = Channel.new(1)
+#   let tk  = Ticker.new(100, ch2)   # ticks every 100 ms
+#   let tick = ch2.recv()
+#   tk.stop()
+
+from std.async.channel import Channel
+
+extern "C":
+    def _tr_timer_new_h(ms: int, ch: Pointer[char]) -> Pointer[char]
+    def _tr_ticker_new_h(ms: int, ch: Pointer[char]) -> Pointer[char]
+    def _tr_timer_stop_h(s: Pointer[char])
+
+pub class Timer:
+    pub handle:  Pointer[char]
+    pub channel: Channel
+
+extend Timer:
+    # Create a timer that sends one tick on ch after ms milliseconds.
+    pub def new(ms: int, ch: Channel) -> Timer:
+        mut t = Timer()
+        t.channel = ch
+        t.handle  = _tr_timer_new_h(ms, ch.handle)
+        return t
+
+    # Stop the timer.  Also closes the channel so recv() unblocks.
+    pub def stop(self):
+        _tr_timer_stop_h(self.handle)
+
+pub class Ticker:
+    pub handle:  Pointer[char]
+    pub channel: Channel
+
+extend Ticker:
+    # Create a ticker that sends a tick on ch every ms milliseconds.
+    pub def new(ms: int, ch: Channel) -> Ticker:
+        mut tk = Ticker()
+        tk.channel = ch
+        tk.handle  = _tr_ticker_new_h(ms, ch.handle)
+        return tk
+
+    # Stop the ticker.  Also closes the channel so recv() unblocks.
+    pub def stop(self):
+        _tr_timer_stop_h(self.handle)

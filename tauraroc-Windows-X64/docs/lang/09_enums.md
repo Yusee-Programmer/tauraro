@@ -1,0 +1,383 @@
+# 09 — Enums (Algebraic Data Types)
+
+---
+
+## What Are Enums
+
+An enum (enumeration) is a type that represents one of several distinct variants. Unlike C enums (which are just integers), Tauraro enums are **algebraic data types** (ADTs) — each variant can carry its own data. This is the same concept as Rust's `enum`, Haskell's `data`, or Scala's `sealed trait`.
+
+Enums are the right tool when:
+- A value can be one of several distinct states
+- Each state may carry different data
+- You want the compiler to help you handle all cases
+
+---
+
+## Declaring an Enum
+
+### Simple Enum (No Data)
+
+```python
+enum Direction:
+    North
+    South
+    East
+    West
+
+enum Color:
+    Red
+    Green
+    Blue
+    White
+    Black
+```
+
+### Data-Carrying Variants
+
+```python
+enum Shape:
+    Circle(radius: int)
+    Rect(width: int, height: int)
+    Triangle(base: int, height: int)
+    Point                           # no data
+
+enum Message:
+    Text(content: str)
+    Image(path: str, width: int, height: int)
+    Close
+    Error(code: int, msg: str)
+```
+
+Each variant can carry zero or more named fields. Fields within a variant have names and types — they are accessible after destructuring in a `match` arm.
+
+---
+
+## How Enums Compile
+
+Tauraro enums compile to **tagged unions** in C — the most efficient possible representation for a discriminated union:
+
+```c
+typedef enum {
+    Shape_Circle = 0,
+    Shape_Rect   = 1,
+    Shape_Triangle = 2,
+    Shape_Point  = 3,
+} Shape_Tag;
+
+struct Shape {
+    Shape_Tag tag;
+    union {
+        struct { long long radius; }              Circle;
+        struct { long long width; long long height; } Rect;
+        struct { long long base; long long height; }  Triangle;
+    } data;
+};
+typedef struct Shape Shape;
+```
+
+- `tag` — a small integer that identifies which variant is active
+- `data` — a union with one struct per data-carrying variant
+- Total size = `sizeof(tag) + sizeof(largest_variant_data)`
+
+No heap allocation. No virtual dispatch. No boxing. Matching on tag is a single integer comparison.
+
+---
+
+## Constructing Enum Values
+
+```python
+# Simple variants:
+mut d = Direction.North
+mut c = Color.Red
+
+# Data-carrying variants:
+mut circle    = Shape.Circle(5)
+mut rect      = Shape.Rect(3, 4)
+mut triangle  = Shape.Triangle(6, 8)
+mut point     = Shape.Point
+mut text_msg  = Message.Text("hello")
+mut close_msg = Message.Close
+mut err_msg   = Message.Error(404, "not found")
+```
+
+**How variant construction compiles:**
+```c
+// Shape.Circle(5):
+Shape _v = { .tag = Shape_Circle, .data.Circle = { .radius = 5 } };
+
+// Shape.Rect(3, 4):
+Shape _v = { .tag = Shape_Rect, .data.Rect = { .width = 3, .height = 4 } };
+```
+
+Struct literal initialization — no function call, no allocation.
+
+---
+
+## Pattern Matching on Enums
+
+`match` is the primary way to work with enums:
+
+```python
+def describe(d: Direction) -> str:
+    match d:
+        case Direction.North: return "heading north"
+        case Direction.South: return "heading south"
+        case Direction.East:  return "heading east"
+        case Direction.West:  return "heading west"
+        case _:               return "unknown"
+
+def area(s: Shape) -> int:
+    match s:
+        case Shape.Circle(r):
+            return r * r * 3        # approximation: π ≈ 3
+        case Shape.Rect(w, h):
+            return w * h
+        case Shape.Triangle(b, h):
+            return b * h / 2
+        case Shape.Point:
+            return 0
+        case _:
+            return 0
+```
+
+The field names in the destructuring pattern (`r`, `w`, `h`) bind the variant's data fields as local immutable variables in the arm body.
+
+**How matching compiles:**
+```c
+switch (s.tag) {
+    case Shape_Circle: {
+        long long r = s.data.Circle.radius;
+        return r * r * 3;
+    }
+    case Shape_Rect: {
+        long long w = s.data.Rect.width;
+        long long h = s.data.Rect.height;
+        return w * h;
+    }
+    // ...
+}
+```
+
+A direct `switch` on the tag — one comparison, no indirection, maximum speed.
+
+---
+
+## Enums in Lists and Structs
+
+Enums can be stored in `List[T]` and as class fields:
+
+```python
+class Inbox:
+    pub messages: List[Message]
+
+extend Inbox:
+    pub def init() -> Inbox:
+        mut box = Inbox()
+        box.messages = []
+        return box
+
+    pub def add(self, msg: Message) -> void:
+        self.messages.append(msg)
+
+    pub def process(self) -> void:
+        mut i = 0
+        while i < len(self.messages):
+            match self.messages[i]:
+                case Message.Text(content):
+                    print(f"  text: {content}")
+                case Message.Error(code, msg):
+                    print(f"  error {code}: {msg}")
+                case Message.Close:
+                    print("  connection closed")
+                case _:
+                    pass
+            i = i + 1
+```
+
+`List[Message]` compiles to `List_Message*` — a contiguous array of `Message` structs stored by value. No boxing.
+
+---
+
+## The Option and Result Enums
+
+Two special enums are built into the language:
+
+### Option[T]
+
+Represents a value that may or may not be present:
+
+```python
+# Using Option values:
+mut found: Option[int] = find_value(items, target)
+match found:
+    case Option.Some(v): print(f"found: {v}")
+    case Option.None:    print("not found")
+```
+
+`Option[T]` is equivalent to:
+```python
+enum Option:
+    Some(value: T)
+    None
+```
+
+### Result[T, E]
+
+Represents either a success value or an error. Primarily generated by `throws` functions (see [Error Handling](12_error_handling.md)):
+
+```python
+mut r: Result[int, str] = parse_int("42")
+if r.is_ok:  print(f"got: {r.ok}")
+if r.is_err: print(f"error: {r.err}")
+```
+
+---
+
+## Adding Methods to Enums
+
+You can add methods to enums using `extend`, just like classes:
+
+```python
+enum Direction:
+    North
+    South
+    East
+    West
+
+extend Direction:
+    pub def opposite(self) -> Direction:
+        match self:
+            case Direction.North: return Direction.South
+            case Direction.South: return Direction.North
+            case Direction.East:  return Direction.West
+            case Direction.West:  return Direction.East
+            case _:               return Direction.North
+
+    pub def is_vertical(self) -> bool:
+        match self:
+            case Direction.North: return true
+            case Direction.South: return true
+            case _:               return false
+
+def main():
+    mut d = Direction.North
+    mut opp = d.opposite()
+    print(d.is_vertical())    # true
+```
+
+**How `self` works for enum methods:** The compiler passes the enum value by pointer: `Direction_opposite(Direction* self)`. Since enums are stack-allocated structs, `self` is a pointer to the caller's local variable.
+
+---
+
+## Nested Enums
+
+Enums can contain other enums as variant fields:
+
+```python
+enum Expr:
+    Num(n: int)
+    Add(left: Expr, right: Expr)
+    Mul(left: Expr, right: Expr)
+    Neg(expr: Expr)
+```
+
+**Important:** Recursive enum variants (where the variant contains the same enum type) require the inner values to be heap-allocated via `Pointer[Expr]` in practice, because a struct cannot contain itself in C. Declare recursive variants as:
+
+```python
+enum Expr:
+    Num(n: int)
+    Add(left: Pointer[Expr], right: Pointer[Expr])
+    Mul(left: Pointer[Expr], right: Pointer[Expr])
+```
+
+Then allocate in unsafe:
+```python
+unsafe:
+    mut left_ptr: Pointer[Expr] = alloc[Expr](1)
+    left_ptr.write(Expr.Num(5))
+    mut expr = Expr.Add(left_ptr, right_ptr)
+```
+
+---
+
+## Exhaustiveness and `case _:`
+
+The compiler does **not** currently enforce exhaustive matching. Always include a `case _:` wildcard arm unless you have explicitly handled every possible variant:
+
+```python
+# RISKY — if a new variant is added to Direction later, this silently
+# falls through without executing any arm:
+match d:
+    case Direction.North: go_north()
+    case Direction.South: go_south()
+    # East and West unhandled!
+
+# SAFE — catch-all handles any unmatched variant:
+match d:
+    case Direction.North: go_north()
+    case Direction.South: go_south()
+    case _: pass          # or: raise(f"unhandled direction: ...")
+```
+
+**Best practice:** For enums where you control all variants and have handled all of them, use:
+```python
+case _: raise("unreachable")
+```
+This acts as an assertion — if a new variant is added and not handled, the program will fail loudly at runtime rather than silently.
+
+---
+
+## Common Enum Errors
+
+### Matching with wrong namespace
+
+```python
+match color:
+    case Red: ...          # ERROR: 'Red' is not in scope
+    case Color.Red: ...    # OK: fully-qualified variant name
+```
+
+### Destructuring wrong number of fields
+
+```python
+match shape:
+    case Shape.Rect(w):    # ERROR: Shape.Rect has 2 fields (width, height), got 1
+```
+**Fix:** `case Shape.Rect(w, h):`
+
+### Using a variant as a type
+
+```python
+def process(d: Direction.North) -> void:  # ERROR: Direction.North is a value, not a type
+```
+**Fix:** `def process(d: Direction) -> void:`
+
+---
+
+## Full Example: Expression Evaluator
+
+```python
+enum Expr:
+    Num(value: int)
+    Add(left: int, right: int)    # simplified: operands are ints
+    Mul(left: int, right: int)
+    Neg(value: int)
+
+def eval(e: Expr) -> int:
+    match e:
+        case Expr.Num(v):    return v
+        case Expr.Add(l, r): return l + r
+        case Expr.Mul(l, r): return l * r
+        case Expr.Neg(v):    return -v
+        case _:              return 0
+
+def main():
+    print(eval(Expr.Num(42)))        # 42
+    print(eval(Expr.Add(3, 4)))      # 7
+    print(eval(Expr.Mul(6, 7)))      # 42
+    print(eval(Expr.Neg(10)))        # -10
+```
+
+---
+
+Next: [Interfaces →](10_interfaces.md)

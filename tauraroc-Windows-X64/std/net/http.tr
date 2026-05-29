@@ -1,0 +1,198 @@
+# std.net.http — HTTP/1.1 client built on TcpStream with header support.
+
+from std.core.string import StringBuilder
+from std.net.tcp import TcpStream
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.core.map import Map
+
+pub class HttpHeader:
+    pub name:  str
+    pub value: str
+
+extend HttpHeader:
+    pub def init(name: str, value: str) -> HttpHeader:
+        mut h = HttpHeader()
+        h.name  = name
+        h.value = value
+        return h
+
+pub class HttpResponse:
+    pub status:  int
+    pub body:    str
+    pub headers: Map[str]
+
+extend HttpResponse:
+    pub def init(status: int, body: str) -> HttpResponse:
+        mut r = HttpResponse()
+        r.status  = status
+        r.body    = body
+        r.headers = Map[str].init(16)
+        return r
+
+    pub def is_ok(self) -> bool:
+        return self.status >= 200 and self.status < 300
+
+    pub def is_redirect(self) -> bool:
+        return self.status >= 300 and self.status < 400
+
+    pub def is_error(self) -> bool:
+        return self.status >= 400
+
+    # Return a named response header value or "" when absent.
+    pub def header(self, name: str) -> str:
+        if self.headers.contains(name): return self.headers.get(name)
+        return ""
+
+    pub def to_string(self) -> str:
+        mut sb = StringBuilder.init(64)
+        sb.append("HTTP ")
+        if self.status == 200:        sb.append("200 OK")
+        elif self.status == 201:      sb.append("201 Created")
+        elif self.status == 204:      sb.append("204 No Content")
+        elif self.status == 301:      sb.append("301 Moved Permanently")
+        elif self.status == 302:      sb.append("302 Found")
+        elif self.status == 400:      sb.append("400 Bad Request")
+        elif self.status == 401:      sb.append("401 Unauthorized")
+        elif self.status == 403:      sb.append("403 Forbidden")
+        elif self.status == 404:      sb.append("404 Not Found")
+        elif self.status == 500:      sb.append("500 Internal Server Error")
+        elif self.status == 502:      sb.append("502 Bad Gateway")
+        elif self.status == 503:      sb.append("503 Service Unavailable")
+        else:
+            sb.append(Fmt.int_to_str(self.status))
+            sb.append(" Unknown")
+        sb.append("\n")
+        sb.append(self.body)
+        return sb.to_owned()
+
+pub class HttpClient:
+    pub host:      str
+    pub port:      int
+    pub timeout:   int
+    pub _headers:  Map[str]
+
+extend HttpClient:
+    pub def init(host: str, port: int) -> HttpClient:
+        mut c = HttpClient()
+        c.host     = host
+        c.port     = port
+        c.timeout  = 5000
+        c._headers = Map[str].init(16)
+        return c
+
+    # Add a request header.
+    pub def set_header(self, name: str, value: str):
+        self._headers.insert(name, value)
+
+    # Set the timeout hint in milliseconds (informational — not enforced by all backends).
+    pub def set_timeout(self, ms: int):
+        self.timeout = ms
+
+    # Build the common headers section of a request.
+    def _build_headers(self) -> str:
+        mut sb = StringBuilder.init(256)
+        sb.append("Host: ")
+        sb.append(self.host)
+        sb.append("\r\nConnection: close\r\n")
+        return sb.to_owned()
+
+    # Parse HTTP status line "HTTP/1.x NNN ..." → int; 0 on failure.
+    def _parse_status(self, raw: str) -> int:
+        mut sp = Str.index_of(raw, " ")
+        if sp < 0: return 0
+        mut rlen = Str.len(raw)
+        if sp + 4 > rlen: return 0
+        mut d1 = Str.char_at(raw, sp + 1) - 48
+        mut d2 = Str.char_at(raw, sp + 2) - 48
+        mut d3 = Str.char_at(raw, sp + 3) - 48
+        if d1 < 0 or d1 > 9 or d2 < 0 or d2 > 9 or d3 < 0 or d3 > 9: return 0
+        return d1 * 100 + d2 * 10 + d3
+
+    # Extract body after the blank header separator (\r\n\r\n).
+    def _extract_body(self, raw: str) -> str:
+        mut sep = Str.index_of(raw, "\r\n\r\n")
+        if sep >= 0: return Str.slice(raw, sep + 4, Str.len(raw))
+        return raw
+
+    # Send a GET request and return the response.
+    pub def get(self, path: str) -> HttpResponse:
+        mut stream = TcpStream.connect(self.host, self.port)
+        if not stream.is_connected():
+            return HttpResponse.init(0, "connection failed")
+        mut sb = StringBuilder.init(512)
+        sb.append("GET ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("\r\n")
+        stream.send(sb.to_owned())
+        mut raw  = stream.recv(65536)
+        stream.close()
+        mut code = self._parse_status(raw)
+        if code == 0: code = 200
+        return HttpResponse.init(code, self._extract_body(raw))
+
+    # Send a POST request with a string body.
+    pub def post(self, path: str, data: str) -> HttpResponse:
+        mut stream = TcpStream.connect(self.host, self.port)
+        if not stream.is_connected():
+            return HttpResponse.init(0, "connection failed")
+        mut clen = Str.len(data)
+        mut sb   = StringBuilder.init(512)
+        sb.append("POST ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("Content-Length: ")
+        if clen == 0: sb.append("0")
+        else: sb.append(Fmt.int_to_str(clen))
+        sb.append("\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\n")
+        sb.append(data)
+        stream.send(sb.to_owned())
+        mut raw  = stream.recv(65536)
+        stream.close()
+        mut code = self._parse_status(raw)
+        if code == 0: code = 200
+        return HttpResponse.init(code, self._extract_body(raw))
+
+    # Send a PUT request.
+    pub def put(self, path: str, data: str) -> HttpResponse:
+        mut stream = TcpStream.connect(self.host, self.port)
+        if not stream.is_connected():
+            return HttpResponse.init(0, "connection failed")
+        mut clen = Str.len(data)
+        mut sb   = StringBuilder.init(512)
+        sb.append("PUT ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("Content-Length: ")
+        if clen == 0: sb.append("0")
+        else: sb.append(Fmt.int_to_str(clen))
+        sb.append("\r\n\r\n")
+        sb.append(data)
+        stream.send(sb.to_owned())
+        mut raw  = stream.recv(65536)
+        stream.close()
+        mut code = self._parse_status(raw)
+        if code == 0: code = 200
+        return HttpResponse.init(code, self._extract_body(raw))
+
+    # Send a DELETE request.
+    pub def delete(self, path: str) -> HttpResponse:
+        mut stream = TcpStream.connect(self.host, self.port)
+        if not stream.is_connected():
+            return HttpResponse.init(0, "connection failed")
+        mut sb = StringBuilder.init(256)
+        sb.append("DELETE ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("\r\n")
+        stream.send(sb.to_owned())
+        mut raw  = stream.recv(65536)
+        stream.close()
+        mut code = self._parse_status(raw)
+        if code == 0: code = 200
+        return HttpResponse.init(code, self._extract_body(raw))

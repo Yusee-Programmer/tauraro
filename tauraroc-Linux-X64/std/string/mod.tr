@@ -1,0 +1,8 @@
+# std.string — Package index.
+#
+# Sub-modules:
+#   from std.string.str import Str
+#   from std.string.fmt import Fmt
+
+from std.string.str import Str
+from std.string.fmt import Fmt

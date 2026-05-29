@@ -1,0 +1,87 @@
+# std.sys.os — OS information and system-level operations via the OS class.
+
+extern "C":
+    def _tr_hostname() -> str
+    def _tr_username() -> str
+    def _tr_cpu_count() -> int
+    def _tr_cwd() -> str
+    def _tr_chdir(path: str) -> int
+    def _tr_platform() -> str
+    def _tr_os_machine() -> str
+    def _tr_memory_total_mb() -> int
+    def _tr_system(cmd: str) -> int
+    def _tr_popen_read(cmd: str) -> str
+    def _tr_getpid() -> int
+    def _tr_is_windows() -> bool
+
+pub class OS:
+    _dummy: int
+
+extend OS:
+    # ── Identity ──────────────────────────────────────────────────────────────
+
+    # Network hostname of this machine.
+    pub def hostname() -> str:
+        return _tr_hostname()
+
+    # Logged-in username running this process.
+    pub def username() -> str:
+        return _tr_username()
+
+    # OS platform string: "windows", "linux", or "macos".
+    pub def platform() -> str:
+        return _tr_platform()
+
+    # CPU architecture: "x86_64", "arm64", "arm", or "unknown".
+    pub def machine() -> str:
+        return _tr_os_machine()
+
+    # True when running on Windows.
+    pub def is_windows() -> bool:
+        return _tr_is_windows()
+
+    # ── Hardware ──────────────────────────────────────────────────────────────
+
+    # Number of logical CPU cores available.
+    pub def cpu_count() -> int:
+        return _tr_cpu_count()
+
+    # Total physical RAM in megabytes.
+    pub def memory_mb() -> int:
+        return _tr_memory_total_mb()
+
+    # ── Working directory ─────────────────────────────────────────────────────
+
+    # Return the current working directory path.
+    pub def cwd() -> str:
+        return _tr_cwd()
+
+    # Change the current working directory.  Returns true on success.
+    pub def chdir(path: str) -> bool:
+        return _tr_chdir(path) == 0
+
+    # ── Process execution ─────────────────────────────────────────────────────
+
+    # Execute cmd in the system shell.  Returns the exit code (0 = success).
+    pub def system(cmd: str) -> int:
+        return _tr_system(cmd)
+
+    # Execute cmd and capture its stdout as a string.
+    pub def shell_output(cmd: str) -> str:
+        return _tr_popen_read(cmd)
+
+    # Current process identifier.
+    pub def getpid() -> int:
+        return _tr_getpid()
+
+    # ── Path separator ────────────────────────────────────────────────────────
+
+    # Directory separator character string ("/" or "\").
+    pub def sep() -> str:
+        if _tr_is_windows(): return "\\"
+        return "/"
+
+    # Line-ending convention ("\r\n" or "\n").
+    pub def linesep() -> str:
+        if _tr_is_windows(): return "\r\n"
+        return "\n"

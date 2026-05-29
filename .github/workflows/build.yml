@@ -13,15 +13,19 @@ jobs:
           - os: ubuntu-latest
             platform: linux-x64
             ext: ""
+            seed_dir: tauraroc-Linux-X64
           - os: ubuntu-22.04-arm
             platform: linux-arm64
             ext: ""
+            seed_dir: tauraroc-Linux-ARM64
           - os: windows-latest
             platform: windows-x64
             ext: ".exe"
+            seed_dir: tauraroc-Windows-X64
           - os: macos-latest
             platform: macos-arm64
             ext: ""
+            seed_dir: tauraroc-macOS-ARM64
 
     runs-on: ${{ matrix.os }}
 
@@ -30,26 +34,39 @@ jobs:
         uses: actions/checkout@v4
 
       # -------------------------------------------------------
-      # Download the latest released bootstrap zip for this
-      # platform, unzip it into bootstrap/tauraroc-<platform>/
-      # so the binary lives at its original name tauraroc[.exe].
-      # Release assets are named  tauraroc-<platform>.zip  and
-      # each zip contains only  tauraroc[.exe]  at the root.
+      # Bootstrap: try latest GitHub Release zip first.
+      # If no release exists yet, fall back to the committed
+      # seed folder (tauraroc-<OS>-<ARCH>/tauraroc[.exe]).
+      # Once a real release is published the seed folders can
+      # be deleted from the repo — this fallback becomes a no-op.
       # -------------------------------------------------------
-      - name: Download and unzip bootstrap binary
+      - name: Prepare bootstrap binary
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p bootstrap
-          gh release download \
-            --repo "${{ github.repository }}" \
-            --pattern "tauraroc-${{ matrix.platform }}.zip" \
-            --dir bootstrap/ \
-            --clobber
-          unzip "bootstrap/tauraroc-${{ matrix.platform }}.zip" \
-            -d "bootstrap/tauraroc-${{ matrix.platform }}/"
-          BOOTSTRAP="$(pwd)/bootstrap/tauraroc-${{ matrix.platform }}/tauraroc${{ matrix.ext }}"
+          DEST="bootstrap/tauraroc-${{ matrix.platform }}"
+          mkdir -p "$DEST"
+
+          if gh release download \
+               --repo "${{ github.repository }}" \
+               --pattern "tauraroc-${{ matrix.platform }}.zip" \
+               --dir bootstrap/ \
+               --clobber 2>/dev/null; then
+            echo "==> Downloaded tauraroc-${{ matrix.platform }}.zip from latest release"
+            unzip "bootstrap/tauraroc-${{ matrix.platform }}.zip" -d "$DEST/"
+          else
+            echo "==> No release found — using committed seed binary from ${{ matrix.seed_dir }}/"
+            if [ ! -f "${{ matrix.seed_dir }}/tauraroc${{ matrix.ext }}" ]; then
+              echo "ERROR: seed binary not found at ${{ matrix.seed_dir }}/tauraroc${{ matrix.ext }}"
+              echo "Either create a GitHub Release with tauraroc-${{ matrix.platform }}.zip"
+              echo "or commit the seed binary folder ${{ matrix.seed_dir }}/ to the repo."
+              exit 1
+            fi
+            cp "${{ matrix.seed_dir }}/tauraroc${{ matrix.ext }}" "$DEST/"
+          fi
+
+          BOOTSTRAP="$(pwd)/$DEST/tauraroc${{ matrix.ext }}"
           chmod +x "$BOOTSTRAP" 2>/dev/null || true
           echo "BOOTSTRAP_BIN=$BOOTSTRAP" >> "$GITHUB_ENV"
 
@@ -67,18 +84,23 @@ jobs:
         run: ./scripts/build.ps1
 
       # -------------------------------------------------------
-      # Move compiled binary to repo root, then wipe both
-      # tauraro/src/build/ and bootstrap/ before bundling.
+      # Move compiled binary to repo root, then wipe all
+      # temporary and seed directories before bundling so the
+      # artifact is clean: source + tauraroc[.exe] at root only.
       # -------------------------------------------------------
       - name: Place binary at repo root
         shell: bash
         run: mv "tauraro/src/build/tauraroc${{ matrix.ext }}" "./tauraroc${{ matrix.ext }}"
 
-      - name: Clean build and bootstrap directories
+      - name: Clean up temporary and seed directories
         shell: bash
         run: |
           rm -rf tauraro/src/build
           rm -rf bootstrap
+          rm -rf tauraroc-Linux-X64
+          rm -rf tauraroc-Linux-ARM64
+          rm -rf tauraroc-Windows-X64
+          rm -rf tauraroc-macOS-ARM64
 
       # -------------------------------------------------------
       # Artifact = full source tree + tauraroc[.exe] at root.
@@ -91,9 +113,10 @@ jobs:
 
   # -----------------------------------------------------------------
   # Release: runs only on v* tag pushes after all builds pass.
-  # Downloads each platform artifact, zips just the binary into
-  # tauraroc-<platform>.zip (the format the bootstrap step expects),
-  # then publishes a GitHub Release with those four zips as assets.
+  # Downloads each platform artifact (source + binary at root),
+  # zips just the binary into tauraroc-<platform>.zip, and publishes
+  # a GitHub Release — those zips become the bootstrap for all
+  # future build runs.
   # -----------------------------------------------------------------
   release:
     needs: build
@@ -127,15 +150,16 @@ jobs:
           name: tauraroc-macos-arm64
           path: release/macos-arm64/
 
-      # Each zip contains only the binary at its root so that after
-      # unzip the binary is at bootstrap/tauraroc-<platform>/tauraroc[.exe].
+      # zip -j strips the path so the binary sits at the zip root:
+      # unzip tauraroc-linux-x64.zip -d bootstrap/tauraroc-linux-x64/
+      # → bootstrap/tauraroc-linux-x64/tauraroc
       - name: Zip per-platform binaries
         run: |
           mkdir -p release/assets
-          zip -j release/assets/tauraroc-linux-x64.zip    release/linux-x64/tauraroc
-          zip -j release/assets/tauraroc-linux-arm64.zip  release/linux-arm64/tauraroc
-          zip -j release/assets/tauraroc-windows-x64.zip  release/windows-x64/tauraroc.exe
-          zip -j release/assets/tauraroc-macos-arm64.zip  release/macos-arm64/tauraroc
+          zip -j release/assets/tauraroc-linux-x64.zip   release/linux-x64/tauraroc
+          zip -j release/assets/tauraroc-linux-arm64.zip release/linux-arm64/tauraroc
+          zip -j release/assets/tauraroc-windows-x64.zip release/windows-x64/tauraroc.exe
+          zip -j release/assets/tauraroc-macos-arm64.zip release/macos-arm64/tauraroc
 
       - name: Create GitHub Release
         env:

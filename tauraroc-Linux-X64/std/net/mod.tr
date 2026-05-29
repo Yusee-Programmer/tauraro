@@ -1,0 +1,17 @@
+# std.net — Package index.
+#
+# Sub-modules:
+#   from std.net.tcp  import TcpStream, TcpListener
+#   from std.net.http import HttpClient, HttpResponse, HttpHeader
+#   from std.net.url  import Url
+#   from std.net.udp  import UdpSocket
+#   from std.net.dns  import Dns
+
+from std.net.tcp  import TcpStream
+from std.net.tcp  import TcpListener
+from std.net.http import HttpClient
+from std.net.http import HttpResponse
+from std.net.http import HttpHeader
+from std.net.url  import Url
+from std.net.udp  import UdpSocket
+from std.net.dns  import Dns

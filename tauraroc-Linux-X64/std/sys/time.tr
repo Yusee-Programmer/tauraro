@@ -1,0 +1,40 @@
+# std.sys.time — Timing via the Clock class (static methods + stopwatch instance).
+
+extern "C":
+    def _tr_sleep_ms(ms: int)
+    def _tr_timestamp() -> int
+    def _tr_time_ms() -> int
+
+pub class Clock:
+    pub start_time: int
+
+extend Clock:
+    # Create a Clock that records the current time as its start point.
+    pub def init() -> Clock:
+        mut c = Clock()
+        c.start_time = _tr_time_ms()
+        return c
+
+    # ── Static helpers ────────────────────────────────────────────────────────
+
+    # Pause the current thread for at least ms milliseconds.
+    pub def sleep_ms(ms: int):
+        _tr_sleep_ms(ms)
+
+    # Pause for at least s seconds.
+    pub def sleep_s(s: int):
+        _tr_sleep_ms(s * 1000)
+
+    # Wall-clock time as seconds since the Unix epoch (time_t).
+    pub def timestamp() -> int:
+        return _tr_timestamp()
+
+    # High-resolution wall-clock time in milliseconds (monotonic).
+    pub def now_ms() -> int:
+        return _tr_time_ms()
+
+    # ── Instance method ───────────────────────────────────────────────────────
+
+    # Milliseconds elapsed since this Clock was created.
+    pub def elapsed_ms(self) -> int:
+        return _tr_time_ms() - self.start_time

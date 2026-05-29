@@ -1,0 +1,422 @@
+# std.string.str — String utilities via the Str static-method class.
+
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_str_split(s: str, sep: str) -> List[str]
+    def _tr_str_join(parts: List[str], sep: str) -> str
+
+pub class Str:
+    _dummy: int
+
+extend Str:
+    # ── Measurement ──────────────────────────────────────────────────────────
+
+    pub def len(s: str) -> int:
+        mut p = s as Pointer[char]
+        mut n = 0
+        while p.offset(n).read() as int != 0: n = n + 1
+        return n
+
+    # ── Predicates ───────────────────────────────────────────────────────────
+
+    pub def starts_with(s: str, prefix: str) -> bool:
+        mut sp = s as Pointer[char]
+        mut pp = prefix as Pointer[char]
+        mut i  = 0
+        while True:
+            mut pc = pp.offset(i).read() as int
+            if pc == 0: return true
+            mut sc = sp.offset(i).read() as int
+            if sc == 0 or sc != pc: return false
+            i = i + 1
+        return false
+
+    pub def ends_with(s: str, suffix: str) -> bool:
+        mut sl = Str.len(s)
+        mut el = Str.len(suffix)
+        if el > sl: return false
+        mut sp  = s as Pointer[char]
+        mut ep  = suffix as Pointer[char]
+        mut off = sl - el
+        mut i   = 0
+        while i < el:
+            if sp.offset(off + i).read() as int != ep.offset(i).read() as int:
+                return false
+            i = i + 1
+        return true
+
+    pub def contains_char(s: str, c: int) -> bool:
+        mut p = s as Pointer[char]
+        mut i = 0
+        while True:
+            mut ch = p.offset(i).read() as int
+            if ch == 0: return false
+            if ch == c: return true
+            i = i + 1
+        return false
+
+    pub def contains(s: str, sub: str) -> bool:
+        return Str.index_of(s, sub) >= 0
+
+    pub def eq(a: str, b: str) -> bool:
+        mut pa = a as Pointer[char]
+        mut pb = b as Pointer[char]
+        mut i  = 0
+        while True:
+            mut ca = pa.offset(i).read() as int
+            mut cb = pb.offset(i).read() as int
+            if ca != cb: return false
+            if ca == 0: return true
+            i = i + 1
+        return true
+
+    # ── Character classification ──────────────────────────────────────────────
+
+    # True when every character in s is a decimal digit.
+    pub def is_digit(s: str) -> bool:
+        mut p = s as Pointer[char]
+        mut i = 0
+        mut c = p.offset(i).read() as int
+        if c == 0: return false
+        while c != 0:
+            if c < 48 or c > 57: return false
+            i = i + 1
+            c = p.offset(i).read() as int
+        return true
+
+    # True when every character in s is an ASCII letter.
+    pub def is_alpha(s: str) -> bool:
+        mut p = s as Pointer[char]
+        mut i = 0
+        mut c = p.offset(i).read() as int
+        if c == 0: return false
+        while c != 0:
+            if not ((c >= 65 and c <= 90) or (c >= 97 and c <= 122)): return false
+            i = i + 1
+            c = p.offset(i).read() as int
+        return true
+
+    # True when every character is a letter or digit.
+    pub def is_alnum(s: str) -> bool:
+        mut p = s as Pointer[char]
+        mut i = 0
+        mut c = p.offset(i).read() as int
+        if c == 0: return false
+        while c != 0:
+            mut ok = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+            if not ok: return false
+            i = i + 1
+            c = p.offset(i).read() as int
+        return true
+
+    # True when s consists entirely of whitespace characters.
+    pub def is_space(s: str) -> bool:
+        mut p = s as Pointer[char]
+        mut i = 0
+        mut c = p.offset(i).read() as int
+        if c == 0: return false
+        while c != 0:
+            if c != 32 and c != 9 and c != 10 and c != 13: return false
+            i = i + 1
+            c = p.offset(i).read() as int
+        return true
+
+    # True when s is all upper-case letters.
+    pub def is_upper(s: str) -> bool:
+        mut p = s as Pointer[char]
+        mut i = 0
+        mut c = p.offset(i).read() as int
+        if c == 0: return false
+        while c != 0:
+            if c >= 97 and c <= 122: return false
+            i = i + 1
+            c = p.offset(i).read() as int
+        return true
+
+    # True when s is all lower-case letters.
+    pub def is_lower(s: str) -> bool:
+        mut p = s as Pointer[char]
+        mut i = 0
+        mut c = p.offset(i).read() as int
+        if c == 0: return false
+        while c != 0:
+            if c >= 65 and c <= 90: return false
+            i = i + 1
+            c = p.offset(i).read() as int
+        return true
+
+    # ── Slicing & building ───────────────────────────────────────────────────
+
+    pub def slice(s: str, start: int, end: int) -> str:
+        mut slen   = Str.len(s)
+        mut real_s = start
+        mut real_e = end
+        if real_s < 0: real_s = 0
+        if real_e > slen: real_e = slen
+        if real_s >= real_e: return ""
+        mut sz = real_e - real_s
+        mut sb = StringBuilder.init(sz + 1)
+        mut p  = s as Pointer[char]
+        mut i  = real_s
+        while i < real_e:
+            sb.append_char(p.offset(i).read() as int)
+            i = i + 1
+        return sb.to_owned()
+
+    pub def repeat(s: str, n: int) -> str:
+        if n <= 0: return ""
+        mut sb = StringBuilder.init(Str.len(s) * n + 1)
+        mut i  = 0
+        while i < n:
+            sb.append(s)
+            i = i + 1
+        return sb.to_owned()
+
+    pub def reverse(s: str) -> str:
+        mut slen = Str.len(s)
+        mut sb   = StringBuilder.init(slen + 1)
+        mut p    = s as Pointer[char]
+        mut i    = slen - 1
+        while i >= 0:
+            sb.append_char(p.offset(i).read() as int)
+            i = i - 1
+        return sb.to_owned()
+
+    # ── Case conversion ──────────────────────────────────────────────────────
+
+    pub def to_upper(s: str) -> str:
+        mut slen = Str.len(s)
+        mut sb   = StringBuilder.init(slen + 1)
+        mut p    = s as Pointer[char]
+        mut i    = 0
+        while i < slen:
+            mut ch = p.offset(i).read() as int
+            if ch >= 97 and ch <= 122: ch = ch - 32
+            sb.append_char(ch)
+            i = i + 1
+        return sb.to_owned()
+
+    pub def to_lower(s: str) -> str:
+        mut slen = Str.len(s)
+        mut sb   = StringBuilder.init(slen + 1)
+        mut p    = s as Pointer[char]
+        mut i    = 0
+        while i < slen:
+            mut ch = p.offset(i).read() as int
+            if ch >= 65 and ch <= 90: ch = ch + 32
+            sb.append_char(ch)
+            i = i + 1
+        return sb.to_owned()
+
+    # Capitalize: first letter upper, rest lower.
+    pub def capitalize(s: str) -> str:
+        mut low = Str.to_lower(s)
+        if Str.len(low) == 0: return low
+        mut p  = low as Pointer[char]
+        mut ch = p.offset(0).read() as int
+        if ch >= 97 and ch <= 122:
+            return Str.to_upper(Str.slice(low, 0, 1)) + Str.slice(low, 1, Str.len(low))
+        return low
+
+    # Title-case: capitalize each word.
+    pub def title(s: str) -> str:
+        mut slen  = Str.len(s)
+        mut sb    = StringBuilder.init(slen + 1)
+        mut p     = s as Pointer[char]
+        mut prev  = 32
+        mut i     = 0
+        while i < slen:
+            mut ch = p.offset(i).read() as int
+            if prev == 32 and ch >= 97 and ch <= 122:
+                sb.append_char(ch - 32)
+            elif prev != 32 and ch >= 65 and ch <= 90:
+                sb.append_char(ch + 32)
+            else:
+                sb.append_char(ch)
+            prev = ch
+            i = i + 1
+        return sb.to_owned()
+
+    # ── Trimming ─────────────────────────────────────────────────────────────
+
+    pub def trim_left(s: str) -> str:
+        mut p = s as Pointer[char]
+        mut i = 0
+        while True:
+            mut c = p.offset(i).read() as int
+            if c == 0 or (c != 32 and c != 9 and c != 10 and c != 13): break
+            i = i + 1
+        return Str.slice(s, i, Str.len(s))
+
+    pub def trim_right(s: str) -> str:
+        mut slen = Str.len(s)
+        mut p    = s as Pointer[char]
+        mut i    = slen - 1
+        while i >= 0:
+            mut c = p.offset(i).read() as int
+            if c != 32 and c != 9 and c != 10 and c != 13: break
+            i = i - 1
+        return Str.slice(s, 0, i + 1)
+
+    pub def trim(s: str) -> str:
+        return Str.trim_left(Str.trim_right(s))
+
+    # ── Char access ──────────────────────────────────────────────────────────
+
+    pub def char_at(s: str, i: int) -> int:
+        mut p = s as Pointer[char]
+        return p.offset(i).read() as int
+
+    # ── Padding & alignment ───────────────────────────────────────────────────
+
+    # Left-pad s to width using pad_char (given as ASCII code).
+    pub def lpad(s: str, width: int, pad_char: int) -> str:
+        mut slen = Str.len(s)
+        if slen >= width: return s
+        mut sb = StringBuilder.init(width + 1)
+        mut i  = slen
+        while i < width:
+            sb.append_char(pad_char)
+            i = i + 1
+        sb.append(s)
+        return sb.to_owned()
+
+    # Right-pad s to width using pad_char.
+    pub def rpad(s: str, width: int, pad_char: int) -> str:
+        mut slen = Str.len(s)
+        if slen >= width: return s
+        mut sb = StringBuilder.init(width + 1)
+        sb.append(s)
+        mut i  = slen
+        while i < width:
+            sb.append_char(pad_char)
+            i = i + 1
+        return sb.to_owned()
+
+    # Center s within width, padding with spaces.
+    pub def center(s: str, width: int) -> str:
+        mut slen = Str.len(s)
+        if slen >= width: return s
+        mut total = width - slen
+        mut left  = total / 2
+        mut right = total - left
+        mut sb    = StringBuilder.init(width + 1)
+        mut i     = 0
+        while i < left:
+            sb.append_char(32)
+            i = i + 1
+        sb.append(s)
+        i = 0
+        while i < right:
+            sb.append_char(32)
+            i = i + 1
+        return sb.to_owned()
+
+    # ── Search ───────────────────────────────────────────────────────────────
+
+    pub def index_of(s: str, sub: str) -> int:
+        mut sl   = Str.len(s)
+        mut subl = Str.len(sub)
+        if subl == 0: return 0
+        if subl > sl: return -1
+        mut sp   = s as Pointer[char]
+        mut subp = sub as Pointer[char]
+        mut i    = 0
+        while i <= sl - subl:
+            mut j     = 0
+            mut found = true
+            while j < subl:
+                if sp.offset(i + j).read() as int != subp.offset(j).read() as int:
+                    found = false
+                    j     = subl
+                j = j + 1
+            if found: return i
+            i = i + 1
+        return -1
+
+    # Last occurrence of sub in s, or -1 if absent.
+    pub def last_index_of(s: str, sub: str) -> int:
+        mut sl   = Str.len(s)
+        mut subl = Str.len(sub)
+        if subl == 0: return sl
+        if subl > sl: return -1
+        mut sp   = s as Pointer[char]
+        mut subp = sub as Pointer[char]
+        mut i    = sl - subl
+        while i >= 0:
+            mut j     = 0
+            mut found = true
+            while j < subl:
+                if sp.offset(i + j).read() as int != subp.offset(j).read() as int:
+                    found = false
+                    j     = subl
+                j = j + 1
+            if found: return i
+            i = i - 1
+        return -1
+
+    # Count non-overlapping occurrences of sub in s.
+    pub def count(s: str, sub: str) -> int:
+        mut subl = Str.len(sub)
+        if subl == 0: return 0
+        mut n = 0
+        mut i = 0
+        while True:
+            mut pos = Str.index_of(Str.slice(s, i, Str.len(s)), sub)
+            if pos < 0: break
+            n = n + 1
+            i = i + pos + subl
+        return n
+
+    # ── Split / join / replace ────────────────────────────────────────────────
+
+    pub def split(s: str, sep: str) -> List[str]:
+        return _tr_str_split(s, sep)
+
+    pub def join(parts: List[str], sep: str) -> str:
+        return _tr_str_join(parts, sep)
+
+    pub def replace(s: str, old: str, new_: str) -> str:
+        mut result = StringBuilder.init(Str.len(s) + 1)
+        mut oldl   = Str.len(old)
+        if oldl == 0: return s
+        mut sl     = Str.len(s)
+        mut sp     = s as Pointer[char]
+        mut i = 0
+        while i < sl:
+            mut found = true
+            if i + oldl > sl: found = false
+            if found:
+                mut j = 0
+                while j < oldl:
+                    if sp.offset(i + j).read() as int != (old as Pointer[char]).offset(j).read() as int:
+                        found = false
+                        j     = oldl
+                    j = j + 1
+            if found:
+                result.append(new_)
+                i = i + oldl
+            else:
+                result.append_char(sp.offset(i).read() as int)
+                i = i + 1
+        return result.to_owned()
+
+    # Replace only the first occurrence of old.
+    pub def replace_first(s: str, old: str, new_: str) -> str:
+        mut pos = Str.index_of(s, old)
+        if pos < 0: return s
+        mut sb = StringBuilder.init(Str.len(s) + Str.len(new_))
+        sb.append(Str.slice(s, 0, pos))
+        sb.append(new_)
+        sb.append(Str.slice(s, pos + Str.len(old), Str.len(s)))
+        return sb.to_owned()
+
+    # Simple positional format: replaces each "{}" in template with the next value.
+    pub def format(template: str, values: Vec[str]) -> str:
+        mut result = template
+        mut i      = 0
+        while i < values.len:
+            result = Str.replace_first(result, "{}", values.get(i))
+            i = i + 1
+        return result

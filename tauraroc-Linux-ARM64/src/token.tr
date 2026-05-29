@@ -1,0 +1,348 @@
+# compiler/token.tr — Token types for the Tauraro self-hosted compiler.
+
+# ─── Token Enum ────────────────────────────────────────────────────────────────
+
+pub enum Token:
+    # Literals
+    IntLit(val: int)
+    FloatLit(val: float)
+    StrLit(val: str)
+    ByteStrLit(val: str)
+    RawStrLit(val: str)
+    CharLit(val: int)     # char stored as codepoint
+    FStrLit(val: str)     # f-string (raw text; interpolation handled by parser)
+    BoolLit(val: bool)
+
+    # Identifier / name
+    Ident(name: str)
+
+    # Keywords — control flow
+    KwDef
+    KwClass
+    KwEnum
+    KwInterface
+    KwExtend
+    KwStruct
+    KwIf
+    KwElif
+    KwElse
+    KwFor
+    KwWhile
+    KwReturn
+    KwBreak
+    KwContinue
+    KwMatch
+    KwCase
+    KwTry
+    KwAssert
+    KwWith
+    KwAsm
+    KwTaskGroup
+    KwGpu
+    KwSizeOf
+    KwExcept
+    KwFinally
+    KwRaise
+    KwPass
+
+    # Keywords — declarations / modifiers
+    KwImplements
+    KwImport
+    KwFrom
+    KwAs
+    KwIn
+    KwMut
+    KwShared
+    KwExtern
+    KwUnsafe
+    KwSpawn
+    KwAsync
+    KwThrows
+    KwExtends
+    KwAwait
+    KwYield
+    KwPub
+    KwWhere
+    KwStatic
+    KwStack
+    KwOwn
+    KwBorrow
+    KwMove
+    KwConst
+    KwActor
+    KwSuper
+    KwExport
+    KwLambda
+    KwDecorator
+
+    # Keywords — literals
+    KwTrue
+    KwFalse
+    KwNone
+
+    # Keywords — type-related
+    KwAnd
+    KwOr
+    KwNot
+    KwIs
+
+    # Keywords — primitive types
+    KwInt
+    KwFloat
+    KwBool
+    KwI8
+    KwI16
+    KwI32
+    KwI64
+    KwI128
+    KwISize
+    KwU8
+    KwU16
+    KwU32
+    KwU64
+    KwU128
+    KwUSize
+    KwF32
+    KwF64
+    KwBoolTy
+    KwChar
+    KwStr
+    KwString
+    KwVoid
+
+    # Operators — arithmetic
+    Plus       # +
+    Minus      # -
+    Star       # *
+    Slash      # /
+    Percent    # %
+    StarStar   # **
+    FloorDiv   # //
+    FloorDivEq # //=
+    StarStarEq # **=
+
+    # Operators — comparison
+    EqEq       # ==
+    NotEq      # !=
+    Lt         # <
+    Gt         # >
+    LtEq       # <=
+    GtEq       # >=
+
+    # Operators — bitwise
+    Amp        # &
+    Pipe       # |
+    Caret      # ^
+    Tilde      # ~
+    LtLt       # <<
+    GtGt       # >>
+
+    # Operators — assignment
+    Eq         # =
+    PlusEq     # +=
+    MinusEq    # -=
+    StarEq     # *=
+    SlashEq    # /=
+    PercentEq  # %=
+    AmpEq      # &=
+    PipeEq     # |=
+    CaretEq    # ^=
+    LtLtEq     # <<=
+    GtGtEq     # >>=
+
+    # Operators — other
+    Arrow      # ->
+    FatArrow   # =>
+    Question   # ?
+    At         # @
+    Dot        # .
+    DotDot     # ..
+    DotDotEq   # ..=
+    DotDotDot  # ...
+
+    # Delimiters
+    LParen     # (
+    RParen     # )
+    LBracket   # [
+    RBracket   # ]
+    LBrace     # {
+    RBrace     # }
+    Colon      # :
+    Comma      # ,
+    Semicolon  # ;
+    Hash       # #
+
+    # Indentation
+    Indent
+    Dedent
+    Newline
+
+    # Special
+    Eof
+    Error(msg: str)
+
+# ─── Token helpers ─────────────────────────────────────────────────────────────
+
+extend Token:
+    pub def is_eof(self) -> bool:
+        match self:
+            case Token.Eof:
+                return True
+        return False
+
+    pub def is_newline(self) -> bool:
+        match self:
+            case Token.Newline:
+                return True
+            case Token.Indent:
+                return True
+            case Token.Dedent:
+                return True
+        return False
+
+    pub def is_keyword(self) -> bool:
+        match self:
+            case Token.KwDef:    return True
+            case Token.KwClass:  return True
+            case Token.KwIf:     return True
+            case Token.KwElif:   return True
+            case Token.KwElse:   return True
+            case Token.KwFor:    return True
+            case Token.KwWhile:  return True
+            case Token.KwReturn: return True
+            case Token.KwMatch:  return True
+            case Token.KwTrue:   return True
+            case Token.KwFalse:  return True
+            case Token.KwNone:   return True
+            case Token.KwAnd:    return True
+            case Token.KwOr:     return True
+            case Token.KwNot:    return True
+            case Token.KwMut:    return True
+            case Token.KwEnum:   return True
+            case Token.KwWhere:  return True
+            case Token.KwStatic: return True
+            case Token.KwStack:  return True
+            case Token.KwOwn:    return True
+            case Token.KwBorrow: return True
+            case Token.KwMove:   return True
+            case Token.KwConst:  return True
+            case Token.KwActor:  return True
+            case Token.KwSuper:  return True
+            case Token.KwExport: return True
+            case Token.KwLambda: return True
+            case Token.KwDecorator: return True
+            case Token.KwInt:    return True
+            case Token.KwFloat:  return True
+            case Token.KwBool:   return True
+            case Token.KwI8:     return True
+            case Token.KwI16:    return True
+            case Token.KwI32:    return True
+            case Token.KwI64:    return True
+            case Token.KwI128:   return True
+            case Token.KwISize:  return True
+            case Token.KwU8:     return True
+            case Token.KwU16:    return True
+            case Token.KwU32:    return True
+            case Token.KwU64:    return True
+            case Token.KwU128:   return True
+            case Token.KwUSize:  return True
+            case Token.KwF32:    return True
+            case Token.KwF64:    return True
+            case Token.KwBoolTy: return True
+            case Token.KwChar:   return True
+            case Token.KwStr:    return True
+            case Token.KwString: return True
+            case Token.KwVoid:   return True
+        return False
+
+    pub def debug(self) -> str:
+        match self:
+            case Token.Ident(name): return name
+            case Token.IntLit(val): return f"IntLit({val})"
+            case Token.FloatLit(val): return f"FloatLit({val})"
+            case Token.StrLit(val): return f"StrLit({val})"
+            case Token.ByteStrLit(val): return f"ByteStrLit({val})"
+            case Token.RawStrLit(val): return f"RawStrLit({val})"
+            case Token.CharLit(val): return f"CharLit({val})"
+            case Token.FStrLit(val): return f"FStrLit({val})"
+            case Token.BoolLit(val): return f"BoolLit({val})"
+            case Token.KwDef:    return "def"
+            case Token.KwClass:  return "class"
+            case Token.KwIf:     return "if"
+            case Token.KwElif:   return "elif"
+            case Token.KwElse:   return "else"
+            case Token.KwFor:    return "for"
+            case Token.KwWhile:  return "while"
+            case Token.KwReturn: return "return"
+            case Token.KwMatch:  return "match"
+            case Token.KwTrue:   return "True"
+            case Token.KwFalse:  return "False"
+            case Token.KwNone:   return "None"
+            case Token.KwAnd:    return "and"
+            case Token.KwOr:     return "or"
+            case Token.KwNot:    return "not"
+            case Token.KwIs:     return "is"
+            case Token.KwMut:    return "mut"
+            case Token.KwEnum:   return "enum"
+            case Token.KwWhere:  return "where"
+            case Token.KwStatic: return "static"
+            case Token.KwStack:  return "stack"
+            case Token.KwOwn:    return "own"
+            case Token.KwBorrow: return "borrow"
+            case Token.KwMove:   return "move"
+            case Token.KwConst:  return "const"
+            case Token.KwActor:  return "actor"
+            case Token.KwSuper:  return "super"
+            case Token.KwExport: return "export"
+            case Token.KwLambda: return "lambda"
+            case Token.KwDecorator: return "decorator"
+            case Token.KwInt:    return "int"
+            case Token.KwFloat:  return "float"
+            case Token.KwBool:   return "bool"
+            case Token.KwI8:     return "i8"
+            case Token.KwI16:    return "i16"
+            case Token.KwI32:    return "i32"
+            case Token.KwI64:    return "i64"
+            case Token.KwI128:   return "i128"
+            case Token.KwISize:  return "isize"
+            case Token.KwU8:     return "u8"
+            case Token.KwU16:    return "u16"
+            case Token.KwU32:    return "u32"
+            case Token.KwU64:    return "u64"
+            case Token.KwU128:   return "u128"
+            case Token.KwUSize:  return "usize"
+            case Token.KwF32:    return "f32"
+            case Token.KwF64:    return "f64"
+            case Token.KwBoolTy: return "bool"
+            case Token.KwChar:   return "char"
+            case Token.KwStr:    return "str"
+            case Token.KwString: return "String"
+            case Token.KwVoid:   return "void"
+            case Token.Plus:     return "+"
+            case Token.Minus:    return "-"
+            case Token.Star:     return "*"
+            case Token.Slash:    return "/"
+            case Token.EqEq:     return "=="
+            case Token.NotEq:    return "!="
+            case Token.Lt:       return "<"
+            case Token.Gt:       return ">"
+            case Token.LtEq:     return "<="
+            case Token.GtEq:     return ">="
+            case Token.Eq:       return "="
+            case Token.Arrow:    return "->"
+            case Token.LParen:   return "("
+            case Token.RParen:   return ")"
+            case Token.LBracket: return "["
+            case Token.RBracket: return "]"
+            case Token.Colon:    return ":"
+            case Token.Comma:    return ","
+            case Token.Dot:      return "."
+            case Token.DotDot:   return ".."
+            case Token.DotDotEq: return "..="
+            case Token.DotDotDot: return "..."
+            case Token.Indent:   return "INDENT"
+            case Token.Dedent:   return "DEDENT"
+            case Token.Newline:  return "NEWLINE"
+            case Token.Eof:      return "EOF"
+            case Token.Error(msg): return msg
+        return "?"
