@@ -1,0 +1,42 @@
+# Benchmark 10: Matrix Multiply — naive 400x400 f64 (A * B = C)
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+    def _tr_float_to_str(n: float) -> str
+
+def main():
+    mut clock = Clock.init()
+
+    mut n = 400
+    mut nn = n * n
+    mut a = List[f64].init()
+    mut b = List[f64].init()
+    mut c = List[f64].init()
+    mut fill = 0
+    while fill < nn:
+        a.push(fill as f64 * 0.000001)
+        b.push((nn - fill) as f64 * 0.000001)
+        c.push(0.0)
+        fill = fill + 1
+
+    mut i = 0
+    while i < n:
+        mut k = 0
+        while k < n:
+            mut aik: f64 = a[i * n + k]
+            mut j = 0
+            while j < n:
+                c[i * n + j] = c[i * n + j] + aik * b[k * n + j]
+                j = j + 1
+            k = k + 1
+        i = i + 1
+
+    mut trace: f64 = 0.0
+    mut ti = 0
+    while ti < n:
+        trace = trace + c[ti * n + ti]
+        ti = ti + 1
+
+    mut ms = clock.elapsed_ms()
+    print(_tr_float_to_str(trace))
+    print(f"TIME_MS:{_tr_int_to_str(ms)}")

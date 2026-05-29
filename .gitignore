@@ -1,3 +1,4 @@
 *.exe
 *.c
 build
+*.pdb

@@ -1,0 +1,10 @@
+# Normalize line endings
+* text=auto
+
+# Mark .tr sample files as Tauraro
+*.tr      linguist-language=Tauraro linguist-detectable=true
+*.tau     linguist-language=Tauraro linguist-detectable=true
+*.tauraro linguist-language=Tauraro linguist-detectable=true
+
+# Mark the Rouge lexer as Ruby (it is Ruby, not Tauraro)
+*.rb      linguist-language=Ruby

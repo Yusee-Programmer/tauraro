@@ -1,0 +1,31 @@
+# Benchmark 6: Mandelbrot — 800x800 grid, 1000 max iterations
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+
+def main():
+    mut clock = Clock.init()
+
+    mut count: i64 = 0
+    mut py = 0
+    while py < 800:
+        mut cy: f64 = (py as f64 / 800.0) * 2.0 - 1.0
+        mut px = 0
+        while px < 800:
+            mut cx: f64 = (px as f64 / 800.0) * 3.5 - 2.5
+            mut x: f64 = 0.0
+            mut y: f64 = 0.0
+            mut iter = 0
+            while iter < 1000 and x*x + y*y < 4.0:
+                mut tx: f64 = x*x - y*y + cx
+                y = 2.0*x*y + cy
+                x = tx
+                iter = iter + 1
+            if iter == 1000:
+                count = count + 1
+            px = px + 1
+        py = py + 1
+
+    mut ms = clock.elapsed_ms()
+    print(count)
+    print(f"TIME_MS:{_tr_int_to_str(ms)}")
