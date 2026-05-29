@@ -1,0 +1,18 @@
+# Benchmark 3: Float Multiply — 1B f64 multiplications
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+    def _tr_float_to_str(n: float) -> str
+
+def main():
+    mut clock = Clock.init()
+
+    mut x: f64 = 1.0
+    mut i = 0
+    while i < 1000000000:
+        x = x * 1.000001
+        i = i + 1
+
+    mut ms = clock.elapsed_ms()
+    print(_tr_float_to_str(x))
+    print(f"TIME_MS:{_tr_int_to_str(ms)}")

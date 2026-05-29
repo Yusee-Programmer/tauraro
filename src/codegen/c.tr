@@ -33,7 +33,7 @@ pub def _indent_str(n: int) -> str:
 
 pub def _is_invalid_ptr(addr: usize) -> bool:
     if addr < 0x10000 as usize: return true
-    if addr > 0x7fffffffffff as usize: return true
+    if addr > 0x0000ffffffffffff as usize: return true
     if addr == 0xabababab as usize or addr == 0xfeeefeee as usize: return true
     if addr == 0xbaadf00d as usize or addr == 0xcccccccc as usize: return true
     if addr == 0xcdcdcdcd as usize or addr == 0xdddddddd as usize: return true
@@ -797,7 +797,7 @@ pub class CGenerator:
         if op == "in": return "_tr_contains(" + ls + ", " + rs + ")"
         if op == "**": return "((long long)pow((double)(" + ls + "), (double)(" + rs + ")))"
         if op == "//": return "((long long)(" + ls + ") / (long long)(" + rs + "))"
-        if _is_str_type(lt_n) and (op == "==" or op == "!="):
+        if (_is_str_type(lt_n) or _is_str_type(rt_n)) and (op == "==" or op == "!="):
             if op == "==": return "(strcmp((char*)" + ls + ", (char*)" + rs + ") == 0)"
             return "(strcmp((char*)" + ls + ", (char*)" + rs + ") != 0)"
         if self.enums.contains(lt_n) and (op == "==" or op == "!="):
@@ -2812,7 +2812,7 @@ pub class CGenerator:
                     case _: pass
             i = i + 1
 
-        out = out + "/* Primitive vec/map types for include/core/*.c */\n"
+        out = out + "/* Primitive vec/map types for core modules */\n"
         out = out + "struct core_vec_Vec_str { char** data; long long len; long long capacity; };\n"
         out = out + "typedef struct core_vec_Vec_str core_vec_Vec_str;\n"
         out = out + "__attribute__((hot)) char** core_alloc_alloc_str(long long count);\n"

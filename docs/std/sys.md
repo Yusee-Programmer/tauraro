@@ -6,6 +6,7 @@ from std.sys.fs       import delete_file, copy_file, file_size, rename_file, is_
 from std.sys.process  import Process
 from std.sys.time     import Stopwatch, timestamp, sleep_ms
 from std.sys.os       import OS
+from std.sys.platform import Platform
 from std.sys.datetime import DateTime, Date, Time, TimeDelta
 ```
 
@@ -222,6 +223,56 @@ print("Sep: "   + OS.sep())
 
 if OS.is_windows():
     print("Running on Windows")
+```
+
+---
+
+## std.sys.platform — Runtime target and capability detection
+
+**When**: You need to branch code at runtime based on the target platform (e.g., skip networking on embedded, choose a filesystem path only when available).
+**Why**: `Platform` wraps the compile-time macros (`TAURARO_BARE`, `TAURARO_WASM`, etc.) as runtime booleans so your Tauraro code stays portable across Linux, Windows, macOS, Android, iOS, WASM, and bare-metal.
+
+| Method | Returns | Description |
+|---|---|---|
+| `Platform.name()` | `str` | `"windows"`, `"linux"`, `"macos"`, `"android"`, `"ios"`, `"wasm"`, or `"embedded"` |
+| `Platform.arch()` | `str` | `"x86_64"`, `"arm64"`, `"arm"`, `"wasm32"`, or `"unknown"` |
+| `Platform.has_filesystem()` | `bool` | `true` when a writable filesystem exists (false on bare WASM / embedded) |
+| `Platform.has_networking()` | `bool` | `true` when sockets are available (false on bare / WASM targets) |
+| `Platform.has_threads()` | `bool` | `true` when OS threads are available |
+| `Platform.has_os_services()` | `bool` | `true` when env vars, process control, etc. are available |
+| `Platform.is_windows()` | `bool` | Running on Windows |
+| `Platform.is_linux()` | `bool` | Running on Linux |
+| `Platform.is_macos()` | `bool` | Running on macOS |
+| `Platform.is_android()` | `bool` | Running on Android |
+| `Platform.is_ios()` | `bool` | Running on iOS |
+| `Platform.is_wasm()` | `bool` | Running in a WASM environment (bare or WASI) |
+| `Platform.is_embedded()` | `bool` | Running on a bare-metal target (no OS) |
+| `Platform.is_posix()` | `bool` | Running on any POSIX system (Linux, macOS, Android, iOS, WASI) |
+| `Platform.is_mobile()` | `bool` | Running on Android or iOS |
+
+### Example
+
+```tauraro
+from std.sys.platform import Platform
+
+def main():
+    print("Platform: " + Platform.name())
+    print("Arch:     " + Platform.arch())
+
+    if Platform.has_filesystem():
+        print("Filesystem available")
+    else:
+        print("No filesystem — skipping file operations")
+
+    if Platform.has_networking():
+        print("Networking available")
+    else:
+        print("No networking on this target")
+
+    if Platform.is_mobile():
+        print("Running on a mobile device")
+    elif Platform.is_embedded():
+        print("Running on embedded hardware")
 ```
 
 ---

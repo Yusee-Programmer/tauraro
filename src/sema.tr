@@ -689,6 +689,9 @@ extend Sema:
                 if callee as usize == 0 as usize: return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
                 match callee.read():
                     case Expr.EIdent(n):
+                        if n == "main":
+                            self.error("[E-1] Explicit call to 'main()' is forbidden. The compiler automatically invokes main() as the program entry point. Remove the 'main()' call from your source.")
+                            return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
                         if self.classes.contains(n) or n == "StringObj" or n == "StringBuilder" or n == "List" or n == "Vec" or n == "Pointer" or n == "Map" or n == "Dict":
                             ret_ty = AstType.init(n)
                         elif self.enums.contains(n):
