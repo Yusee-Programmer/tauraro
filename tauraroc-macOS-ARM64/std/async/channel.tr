@@ -1,0 +1,84 @@
+# std.async.channel — Production bounded MPMC channel.
+#
+# Backed by a ring buffer with mutex + two condition variables.
+# send() blocks when full; recv() blocks when empty.
+# Fully thread-safe: Win32 CriticalSection / POSIX pthread_mutex.
+#
+# Usage:
+#   let ch = Channel.new(16)
+#   ch.send(42)
+#   let v = ch.recv()
+#   ch.close()
+
+extern "C":
+    def _tr_chan_new_h(cap: int) -> Pointer[char]
+    def _tr_chan_send_h(ch: Pointer[char], val: int)
+    def _tr_chan_recv_h(ch: Pointer[char]) -> int
+    def _tr_chan_try_send_h(ch: Pointer[char], val: int) -> bool
+    def _tr_chan_try_recv_val_h(ch: Pointer[char]) -> int
+    def _tr_chan_send_timeout_h(ch: Pointer[char], val: int, ms: int) -> bool
+    def _tr_chan_recv_timeout_val_h(ch: Pointer[char], ms: int) -> int
+    def _tr_chan_close_h(ch: Pointer[char])
+    def _tr_chan_is_closed_h(ch: Pointer[char]) -> bool
+    def _tr_chan_len_h(ch: Pointer[char]) -> int
+    def _tr_chan_cap_h(ch: Pointer[char]) -> int
+    def _tr_chan_free_h(ch: Pointer[char])
+
+pub class Channel:
+    pub handle: Pointer[char]
+
+extend Channel:
+    # Create a new bounded channel with capacity cap (minimum 1).
+    pub def new(cap: int) -> Channel:
+        mut real_cap = cap
+        if real_cap < 1: real_cap = 1
+        mut c = Channel()
+        c.handle = _tr_chan_new_h(real_cap)
+        return c
+
+    # Block until value is sent or channel is closed.
+    pub def send(self, val: int):
+        _tr_chan_send_h(self.handle, val)
+
+    # Block until a value is available.  Returns 0 on closed empty channel.
+    pub def recv(self) -> int:
+        return _tr_chan_recv_h(self.handle)
+
+    # Non-blocking send.  Returns false when full or closed.
+    pub def try_send(self, val: int) -> bool:
+        return _tr_chan_try_send_h(self.handle, val)
+
+    # Non-blocking recv.  Returns LLONG_MIN sentinel when empty or closed.
+    pub def try_recv(self) -> int:
+        return _tr_chan_try_recv_val_h(self.handle)
+
+    # Send with timeout.  Returns false when timeout elapses.
+    pub def send_timeout(self, val: int, ms: int) -> bool:
+        return _tr_chan_send_timeout_h(self.handle, val, ms)
+
+    # Recv with timeout.  Returns LLONG_MIN sentinel on timeout.
+    pub def recv_timeout(self, ms: int) -> int:
+        return _tr_chan_recv_timeout_val_h(self.handle, ms)
+
+    # Close: unblocks all waiting senders and receivers.
+    pub def close(self):
+        _tr_chan_close_h(self.handle)
+
+    pub def is_closed(self) -> bool:
+        return _tr_chan_is_closed_h(self.handle)
+
+    pub def len(self) -> int:
+        return _tr_chan_len_h(self.handle)
+
+    pub def cap(self) -> int:
+        return _tr_chan_cap_h(self.handle)
+
+    pub def is_empty(self) -> bool:
+        return _tr_chan_len_h(self.handle) == 0
+
+    pub def is_full(self) -> bool:
+        return _tr_chan_len_h(self.handle) >= _tr_chan_cap_h(self.handle)
+
+    # Free underlying OS resources.  Do not use after calling free().
+    pub def free(self):
+        _tr_chan_free_h(self.handle)

@@ -1,0 +1,145 @@
+# std.core.map — String-keyed hash map Map[V].
+#
+# Open-addressing linear-probe hash table.  Keys are always str.
+# No bootstrap compiler dependency.
+
+extern "C":
+    def _tr_checked_alloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_c_memset(ptr: Pointer[char], val: int, n: int)
+    def _tr_str_eq(a: str, b: str) -> bool
+    def _tr_strlen(s: str) -> int
+
+# FNV-1a hash for str keys (fast, good distribution).
+pub def _map_hash(key: str, cap: int) -> int:
+    mut h: u64 = 14695981039346656037 as u64
+    mut p = key as Pointer[char]
+    mut i = 0
+    while True:
+        mut c = p.offset(i).read() as u64
+        if c == 0 as u64: break
+        h = (h ^ c) * 1099511628211 as u64
+        i = i + 1
+    return (h as int) % cap
+
+pub class MapEntry[V]:
+    pub key:  str
+    pub val:  V
+    pub used: bool
+
+pub class Map[V]:
+    pub buckets:  Pointer[char]   # raw storage for MapEntry[V] array
+    pub count:    int
+    pub capacity: int
+
+extend Map[V]:
+    pub def init(cap: int) -> Map[V]:
+        mut cap2 = cap
+        if cap2 < 8: cap2 = 8
+        # Round up to next power of two for fast mod
+        mut p = 1
+        while p < cap2: p = p * 2
+        cap2 = p
+        mut m = Map[V]()
+        mut sz = cap2 * sizeof(MapEntry[V])
+        m.buckets  = _tr_checked_alloc(sz)
+        _tr_c_memset(m.buckets, 0, sz)
+        m.count    = 0
+        m.capacity = cap2
+        return m
+
+    pub def _bucket(self, i: int) -> Pointer[MapEntry[V]]:
+        unsafe:
+            return (self.buckets as Pointer[MapEntry[V]]).offset(i)
+
+    pub def insert(self, key: str, val: V):
+        # Rehash at 75% load
+        if self.count * 4 >= self.capacity * 3:
+            self._rehash()
+        mut h = _map_hash(key, self.capacity)
+        mut i = h
+        while True:
+            mut entry = self._bucket(i)
+            if not entry.read().used:
+                mut e = MapEntry[V]()
+                e.key  = key
+                e.val  = val
+                e.used = true
+                entry.write(e)
+                self.count = self.count + 1
+                return
+            if _tr_str_eq(entry.read().key, key):
+                mut e = entry.read()
+                e.val = val
+                entry.write(e)
+                return
+            i = (i + 1) % self.capacity
+
+    pub def get(self, key: str) -> V:
+        mut h = _map_hash(key, self.capacity)
+        mut i = h
+        while True:
+            mut entry = self._bucket(i)
+            if not entry.read().used:
+                mut dummy = MapEntry[V]()
+                return dummy.val
+            if _tr_str_eq(entry.read().key, key):
+                return entry.read().val
+            i = (i + 1) % self.capacity
+        mut dummy = MapEntry[V]()
+        return dummy.val
+
+    pub def contains(self, key: str) -> bool:
+        mut h = _map_hash(key, self.capacity)
+        mut i = h
+        while True:
+            mut entry = self._bucket(i)
+            if not entry.read().used: return false
+            if _tr_str_eq(entry.read().key, key): return true
+            i = (i + 1) % self.capacity
+        return false
+
+    pub def remove(self, key: str):
+        mut h = _map_hash(key, self.capacity)
+        mut i = h
+        while True:
+            mut entry = self._bucket(i)
+            if not entry.read().used: return
+            if _tr_str_eq(entry.read().key, key):
+                mut e = entry.read()
+                e.used = false
+                entry.write(e)
+                self.count = self.count - 1
+                return
+            i = (i + 1) % self.capacity
+
+    pub def len(self) -> int:
+        return self.count
+
+    pub def is_empty(self) -> bool:
+        return self.count == 0
+
+    pub def _rehash(self):
+        mut new_cap = self.capacity * 2
+        mut new_sz = new_cap * sizeof(MapEntry[V])
+        mut new_bkt = _tr_checked_alloc(new_sz)
+        _tr_c_memset(new_bkt, 0, new_sz)
+        mut old_bkt = self.buckets
+        mut old_cap = self.capacity
+        self.buckets  = new_bkt
+        self.capacity = new_cap
+        self.count    = 0
+        mut i = 0
+        while i < old_cap:
+            unsafe:
+                mut entry = (old_bkt as Pointer[MapEntry[V]]).offset(i)
+                if entry.read().used:
+                    self.insert(entry.read().key, entry.read().val)
+            i = i + 1
+        _tr_c_free(old_bkt)
+
+    pub def free(self):
+        _tr_c_free(self.buckets)
+        self.buckets  = 0 as Pointer[char]
+        self.count    = 0
+        self.capacity = 0

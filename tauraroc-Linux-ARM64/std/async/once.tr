@@ -1,0 +1,31 @@
+# std.async.once — Run a block of code exactly once across all threads.
+#
+# do_once() returns true the first time any thread calls it, false on all
+# subsequent calls — even from concurrent threads.
+#
+# Usage:
+#   let init_once = Once.new()
+#   if init_once.do_once():
+#       heavy_global_init()
+
+extern "C":
+    def _tr_once_new_h() -> Pointer[char]
+    def _tr_once_do_h(o: Pointer[char]) -> bool
+    def _tr_once_free_h(o: Pointer[char])
+
+pub class Once:
+    pub handle: Pointer[char]
+
+extend Once:
+    pub def new() -> Once:
+        mut o = Once()
+        o.handle = _tr_once_new_h()
+        return o
+
+    # Returns true exactly once across all threads.
+    # Use the return value to gate one-time initialisation.
+    pub def do_once(self) -> bool:
+        return _tr_once_do_h(self.handle)
+
+    pub def free(self):
+        _tr_once_free_h(self.handle)

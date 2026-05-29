@@ -1,0 +1,135 @@
+# std.io.console — Console I/O with color support via the Console class.
+
+from std.string.fmt import Fmt
+
+extern "C":
+    def _tr_read_line(prompt: str) -> str
+    def _tr_print_raw(s: str)
+    def _tr_eprint(s: str)
+    def _tr_console_color(code: int)
+    def _tr_console_reset()
+    def _tr_console_clear()
+
+pub class Console:
+    _dummy: int
+
+extend Console:
+    # ── Output ────────────────────────────────────────────────────────────────
+
+    pub def println(s: str):
+        print(s)
+
+    pub def print(s: str):
+        _tr_print_raw(s)
+
+    pub def eprint(s: str):
+        _tr_eprint(s)
+
+    pub def eprintln(s: str):
+        _tr_eprint(s)
+
+    # ── Input ─────────────────────────────────────────────────────────────────
+
+    # Read a line from stdin with an optional prompt.
+    pub def read_line(prompt: str) -> str:
+        return _tr_read_line(prompt)
+
+    pub def input_line() -> str:
+        return _tr_read_line("")
+
+    # Read an integer from stdin (returns 0 on parse failure).
+    pub def read_int(prompt: str) -> int:
+        mut s = _tr_read_line(prompt)
+        mut p = s as Pointer[char]
+        mut neg = false
+        mut val = 0
+        mut i   = 0
+        mut c   = p.offset(i).read() as int
+        if c == 45:
+            neg = true
+            i   = i + 1
+        while True:
+            c = p.offset(i).read() as int
+            if c == 0: break
+            if c >= 48 and c <= 57:
+                val = val * 10 + (c - 48)
+            i = i + 1
+        if neg: return 0 - val
+        return val
+
+    # Read a float from stdin.
+    pub def read_float(prompt: str) -> float:
+        mut s = _tr_read_line(prompt)
+        mut p = s as Pointer[char]
+        mut neg    = false
+        mut intpart = 0
+        mut fracpart = 0
+        mut fracdiv  = 1
+        mut dot      = false
+        mut i = 0
+        mut c = p.offset(i).read() as int
+        if c == 45:
+            neg = true
+            i   = i + 1
+        while True:
+            c = p.offset(i).read() as int
+            if c == 0: break
+            if c == 46:
+                dot = true
+            elif c >= 48 and c <= 57:
+                if dot:
+                    fracpart = fracpart * 10 + (c - 48)
+                    fracdiv  = fracdiv * 10
+                else:
+                    intpart = intpart * 10 + (c - 48)
+            i = i + 1
+        mut result = intpart as float + fracpart as float / fracdiv as float
+        if neg: return 0.0 - result
+        return result
+
+    # ── Screen control ────────────────────────────────────────────────────────
+
+    # Clear the terminal screen.
+    pub def clear():
+        _tr_console_clear()
+
+    # ── Colors (ANSI codes) ───────────────────────────────────────────────────
+
+    # Set foreground color.  Use Console.RED, Console.GREEN, etc. as the code.
+    pub def set_color(code: int):
+        _tr_console_color(code)
+
+    # Reset colors to default.
+    pub def reset_color():
+        _tr_console_reset()
+
+    # Print s in color, then reset.
+    pub def print_colored(s: str, code: int):
+        _tr_console_color(code)
+        _tr_print_raw(s)
+        _tr_console_reset()
+
+    # Print s in color with trailing newline, then reset.
+    pub def println_colored(s: str, code: int):
+        _tr_console_color(code)
+        print(s)
+        _tr_console_reset()
+
+    # ── Color constants ───────────────────────────────────────────────────────
+
+    pub def BLACK()   -> int: return 30
+    pub def RED()     -> int: return 31
+    pub def GREEN()   -> int: return 32
+    pub def YELLOW()  -> int: return 33
+    pub def BLUE()    -> int: return 34
+    pub def MAGENTA() -> int: return 35
+    pub def CYAN()    -> int: return 36
+    pub def WHITE()   -> int: return 37
+
+    pub def BRIGHT_RED()     -> int: return 91
+    pub def BRIGHT_GREEN()   -> int: return 92
+    pub def BRIGHT_YELLOW()  -> int: return 93
+    pub def BRIGHT_BLUE()    -> int: return 94
+    pub def BRIGHT_MAGENTA() -> int: return 95
+    pub def BRIGHT_CYAN()    -> int: return 96
+    pub def BRIGHT_WHITE()   -> int: return 97

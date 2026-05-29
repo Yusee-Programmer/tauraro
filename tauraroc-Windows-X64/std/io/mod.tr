@@ -1,0 +1,15 @@
+# std.io — Package index.
+#
+# Sub-modules:
+#   from std.io.file    import File
+#   from std.io.console import Console
+#   from std.io.path    import Path
+#   from std.io.dir     import Dir
+#   from std.io.bufio   import BufReader, BufWriter
+
+from std.io.file    import File
+from std.io.console import Console
+from std.io.path    import Path
+from std.io.dir     import Dir
+from std.io.bufio   import BufReader
+from std.io.bufio   import BufWriter

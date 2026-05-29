@@ -1,0 +1,17 @@
+# Benchmark 1: Integer Sum — sum 0..999_999_999 (1B additions)
+from std.sys.time import Clock
+extern "C":
+    def _tr_int_to_str(n: int) -> str
+
+def main():
+    mut clock = Clock.init()
+
+    mut sum: i64 = 0
+    mut i: i64 = 0
+    while i < 1000000000:
+        sum = sum + i
+        i = i + 1
+
+    mut ms = clock.elapsed_ms()
+    print(sum)
+    print(f"TIME_MS:{_tr_int_to_str(ms)}")

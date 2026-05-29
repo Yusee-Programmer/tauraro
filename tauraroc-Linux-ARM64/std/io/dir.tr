@@ -1,0 +1,55 @@
+# std.io.dir — Directory operations via the Dir class.
+
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_mkdir(path: str) -> int
+    def _tr_rmdir(path: str) -> int
+    def _tr_dir_exists(path: str) -> bool
+    def _tr_opendir(path: str) -> Pointer[char]
+    def _tr_readdir(handle: Pointer[char]) -> str
+    def _tr_closedir(handle: Pointer[char])
+
+pub class Dir:
+    pub path: str
+
+extend Dir:
+    # Create a Dir bound to path.
+    pub def init(path: str) -> Dir:
+        mut d = Dir()
+        d.path = path
+        return d
+
+    # Create the directory.  True on success or if it already exists.
+    pub def make(self) -> bool:
+        if _tr_dir_exists(self.path): return true
+        return _tr_mkdir(self.path) == 0
+
+    # Remove the directory (must be empty).  True on success.
+    pub def remove(self) -> bool:
+        return _tr_rmdir(self.path) == 0
+
+    # True when self.path names an existing directory.
+    pub def exists(self) -> bool:
+        return _tr_dir_exists(self.path)
+
+    # List entries (files and subdirectories) in the directory.
+    # Returns names only (no path prefix), excluding "." and "..".
+    pub def list(self) -> Vec[str]:
+        mut entries = Vec[str].init(16)
+        mut handle = _tr_opendir(self.path)
+        if handle as int == 0:
+            return entries
+        while true:
+            mut name = _tr_readdir(handle)
+            if name == "":
+                break
+            if name != "." and name != "..":
+                entries.push(name)
+        _tr_closedir(handle)
+        return entries
+
+    # Return the number of entries (excluding "." and "..").
+    pub def count(self) -> int:
+        mut entries = self.list()
+        return entries.len

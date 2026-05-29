@@ -1,0 +1,15 @@
+# std.core — Low-level building blocks for the self-hosted Tauraro stdlib.
+#
+# These are pure Tauraro implementations backed by extern "C" bindings.
+# Nothing here imports from the bootstrap compiler's core.* modules.
+#
+# Usage:
+#   from std.core.vec    import Vec
+#   from std.core.map    import Map, MapEntry
+#   from std.core.string import StringObj, StringBuilder
+#   from std.core.alloc  import raw_alloc, raw_free, raw_copy, raw_zero
+
+from std.core.alloc  import raw_alloc, raw_realloc, raw_free, raw_copy, raw_zero, raw_move, alloc, dealloc, resize, copy
+from std.core.vec    import Vec
+from std.core.map    import Map, MapEntry, _map_hash
+from std.core.string import StringObj, StringBuilder

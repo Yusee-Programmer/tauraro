@@ -1,0 +1,82 @@
+# std.sys.platform — Runtime target/capability detection via the Platform class.
+
+extern "C":
+    def _tr_platform() -> str
+    def _tr_os_machine() -> str
+    def _tr_target_has_filesystem() -> bool
+    def _tr_target_has_networking() -> bool
+    def _tr_target_has_threads() -> bool
+    def _tr_target_has_os_services() -> bool
+    def _tr_is_android() -> bool
+    def _tr_is_ios() -> bool
+    def _tr_is_wasm() -> bool
+    def _tr_is_embedded() -> bool
+    def _tr_is_posix() -> bool
+    def _tr_is_mobile() -> bool
+    def _tr_is_windows() -> bool
+
+pub class Platform:
+    _dummy: int
+
+extend Platform:
+    # ── Identity ──────────────────────────────────────────────────────────────
+
+    # Platform name: "windows", "linux", "macos", "android", "ios",
+    #                "wasm", or "embedded".
+    pub def name() -> str:
+        return _tr_platform()
+
+    # CPU architecture: "x86_64", "arm64", "arm", "wasm32", or "unknown".
+    pub def arch() -> str:
+        return _tr_os_machine()
+
+    # ── Capability queries ────────────────────────────────────────────────────
+
+    # True when a writable filesystem is available (false on bare WASM, embedded).
+    pub def has_filesystem() -> bool:
+        return _tr_target_has_filesystem()
+
+    # True when BSD/POSIX sockets are available (false on bare/WASM targets).
+    pub def has_networking() -> bool:
+        return _tr_target_has_networking()
+
+    # True when the target supports OS threads (false on bare/WASM without threads).
+    pub def has_threads() -> bool:
+        return _tr_target_has_threads()
+
+    # True when general OS services (env vars, process control) are available.
+    pub def has_os_services() -> bool:
+        return _tr_target_has_os_services()
+
+    # ── Platform predicates ───────────────────────────────────────────────────
+
+    pub def is_windows() -> bool:
+        return _tr_is_windows()
+
+    pub def is_linux() -> bool:
+        mut p = _tr_platform()
+        return p == "linux"
+
+    pub def is_macos() -> bool:
+        mut p = _tr_platform()
+        return p == "macos"
+
+    pub def is_android() -> bool:
+        return _tr_is_android()
+
+    pub def is_ios() -> bool:
+        return _tr_is_ios()
+
+    pub def is_wasm() -> bool:
+        return _tr_is_wasm()
+
+    pub def is_embedded() -> bool:
+        return _tr_is_embedded()
+
+    # True on any POSIX system (Linux, macOS, Android, iOS, WASI).
+    pub def is_posix() -> bool:
+        return _tr_is_posix()
+
+    # True on Android or iOS.
+    pub def is_mobile() -> bool:
+        return _tr_is_mobile()
