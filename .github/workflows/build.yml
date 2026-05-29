@@ -67,9 +67,9 @@ jobs:
             #  4. platform-named binary   (tauraroc-Linux-X64 / tauraroc-Windows-X64.exe)
             for CANDIDATE in \
                 "tauraroc-${{ matrix.platform }}.zip" \
-                "tauraroc-${{ matrix.seed_dir }}.zip" \
+                "${{ matrix.seed_dir }}.zip" \
                 "tauraroc${{ matrix.ext }}" \
-                "tauraroc-${{ matrix.seed_dir }}${{ matrix.ext }}"; do
+                "${{ matrix.seed_dir }}${{ matrix.ext }}"; do
 
               if echo "$ASSET_LIST" | grep -Fxq "$CANDIDATE"; then
                 echo "==> Downloading: $CANDIDATE"
@@ -107,7 +107,7 @@ jobs:
             if [ "$DOWNLOADED" = "false" ]; then
               echo "==> No matching asset found in the release."
               echo "    Available: $(echo "$ASSET_LIST" | tr '\n' ' ')"
-              echo "    Expected one of: tauraroc-${{ matrix.platform }}.zip | tauraroc-${{ matrix.seed_dir }}.zip | tauraroc${{ matrix.ext }} | tauraroc-${{ matrix.seed_dir }}${{ matrix.ext }}"
+              echo "    Expected one of: tauraroc-${{ matrix.platform }}.zip | ${{ matrix.seed_dir }}.zip | tauraroc${{ matrix.ext }} | ${{ matrix.seed_dir }}${{ matrix.ext }}"
             fi
           else
             echo "==> No published release found."
