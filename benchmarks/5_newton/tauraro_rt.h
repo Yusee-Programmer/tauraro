@@ -20,24 +20,6 @@
 #  define _POSIX_C_SOURCE 200809L
 #endif
 
-/* ── Tauraro platform detection ──────────────────────────────────────────── *
- * Set TAURARO_NO_OS before including this header to target bare-metal or     *
- * freestanding environments (no OS, filesystem, networking, or threads).     *
- * These macros drive conditional compilation of all platform-specific code.  */
-#if defined(__wasm__) || defined(__wasm32__) || defined(__EMSCRIPTEN__)
-#  define TAURARO_WASM 1
-#endif
-#if defined(__ANDROID__)
-#  define TAURARO_ANDROID 1
-#endif
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-#  define TAURARO_IOS 1
-#endif
-/* BARE = no OS: bare WASM (no WASI) or explicit TAURARO_NO_OS */
-#if defined(TAURARO_NO_OS) || (defined(TAURARO_WASM) && !defined(__wasi__))
-#  define TAURARO_BARE 1
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -119,23 +101,17 @@ static inline char* _tr_getenv(const char* name) { return getenv(name); }
 #ifdef _WIN32
 static inline int _tr_setenv(const char* name, const char* value) { return _putenv_s(name, value) == 0 ? 0 : -1; }
 static inline int _tr_unsetenv(const char* name) { return _putenv_s(name, "") == 0 ? 0 : -1; }
-#elif defined(TAURARO_BARE)
-static inline int _tr_setenv(const char* name, const char* value) { (void)name; (void)value; return -1; }
-static inline int _tr_unsetenv(const char* name) { (void)name; return -1; }
 #else
 static inline int _tr_setenv(const char* name, const char* value) { return setenv(name, value, 1) == 0 ? 0 : -1; }
 static inline int _tr_unsetenv(const char* name) { return unsetenv(name) == 0 ? 0 : -1; }
 #endif
-#ifdef TAURARO_BARE
-static inline char* _tr_popen_read(const char* cmd) { (void)cmd; return (char*)""; }
-#else
 static inline char* _tr_popen_read(const char* cmd) {
     if (!cmd) return "";
-#  ifdef _WIN32
+#ifdef _WIN32
     FILE* fp = _popen(cmd, "r");
-#  else
+#else
     FILE* fp = popen(cmd, "r");
-#  endif
+#endif
     if (!fp) return "";
     size_t cap = 4096, total = 0; char* buf = (char*)malloc(cap); char tmp[512];
     if (!buf) { fclose(fp); return ""; }
@@ -152,8 +128,7 @@ static inline char* _tr_popen_read(const char* cmd) {
 #endif
     return buf ? buf : "";
 }
-#endif /* TAURARO_BARE popen guard */
-#if !defined(_WIN32) && !defined(TAURARO_BARE)
+#ifndef _WIN32
 static inline long long _tr_time_ns(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
@@ -161,16 +136,6 @@ static inline long long _tr_time_ns(void) {
 static inline char* _tr_path_canonicalize(const char* path) {
     char* r = realpath(path, NULL); return r ? r : (char*)path;
 }
-#elif defined(TAURARO_BARE)
-static inline long long _tr_time_ns(void) {
-#  ifdef __wasi__
-    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
-#  else
-    return 0LL;
-#  endif
-}
-static inline char* _tr_path_canonicalize(const char* path) { return (char*)path; }
 #endif
 
 /* ── Prelude: Option[T] ──────────────────────────────────────────────────── */
@@ -315,26 +280,6 @@ static inline char* _tr_path_canonicalize(const char* path) {
     if (n == 0) { free(buf); return (char*)path; }
     return buf;
 }
-
-#elif defined(TAURARO_BARE)
-/* ── BARE/WASM: single-threaded primitive stubs ──────────────────────── */
-typedef int _TrThread;
-static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) { fn(arg); return 0; }
-static void _tr_thread_detach(_TrThread t)      { (void)t; }
-static void _tr_thread_join_wait(_TrThread t)   { (void)t; }
-
-typedef int _TrMutex;
-static void _tr_mutex_init(_TrMutex* m)         { (void)m; }
-static void _tr_mutex_lock(_TrMutex* m)         { (void)m; }
-static void _tr_mutex_unlock(_TrMutex* m)       { (void)m; }
-
-typedef struct { int dummy; } _TrCondMutex;
-static void _tr_condmutex_init(_TrCondMutex* cm)    { (void)cm; }
-static void _tr_condmutex_lock(_TrCondMutex* cm)    { (void)cm; }
-static void _tr_condmutex_unlock(_TrCondMutex* cm)  { (void)cm; }
-static void _tr_condmutex_wait(_TrCondMutex* cm)    { (void)cm; }
-static void _tr_condmutex_signal(_TrCondMutex* cm)  { (void)cm; }
-static void _tr_sleep_ms(long ms) { (void)ms; }
 
 #else
 #include <pthread.h>
@@ -573,130 +518,6 @@ static _TrTimerState* _tr_ticker_new(long long ms, _TrChan* ch) {
 static void _tr_timer_stop(_TrTimerState* s) {
     if(!s)return; EnterCriticalSection(&s->stop_mu); s->stopped=1; LeaveCriticalSection(&s->stop_mu);
     _tr_chan_close(s->ch);
-}
-
-#elif defined(TAURARO_BARE)
-/* ═══════════════════════════════════════════════════════════════════════════
- * BARE/WASM: single-threaded async stubs — no locking, no blocking.
- * Channels are lock-free ring buffers; mutexes/semaphores are no-ops.
- * ═══════════════════════════════════════════════════════════════════════════*/
-
-typedef struct {
-    long long* buf; long long head, tail, count, cap; volatile int closed;
-} _TrChan;
-static _TrChan* _tr_chan_new(long long cap) {
-    if (cap < 1) cap = 1;
-    _TrChan* c = (_TrChan*)calloc(1, sizeof(_TrChan));
-    c->buf = (long long*)calloc((size_t)cap, sizeof(long long)); c->cap = cap;
-    return c;
-}
-static void _tr_chan_send(_TrChan* c, long long val) {
-    if (!c || c->closed || c->count >= c->cap) return;
-    c->buf[c->tail] = val; c->tail = (c->tail+1)%c->cap; c->count++;
-}
-static long long _tr_chan_recv(_TrChan* c) {
-    if (!c || c->count == 0) return 0LL;
-    long long v = c->buf[c->head]; c->head = (c->head+1)%c->cap; c->count--;
-    return v;
-}
-static bool _tr_chan_try_send(_TrChan* c, long long val) {
-    if (!c || c->closed || c->count >= c->cap) return false;
-    c->buf[c->tail]=val; c->tail=(c->tail+1)%c->cap; c->count++; return true;
-}
-static long long _tr_chan_try_recv_val(_TrChan* c) {
-    if (!c || c->count == 0) return LLONG_MIN;
-    long long v=c->buf[c->head]; c->head=(c->head+1)%c->cap; c->count--; return v;
-}
-static bool  _tr_chan_send_timeout(_TrChan* c, long long val, long long ms)  { (void)ms; return _tr_chan_try_send(c, val); }
-static long long _tr_chan_recv_timeout_val(_TrChan* c, long long ms)         { (void)ms; return _tr_chan_try_recv_val(c); }
-static void  _tr_chan_close(_TrChan* c)          { if (c) c->closed = 1; }
-static bool  _tr_chan_is_closed(_TrChan* c)      { return c && c->closed; }
-static long long _tr_chan_len(_TrChan* c)         { return c ? c->count : 0LL; }
-static long long _tr_chan_cap(_TrChan* c)         { return c ? c->cap : 0LL; }
-static void  _tr_chan_free(_TrChan* c)            { if (!c) return; free(c->buf); free(c); }
-
-typedef struct { volatile long long result; char* error; volatile int done, cancelled; } _TrTaskState;
-static _TrTaskState* _tr_task_new(void) {
-    _TrTaskState* t = (_TrTaskState*)calloc(1, sizeof(_TrTaskState)); t->error = ""; return t;
-}
-static void   _tr_task_complete(_TrTaskState* t, long long r)           { if (t&&!t->done){t->result=r;t->done=1;} }
-static void   _tr_task_complete_err(_TrTaskState* t, const char* msg)   { if (t&&!t->done){t->error=msg?(char*)msg:"error";t->done=1;} }
-static void   _tr_task_cancel(_TrTaskState* t)                           { if (t&&!t->done){t->cancelled=1;t->done=1;} }
-static long long _tr_task_await(_TrTaskState* t)                         { return t?t->result:0LL; }
-static bool   _tr_task_await_timeout(_TrTaskState* t, long long ms, long long* out) {
-    (void)ms; if (t && out) *out = t->result; return t && t->done;
-}
-static bool   _tr_task_is_done(_TrTaskState* t)      { return t && t->done; }
-static bool   _tr_task_is_cancelled(_TrTaskState* t) { return t && t->cancelled; }
-static bool   _tr_task_has_error(_TrTaskState* t)    { return t && t->error && t->error[0]; }
-static char*  _tr_task_get_error(_TrTaskState* t)    { return t && t->error ? t->error : ""; }
-static void   _tr_task_free(_TrTaskState* t)          { if (t) free(t); }
-
-typedef struct { int dummy; } _TrMutexH;
-static _TrMutexH* _tr_mutex_new(void)             { return (_TrMutexH*)calloc(1, sizeof(_TrMutexH)); }
-static void _tr_mutex_hlock(_TrMutexH* m)         { (void)m; }
-static void _tr_mutex_hunlock(_TrMutexH* m)       { (void)m; }
-static bool _tr_mutex_htrylock(_TrMutexH* m)      { (void)m; return true; }
-static void _tr_mutex_hfree(_TrMutexH* m)         { if (m) free(m); }
-
-typedef struct { int dummy; } _TrRWL;
-static _TrRWL* _tr_rwl_new(void)                  { return (_TrRWL*)calloc(1, sizeof(_TrRWL)); }
-static void _tr_rwl_read_lock(_TrRWL* r)          { (void)r; }
-static void _tr_rwl_read_unlock(_TrRWL* r)        { (void)r; }
-static void _tr_rwl_write_lock(_TrRWL* r)         { (void)r; }
-static void _tr_rwl_write_unlock(_TrRWL* r)       { (void)r; }
-static void _tr_rwl_free(_TrRWL* r)               { if (r) free(r); }
-
-typedef struct { volatile long long count, maxv; } _TrSema;
-static _TrSema* _tr_sema_new(long long init, long long maxv) {
-    _TrSema* s = (_TrSema*)calloc(1, sizeof(_TrSema));
-    s->count = init; s->maxv = maxv > 0 ? maxv : (long long)0x7fffffffffffffffLL; return s;
-}
-static void _tr_sema_acquire(_TrSema* s)           { if (s && s->count > 0) s->count--; }
-static bool _tr_sema_try_acquire(_TrSema* s)       { if (s && s->count > 0) { s->count--; return true; } return false; }
-static bool _tr_sema_acquire_timeout(_TrSema* s, long long ms) { (void)ms; return _tr_sema_try_acquire(s); }
-static void _tr_sema_release(_TrSema* s)           { if (s && s->count < s->maxv) s->count++; }
-static void _tr_sema_free(_TrSema* s)              { if (s) free(s); }
-
-typedef struct { volatile long long count; } _TrWG;
-static _TrWG* _tr_wg_new(void) { return (_TrWG*)calloc(1, sizeof(_TrWG)); }
-static void _tr_wg_add(_TrWG* w, long long n)      { if (w) w->count += n; }
-static void _tr_wg_done(_TrWG* w)                  { if (w && w->count > 0) w->count--; }
-static void _tr_wg_wait(_TrWG* w)                  { (void)w; /* no blocking */ }
-static bool _tr_wg_wait_timeout(_TrWG* w, long long ms) { (void)ms; return w ? w->count == 0 : true; }
-static void _tr_wg_free(_TrWG* w)                  { if (w) free(w); }
-
-typedef struct { long long total, count, gen; } _TrBarrier;
-static _TrBarrier* _tr_barrier_new(long long n) {
-    _TrBarrier* b = (_TrBarrier*)calloc(1, sizeof(_TrBarrier)); b->total = b->count = n; return b;
-}
-static void _tr_barrier_wait(_TrBarrier* b) {
-    if (!b) return;
-    if (--b->count == 0) { b->gen++; b->count = b->total; }
-}
-static void _tr_barrier_free(_TrBarrier* b) { if (b) free(b); }
-
-typedef struct { volatile int done; } _TrOnce;
-static _TrOnce* _tr_once_new(void)   { return (_TrOnce*)calloc(1, sizeof(_TrOnce)); }
-static bool _tr_once_do(_TrOnce* o)  { if (!o || o->done) return false; o->done = 1; return true; }
-static void _tr_once_free(_TrOnce* o){ if (o) free(o); }
-
-typedef struct { _TrChan* ch; long long ms; int periodic; volatile int stopped; } _TrTimerState;
-static void* _tr_timer_thread_fn(void* arg) { (void)arg; return NULL; }
-static _TrTimerState* _tr_timer_new(long long ms, _TrChan* ch) {
-    _TrTimerState* s = (_TrTimerState*)calloc(1, sizeof(_TrTimerState));
-    s->ch = ch; s->ms = ms;
-    _tr_chan_try_send(ch, 1LL); /* fire immediately — no background thread */
-    return s;
-}
-static _TrTimerState* _tr_ticker_new(long long ms, _TrChan* ch) {
-    _TrTimerState* s = (_TrTimerState*)calloc(1, sizeof(_TrTimerState));
-    s->ch = ch; s->ms = ms; s->periodic = 1;
-    _tr_chan_try_send(ch, 1LL); return s;
-}
-static void _tr_timer_stop(_TrTimerState* s) {
-    if (!s) return; s->stopped = 1;
-    if (s->ch) _tr_chan_close(s->ch);
 }
 
 #else /* POSIX ─────────────────────────────────────────────────────────── */
@@ -1001,9 +822,7 @@ static inline char* _tr_str_substring(const char* s, int start, int end) {
 
 static inline void _tr_exit(long long code) { exit((int)code); }
 
-#if defined(TAURARO_BARE) && !defined(__wasi__)
-static inline long long _tr_getpid(void) { return 0LL; }
-#elif defined(_WIN32)
+#ifdef _WIN32
 #ifndef _TR_PID_INCLUDED
 #define _TR_PID_INCLUDED
 #include <process.h>
@@ -1021,9 +840,7 @@ static inline long long _tr_timestamp(void) { return (long long)time(NULL); }
 /* High-resolution millisecond wall-clock: QueryPerformanceCounter on Windows,
    CLOCK_MONOTONIC on POSIX.  Used by std.sys.time.time_ms / elapsed_ms. */
 static inline long long _tr_time_ms(void) {
-#if defined(TAURARO_BARE) && !defined(__wasi__)
-    return 0LL;
-#elif defined(_WIN32)
+#ifdef _WIN32
     LARGE_INTEGER freq, count;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&count);
@@ -1048,24 +865,7 @@ static inline void _tr_enable_vt100(void) {
 }
 
 /* ── TCP socket helpers ─────────────────────────────────────────────── */
-#if defined(TAURARO_BARE) || defined(TAURARO_WASM)
-/* No networking on bare WASM or freestanding targets */
-static inline int _tr_net_init(void)                                              { return -1; }
-static inline int _tr_tcp_connect(const char* h, int p)                           { (void)h;(void)p; return -1; }
-static inline int _tr_tcp_send(int fd, const char* d, int l)                      { (void)fd;(void)d;(void)l; return -1; }
-static inline int _tr_tcp_recv(int fd, char* b, int c)                            { (void)fd;(void)b;(void)c; return -1; }
-static inline void _tr_tcp_close(int fd)                                           { (void)fd; }
-static inline int _tr_tcp_listen(const char* h, int p, int bl)                    { (void)h;(void)p;(void)bl; return -1; }
-static inline int _tr_tcp_accept(int s)                                            { (void)s; return -1; }
-static inline char* _tr_tcp_peer_addr(int fd)                                      { (void)fd; return (char*)""; }
-static inline int _tr_udp_socket(void)                                             { return -1; }
-static inline int _tr_udp_bind(int fd, int p)                                      { (void)fd;(void)p; return -1; }
-static inline int _tr_udp_send_to(int fd, const char* d, int l, const char* h, int p) { (void)fd;(void)d;(void)l;(void)h;(void)p; return -1; }
-static inline int _tr_udp_recv_from(int fd, char* b, int c, char* src)            { (void)fd;(void)b;(void)c;(void)src; return -1; }
-static inline void _tr_udp_close(int fd)                                           { (void)fd; }
-static inline char* _tr_dns_resolve(const char* host)                              { (void)host; return (char*)""; }
-static inline char* _tr_dns_reverse(const char* ip)                                { (void)ip;  return (char*)""; }
-#elif defined(_WIN32)
+#ifdef _WIN32
 #ifndef _TR_NET_INCLUDED
 #define _TR_NET_INCLUDED
 #include <winsock2.h>
@@ -1134,17 +934,7 @@ static inline bool _tr_is_windows(void) {
 }
 
 /* ── Directory operations (cross-platform) ──────────────────────────── */
-#if defined(TAURARO_BARE) && !defined(__wasi__)
-/* Bare targets with no filesystem */
-static inline int   _tr_mkdir(const char* p)     { (void)p; return -1; }
-static inline int   _tr_rmdir(const char* p)     { (void)p; return -1; }
-static inline bool  _tr_dir_exists(const char* p){ (void)p; return false; }
-static inline bool  _tr_is_dir(const char* p)    { (void)p; return false; }
-static inline bool  _tr_is_file(const char* p)   { (void)p; return false; }
-static inline void* _tr_opendir(const char* p)   { (void)p; return NULL; }
-static inline char* _tr_readdir(void* h)         { (void)h; return (char*)""; }
-static inline void  _tr_closedir(void* h)        { (void)h; }
-#elif defined(_WIN32)
+#ifdef _WIN32
 static inline int  _tr_mkdir(const char* path)     { return CreateDirectoryA(path, NULL) ? 0 : -1; }
 static inline int  _tr_rmdir(const char* path)     { return RemoveDirectoryA(path) ? 0 : -1; }
 static inline bool _tr_dir_exists(const char* path) {
@@ -1364,11 +1154,7 @@ static inline char* _tr_char_to_str(long long code) {
 static inline char* _tr_char_to_str_alloc(long long code) { return _tr_char_to_str(code); }
 
 /* ── Shell command execution ─────────────────────────────────────────── */
-#ifdef TAURARO_BARE
-static inline int _tr_system(const char* cmd) { (void)cmd; return -1; }
-#else
 static inline int _tr_system(const char* cmd) { return system(cmd); }
-#endif
 
 /* ── Panic / error ───────────────────────────────────────────────────── */
 static inline void _tr_panic(const char* msg) {
@@ -1844,21 +1630,6 @@ static inline void StringBuilder_append_char(StringBuilder* sb, long long c) {
 static inline StringObj* StringBuilder_to_string(StringBuilder* sb) {
     return StringObj_init(sb->buf->data);
 }
-static inline char* StringBuilder_to_owned(StringBuilder* sb) {
-    long long sz = sb->buf->len + 1;
-    char* out = (char*)_tr_checked_alloc(sz);
-    memcpy(out, sb->buf->data, sz);
-    return out;
-}
-static inline char* StringBuilder_as_str(StringBuilder* sb) { return sb->buf->data; }
-static inline void StringBuilder_append_int(StringBuilder* sb, long long n) {
-    char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", n);
-    StringBuilder_append(sb, tmp);
-}
-static inline void StringBuilder_append_float(StringBuilder* sb, double f) {
-    char tmp[32]; snprintf(tmp, sizeof(tmp), "%g", f);
-    StringBuilder_append(sb, tmp);
-}
 static inline long long StringBuilder_length(StringBuilder* sb) { return sb->buf->len; }
 static inline void StringBuilder_free(StringBuilder* sb) {
     free(sb->buf->data); free(sb->buf); free(sb);
@@ -1948,30 +1719,7 @@ static inline char* _tr_strftime(long long ts, const char* fmt) {
 }
 
 /* -- OS / System helpers (platform-specific) ------------------------------- */
-#if defined(TAURARO_BARE) && !defined(__wasi__)
-/* Bare / freestanding: no OS services */
-static inline char* _tr_hostname(void)          { return (char*)"embedded"; }
-static inline char* _tr_username(void)          { return (char*)""; }
-static inline int   _tr_cpu_count(void)         { return 1; }
-static inline char* _tr_cwd(void)               { return (char*)"/"; }
-static inline int   _tr_chdir(const char* p)    { (void)p; return -1; }
-static inline char* _tr_platform(void)          { return (char*)"embedded"; }
-static inline char* _tr_os_machine(void)        {
-#if defined(__aarch64__)
-    return (char*)"arm64";
-#elif defined(__arm__)
-    return (char*)"arm";
-#elif defined(__riscv)
-    return (char*)"riscv";
-#else
-    return (char*)"unknown";
-#endif
-}
-static inline long long _tr_memory_total_mb(void) { return 0LL; }
-static inline void _tr_console_color(int code)  { (void)code; }
-static inline void _tr_console_reset(void)      {}
-static inline void _tr_console_clear(void)      {}
-#elif defined(_WIN32)
+#ifdef _WIN32
 static inline char* _tr_hostname(void) { char* b=(char*)_tr_c_malloc(256); DWORD n=256; GetComputerNameA(b,&n); return b; }
 static inline char* _tr_username(void) { char* b=(char*)_tr_c_malloc(256); DWORD n=256; GetUserNameA(b,&n); return b; }
 static inline int   _tr_cpu_count(void) { SYSTEM_INFO si; GetSystemInfo(&si); return (int)si.dwNumberOfProcessors; }
@@ -2062,15 +1810,7 @@ static inline int   _tr_cpu_count(void) { return (int)sysconf(_SC_NPROCESSORS_ON
 static inline char* _tr_cwd(void)       { char* b=(char*)_tr_c_malloc(4096); return getcwd(b,4096); }
 static inline int   _tr_chdir(const char* p) { return chdir(p); }
 #ifdef __APPLE__
-#  if defined(TAURARO_IOS)
-static inline char* _tr_platform(void) { return (char*)"ios"; }
-#  else
 static inline char* _tr_platform(void) { return (char*)"macos"; }
-#  endif
-#elif defined(TAURARO_ANDROID)
-static inline char* _tr_platform(void) { return (char*)"android"; }
-#elif defined(TAURARO_WASM)
-static inline char* _tr_platform(void) { return (char*)"wasm"; }
 #else
 static inline char* _tr_platform(void) { return (char*)"linux"; }
 #endif
@@ -2159,80 +1899,6 @@ static inline char* _tr_float_fmt(double f, int decimals) {
     sprintf(fmt, "%%.%df", d);
     char* buf = (char*)_tr_c_malloc(64); if(!buf) return (char*)"";
     sprintf(buf, fmt, f); return buf;
-}
-
-/* ── Platform capability detection ──────────────────────────────────────
- * Call from Tauraro via  extern "C":  def _tr_target_has_filesystem() -> bool
- * ─────────────────────────────────────────────────────────────────────── */
-static inline bool _tr_target_has_filesystem(void) {
-#if defined(TAURARO_BARE) && !defined(__wasi__)
-    return false;
-#else
-    return true;
-#endif
-}
-static inline bool _tr_target_has_networking(void) {
-#if defined(TAURARO_BARE) || defined(TAURARO_WASM)
-    return false;
-#else
-    return true;
-#endif
-}
-static inline bool _tr_target_has_threads(void) {
-#ifdef TAURARO_BARE
-    return false;
-#else
-    return true;
-#endif
-}
-static inline bool _tr_target_has_os_services(void) {
-#if defined(TAURARO_BARE) && !defined(__wasi__)
-    return false;
-#else
-    return true;
-#endif
-}
-static inline bool _tr_is_android(void) {
-#ifdef TAURARO_ANDROID
-    return true;
-#else
-    return false;
-#endif
-}
-static inline bool _tr_is_ios(void) {
-#ifdef TAURARO_IOS
-    return true;
-#else
-    return false;
-#endif
-}
-static inline bool _tr_is_wasm(void) {
-#ifdef TAURARO_WASM
-    return true;
-#else
-    return false;
-#endif
-}
-static inline bool _tr_is_embedded(void) {
-#if defined(TAURARO_BARE) && !defined(TAURARO_WASM)
-    return true;
-#else
-    return false;
-#endif
-}
-static inline bool _tr_is_posix(void) {
-#if defined(_WIN32) || defined(TAURARO_BARE)
-    return false;
-#else
-    return true;
-#endif
-}
-static inline bool _tr_is_mobile(void) {
-#if defined(TAURARO_ANDROID) || defined(TAURARO_IOS)
-    return true;
-#else
-    return false;
-#endif
 }
 
 #endif /* TAURARO_RT_H */

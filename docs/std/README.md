@@ -8,12 +8,14 @@ Complete reference for the Tauraro standard library (`std`).
 |---|---|
 | [`std.async`](async.md) | Concurrency primitives: channels, tasks, mutexes, semaphores, barriers |
 | [`std.collections`](collections.md) | Data structures: stack, queue, deque, set, counter, tuple |
+| [`std.encoding`](encoding.md) | Data encoding: JSON, Base64, Hex |
 | [`std.io`](io.md) | File I/O, directory operations, path manipulation, console |
 | [`std.iter`](iter.md) | Range construction and vector transformations |
 | [`std.math`](math.md) | Integer math, floating-point math, bitwise operations |
 | [`std.string`](string.md) | String utilities and formatting |
-| [`std.sys`](sys.md) | Environment variables, file system, process control, timing |
+| [`std.sys`](sys.md) | Environment variables, file system, process control, timing, platform detection |
 | [`std.net`](net.md) | URL building, parsing, and encoding |
+| [`std.test`](test.md) | Lightweight unit-testing framework |
 
 ## Import conventions
 
