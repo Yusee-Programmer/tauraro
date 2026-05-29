@@ -4,7 +4,7 @@ A compiled, statically-typed programming language with Python-style syntax, Rust
 
 ## Installation
 
-Download the latest binary for your platform from the [Releases](https://github.com/Yusee-Programmer/tauraro/releases) page:
+Download the latest binary for your platform from the [Releases](https://github.com/tauraro/tauraro/releases) page:
 
 | Platform | File |
 |----------|------|
