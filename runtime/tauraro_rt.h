@@ -1328,6 +1328,7 @@ static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
 }
 static char*     _tr_int_to_str(long long n)   { char* b=(char*)malloc(32); snprintf(b,32,"%lld",n); return b; }
 static char*     _tr_float_to_str(double n)    { char* b=(char*)malloc(32); snprintf(b,32,"%g",n);   return b; }
+static char*     _tr_float_to_c_lit(double n)  { char* b=(char*)malloc(32); snprintf(b,32,"%.17g",n); return b; }
 static char*     _tr_bool_to_str(bool b)       { return b ? "true" : "false"; }
 static long long _tr_str_to_int(const char* s) { return s ? strtoll(s,NULL,10) : 0LL; }
 static double    _tr_str_to_float(const char* s){ return s ? strtod(s,NULL) : 0.0; }
