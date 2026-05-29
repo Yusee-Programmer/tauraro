@@ -94,12 +94,12 @@ jobs:
       # -------------------------------------------------------
       - name: Place binary at repo root
         shell: bash
-        run: mv "tauraro/src/build/tauraroc${{ matrix.ext }}" "./tauraroc${{ matrix.ext }}"
+        run: mv "src/build/tauraroc${{ matrix.ext }}" "./tauraroc${{ matrix.ext }}"
 
       - name: Clean up temporary and seed directories
         shell: bash
         run: |
-          rm -rf tauraro/src/build
+          rm -rf src/build
           rm -rf bootstrap
           rm -rf tauraroc-Linux-X64
           rm -rf tauraroc-Linux-ARM64
