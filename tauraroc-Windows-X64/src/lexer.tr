@@ -1,0 +1,625 @@
+# compiler/src/lexer.tr — Tauraro lexer written in Tauraro.
+# Tokenizes a source string into a Vec[Token].
+
+from token import Token
+from core.vec import Vec
+from core.string import StringBuilder
+
+# ─── Keyword table helper ───────────────────────────────────────────────────────
+
+pub def keyword_to_token(s: str) -> Token:
+    if s == "def" or s == "aiki":       return Token.KwDef
+    if s == "class" or s == "aji":     return Token.KwClass
+    if s == "enum":                    return Token.KwEnum
+    if s == "interface":               return Token.KwInterface
+    if s == "extend":                  return Token.KwExtend
+    if s == "struct" or s == "tsari":  return Token.KwStruct
+    if s == "if" or s == "idan":       return Token.KwIf
+    if s == "elif" or s == "koidan":   return Token.KwElif
+    if s == "else" or s == "sai":      return Token.KwElse
+    if s == "for" or s == "ga":        return Token.KwFor
+    if s == "while" or s == "yayinda": return Token.KwWhile
+    if s == "return" or s == "dawo":   return Token.KwReturn
+    if s == "break" or s == "tsaya":   return Token.KwBreak
+    if s == "continue" or s == "ci_gaba": return Token.KwContinue
+    if s == "pass" or s == "wuce":     return Token.KwPass
+    if s == "match" or s == "duba":    return Token.KwMatch
+    if s == "case" or s == "hali":     return Token.KwCase
+    if s == "try" or s == "gwada":     return Token.KwTry
+    if s == "except" or s == "kama":   return Token.KwExcept
+    if s == "finally" or s == "karshe": return Token.KwFinally
+    if s == "raise" or s == "jefa":    return Token.KwRaise
+    if s == "assert" or s == "tabbatar": return Token.KwAssert
+    if s == "with" or s == "tare":     return Token.KwWith
+    if s == "asm":                     return Token.KwAsm
+    if s == "taskgroup" or s == "task_group": return Token.KwTaskGroup
+    if s == "gpu":                     return Token.KwGpu
+    if s == "implements":              return Token.KwImplements
+    if s == "import":                  return Token.KwImport
+    if s == "from":                    return Token.KwFrom
+    if s == "as":                      return Token.KwAs
+    if s == "in" or s == "ciki" or s == "a_cikin": return Token.KwIn
+    if s == "mut":                     return Token.KwMut
+    if s == "shared":                  return Token.KwShared
+    if s == "extern":                  return Token.KwExtern
+    if s == "unsafe":                  return Token.KwUnsafe
+    if s == "spawn":                   return Token.KwSpawn
+    if s == "throws":                  return Token.KwThrows
+    if s == "extends":                 return Token.KwExtends
+    if s == "async" or s == "ba_jira": return Token.KwAsync
+    if s == "await" or s == "jira":    return Token.KwAwait
+    if s == "yield" or s == "bayar":   return Token.KwYield
+    if s == "pub" or s == "fito":      return Token.KwPub
+    if s == "static":                  return Token.KwStatic
+    if s == "const":                   return Token.KwConst
+    if s == "actor":                   return Token.KwActor
+    if s == "super":                   return Token.KwSuper
+    if s == "export":                  return Token.KwExport
+    if s == "lambda" or s == "dan_aiki": return Token.KwLambda
+    if s == "decorator":               return Token.KwDecorator
+    if s == "sizeof":                  return Token.KwSizeOf
+    if s == "is":                      return Token.KwIs
+    
+    if s == "true" or s == "gaskiya" or s == "True": return Token.KwTrue
+    if s == "false" or s == "karya" or s == "False": return Token.KwFalse
+    if s == "none" or s == "babu" or s == "None":    return Token.KwNone
+    if s == "and" or s == "da":        return Token.KwAnd
+    if s == "or" or s == "ko":         return Token.KwOr
+    if s == "not" or s == "ba":        return Token.KwNot
+
+    # Primitive types
+    if s == "int" or s == "lamba" or s == "i64": return Token.KwInt
+    if s == "float" or s == "f64":               return Token.KwFloat
+    if s == "bool":                              return Token.KwBool
+    if s == "char":                              return Token.KwChar
+    if s == "str" or s == "zuwa_rubutu":         return Token.KwStr
+    if s == "String":                            return Token.KwString
+    if s == "void":                              return Token.KwVoid
+    
+    return Token.Ident(s)
+
+# ─── Character helpers ──────────────────────────────────────────────────────────
+
+pub def char_is_digit(c: int) -> bool:
+    return c >= 48 and c <= 57   # '0' .. '9'
+
+pub def char_is_alpha(c: int) -> bool:
+    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95  # A-Z a-z _
+
+pub def char_is_alnum(c: int) -> bool:
+    return char_is_alpha(c) or char_is_digit(c)
+
+pub def char_is_space(c: int) -> bool:
+    return c == 32 or c == 9   # ' ' or '\t'
+
+pub def char_is_newline(c: int) -> bool:
+    return c == 10 or c == 13  # '\n' or '\r'
+
+pub def char_is_hex(c: int) -> bool:
+    return char_is_digit(c) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+
+# ─── Lexer class ────────────────────────────────────────────────────────────────
+
+pub class Lexer:
+    pub src:    Pointer[char]   # raw source bytes
+    pub len:    int             # total source length
+    pub pos:    int             # current byte position
+    pub line:   int             # 1-based line number
+    pub indent_stack: Vec[int]  # stack of indent levels
+    pub pending_dedents: int    # dedents to emit before next token
+    pub token_lines: Vec[int]   # parallel line numbers for each token
+
+    pub def init(source: str) -> Lexer:
+        mut lx = Lexer()
+        unsafe:
+            lx.src = source as Pointer[char]
+        mut src_len = 0
+        unsafe:
+            mut p = lx.src
+            while p.offset(src_len).read() as int != 0:
+                src_len = src_len + 1
+        lx.len = src_len
+        lx.pos = 0
+        lx.line = 1
+        lx.indent_stack = Vec[int].init(16)
+        lx.indent_stack.push(0)   # base indent level = 0
+        lx.pending_dedents = 0
+        lx.token_lines = Vec[int].init(1024)
+        return lx
+
+    # ── Token access helpers ──
+
+    pub def peek(self) -> int:
+        if self.pos >= self.len:
+            return 0
+        unsafe:
+            return self.src.offset(self.pos).read() as int
+
+    pub def peek_at(self, offset: int) -> int:
+        mut p = self.pos + offset
+        if p >= self.len:
+            return 0
+        unsafe:
+            return self.src.offset(p).read() as int
+
+    pub def advance(self) -> int:
+        mut c = self.peek()
+        if c == 10:
+            self.line = self.line + 1
+        self.pos = self.pos + 1
+        return c
+
+    pub def at_end(self) -> bool:
+        return self.pos >= self.len
+
+    # ── Skip whitespace and comments (not newlines) ──
+
+    pub def skip_spaces(self):
+        while not self.at_end():
+            mut c = self.peek()
+            if char_is_space(c):
+                self.advance()
+            else:
+                break
+
+    pub def skip_comment(self):
+        while not self.at_end() and not char_is_newline(self.peek()):
+            self.advance()
+
+    pub def read_int(self) -> Token:
+        # Hexadecimal: 0x / 0X
+        if self.peek() == 48 and (self.peek_at(1) == 120 or self.peek_at(1) == 88):
+            self.advance(); self.advance()
+            mut val = 0
+            while char_is_hex(self.peek()) or self.peek() == 95:
+                mut c = self.advance()
+                if c != 95:
+                    mut digit = 0
+                    if c >= 48 and c <= 57:
+                        digit = c - 48
+                    elif c >= 65 and c <= 70:
+                        digit = c - 65 + 10
+                    else:
+                        digit = c - 97 + 10
+                    val = val * 16 + digit
+            return Token.IntLit(val)
+        # Binary: 0b / 0B
+        elif self.peek() == 48 and (self.peek_at(1) == 98 or self.peek_at(1) == 66):
+            self.advance(); self.advance()
+            mut val = 0
+            while self.peek() == 48 or self.peek() == 49 or self.peek() == 95:
+                mut c = self.advance()
+                if c != 95:
+                    val = val * 2 + (c - 48)
+            return Token.IntLit(val)
+        # Octal: 0o / 0O
+        elif self.peek() == 48 and (self.peek_at(1) == 111 or self.peek_at(1) == 79):
+            self.advance(); self.advance()
+            mut val = 0
+            while (self.peek() >= 48 and self.peek() <= 55) or self.peek() == 95:
+                mut c = self.advance()
+                if c != 95:
+                    val = val * 8 + (c - 48)
+            return Token.IntLit(val)
+        else:
+            # Decimal integer (with optional _ separators)
+            mut val = 0
+            while char_is_digit(self.peek()) or self.peek() == 95:
+                mut c = self.advance()
+                if c != 95:
+                    val = val * 10 + (c - 48)
+            # Float with decimal point
+            if self.peek() == 46 and char_is_digit(self.peek_at(1)):
+                self.advance()
+                mut frac = 0.0
+                mut divisor = 10.0
+                while char_is_digit(self.peek()) or self.peek() == 95:
+                    mut c = self.advance()
+                    if c != 95:
+                        frac = frac + (c - 48).to_float() / divisor
+                        divisor = divisor * 10.0
+                # Scientific notation after decimal: 1.5e3
+                mut result = val.to_float() + frac
+                if self.peek() == 101 or self.peek() == 69:
+                    self.advance()
+                    mut exp_neg = False
+                    if self.peek() == 45:
+                        self.advance()
+                        exp_neg = True
+                    elif self.peek() == 43:
+                        self.advance()
+                    mut exp = 0
+                    while char_is_digit(self.peek()):
+                        exp = exp * 10 + (self.advance() - 48)
+                    mut ei = 0
+                    if exp_neg:
+                        while ei < exp:
+                            result = result / 10.0
+                            ei = ei + 1
+                    else:
+                        while ei < exp:
+                            result = result * 10.0
+                            ei = ei + 1
+                return Token.FloatLit(result)
+            # Scientific notation for integer: 1e10
+            if self.peek() == 101 or self.peek() == 69:
+                self.advance()
+                mut exp_neg = False
+                if self.peek() == 45:
+                    self.advance()
+                    exp_neg = True
+                elif self.peek() == 43:
+                    self.advance()
+                mut exp = 0
+                while char_is_digit(self.peek()):
+                    exp = exp * 10 + (self.advance() - 48)
+                mut result = val.to_float()
+                mut ei = 0
+                if exp_neg:
+                    while ei < exp:
+                        result = result / 10.0
+                        ei = ei + 1
+                else:
+                    while ei < exp:
+                        result = result * 10.0
+                        ei = ei + 1
+                return Token.FloatLit(result)
+            return Token.IntLit(val)
+
+    pub def read_string(self, quote: int) -> Token:
+        self.advance()
+        mut sb = StringBuilder.init(64)
+        while not self.at_end() and self.peek() != quote:
+            mut c = self.advance()
+            if c == 92:
+                mut esc = self.advance()
+                if esc == 110:      sb.append_char(10)
+                elif esc == 116:    sb.append_char(9)
+                elif esc == 114:    sb.append_char(13)
+                elif esc == 92:     sb.append_char(92)
+                elif esc == 39:     sb.append_char(39)
+                elif esc == 34:     sb.append_char(34)
+                elif esc == 48:     sb.append_char(0)
+                else: sb.append_char(esc)
+            else:
+                sb.append_char(c)
+        if not self.at_end(): self.advance()
+        return Token.StrLit(sb.to_string().as_str())
+
+    pub def read_char(self) -> Token:
+        self.advance()
+        mut val = 0
+        if self.peek() == 92:
+            self.advance(); mut esc = self.advance()
+            if esc == 110: val = 10
+            elif esc == 116: val = 9
+            elif esc == 114: val = 13
+            elif esc == 92: val = 92
+            elif esc == 39: val = 39
+            elif esc == 48: val = 0
+            else: val = esc
+        else:
+            val = self.advance()
+        if self.peek() == 39: self.advance()
+        return Token.CharLit(val)
+
+    pub def read_fstring(self) -> Token:
+        self.advance(); mut quote = self.advance()
+        mut sb = StringBuilder.init(64)
+        while not self.at_end() and self.peek() != quote:
+            mut c = self.advance()
+            sb.append_char(c)
+        if not self.at_end(): self.advance()
+        return Token.FStrLit(sb.to_string().as_str())
+
+    pub def read_raw_string(self) -> Token:
+        self.advance(); mut quote = self.advance()
+        mut sb = StringBuilder.init(64)
+        while not self.at_end() and self.peek() != quote:
+            sb.append_char(self.advance())
+        if not self.at_end(): self.advance()
+        return Token.RawStrLit(sb.to_string().as_str())
+
+    pub def read_byte_string(self) -> Token:
+        self.advance(); mut quote = self.advance()
+        mut sb = StringBuilder.init(64)
+        while not self.at_end() and self.peek() != quote:
+            mut c = self.advance()
+            if c == 92:
+                mut esc = self.advance()
+                if esc == 110:      sb.append_char(10)
+                elif esc == 116:    sb.append_char(9)
+                elif esc == 114:    sb.append_char(13)
+                elif esc == 92:     sb.append_char(92)
+                elif esc == 39:     sb.append_char(39)
+                elif esc == 34:     sb.append_char(34)
+                elif esc == 48:     sb.append_char(0)
+                else: sb.append_char(esc)
+            else:
+                sb.append_char(c)
+        if not self.at_end(): self.advance()
+        return Token.ByteStrLit(sb.to_string().as_str())
+
+    pub def read_ident(self) -> Token:
+        mut sb = StringBuilder.init(64)
+        while char_is_alnum(self.peek()):
+            sb.append_char(self.advance())
+        return keyword_to_token(sb.to_string().as_str())
+
+    pub def tokenize(self) -> Vec[Token]:
+        # Skip UTF-8 BOM if present
+        if self.pos == 0 and self.len >= 3:
+            if self.peek_at(0) == 239 and self.peek_at(1) == 187 and self.peek_at(2) == 191:
+                self.pos = self.pos + 3
+
+        mut tokens = Vec[Token].init(1024)
+        mut at_line_start = True
+        mut nesting = 0  # paren/bracket/brace depth; suppress Indent/Dedent inside
+
+        while not self.at_end():
+            if self.pending_dedents > 0:
+                tokens.push(Token.Dedent)
+                self.token_lines.push(self.line)
+                self.pending_dedents = self.pending_dedents - 1
+                continue
+
+            if at_line_start:
+                at_line_start = False
+                
+                # 1. Skip leading horizontal whitespace and measure indent
+                mut indent = 0
+                while not self.at_end():
+                    mut c_peek = self.peek()
+                    if c_peek == 32: # space
+                        indent = indent + 1
+                        self.advance()
+                    elif c_peek == 9: # tab
+                        indent = indent + 4
+                        self.advance()
+                    else:
+                        break
+                
+                if self.at_end(): break
+                
+                # 2. If it's a blank line or comment, ignore this line's indent change
+                mut next_c = self.peek()
+                if char_is_newline(next_c) or next_c == 35:
+                    if next_c == 35:
+                        self.advance()
+                        self.skip_comment()
+                    else:
+                        self.advance()
+                        if next_c == 13 and self.peek() == 10: self.advance()
+                    # Reset for next line
+                    at_line_start = True
+                    continue
+
+                # 3. Handle Indent/Dedent tokens (suppressed inside brackets)
+                if nesting == 0:
+                    mut cur_indent = self.indent_stack.get(self.indent_stack.len - 1)
+                    if indent > cur_indent:
+                        self.indent_stack.push(indent)
+                        tokens.push(Token.Indent)
+                        self.token_lines.push(self.line)
+                    elif indent < cur_indent:
+                        while self.indent_stack.len > 1:
+                            mut top = self.indent_stack.get(self.indent_stack.len - 1)
+                            if top <= indent: break
+                            self.indent_stack.len = self.indent_stack.len - 1
+                            tokens.push(Token.Dedent)
+                            self.token_lines.push(self.line)
+
+            mut c = self.peek()
+            if char_is_space(c): 
+                self.advance()
+                continue
+            if char_is_newline(c):
+                self.advance()
+                if c == 13 and self.peek() == 10: self.advance()
+                if nesting == 0:
+                    tokens.push(Token.Newline)
+                    self.token_lines.push(self.line)
+                    at_line_start = True
+                continue
+            if c == 35:
+                self.advance()
+                self.skip_comment()
+                if nesting == 0:
+                    tokens.push(Token.Newline)
+                    self.token_lines.push(self.line)
+                    at_line_start = True
+                continue
+
+            if char_is_digit(c):
+                tokens.push(self.read_int())
+                self.token_lines.push(self.line)
+                continue
+            if c == 34 or c == 39:
+                if c == 39 and (self.peek_at(2) == 39 or self.peek_at(1) == 92):
+                    tokens.push(self.read_char())
+                    self.token_lines.push(self.line)
+                else:
+                    tokens.push(self.read_string(c))
+                    self.token_lines.push(self.line)
+                continue
+            if c == 102 and (self.peek_at(1) == 34 or self.peek_at(1) == 39):
+                tokens.push(self.read_fstring())
+                self.token_lines.push(self.line)
+                continue
+            if c == 114 and (self.peek_at(1) == 34 or self.peek_at(1) == 39):
+                tokens.push(self.read_raw_string())
+                self.token_lines.push(self.line)
+                continue
+            if c == 98 and (self.peek_at(1) == 34 or self.peek_at(1) == 39):
+                tokens.push(self.read_byte_string())
+                self.token_lines.push(self.line)
+                continue
+            if char_is_alpha(c):
+                tokens.push(self.read_ident())
+                self.token_lines.push(self.line)
+                continue
+
+            self.advance()
+            if c == 61:
+                mut nc = self.peek()
+                if nc == 61:
+                    self.advance()
+                    tokens.push(Token.EqEq)
+                elif nc == 62:
+                    self.advance()
+                    tokens.push(Token.FatArrow)
+                else:
+                    tokens.push(Token.Eq)
+            elif c == 33:
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.NotEq)
+                else:
+                    tokens.push(Token.Error("!"))
+            elif c == 60:
+                mut nc = self.peek()
+                if nc == 61:
+                    self.advance()
+                    tokens.push(Token.LtEq)
+                elif nc == 60:
+                    self.advance()
+                    if self.peek() == 61:
+                        self.advance()
+                        tokens.push(Token.LtLtEq)
+                    else:
+                        tokens.push(Token.LtLt)
+                else:
+                    tokens.push(Token.Lt)
+            elif c == 62:
+                mut nc = self.peek()
+                if nc == 61:
+                    self.advance()
+                    tokens.push(Token.GtEq)
+                elif nc == 62:
+                    self.advance()
+                    if self.peek() == 61:
+                        self.advance()
+                        tokens.push(Token.GtGtEq)
+                    else:
+                        tokens.push(Token.GtGt)
+                else:
+                    tokens.push(Token.Gt)
+            elif c == 43:
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.PlusEq)
+                else:
+                    tokens.push(Token.Plus)
+            elif c == 45:
+                mut nc = self.peek()
+                if nc == 62:
+                    self.advance()
+                    tokens.push(Token.Arrow)
+                elif nc == 61:
+                    self.advance()
+                    tokens.push(Token.MinusEq)
+                else:
+                    tokens.push(Token.Minus)
+            elif c == 42:
+                if self.peek() == 42:
+                    self.advance()
+                    if self.peek() == 61:
+                        self.advance()
+                        tokens.push(Token.StarStarEq)
+                    else:
+                        tokens.push(Token.StarStar)
+                elif self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.StarEq)
+                else:
+                    tokens.push(Token.Star)
+            elif c == 47:
+                if self.peek() == 47:
+                    self.advance()
+                    if self.peek() == 61:
+                        self.advance()
+                        tokens.push(Token.FloorDivEq)
+                    else:
+                        tokens.push(Token.FloorDiv)
+                elif self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.SlashEq)
+                else:
+                    tokens.push(Token.Slash)
+            elif c == 37:
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.PercentEq)
+                else:
+                    tokens.push(Token.Percent)
+            elif c == 46:
+                if self.peek() == 46:
+                    self.advance()
+                    if self.peek() == 46:
+                        self.advance()
+                        tokens.push(Token.DotDotDot)
+                    elif self.peek() == 61:
+                        self.advance()
+                        tokens.push(Token.DotDotEq)
+                    else:
+                        tokens.push(Token.DotDot)
+                else:
+                    tokens.push(Token.Dot)
+            elif c == 40:
+                tokens.push(Token.LParen)
+                nesting = nesting + 1
+            elif c == 41:
+                tokens.push(Token.RParen)
+                if nesting > 0:
+                    nesting = nesting - 1
+            elif c == 91:
+                tokens.push(Token.LBracket)
+                nesting = nesting + 1
+            elif c == 93:
+                tokens.push(Token.RBracket)
+                if nesting > 0:
+                    nesting = nesting - 1
+            elif c == 123:
+                tokens.push(Token.LBrace)
+                nesting = nesting + 1
+            elif c == 125:
+                tokens.push(Token.RBrace)
+                if nesting > 0:
+                    nesting = nesting - 1
+            elif c == 58: tokens.push(Token.Colon)
+            elif c == 44: tokens.push(Token.Comma)
+            elif c == 59: tokens.push(Token.Semicolon)
+            elif c == 64: tokens.push(Token.At)
+            elif c == 63: tokens.push(Token.Question)
+            elif c == 126: tokens.push(Token.Tilde)
+            elif c == 38:
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.AmpEq)
+                else:
+                    tokens.push(Token.Amp)
+            elif c == 124:
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.PipeEq)
+                else:
+                    tokens.push(Token.Pipe)
+            elif c == 94:
+                if self.peek() == 61:
+                    self.advance()
+                    tokens.push(Token.CaretEq)
+                else:
+                    tokens.push(Token.Caret)
+            else:
+                self.advance()
+                tokens.push(Token.Error("?"))
+            self.token_lines.push(self.line)
+
+        while self.indent_stack.len > 1:
+            self.indent_stack.len = self.indent_stack.len - 1
+            tokens.push(Token.Dedent)
+            self.token_lines.push(self.line)
+        tokens.push(Token.Eof)
+        self.token_lines.push(self.line)
+        return tokens
+

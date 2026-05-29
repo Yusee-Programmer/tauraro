@@ -1,0 +1,329 @@
+# std.sys.datetime — DateTime, Date, Time, TimeDelta classes (like Python datetime module).
+
+from std.core.string import StringBuilder
+from std.string.fmt import Fmt
+
+extern "C":
+    def _tr_timestamp() -> int
+    def _tr_tm_year(ts: int) -> int
+    def _tr_tm_month(ts: int) -> int
+    def _tr_tm_day(ts: int) -> int
+    def _tr_tm_hour(ts: int) -> int
+    def _tr_tm_min(ts: int) -> int
+    def _tr_tm_sec(ts: int) -> int
+    def _tr_tm_weekday(ts: int) -> int
+    def _tr_tm_yearday(ts: int) -> int
+    def _tr_tm_make(year: int, month: int, day: int, hour: int, mi: int, sec: int) -> int
+    def _tr_strftime(ts: int, fmt: str) -> str
+
+# ─── TimeDelta ────────────────────────────────────────────────────────────────
+
+pub class TimeDelta:
+    pub days:    int
+    pub seconds: int
+
+extend TimeDelta:
+    # Create a TimeDelta from explicit components (all optional, default 0).
+    pub def init(days: int, seconds: int) -> TimeDelta:
+        mut d = TimeDelta()
+        mut total_s = days * 86400 + seconds
+        if total_s < 0:
+            mut neg = 0 - total_s
+            d.days    = 0 - (neg / 86400)
+            d.seconds = 0 - (neg - (neg / 86400) * 86400)
+        else:
+            d.days    = total_s / 86400
+            d.seconds = total_s - (total_s / 86400) * 86400
+        return d
+
+    pub def from_seconds(s: int) -> TimeDelta:
+        return TimeDelta.init(0, s)
+
+    pub def from_minutes(m: int) -> TimeDelta:
+        return TimeDelta.init(0, m * 60)
+
+    pub def from_hours(h: int) -> TimeDelta:
+        return TimeDelta.init(0, h * 3600)
+
+    pub def from_days(d: int) -> TimeDelta:
+        return TimeDelta.init(d, 0)
+
+    # Total duration expressed purely in seconds.
+    pub def total_seconds(self) -> int:
+        return self.days * 86400 + self.seconds
+
+    pub def to_string(self) -> str:
+        mut sb = StringBuilder.init(32)
+        if self.days != 0:
+            sb.append(Fmt.int_to_str(self.days))
+            sb.append("d ")
+        mut h   = self.seconds / 3600
+        mut rem = self.seconds - h * 3600
+        mut mi  = rem / 60
+        mut s   = rem - mi * 60
+        sb.append(Fmt.zero_pad(h, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(mi, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(s, 2))
+        return sb.to_owned()
+
+# ─── DateTime ─────────────────────────────────────────────────────────────────
+
+pub class DateTime:
+    pub year:   int
+    pub month:  int
+    pub day:    int
+    pub hour:   int
+    pub minute: int
+    pub second: int
+    pub _ts:    int
+
+extend DateTime:
+    # Construct a DateTime with explicit components.
+    pub def init(year: int, month: int, day: int, hour: int, minute: int, second: int) -> DateTime:
+        mut dt = DateTime()
+        dt.year   = year
+        dt.month  = month
+        dt.day    = day
+        dt.hour   = hour
+        dt.minute = minute
+        dt.second = second
+        dt._ts    = _tr_tm_make(year, month, day, hour, minute, second)
+        return dt
+
+    # Current local date and time.
+    pub def now() -> DateTime:
+        mut ts = _tr_timestamp()
+        return DateTime._from_ts(ts)
+
+    # Build a DateTime from a Unix timestamp.
+    pub def from_timestamp(ts: int) -> DateTime:
+        return DateTime._from_ts(ts)
+
+    def _from_ts(ts: int) -> DateTime:
+        mut dt = DateTime()
+        dt._ts    = ts
+        dt.year   = _tr_tm_year(ts)
+        dt.month  = _tr_tm_month(ts)
+        dt.day    = _tr_tm_day(ts)
+        dt.hour   = _tr_tm_hour(ts)
+        dt.minute = _tr_tm_min(ts)
+        dt.second = _tr_tm_sec(ts)
+        return dt
+
+    # Unix timestamp (seconds since 1970-01-01 00:00:00 UTC).
+    pub def timestamp(self) -> int:
+        return self._ts
+
+    # 0=Monday … 6=Sunday (same convention as Python).
+    pub def weekday(self) -> int:
+        mut w = _tr_tm_weekday(self._ts)
+        if w == 0: return 6
+        return w - 1
+
+    # 0=Sunday … 6=Saturday (C convention).
+    pub def isoweekday(self) -> int:
+        return _tr_tm_weekday(self._ts)
+
+    # Day of year 1–366.
+    pub def yearday(self) -> int:
+        return _tr_tm_yearday(self._ts)
+
+    # Name of the weekday.
+    pub def weekday_name(self) -> str:
+        mut w = self.weekday()
+        if w == 0: return "Monday"
+        if w == 1: return "Tuesday"
+        if w == 2: return "Wednesday"
+        if w == 3: return "Thursday"
+        if w == 4: return "Friday"
+        if w == 5: return "Saturday"
+        return "Sunday"
+
+    # Abbreviated weekday name.
+    pub def weekday_abbr(self) -> str:
+        mut w = self.weekday()
+        if w == 0: return "Mon"
+        if w == 1: return "Tue"
+        if w == 2: return "Wed"
+        if w == 3: return "Thu"
+        if w == 4: return "Fri"
+        if w == 5: return "Sat"
+        return "Sun"
+
+    # Full month name.
+    pub def month_name(self) -> str:
+        if self.month == 1:  return "January"
+        if self.month == 2:  return "February"
+        if self.month == 3:  return "March"
+        if self.month == 4:  return "April"
+        if self.month == 5:  return "May"
+        if self.month == 6:  return "June"
+        if self.month == 7:  return "July"
+        if self.month == 8:  return "August"
+        if self.month == 9:  return "September"
+        if self.month == 10: return "October"
+        if self.month == 11: return "November"
+        return "December"
+
+    # True when the year is a leap year.
+    pub def is_leap_year(self) -> bool:
+        mut y = self.year
+        if (y - (y / 400) * 400) == 0: return true
+        if (y - (y / 100) * 100) == 0: return false
+        if (y - (y / 4) * 4) == 0: return true
+        return false
+
+    # Return a new DateTime offset by the given TimeDelta.
+    pub def add(self, delta: TimeDelta) -> DateTime:
+        return DateTime._from_ts(self._ts + delta.total_seconds())
+
+    # Return a new DateTime moved back by the given TimeDelta.
+    pub def sub(self, delta: TimeDelta) -> DateTime:
+        return DateTime._from_ts(self._ts - delta.total_seconds())
+
+    # Difference between two DateTimes as a TimeDelta.
+    pub def diff(self, other: DateTime) -> TimeDelta:
+        return TimeDelta.from_seconds(self._ts - other._ts)
+
+    # True when this moment is before other.
+    pub def before(self, other: DateTime) -> bool:
+        return self._ts < other._ts
+
+    # True when this moment is after other.
+    pub def after(self, other: DateTime) -> bool:
+        return self._ts > other._ts
+
+    # True when both moments represent the same second.
+    pub def eq(self, other: DateTime) -> bool:
+        return self._ts == other._ts
+
+    # strftime-style formatting string.  e.g. "%Y-%m-%d %H:%M:%S"
+    pub def strftime(self, fmt: str) -> str:
+        return _tr_strftime(self._ts, fmt)
+
+    # ISO 8601 string: "YYYY-MM-DD HH:MM:SS"
+    pub def to_string(self) -> str:
+        mut sb = StringBuilder.init(20)
+        sb.append(Fmt.zero_pad(self.year, 4))
+        sb.append("-")
+        sb.append(Fmt.zero_pad(self.month, 2))
+        sb.append("-")
+        sb.append(Fmt.zero_pad(self.day, 2))
+        sb.append(" ")
+        sb.append(Fmt.zero_pad(self.hour, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(self.minute, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(self.second, 2))
+        return sb.to_owned()
+
+    # ISO 8601 date-only string: "YYYY-MM-DD"
+    pub def date_str(self) -> str:
+        mut sb = StringBuilder.init(11)
+        sb.append(Fmt.zero_pad(self.year, 4))
+        sb.append("-")
+        sb.append(Fmt.zero_pad(self.month, 2))
+        sb.append("-")
+        sb.append(Fmt.zero_pad(self.day, 2))
+        return sb.to_owned()
+
+    # Time-only string: "HH:MM:SS"
+    pub def time_str(self) -> str:
+        mut sb = StringBuilder.init(9)
+        sb.append(Fmt.zero_pad(self.hour, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(self.minute, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(self.second, 2))
+        return sb.to_owned()
+
+# ─── Date ─────────────────────────────────────────────────────────────────────
+
+pub class Date:
+    pub year:  int
+    pub month: int
+    pub day:   int
+
+extend Date:
+    pub def init(year: int, month: int, day: int) -> Date:
+        mut d = Date()
+        d.year  = year
+        d.month = month
+        d.day   = day
+        return d
+
+    # Today's local date.
+    pub def today() -> Date:
+        mut ts = _tr_timestamp()
+        mut d  = Date()
+        d.year  = _tr_tm_year(ts)
+        d.month = _tr_tm_month(ts)
+        d.day   = _tr_tm_day(ts)
+        return d
+
+    pub def to_string(self) -> str:
+        mut sb = StringBuilder.init(11)
+        sb.append(Fmt.zero_pad(self.year, 4))
+        sb.append("-")
+        sb.append(Fmt.zero_pad(self.month, 2))
+        sb.append("-")
+        sb.append(Fmt.zero_pad(self.day, 2))
+        return sb.to_owned()
+
+    pub def to_datetime(self) -> DateTime:
+        return DateTime.init(self.year, self.month, self.day, 0, 0, 0)
+
+    pub def eq(self, other: Date) -> bool:
+        return self.year == other.year and self.month == other.month and self.day == other.day
+
+    pub def before(self, other: Date) -> bool:
+        if self.year != other.year: return self.year < other.year
+        if self.month != other.month: return self.month < other.month
+        return self.day < other.day
+
+    pub def after(self, other: Date) -> bool:
+        return other.before(self)
+
+# ─── Time ─────────────────────────────────────────────────────────────────────
+
+pub class Time:
+    pub hour:   int
+    pub minute: int
+    pub second: int
+
+extend Time:
+    pub def init(hour: int, minute: int, second: int) -> Time:
+        mut t = Time()
+        t.hour   = hour
+        t.minute = minute
+        t.second = second
+        return t
+
+    # Current local time of day.
+    pub def now() -> Time:
+        mut ts = _tr_timestamp()
+        mut t  = Time()
+        t.hour   = _tr_tm_hour(ts)
+        t.minute = _tr_tm_min(ts)
+        t.second = _tr_tm_sec(ts)
+        return t
+
+    pub def to_string(self) -> str:
+        mut sb = StringBuilder.init(9)
+        sb.append(Fmt.zero_pad(self.hour, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(self.minute, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(self.second, 2))
+        return sb.to_owned()
+
+    pub def total_seconds(self) -> int:
+        return self.hour * 3600 + self.minute * 60 + self.second
+
+    pub def eq(self, other: Time) -> bool:
+        return self.hour == other.hour and self.minute == other.minute and self.second == other.second
+
+    pub def before(self, other: Time) -> bool:
+        return self.total_seconds() < other.total_seconds()

@@ -1,0 +1,70 @@
+# std.collections.deque — Double-ended queue (Deque) of integers.
+#
+# Backed by a circular buffer in a Vec[int].  push_front / push_back are
+# amortised O(1); get(i) is O(1).
+
+from std.core.vec import Vec
+
+pub class Deque:
+    pub data:     Vec[int]
+    pub head:     int
+    pub tail:     int
+    pub count:    int
+    pub capacity: int
+
+extend Deque:
+    pub def init(cap: int) -> Deque:
+        mut real_cap = cap
+        if real_cap < 8: real_cap = 8
+        mut d = Deque()
+        d.data     = Vec[int].init(real_cap)
+        mut i = 0
+        while i < real_cap:
+            d.data.push(0)
+            i = i + 1
+        d.head     = 0
+        d.tail     = 0
+        d.count    = 0
+        d.capacity = real_cap
+        return d
+
+    # Append to the back.
+    pub def push_back(self, v: int):
+        if self.count < self.capacity:
+            self.data.set(self.tail, v)
+            self.tail = (self.tail + 1) % self.capacity
+            self.count = self.count + 1
+
+    # Prepend to the front.
+    pub def push_front(self, v: int):
+        if self.count < self.capacity:
+            self.head = (self.head + self.capacity - 1) % self.capacity
+            self.data.set(self.head, v)
+            self.count = self.count + 1
+
+    # Remove and return the back element.  Returns 0 when empty.
+    pub def pop_back(self) -> int:
+        if self.count == 0: return 0
+        self.tail = (self.tail + self.capacity - 1) % self.capacity
+        mut val = self.data.get(self.tail)
+        self.count = self.count - 1
+        return val
+
+    # Remove and return the front element.  Returns 0 when empty.
+    pub def pop_front(self) -> int:
+        if self.count == 0: return 0
+        mut val = self.data.get(self.head)
+        self.head = (self.head + 1) % self.capacity
+        self.count = self.count - 1
+        return val
+
+    # O(1) index access (0 = front).  Returns 0 when out of range.
+    pub def get(self, i: int) -> int:
+        if i < 0 or i >= self.count: return 0
+        return self.data.get((self.head + i) % self.capacity)
+
+    pub def is_empty(self) -> bool:
+        return self.count == 0
+
+    pub def len(self) -> int:
+        return self.count

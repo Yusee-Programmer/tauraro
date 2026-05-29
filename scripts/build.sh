@@ -22,12 +22,12 @@ if [ "$(uname -m)" = "aarch64" ] && [ "$(uname -s)" = "Linux" ]; then
     STATIC_FLAG="--static"
 fi
 
-echo "==> Compiling tauraro/src/main.tr → tauraro/src/build/tauraroc"
-"$BOOTSTRAP" tauraro/src/main.tr -o tauraroc $STATIC_FLAG
+echo "==> Compiling src/main.tr → src/build/tauraroc"
+"$BOOTSTRAP" src/main.tr -o tauraroc $STATIC_FLAG
 
-if [ ! -f "./tauraro/src/build/tauraroc" ]; then
+if [ ! -f "./src/build/tauraroc" ]; then
     echo "ERROR: tauraroc not produced — compilation failed"
     exit 1
 fi
 
-echo "==> Done: tauraro/src/build/tauraroc"
+echo "==> Done: src/build/tauraroc"

@@ -1,0 +1,34 @@
+# std.async.barrier — Cyclic barrier: synchronise N threads at a rendezvous point.
+#
+# All N threads call wait(); the last one releases all of them atomically.
+# The barrier is automatically reset after each cycle (reusable).
+#
+# Usage:
+#   let bar = Barrier.new(3)
+#   # In each of 3 threads:
+#   do_first_phase()
+#   bar.wait()    # all threads pause here until all 3 arrive
+#   do_second_phase()
+
+extern "C":
+    def _tr_barrier_new_h(n: int) -> Pointer[char]
+    def _tr_barrier_wait_h(b: Pointer[char])
+    def _tr_barrier_free_h(b: Pointer[char])
+
+pub class Barrier:
+    pub handle: Pointer[char]
+
+extend Barrier:
+    # Create a barrier for n threads.
+    pub def new(n: int) -> Barrier:
+        mut b = Barrier()
+        b.handle = _tr_barrier_new_h(n)
+        return b
+
+    # Block until all n threads have called wait().
+    # The last thread to arrive releases all blocked threads simultaneously.
+    pub def wait(self):
+        _tr_barrier_wait_h(self.handle)
+
+    pub def free(self):
+        _tr_barrier_free_h(self.handle)

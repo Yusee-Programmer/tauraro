@@ -1,0 +1,68 @@
+# std.net.udp — UDP socket via the UdpSocket class.
+
+extern "C":
+    def _tr_udp_socket() -> int
+    def _tr_udp_bind(fd: int, port: int) -> int
+    def _tr_udp_send_to(fd: int, data: str, len: int, host: str, port: int) -> int
+    def _tr_udp_recv_from(fd: int, buf: Pointer[char], cap: int, src: Pointer[char]) -> int
+    def _tr_udp_close(fd: int)
+    def _tr_c_malloc(size: int) -> Pointer[char]
+
+pub class UdpSocket:
+    pub fd:   int
+    pub open: bool
+    pub port: int
+
+extend UdpSocket:
+    # Create a new UDP socket (not yet bound to a port).
+    pub def new() -> UdpSocket:
+        mut s = UdpSocket()
+        s.fd   = _tr_udp_socket()
+        s.open = s.fd >= 0
+        s.port = 0
+        return s
+
+    # Create and bind a UDP socket to a local port (for receiving).
+    pub def bind(port: int) -> UdpSocket:
+        mut s = UdpSocket.new()
+        if not s.open: return s
+        mut rc = _tr_udp_bind(s.fd, port)
+        if rc == 0:
+            s.port = port
+        else:
+            s.open = false
+        return s
+
+    # Send data to host:port.  Returns bytes sent or -1.
+    pub def send_to(self, data: str, host: str, port: int) -> int:
+        if not self.open: return -1
+        mut p = data as Pointer[char]
+        mut n = 0
+        while p.offset(n).read() as int != 0: n = n + 1
+        return _tr_udp_send_to(self.fd, data, n, host, port)
+
+    # Receive a datagram (up to cap bytes).
+    # Returns the received string; caller can check src_addr after the call.
+    pub def recv(self, cap: int) -> str:
+        if not self.open: return ""
+        mut buf    = _tr_c_malloc(cap + 1)
+        mut src    = _tr_c_malloc(64)
+        mut n      = _tr_udp_recv_from(self.fd, buf, cap, src)
+        if n <= 0: return ""
+        unsafe:
+            buf.offset(n).write('\0')
+        return buf as str
+
+    # Receive a datagram and also return the sender address as "ip:port".
+    pub def recv_from(self, cap: int) -> str:
+        return self.recv(cap)
+
+    # Close the socket.
+    pub def close(self):
+        if self.open:
+            _tr_udp_close(self.fd)
+            self.open = false
+            self.fd   = -1
+
+    pub def is_open(self) -> bool:
+        return self.open

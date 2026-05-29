@@ -1,0 +1,81 @@
+# std.collections.list — Singly-linked list of integers.
+#
+# Uses Pointer[ListNode] for node chaining and extern "C" malloc for nodes.
+# No bootstrap compiler dependency.
+
+extern "C":
+    def _tr_checked_alloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+
+pub class ListNode:
+    pub value: int
+    pub next:  Pointer[ListNode]
+
+extend ListNode:
+    pub def init(value: int) -> ListNode:
+        mut n = ListNode()
+        n.value = value
+        n.next  = 0 as Pointer[ListNode]
+        return n
+
+pub class LinkedList:
+    pub head:   Pointer[ListNode]
+    pub len: int
+
+extend LinkedList:
+    pub def init() -> LinkedList:
+        mut l = LinkedList()
+        l.head   = 0 as Pointer[ListNode]
+        l.len = 0
+        return l
+
+    pub def prepend(self, value: int):
+        mut node = _tr_checked_alloc(sizeof(ListNode)) as Pointer[ListNode]
+        node.write(ListNode.init(value))
+        mut n = node.read()
+        n.next = self.head
+        node.write(n)
+        self.head = node
+        self.len = self.len + 1
+
+    pub def append(self, value: int):
+        mut node = _tr_checked_alloc(sizeof(ListNode)) as Pointer[ListNode]
+        node.write(ListNode.init(value))
+        if self.head as int == 0:
+            self.head = node
+        else:
+            mut cur = self.head
+            while cur.read().next as int != 0:
+                cur = cur.read().next
+            mut tail = cur.read()
+            tail.next = node
+            cur.write(tail)
+        self.len = self.len + 1
+
+    pub def pop_front(self) -> int:
+        if self.head as int == 0: return 0
+        mut val  = self.head.read().value
+        mut old  = self.head
+        self.head = self.head.read().next
+        _tr_c_free(old as Pointer[char])
+        self.len = self.len - 1
+        return val
+
+    pub def is_empty(self) -> bool:
+        return self.head as int == 0
+
+    pub def get(self, index: int) -> int:
+        mut cur = self.head
+        mut i   = 0
+        while cur as int != 0:
+            if i == index: return cur.read().value
+            cur = cur.read().next
+            i   = i + 1
+        return 0
+
+    pub def contains(self, value: int) -> bool:
+        mut cur = self.head
+        while cur as int != 0:
+            if cur.read().value == value: return true
+            cur = cur.read().next
+        return false
