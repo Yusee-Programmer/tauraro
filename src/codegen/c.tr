@@ -9,6 +9,9 @@ from core.io import write_file
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, _tr_str_len, hir_stmt_ownership, hir_expr_type
 from ast import AstType, Decorator, Pattern, Ownership, Decl
 
+extern "C":
+    def _tr_float_to_c_lit(n: float) -> str
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 pub def _c_dot_to_safe(s: str) -> str:
@@ -701,7 +704,7 @@ pub class CGenerator:
         e = e_ptr.read()
         match e:
             case HirExpr.ELitInt(v, _): return v.to_str() + "LL"
-            case HirExpr.ELitFloat(v, _): return v.to_str()
+            case HirExpr.ELitFloat(v, _): return _tr_float_to_c_lit(v)
             case HirExpr.ELitStr(v, _): return "\"" + _escape_str_for_c(v) + "\""
             case HirExpr.ERawStr(v, _): return "\"" + _escape_str_for_c(v) + "\""
             case HirExpr.ELitBytes(v, _): return "\"" + _escape_str_for_c(v) + "\""
