@@ -1,7 +1,0 @@
-# std.collections.vec — Re-exports Vec[T] from std.core.vec.
-#
-# Usage:
-#   from std.collections.vec import Vec
-#   from std.collections import Vec
-
-from std.core.vec import Vec
