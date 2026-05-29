@@ -9,7 +9,7 @@ if (-not (Test-Path $BOOTSTRAP) -and -not (Get-Command $BOOTSTRAP -ErrorAction S
 }
 
 Write-Host "==> Compiling tauraro/src/main.tr -> tauraro\src\build\tauraroc.exe"
-& $BOOTSTRAP tauraro/src/main.tr -o tauraroc.exe
+& $BOOTSTRAP tauraro/src/main.tr -o tauraroc.exe --static
 
 if (-not (Test-Path ".\tauraro\src\build\tauraroc.exe")) {
     Write-Error "ERROR: tauraroc.exe not produced — compilation failed"
