@@ -114,10 +114,9 @@ cargo build --release          # build the compiler
 
 The compiler binary is at `target/release/tauraro` (or `tauraro.exe` on Windows).
 
-You can also use the self-hosted stage5 compiler directly:
-```bash
-./src/build/tauraroc_stage5.exe  # self-hosted compiler binary
-```
+The CI build also produces a pre-built `tauraroc` binary (and `tauraroc.exe` on Windows) in the
+`tauraro/` directory.  Download the artifact for your platform from GitHub Actions and place it
+anywhere on your `PATH`.
 
 ### Your First Program
 
@@ -130,8 +129,8 @@ def main():
 Run it:
 ```bash
 cargo run -- --run hello.tr
-# or with the self-hosted compiler:
-./src/build/tauraroc_stage5.exe --run hello.tr
+# or with the pre-built binary:
+tauraroc --run hello.tr
 ```
 
 Output:
@@ -223,22 +222,73 @@ tauraroc --backend llvm program.tr
 | `-O2` | Standard optimization (default) |
 | `-O3` | Aggressive optimization (enables AVX2 on x86-64) |
 | `--verbose` | Show all pipeline phases |
+| `--static` | Link the output binary statically (no shared libs) |
+| `--target <triple>` | Cross-compile for a different target (see below) |
+| `--sysroot <path>` | Override the C compiler sysroot for cross-compilation |
+
+### Cross-Compilation (`--target`)
+
+`tauraroc` can cross-compile Tauraro programs to any target that the host C compiler supports.
+Pass a shorthand alias or a raw LLVM triple:
+
+| Shorthand | Triple | Notes |
+|-----------|--------|-------|
+| `android-arm64` | `aarch64-linux-android34` | Android 14+, ARM64 |
+| `android-arm32` | `armv7a-linux-androideabi34` | Android 14+, 32-bit ARM |
+| `android-x86` | `i686-linux-android34` | Android x86 emulator |
+| `android-x64` | `x86_64-linux-android34` | Android x86-64 |
+| `ios-arm64` | `aarch64-apple-ios` | iOS device |
+| `ios-sim-x64` | `x86_64-apple-ios-simulator` | iOS Simulator, Intel |
+| `ios-sim-arm64` | `aarch64-apple-ios-simulator` | iOS Simulator, Apple Silicon |
+| `embedded-arm` | `arm-none-eabi` | Bare-metal ARM (adds `-nostdlib`) |
+| `embedded-arm64` | `aarch64-none-elf` | Bare-metal AArch64 |
+| `embedded-riscv` | `riscv32-unknown-elf` | Bare-metal RISC-V 32 |
+| `wasm` | `wasm32-unknown-wasi` | WebAssembly (WASI) |
+| `wasm-bare` | `wasm32-unknown-unknown` | Bare WebAssembly |
+| `linux-arm64` | `aarch64-unknown-linux-gnu` | Linux AArch64 (glibc) |
+| `linux-arm32` | `armv7-unknown-linux-gnueabihf` | Linux ARMv7 (glibc) |
+| `linux-musl-arm64` | `aarch64-unknown-linux-musl` | Linux AArch64 (musl) |
+| `windows-x64` | `x86_64-pc-windows-gnu` | Windows 64-bit (MinGW) |
+| `windows-arm64` | `aarch64-pc-windows-gnu` | Windows ARM64 (MinGW) |
+| `macos-arm64` | `aarch64-apple-darwin` | macOS Apple Silicon |
+| `macos-x64` | `x86_64-apple-darwin` | macOS Intel |
+
+For Android targets, `tauraroc` automatically searches for the Android NDK clang wrapper using
+the `ANDROID_NDK_ROOT`, `ANDROID_NDK_HOME`, and `NDK_HOME` environment variables.
+
+```bash
+# Build for Android ARM64 (requires Android NDK in ANDROID_NDK_ROOT)
+tauraroc --target android-arm64 --static -o hello-android hello.tr
+
+# Build for bare-metal ARM embedded (no libc)
+tauraroc --target embedded-arm -o firmware.elf firmware.tr
+
+# Cross-compile with a custom sysroot
+tauraroc --target linux-arm64 --sysroot /opt/aarch64-sysroot -o app app.tr
+
+# Static Android binary (runs on Termux without modifications)
+tauraroc --target android-arm64 --static --run hello.tr
+```
 
 ---
 
 ## The Self-Hosted Compiler
 
-Tauraro's compiler is **self-hosted** — the compiler is written in Tauraro itself. There are multiple bootstrap stages:
+Tauraro's compiler is **self-hosted** — the compiler is written in Tauraro itself. The build
+process goes through three bootstrap stages:
 
 | Stage | Built by | Description |
 |-------|----------|-------------|
-| `tauraroc_s3h` | Rust compiler | First self-hosted binary — Rust compiles main.tr |
-| `tauraroc_stage4` | `tauraroc_s3h` | Stage 3h compiles main.tr → stage4 C → GCC |
-| `tauraroc_stage5` | `tauraroc_stage4` | Stage 4 compiles main.tr → stage5 C → GCC |
+| `stage0` (Rust) | Cargo | Rust implementation of the full compiler pipeline |
+| `stage1` | `stage0` | stage0 compiles `tauraro/src/main.tr` → C → GCC |
+| `tauraroc` | `stage1` | stage1 compiles `main.tr` again → C → GCC (final binary) |
 
-Stage5 is stable: compiling `main.tr` with stage5 produces a binary that also correctly compiles `main.tr`. The bootstrap is verified when stage4 output = stage5 output.
+`tauraroc` is stable: compiling `main.tr` with `tauraroc` produces a binary whose generated C is
+identical to what `stage1` produced.  The CI script (`scripts/build.sh` / `scripts/build.ps1`)
+runs all three stages and uploads the final `tauraroc` binary as a GitHub Actions artifact.
 
-Both the Rust compiler and stage5 accept the same CLI flags and produce identical output.
+Both the Rust stage0 and the self-hosted `tauraroc` accept the same CLI flags and produce
+identical output.
 
 ---
 

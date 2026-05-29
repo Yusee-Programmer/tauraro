@@ -1,22 +1,30 @@
-# Tauraro Self-Hosted Compiler
+# Tauraro
 
-A complete, production-ready Tauraro compiler written entirely in Tauraro.
-This is the **Phase 1.5** milestone: self-hosting the compiler so it can compile itself.
+A compiled, statically-typed programming language with Python-style syntax, Rust-level performance, and full bilingual (English + Hausa) keyword support.
 
-## Quick Start
+## Installation
 
-```bash
-# Build the Rust bootstrap compiler first
-cargo build --release
+Download the latest binary for your platform from the [Releases](https://github.com/Yusee-Programmer/tauraro/releases) page:
 
-# Compile a Tauraro source file
-cargo run -- compiler/src/main.tr --emit c > bootstrap.c
+| Platform | File |
+|----------|------|
+| Windows (x64) | `tauraroc-windows-x64.zip` |
+| Linux (x64) | `tauraroc-linux-x64.tar.gz` |
+| macOS (x64/arm64) | `tauraroc-macos.tar.gz` |
 
-# Compile the generated C to an executable
-gcc -O3 bootstrap.c runtime/tauraro_rt.h -o tauraroc
+Extract and place `tauraroc` (or `tauraroc.exe` on Windows) somewhere on your `PATH`.
 
-# Now use the self-hosted compiler
-./tauraroc examples/hello.tr --run
+**Requirements:** GCC or Clang must be installed — `tauraroc` compiles to C and calls the system C compiler to produce the final binary.
+
+## Hello World
+
+```tauraro
+def main():
+    print("Sannu duniya!")
+```
+
+```sh
+tauraroc --run hello.tr
 ```
 
 ## CLI Reference
@@ -24,102 +32,56 @@ gcc -O3 bootstrap.c runtime/tauraro_rt.h -o tauraroc
 ```
 tauraroc <file.tr> [options]
 
-Options:
-  --emit c          Emit generated C code to stdout (or -o file)
-  --emit ast        Print AST and stop
-  --emit mir        Print MIR info and stop
   --run             Compile and immediately execute
-  --check           Semantic analysis only, no codegen
+  --check           Semantic analysis only, no output
+  --emit c          Print generated C code
+  --emit ast        Print AST and stop
+  --emit mir        Print MIR and stop
   --verbose         Show all pipeline phases
-  --backend llvm    Use LLVM IR backend (stub)
-  -o <path>         Output file path
-  -O0/-O1/-O2/-O3  GCC optimization level (default: -O2)
+  -o <path>         Output executable path
+  -O0/-O1/-O2/-O3  Optimization level (default: -O2)
   -Os               Optimize for size
 ```
 
-## Project Structure
+## Language Features
 
-```
-compiler/
-  src/
-    main.tr          ← CLI driver, module resolver, linker invocation
-    token.tr         ← Token enum + keyword table (bilingual)
-    lexer.tr         ← Hand-written FSM lexer with indentation tracking
-    ast.tr           ← All AST types (Program, Decl, Stmt, Expr, Type, Pattern)
-    parser.tr        ← Recursive descent parser (1400+ lines)
-    sema.tr          ← Semantic analysis, type checking, ownership inference
-    hir.tr           ← HIR types + AST→HIR lowering
-    resolver.tr      ← Unity-build module resolver
-    codegen/
-      c.tr           ← C transpiler backend (PRIMARY, production-ready)
-      llvm.tr        ← LLVM IR backend (stub, Phase 2)
-      mod.tr         ← Module declarations
-  tests/
-    lexer_test.tr    ← Lexer unit tests
-    parser_test.tr   ← Parser unit tests
-    sema_test.tr     ← Semantic analysis tests
-    self_host_test.tr ← Integration & bootstrap tests
-```
+- **Classes** with method dispatch, inheritance, and interfaces
+- **Enums** as tagged unions with pattern matching
+- **Generics** monomorphized at compile time
+- **F-strings** — `f"result = {value}"`
+- **Ownership inference** — memory managed automatically, no GC
+- **Result/Option types** for explicit error handling
+- **Bilingual keywords** — English and Hausa equally supported
 
-## Compiler Pipeline
+## Bilingual Keywords
 
-```
-.tr source
-    │
-    ▼ Lexer (lexer.tr)
-Token stream with indent/dedent tokens
-    │
-    ▼ Parser (parser.tr)
-Abstract Syntax Tree (ast.tr types)
-    │
-    ▼ Semantic Analysis (sema.tr)
-Annotated HIR (hir.tr types)
-  - Type checking
-  - Ownership inference (Own/Borrow/Move/Shared/Stack)
-  - Escape analysis
-  - Free injection (HirStmt::SFree)
-    │
-    ▼ C Code Generator (codegen/c.tr)
-Brutally optimized C code
-  - Struct definitions for classes
-  - Tagged unions for enums
-  - Vtables for interfaces
-  - range() → for(long long i = start; i < end; i++)
-  - f-strings → snprintf()
-    │
-    ▼ GCC/Clang
-Native executable
-```
-
-## Language Features Supported
-
-- **Classes** → C structs with `ClassName_method(ClassName* self, ...)` mangling
-- **Enums** → Tagged unions with constants and constructor helpers
-- **Interfaces** → Vtable dispatch structs
-- **Generics** → Monomorphized at codegen time
-- **Pattern matching** → if/else chains with binding extraction
-- **F-strings** → snprintf with format string synthesis
-- **For loops** → Optimized C for loops (range → counter loops)
-- **Ownership inference** → Automatic free injection
-- **Bilingual keywords** → English + Hausa equally supported
-- **Error handling** → Result types as plain structs
-
-## Bilingual Support
-
-Every keyword has an English and Hausa form:
+Every keyword has an English and Hausa equivalent — programs can be written in either or mixed freely:
 
 | English | Hausa | Meaning |
 |---------|-------|---------|
-| `def` | `aiki` | function definition |
-| `class` | `aji` | class definition |
+| `def` | `aiki` | function |
+| `class` | `aji` | class |
+| `struct` | `tsari` | struct |
 | `if` | `idan` | conditional |
 | `elif` | `koidan` | else-if |
 | `else` | `sai` | else |
 | `for` | `ga` | for loop |
 | `while` | `yayinda` | while loop |
 | `return` | `dawo` | return |
+| `break` | `tsaya` | break |
+| `continue` | `ci_gaba` | continue |
 | `match` | `duba` | pattern match |
 | `case` | `hali` | match arm |
+| `try` | `gwada` | try block |
+| `except` | `kama` | except handler |
+| `finally` | `karshe` | finally block |
+| `raise` | `jefa` | raise exception |
+| `async` | `ba_jira` | async function |
+| `await` | `jira` | await expression |
+| `import` | `shigo` | import module |
+| `from` | `daga` | from import |
+| `as` | `kamar` | alias |
+| `in` | `a_cikin` | membership / loop |
 | `true` | `gaskiya` | boolean true |
 | `false` | `karya` | boolean false |
 | `none` | `babu` | null/none |
@@ -127,3 +89,36 @@ Every keyword has an English and Hausa form:
 | `or` | `ko` | logical or |
 | `not` | `ba` | logical not |
 | `print` | `buga` | print to stdout |
+
+## Example
+
+```tauraro
+class Kirga:
+    mut adadi: i64
+
+    def init(n: i64) -> Kirga:
+        mut k = Kirga()
+        k.adadi = n
+        return k
+
+    def ƙara(self, n: i64):
+        self.adadi = self.adadi + n
+
+    def nuna(self):
+        buga(f"adadi = {self.adadi}")
+
+def main():
+    mut k = Kirga.init(0)
+    ga i in range(10):
+        k.ƙara(i)
+    k.nuna()
+```
+
+## Compiler Pipeline
+
+```
+.tr source  →  Lexer  →  Parser  →  Sema  →  HIR  →  C codegen  →  GCC/Clang  →  exe
+```
+
+All stages are written in Tauraro itself — the compiler is fully self-hosted.
+
