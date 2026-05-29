@@ -121,4 +121,3 @@ def main():
 ```
 
 All stages are written in Tauraro itself — the compiler is fully self-hosted.
-
