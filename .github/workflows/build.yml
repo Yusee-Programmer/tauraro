@@ -68,6 +68,10 @@ jobs:
 
           BOOTSTRAP="$(pwd)/$DEST/tauraroc${{ matrix.ext }}"
           chmod +x "$BOOTSTRAP" 2>/dev/null || true
+          # PowerShell requires a native Windows path; cygpath -w converts /d/a/... → D:\a\...
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            BOOTSTRAP=$(cygpath -w "$BOOTSTRAP")
+          fi
           echo "BOOTSTRAP_BIN=$BOOTSTRAP" >> "$GITHUB_ENV"
 
       # -------------------------------------------------------
