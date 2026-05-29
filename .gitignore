@@ -2,3 +2,4 @@
 *.c
 build
 *.pdb
+benchmarks/*/*.exe
