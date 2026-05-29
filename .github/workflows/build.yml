@@ -75,7 +75,7 @@ jobs:
           echo "BOOTSTRAP_BIN=$BOOTSTRAP" >> "$GITHUB_ENV"
 
       # -------------------------------------------------------
-      # Single compilation pass — output lands in tauraro/src/build/
+      # Single compilation pass — output lands in src/build/
       # -------------------------------------------------------
       - name: Build (Linux / macOS)
         if: runner.os != 'Windows'
