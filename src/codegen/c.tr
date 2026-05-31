@@ -397,12 +397,26 @@ pub class CGenerator:
         return n
 
     pub def list_elem_suffix(self, n: str) -> str:
-        mut sfx = self.type_suffix(n)
+        mut actual_n = n
+        if self.type_subst.contains(n):
+            mut cv = self.type_subst.get(n)
+            if cv == "long long": actual_n = "int"
+            elif cv == "double": actual_n = "float"
+            elif cv == "char*": actual_n = "str"
+            elif cv == "bool": actual_n = "bool"
+            elif cv == "char": actual_n = "char"
+            elif cv == "unsigned long long": actual_n = "u64"
+            elif cv == "unsigned int": actual_n = "u32"
+            elif cv == "int": actual_n = "i32"
+            elif cv == "short": actual_n = "i16"
+            elif cv == "signed char": actual_n = "i8"
+            elif cv == "float": actual_n = "f32"
+        mut sfx = self.type_suffix(actual_n)
         if sfx == "i64" or sfx == "f64" or sfx == "str" or sfx == "bool" or sfx == "i8" or sfx == "i32" or sfx == "char" or sfx == "u8" or sfx == "u32":
             return sfx
-        if self.enums.contains(n):
-            self.ensure_list_type(n)
-            return n
+        if self.enums.contains(actual_n):
+            self.ensure_list_type(actual_n)
+            return actual_n
         return "ptr"
 
     # ── Generic monomorphization helpers ─────────────────────────────────────
@@ -543,6 +557,56 @@ pub class CGenerator:
         self.buf        = old_buf
         self.struct_buf = old_sbuf
         self.proto_buf  = old_pbuf
+        self.type_subst = old_subst
+
+    # Ensure a monomorphized version of a generic function is generated into mono_buf.
+    pub def ensure_mono_func(self, fname: str, targ: str):
+        mut mono_key = "func_" + fname + "__MONO_" + targ
+        if self.mono_done.contains(mono_key): return
+        self.mono_done.insert(mono_key, true)
+        if not self.functions.contains(fname): return
+        mut f = self.functions.get(fname)
+        if f.generics.len == 0: return
+        mut type_param = f.generics.get(0)
+        mut concrete_c = self.type_to_c(AstType.init(targ))
+        mut old_subst = self.type_subst
+        self.type_subst = Map[str, str].init(4)
+        self.type_subst.insert(type_param, concrete_c)
+        mut old_buf = self.buf
+        mut old_sbuf = self.struct_buf
+        mut old_pbuf = self.proto_buf
+        self.buf = self.mono_buf
+        self.struct_buf = self.mono_buf
+        self.proto_buf = self.mono_buf
+        mut mono_fname = fname + "__MONO_" + targ
+        mut ret_s = self.type_to_c(f.ret_ty)
+        mut sig = ret_s + " " + mono_fname + "("
+        mut first = true
+        mut pi = 0
+        while pi < f.params.len:
+            mut p = f.params.get(pi)
+            if p.name != "self":
+                if not first: sig = sig + ", "
+                sig = sig + self.type_to_c(p.ty) + " " + p.name
+                first = false
+            pi = pi + 1
+        sig = sig + ")"
+        self.w(sig + ";\n")
+        mut old_class = self.cur_class
+        mut old_func = self.cur_func
+        self.cur_class = ""
+        self.cur_func = mono_fname
+        self.decl_vars = Map[str, bool].init(64)
+        self.seed_params(f)
+        self.w(sig + " {\n")
+        self.gen_block(f.body, 1)
+        self.w("}\n\n")
+        self.cur_class = old_class
+        self.cur_func = old_func
+        self.mono_buf = self.buf
+        self.buf = old_buf
+        self.struct_buf = old_sbuf
+        self.proto_buf = old_pbuf
         self.type_subst = old_subst
 
     # ── Attributes & signatures ───────────────────────────────────────────────
@@ -2344,20 +2408,70 @@ pub class CGenerator:
             self.scan_mono_stmt(block.stmts.get(i))
             i = i + 1
 
+    # Scan expression tree for __MONO_-mangled generic function calls.
+    pub def scan_mono_expr(self, e: Pointer[HirExpr]):
+        if e as usize == 0 as usize: return
+        if _is_invalid_ptr(e as usize): return
+        match e.read():
+            case HirExpr.ECall(callee, args, _):
+                self.scan_mono_expr(callee)
+                mut ei = 0
+                while ei < args.len:
+                    self.scan_mono_expr(args.get(ei))
+                    ei = ei + 1
+                match callee.read():
+                    case HirExpr.EIdent(mn, _, _):
+                        if mn.contains("__MONO_"):
+                            mut nlen = _tr_strlen(mn)
+                            mut si2 = 0
+                            mut found_s = false
+                            mut sep_p = 0
+                            while si2 <= nlen - 7 and not found_s:
+                                if _tr_str_slice(mn, si2, si2 + 7) == "__MONO_":
+                                    found_s = true
+                                    sep_p = si2
+                                si2 = si2 + 1
+                            if found_s:
+                                mut gfunc_n = _tr_str_slice(mn, 0, sep_p)
+                                mut gfunc_t = _tr_str_slice(mn, sep_p + 7, nlen)
+                                if self.functions.contains(gfunc_n):
+                                    self.ensure_mono_func(gfunc_n, gfunc_t)
+                    case _: pass
+            case HirExpr.EMethodCall(obj, _, margs, _):
+                self.scan_mono_expr(obj)
+                mut ei2 = 0
+                while ei2 < margs.len:
+                    self.scan_mono_expr(margs.get(ei2))
+                    ei2 = ei2 + 1
+            case HirExpr.EBinOp(_, bl, br, _):
+                self.scan_mono_expr(bl)
+                self.scan_mono_expr(br)
+            case HirExpr.EUnaryOp(_, ue, _):
+                self.scan_mono_expr(ue)
+            case _: pass
+
     pub def scan_mono_stmt(self, s_ptr: Pointer[HirStmt]):
         if _is_invalid_ptr(s_ptr as usize): return
         match s_ptr.read():
-            case HirStmt.SLet(_, _, _, _, _, ty, _):
+            case HirStmt.SLet(_, _, _, _, _, ty, val):
                 self.scan_mono_ty(ty)
-            case HirStmt.SIf(_, then_b, else_b):
+                if val as usize != 0 as usize: self.scan_mono_expr(val)
+            case HirStmt.SExpr(expr):
+                if expr as usize != 0 as usize: self.scan_mono_expr(expr)
+            case HirStmt.SReturn(val):
+                if val as usize != 0 as usize: self.scan_mono_expr(val)
+            case HirStmt.SIf(cond_s, then_b, else_b):
+                if cond_s as usize != 0 as usize: self.scan_mono_expr(cond_s)
                 self.scan_mono_block(then_b)
                 if else_b as usize != 0 as usize:
                     self.scan_mono_block(else_b)
-            case HirStmt.SWhile(_, body):
+            case HirStmt.SWhile(cond_s2, body):
+                if cond_s2 as usize != 0 as usize: self.scan_mono_expr(cond_s2)
                 self.scan_mono_block(body)
             case HirStmt.SFor(_, _, body):
                 self.scan_mono_block(body)
-            case HirStmt.SMatch(_, arms):
+            case HirStmt.SMatch(subj_s, arms):
+                if subj_s as usize != 0 as usize: self.scan_mono_expr(subj_s)
                 mut ai = 0
                 while ai < arms.len:
                     self.scan_mono_block(arms.get(ai).body)
