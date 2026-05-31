@@ -1,0 +1,113 @@
+# examples/vec_example.tr
+# Demonstrates Vec[T] operations and documents the is_empty() type-inference
+# workaround: use  v.len == 0  directly instead of  v.is_empty().
+
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_float_to_str(n: float) -> str
+
+# ── helper: print bool safely ────────────────────────────────────────────────
+# print(v.is_empty()) triggers a type-inference bug on bool results from
+# generic-class methods — the codegen loses the bool type and emits a bad cast.
+# Use v.len == 0 for the condition and this helper for display.
+def bool_str(b: bool) -> str:
+    if b: return "true"
+    return "false"
+
+def main():
+
+    # ── 1. init & push ───────────────────────────────────────────────────────
+    mut v = Vec[int].init(4)
+    print("=== push 1..5 ===")
+    mut i = 1
+    while i <= 5:
+        v.push(i)
+        i = i + 1
+    print("len: " + str(v.len))               # 5
+
+    # ── 2. is_empty workaround ───────────────────────────────────────────────
+    # BUG: print(v.is_empty())  — type-inference fails for bool on generic method
+    # FIX: compare v.len directly
+    print("is_empty (len==0): " + bool_str(v.len == 0))   # false
+    print("is_empty (len==0): " + bool_str(v.len == 0))   # false (repeat for clarity)
+
+    # ── 3. get ───────────────────────────────────────────────────────────────
+    print("=== get ===")
+    print("v[0]: " + str(v.get(0)))            # 1
+    print("v[4]: " + str(v.get(4)))            # 5
+
+    # ── 4. set ───────────────────────────────────────────────────────────────
+    print("=== set ===")
+    v.set(2, 99)
+    print("v[2] after set(2,99): " + str(v.get(2)))   # 99
+
+    # ── 5. contains ──────────────────────────────────────────────────────────
+    print("=== contains ===")
+    print("contains 99: " + bool_str(v.contains(99)))   # true
+    print("contains  3: " + bool_str(v.contains(3)))    # false (was overwritten)
+    print("contains  1: " + bool_str(v.contains(1)))    # true
+
+    # ── 6. pop ───────────────────────────────────────────────────────────────
+    print("=== pop ===")
+    mut popped = v.pop()
+    print("popped: " + str(popped))            # 5
+    print("len after pop: " + str(v.len))      # 4
+
+    # ── 7. remove ────────────────────────────────────────────────────────────
+    print("=== remove index 0 ===")
+    v.remove(0)
+    print("v[0] after remove(0): " + str(v.get(0)))   # 2
+    print("len after remove: " + str(v.len))           # 3
+
+    # ── 8. swap ──────────────────────────────────────────────────────────────
+    print("=== swap 0,1 ===")
+    v.swap(0, 1)
+    print("v[0]: " + str(v.get(0)))   # 99
+    print("v[1]: " + str(v.get(1)))   # 2
+
+    # ── 9. extend ────────────────────────────────────────────────────────────
+    print("=== extend ===")
+    mut extra = Vec[int].init(2)
+    extra.push(10)
+    extra.push(20)
+    v.extend(extra)
+    print("len after extend: " + str(v.len))   # 5
+    print("v[3]: " + str(v.get(3)))            # 10
+    print("v[4]: " + str(v.get(4)))            # 20
+
+    # ── 10. clear ────────────────────────────────────────────────────────────
+    print("=== clear ===")
+    v.clear()
+    print("len after clear: " + str(v.len))                   # 0
+    print("is_empty (len==0): " + bool_str(v.len == 0))       # true
+
+    # ── 11. Vec[str] ─────────────────────────────────────────────────────────
+    print("=== Vec[str] ===")
+    mut words = Vec[str].init(4)
+    words.push("hello")
+    words.push("tauraro")
+    words.push("world")
+    print("len: " + str(words.len))                          # 3
+    print("words[1]: " + words.get(1))                       # tauraro
+    print("contains 'world': " + bool_str(words.contains("world")))   # true
+    print("contains 'rust':  " + bool_str(words.contains("rust")))    # false
+
+    # ── 12. Vec[f64] ─────────────────────────────────────────────────────────
+    print("=== Vec[f64] ===")
+    mut floats = Vec[f64].init(4)
+    floats.push(1.5)
+    floats.push(2.5)
+    floats.push(3.5)
+    mut sum: f64 = 0.0
+    mut fi = 0
+    while fi < floats.len:
+        sum = sum + floats.get(fi)
+        fi = fi + 1
+    print("sum: " + _tr_float_to_str(sum))   # 7.500000
+
+    v.free()
+    extra.free()
+    words.free()
+    floats.free()
+    print("=== done ===")

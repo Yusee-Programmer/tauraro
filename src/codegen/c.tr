@@ -264,6 +264,38 @@ pub class CGenerator:
         if n == "char": return "char"
         if _is_str_type(n): return "char*"
 
+        # FFI / C interop types
+        if n == "c_int": return "int"
+        if n == "c_long": return "long"
+        if n == "c_longlong": return "long long"
+        if n == "c_uint": return "unsigned int"
+        if n == "c_ulong": return "unsigned long"
+        if n == "c_ulonglong": return "unsigned long long"
+        if n == "c_short": return "short"
+        if n == "c_ushort": return "unsigned short"
+        if n == "c_char": return "char"
+        if n == "c_uchar": return "unsigned char"
+        if n == "c_schar": return "signed char"
+        if n == "c_float": return "float"
+        if n == "c_double": return "double"
+        if n == "c_ldouble": return "long double"
+        if n == "c_void_ptr" or n == "RawPtr": return "void*"
+        if n == "c_size_t": return "size_t"
+        if n == "c_ssize_t": return "ssize_t"
+        if n == "c_ptrdiff_t": return "ptrdiff_t"
+        if n == "c_intptr_t": return "intptr_t"
+        if n == "c_uintptr_t": return "uintptr_t"
+        if n == "c_int8_t": return "int8_t"
+        if n == "c_int16_t": return "int16_t"
+        if n == "c_int32_t": return "int32_t"
+        if n == "c_int64_t": return "int64_t"
+        if n == "c_uint8_t": return "uint8_t"
+        if n == "c_uint16_t": return "uint16_t"
+        if n == "c_uint32_t": return "uint32_t"
+        if n == "c_uint64_t": return "uint64_t"
+        if n == "CFile" or n == "c_FILE": return "FILE*"
+        if n == "CString": return "char*"
+
         # Check if it's a generic type parameter in current function
         if self.cur_func != "":
             if self.functions.contains(self.cur_func):
@@ -337,6 +369,7 @@ pub class CGenerator:
 
         if n == "Result": return "Result"
         if n == "Option": return "Option"
+        if n == "lambda": return "void*"
         if self.enums.contains(n): return n
         if self.interfaces.contains(n): return n + "_obj"
         return n + "*"
@@ -582,14 +615,29 @@ pub class CGenerator:
 
     # ── Struct generation ─────────────────────────────────────────────────────
 
+    pub def emit_base_fields(self, base_name: str):
+        if self.classes.contains(base_name):
+            mut base_cls: HirClass = self.classes.get(base_name)
+            mut bfi: int = 0
+            while bfi < base_cls.fields.len:
+                mut bf: HirField = base_cls.fields.get(bfi)
+                self.ws("    " + self.type_to_c(bf.ty) + " " + bf.name + ";\n")
+                bfi = bfi + 1
+
     pub def gen_class_struct(self, c: HirClass):
         self.ws("typedef struct " + c.name + " {\n")
-        mut i = 0
+        # Emit inherited fields first (single-level inheritance via field copying)
+        mut bi: int = 0
+        while bi < c.base_classes.len:
+            mut base_name: str = c.base_classes.get(bi)
+            self.emit_base_fields(base_name)
+            bi = bi + 1
+        mut i: int = 0
         while i < c.fields.len:
-            mut f = c.fields.get(i)
+            mut f: HirField = c.fields.get(i)
             self.ws("    " + self.type_to_c(f.ty) + " " + f.name + ";\n")
             i = i + 1
-        if c.fields.len == 0:
+        if c.fields.len == 0 and c.base_classes.len == 0:
             self.ws("    char _pad;\n")
         self.ws("} " + c.name + ";\n\n")
 
@@ -671,7 +719,9 @@ pub class CGenerator:
             self.ws(");\n")
             i = i + 1
         self.ws("} " + iface.name + "_vtable;\n\n")
-        self.ws("typedef struct { " + iface.name + "_vtable* vtable; void* data; } " + iface.name + "_obj;\n\n")
+        if not self.emitted_fns.contains("iface_obj_" + iface.name):
+            self.emitted_fns.insert("iface_obj_" + iface.name, true)
+            self.ws("typedef struct { " + iface.name + "_vtable* vtable; void* data; } " + iface.name + "_obj;\n\n")
 
     # Build the static-inline _as_ wrap function string for one class+interface pair.
     # Called from generate_types_header (appended after all prototypes).
@@ -753,7 +803,10 @@ pub class CGenerator:
             case HirExpr.ERange(start, end, inclusive, _):
                 return self.gen_expr(start)
             case HirExpr.ESuperMethodCall(base, method, args, _):
-                mut sig = base + "_" + method + "((void*)self"
+                mut super_mc: str = method
+                if _is_c_keyword(super_mc):
+                    super_mc = "_tr_fn_" + super_mc
+                mut sig = base + "_" + super_mc + "((" + base + "*)self"
                 mut i = 0
                 while i < args.len:
                     sig = sig + ", " + self.gen_expr(args.get(i))
@@ -797,7 +850,13 @@ pub class CGenerator:
         if op == "and": return "(" + ls + " && " + rs + ")"
         if op == "or": return "(" + ls + " || " + rs + ")"
         if op == "is": return "(" + ls + " == " + rs + ")"
-        if op == "in": return "_tr_contains(" + ls + ", " + rs + ")"
+        if op == "in":
+            if rt_n == "List" or rt_n == "Vec":
+                mut in_sfx: str = self.list_elem_suffix(lt_n)
+                return "List_" + in_sfx + "_contains(" + rs + ", " + ls + ")"
+            if rt_n == "Map" or rt_n == "Dict":
+                return "_tr_dict_contains(" + rs + ", " + ls + ")"
+            return "_tr_contains(" + rs + ", " + ls + ")"
         if op == "**": return "((long long)pow((double)(" + ls + "), (double)(" + rs + ")))"
         if op == "//": return "((long long)(" + ls + ") / (long long)(" + rs + "))"
         if (_is_str_type(lt_n) or _is_str_type(rt_n)) and (op == "==" or op == "!="):
@@ -852,6 +911,9 @@ pub class CGenerator:
                     mut opt_ct = self.type_to_c(full_opt_ty.args.get(0).read())
                     return "((" + opt_ct + ")(" + obj_s + ".data.Some.val))"
                 return obj_s + ".data.Some.val"
+            # Handle Option.None / Option.Some as static constructors (p may be empty if None is a keyword)
+            if p == "" or p == "None" or p == "none": return "((Option){.tag=Option_None})"
+            if p == "Some" or p == "some": return "((Option){.tag=Option_None})"
             return obj_s + "." + p
         if self.interfaces.contains(t_n) and self.interfaces as usize != 0 as usize:
             return obj_s + "." + p
@@ -920,7 +982,10 @@ pub class CGenerator:
 
         # ord / chr — character conversions
         if base_callee == "ord":
-            if args.len > 0: return "((long long)(unsigned char)(" + self.gen_expr(args.get(0)) + ")[0])"
+            if args.len > 0:
+                mut ord_t_n: str = hir_expr_type(args.get(0)).name
+                if ord_t_n == "char": return "((long long)(unsigned char)(" + self.gen_expr(args.get(0)) + "))"
+                return "((long long)(unsigned char)(" + self.gen_expr(args.get(0)) + ")[0])"
             return "0LL"
         if base_callee == "chr":
             if args.len > 0: return "((char)(" + self.gen_expr(args.get(0)) + "))"
@@ -965,12 +1030,16 @@ pub class CGenerator:
                 return "(char*)(" + self.gen_expr(str_arg) + ")"
             return "\"\""
 
-        # int() / float() / bool() — type coercions
-        if base_callee == "int":
-            if args.len > 0: return "(long long)(" + self.gen_expr(args.get(0)) + ")"
+        # int() / float() / bool() — type coercions; int/float from str → parse
+        if base_callee == "int" or base_callee == "_tr_fn_int":
+            if args.len > 0:
+                if _is_str_type(hir_expr_type(args.get(0)).name): return "_tr_str_to_int(" + self.gen_expr(args.get(0)) + ")"
+                return "(long long)(" + self.gen_expr(args.get(0)) + ")"
             return "0LL"
         if base_callee == "float" or base_callee == "_tr_fn_float":
-            if args.len > 0: return "(double)(" + self.gen_expr(args.get(0)) + ")"
+            if args.len > 0:
+                if _is_str_type(hir_expr_type(args.get(0)).name): return "_tr_str_to_float(" + self.gen_expr(args.get(0)) + ")"
+                return "(double)(" + self.gen_expr(args.get(0)) + ")"
             return "0.0"
         if base_callee == "bool":
             if args.len > 0: return "(_Bool)(" + self.gen_expr(args.get(0)) + ")"
@@ -1170,6 +1239,20 @@ pub class CGenerator:
                     ai = ai + 1
                 return callee_s + "(" + wrapped_args + ")"
 
+        # Lambda / void* function pointer: cast to typed function pointer before calling
+        mut callee_ty_n: str = hir_expr_type(callee).name
+        if callee_ty_n == "lambda" or callee_ty_n == "void*":
+            mut ret_cty = self.type_to_c(call_ty)
+            if ret_cty == "void": ret_cty = "long long"
+            mut arg_types = ""
+            mut ai2 = 0
+            while ai2 < args.len:
+                if ai2 > 0: arg_types = arg_types + ", "
+                arg_types = arg_types + self.type_to_c(hir_expr_type(args.get(ai2)))
+                ai2 = ai2 + 1
+            if arg_types == "": arg_types = "void"
+            return "((" + ret_cty + "(*)(" + arg_types + "))(" + callee_s + "))(" + self.gen_args(args) + ")"
+
         return callee_s + "(" + self.gen_args(args) + ")"
 
     pub def gen_print_call(self, args: Vec[Pointer[HirExpr]]) -> str:
@@ -1310,6 +1393,19 @@ pub class CGenerator:
         if method == "contains" and args.len > 0 and _is_str_type(t_n):
             return "_tr_str_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
 
+        # String method dispatch — must be before the generic TrStr_ fallback
+        if _is_str_type(t_n):
+            if method == "upper": return "_tr_str_upper(" + obj_s + ")"
+            if method == "lower": return "_tr_str_lower(" + obj_s + ")"
+            if method == "strip": return "_tr_str_strip(" + obj_s + ")"
+            if method == "replace" and args.len == 2:
+                return "_tr_str_replace(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
+            if method == "split" and args.len > 0:
+                return "_tr_str_split(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "find" and args.len > 0:
+                mut tmp_find: str = self.next_temp()
+                return "({ char* " + tmp_find + " = strstr(" + obj_s + ", " + self.gen_expr(args.get(0)) + "); " + tmp_find + " ? (long long)(" + tmp_find + " - (" + obj_s + ")) : -1LL; })"
+
         mut class_name: str = t_n
         if _is_str_type(class_name): class_name = "TrStr"
 
@@ -1397,6 +1493,22 @@ pub class CGenerator:
                 return class_name + "_" + method_c + "(" + self.gen_args(args) + ")"
             if obj_s == class_name:
                 return class_name + "_" + method_c + "(" + self.gen_args(args) + ")"
+            # Check if method exists in own class; if not, fall back to base class dispatch
+            mut ucls_inh: HirClass = self.classes.get(class_name)
+            mut has_own_method: bool = false
+            mut mci: int = 0
+            while mci < ucls_inh.methods.len:
+                mut mdef: HirFunction = ucls_inh.methods.get(mci)
+                if mdef.name == method:
+                    has_own_method = true
+                mci = mci + 1
+            if not has_own_method and ucls_inh.base_classes.len > 0:
+                mut base_cls_n: str = ucls_inh.base_classes.get(0)
+                if self.classes.contains(base_cls_n):
+                    mut s_base: str = base_cls_n + "_" + method_c + "((" + base_cls_n + "*)" + obj_s
+                    if args.len > 0:
+                        s_base = s_base + ", " + self.gen_args(args)
+                    return s_base + ")"
             mut s = class_name + "_" + method_c + "(" + obj_s
             if args.len > 0: s = s + ", " + self.gen_args(args)
             return s + ")"
@@ -1563,7 +1675,15 @@ pub class CGenerator:
         return s + l + "; })"
 
     pub def gen_dict_literal(self, keys: Vec[Pointer[HirExpr]], vals: Vec[Pointer[HirExpr]]) -> str:
-        mut s = "_tr_dict_new(" + str(keys.len) + "LL)"
+        if keys.len == 0:
+            return "_tr_dict_new(0LL)"
+        mut tmp = self.next_temp()
+        mut s = "({ TrMap* " + tmp + " = _tr_dict_new(" + str(keys.len) + "LL); "
+        mut i = 0
+        while i < keys.len:
+            s = s + "_tr_dict_set(" + tmp + ", " + self.gen_expr(keys.get(i)) + ", " + self.gen_expr(vals.get(i)) + "); "
+            i = i + 1
+        s = s + tmp + "; })"
         return s
 
     pub def gen_list_comp(self, element: Pointer[HirExpr], generators: Vec[Pointer[HirComprehension]]) -> str:
@@ -1598,23 +1718,21 @@ pub class CGenerator:
     pub def gen_closure(self, params: Vec[HirParam], ret_ty: AstType, body: HirBlock) -> str:
         self.closure_count = self.closure_count + 1
         mut cname = "_closure_" + self.closure_count.to_str()
-        self.wp("static __attribute__((hot)) ")
-        self.wp(self.type_to_c(ret_ty) + " " + cname + "(")
-        mut first = true
-        mut i = 0
+        mut ret_c = self.type_to_c(ret_ty)
+        if ret_c == "void": ret_c = "long long"
+        self.w("    " + ret_c + " " + cname + "(")
+        mut first: bool = true
+        mut i: int = 0
         while i < params.len:
-            mut p = params.get(i)
-            if not first: self.wp(", ")
-            self.wp(self.type_to_c(p.ty) + " " + p.name)
+            mut p: HirParam = params.get(i)
+            if not first: self.w(", ")
+            self.w(self.type_to_c(p.ty) + " " + p.name)
             first = false
             i = i + 1
-        self.wp(") {\n")
-        mut old_buf = self.buf
-        self.buf = self.proto_buf
-        self.gen_block(body, 1)
-        self.buf = old_buf
-        self.wp("}\n\n")
-        return cname
+        self.w(") {\n")
+        self.gen_block(body, 2)
+        self.w("    }\n")
+        return "(void*)(&" + cname + ")"
 
     # ── Spawn wrapper pre-scan ────────────────────────────────────────────────
 
@@ -1636,7 +1754,7 @@ pub class CGenerator:
                     mut cast_back = "(long long)(uintptr_t)_vp"
                     if not _is_int_type(arg_ty_n) and arg_ty_n != "bool" and arg_ty_n != "char":
                         mut c_arg_ty = self.type_to_c(hir_expr_type(args.get(0)))
-                        cast_back = "(" + c_arg_ty + "*)_vp"
+                        cast_back = "(" + c_arg_ty + ")_vp"
                     self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { " + fn_name + "(" + cast_back + "); return NULL; }\n")
                 else:
                     self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { (void)_vp; /* multi-arg spawn not supported */ return NULL; }\n")
@@ -2012,7 +2130,10 @@ pub class CGenerator:
                                 start_s = self.gen_expr(args.get(0))
                                 end_s = self.gen_expr(args.get(1))
                                 step_s = self.gen_expr(args.get(2))
-                            self.w(pad + "for (long long " + var + " = " + start_s + "; " + var + " < " + end_s + "; " + var + " += " + step_s + ") {\n")
+                            mut cmp = "<"
+                            mut step_p = step_s as Pointer[char]
+                            if step_p.offset(0).read() as int == 45: cmp = ">"
+                            self.w(pad + "for (long long " + var + " = " + start_s + "; " + var + " " + cmp + " " + end_s + "; " + var + " += " + step_s + ") {\n")
                             self.gen_block(body, indent + 1)
                             self.w(pad + "}\n")
                             return
@@ -2021,10 +2142,18 @@ pub class CGenerator:
 
         # Generic iteration over a collection
         mut tmp = self.next_temp()
+        mut iter_ty = hir_expr_type(iter)
+        mut elem_c = "__auto_type"
+        if iter_ty.name == "List" or iter_ty.name == "Vec":
+            if iter_ty.args.len > 0:
+                elem_c = self.type_to_c(iter_ty.args.get(0).read())
         self.w(pad + "{ long long " + tmp + "_i = 0;\n")
         self.w(pad + "  __auto_type " + tmp + "_col = " + iter_s + ";\n")
         self.w(pad + "  while (" + tmp + "_i < " + tmp + "_col->len) {\n")
-        self.w(pad + "    __auto_type " + var + " = " + tmp + "_col->data[" + tmp + "_i];\n")
+        if elem_c == "__auto_type":
+            self.w(pad + "    __auto_type " + var + " = " + tmp + "_col->data[" + tmp + "_i];\n")
+        else:
+            self.w(pad + "    " + elem_c + " " + var + " = (" + elem_c + ")" + tmp + "_col->data[" + tmp + "_i];\n")
         self.gen_block(body, indent + 2)
         self.w(pad + "    " + tmp + "_i++;\n")
         self.w(pad + "  }\n")
@@ -2086,10 +2215,17 @@ pub class CGenerator:
                     if v: cond = subj
                     else: cond = "!" + subj
                 case Pattern.PLitStr(v): cond = "_tr_str_eq(" + subj + ", \"" + _escape_str_for_c(v) + "\")"
-                case Pattern.PVariant(tn, vn): cond = subj + ".tag == " + tn + "_" + vn
+                case Pattern.PVariant(tn, vn):
+                    mut pv_vn = vn
+                    if tn == "Option" and (vn == "" or vn == "none"): pv_vn = "None"
+                    cond = subj + ".tag == " + tn + "_" + pv_vn
                 case Pattern.PVariantBind(tn, vn, field):
                     cond = subj + ".tag == " + tn + "_" + vn
                     mut actual_fld = field
+                    # Built-in Option/Result: use known field names
+                    if tn == "Option" and vn == "Some": actual_fld = "val"
+                    if tn == "Result" and vn == "Ok": actual_fld = "val"
+                    if tn == "Result" and vn == "Err": actual_fld = "err"
                     if self.enums.contains(tn):
                         mut _ev_def = self.enums.get(tn)
                         mut _vi = 0
@@ -2127,7 +2263,10 @@ pub class CGenerator:
                         mut pp = pats.get(oi)
                         mut pc = "1"
                         match pp:
-                            case Pattern.PVariant(tn, vn): pc = subj + ".tag == " + tn + "_" + vn
+                            case Pattern.PVariant(tn, vn):
+                                mut or_vn = vn
+                                if tn == "Option" and (vn == "" or vn == "none"): or_vn = "None"
+                                pc = subj + ".tag == " + tn + "_" + or_vn
                             case Pattern.PLitInt(vi): pc = subj + " == " + vi.to_str() + "LL"
                             case Pattern.PLitStr(vs): pc = "_tr_str_eq(" + subj + ", \"" + _escape_str_for_c(vs) + "\")"
                             case Pattern.PLitBool(bv):
@@ -2577,6 +2716,10 @@ pub class CGenerator:
             mut iface2 = prog.interfaces.get(i)
             if not _is_invalid_ptr(iface2 as usize):
                 out.append("typedef struct _" + iface2.name + "_vtable " + iface2.name + "_vtable;\n")
+                # _obj typedef only needs a pointer to vtable (already fwd-declared above),
+                # so emit it here before any function prototypes reference it.
+                out.append("typedef struct { " + iface2.name + "_vtable* vtable; void* data; } " + iface2.name + "_obj;\n")
+                self.emitted_fns.insert("iface_obj_" + iface2.name, true)
             i = i + 1
         self.emit_list_fwd_decls(prog)          # writes to self.buf
         out.append(self.buf.to_string().as_str())
