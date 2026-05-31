@@ -18,9 +18,9 @@
     &nbsp;·&nbsp;
     <a href="examples/"><strong>Examples</strong></a>
     &nbsp;·&nbsp;
-    <a href="https://github.com/Yusee-Programmer/tauraro/releases"><strong>Releases</strong></a>
+    <a href="https://github.com/tauraro/tauraro/releases"><strong>Releases</strong></a>
     &nbsp;·&nbsp;
-    <a href="https://github.com/Yusee-Programmer/tauraro/issues"><strong>Issues</strong></a>
+    <a href="https://github.com/tauraro/tauraro/issues"><strong>Issues</strong></a>
   </p>
 </div>
 
