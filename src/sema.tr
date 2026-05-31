@@ -401,7 +401,7 @@ extend Sema:
         hc.generics = c.generics
         hc.fields = hfields
         hc.methods = hmethods
-        hc.base_classes = c.iface_names
+        hc.base_classes = c.base_classes
         hc.iface_names = c.iface_names
         hc.decorators = c.decorators
         hc.is_public = c.is_public
@@ -550,8 +550,16 @@ extend Sema:
                 return box_hirstmt(HirStmt.SWhile(self.lower_expr(cond), self.lower_block(body)))
             case Stmt.SFor(var, iter, body, decorators):
                 self.enter_scope()
-                self.declare(var, SymbolKind.SVariable, box_asttype(AstType.init("int")), false)
-                mut hstmt = box_hirstmt(HirStmt.SFor(var, self.lower_expr(iter), self.lower_block(body)))
+                mut h_iter_for = self.lower_expr(iter)
+                mut var_ty_for = AstType.init("int")
+                mut iter_hn = hir_expr_type(h_iter_for).name
+                mut iter_hal = hir_expr_type(h_iter_for).args.len
+                if (iter_hn == "List" or iter_hn == "Vec") and iter_hal > 0:
+                    var_ty_for = hir_expr_type(h_iter_for).args.get(0).read()
+                elif iter_hn == "str":
+                    var_ty_for = AstType.init("char")
+                self.declare(var, SymbolKind.SVariable, box_asttype(var_ty_for), false)
+                mut hstmt = box_hirstmt(HirStmt.SFor(var, h_iter_for, self.lower_block(body)))
                 self.exit_scope()
                 return hstmt
             case Stmt.SMatch(subj, arms):
@@ -978,6 +986,127 @@ extend Sema:
                 mut hinner_await = self.lower_expr(inner_await)
                 mut await_ty = hir_expr_type(hinner_await)
                 return box_hirexpr(HirExpr.EAwait(hinner_await, await_ty))
+            case Expr.EDict(keys, vals):
+                mut h_keys = Vec[Pointer[HirExpr]].init(keys.len)
+                mut h_vals = Vec[Pointer[HirExpr]].init(vals.len)
+                mut di = 0
+                while di < keys.len:
+                    h_keys.push(self.lower_expr(keys.get(di)))
+                    h_vals.push(self.lower_expr(vals.get(di)))
+                    di = di + 1
+                return box_hirexpr(HirExpr.EDict(h_keys, h_vals, AstType.init("Dict")))
+            case Expr.EListComp(element, generators):
+                self.enter_scope()
+                mut hgens = Vec[Pointer[HirComprehension]].init(generators.len)
+                mut gc: int = 0
+                while gc < generators.len:
+                    mut gen_ast: Comprehension = generators.get(gc).read()
+                    mut hgen_ptr = alloc[HirComprehension](1)
+                    mut hgen_val = HirComprehension()
+                    hgen_val.target = gen_ast.target
+                    mut h_iter_lc = self.lower_expr(gen_ast.iter)
+                    hgen_val.iter = h_iter_lc
+                    mut lc_itn = hir_expr_type(h_iter_lc).name
+                    mut lc_ial = hir_expr_type(h_iter_lc).args.len
+                    mut lc_elem_ty = AstType.init("int")
+                    if (lc_itn == "List" or lc_itn == "Vec") and lc_ial > 0:
+                        lc_elem_ty = hir_expr_type(h_iter_lc).args.get(0).read()
+                    elif lc_itn == "str":
+                        lc_elem_ty = AstType.init("char")
+                    self.declare(gen_ast.target, SymbolKind.SVariable, box_asttype(lc_elem_ty), false)
+                    mut hifs = Vec[Pointer[HirExpr]].init(gen_ast.ifs.len)
+                    mut lc_fi = 0
+                    while lc_fi < gen_ast.ifs.len:
+                        hifs.push(self.lower_expr(gen_ast.ifs.get(lc_fi)))
+                        lc_fi = lc_fi + 1
+                    hgen_val.ifs = hifs
+                    hgen_val.is_async = gen_ast.is_async
+                    hgen_ptr.write(hgen_val)
+                    hgens.push(hgen_ptr)
+                    gc = gc + 1
+                mut h_lc_elem = self.lower_expr(element)
+                mut lc_elem_hty = hir_expr_type(h_lc_elem)
+                mut comp_ty = AstType.init("List")
+                comp_ty.args = Vec[Pointer[AstType]].init(1)
+                comp_ty.args.push(box_asttype(lc_elem_hty))
+                self.exit_scope()
+                return box_hirexpr(HirExpr.EListComp(h_lc_elem, hgens, comp_ty))
+            case Expr.EGeneratorExpr(element, generators):
+                self.enter_scope()
+                mut hgens2 = Vec[Pointer[HirComprehension]].init(generators.len)
+                mut gc2: int = 0
+                while gc2 < generators.len:
+                    mut gen_ast2: Comprehension = generators.get(gc2).read()
+                    mut hgen_ptr2 = alloc[HirComprehension](1)
+                    mut hgen_val2 = HirComprehension()
+                    hgen_val2.target = gen_ast2.target
+                    mut h_iter_ge = self.lower_expr(gen_ast2.iter)
+                    hgen_val2.iter = h_iter_ge
+                    mut ge_itn = hir_expr_type(h_iter_ge).name
+                    mut ge_ial = hir_expr_type(h_iter_ge).args.len
+                    mut ge_elem_ty = AstType.init("int")
+                    if (ge_itn == "List" or ge_itn == "Vec") and ge_ial > 0:
+                        ge_elem_ty = hir_expr_type(h_iter_ge).args.get(0).read()
+                    elif ge_itn == "str":
+                        ge_elem_ty = AstType.init("char")
+                    self.declare(gen_ast2.target, SymbolKind.SVariable, box_asttype(ge_elem_ty), false)
+                    mut hifs2 = Vec[Pointer[HirExpr]].init(gen_ast2.ifs.len)
+                    mut ge_fi = 0
+                    while ge_fi < gen_ast2.ifs.len:
+                        hifs2.push(self.lower_expr(gen_ast2.ifs.get(ge_fi)))
+                        ge_fi = ge_fi + 1
+                    hgen_val2.ifs = hifs2
+                    hgen_val2.is_async = gen_ast2.is_async
+                    hgen_ptr2.write(hgen_val2)
+                    hgens2.push(hgen_ptr2)
+                    gc2 = gc2 + 1
+                mut h_ge_elem = self.lower_expr(element)
+                mut ge_elem_hty = hir_expr_type(h_ge_elem)
+                mut gen_ty = AstType.init("List")
+                gen_ty.args = Vec[Pointer[AstType]].init(1)
+                gen_ty.args.push(box_asttype(ge_elem_hty))
+                self.exit_scope()
+                return box_hirexpr(HirExpr.EGeneratorExpr(h_ge_elem, hgens2, gen_ty))
+            case Expr.ESuperMethodCall(base_class, method, args):
+                mut h_super_args = Vec[Pointer[HirExpr]].init(4)
+                mut k_smc: int = 0
+                while k_smc < args.len:
+                    h_super_args.push(self.lower_expr(args.get(k_smc)))
+                    k_smc = k_smc + 1
+                # Infer base class from current class if not explicit
+                mut resolved_base: str = base_class
+                if resolved_base == "" and self.current_class_name != "":
+                    if self.classes.contains(self.current_class_name):
+                        mut cur_cls: ClassDef = self.classes.get(self.current_class_name)
+                        if cur_cls.base_classes.len > 0:
+                            resolved_base = cur_cls.base_classes.get(0)
+                mut super_ret_ty = AstType.init("void")
+                if self.classes.contains(resolved_base):
+                    mut bc_def: ClassDef = self.classes.get(resolved_base)
+                    mut k_smc2: int = 0
+                    while k_smc2 < bc_def.methods.len:
+                        if bc_def.methods.get(k_smc2).name == method:
+                            if bc_def.methods.get(k_smc2).ret_ty as usize != 0 as usize:
+                                super_ret_ty = bc_def.methods.get(k_smc2).ret_ty.read()
+                        k_smc2 = k_smc2 + 1
+                return box_hirexpr(HirExpr.ESuperMethodCall(resolved_base, method, h_super_args, super_ret_ty))
+            case Expr.ESuperPropAccess(base_class, prop):
+                mut resolved_base2: str = base_class
+                if resolved_base2 == "" and self.current_class_name != "":
+                    if self.classes.contains(self.current_class_name):
+                        mut cur_cls2: ClassDef = self.classes.get(self.current_class_name)
+                        if cur_cls2.base_classes.len > 0:
+                            resolved_base2 = cur_cls2.base_classes.get(0)
+                mut super_field_ty = AstType.init("void")
+                if self.classes.contains(resolved_base2):
+                    mut bc_def2: ClassDef = self.classes.get(resolved_base2)
+                    mut k_spa: int = 0
+                    while k_spa < bc_def2.fields.len:
+                        if bc_def2.fields.get(k_spa).name == prop:
+                            if bc_def2.fields.get(k_spa).ty as usize != 0 as usize:
+                                super_field_ty = bc_def2.fields.get(k_spa).ty.read()
+                        k_spa = k_spa + 1
+                return box_hirexpr(HirExpr.ESuperPropAccess(resolved_base2, prop, super_field_ty))
             case _: return box_hirexpr(HirExpr.ELitNone(AstType.init("None")))
 
     # ── Rule N-1: Reserved name helpers ───────────────────────────────────────
