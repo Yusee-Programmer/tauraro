@@ -1,21 +1,16 @@
-# 07 — Classes and Extend
-# Covers: class (data layout), extend (methods), constructor pattern (init),
-# self, pub visibility, static methods, multiple extend blocks,
-# struct embedding (inheritance), @packed decorator.
+# 07 — Classes
+# Covers: class with inline methods, optional extend blocks, constructor pattern
+# (init), self, pub visibility, static methods, extends inheritance,
+# super() calls, @packed decorator.
 
-# ── 1. Simple class with fields ───────────────────────────────────────────────
-# 'class' declares the data layout only — field names and types.
-# Fields are PRIVATE by default; use 'pub' to expose them.
+# ── 1. Inline style: fields + methods in one block ────────────────────────────
+# Methods can live directly inside the class body — 'extend' is optional.
+# Use this compact style for small, self-contained classes.
 class Point:
     pub x: int
     pub y: int
 
-# ── 2. Methods via 'extend' ───────────────────────────────────────────────────
-# 'extend' attaches methods to a class. Separating data from methods lets you
-# read the struct layout without scrolling through function bodies.
-extend Point:
-    # Constructor: a static method named 'init' by convention.
-    # 'Point()' allocates a zero-initialised heap instance.
+    # Constructor: static method named 'init' by convention.
     pub def init(px: int, py: int) -> Point:
         mut p = Point()
         p.x = px
@@ -27,7 +22,6 @@ extend Point:
         return Point.init(0, 0)
 
     # Instance method — 'self' is a pointer to the current instance.
-    # 'self.field' compiles to 'self->field' in C.
     pub def distance_sq(self) -> int:
         return self.x * self.x + self.y * self.y
 
@@ -38,11 +32,12 @@ extend Point:
     pub def describe(self) -> void:
         print(f"Point({self.x}, {self.y})")
 
-    # __str__ — used when the object appears in an f-string
     pub def __str__(self) -> str:
         return f"({self.x}, {self.y})"
 
-# ── 3. Multiple extend blocks — organise methods by concern ──────────────────
+# ── 2. Separate 'extend' blocks — organise methods by concern ────────────────
+# 'extend' is the other style: keep data layout separate from methods.
+# Both styles work; mix freely within the same project.
 class Counter:
     pub value: int
     step: int       # private — only accessible inside this file
@@ -68,7 +63,7 @@ extend Counter:    # querying
     pub def describe(self) -> void:
         print(f"Counter(value={self.value}, step={self.step})")
 
-# ── 4. Class with various field types ─────────────────────────────────────────
+# ── 3. Class with various field types ─────────────────────────────────────────
 class Config:
     pub host:    str
     pub port:    i32
@@ -94,7 +89,7 @@ extend Config:
         print(f"  timeout={self.timeout}  debug={self.debug}")
         print(f"  tags: {len(self.tags)}")
 
-# ── 5. Classes sharing common patterns ───────────────────────────────────────
+# ── 4. Classes sharing common patterns ───────────────────────────────────────
 # Both Animal and Dog have name/sound fields — demonstrated via composition.
 class Animal:
     pub name: str
@@ -136,7 +131,7 @@ extend Dog:
     pub def describe(self) -> void:
         print(f"Dog: {self.name} ({self.breed}), {self.tricks} tricks")
 
-# ── 6. @packed — exact byte layout for hardware/network structs ───────────────
+# ── 5. @packed — exact byte layout for hardware/network structs ───────────────
 @packed
 class NetworkHeader:
     pub version: u8
@@ -156,13 +151,12 @@ extend NetworkHeader:
     pub def describe(self) -> void:
         print(f"Header: ver={self.version as int} len={self.length as int} seq={self.seq as int}")
 
-# ── 7. Inheritance via 'extends' ──────────────────────────────────────────────
+# ── 6. Inheritance via 'extends' ──────────────────────────────────────────────
 # 'extends' embeds all parent fields into the child struct and enables
 # inherited method dispatch. Use super(ClassName).method() to call the parent.
 class Shape:
     pub color: str
 
-extend Shape:
     pub def init(color: str) -> Shape:
         mut s = Shape()
         s.color = color
@@ -177,7 +171,6 @@ extend Shape:
 class Circle extends Shape:
     pub radius: float
 
-extend Circle:
     pub def init(color: str, radius: float) -> Circle:
         mut c = Circle()
         c.color  = color
