@@ -1,0 +1,240 @@
+# 06 — Collections: List[T] and Dict
+# Covers: List creation, append/pop/index/modify, iteration, enumerate,
+# list comprehension, Dict create/get/set/has, ownership rules.
+
+def sum_list(items: List[int]) -> int:
+    mut total = 0
+    for x in items:
+        total += x
+    return total
+
+def filter_positive(nums: List[int]) -> List[int]:
+    mut result: List[int] = []
+    for x in nums:
+        if x > 0: result.append(x)
+    return result
+
+def reverse_list(items: List[int]) -> List[int]:
+    mut result: List[int] = []
+    for v in items:
+        result.append(v)
+    mut lo = 0
+    mut hi = len(result) - 1
+    while lo < hi:
+        mut tmp = result[lo + 0]
+        result[lo + 0] = result[hi + 0]
+        result[hi + 0] = tmp
+        lo += 1
+        hi -= 1
+    return result
+
+def make_range(n: int) -> List[int]:
+    mut result: List[int] = []
+    for i in range(n):
+        result.append(i)
+    return result    # ownership transferred — no free here
+
+def main():
+
+    # ── 1. Creating lists ──────────────────────────────────────────────────────
+    print("=== Creating Lists ===")
+    mut primes: List[int]  = [2, 3, 5, 7, 11]
+    mut names:  List[str]  = ["Alice", "Bob", "Charlie"]
+    mut flags:  List[bool] = [true, false, true]
+
+    # Empty list — type annotation required (compiler can't infer from nothing):
+    mut scores: List[int] = []
+    mut words:  List[str] = []
+
+    print(f"primes: {len(primes)} elements")
+    print(f"names:  {len(names)} elements")
+
+    # ── 2. Appending elements ─────────────────────────────────────────────────
+    print("=== Append ===")
+    scores.append(90)
+    scores.append(85)
+    scores.append(72)
+    scores.append(61)
+    print(f"scores len: {len(scores)}")    # 4
+
+    # ── 3. Reading elements ────────────────────────────────────────────────────
+    print("=== Indexing ===")
+    print(f"primes[0] = {primes[0]}")    # 2
+    print(f"primes[4] = {primes[4]}")    # 11
+
+    # Last element:
+    mut last: int = primes[len(primes) - 1]
+    print(f"last = {last}")              # 11
+
+    # Bounds checking (always validate when index is not statically known):
+    idx: int = 2
+    if idx < len(primes):
+        print(f"primes[{idx}] = {primes[idx + 0]}")    # 5
+
+    # ── 4. Modifying elements ─────────────────────────────────────────────────
+    print("=== Modify ===")
+    mut vals: List[int] = [10, 20, 30, 40, 50]
+    vals[0] = 99
+    vals[2] += 5
+    print(f"vals[0] = {vals[0]}")   # 99
+    print(f"vals[2] = {vals[2]}")   # 35
+
+    # ── 5. Removing the last element ──────────────────────────────────────────
+    print("=== Pop ===")
+    mut popped: int = vals.pop()
+    print(f"popped: {popped}")          # 50
+    print(f"len after pop: {len(vals)}")  # 4
+
+    # ── 6. Iteration ──────────────────────────────────────────────────────────
+    print("=== Iteration ===")
+    mut ni2: int = 0
+    while ni2 < len(names):
+        mut nm2: str = names[ni2 + 0]
+        print(f"  Hello, {nm2}!")
+        ni2 += 1
+
+    # While loop when you need full index control:
+    mut i = 0
+    while i < len(scores):
+        print(f"  scores[{i}] = {scores[i + 0]}")
+        i += 1
+
+    # ── 7. enumerate — index + value ──────────────────────────────────────────
+    # Tauraro uses while + manual index for enumerated access:
+    print("=== Enumerate ===")
+    mut fruits: List[str] = ["apple", "banana", "cherry"]
+    mut ei = 0
+    while ei < len(fruits):
+        mut fn: str = fruits[ei + 0]
+        print(f"  [{ei}] {fn}")
+        ei += 1
+
+    # ── 8. List building (comprehension-style) ───────────────────────────────
+    print("=== Comprehension ===")
+    mut numbers: List[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    # Transform: square each element
+    mut squares: List[int] = []
+    mut si: int = 0
+    while si < len(numbers):
+        mut sx: int = numbers[si + 0]
+        squares.append(sx * sx)
+        si += 1
+    print(f"squares: first={squares[0]}, last={squares[9]}")   # 1, 100
+
+    # Filter: keep only evens
+    mut evens: List[int] = []
+    mut evi: int = 0
+    while evi < len(numbers):
+        mut ex: int = numbers[evi + 0]
+        if ex % 2 == 0: evens.append(ex)
+        evi += 1
+    print(f"evens len: {len(evens)}")   # 5
+
+    # Transform + filter combined:
+    mut even_squares: List[int] = []
+    mut esi: int = 0
+    while esi < len(numbers):
+        mut esx: int = numbers[esi + 0]
+        if esx % 2 == 0: even_squares.append(esx * esx)
+        esi += 1
+    mut vi: int = 0
+    while vi < len(even_squares):
+        mut vv: int = even_squares[vi + 0]
+        print(f"  {vv}")   # 4 16 36 64 100
+        vi += 1
+
+    # ── 9. Passing lists to functions (borrow — caller keeps ownership) ────────
+    print("=== Functions with Lists ===")
+    mut data: List[int] = [-3, 7, -1, 4, -2, 9, 0]
+    print(f"sum:      {sum_list(data)}")             # 14
+    mut pos = filter_positive(data)
+    print(f"positive: {len(pos)} elements")          # 3 (7, 4, 9)
+    mut rev = reverse_list([1, 2, 3, 4, 5])
+    print(f"reversed[0] = {rev[0]}")                 # 5
+
+    # ── 10. List[str] operations ──────────────────────────────────────────────
+    print("=== List[str] ===")
+    mut tags: List[str] = []
+    tags.append("tauraro")
+    tags.append("systems")
+    tags.append("fast")
+
+    print(f"tags: {len(tags)}")
+    print(f"tags[1] = {tags[1]}")    # systems
+
+    mut ti: int = 0
+    while ti < len(tags):
+        mut tg: str = tags[ti + 0]
+        print(f"  #{tg}")
+        ti += 1
+
+    # ── 11. List[float] ────────────────────────────────────────────────────────
+    print("=== List[float] ===")
+    mut temps: List[float] = [36.6, 37.1, 36.9, 38.2, 37.5]
+    mut sum_f: float = 0.0
+    mut ti2: int = 0
+    while ti2 < len(temps):
+        mut t: float = temps[ti2 + 0]
+        sum_f += t
+        ti2 += 1
+    mut avg: float = sum_f / len(temps) as float
+    print(f"avg temp: {avg}")
+
+    # ── 12. Dict — string-keyed hash map ──────────────────────────────────────
+    print("=== Dict ===")
+    # Create with a literal:
+    mut config: Dict = {"host": "localhost", "port": "8080", "debug": "true"}
+
+    # Read a value:
+    host_val: str = config.get("host")
+    print(f"host: {host_val}")    # localhost
+
+    # Write/update a value:
+    config.set("timeout", "30")
+    config.set("port", "9090")
+
+    # Check if key exists:
+    if config.has("debug"):
+        debug_val: str = config.get("debug")
+        print(f"debug = {debug_val}")    # true
+
+    if not config.has("missing_key"):
+        print("missing_key not present")
+
+    # Empty Dict:
+    mut store: Dict = {}
+    store.set("name", "Tauraro")
+    store.set("version", "2")
+    has_name: bool = store.has("name")
+    print(f"store has name: {has_name}")
+
+    # ── 13. Dict — counting pattern ───────────────────────────────────────────
+    print("=== Dict Counting ===")
+    sentence: str = "the quick brown fox jumps over the lazy dog the"
+    mut word_counts: Dict = {}
+    mut ws: List[str] = sentence.split(" ")
+    mut wi: int = 0
+    while wi < len(ws):
+        mut word: str = ws[wi + 0]
+        if word_counts.has(word):
+            mut wval: str = word_counts.get(word)
+            mut n: int = int(wval)
+            word_counts.set(word, str(n + 1))
+        else:
+            word_counts.set(word, "1")
+        wi += 1
+
+    the_count: str = word_counts.get("the")
+    fox_count: str = word_counts.get("fox")
+    print(f"the appears: {the_count} times")    # 3
+    print(f"fox appears: {fox_count} times")    # 1
+
+    # ── 14. Ownership — lists returned from functions ─────────────────────────
+    # Returning a list transfers ownership to the caller.
+    print("=== Ownership ===")
+    mut my_range = make_range(5)    # my_range owns the returned list
+    print(f"make_range(5): {len(my_range)} elements")
+    print(f"first: {my_range[0]}, last: {my_range[4]}")
+
+    print("=== done ===")

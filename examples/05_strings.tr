@@ -1,0 +1,188 @@
+# 05 — Strings and F-Strings
+# Covers: string literals, escape sequences, concatenation, f-strings,
+# string operations (len/index/methods), type↔string conversion.
+
+def main():
+
+    # ── 1. String literals ────────────────────────────────────────────────────
+    # str = C char* — null-terminated UTF-8 byte sequence.
+    print("=== String Literals ===")
+    plain   = "Hello, world!"
+    empty   = ""
+    escaped = "tab:\there\nnewline"
+    path    = "C:\\Users\\Tauraro"
+    quoted  = "She said \"hello\""
+    single  = 'also valid'        # single quotes work too
+
+    print(plain)
+    print(escaped)
+    print(path)
+    print(quoted)
+
+    # All escape sequences:
+    # \n  newline      \r  carriage return    \t  horizontal tab
+    # \\  backslash    \"  double quote       \'  single quote
+    # \0  null byte
+
+    # ── 2. String length and indexing ─────────────────────────────────────────
+    print("=== Length & Indexing ===")
+    s: str = "Hello"
+    print(f"len: {len(s)}")      # 5
+
+    first_char: char = s[0]     # 'H' — returns char
+    last_char:  char = s[4]     # 'o'
+    print(f"ASCII of H = {ord(first_char)}")   # 72
+    print(f"ASCII of o = {ord(last_char)}")    # 111
+
+    # No bounds checking — always validate when index is not statically known:
+    idx: int = 2
+    if idx < len(s):
+        mut ch_at: char = s[idx + 0]
+        print(f"s[{idx}] ASCII = {ord(ch_at)}")   # 108 = 'l'
+
+    # ── 3. String concatenation ───────────────────────────────────────────────
+    # '+' allocates a new heap string.
+    print("=== Concatenation ===")
+    first  = "Hello"
+    second = "world"
+    combined = first + ", " + second + "!"
+    print(combined)    # Hello, world!
+
+    # Must convert non-strings to str before concatenating:
+    count: int = 42
+    mut result = "count: " + str(count)
+    print(result)    # count: 42
+
+    score: float = 9.5
+    mut line  = "score: " + str(score)
+    print(line)      # score: 9.5
+
+    # ── 4. F-strings ──────────────────────────────────────────────────────────
+    # f"..." evaluates {expressions} at runtime. Type-safe — correct format
+    # specifier is chosen per type (%lld for int, %g for float, etc.)
+    print("=== F-Strings ===")
+    name:    str   = "Tauraro"
+    version: int   = 2
+    pi:      float = 3.14159
+
+    print(f"Hello from {name} v{version}!")
+    print(f"pi = {pi}")
+    print(f"1 + 1 = {1 + 1}")
+    print("len(name) = " + str(len(name)))
+
+    # Arithmetic inside {}:
+    a: int = 10
+    b: int = 3
+    print(f"{a} + {b} = {a + b}")
+    print(f"{a} / {b} = {a / b}")             # integer division
+    print(f"{a} / {b} (float) = {a as float / b}")
+
+    # Boolean in f-string:
+    flag: bool = true
+    print(f"flag = {flag}")    # "flag = true"
+
+    # Method call in {}:
+    word: str = "hello"
+    print(f"upper: {word.upper()}")
+
+    # Assign f-string to a variable (heap-allocated):
+    mut msg = f"name={name}, version={version}"
+    print(msg)
+
+    # ── 5. String methods ─────────────────────────────────────────────────────
+    print("=== String Methods ===")
+    text: str = "  Hello, World!  "
+
+    print(text.upper())             # "  HELLO, WORLD!  "
+    print(text.lower())             # "  hello, world!  "
+    print(text.strip())             # "Hello, World!"
+    mut find_world: int = text.find("World")
+    print(str(find_world))          # 9  (index, or -1 if not found)
+    mut find_xyz: int = text.find("xyz")
+    print(str(find_xyz))            # -1
+
+    replaced: str = text.replace("World", "Tauraro")
+    print(replaced)                 # "  Hello, Tauraro!  "
+
+    csv: str = "one,two,three,four"
+    mut parts: List[str] = csv.split(",")
+    mut pi2: int = 0
+    while pi2 < len(parts):
+        mut p: str = parts[pi2 + 0]
+        print(f"  part: {p}")       # one / two / three / four
+        pi2 += 1
+
+    # ── 6. Type-to-string and string-to-type ──────────────────────────────────
+    print("=== Conversions ===")
+    # str() converts any value to its string representation:
+    s_int   = str(42)        # "42"
+    s_float = str(3.14)      # "3.14"
+    s_bool  = str(true)      # "true"
+    s_neg   = str(-100)      # "-100"
+    print(s_int)
+    print(s_float)
+    print(s_bool)
+
+    # Parsing strings to numbers:
+    mut n_int   = int("123")    # 123
+    mut n_float = float("9.81") # 9.81
+    print(f"int:   {n_int}")
+    print(f"float: {n_float}")
+
+    # ── 7. String comparison ──────────────────────────────────────────────────
+    # == and != compare CONTENT (via strcmp), not pointer identity.
+    print("=== Comparison ===")
+    p1 = "hello"
+    p2 = "hello"
+    p3 = "world"
+
+    print("hello == hello: " + str(p1 == p2))   # true
+    print("hello != world: " + str(p1 != p3))   # true
+    print("hello <  world: " + str(p1 < p3))    # true (lexicographic)
+
+    # ── 8. Accessing raw bytes ────────────────────────────────────────────────
+    # s[i] returns a char. Use ord() to get the byte value.
+    print("=== Raw Bytes ===")
+    bytes_str: str = "ABC"
+    mut bi = 0
+    while bi < len(bytes_str):
+        mut bch: char = bytes_str[bi + 0]
+        print(f"  bytes_str[{bi}] ASCII = {ord(bch)}")   # 65 66 67
+        bi += 1
+
+    # Count occurrences of a character:
+    sentence: str = "banana"
+    target: char  = 'a'
+    mut cnt  = 0
+    mut si   = 0
+    while si < len(sentence):
+        mut sch: char = sentence[si + 0]
+        if sch == target:
+            cnt += 1
+        si += 1
+    print(f"a appears {cnt} times in: {sentence}")   # 3
+
+    # ── 9. Building strings efficiently ───────────────────────────────────────
+    # Repeated '+' in a loop is O(n²). Collect parts then join.
+    print("=== String Building ===")
+    mut data: List[int] = [1, 2, 3, 4, 5]
+    mut parts2: List[str] = []
+    mut di: int = 0
+    while di < len(data):
+        mut num: int = data[di + 0]
+        parts2.append(str(num))
+        di += 1
+
+    mut joined = ""
+    mut ji = 0
+    while ji < len(parts2):
+        if ji > 0: joined = joined + ", "
+        joined = joined + parts2[ji + 0]
+        ji += 1
+    print(f"joined: {joined}")   # 1, 2, 3, 4, 5
+
+    # f-strings inside a loop — each iteration prints directly:
+    for i in range(1, 4):
+        print(f"item {i}")
+
+    print("=== done ===")

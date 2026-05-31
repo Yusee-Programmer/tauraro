@@ -1,0 +1,164 @@
+# 15 — Concurrency
+# Covers: async/await (synchronous today, forward-compatible),
+# spawn (OS threads), task_group: (structured concurrency, joins threads),
+# shared (atomic reference-counted ownership across threads).
+
+# ── 1. async / await ──────────────────────────────────────────────────────────
+# 'async def' marks a function as a coroutine.
+# Today: 'await f(x)' is a direct function call — no scheduler, no heap future.
+# When a real async runtime is added, all async/await code will still work.
+async def fetch(id: int) -> str:
+    return f"item-{id}"
+
+async def process(n: int) -> int:
+    mut data = await fetch(n)
+    return len(data)
+
+async def pipeline(ids: List[int]) -> int:
+    mut total = 0
+    for id in ids:
+        mut r = await process(id)
+        total += r
+    return total
+
+# ── 2. spawn — OS threads ─────────────────────────────────────────────────────
+# spawn f(arg) starts a real OS thread (pthread on Linux/macOS, Win32 thread).
+# A spawn outside task_group: is DETACHED — fire and forget.
+def worker(id: int) -> void:
+    print(f"  worker {id} running")
+    # ... do CPU-bound work ...
+    print(f"  worker {id} done")
+
+# ── 3. Multiple arguments — pack into a class ─────────────────────────────────
+# spawn takes a single argument (packed into void* via uintptr_t).
+# For multiple args, create a class to hold them.
+class WorkArgs:
+    pub task_id:  int
+    pub priority: int
+    pub label:    str
+
+extend WorkArgs:
+    pub def init(id: int, pri: int, label: str) -> WorkArgs:
+        mut w = WorkArgs()
+        w.task_id  = id
+        w.priority = pri
+        w.label    = label
+        return w
+
+def task_worker(args: WorkArgs) -> void:
+    print(f"  task[{args.task_id}] pri={args.priority} '{args.label}'")
+
+# ── 4. task_group: — structured concurrency ───────────────────────────────────
+# Spawns inside task_group: are JOINED — all must finish before continuing.
+def compute(n: int) -> void:
+    mut result = n * n
+    print(f"  compute({n}) = {result}")
+
+# ── 5. shared — reference-counted ownership ───────────────────────────────────
+# 'shared' wraps a value in an atomic refcount box so multiple threads can
+# access the same object. The refcount is thread-safe; the data is NOT.
+class SharedCounter:
+    pub value: int
+
+extend SharedCounter:
+    pub def init() -> SharedCounter:
+        mut c = SharedCounter()
+        c.value = 0
+        return c
+
+    pub def increment(self) -> void:
+        self.value += 1
+
+    pub def get(self) -> int:
+        return self.value
+
+def increment_shared(c: SharedCounter) -> void:
+    c.increment()
+    print(f"  incremented to {c.get()}")
+
+def heavy_compute(n: int) -> void:
+    mut result = 0
+    mut i = 0
+    while i < n:
+        result += i * i
+        i += 1
+    print(f"  sum of squares 0..{n} = {result}")
+
+async def main():
+
+    # ── async/await ───────────────────────────────────────────────────────────
+    print("=== async / await ===")
+    mut r1 = await process(1)
+    mut r2 = await process(42)
+    print(f"process(1)  = {r1}")    # 6  (len("item-1"))
+    print(f"process(42) = {r2}")   # 7  (len("item-42"))
+
+    mut ids = [1, 2, 3, 10]
+    mut total = await pipeline(ids)
+    print(f"pipeline total chars = {total}")
+
+    # ── spawn (detached — no join) ────────────────────────────────────────────
+    # WARNING: detached threads may outlive main() if main exits too quickly.
+    # Use task_group: when you need to wait for completion.
+    print("=== spawn (detached) ===")
+    spawn worker(1)
+    spawn worker(2)
+    spawn worker(3)
+    print("  main thread continues immediately (workers may still be running)")
+
+    # ── task_group: — wait for all spawned threads ────────────────────────────
+    print("=== task_group: ===")
+    task_group:
+        spawn compute(4)
+        spawn compute(7)
+        spawn compute(12)
+    # ALL THREE are guaranteed finished here — task_group: joins them
+    print("  all compute() workers finished")
+
+    # ── task_group: with class args ───────────────────────────────────────────
+    print("=== task_group + class args ===")
+    task_group:
+        spawn task_worker(WorkArgs.init(1, 9, "urgent"))
+        spawn task_worker(WorkArgs.init(2, 3, "background"))
+        spawn task_worker(WorkArgs.init(3, 6, "normal"))
+    print("  all task_worker() finished")
+
+    # ── Nested task_group: blocks ─────────────────────────────────────────────
+    print("=== Nested task_group: ===")
+    task_group:
+        spawn compute(2)
+        spawn compute(3)
+    print("  phase 1 done")
+
+    task_group:
+        spawn compute(5)
+        spawn compute(6)
+    print("  phase 2 done")
+
+    # ── shared — reference-counted across threads ─────────────────────────────
+    print("=== shared ===")
+    mut counter = SharedCounter.init()
+    shared s1 = counter     # ref count = 1
+    shared s2 = s1          # ref count = 2 — same underlying counter
+
+    task_group:
+        spawn increment_shared(s1)    # thread 1
+        spawn increment_shared(s2)    # thread 2 — same SharedCounter!
+
+    # Both threads finished — but increment() is NOT atomic on .value.
+    # For this toy example the final value is likely 2, but it's technically
+    # a data race. Use an atomic int (via extern C) for real thread safety.
+    print(f"  counter after 2 threads: {s1.get()}")
+
+    # s1 drops → ref count = 1
+    # s2 drops → ref count = 0 → SharedCounter freed automatically
+
+    # ── Using spawn for parallel CPU work ─────────────────────────────────────
+    print("=== Parallel computation ===")
+    task_group:
+        spawn heavy_compute(100)
+        spawn heavy_compute(200)
+        spawn heavy_compute(300)
+    print("  all heavy computations done")
+
+    print("=== done ===")
