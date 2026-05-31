@@ -396,6 +396,69 @@ extend Sema:
             hmethods.push(hm)
             i = i + 1
             
+        # ── Interface completeness + signature checks ─────────────────────────
+        mut _ifc_i = 0
+        while _ifc_i < c.iface_names.len:
+            mut _ifc_nm = c.iface_names.get(_ifc_i)
+            if not self.interfaces.contains(_ifc_nm):
+                self.error("[I-1] Class '" + c.name + "' declares 'implements " + _ifc_nm + "' but interface '" + _ifc_nm + "' is not defined.\n      FIX: Define 'interface " + _ifc_nm + ":' before this class, or check for typos.")
+            else:
+                mut _idef = self.interfaces.get(_ifc_nm)
+                mut _im_i = 0
+                while _im_i < _idef.methods.len:
+                    mut _imeth = _idef.methods.get(_im_i)
+                    mut _found = false
+                    mut _cm_i = 0
+                    while _cm_i < c.methods.len:
+                        mut _cmeth = c.methods.get(_cm_i)
+                        if _cmeth.name == _imeth.name:
+                            _found = true
+                            # Return type check
+                            mut _iret = "void"
+                            if _imeth.ret_ty as usize != 0 as usize:
+                                _iret = _imeth.ret_ty.read().name
+                            mut _cret = "void"
+                            if _cmeth.ret_ty as usize != 0 as usize:
+                                _cret = _cmeth.ret_ty.read().name
+                            # Allow generics (single-letter type param) to match anything
+                            mut _iret_is_generic = _ifc_i >= 0 and _idef.generics.len > 0 and _iret != "void" and _iret != ""
+                            mut _gi = 0
+                            while _gi < _idef.generics.len:
+                                if _idef.generics.get(_gi) == _iret: _iret_is_generic = true
+                                _gi = _gi + 1
+                            if not _iret_is_generic and _iret != "void" and _iret != "" and _cret != _iret:
+                                self.error("[I-3] Class '" + c.name + "': method '" + _cmeth.name + "' returns '" + _cret + "' but interface '" + _ifc_nm + "' declares '-> " + _iret + "'.\n      FIX: Change return type to '-> " + _iret + "'.")
+                            # Non-self param count check
+                            mut _ip_cnt = 0
+                            mut _ip_i = 0
+                            while _ip_i < _imeth.params.len:
+                                if _imeth.params.get(_ip_i).name != "self": _ip_cnt = _ip_cnt + 1
+                                _ip_i = _ip_i + 1
+                            mut _cp_cnt = 0
+                            mut _cp_i = 0
+                            while _cp_i < _cmeth.params.len:
+                                if _cmeth.params.get(_cp_i).name != "self": _cp_cnt = _cp_cnt + 1
+                                _cp_i = _cp_i + 1
+                            if _ip_cnt != _cp_cnt:
+                                self.error("[I-3] Class '" + c.name + "': method '" + _cmeth.name + "' has " + str(_cp_cnt) + " parameter(s) but interface '" + _ifc_nm + "' requires " + str(_ip_cnt) + ".\n      FIX: Match the parameter list in '" + _ifc_nm + "' exactly.")
+                        _cm_i = _cm_i + 1
+                    if not _found:
+                        mut _sig = "pub def " + _imeth.name + "(self"
+                        mut _pi = 0
+                        while _pi < _imeth.params.len:
+                            mut _p = _imeth.params.get(_pi)
+                            if _p.name != "self":
+                                mut _pty = "int"
+                                if _p.ty as usize != 0 as usize: _pty = _p.ty.read().name
+                                _sig = _sig + ", " + _p.name + ": " + _pty
+                            _pi = _pi + 1
+                        mut _iret2 = "void"
+                        if _imeth.ret_ty as usize != 0 as usize: _iret2 = _imeth.ret_ty.read().name
+                        _sig = _sig + ") -> " + _iret2 + ":"
+                        self.error("[I-2] Class '" + c.name + "' implements '" + _ifc_nm + "' but is missing method '" + _imeth.name + "'.\n      FIX: Add to 'extend " + c.name + ":'  " + _sig)
+                    _im_i = _im_i + 1
+            _ifc_i = _ifc_i + 1
+
         mut hc = HirClass()
         hc.name = c.name
         hc.generics = c.generics
@@ -828,6 +891,14 @@ extend Sema:
                             if _imdef.ret_ty as usize != 0 as usize:
                                 ret_ty = _imdef.ret_ty.read()
                         _imi = _imi + 1
+                    # Substitute generic type params: T→concrete when interface has type args
+                    if _iface_def.generics.len > 0 and hobj_ty.args.len > 0:
+                        mut _gi5 = 0
+                        while _gi5 < _iface_def.generics.len:
+                            if _iface_def.generics.get(_gi5) == ret_ty.name:
+                                if _gi5 < hobj_ty.args.len:
+                                    ret_ty = hobj_ty.args.get(_gi5).read()
+                            _gi5 = _gi5 + 1
                 elif self.enums.contains(hobj_ty.name):
                     ret_ty = AstType.init(hobj_ty.name)
                 elif self.classes.contains(hobj_ty.name):

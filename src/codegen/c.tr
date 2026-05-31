@@ -371,7 +371,11 @@ pub class CGenerator:
         if n == "Option": return "Option"
         if n == "lambda": return "void*"
         if self.enums.contains(n): return n
-        if self.interfaces.contains(n): return n + "_obj"
+        if self.interfaces.contains(n):
+            mut gi_iface = self.interfaces.get(n)
+            if gi_iface.generics.len > 0 and ty.args.len > 0:
+                return n + "_" + self.type_args_suffix(ty.args) + "_obj"
+            return n + "_obj"
         return n + "*"
 
     pub def type_suffix(self, n: str) -> str:
@@ -549,6 +553,63 @@ pub class CGenerator:
             self.cur_class = old_class
             self.cur_func  = old_func
             mi = mi + 1
+
+        # Generate monomorphized interface vtable + wrapper for each implemented interface.
+        # type_subst is still active here so type_to_c substitutes T→concrete correctly.
+        if cls.iface_names as usize != 0 as usize and not _is_invalid_ptr(cls.iface_names as usize):
+            mut ifw_i = 0
+            while ifw_i < cls.iface_names.len:
+                mut iface_base = cls.iface_names.get(ifw_i)
+                if self.interfaces.contains(iface_base):
+                    mut m_iface = self.interfaces.get(iface_base)
+                    if not _is_invalid_ptr(m_iface as usize):
+                        mut mono_iface_name = iface_base
+                        if m_iface.generics.len > 0:
+                            mono_iface_name = iface_base + "_" + sfx
+                        # Emit vtable struct + obj typedef once per monomorphized interface name
+                        mut vtbl_done_key = "iface_obj_" + mono_iface_name
+                        if not self.emitted_fns.contains(vtbl_done_key):
+                            self.emitted_fns.insert(vtbl_done_key, true)
+                            self.w("typedef struct _" + mono_iface_name + "_vtable {\n")
+                            mut vmi = 0
+                            while vmi < m_iface.methods.len:
+                                mut vm2 = m_iface.methods.get(vmi)
+                                mut vret2 = self.type_to_c(vm2.ret_ty)
+                                self.w("    " + vret2 + " (*" + vm2.name + ")(void* self")
+                                mut vpi = 0
+                                while vpi < vm2.params.len:
+                                    mut vp2 = vm2.params.get(vpi)
+                                    if vp2.name != "self":
+                                        self.w(", " + self.type_to_c(vp2.ty) + " " + vp2.name)
+                                    vpi = vpi + 1
+                                self.w(");\n")
+                                vmi = vmi + 1
+                            self.w("} " + mono_iface_name + "_vtable;\n\n")
+                            self.w("typedef struct { " + mono_iface_name + "_vtable* vtable; void* data; } " + mono_iface_name + "_obj;\n\n")
+                        # Emit wrapper function once per class+interface pair
+                        mut wrap_done_key = "iface_wrap_" + mono_name + "_" + mono_iface_name
+                        if not self.emitted_fns.contains(wrap_done_key):
+                            self.emitted_fns.insert(wrap_done_key, true)
+                            self.w("static inline " + mono_iface_name + "_obj " + mono_name + "_as_" + mono_iface_name + "(" + mono_name + "* self) {\n")
+                            self.w("    static const " + mono_iface_name + "_vtable _vtbl_" + mono_name + "_" + mono_iface_name + " = {\n")
+                            mut wm_i = 0
+                            while wm_i < m_iface.methods.len:
+                                mut wm2 = m_iface.methods.get(wm_i)
+                                mut wret_c2 = self.type_to_c(wm2.ret_ty)
+                                mut wcast2 = wret_c2 + "(*)(void*"
+                                mut wp_i = 0
+                                while wp_i < wm2.params.len:
+                                    mut wp2 = wm2.params.get(wp_i)
+                                    if wp2.name != "self":
+                                        wcast2 = wcast2 + ", " + self.type_to_c(wp2.ty)
+                                    wp_i = wp_i + 1
+                                wcast2 = wcast2 + ")"
+                                self.w("        ." + wm2.name + " = (" + wcast2 + ")(" + mono_name + "_" + wm2.name + "),\n")
+                                wm_i = wm_i + 1
+                            self.w("    };\n")
+                            self.w("    return (" + mono_iface_name + "_obj){ .vtable = (" + mono_iface_name + "_vtable*)&_vtbl_" + mono_name + "_" + mono_iface_name + ", .data = (void*)self };\n")
+                            self.w("}\n\n")
+                ifw_i = ifw_i + 1
 
         # Save back the (possibly realloc-grown) mono buffer before restoring.
         # self.buf IS the mono buffer; without this, mono_buf.ptr becomes stale
@@ -768,6 +829,7 @@ pub class CGenerator:
         self.ws("\n")
 
     pub def gen_interface_vtable(self, iface: HirInterface):
+        if iface.generics.len > 0: return  # monomorphized versions generated in ensure_mono
         self.ws("typedef struct _" + iface.name + "_vtable {\n")
         mut i = 0
         while i < iface.methods.len:
@@ -1414,10 +1476,18 @@ pub class CGenerator:
                     mut pi = ai + self_skip
                     mut arg_s = self.gen_expr(args.get(ai))
                     if fn_def.params as usize != 0 as usize and pi < fn_def.params.len:
-                        mut expected_iface = fn_def.params.get(pi).ty.name
+                        mut _p_iface_ty = fn_def.params.get(pi).ty
+                        mut expected_iface = _p_iface_ty.name
                         if self.interfaces.contains(expected_iface):
-                            mut actual_ty_n = hir_expr_type(args.get(ai)).name
+                            mut _ep_iface = self.interfaces.get(expected_iface)
+                            if _ep_iface.generics.len > 0 and _p_iface_ty.args.len > 0:
+                                expected_iface = expected_iface + "_" + self.type_args_suffix(_p_iface_ty.args)
+                            mut actual_ty_e = hir_expr_type(args.get(ai))
+                            mut actual_ty_n = actual_ty_e.name
                             if self.classes.contains(actual_ty_n):
+                                mut _acls = self.classes.get(actual_ty_n)
+                                if _acls.generics.len > 0 and actual_ty_e.args.len > 0:
+                                    actual_ty_n = actual_ty_n + "_" + self.type_args_suffix(actual_ty_e.args)
                                 arg_s = actual_ty_n + "_as_" + expected_iface + "(" + arg_s + ")"
                     wrapped_args = wrapped_args + arg_s
                     ai = ai + 1
@@ -2152,9 +2222,17 @@ pub class CGenerator:
                         mut init_s = ""
                         # Auto-wrap class instance into interface object
                         if self.interfaces.contains(ty.name):
-                            mut val_ty_n = hir_expr_type(v).name
+                            mut _slet_iface = self.interfaces.get(ty.name)
+                            mut _slet_iface_name = ty.name
+                            if _slet_iface.generics.len > 0 and ty.args.len > 0:
+                                _slet_iface_name = ty.name + "_" + self.type_args_suffix(ty.args)
+                            mut _slet_val_ty = hir_expr_type(v)
+                            mut val_ty_n = _slet_val_ty.name
                             if self.classes.contains(val_ty_n):
-                                init_s = val_ty_n + "_as_" + ty.name + "(" + self.gen_expr(v) + ")"
+                                mut _slet_cls = self.classes.get(val_ty_n)
+                                if _slet_cls.generics.len > 0 and _slet_val_ty.args.len > 0:
+                                    val_ty_n = val_ty_n + "_" + self.type_args_suffix(_slet_val_ty.args)
+                                init_s = val_ty_n + "_as_" + _slet_iface_name + "(" + self.gen_expr(v) + ")"
                         if init_s == "":
                             match v.read():
                                 case HirExpr.EList(items, list_ty):
@@ -2790,7 +2868,9 @@ pub class CGenerator:
             i = i + 1
         i = 0
         while i < prog.interfaces.len:
-            self.w("typedef struct _" + prog.interfaces.get(i).name + "_vtable " + prog.interfaces.get(i).name + "_vtable;\n")
+            mut iface_fwd = prog.interfaces.get(i)
+            if iface_fwd.generics.len == 0:
+                self.w("typedef struct _" + iface_fwd.name + "_vtable " + iface_fwd.name + "_vtable;\n")
             i = i + 1
         # Emit forward declarations for value-type List_T structs used in fields
         self.emit_list_fwd_decls(prog)
@@ -3074,16 +3154,19 @@ pub class CGenerator:
         while i < prog.interfaces.len:
             mut iface2 = prog.interfaces.get(i)
             if not _is_invalid_ptr(iface2 as usize):
-                out.append("typedef struct _" + iface2.name + "_vtable " + iface2.name + "_vtable;\n")
-                # _obj typedef only needs a pointer to vtable (already fwd-declared above),
-                # so emit it here before any function prototypes reference it.
-                out.append("typedef struct { " + iface2.name + "_vtable* vtable; void* data; } " + iface2.name + "_obj;\n")
-                self.emitted_fns.insert("iface_obj_" + iface2.name, true)
+                if iface2.generics.len == 0:
+                    out.append("typedef struct _" + iface2.name + "_vtable " + iface2.name + "_vtable;\n")
+                    out.append("typedef struct { " + iface2.name + "_vtable* vtable; void* data; } " + iface2.name + "_obj;\n")
+                    self.emitted_fns.insert("iface_obj_" + iface2.name, true)
             i = i + 1
         self.emit_list_fwd_decls(prog)          # writes to self.buf
         out.append(self.buf.to_string().as_str())
         self.buf = StringBuilder.init(256)
         out.append("\n")
+
+        # ── Monomorphized generic types (must precede prototypes that use them) ─
+        mut mono_early = self.mono_buf.to_string().as_str()
+        if mono_early != "": out.append(mono_early + "\n")
 
         # ── Extern C declarations ─────────────────────────────────────────────
         if not _is_invalid_ptr(prog.extern_funcs as usize):
@@ -3134,10 +3217,6 @@ pub class CGenerator:
                             out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
             i = i + 1
         out.append("\n")
-
-        # ── Monomorphized generic types ───────────────────────────────────────
-        mut mono = self.mono_buf.to_string().as_str()
-        if mono != "": out.append(mono + "\n")
 
         # ── Struct / enum / interface definitions ─────────────────────────────
         i = 0

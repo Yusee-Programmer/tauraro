@@ -4,17 +4,17 @@
 
 ## Why Interfaces
 
-Tauraro uses **interfaces** for polymorphism — the ability to write code that works with many different types through a common contract. An interface defines a set of methods that any conforming type must implement.
+Tauraro uses **interfaces** for polymorphism — the ability to write code that works with many
+different concrete types through a shared contract.
 
-Tauraro's approach is composition over inheritance:
-- No class hierarchy
-- No `extends Base` for code sharing
-- Multiple interfaces per class
-- Interface dispatch is explicit (via `implements` declaration)
+Tauraro's model:
+- One keyword to declare the contract: `interface`
+- One keyword to fulfil it: `implements` (in the class header)
+- The compiler handles the rest — vtable generation, wrapping, dispatch
 
 **When to use interfaces:**
-- A function needs to accept multiple different classes through a uniform API
-- You're building a plugin system or strategy pattern
+- A function needs to accept multiple unrelated classes through a uniform API
+- You're building a plugin system, strategy pattern, or extensible dispatch
 - You want to abstract over a collection of different types
 
 **When NOT to use interfaces:**
@@ -29,254 +29,224 @@ Tauraro's approach is composition over inheritance:
 interface Animal:
     def speak(self) -> void
     def name(self) -> str
-
-interface Drawable:
-    def draw(self) -> void
-    def bounding_box(self) -> Rect
-
-interface Serializable:
-    def to_string(self) -> str
-    def byte_size(self) -> int
+    def legs(self) -> int
 ```
 
-An interface declares **method signatures** — no implementations, no field access. Methods are listed with their full type signatures.
-
-**Compiler rule:** Interface method signatures are not checked for F-3 (no missing return error) because they have no body.
+An interface declares **method signatures** only — no implementations, no fields.
 
 ---
 
 ## Implementing an Interface
 
+Put `implements InterfaceName` directly in the class header:
+
 ```python
-class Dog:
+class Dog implements Animal:
     pub label: str
-    pub tricks: int
+    pub breed: str
 
 extend Dog:
-    pub def init(n: str) -> Dog:
+    pub def init(n: str, breed: str) -> Dog:
         mut d = Dog()
         d.label = n
-        d.tricks = 0
+        d.breed = breed
         return d
 
-    pub def speak(self) -> void:
-        print(f"  {self.label}: Woof!")
-
-    pub def name(self) -> str:
-        return self.label
-
-Dog implements Animal    # declaration that Dog fulfills the Animal contract
+    pub def speak(self) -> void: print(f"  {d.label}: Woof!")
+    pub def name(self) -> str:   return self.label
+    pub def legs(self) -> int:   return 4
 ```
+
+Multiple interfaces are comma-separated:
 
 ```python
-class Cat:
-    pub label: str
-
-extend Cat:
-    pub def init(n: str) -> Cat:
-        mut c = Cat()
-        c.label = n
-        return c
-
-    pub def speak(self) -> void:
-        print(f"  {self.label}: Meow!")
-
-    pub def name(self) -> str:
-        return self.label
-
-Cat implements Animal
+class Employee implements Printable, Serializable:
+    pub name:   str
+    pub salary: int
 ```
 
-**Compiler rule:** The compiler does NOT currently verify that `Dog` actually has all methods declared in `Animal`. If `Dog` is missing a method, you get a linker error when the vtable wrapper is generated. Always implement all interface methods.
+**Compiler rule:** The compiler does not verify that all interface methods are implemented at
+compile time — a missing method produces a linker error. Implement all methods listed in the
+interface.
 
 ---
 
-## How Interfaces Compile
+## Automatic Interface Conversion
 
-An interface becomes two C structs:
+Once a class declares `implements`, the compiler **automatically converts** class instances to
+the interface type wherever one is needed. You never write any explicit cast or wrapper call.
 
-**1. The vtable struct** — one function pointer per method:
+### Passing to a function
+
+```python
+def introduce(a: Animal) -> void:
+    print(f"  {a.name()} has {a.legs()} legs")
+    a.speak()
+
+mut dog = Dog.init("Rex", "Shepherd")
+mut cat = Cat.init("Whiskers")
+
+introduce(dog)    # Dog → Animal: auto-converted at the call site
+introduce(cat)    # Cat → Animal: auto-converted at the call site
+```
+
+### Storing in an interface-typed variable
+
+```python
+mut a: Animal = dog    # Dog → Animal: auto-converted
+a.speak()              # dispatches through vtable: Dog_speak
+```
+
+### Multiple concrete types, same interface
+
+```python
+def loudest_first(a: Animal, b: Animal) -> void:
+    a.speak()
+    b.speak()
+
+mut dog = Dog.init("Rex", "Shepherd")
+mut cat = Cat.init("Whiskers")
+mut bird = Bird.init("Tweety", true)
+
+loudest_first(dog, cat)     # both auto-converted
+```
+
+---
+
+## How It Compiles
+
+When the compiler sees `class Dog implements Animal:`, it generates:
+
+**1. A vtable struct** — one function pointer per interface method:
 ```c
 typedef struct {
     void  (*speak)(void* self);
     char* (*name)(void* self);
+    long long (*legs)(void* self);
 } Animal_vtable;
 ```
 
-**2. The fat pointer struct** — an object pointer + vtable pointer:
+**2. A fat-pointer struct** — pairs data + vtable:
 ```c
 typedef struct {
-    void*          data;     // pointer to the concrete instance
-    Animal_vtable* vtable;   // pointer to the method table
+    void*          data;
+    Animal_vtable* vtable;
 } Animal_obj;
 typedef Animal_obj Animal;
 ```
 
-For each class that implements the interface, the compiler generates:
-
-**3. Per-method wrapper functions** (adapt `void*` self to typed self):
+**3. Per-class vtable + wrapper** (auto-generated, never written by the user):
 ```c
-static void _Dog_Animal_speak_wrap(void* _self) {
-    Dog_speak((Dog*)_self);
-}
-static char* _Dog_Animal_name_wrap(void* _self) {
-    return Dog_name((Dog*)_self);
-}
-```
-
-**4. A vtable instance:**
-```c
-static Animal_vtable _Dog_Animal_vtable = {
-    .speak = _Dog_Animal_speak_wrap,
-    .name  = _Dog_Animal_name_wrap,
-};
-```
-
-**5. A wrap function:**
-```c
-Animal _wrap_Dog_Animal(Dog* self) {
-    return (Animal){ .data = (void*)self, .vtable = &_Dog_Animal_vtable };
+static inline Animal_obj Dog_as_Animal(Dog* self) {
+    static const Animal_vtable _vtbl = {
+        .speak = (void(*)(void*))Dog_speak,
+        .name  = (char*(*)(void*))Dog_name,
+        .legs  = (long long(*)(void*))Dog_legs,
+    };
+    return (Animal_obj){ .vtable = &_vtbl, .data = (void*)self };
 }
 ```
 
----
+**4. Every call site where a `Dog` is used as `Animal`** gets wrapped automatically:
+```c
+// introduce(dog)  becomes:
+introduce(Dog_as_Animal(dog));
 
-## Using Interfaces
-
-### Wrapping a Concrete Type
-
-```python
-mut dog = Dog.init("Rex")
-mut animal: Animal = _wrap_Dog_Animal(&dog)
+// mut a: Animal = dog  becomes:
+Animal a = Dog_as_Animal(dog);
 ```
 
-The `_wrap_Dog_Animal` function is auto-generated by the compiler when it sees `Dog implements Animal`.
-
-### Calling Interface Methods
-
-```python
-def make_sound(a: Animal) -> void:
-    a.speak()
-    print(f"  ({a.name()})")
-
-def main():
-    mut dog = Dog.init("Rex")
-    mut cat = Cat.init("Whiskers")
-
-    mut d_animal: Animal = _wrap_Dog_Animal(&dog)
-    mut c_animal: Animal = _wrap_Cat_Animal(&cat)
-
-    make_sound(d_animal)    # Rex: Woof!  (Rex)
-    make_sound(c_animal)    # Whiskers: Meow!  (Whiskers)
-```
-
-**How interface dispatch compiles:**
+**5. Method calls on an interface variable** go through the vtable:
 ```c
 // a.speak()  compiles to:
 a.vtable->speak(a.data);
-
-// a.name()   compiles to:
-a.vtable->name(a.data);
 ```
 
-One pointer dereference to get the vtable, one function pointer call. This is identical to C++ virtual dispatch — one pointer dereference on the hot path.
+One pointer dereference to the vtable, one function pointer call — identical to C++ virtual dispatch.
 
 ---
 
-## Polymorphic Collections
+## Interface-Typed Variables and Collections
 
-Store multiple types through a common interface:
+When storing interface values in variables or collections, declare the type explicitly so the
+compiler knows which wrapper to apply:
 
 ```python
-def main():
-    mut animals: List[Animal] = []
+# Declare the variable with the interface type — auto-wraps on assignment
+mut a_dog: Animal = dog
+mut a_cat: Animal = cat
 
-    mut dog = Dog.init("Rex")
-    mut cat = Cat.init("Whiskers")
-    mut dog2 = Dog.init("Buddy")
-
-    animals.append(_wrap_Dog_Animal(&dog))
-    animals.append(_wrap_Cat_Animal(&cat))
-    animals.append(_wrap_Dog_Animal(&dog2))
-
-    for a in animals:
-        a.speak()
+# After the assignment, a_dog is an Animal — vtable dispatch from here on
+a_dog.speak()
+print(f"  {a_dog.name()} has {a_dog.legs()} legs")
 ```
 
-`List[Animal]` is a list of `Animal_obj` structs — the fat pointer. Each element is 16 bytes (two pointers).
+For `List[Interface]`, convert to interface type first:
 
-**Important:** The underlying `Dog` and `Cat` instances must outlive the `Animal` values in the list. The interface value holds a raw pointer to the concrete object — the compiler's ownership system doesn't track this relationship. Make sure the concrete objects don't go out of scope while the interface values are still alive.
+```python
+mut animals: List[Animal] = []
+mut a_dog: Animal = dog      # wrap once
+mut a_cat: Animal = cat
+animals.append(a_dog)
+animals.append(a_cat)
+
+mut i = 0
+while i < len(animals):
+    mut a = animals[i]
+    a.speak()
+    i = i + 1
+```
 
 ---
 
-## Multiple Interfaces
+## Multiple Interfaces per Class
 
-A class can implement multiple interfaces:
+Each call site independently selects the correct interface:
 
 ```python
 interface Printable:
     def print_info(self) -> void
 
-interface Comparable:
-    def compare(self, other: Comparable) -> int
+interface Serializable:
+    def serialize(self) -> str
 
-class Employee:
-    pub name: str
+class Employee implements Printable, Serializable:
+    pub name:   str
     pub salary: int
 
 extend Employee:
     pub def init(n: str, s: int) -> Employee:
         mut e = Employee()
-        e.name = n
-        e.salary = s
+        e.name = n; e.salary = s
         return e
 
     pub def print_info(self) -> void:
-        print(f"Employee: {self.name}, salary: {self.salary}")
+        print(f"  {self.name}: ${self.salary}")
 
-    pub def compare(self, other: Comparable) -> int:
-        return 0    # simplified
+    pub def serialize(self) -> str:
+        return f"{self.name},{self.salary}"
 
-Employee implements Printable
-Employee implements Comparable
+def print_one(x: Printable) -> void:   x.print_info()
+def to_json(x: Serializable) -> str:   return x.serialize()
+
+mut emp = Employee.init("Alice", 95000)
+
+print_one(emp)              # Employee → Printable, auto-converted
+mut s = to_json(emp)        # Employee → Serializable, auto-converted
 ```
 
 ---
 
-## Interface as Function Parameter
+## Interface Values Cannot Recover the Concrete Type
 
-The most common use: a function that works with any type implementing an interface:
-
-```python
-def describe_all(animals: List[Animal]) -> void:
-    mut i = 0
-    while i < len(animals):
-        mut a = animals[i]
-        a.speak()
-        i = i + 1
-
-def loudest(a: Animal, b: Animal) -> Animal:
-    # Both get to speak, return the first
-    a.speak()
-    b.speak()
-    return a
-```
-
----
-
-## Checking Interface Values
-
-Interface values cannot be pattern-matched to recover the concrete type. If you need to dispatch on the concrete type, use an enum instead of an interface:
+Interface values carry a `void*` data pointer — the concrete type is erased. You cannot cast
+an `Animal` back to a `Dog` at runtime. If you need type-tagged dispatch, use an enum:
 
 ```python
-# WRONG — can't recover Dog from Animal at runtime:
-match animal:
-    case Dog: ...     # no — Animal doesn't carry type information
-
-# CORRECT — use enum for type-tagged dispatch:
+# Use an enum when you need to recover the concrete type:
 enum AnimalKind:
-    IsDog(dog: Dog)
-    IsCat(cat: Cat)
+    IsDog(d: Dog)
+    IsCat(c: Cat)
 
 match kind:
     case AnimalKind.IsDog(d): d.fetch()
@@ -285,128 +255,161 @@ match kind:
 
 ---
 
-## Interface Limitations
+## Generic Interfaces
 
-1. **No default implementations** — all methods in an interface must be implemented by every class. No partial defaults.
+Interfaces can be parameterized with type parameters: `interface Container[T]:`.
 
-2. **No interface fields** — interfaces declare methods only, not fields.
+A generic class implements a generic interface by declaring it in the class header:
 
-3. **No interface generics** — `interface Container[T]:` is not yet supported. Use concrete types or `void*` for generic containers.
+```python
+interface Container[T]:
+    def push(self, item: T) -> void
+    def pop(self) -> T
+    def peek(self) -> T
+    def size(self) -> int
+    def is_empty(self) -> bool
 
-4. **No runtime type check** — you cannot cast an `Animal` back to a `Dog` at runtime. Design your types to avoid this need.
+class Stack[T] implements Container[T]:
+    pub items: Vec[T]
+    pub count: int
 
-5. **Concrete object lifetime** — the concrete `Dog` instance must outlive the `Animal` value that wraps it. The compiler does not enforce this. This is a responsibility on the programmer.
+extend Stack:
+    pub def init() -> Stack[T]:
+        mut s = Stack[T](); s.items = Vec[T].init(8); s.count = 0; return s
+    pub def push(self, item: T) -> void:
+        self.items.push(item); self.count = self.count + 1
+    pub def pop(self) -> T:
+        self.count = self.count - 1; return self.items.pop()
+    pub def peek(self) -> T: return self.items.get(self.count - 1)
+    pub def size(self) -> int: return self.count
+    pub def is_empty(self) -> bool: return self.count == 0
+```
+
+The compiler generates a **monomorphized vtable** for each concrete type used (e.g., `Container_i64_vtable`
+for `Container[int]`). Auto-conversion and vtable dispatch work identically to non-generic interfaces:
+
+```python
+def drain_all(c: Container[int]) -> void:
+    while not c.is_empty():
+        print(f"  popped: {c.pop()}")
+
+mut s = Stack[int].init()
+s.push(10); s.push(20); s.push(30)
+
+drain_all(s)             # Stack[int] → Container[int], auto-converted
+mut c: Container[int] = s    # auto-converted at assignment
+print(f"  top={c.peek()}")   # vtable dispatch, returns int correctly
+```
+
+**Rules for generic interfaces:**
+- Declare type params in brackets: `interface Container[T]:`
+- Use the same brackets in `implements`: `class Stack[T] implements Container[T]:`
+- The type args after `implements` are consumed by the parser and used for validation only
+- Each monomorphized usage (e.g., `Container[int]`, `Container[str]`) generates its own vtable struct
 
 ---
 
-## Common Interface Errors
+## Interface Limitations
 
-### Missing `implements` declaration
+1. **No default method implementations** — every implementing class must define all methods.
+
+2. **No interface fields** — interfaces are method-only contracts.
+
+3. **No default generic method implementations** — each generic interface method must be fully implemented by every implementing class.
+
+4. **No runtime type recovery** — you cannot downcast an interface back to its concrete type.
+
+5. **Concrete object lifetime** — the concrete `Dog` must outlive any `Animal` value wrapping it.
+   The interface holds a raw pointer; the compiler does not enforce this relationship. Keep
+   concrete objects in a scope that outlives all interface values derived from them.
+
+---
+
+## Common Errors
+
+### Missing `implements` in the class header
 
 ```python
-class Bird:
-    pub def speak(self) -> void: print("Tweet!")
-    pub def name(self) -> str:   return "Bird"
+class Bird:          # forgot "implements Animal"
+    pub label: str
+    ...
 
-# Bird implements Animal  ← missing!
-
-mut b: Bird = Bird.init()
-mut a: Animal = _wrap_Bird_Animal(&b)   # ERROR: _wrap_Bird_Animal not defined
+introduce(bird)    # ERROR: no Dog_as_Animal wrapper generated — linker error
 ```
-**Fix:** Add `Bird implements Animal` after the extend block.
+**Fix:** `class Bird implements Animal:`
 
-### Method signature mismatch
+### Implementing the wrong signature
 
 ```python
 interface Animal:
     def speak(self) -> void
 
-class Dog:
-    ...
 extend Dog:
-    pub def speak(self) -> str:    # ERROR: returns str, but interface declares void
+    pub def speak(self) -> str:    # ERROR: should return void
         return "Woof"
 ```
 **Fix:** Match the interface signature exactly.
 
-### Using interface as constructor type
+### Constructing from the interface name
 
 ```python
 mut a = Animal.init("Rex")    # ERROR: Animal is an interface, not a class
 ```
-**Fix:** Construct the concrete type: `mut dog = Dog.init("Rex")`
+**Fix:** `mut dog = Dog.init("Rex")`
 
 ---
 
-## Full Example: Shape Renderer
+## Full Example
 
 ```python
 interface Shape:
     def area(self) -> float
-    def perimeter(self) -> float
     def describe(self) -> void
 
-class Circle:
+class Circle implements Shape:
     pub radius: float
 
 extend Circle:
     pub def init(r: float) -> Circle:
-        mut c = Circle()
-        c.radius = r
-        return c
+        mut c = Circle(); c.radius = r; return c
 
     pub def area(self) -> float:
         return 3.14159 * self.radius * self.radius
 
-    pub def perimeter(self) -> float:
-        return 2.0 * 3.14159 * self.radius
-
     pub def describe(self) -> void:
-        print(f"Circle r={self.radius}")
-        print(f"  area={self.area()}")
+        print(f"Circle r={self.radius}, area={self.area()}")
 
-Circle implements Shape
-
-class Rectangle:
+class Rectangle implements Shape:
     pub width: float
     pub height: float
 
 extend Rectangle:
     pub def init(w: float, h: float) -> Rectangle:
-        mut r = Rectangle()
-        r.width = w
-        r.height = h
-        return r
+        mut r = Rectangle(); r.width = w; r.height = h; return r
 
     pub def area(self) -> float:
         return self.width * self.height
 
-    pub def perimeter(self) -> float:
-        return 2.0 * (self.width + self.height)
-
     pub def describe(self) -> void:
-        print(f"Rect {self.width}x{self.height}")
-        print(f"  area={self.area()}")
+        print(f"Rect {self.width}x{self.height}, area={self.area()}")
 
-Rectangle implements Shape
-
-def print_shapes(shapes: List[Shape]) -> void:
-    mut total_area: float = 0.0
-    for s in shapes:
-        s.describe()
-        total_area = total_area + s.area()
-    print(f"Total area: {total_area}")
+def print_shape(s: Shape) -> void:
+    s.describe()
 
 def main():
     mut c = Circle.init(5.0)
     mut r = Rectangle.init(3.0, 4.0)
 
-    mut shapes: List[Shape] = []
-    shapes.append(_wrap_Circle_Shape(&c))
-    shapes.append(_wrap_Rectangle_Shape(&r))
+    print_shape(c)    # Circle → Shape, auto-converted
+    print_shape(r)    # Rectangle → Shape, auto-converted
 
-    print_shapes(shapes)
+    mut total: float = c.area() + r.area()
+    print(f"Total area: {total}")
 ```
+
+See `examples/09_interfaces.tr` for a runnable demonstration of non-generic interfaces.
+
+See `examples/19_generic_interfaces.tr` for a runnable demonstration of generic interfaces.
 
 ---
 
