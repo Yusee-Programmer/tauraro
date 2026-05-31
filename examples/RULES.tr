@@ -1,0 +1,800 @@
+# RULES.tr — Tauraro Language Rules & Common Fixes
+# ════════════════════════════════════════════════════════════════════════════
+# Canonical reference: every rule shows the CORRECT pattern and marks the
+# WRONG version in a comment.  The entire file compiles and runs to === done ===
+# with no errors — every snippet is live, tested code.
+# ════════════════════════════════════════════════════════════════════════════
+
+# ─── top-level definitions used by later rules ───────────────────────────────
+
+class Animal:
+    pub name:  str
+    pub sound: str
+
+    pub def init(name: str, sound: str) -> Animal:
+        mut a = Animal()
+        a.name  = name
+        a.sound = sound
+        return a
+
+    pub def speak(self) -> void:
+        print(self.name + " says " + self.sound)
+
+    pub def tag(self) -> str:
+        return "[animal:" + self.name + "]"
+
+class Dog extends Animal:
+    pub breed: str
+
+    pub def init(name: str, breed: str) -> Dog:
+        mut d = Dog()
+        d.name  = name
+        d.sound = "Woof"
+        d.breed = breed
+        return d
+
+    pub def describe(self) -> void:
+        super(Animal).speak()
+        print("  breed: " + self.breed)
+
+enum Direction:
+    North
+    South
+    East
+    West
+
+extend Direction:
+    pub def label(self) -> str:
+        match self:
+            case Direction.North: return "N"
+            case Direction.South: return "S"
+            case Direction.East:  return "E"
+            case Direction.West:  return "W"
+            case _:               return "?"
+
+interface Printable:
+    def display(self) -> void
+
+class Point implements Printable:
+    pub x: int
+    pub y: int
+
+    pub def init(x: int, y: int) -> Point:
+        mut p = Point()
+        p.x = x
+        p.y = y
+        return p
+
+    pub def display(self) -> void:
+        print(f"Point({self.x}, {self.y})")
+
+    pub def distance_sq(self) -> int:
+        return self.x * self.x + self.y * self.y
+
+def safe_div(a: int, b: int) throws str -> int:
+    if b == 0:
+        raise("division by zero")
+    return a / b
+
+# ═════════════════════════════════════════════════════════════════════════════
+def main():
+# ═════════════════════════════════════════════════════════════════════════════
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 1 — VARIABLES & MUTABILITY
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 1: Variables & Mutability ===")
+
+    # RULE 1.1  'mut' is required to reassign a variable.
+    #
+    # WRONG:   name = "Alice"
+    #          name = "Bob"     # Error [M-6]: cannot assign to immutable binding
+    #
+    # CORRECT:
+    mut name: str = "Alice"
+    name = "Bob"
+    print(name)                 # Bob
+
+    # RULE 1.2  Bindings without 'mut' are immutable — they cannot be
+    #           reassigned but are perfectly valid as read-only values.
+    greeting: str = "Hello, Tauraro!"
+    print(greeting)
+
+    # RULE 1.3  'const' is for compile-time constants.
+    const MAX: int = 100
+    print("max=" + str(MAX))
+
+    # RULE 1.4  Type annotations are optional for variables — the compiler infers
+    #           the type from the initialiser.  Annotate when you want to be
+    #           explicit or when narrowing is required.
+    mut count = 0           # inferred int — fine for arithmetic and f-strings
+    count = count + 1
+    print("count=" + str(count))
+    mut count2: int = 0     # annotated — equally correct
+    count2 = count2 + 1
+    print("count2=" + str(count2))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 2 — TYPES & CASTING
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 2: Types & Casting ===")
+
+    # RULE 2.1  Numeric types and their C equivalents:
+    #   int   → long long (64-bit signed)   i32 → int32_t   i8 → int8_t
+    #   u64   → uint64_t   u32 → uint32_t   u8  → uint8_t
+    #   float → double (64-bit)             f32 → float
+    #   bool  → bool (true / false)         char → char (single byte)
+    mut big: int   = 1_000_000
+    mut sm: i32    = big as i32
+    mut fv: float  = big as float
+    print(str(big) + " " + str(sm as int) + " " + str(fv))
+
+    # RULE 2.2  Convert between types with 'as' (numeric) and str()/int()/float()
+    #           (string ↔ number).
+    #
+    # WRONG:   mut s: str = 42     # type mismatch — cannot assign int to str
+    # CORRECT:
+    mut n: int   = 42
+    mut s: str   = str(n)
+    mut back: int = int(s)
+    print(s + " -> " + str(back))
+
+    # RULE 2.3  Option[T] for nullable / optional values.
+    mut maybe: Option[int] = Option.Some(7)
+    match maybe:
+        case Option.Some(mv):
+            print("some: " + str(mv))
+        case Option.None:
+            pass
+    mut none_val: Option[int] = Option.None
+    match none_val:
+        case Option.None:
+            print("none")
+        case Option.Some(nv):
+            pass
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 3 — STRINGS & F-STRINGS
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 3: Strings & F-Strings ===")
+
+    # RULE 3.1  Concatenate strings with '+'.
+    mut hello: str = "Hello" + ", " + "World!"
+    print(hello)
+
+    # RULE 3.2  Variables in f"{...}" work with or without explicit type annotations.
+    #           The compiler uses _TR_AUTO_STR (_Generic dispatch) for untyped vars
+    #           so int, float, and bool are all converted correctly at compile time.
+    #
+    # Both of these work:
+    mut score = 95          # untyped — works in f-string via _TR_AUTO_STR
+    mut ratio = 0.85        # untyped float — also works
+    mut is_pass = true      # untyped bool — also works
+    print(f"score={score} ratio={ratio} pass={is_pass}")
+
+    # Explicit annotations are still fine and may be clearer in complex code:
+    mut score2: int   = 95
+    mut ratio2: float = 0.85
+    print(f"score2={score2} ratio2={ratio2}")
+
+    # RULE 3.3  Method return values can be embedded in f-strings directly
+    #           or stored first — both work.
+    mut pt: Point = Point.init(3, 4)
+    mut dsq: int = pt.distance_sq()
+    print(f"distance_sq={dsq}")
+
+    # RULE 3.4  Substring test and negation use 'in' / 'not in'.
+    msg: str = "Hello, Tauraro!"
+    if "Tauraro" in msg:
+        print("found substring")
+    if "Python" not in msg:
+        print("Python not present")
+
+    # RULE 3.5  Built-in string functions: str(x) to convert, int(s) / float(s)
+    #           to parse.  Use + not f-string when no formatting is needed.
+    mut pi_str: str = str(3.14)
+    print("pi=" + pi_str)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 4 — FUNCTIONS
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 4: Functions ===")
+
+    # RULE 4.1  Every parameter must have a type.  Return type follows '->'.
+    #           Use '-> void' (or omit) when there is no return value.
+    #
+    # WRONG:   def add(a, b): return a + b        # missing types
+    # WRONG:   def greet(name: str): print(name)  # missing return type (valid
+    #          but omitting -> void can confuse static analysis tools)
+    # CORRECT: shown in the top-level definitions above.
+
+    # RULE 4.2  Decorators @inline / @hot / @cold hint the compiler.
+    #           They are optional; use them for hot paths.
+
+    # RULE 4.3  Functions that may fail use 'throws ErrorType'.
+    #           The return type becomes Result[T, ErrorType].
+    #
+    #           Outside a throws function: inspect with .is_ok / .is_err.
+    #           Inside a throws function: use '?' to propagate.
+    mut r1: Result[int, str] = safe_div(10, 2)
+    if r1.is_ok:
+        mut v1: int = r1.ok as int
+        print("10/2=" + str(v1))
+
+    mut r2: Result[int, str] = safe_div(10, 0)
+    if r2.is_err:
+        print("error: " + r2.err)
+
+    # RULE 4.4  Generic functions use '[T]' after the function name.
+    #           Type is inferred at the call site.
+    #           (See 04_functions.tr for generic function examples.)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 5 — CLASSES & METHODS
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 5: Classes & Methods ===")
+
+    # RULE 5.1  Two equivalent styles for attaching methods:
+    #
+    #   INLINE (compact):               SEPARATE EXTEND (explicit):
+    #   ─────────────────────────────   ─────────────────────────────
+    #   class Dog:                      class Dog:
+    #       pub breed: str                  pub breed: str
+    #       pub def bark(self):         extend Dog:
+    #           print("Woof")               pub def bark(self):
+    #                                           print("Woof")
+    #
+    #   Both compile to identical C.  Use whichever fits your style.
+
+    # RULE 5.2  The constructor is a STATIC method named 'init' that
+    #           allocates a zero-initialised instance with 'ClassName()'
+    #           and returns it.
+    #
+    # WRONG:   def init(self, x: int):      # instance init — Dog.init() won't work
+    # CORRECT: def init(x: int) -> Dog:     # static, no self, returns Dog
+    mut dog: Dog = Dog.init("Rex", "Labrador")
+    dog.speak()
+
+    # RULE 5.3  Fields are PRIVATE by default.
+    #           Add 'pub' to allow access from outside the class.
+    #
+    # WRONG:   print(dog.breed)   # Error if breed is not marked 'pub'
+    # CORRECT:
+    print("breed: " + dog.breed)
+
+    # RULE 5.4  Instance methods receive 'self' (a pointer to the instance).
+    #           Static methods have no 'self' and are called as Class.method().
+    mut a: Animal = Animal.init("Cat", "Meow")
+    a.speak()                     # instance method
+    mut a2: Animal = Animal.init("Dog2", "Bark")
+    a2.speak()
+
+    # RULE 5.5  Fields and methods can coexist in a single class block.
+    #           'extend' only adds methods; it cannot add new fields.
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 6 — INHERITANCE (extends + super)
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 6: Inheritance ===")
+
+    # RULE 6.1  'class Child extends Parent:' embeds all parent fields inside
+    #           the child struct — no need to redeclare them.
+    #
+    # WRONG:   class Dog extends Animal:    # 'name' already in Animal
+    #              pub name: str            # redeclaring causes duplication
+    # CORRECT: just add the NEW fields.
+
+    # RULE 6.2  Inherited methods are dispatched automatically.
+    #           If Dog does not define speak(), the compiler routes the call to
+    #           Animal_speak — no extra code needed.
+    dog.speak()      # uses Animal.speak because Dog doesn't override it
+
+    # RULE 6.3  Override a method by defining it in the child class.
+    #           The child's version wins; the parent's is still reachable via super.
+    dog.describe()   # Dog.describe overrides, calls super(Animal).speak() inside
+
+    # RULE 6.4  'super(ParentClass).method()' calls the parent implementation.
+    #           Do NOT pass 'self' explicitly — the compiler inserts it.
+    #
+    # WRONG:   super(Animal).speak(self)   # generates Animal_speak((Animal*)self, self)
+    # CORRECT: super(Animal).speak()       # generates Animal_speak((Animal*)self)
+
+    # RULE 6.5  'super' is a reserved keyword (Token.KwSuper).
+    #           It only works inside a method body as a call prefix.
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 7 — ENUMS & MATCH
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 7: Enums & Match ===")
+
+    # RULE 7.1  Always annotate enum variables with an explicit type so the
+    #           compiler can generate the correct method dispatch prefix.
+    #
+    # WRONG:   mut d = Direction.North
+    #          print(d.label())    # generates bare label(d) → undeclared in C
+    # CORRECT:
+    mut dir: Direction = Direction.North
+    print("dir=" + dir.label())
+
+    # RULE 7.2  Use 'match' for exhaustive enum branching.
+    #           Always include 'case _:' for the remaining variants.
+    match dir:
+        case Direction.North: print("going north")
+        case Direction.South: print("going south")
+        case _:               print("going east/west")
+
+    # RULE 7.3  'match' also works on integers and strings.
+    mut code: int = 200
+    match code:
+        case 200: print("OK")
+        case 404: print("Not Found")
+        case _:   print("other: " + str(code))
+
+    # RULE 7.4  Data-carrying enum variants destructure in the case pattern.
+    #
+    #   enum Shape:
+    #       Circle(radius: float)
+    #       Rect(w: float, h: float)
+    #
+    #   case Shape.Circle(r): print(str(r))
+    #   case Shape.Rect(w, h): print(str(w * h))
+    #
+    # (See 08_enums.tr for full data-variant examples.)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 8 — INTERFACES
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 8: Interfaces ===")
+
+    # RULE 8.1  Declare the interface at the top level; list it in the
+    #           class header with 'implements'.
+    #
+    # WRONG:   extend Dog implements Printable:   # wrong syntax
+    # CORRECT: class Dog implements Printable:    # in the class header
+
+    # RULE 8.2  The class must implement every method declared in the interface.
+    #           Missing a method → a compile error in the vtable wiring.
+
+    # RULE 8.3  Functions that accept an interface type get true polymorphism:
+    #           any class implementing the interface can be passed.
+    mut p2: Point = Point.init(1, 2)
+    p2.display()   # calls through Printable vtable
+
+    # RULE 8.4  A class may implement multiple interfaces:
+    #           class Foo implements A, B, C:
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 9 — COLLECTIONS (List & Dict)
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 9: Collections ===")
+
+    # RULE 9.1  Always give the type parameter when declaring a list.
+    #
+    # WRONG:   mut items = [1, 2, 3]         # bootstrap may pick wrong elem type
+    # CORRECT:
+    mut items: List[int] = [1, 2, 3, 4, 5]
+
+    # RULE 9.2  Use .get(index) to read elements.  .len for the count.
+    mut third: int = items.get(2)
+    mut length: int = items.len
+    print(f"third={third} len={length}")
+
+    # RULE 9.3  Append with .append(value), remove last with .pop().
+    items.append(6)
+    mut popped: int = items.pop()
+    print("popped=" + str(popped))
+
+    # RULE 9.4  'in' and 'not in' test membership directly.
+    if 3 in items:
+        print("3 is in the list")
+    if 99 not in items:
+        print("99 is not in the list")
+
+    # RULE 9.5  List comprehensions build a new list.
+    mut squares: List[int] = [x * x for x in items]
+    mut sq0: int = squares.get(0)
+    print("first square=" + str(sq0))
+
+    # RULE 9.6  For-loop iteration: the loop variable is __auto_type (C).
+    #           For simple reads (print, comparisons) it works as-is.
+    #           For f-string embedding or typed arithmetic, store it first.
+    #
+    # WORKS fine (char* is a pointer — %s format is correct):
+    mut words: List[str] = ["alpha", "beta", "gamma"]
+    for w in words:
+        print(w)
+
+    # WRONG (int is not a pointer — %s cast crashes):
+    #   for elem in items:
+    #       print(f"elem={elem}")
+    #
+    # CORRECT: use an index-while loop with a typed variable:
+    mut wi: int = 0
+    while wi < items.len:
+        mut elem: int = items.get(wi)
+        print(f"items[{wi}]={elem}")
+        wi = wi + 1
+
+    # RULE 9.7  Dict keys are always strings.  Values are void* internally;
+    #           cast the result of .get() to the expected type.
+    mut info: Dict = {"lang": "Tauraro", "version": "1.0"}
+    if info.contains("lang"):
+        mut lang: str = info.get("lang") as str
+        print("lang=" + lang)
+    info.set("author", "you")
+    mut author: str = info.get("author") as str
+    print("author=" + author)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 10 — CONTROL FLOW
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 10: Control Flow ===")
+
+    # RULE 10.1  if / elif / else.  One-liner form for single statements.
+    mut v: int = 42
+    if v < 0:
+        print("negative")
+    elif v == 0:
+        print("zero")
+    else:
+        print("positive")
+
+    # RULE 10.2  for + range(n), range(start, stop), range(start, stop, step).
+    mut total: int = 0
+    for i in range(5):
+        total = total + i
+    print("sum 0..4=" + str(total))
+
+    # RULE 10.3  Countdown: range(n, 0, -1) counts down n-1 .. 1.
+    #            If the step is negative, use a while loop to be safe.
+    mut cd: int = 3
+    while cd > 0:
+        print("t-" + str(cd))
+        cd = cd - 1
+
+    # RULE 10.4  while true + break for open-ended loops.
+    mut found: bool = false
+    mut fi: int = 0
+    while true:
+        if fi >= items.len: break
+        mut val_fi: int = items.get(fi)
+        if val_fi == 3:
+            found = true
+            break
+        fi = fi + 1
+    print("found 3: " + str(found))
+
+    # RULE 10.5  'continue' skips to the next iteration.
+    mut evens: List[int] = []
+    for ei in range(10):
+        if ei % 2 != 0: continue
+        evens.append(ei as int)
+    mut ev0: int = evens.get(0)
+    mut ev2: int = evens.get(2)
+    print(f"evens[0]={ev0} evens[2]={ev2}")
+
+    # RULE 10.6  Nested break: use a flag variable — there is no labelled break.
+    mut outer_done: bool = false
+    mut oi: int = 0
+    while oi < 3 and not outer_done:
+        mut ij: int = 0
+        while ij < 3:
+            if oi == 1 and ij == 1:
+                outer_done = true
+                break
+            ij = ij + 1
+        oi = oi + 1
+    print("stopped at oi=" + str(oi - 1))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 11 — OPERATORS
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 11: Operators ===")
+
+    # RULE 11.1  Integer division '/' truncates toward zero.
+    #            Cast to float before '/' for real division.
+    print(str(7 / 2))              # 3
+    print(str(7 as float / 2))     # 3.5
+
+    # RULE 11.2  '//' is explicit integer floor-division (same for positives).
+    print(str(7 // 2))             # 3
+
+    # RULE 11.3  '**' is exponentiation (returns int).
+    print(str(2 ** 10))            # 1024
+
+    # RULE 11.4  Bitwise operators &  |  ^  ~  <<  >>
+    #            WARNING: '&' has LOWER precedence than '=='.
+    #
+    # WRONG:   if flags & MASK == 0:   # parsed as flags & (MASK == 0) — always 0
+    # CORRECT: parenthesise the bitwise operation:
+    mut flags: int = 0b1010
+    mut msk: int   = 0b1100
+    if (flags & msk) != 0:
+        print("bits overlap")
+
+    # RULE 11.5  String equality uses '==' (content); 'is' tests pointer identity.
+    #
+    # WRONG:   if s is "hello":   # pointer comparison — almost always false
+    # CORRECT:
+    mut sa: str = "hello"
+    mut sb: str = "hello"
+    if sa == sb: print("strings equal")
+    if sa != "world": print("not world")
+
+    # RULE 11.6  Augmented assignment: +=  -=  *=  /=  %=  &=  |=  ^=  <<=  >>=
+    mut acc: int = 10
+    acc += 5
+    acc -= 2
+    acc *= 3
+    print("acc=" + str(acc))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 12 — ERROR HANDLING
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 12: Error Handling ===")
+
+    # RULE 12.1  A function that may fail declares 'throws ErrorType'.
+    #            Its return type becomes Result[ReturnType, ErrorType].
+
+    # RULE 12.2  Callers outside a throws context inspect the Result:
+    #            .is_ok / .is_err, .ok (cast to the value type), .err (error).
+    mut ok_res: Result[int, str] = safe_div(20, 4)
+    if ok_res.is_ok:
+        mut qv: int = ok_res.ok as int
+        print("20/4=" + str(qv))
+
+    mut bad_res: Result[int, str] = safe_div(1, 0)
+    if bad_res.is_err:
+        print("caught: " + bad_res.err)
+
+    # RULE 12.3  Inside a throws function, '?' propagates the error upward.
+    #
+    #   def double_div(a: int, b: int) throws str -> int:
+    #       mut q: int = safe_div(a, b)?   # returns Err immediately if b == 0
+    #       return q * 2
+
+    # RULE 12.4  'raise(msg)' throws an error from inside a throws function.
+    #            'msg' can be any value matching the declared error type.
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 13 — GENERICS
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 13: Generics ===")
+
+    # RULE 13.1  Generic classes use '[T]' in the class header.
+    #            Instantiations like List[int] are monomorphized to typed C structs.
+    mut ints: List[int]   = [10, 20, 30]
+    mut strs: List[str]   = ["x", "y", "z"]
+    mut il: int = ints.len
+    mut sl: int = strs.len
+    print(f"ints.len={il} strs.len={sl}")
+
+    # RULE 13.2  Built-in generic containers and their C equivalents:
+    #   List[int]   → List_i64*    List[str]  → List_str*
+    #   List[float] → List_f64*    List[bool] → List_bool*
+    #   List[T]     → List_ptr*    (T = any class / enum)
+    #   Dict        → TrMap*
+
+    # RULE 13.3  Generic functions work the same way:
+    #
+    #   def first[T](items: List[T]) -> T:
+    #       return items.get(0)
+    #
+    # (See 04_functions.tr for working generic function examples.)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 14 — MEMORY & OWNERSHIP
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 14: Memory & Ownership ===")
+
+    # RULE 14.1  The compiler handles all allocation and freeing.
+    #            'ClassName()' allocates a zero-initialised heap instance.
+    #            You do not call free() manually in safe code.
+
+    # RULE 14.2  Variables are OWNED by default.  Passing a class value to a
+    #            function transfers ownership unless the parameter is a borrow.
+
+    # RULE 14.3  'unsafe:' blocks allow raw pointer manipulation.
+    #
+    #   unsafe:
+    #       mut raw: Pointer[int] = &value
+    #       raw.offset(1).write(99)
+    #
+    # (See 13_unsafe_and_pointers.tr for full pointer examples.)
+
+    # RULE 14.4  'shared' variables can be captured across async tasks.
+    #            Declare with 'mut shared name: Type'.
+    #            (See 15_concurrency.tr for task / shared examples.)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 15 — MISCELLANEOUS GOTCHAS
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 15: Gotchas ===")
+
+    # RULE 15.1  'for x in list:' loop variable is __auto_type in C.
+    #            It works for simple reads but breaks in f-strings for
+    #            non-pointer element types (int, float, bool).
+    #            Fix: use an index-while loop with an explicitly typed variable.
+    #            (Shown in RULE 9.6 above.)
+
+    # RULE 15.2  Enum methods require a typed variable (not 'mut c = Color.X').
+    #
+    # WRONG:   mut d = Direction.North
+    #          d.label()              # generates bare label(d) — C undeclared
+    # CORRECT: mut d: Direction = Direction.North
+    mut final_dir: Direction = Direction.West
+    print("final dir=" + final_dir.label())
+
+    # RULE 15.3  super() does NOT take 'self' as an argument.
+    #            It automatically receives '(ParentClass*)self' in C.
+    #
+    # WRONG:   super(Animal).speak(self)   # double self — compile error
+    # CORRECT: super(Animal).speak()
+
+    # RULE 15.4  Dict.get() returns void*; always cast the result.
+    #
+    # WRONG:   mut v = my_dict.get("key")         # v is void*; str ops fail
+    # CORRECT: mut v: str = my_dict.get("key") as str
+
+    # RULE 15.5  'in' / 'not in' on List uses List_T_contains; on str uses
+    #            _tr_contains (substring); on Dict uses _tr_dict_contains.
+    #            All three operate as expected from the Tauraro side.
+    mut test_list: List[str] = ["a", "b", "c"]
+    if "b" in test_list:    print("b in list")
+    if "z" not in test_list: print("z not in list")
+
+    # RULE 15.6  Bitwise '&' has lower precedence than '=='.
+    #            Always wrap bitwise sub-expressions in parentheses.
+    #            (Shown in RULE 11.4 above.)
+
+    # RULE 15.7  String comparison with '==' tests content (strcmp), not
+    #            pointer identity.  'is' tests pointer identity — rarely useful.
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 16 — COMPILER SAFETY RULES (automatic — no user annotations needed)
+    # ═════════════════════════════════════════════════════════════════════════
+    # These rules are enforced by the compiler.  You write zero safety
+    # annotations — the compiler carries all the complexity burden.
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 16: Compiler Safety Rules ===")
+
+    # ── Category M: Memory Safety ─────────────────────────────────────────────
+
+    # RULE M-1  Automatic ownership inference.
+    #           The compiler assigns Own / Borrow / Move / Shared to every variable.
+    #           No annotation is ever required.
+
+    # RULE M-2  No use-after-move.
+    #           Once a value is moved into a function it cannot be used again.
+    #
+    # WRONG:   send(data)
+    #          print(data.len)   # ERROR [M-2]: 'data' was moved into 'send'
+    # CORRECT:
+    mut nums: List[int] = [10, 20, 30]
+    mut nums_len: int = nums.len       # read before any move
+    print("nums len=" + str(nums_len))
+
+    # RULE M-3  No double-free.
+    #           Exactly one free is emitted per owned variable at scope exit.
+
+    # RULE M-4  No dangling pointer.
+    #           A borrowed reference cannot outlive its source.  Returning a
+    #           pointer to a local variable is a compile error.
+
+    # RULE M-5  No aliased mutation.
+    #           While a borrow to x is active, x cannot be reassigned.
+
+    # RULE M-6  Bounds checking — runtime check on every list index.
+    #           Out-of-bounds access: clear error message with index and length.
+    #
+    # WRONG:   items[99]    # RUNTIME ERROR: index 99 out of bounds (len=5)
+    # CORRECT: always check len first, or use .get() which also checks.
+    mut safe_items: List[int] = [1, 2, 3]
+    if 1 < safe_items.len:
+        mut si: int = safe_items.get(1)
+        print("item[1]=" + str(si))
+
+    # RULE M-7  Option safety — 'none' is only valid for Option[T].
+    #
+    # WRONG:   mut count: int = none   # ERROR: cannot assign none to int
+    # CORRECT:
+    mut maybe_n: Option[int] = Option.None    # OK — Optional
+    match maybe_n:
+        case Option.None:    print("no value")
+        case Option.Some(v): print("value=" + str(v))
+
+    # RULE M-9  No uninitialized variables.
+    #           Every variable must be assigned on every path before use.
+    #
+    # WRONG:   mut x: int
+    #          if flag: x = 1
+    #          print(x)   # ERROR: x may be uninitialized
+    # CORRECT: give a default value upfront.
+    mut init_val: int = 0      # always initialized
+
+    # ── Category C: Concurrency Safety ───────────────────────────────────────
+
+    # RULE C-1  spawn captures are moved — the caller loses access after spawn.
+    #
+    # WRONG:   spawn process(data); print(data.len)   # ERROR: data was moved
+    # CORRECT: use 'mut shared name = ...' for shared access across tasks.
+
+    # RULE C-3  task_group: joins all spawned threads before exiting.
+    #           Variables freed at scope exit cannot be accessed by workers.
+
+    # RULE C-4  'await' is only valid inside 'async def' functions.
+    #
+    # WRONG:   def fetch() -> str: result = await http_get()   # ERROR outside async
+    # CORRECT: async def fetch() -> str: result = await http_get()
+
+    # ── Category T: Type Safety ───────────────────────────────────────────────
+
+    # RULE T-1  No implicit numeric coercion — use 'as' to cast explicitly.
+    #
+    # WRONG:   mut r: float = get_int()     # ERROR: cannot coerce int to float
+    # CORRECT:
+    mut raw: int   = 7
+    mut as_f: float = raw as float
+    print("as float=" + str(as_f))
+
+    # RULE T-3  Exhaustive match — all enum variants must be covered.
+    #           Use 'case _:' as a catch-all for the remaining variants.
+    #
+    # WRONG:   match dir: case Direction.North: ...   # ERROR: missing South, East, West
+    # CORRECT: (shown in RULE 7 above — always include 'case _:')
+
+    # RULE T-4  Result from a throws function must be handled.
+    #           Silently discarding errors is not allowed.
+    #
+    # WRONG:   safe_div(1, 0)                  # ERROR: Result discarded
+    # CORRECT:
+    mut handled: Result[int, str] = safe_div(5, 2)
+    if handled.is_ok:
+        mut hv: int = handled.ok as int
+        print("handled ok=" + str(hv))
+
+    # RULE T-5  Integer cannot be used as a boolean condition directly.
+    #
+    # WRONG:   if count:       # ERROR: 'count' is int — be explicit
+    # CORRECT:
+    mut cnt: int = 3
+    if cnt != 0:
+        print("count is non-zero")
+    if cnt > 0:
+        print("count is positive")
+
+    # ── Category F: Control Flow Safety ──────────────────────────────────────
+
+    # RULE F-1  match arms never fall through.
+    #           Each arm is fully independent — no accidental C-switch fallthrough.
+
+    # RULE F-3  Definite return — every non-void function must return a value
+    #           on ALL control flow paths.
+    #
+    # WRONG:   def sign(x: int) -> str:
+    #              if x > 0: return "pos"   # ERROR: missing return for x <= 0
+    # CORRECT: cover every branch or add a default return after all ifs.
+
+    # ── Category N: Reserved Names ────────────────────────────────────────────
+
+    # RULE N-1  Built-in names cannot be redefined.
+    #
+    # WRONG:   mut true = "yes"    # ERROR: 'true' is a built-in constant
+    # WRONG:   mut none = 0        # ERROR: 'none' is a built-in constant
+    # WRONG:   def print(s: str):  # WARNING: shadows the built-in print()
+    # CORRECT: use distinct names that do not clash with builtins.
+    mut is_valid: bool = true       # OK — not shadowing a builtin
+    print("is_valid=" + str(is_valid))
+
+    # ── Category U: unsafe: Quarantine ───────────────────────────────────────
+
+    # RULE U-1  Raw pointer operations are only permitted inside 'unsafe:' blocks:
+    #           ptr.read(), ptr.write(), &x, ptr.offset(n), alloc[T](n), asm(...)
+    #
+    # WRONG:   p.write(42)          # ERROR: pointer write requires unsafe:
+    # CORRECT: unsafe: p.write(42)
+
+    # RULE U-2  Ownership rules still apply inside unsafe: — you cannot use a
+    #           moved variable or double-free even in an unsafe: block.
+
+    print("=== done ===")

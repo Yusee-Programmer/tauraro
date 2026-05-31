@@ -1330,6 +1330,36 @@ static char*     _tr_int_to_str(long long n)   { char* b=(char*)malloc(32); snpr
 static char*     _tr_float_to_str(double n)    { char* b=(char*)malloc(32); snprintf(b,32,"%g",n);   return b; }
 static char*     _tr_float_to_c_lit(double n)  { char* b=(char*)malloc(32); snprintf(b,32,"%.17g",n); return b; }
 static char*     _tr_bool_to_str(bool b)       { return b ? "true" : "false"; }
+
+/* _TR_AUTO_STR — convert any scalar to char* for f-string / print with unknown type.
+ * Uses _Generic so __auto_type variables work without an explicit type annotation.
+ * Each branch is a distinct typed helper to avoid cross-type implicit-cast errors. */
+static inline char* _tr__ll_s(long long x)          { return _tr_int_to_str(x); }
+static inline char* _tr__ull_s(unsigned long long x) { return _tr_int_to_str((long long)x); }
+static inline char* _tr__i32_s(int x)               { return _tr_int_to_str((long long)x); }
+static inline char* _tr__u32_s(unsigned int x)       { return _tr_int_to_str((long long)x); }
+static inline char* _tr__i16_s(short x)              { return _tr_int_to_str((long long)x); }
+static inline char* _tr__u16_s(unsigned short x)     { return _tr_int_to_str((long long)x); }
+static inline char* _tr__i8_s(signed char x)         { return _tr_int_to_str((long long)x); }
+static inline char* _tr__u8_s(unsigned char x)       { return _tr_int_to_str((long long)x); }
+static inline char* _tr__dbl_s(double x)             { return _tr_float_to_str(x); }
+static inline char* _tr__flt_s(float x)              { return _tr_float_to_str((double)x); }
+static inline char* _tr__bool_s(bool x)              { return x ? "true" : "false"; }
+static inline char* _tr__ptr_s(void* x)              { return (char*)x; }
+#define _TR_AUTO_STR(x) _Generic((x), \
+    long long:          _tr__ll_s,  \
+    unsigned long long: _tr__ull_s, \
+    int:                _tr__i32_s, \
+    unsigned int:       _tr__u32_s, \
+    short:              _tr__i16_s, \
+    unsigned short:     _tr__u16_s, \
+    signed char:        _tr__i8_s,  \
+    unsigned char:      _tr__u8_s,  \
+    double:             _tr__dbl_s, \
+    float:              _tr__flt_s, \
+    bool:               _tr__bool_s,\
+    default:            _tr__ptr_s  \
+)(x)
 static long long _tr_str_to_int(const char* s) { return s ? strtoll(s,NULL,10) : 0LL; }
 static double    _tr_str_to_float(const char* s){ return s ? strtod(s,NULL) : 0.0; }
 static long long _tr_strlen(char* s)     { return s ? (long long)strlen(s) : 0LL; }
