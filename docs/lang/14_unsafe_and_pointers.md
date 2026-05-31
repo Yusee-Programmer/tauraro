@@ -136,21 +136,7 @@ unsafe:
     dealloc(buf)    # free the memory
 ```
 
-**How `alloc[T](n)` compiles:**
-```c
-long long* buf = (long long*)_tr_checked_alloc((size_t)(8) * sizeof(long long));
-```
-
-`_tr_checked_alloc` is:
-```c
-static inline void* _tr_checked_alloc(size_t sz) {
-    void* p = calloc(1, sz);
-    if (!p) abort();        // fails-fast on OOM — no null check needed
-    return p;
-}
-```
-
-**Ownership contract:** `alloc` gives you a pointer that **you** must `dealloc`. The compiler will not inject `free()` for it. Forget to call `dealloc` → memory leak. Call `dealloc` twice → heap corruption.
+**Ownership contract:** `alloc` gives you a pointer that **you** must `dealloc`. The compiler will not inject `free()` for it. Forget to call `dealloc` → memory leak. Call `dealloc` twice → heap corruption. Allocation failures abort immediately — you never need to check for null.
 
 **Best practice:** Wrap every `alloc`/`dealloc` pair inside a class with `init` and `drop` methods. Then the class instance gets normal `Own` tracking:
 
@@ -214,7 +200,7 @@ unsafe:
     mut rp: Pointer[int] = addr as Pointer[int]
 ```
 
-**C equivalent:** These casts compile to C-style casts: `(void*)p`, `(long long*)vp`, `(unsigned long long)p`, `(long long*)addr`.
+These casts are zero-cost reinterpretations of the pointer value.
 
 ---
 
@@ -244,7 +230,7 @@ mut p: Pointer[int] = none
 `sizeof(T)` returns the size of a type in bytes:
 
 ```python
-mut int_size    = sizeof(int)     # 8  (long long on 64-bit)
+mut int_size    = sizeof(int)     # 8  (64-bit int)
 mut float_size  = sizeof(float)   # 8  (double)
 mut bool_size   = sizeof(bool)    # 1
 mut char_size   = sizeof(char)    # 1
@@ -285,24 +271,12 @@ unsafe:
     asm("mfence")       # memory fence
 ```
 
-Compiles to:
-```c
-__asm__ volatile("nop");
-__asm__ volatile("pause");
-__asm__ volatile("mfence");
-```
-
 ### Extended Form (with operands)
 
 ```python
 unsafe:
     mut cycles: int = 0
     asm("rdtsc", "=A"(cycles), "", "")    # read time-stamp counter
-```
-
-Compiles to:
-```c
-__asm__ volatile("rdtsc" : "=A"(cycles) : : "");
 ```
 
 Four-argument form: `asm(code, outputs, inputs, clobbers)`:
@@ -318,7 +292,7 @@ unsafe:
     asm("", "", "", "memory")    # compiler memory barrier
 ```
 
-Prevents the C compiler from reordering memory operations across this point.
+Prevents the compiler from reordering memory operations across this point.
 
 ### x86 Examples
 
@@ -386,7 +360,7 @@ For production code, rely on architecture (keep allocations in known ranges) and
        buf.offset(i).read()
    ```
 
-4. **Prefer the standard safe wrappers.** `alloc[T](n)` + `dealloc` is safer than direct `malloc` + `free` because `_tr_checked_alloc` never returns null.
+4. **Prefer the standard safe wrappers.** `alloc[T](n)` + `dealloc` is safer than manual allocation because `alloc` aborts on out-of-memory rather than returning null.
 
 5. **Don't use pointer arithmetic to iterate lists.** Use `List[T]` with index access — it's the same performance and stays tracked.
 

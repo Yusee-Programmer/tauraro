@@ -51,10 +51,7 @@ mut n2 = identity(42)       # inferred as identity[int]
 mut s2 = identity("world")  # inferred as identity[str]
 ```
 
-**How monomorphization works:**
-- `identity[int]` → generates `long long identity_int(long long x) { return x; }`
-- `identity[str]` → generates `char* identity_str(char* x) { return x; }`
-- Only types actually used in calls are compiled — no code bloat for unused types
+**How monomorphization works:** The compiler generates a separate concrete function for each type argument used at a call site. Only types actually used in calls are compiled — no code bloat for unused types.
 
 ---
 
@@ -88,15 +85,7 @@ print(int_box.get())     # 42
 print(str_box.get())     # hello
 ```
 
-**How generic classes compile:** The compiler generates a separate C struct for each concrete type combination:
-
-```c
-typedef struct { long long value; } Box_int;
-typedef struct { char* value;     } Box_str;
-typedef struct { double value;    } Box_float;
-```
-
-Each is an independent C struct with no relationship at runtime.
+**How generic classes compile:** The compiler generates a separate struct for each concrete type combination — `Box[int]`, `Box[str]`, `Box[float]` are fully independent types at runtime, each with the correct field size.
 
 ---
 
@@ -144,24 +133,12 @@ def main():
 
 ## Type Substitution During Monomorphization
 
-When the compiler monomorphizes a generic function or class, it performs a textual substitution of the type parameter:
+When the compiler monomorphizes a generic function, it substitutes the type parameter throughout the body. The `+` operator uses the correct operation for each type — integer addition for `int`, string concatenation for `str`:
 
 ```python
 def double[T](x: T) -> T:
     return x + x    # works for int, float, str (str + str = concatenation)
 ```
-
-For `double[int]`:
-```c
-long long double_int(long long x) { return x + x; }
-```
-
-For `double[str]`:
-```c
-char* double_str(char* x) { return _tr_str_concat(x, x); }
-```
-
-The `+` operator uses the correct C operator for each type — integer addition for int, `_tr_str_concat` for str.
 
 ---
 

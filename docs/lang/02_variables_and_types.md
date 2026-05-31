@@ -104,19 +104,19 @@ mut c = a as float + b  # OK
 
 ### Integer Types
 
-| Tauraro | C equivalent | Bits | Signed range |
-|---------|-------------|------|-------------|
-| `int` | `long long` | 64 | −9.2×10¹⁸ to 9.2×10¹⁸ |
-| `i64` | `long long` | 64 | same as `int` |
-| `i32` | `int` | 32 | −2.1×10⁹ to 2.1×10⁹ |
-| `i16` | `short` | 16 | −32,768 to 32,767 |
-| `i8` | `int8_t` | 8 | −128 to 127 |
-| `u64` | `unsigned long long` | 64 | 0 to 1.8×10¹⁹ |
-| `u32` | `unsigned int` | 32 | 0 to 4.3×10⁹ |
-| `u16` | `unsigned short` | 16 | 0 to 65,535 |
-| `u8` | `uint8_t` | 8 | 0 to 255 |
-| `usize` | `unsigned long long` | 64 | platform word size, unsigned |
-| `isize` | `long long` | 64 | platform word size, signed |
+| Tauraro | Bits | Signed range |
+|---------|------|-------------|
+| `int` | 64 | −9.2×10¹⁸ to 9.2×10¹⁸ |
+| `i64` | 64 | same as `int` |
+| `i32` | 32 | −2.1×10⁹ to 2.1×10⁹ |
+| `i16` | 16 | −32,768 to 32,767 |
+| `i8` | 8 | −128 to 127 |
+| `u64` | 64 | 0 to 1.8×10¹⁹ |
+| `u32` | 32 | 0 to 4.3×10⁹ |
+| `u16` | 16 | 0 to 65,535 |
+| `u8` | 8 | 0 to 255 |
+| `usize` | 64 | platform word size, unsigned |
+| `isize` | 64 | platform word size, signed |
 
 **When to use which:**
 - `int` — default for all integer values in application code
@@ -127,11 +127,11 @@ mut c = a as float + b  # OK
 
 ### Float Types
 
-| Tauraro | C equivalent | Bits | Precision |
-|---------|-------------|------|-----------|
-| `float` | `double` | 64 | ~15 significant digits |
-| `f64` | `double` | 64 | same as `float` |
-| `f32` | `float` | 32 | ~7 significant digits |
+| Tauraro | Bits | Precision |
+|---------|------|-----------|
+| `float` | 64 | ~15 significant digits |
+| `f64` | 64 | same as `float` |
+| `f32` | 32 | ~7 significant digits |
 
 **When to use `f32` vs `f64`:** Use `f32` when memory is constrained (e.g., large arrays of floats for graphics/audio). Use `float`/`f64` everywhere else — the extra precision prevents accumulation errors.
 
@@ -142,7 +142,7 @@ active: bool = true
 disabled: bool = false
 ```
 
-Compiles to C `bool` (from `<stdbool.h>`), stored as `uint8_t`.
+Stored as a single byte internally.
 
 **Note:** `true`/`false` are lowercase. `True`/`False` are also accepted. `1`/`0` are NOT booleans — use explicit `as bool` if you need to convert.
 
@@ -163,7 +163,7 @@ greeting: str = "Hello, world!"
 empty: str = ""
 ```
 
-A `str` is a C `char*` — a pointer to a null-terminated UTF-8 byte sequence. It is not heap-owned by default; string literals are stored in the read-only data segment. Dynamically-built strings (from `+` concatenation or f-strings) are heap-allocated.
+A `str` is a pointer to a null-terminated UTF-8 byte sequence. String literals are stored in read-only memory. Dynamically-built strings (from `+` concatenation or f-strings) are heap-allocated.
 
 **Ownership note:** A `str` variable that holds a heap-allocated string (e.g., from `f"..."` or `s + t`) is tracked as `Own` and freed at scope exit. A `str` variable holding a string literal is not freed (it points to static memory). The compiler distinguishes these automatically.
 
@@ -284,15 +284,7 @@ F-strings evaluate expressions inside `{}` at runtime and produce a formatted st
 - Method calls: `{obj.method()}`
 - Nested f-strings are not supported — build complex strings with `+`
 
-**How f-strings compile:**
-```python
-f"point = ({p.x}, {p.y})"
-```
-→
-```c
-_tr_format("point = (%lld, %lld)", p->x, p->y)
-```
-`_tr_format` is a `printf`-based allocator. The result is a heap-allocated `char*`.
+F-strings are evaluated at runtime and produce a heap-allocated string.
 
 ### Boolean Literals
 
@@ -325,7 +317,7 @@ All type conversions use `as`:
 ```python
 # Numeric widening
 n: int = 42
-f: float = n as float        # long long → double
+f: float = n as float        # int → float
 
 # Numeric narrowing (truncates)
 big: int = 1000

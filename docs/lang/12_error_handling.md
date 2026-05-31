@@ -48,7 +48,7 @@ def validate_age(age: int) -> void:
     # valid
 ```
 
-`raise(msg)` takes a `str`. It calls `_tr_exc_raise(msg)` in the runtime, which uses `longjmp` to jump to the nearest enclosing `try` block.
+`raise(msg)` takes a `str` and jumps to the nearest enclosing `try` block.
 
 **What happens without a try/catch:** If `raise` is called and there is no enclosing `try`, the runtime prints the error message and calls `abort()` — the program terminates. This is the correct behavior for unrecoverable errors.
 
@@ -86,7 +86,7 @@ def process_resource(path: str) -> void:
         close_resource(handle)    # always runs — even if exception was raised
 ```
 
-**How finally compiles:** The block is duplicated in C — once after the `catch` block (normal path) and once in the `catch` handler before re-raising. This is how `setjmp`/`longjmp`-based finally must be implemented.
+`finally` always runs — on both the success path and the exception path.
 
 ### try/except Performance Notes
 
@@ -126,21 +126,10 @@ def parse_int(s: str) throws str -> int:
 ```
 
 The `throws ErrorType` annotation changes the return type to `Result[ReturnType, ErrorType]`. Inside a `throws` function:
-- `return value` → emits `Result { is_err: false, data.value: value }`
-- `raise(err)` → emits `Result { is_err: true, data.error: err }` and returns immediately
+- `return value` → wraps as a success result
+- `raise(err)` → wraps as an error result and returns immediately
 
-**Generated C type:**
-```c
-typedef struct {
-    bool is_err;
-    union {
-        long long value;
-        char*     error;
-    } data;
-} Result_i64_str;
-```
-
-A plain struct — no heap allocation, no exceptions, no overhead.
+`Result[T, E]` is a plain struct — no heap allocation, no exceptions, no overhead.
 
 ### The ? Propagation Operator
 
@@ -156,15 +145,7 @@ def tripled(s: str) throws str -> int:
     return n * 3
 ```
 
-**How `?` compiles:**
-```c
-// mut n = parse_int(s)?
-Result_i64_str _r1 = parse_int(s);
-if (_r1.is_err) return _r1;        // propagate
-long long n = _r1.data.value;      // unwrap success
-```
-
-A single conditional branch. On the happy path (no error), this is one branch prediction miss on the first call and correct prediction thereafter.
+On the happy path (no error), `?` is a single conditional branch. On error, it propagates immediately.
 
 ### Handling a Result Value
 

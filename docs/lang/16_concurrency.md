@@ -43,22 +43,6 @@ In the current compiler, `async`/`await` executes **synchronously**. `await f(x)
 
 3. **Zero overhead today:** No future allocation, no scheduler, no executor. Just a function call.
 
-**How async compiles:**
-```c
-// async def fetch(id: int) -> str:
-//     return f"item-{id}"
-// compiles identically to:
-// def fetch(id: int) -> str:
-//     return f"item-{id}"
-
-static inline char* fetch(long long id) {
-    return _tr_format("item-%lld", id);
-}
-
-// await fetch(n)  →  fetch(n)
-char* data = fetch(n);
-```
-
 ### Rules for async/await
 
 - `async def` can `await` other `async def` functions
@@ -91,33 +75,7 @@ def main():
 
 ### Detached Spawn
 
-A `spawn` outside a `task_group:` is **detached** — fire-and-forget. The spawning thread doesn't wait for it.
-
-**How detached spawn compiles:**
-```c
-// spawn worker(1)
-{
-    _TrThread _th = _tr_thread_start(_tr_spawn_wrap_worker, (void*)(uintptr_t)(1));
-    _tr_thread_detach(_th);
-}
-```
-
-`_tr_thread_start` calls `pthread_create` on Linux/macOS or `CreateThread` on Windows.
-
-### Spawn Wrappers
-
-POSIX and Win32 threads both take a single `void*` argument. The compiler auto-generates a wrapper for every spawned function that packs the argument into a `uintptr_t`:
-
-```c
-// generated for: spawn worker(id)
-static void* _tr_spawn_wrap_worker(void* _arg) {
-    long long _v = (long long)((uintptr_t)_arg);
-    worker(_v);
-    return NULL;
-}
-```
-
-This is generated automatically — you don't write it.
+A `spawn` outside a `task_group:` is **detached** — fire-and-forget. The spawning thread doesn't wait for it. Uses OS threads (`pthreads` on Linux/macOS, `CreateThread` on Windows).
 
 **Argument constraint:** The single-argument pack works correctly for:
 - Integer types up to 64 bits
@@ -171,18 +129,7 @@ def main():
     print("main continues after all workers")
 ```
 
-**How task_group: compiles:**
-```c
-_tr_tg_begin();
-{
-    _tr_tg_push(_tr_thread_start(_tr_spawn_wrap_compute, (void*)(uintptr_t)(4)));
-    _tr_tg_push(_tr_thread_start(_tr_spawn_wrap_compute, (void*)(uintptr_t)(7)));
-    _tr_tg_push(_tr_thread_start(_tr_spawn_wrap_compute, (void*)(uintptr_t)(12)));
-}
-_tr_taskgroup_wait();
-```
-
-`_tr_taskgroup_wait()` iterates over all tracked thread handles and calls `pthread_join` (or `WaitForSingleObject` on Windows) on each one. After it returns, all threads are done.
+`task_group:` tracks all thread handles and waits for each one to complete (via `pthread_join` on Linux/macOS, `WaitForSingleObject` on Windows). After the block exits, all threads are guaranteed done.
 
 ### Task Group Limit
 
@@ -331,14 +278,14 @@ while i < 200:
 
 ## Summary
 
-| Construct | Compiles to | Notes |
-|-----------|------------|-------|
-| `async def f()` | Normal C function | Synchronous today; forward-compatible |
-| `await f(x)` | Direct call `f(x)` | Return type of `f`, not a future |
-| `spawn f(x)` (outside group) | `_tr_thread_start` + detach | Fire-and-forget |
-| `task_group: { spawn f(x) }` | `_tr_tg_begin` + push + wait | Structured concurrency; max 64 threads |
-| `shared x = val` | `_TrSharedBox*` refcounted | Refcount atomic; data is not |
-| `shared y = x` (clone) | `_tr_shared_clone(x)` | Increments refcount atomically |
+| Construct | Behavior | Notes |
+|-----------|----------|-------|
+| `async def f()` | Synchronous function | Forward-compatible with future async runtime |
+| `await f(x)` | Direct call | Return type of `f`, not a future |
+| `spawn f(x)` (outside group) | OS thread, detached | Fire-and-forget |
+| `task_group: { spawn f(x) }` | OS threads, joined | Structured concurrency; max 64 threads |
+| `shared x = val` | Ref-counted box | Refcount atomic; data is not |
+| `shared y = x` (clone) | Share same box | Increments refcount atomically |
 
 ---
 

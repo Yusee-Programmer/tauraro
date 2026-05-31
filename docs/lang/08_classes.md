@@ -31,17 +31,6 @@ class Person:
 
 Fields are **private by default**. Add `pub` to expose them.
 
-**How a class compiles to C:**
-```c
-typedef struct Point Point;
-struct Point {
-    long long x;
-    long long y;
-};
-```
-
-The struct is forward-declared and then defined — standard C style. Method functions are generated separately.
-
 ### Field Types
 
 Any Tauraro type is valid as a field type:
@@ -88,7 +77,7 @@ extend Point:
 
 The first parameter of an instance method must be `self`. It receives a pointer to the current instance. You don't need to annotate its type — the compiler infers it from the enclosing `extend` block.
 
-`self.field` compiles to `self->field` in C (pointer dereference). You write `.` — the compiler generates `->`.
+You always write `.` to access fields and call methods on `self`.
 
 ### Methods Without `self` (Static Methods)
 
@@ -132,13 +121,7 @@ extend Point:
         return p
 ```
 
-**How `Point()` compiles:**
-```c
-Point* p = (Point*)_tr_checked_alloc(sizeof(Point));
-memset(p, 0, sizeof(Point));   // zero-initialized
-```
-
-`_tr_checked_alloc` wraps `malloc` and calls `abort()` on failure — you never need to check for null.
+`Point()` allocates a new zero-initialized instance on the heap. Allocation failures abort immediately — you never need to check for null.
 
 **Calling the constructor:**
 ```python
@@ -176,7 +159,7 @@ def main():
     print(f"distance sq = {dsq}")
 ```
 
-**Method call compilation:** `p.method(args)` → `Point_method(p, args)`. All dispatch is **static** — resolved at compile time based on the declared type of `p`. There is no virtual dispatch unless you use an interface.
+All method dispatch is **static** — resolved at compile time based on the declared type of `p`. There is no virtual dispatch unless you use an interface.
 
 ---
 
@@ -280,52 +263,11 @@ extend Dog:
         print(f"{self.name} ({self.breed}): Woof!")
 ```
 
-The `Dog(Animal)` syntax causes the C struct for `Dog` to include all of `Animal`'s fields. Methods from `Animal` can be called on a `Dog` pointer via `Animal_method((Animal*)dog)`.
+The `Dog(Animal)` syntax causes `Dog` to include all of `Animal`'s fields. Methods from `Animal` can be called on a `Dog` by casting to `Animal` type.
 
 This is **struct embedding**, not dynamic dispatch. For polymorphism across types, use interfaces (see [Interfaces](10_interfaces.md)).
 
 ---
-
-## How Classes Compile — Full Example
-
-Tauraro:
-```python
-class Vec2:
-    pub x: float
-    pub y: float
-
-extend Vec2:
-    pub def init(x: float, y: float) -> Vec2:
-        mut v = Vec2()
-        v.x = x
-        v.y = y
-        return v
-
-    pub def dot(self, other: Vec2) -> float:
-        return self.x * other.x + self.y * other.y
-```
-
-Generated C:
-```c
-typedef struct Vec2 Vec2;
-struct Vec2 {
-    double x;
-    double y;
-};
-
-Vec2* Vec2_init(double x, double y) {
-    Vec2* v = (Vec2*)_tr_checked_alloc(sizeof(Vec2));
-    v->x = x;
-    v->y = y;
-    return v;
-}
-
-double Vec2_dot(Vec2* self, Vec2* other) {
-    return self->x * other->x + self->y * other->y;
-}
-```
-
-Clean, efficient C with no overhead beyond the underlying struct and function.
 
 ---
 

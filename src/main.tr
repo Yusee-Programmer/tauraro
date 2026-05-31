@@ -20,9 +20,13 @@ extern "C":
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+pub def print_version():
+    print("tauraroc v0.0.3")
+
 pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
     print("Options:")
+    print("  --version         Print version and exit")
     print("  --emit c          Emit generated C code to build/")
     print("  --emit ast        Emit AST representation and stop")
     print("  --emit mir        Emit MIR basic blocks and stop")
@@ -400,6 +404,10 @@ pub def main(args: Vec[str]):
         print_usage()
         _tr_exit(1)
 
+    if args.len == 2 and args.get(1) == "--version":
+        print_version()
+        _tr_exit(0)
+
     mut input_path  = ""
     mut output_path = ""
     mut backend     = "c"
@@ -417,7 +425,10 @@ pub def main(args: Vec[str]):
     mut i = 1
     while i < args.len:
         mut arg = args.get(i)
-        if arg == "--run":
+        if arg == "--version":
+            print_version()
+            _tr_exit(0)
+        elif arg == "--run":
             run_after = true
         elif arg == "--check":
             check_only = true

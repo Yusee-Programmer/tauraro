@@ -23,7 +23,7 @@ Every variable has exactly one ownership state, assigned by the semantic analysi
 | `Own` | Variable owns heap memory | Yes, at scope exit |
 | `Borrow` | Temporary read/write access — caller still owns | No |
 | `Move` | Ownership transferred to another binding | No (new owner handles it) |
-| `Shared` | Reference-counted via `shared` keyword | Via `_tr_shared_drop` |
+| `Shared` | Reference-counted via `shared` keyword | Yes, when refcount drops to zero |
 | `Stack` | Stack-allocated or scalar value | No |
 
 You never annotate these. The compiler assigns them based on:
@@ -35,25 +35,14 @@ You never annotate these. The compiler assigns them based on:
 
 ## Rule M-1: Automatic Ownership Inference
 
-Every heap allocation — `Point.init()`, `[]`, `{}`, `alloc[T](n)` — is marked `Own`. The compiler traces the value through assignments:
+Every heap allocation — `Point.init()`, `[]`, `{}`, `alloc[T](n)` — is marked `Own`. The compiler traces the value through assignments and injects a `free()` at scope exit — exactly once, on every exit path:
 
 ```python
 def example() -> void:
     mut p = Point.init(1, 2)    # Own: p owns this heap Point
     p.describe()                 # Borrow: describe takes p, doesn't consume it
-    # scope ends → compiler injects: if (p) { free(p); }
+    # scope ends → free(p) injected automatically
 ```
-
-Generated C:
-```c
-void example(void) {
-    Point* p = Point_init(1, 2);
-    Point_describe(p);
-    if (p) { free(p); }   // ← you never wrote this
-}
-```
-
-The `free()` is exactly once, exactly at scope exit. No more, no less.
 
 ---
 
@@ -89,7 +78,7 @@ print(len(data))
 
 ## Rule M-3: No Double-Free
 
-The compiler emits exactly one `free()` per owned variable, on every exit path. For branching code:
+The compiler emits exactly one `free()` per owned variable, on every exit path. For branching code, each branch gets its own `free()` — so `free()` executes exactly once no matter which path is taken:
 
 ```python
 def conditional(flag: bool) -> void:
@@ -99,23 +88,8 @@ def conditional(flag: bool) -> void:
         return                   # free(obj) injected here
     
     obj.process()
-    # free(obj) injected here
+    # free(obj) injected here too
 ```
-
-Generated C:
-```c
-void conditional(bool flag) {
-    MyClass* obj = MyClass_init();
-    if (flag) {
-        if (obj) { free(obj); }   // path 1
-        return;
-    }
-    MyClass_process(obj);
-    if (obj) { free(obj); }       // path 2
-}
-```
-
-Two paths, two `free()` calls, each executing on exactly one path. Neither path executes both.
 
 ---
 
@@ -248,26 +222,9 @@ print(s1.get())               # 2 — both accessed the same Counter
 # scope ends: s1 drops (ref count → 1), s2 drops (ref count → 0 → free)
 ```
 
-### How shared Compiles
+### How shared Works
 
-```c
-_TrSharedBox* s1 = _tr_shared_new(counter);
-_TrSharedBox* s2 = _tr_shared_clone(s1);     // increments refcount atomically
-Counter_increment(((Counter*)(s1->data)));
-Counter_increment(((Counter*)(s2->data)));
-_tr_shared_drop(s1);    // atomic decrement; ref count = 1
-_tr_shared_drop(s2);    // atomic decrement; ref count = 0 → frees Counter
-```
-
-`_TrSharedBox` is:
-```c
-typedef struct _TrSharedBox {
-    void*       data;
-    _Atomic int ref_count;
-} _TrSharedBox;
-```
-
-The reference count is an `_Atomic int` — thread-safe increments and decrements without a mutex.
+`shared` wraps the object in a reference-counted box with an atomic reference count. When the last `shared` reference drops, the underlying object is freed. The reference count itself is thread-safe — atomic increments and decrements without a mutex.
 
 **Important:** `shared` makes the reference count thread-safe. It does **not** make mutations to the underlying object thread-safe. If multiple threads call `s1.increment()` simultaneously, the counter's internal state may race. Use a mutex for mutually exclusive access:
 
@@ -307,36 +264,6 @@ This is why `unsafe:` is the quarantine zone — it's where the ownership guaran
 
 ---
 
-## What the Compiler Actually Generates
-
-For a realistic function:
-
-```python
-def process(items: List[str]) -> str:
-    mut result = ""
-    for item in items:
-        mut line = item + "\n"    # Own heap string
-        result = result + line    # concat: new Own heap string, old 'result' freed
-    return result                  # ownership transferred to caller
-```
-
-Generated C (simplified):
-```c
-char* process(List_str* items) {
-    char* result = "";
-    for (long long _i = 0; _i < items->len; _i++) {
-        char* item = items->data[_i];
-        char* line = _tr_str_concat(item, "\n");    // heap alloc
-        char* _tmp = _tr_str_concat(result, line);  // heap alloc
-        if (result != _empty_str) free(result);     // free old result
-        free(line);                                   // free line
-        result = _tmp;                                // new result
-    }
-    return result;    // caller owns this
-}
-```
-
-The compiler injected every `free()`. You wrote none.
 
 ---
 

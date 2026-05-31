@@ -51,7 +51,7 @@ There is no runtime, no REPL, no interpreter. Source goes through:
 ```
 .tr → Lexer → Parser → AST → Sema → HIR → C → GCC/Clang → native binary
 ```
-The binary runs standalone. No Tauraro runtime needs to be installed on the target machine (only the C runtime — libc — is needed, which is always present).
+The binary runs standalone. No Tauraro runtime needs to be installed on the target machine.
 
 ### 5. Bilingual (English + Hausa)
 Every keyword has a Hausa equivalent. Both are accepted anywhere. A program can mix them or use one exclusively. This is not cosmetic — it makes the language accessible to Hausa-speaking programmers who may think in Hausa more naturally.
@@ -63,25 +63,25 @@ Every keyword has a Hausa equivalent. Both are accepted anywhere. A program can 
 ```
 source.tr
     │
-    ├─ Lexer          (src/lexer/mod.rs)
+    ├─ Lexer          (src/lexer.tr)
     │   Tokenizes the source into tokens with indentation tracking.
     │   Handles both English and Hausa keywords.
-    │   Produces: Vec<Token> with Indent/Dedent tokens for blocks.
+    │   Produces: tokens with Indent/Dedent tokens for blocks.
     │
-    ├─ Parser          (src/parser/mod.rs)
+    ├─ Parser          (src/parser.tr)
     │   Recursive descent parser. Converts tokens to an AST.
     │   Handles: classes, enums, interfaces, generics, decorators,
     │            async, match, try/except, GPU blocks, unsafe blocks.
-    │   Produces: Program (Vec<Decl>, Vec<Stmt>)
+    │   Produces: Program (list of declarations and statements)
     │
-    ├─ Semantic Analysis  (src/sema/mod.rs)
+    ├─ Semantic Analysis  (src/sema.tr)
     │   Type checking, ownership inference, scope management.
-    │   Injects HirStmt::Free for every Own variable at scope exit.
+    │   Injects free calls for every Own variable at scope exit.
     │   Checks: type rules (T-1 through T-4), memory rules (M-1 through M-7),
     │            function rules (F-1 through F-3), name rules (N-1).
-    │   Produces: HirProgram
+    │   Produces: HIR (high-level intermediate representation)
     │
-    ├─ C Code Generation  (src/codegen/c.rs)
+    ├─ C Code Generation  (src/codegen/c.tr)
     │   Walks the HIR and emits C source code.
     │   Classes → structs + ClassName_method() functions
     │   Interfaces → vtable structs + wrapper functions
@@ -103,20 +103,14 @@ source.tr
 ### Installation
 
 Requirements:
-- Rust toolchain (for building the compiler): `rustup.rs`
 - GCC or Clang (for compiling generated C)
 
+Download the pre-built `tauraroc` binary (`tauraroc.exe` on Windows) from the GitHub releases page and place it anywhere on your `PATH`.
+
 ```bash
-git clone <repo>
-cd tauraro
-cargo build --release          # build the compiler
+# Verify the installation:
+tauraroc --version
 ```
-
-The compiler binary is at `target/release/tauraro` (or `tauraro.exe` on Windows).
-
-The CI build also produces a pre-built `tauraroc` binary (and `tauraroc.exe` on Windows) in the
-`tauraro/` directory.  Download the artifact for your platform from GitHub Actions and place it
-anywhere on your `PATH`.
 
 ### Your First Program
 
@@ -128,8 +122,6 @@ def main():
 
 Run it:
 ```bash
-cargo run -- --run hello.tr
-# or with the pre-built binary:
 tauraroc --run hello.tr
 ```
 
@@ -178,6 +170,9 @@ distance squared = 25
 ## CLI Reference
 
 ```bash
+# Print version
+tauraroc --version
+
 # Compile and run immediately
 tauraroc --run program.tr
 
@@ -210,6 +205,7 @@ tauraroc --backend llvm program.tr
 
 | Flag | Description |
 |------|-------------|
+| `--version` | Print version and exit |
 | `--run` | Compile and execute immediately |
 | `-o <path>` | Set output executable path |
 | `--emit c` | Print generated C source to stdout |
@@ -274,40 +270,7 @@ tauraroc --target android-arm64 --static --run hello.tr
 
 ## The Self-Hosted Compiler
 
-Tauraro's compiler is **self-hosted** — the compiler is written in Tauraro itself. The build
-process goes through three bootstrap stages:
-
-| Stage | Built by | Description |
-|-------|----------|-------------|
-| `stage0` (Rust) | Cargo | Rust implementation of the full compiler pipeline |
-| `stage1` | `stage0` | stage0 compiles `tauraro/src/main.tr` → C → GCC |
-| `tauraroc` | `stage1` | stage1 compiles `main.tr` again → C → GCC (final binary) |
-
-`tauraroc` is stable: compiling `main.tr` with `tauraroc` produces a binary whose generated C is
-identical to what `stage1` produced.  The CI script (`scripts/build.sh` / `scripts/build.ps1`)
-runs all three stages and uploads the final `tauraroc` binary as a GitHub Actions artifact.
-
-Both the Rust stage0 and the self-hosted `tauraroc` accept the same CLI flags and produce
-identical output.
-
----
-
-## What the Compiler Sees
-
-When you write:
-```python
-mut p = Point.init(3, 4)
-p.describe()
-```
-
-The compiler emits this C:
-```c
-Point* p = Point_init(3, 4);
-Point_describe(p);
-if (p) { free(p); }   // injected automatically — you never wrote this
-```
-
-Every `free()` in the generated C was inserted by the compiler's semantic analysis phase. You never write memory management. The compiler verifies it is correct and inserts it exactly once on every exit path.
+Tauraro's compiler is **self-hosted** — written in Tauraro itself (`src/main.tr`). The distributed `tauraroc` binary is produced by compiling the compiler source with itself. This means the compiler is its own reference implementation: any feature that works in example programs also works in the compiler source.
 
 ---
 

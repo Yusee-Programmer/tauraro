@@ -85,7 +85,7 @@ def words_longer_than(words: List[str], n: int) -> List[str]:
     return result
 ```
 
-Compiles to a loop that appends to a `_tr_list_append`-backed C list — no allocation per iteration.
+Compiles to a simple loop with no allocation per iteration.
 
 ---
 
@@ -136,7 +136,7 @@ def count_words(text: str) -> Dict:
     return counts
 ```
 
-Dict values are untyped `_tr_any*` internally. Store counts as strings (`str(n)`) or parse on read.
+Dict values are untyped. Store counts as strings (`str(n)`) or parse on read.
 
 ---
 
@@ -227,9 +227,7 @@ def main():
     for n in nums: print(n)    # 9 8 5 3 2 1
 ```
 
-**What compiles:** `compare` is a function pointer (`void*` cast to the right function type) in C. The `insertion_sort` call generates `compare(data[j], key)` which is a direct indirect function call.
-
-**Limitation:** Strategy functions must be top-level `def`, not closures (closures carry a context pointer incompatible with the raw function pointer calling convention).
+**Limitation:** Strategy functions must be top-level `def`, not closures — closures carry captured state that the calling convention cannot pass transparently.
 
 ---
 
@@ -292,7 +290,7 @@ def main():
     bus.emit("user:logged_in")
 ```
 
-**How it works:** `List[lambda]` stores function pointers (all `void*` in C). Each `handler(event)` is an indirect call through the stored pointer.
+**How it works:** `List[lambda]` stores closures. Each `handler(event)` is an indirect call through the stored function.
 
 ---
 
@@ -502,13 +500,13 @@ while i < n:
     i = i + 1
 ```
 
-The `for i in range(n)` form compiles directly to `for (long long i = 0; i < n; i++)` — no overhead, maximum clarity.
+The `for i in range(n)` form compiles to a direct loop — no overhead, maximum clarity.
 
 ---
 
 ### String Building: Don't Concatenate in a Loop
 
-Each `+` on strings calls `_tr_str_concat`, allocating a new string. Concatenating in a loop is O(n²):
+Each `+` on strings allocates a new string. Concatenating in a loop is O(n²):
 
 ```python
 # BAD: O(n²) allocations
@@ -561,7 +559,7 @@ def clamp(x: int, lo: int, hi: int) -> int:
     return x
 ```
 
-`@inline` generates `__attribute__((always_inline))` in C. Use it for:
+`@inline` forces the compiler to inline the function at every call site. Use it for:
 - Functions called in tight loops
 - Functions with 1–5 expressions
 - Math helpers that would otherwise incur call overhead
@@ -931,7 +929,7 @@ def main():
     print(f"min={lo} max={hi}")    # min=1 max=9
 ```
 
-The tuple return compiles to a C struct `struct { long long _0; long long _1; }` returned by value. Unpacking is field access with auto-named fields.
+Tuple returns are unpacked by the compiler with zero overhead — returned by value, unpacked at the call site.
 
 ---
 

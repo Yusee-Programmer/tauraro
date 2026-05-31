@@ -68,19 +68,19 @@ Tauraro accepts both English and Hausa keyword variants:
 
 ### Type Quick Reference
 
-| Tauraro type | C type | Notes |
+| Tauraro type | Size | Notes |
 |---|---|---|
-| `int` | `long long` | 64-bit signed integer |
-| `float` | `double` | 64-bit IEEE 754 |
-| `bool` | `bool` | 8-bit boolean |
-| `char` | `char` | single byte |
-| `str` | `char*` | C string pointer |
-| `i8/i16/i32/i64` | `int8_t / short / int / long long` | fixed-width integers |
-| `u8/u16/u32/u64` | `uint8_t / unsigned short / unsigned int / unsigned long long` | unsigned fixed-width |
-| `usize` | `unsigned long long` | platform word size |
-| `f32/f64` | `float / double` | floating point |
-| `List[T]` | `List_T*` | growable typed array |
-| `Dict` | `TrMap*` | string-keyed map |
-| `Pointer[T]` | `T*` | raw pointer (unsafe) |
-| `Result[T,E]` | `Result_T_E` | success/error struct |
-| `Option[T]` | — | optional value |
+| `int` | 64-bit | 64-bit signed integer |
+| `float` | 64-bit | 64-bit IEEE 754 double |
+| `bool` | 1 byte | boolean |
+| `char` | 1 byte | single ASCII byte |
+| `str` | pointer | null-terminated UTF-8 string |
+| `i8/i16/i32/i64` | 8/16/32/64-bit | fixed-width signed integers |
+| `u8/u16/u32/u64` | 8/16/32/64-bit | fixed-width unsigned integers |
+| `usize` | 64-bit | platform word size (unsigned) |
+| `f32/f64` | 32/64-bit | floating point |
+| `List[T]` | heap | growable typed array |
+| `Dict` | heap | string-keyed hash map |
+| `Pointer[T]` | pointer | raw pointer (unsafe only) |
+| `Result[T,E]` | struct | success/error union |
+| `Option[T]` | struct | optional value |

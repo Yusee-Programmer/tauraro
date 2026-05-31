@@ -58,6 +58,10 @@ pub def _is_int_type(n: str) -> bool:
 pub def _is_float_type(n: str) -> bool:
     return n == "float" or n == "f64" or n == "f32" or n == "double"
 
+pub def _safe_c_varname(n: str) -> str:
+    if _is_c_keyword(n): return "_tr_v_" + n
+    return n
+
 pub def _is_c_keyword(n: str) -> bool:
     # C language keywords
     if n == "double" or n == "float" or n == "int" or n == "char": return true
@@ -652,7 +656,7 @@ pub class CGenerator:
             mut p = f.params.get(pi)
             if p.name != "self":
                 if not first: sig = sig + ", "
-                sig = sig + self.type_to_c(p.ty) + " " + p.name
+                sig = sig + self.type_to_c(p.ty) + " " + _safe_c_varname(p.name)
                 first = false
             pi = pi + 1
         sig = sig + ")"
@@ -730,7 +734,7 @@ pub class CGenerator:
             mut p = f.params.get(i)
             if p.name != "self":
                 if not first: sig = sig + ", "
-                sig = sig + self.type_to_c(p.ty) + " " + p.name
+                sig = sig + self.type_to_c(p.ty) + " " + _safe_c_varname(p.name)
                 first = false
             i = i + 1
 
@@ -900,7 +904,9 @@ pub class CGenerator:
                 if v: return "true"
                 else: return "false"
             case HirExpr.ELitNone(_): return "NULL"
-            case HirExpr.EIdent(n, _, _): return n
+            case HirExpr.EIdent(n, _, _):
+                if _is_c_keyword(n) and self.decl_vars.contains(n): return "_tr_v_" + n
+                return n
             case HirExpr.EBinOp(op, l, r, _): return self.gen_binop(op, l, r)
             case HirExpr.EUnaryOp(op, expr, _): return self.gen_unary(op, expr)
             case HirExpr.ECall(callee, args, call_ty): return self.gen_call(callee, args, call_ty)
@@ -1168,6 +1174,10 @@ pub class CGenerator:
         mut has_generic = false
         mut generic_ty = AstType.init("void")
         match callee.read():
+            case HirExpr.EIdent(raw_n, _, _):
+                # Use raw identifier name (not gen_expr output) so C-keyword variable names
+                # like `int`, `float`, `count` don't obscure builtin dispatch.
+                base_callee = raw_n
             case HirExpr.EIndex(base_expr, idx_expr, idx_ty):
                 match base_expr.read():
                     case HirExpr.EIdent(n, _, _):
@@ -2028,7 +2038,7 @@ pub class CGenerator:
         while i < params.len:
             mut p: HirParam = params.get(i)
             if not first: self.w(", ")
-            self.w(self.type_to_c(p.ty) + " " + p.name)
+            self.w(self.type_to_c(p.ty) + " " + _safe_c_varname(p.name))
             first = false
             i = i + 1
         self.w(") {\n")
@@ -2205,9 +2215,9 @@ pub class CGenerator:
                             else:
                                 ok_val3 = "(" + ok_c3 + "*)" + tmp_qr3 + ".data.Ok.val"
                             if is_const:
-                                self.w(pad + "const " + ok_c3 + " " + n + " = " + ok_val3 + ";\n")
+                                self.w(pad + "const " + ok_c3 + " " + _safe_c_varname(n) + " = " + ok_val3 + ";\n")
                             else:
-                                self.w(pad + ok_c3 + " " + n + " = " + ok_val3 + ";\n")
+                                self.w(pad + ok_c3 + " " + _safe_c_varname(n) + " = " + ok_val3 + ";\n")
                             self.decl_vars.insert(n, true)
                             return
                         case _: pass
@@ -2234,22 +2244,23 @@ pub class CGenerator:
                             while cl_ii < cl_params.len:
                                 mut cl_p = cl_params.get(cl_ii)
                                 if not cl_first: self.w(", ")
-                                self.w(self.type_to_c(cl_p.ty) + " " + cl_p.name)
+                                self.w(self.type_to_c(cl_p.ty) + " " + _safe_c_varname(cl_p.name))
                                 cl_first = false
                                 cl_ii = cl_ii + 1
                             self.w(") {\n")
                             self.gen_block(cl_body, indent + 1)
                             self.w(pad + "}\n")
-                            self.w(pad + "void* " + n + " = (void*)(&" + cl_cname + ");\n")
+                            self.w(pad + "void* " + _safe_c_varname(n) + " = (void*)(&" + cl_cname + ");\n")
                             self.decl_vars.insert(n, true)
                             return
                         case _: pass
+                mut _sn = _safe_c_varname(n)
                 if is_const:
-                    self.w(pad + "const " + c_ty + " " + n)
+                    self.w(pad + "const " + c_ty + " " + _sn)
                 elif is_shared:
-                    self.w(pad + "_TrSharedBox* " + n)
+                    self.w(pad + "_TrSharedBox* " + _sn)
                 else:
-                    self.w(pad + c_ty + " " + n)
+                    self.w(pad + c_ty + " " + _sn)
                 if v as usize != 0 as usize:
                     if is_shared:
                         # Detect clone vs new-wrap: if value is an already-shared var, clone it
@@ -2307,7 +2318,7 @@ pub class CGenerator:
                 match t.read():
                     case HirExpr.EIdent(n, _, _):
                         if not self.decl_vars.contains(n):
-                            self.w(pad + "__auto_type " + n + " = " + self.gen_expr(v) + ";\n")
+                            self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + self.gen_expr(v) + ";\n")
                             self.decl_vars.insert(n, true)
                             return
                     case HirExpr.EIndex(idx_obj, idx_key, _):
@@ -2671,7 +2682,8 @@ pub class CGenerator:
                             if _ev.name == vn and _ev.fields.len > 0:
                                 actual_fld = _ev.fields.get(0).name
                             _vi = _vi + 1
-                    bindings = "__auto_type " + field + " = " + subj + ".data." + vn + "." + actual_fld + ";\n"
+                    self.decl_vars.insert(field, true)
+                    bindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + actual_fld + ";\n"
                 case Pattern.PVariantBindMany(tn, vn, fields):
                     cond = subj + ".tag == " + tn + "_" + vn
                     mut _bi = 0
@@ -2687,11 +2699,13 @@ pub class CGenerator:
                                     if _ev2.name == vn and _bi < _ev2.fields.len:
                                         _actual = _ev2.fields.get(_bi).name
                                     _vi2 = _vi2 + 1
-                            bindings = bindings + "__auto_type " + _bf + " = " + subj + ".data." + vn + "." + _actual + ";\n"
+                            self.decl_vars.insert(_bf, true)
+                            bindings = bindings + "__auto_type " + _safe_c_varname(_bf) + " = " + subj + ".data." + vn + "." + _actual + ";\n"
                         _bi = _bi + 1
                 case Pattern.PBind(n):
                     cond = "1"
-                    bindings = "__auto_type " + n + " = " + subj + ";\n"
+                    self.decl_vars.insert(n, true)
+                    bindings = "__auto_type " + _safe_c_varname(n) + " = " + subj + ";\n"
                 case Pattern.PWild: cond = "1"
                 case Pattern.POr(pats):
                     mut or_conds = ""
@@ -2711,7 +2725,8 @@ pub class CGenerator:
                                 else: pc = "!" + subj
                             case Pattern.PBind(bn):
                                 pc = "1"
-                                bindings = bindings + "__auto_type " + bn + " = " + subj + ";\n"
+                                self.decl_vars.insert(bn, true)
+                                bindings = bindings + "__auto_type " + _safe_c_varname(bn) + " = " + subj + ";\n"
                             case _: pc = "1"
                         if oi == 0: or_conds = pc
                         else: or_conds = or_conds + " || " + pc
