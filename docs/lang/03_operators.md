@@ -353,4 +353,33 @@ if (x & 1) == 1:   # CORRECT: parentheses make precedence explicit
 
 ---
 
+## Operator Overloading
+
+User-defined classes can override the behaviour of most operators by implementing **dunder
+methods** such as `__add__`, `__eq__`, `__bool__`, and `__contains__`. The compiler dispatches to
+these methods automatically when an operator is applied to a class instance.
+
+```python
+class Money:
+    pub cents: int
+
+extend Money:
+    pub def __add__(self, other: Money) -> Money:
+        mut m = Money()
+        m.cents = self.cents + other.cents
+        return m
+
+    pub def __lt__(self, other: Money) -> bool:
+        return self.cents < other.cents
+
+mut a = Money.init(100)
+mut b = Money.init(50)
+mut total = a + b      # calls Money___add__
+mut cheap = a < b      # calls Money___lt__
+```
+
+See [21 — Operator Overloading](21_operator_overloading.md) for the full list of supported dunders.
+
+---
+
 Next: [Control Flow →](04_control_flow.md)

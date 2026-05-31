@@ -28,6 +28,7 @@
 | 18 | [GPU & Inline Assembly](18_gpu_and_asm.md) | gpu: blocks, OpenMP, asm(), memory barriers |
 | 19 | [Compiler Error Reference](19_compiler_errors.md) | Every error code with cause, example, and fix |
 | 20 | [Advanced Patterns](20_advanced_patterns.md) | Idioms, design patterns, performance, best practices |
+| 21 | [Operator Overloading](21_operator_overloading.md) | Dunder methods: `__add__`, `__str__`, `__iter__`, `with`, callable objects |
 
 ---
 

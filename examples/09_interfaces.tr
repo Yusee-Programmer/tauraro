@@ -1,8 +1,9 @@
 # 09 — Interfaces
-# Covers: interface declaration, implementing an interface, polymorphic functions,
-# multiple interfaces per class.
-# Interfaces compile to C vtables (fat pointer = data + vtable pointer).
-# Syntax: 'class Dog implements Animal:' — implements goes in the class header.
+# Interfaces compile to C vtables (fat pointer: data + vtable pointer).
+# Declare an interface, then write  class Dog implements Animal:
+# The compiler auto-generates the vtable + wrapper and inserts the conversion
+# everywhere a Dog appears in a context that expects an Animal.
+# Users never need to write Dog_as_Animal() or any explicit cast.
 
 # ── 1. Declare an interface ───────────────────────────────────────────────────
 interface Animal:
@@ -69,7 +70,7 @@ extend Bird:
     pub def legs(self) -> int:
         return 2
 
-# ── 3. Polymorphic function — accepts any Animal ──────────────────────────────
+# ── 3. Polymorphic functions — accept any Animal ──────────────────────────────
 def introduce(a: Animal) -> void:
     print(f"  Name: {a.name()},  Legs: {a.legs()}")
     a.speak()
@@ -160,24 +161,24 @@ def serialize_one(item: Serializable) -> str:
 
 def main():
 
-    # ── Wrapping concrete instances ───────────────────────────────────────────
-    # The compiler auto-generates ClassName_as_InterfaceName() when
-    # 'class Dog implements Animal:' is used.
+    # ── Animal interface ──────────────────────────────────────────────────────
     print("=== Animal Interface ===")
     mut dog1 = Dog.init("Rex", "German Shepherd")
     mut cat1 = Cat.init("Whiskers")
     mut bird = Bird.init("Tweety", true)
 
-    mut a_dog: Animal = Dog_as_Animal(dog1)
-    mut a_cat: Animal = Cat_as_Animal(cat1)
-    mut a_bird: Animal = Bird_as_Animal(bird)
+    # Concrete objects passed directly — compiler wraps them automatically
+    introduce(dog1)
+    introduce(cat1)
+    introduce(bird)
 
-    introduce(a_dog)
-    introduce(a_cat)
-    introduce(a_bird)
-
-    # Direct dispatch through interface value:
+    # ── Interface-typed variables ─────────────────────────────────────────────
+    # Assignment from concrete class to interface type — auto-wrapped
     print("=== Direct Dispatch ===")
+    mut a_dog: Animal = dog1
+    mut a_cat: Animal = cat1
+    mut a_bird: Animal = bird
+
     a_dog.speak()
     a_cat.speak()
     a_bird.speak()
@@ -192,28 +193,21 @@ def main():
     mut c = Circle.init(5.0)
     mut r = Rect.init(3.0, 4.0)
 
-    render(Circle_as_Drawable(c))
-    render(Rect_as_Drawable(r))
+    render(c)    # Circle → Drawable, auto-wrapped at the call site
+    render(r)    # Rect   → Drawable, auto-wrapped at the call site
 
-    # ── Multiple interfaces ────────────────────────────────────────────────────
+    # ── Multiple interfaces ───────────────────────────────────────────────────
     print("=== Multiple Interfaces ===")
     mut e1 = Employee.init("Alice", 95000, "Engineering")
     mut e2 = Employee.init("Bob",   72000, "Sales")
     mut e3 = Employee.init("Carol", 88000, "Design")
 
-    # Use via Printable interface:
-    print_one(Employee_as_Printable(e1))
-    print_one(Employee_as_Printable(e2))
-    print_one(Employee_as_Printable(e3))
+    # Each call site selects the right interface automatically
+    print_one(e1)
+    print_one(e2)
+    print_one(e3)
 
-    # Use via Serializable interface:
-    mut serialized = serialize_one(Employee_as_Serializable(e1))
+    mut serialized = serialize_one(e1)
     print(f"serialized: {serialized}")
-
-    # ── Lifetime note ─────────────────────────────────────────────────────────
-    # IMPORTANT: The concrete instance (dog1, cat1, etc.) must OUTLIVE the
-    # interface value that wraps it. The interface holds a raw pointer —
-    # the compiler does not track this relationship for you.
-    # In the examples above this is safe because both live in main().
 
     print("=== done ===")

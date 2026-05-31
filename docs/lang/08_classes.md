@@ -368,4 +368,42 @@ Classes can be declared and used before their `extend` block — the compiler re
 
 ---
 
+## Operator Overloading (Dunder Methods)
+
+Classes can hook into operators and built-in functions by defining **dunder methods** — methods
+whose names start and end with double underscores. The compiler automatically calls them when the
+corresponding operation is used on a class instance.
+
+```python
+class Vec2:
+    pub x: float
+    pub y: float
+
+extend Vec2:
+    pub def __add__(self, other: Vec2) -> Vec2:
+        return Vec2.init(self.x + other.x, self.y + other.y)
+
+    pub def __str__(self) -> str:
+        return "Vec2(" + str(self.x) + ", " + str(self.y) + ")"
+
+    pub def __bool__(self) -> bool:
+        return self.x != 0.0 or self.y != 0.0
+
+mut a = Vec2.init(1.0, 2.0)
+mut b = Vec2.init(3.0, 4.0)
+mut c = a + b          # dispatches to __add__
+print(c)               # dispatches to __str__
+if a:                  # dispatches to __bool__
+    ...
+```
+
+Supported dunders include `__add__`, `__sub__`, `__mul__`, `__neg__`, `__eq__`, `__ne__`,
+`__lt__`, `__le__`, `__gt__`, `__ge__`, `__bool__`, `__len__`, `__str__`, `__repr__`,
+`__getitem__`, `__setitem__`, `__contains__`, `__iter__`, `__next__`, `__enter__`, `__exit__`,
+and `__call__`.
+
+See [21 — Operator Overloading](21_operator_overloading.md) for the complete reference.
+
+---
+
 Next: [Enums →](09_enums.md)
