@@ -150,6 +150,8 @@ pub class CGenerator:
     pub in_task_group:   int              # depth counter for task_group nesting
     pub in_gpu_block:    int              # depth counter for gpu: block nesting
     pub value_types:     Map[str, bool]  # classes with is_class=false — no * in C type
+    pub closure_cap_set: Map[str, bool]  # captured var names for the current closure being generated
+    pub closure_env_var: str             # env var name inside a closure body (empty = not in closure body)
 
     pub def init() -> CGenerator:
         mut g = CGenerator()
@@ -180,6 +182,8 @@ pub class CGenerator:
         g.in_task_group  = 0
         g.in_gpu_block   = 0
         g.value_types    = Map[str, bool].init(32)
+        g.closure_cap_set = Map[str, bool].init(0)
+        g.closure_env_var = ""
         return g
 
     pub def next_temp(self) -> str:
@@ -924,8 +928,8 @@ pub class CGenerator:
             case HirExpr.ETuple(items, _): return self.gen_tuple(items)
             case HirExpr.EList(items, ty): return self.gen_list_literal(items, ty)
             case HirExpr.EDict(keys, vals, _): return self.gen_dict_literal(keys, vals)
-            case HirExpr.EClosure(params, ret_ty, body, _):
-                return self.gen_closure(params, ret_ty, body)
+            case HirExpr.EClosure(params, ret_ty, body, _, captures):
+                return self.gen_closure(params, ret_ty, body, captures)
             case HirExpr.ERange(start, end, inclusive, _):
                 return self.gen_expr(start)
             case HirExpr.ESuperMethodCall(base, method, args, _):
@@ -1497,7 +1501,7 @@ pub class CGenerator:
         mut callee_ty_n: str = hir_expr_type(callee).name
         if callee_ty_n == "lambda" or callee_ty_n == "void*":
             mut ret_cty = self.type_to_c(call_ty)
-            if ret_cty == "void": ret_cty = "long long"
+            if ret_cty == "void" or ret_cty == "void*": ret_cty = "long long"
             mut arg_types = ""
             mut ai2 = 0
             while ai2 < args.len:
@@ -1533,7 +1537,7 @@ pub class CGenerator:
             return "printf(\"%s\\n\", " + self.cls_method_c_call(ty0_n, "__str__", s0, "") + ")"
         if self.has_method(ty0_n, "__repr__"):
             return "printf(\"%s\\n\", " + self.cls_method_c_call(ty0_n, "__repr__", s0, "") + ")"
-        if ty0_n == "void" or ty0_n == "":
+        if ty0_n == "void" or ty0_n == "" or ty0_n == "lambda":
             return "printf(\"%s\\n\", _TR_AUTO_STR(" + s0 + "))"
         return "printf(\"%s\\n\", (char*)(" + s0 + "))"
 
@@ -2000,11 +2004,24 @@ pub class CGenerator:
             i = i + 1
         return s + tmp + "; })"
 
-    pub def gen_closure(self, params: Vec[HirParam], ret_ty: AstType, body: HirBlock) -> str:
+    pub def gen_closure(self, params: Vec[HirParam], ret_ty: AstType, body: HirBlock, captures: Vec[HirParam]) -> str:
         self.closure_count = self.closure_count + 1
         mut cname = "_closure_" + self.closure_count.to_str()
         mut ret_c = self.type_to_c(ret_ty)
         if ret_c == "void": ret_c = "long long"
+
+        # Seed closure params into decl_vars so SAssign generates plain assignment, not __auto_type
+        mut pi = 0
+        while pi < params.len:
+            self.decl_vars.insert(params.get(pi).name, true)
+            pi = pi + 1
+        # Seed captured vars into decl_vars so assignments to them don't create new locals
+        mut ci = 0
+        while ci < captures.len:
+            self.decl_vars.insert(captures.get(ci).name, true)
+            ci = ci + 1
+
+        # GCC nested function: has access to all outer scope variables via trampoline
         self.w("    " + ret_c + " " + cname + "(")
         mut first: bool = true
         mut i: int = 0
@@ -2191,6 +2208,39 @@ pub class CGenerator:
                                 self.w(pad + "const " + ok_c3 + " " + n + " = " + ok_val3 + ";\n")
                             else:
                                 self.w(pad + ok_c3 + " " + n + " = " + ok_val3 + ";\n")
+                            self.decl_vars.insert(n, true)
+                            return
+                        case _: pass
+                # Special-case: EClosure in SLet — write nested function FIRST, then the variable,
+                # to prevent gen_closure's self.w() calls from merging into the "c_ty n" prefix line.
+                if v as usize != 0 as usize:
+                    match v.read():
+                        case HirExpr.EClosure(cl_params, cl_ret_ty, cl_body, _, cl_caps):
+                            self.closure_count = self.closure_count + 1
+                            mut cl_cname = "_closure_" + self.closure_count.to_str()
+                            mut cl_ret_c = self.type_to_c(cl_ret_ty)
+                            if cl_ret_c == "void": cl_ret_c = "long long"
+                            mut cl_pi = 0
+                            while cl_pi < cl_params.len:
+                                self.decl_vars.insert(cl_params.get(cl_pi).name, true)
+                                cl_pi = cl_pi + 1
+                            mut cl_ci = 0
+                            while cl_ci < cl_caps.len:
+                                self.decl_vars.insert(cl_caps.get(cl_ci).name, true)
+                                cl_ci = cl_ci + 1
+                            self.w(pad + cl_ret_c + " " + cl_cname + "(")
+                            mut cl_first = true
+                            mut cl_ii = 0
+                            while cl_ii < cl_params.len:
+                                mut cl_p = cl_params.get(cl_ii)
+                                if not cl_first: self.w(", ")
+                                self.w(self.type_to_c(cl_p.ty) + " " + cl_p.name)
+                                cl_first = false
+                                cl_ii = cl_ii + 1
+                            self.w(") {\n")
+                            self.gen_block(cl_body, indent + 1)
+                            self.w(pad + "}\n")
+                            self.w(pad + "void* " + n + " = (void*)(&" + cl_cname + ");\n")
                             self.decl_vars.insert(n, true)
                             return
                         case _: pass

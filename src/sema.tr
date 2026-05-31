@@ -66,6 +66,9 @@ pub class Sema:
     pub assign_froms:       Map[str, int] # block-local last use tracking
     pub current_line:       int
     pub current_func_generics: Vec[str]
+    pub closure_boundary: int           # scope depth just before entering a closure (-1 = not in closure)
+    pub closure_caps:     Vec[HirParam] # captures accumulated for the current innermost closure
+    pub closure_cap_set:  Map[str, bool] # dedup set for capture names
 
 extend Sema:
     pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
@@ -100,6 +103,9 @@ extend Sema:
         s.assign_froms       = Map[str, int].init(32)
         s.current_line       = 0
         s.current_func_generics = Vec[str].init(0)
+        s.closure_boundary  = -1
+        s.closure_caps      = Vec[HirParam].init(0)
+        s.closure_cap_set   = Map[str, bool].init(0)
 
         # ── Built-in functions ─────────────────────────────────────────────────
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -215,10 +221,10 @@ extend Sema:
             if scope.variables.contains(name):
                 return scope.variables.get(name)
             i = i - 1
-        
+
         if self.globals.contains(name):
             return self.globals.get(name)
-        
+
         return Symbol.init("", SymbolKind.SVariable, box_asttype(AstType.init("void")))
 
     pub def analyze(self, prog: Program) -> HirProgram:
@@ -1069,7 +1075,7 @@ extend Sema:
                     l = l + 1
                 mut r_ty = AstType.init("void")
                 if ret_ty as usize != 0 as usize: r_ty = ret_ty.read()
-                mut hexpr = HirExpr.EClosure(hparams, r_ty, self.lower_block(body), is_async)
+                mut hexpr = HirExpr.EClosure(hparams, r_ty, self.lower_block(body), is_async, Vec[HirParam].init(0))
                 self.exit_scope()
                 return box_hirexpr(hexpr)
             case Expr.EIfElse(cond, then_e, else_e):

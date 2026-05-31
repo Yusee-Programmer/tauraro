@@ -26,7 +26,7 @@ pub enum HirExpr:
     ECast(expr: Pointer[HirExpr], target_ty: AstType)
     EFString(parts: Vec[HirFStringPart], ty: AstType)
     ETryExpr(expr: Pointer[HirExpr], ty: AstType)
-    EClosure(params: Vec[HirParam], ret_ty: AstType, body: HirBlock, is_async: bool)
+    EClosure(params: Vec[HirParam], ret_ty: AstType, body: HirBlock, is_async: bool, captures: Vec[HirParam])
     ESuperMethodCall(base_class: str, method: str, args: Vec[Pointer[HirExpr]], ty: AstType)
     ESuperPropAccess(base_class: str, prop: str, ty: AstType)
     EList(items: Vec[Pointer[HirExpr]], ty: AstType)
@@ -226,7 +226,7 @@ pub def hir_expr_type(e: Pointer[HirExpr]) -> AstType:
         case HirExpr.ECast(_, ty): return ty
         case HirExpr.EFString(_, ty): return ty
         case HirExpr.ETryExpr(_, ty): return ty
-        case HirExpr.EClosure(_, _, _, _): return AstType.init("lambda")
+        case HirExpr.EClosure(_, _, _, _, _): return AstType.init("lambda")
         case HirExpr.ESuperMethodCall(_, _, _, ty): return ty
         case HirExpr.ESuperPropAccess(_, _, ty): return ty
         case HirExpr.EList(_, ty): return ty

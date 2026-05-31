@@ -1271,6 +1271,8 @@ extend Parser:
                     case Token.LParen:
                         self.pos = self.pos + 1
                 mut params = self.parse_param_list()
+                if self.peek() == Token.RParen:
+                    self.pos = self.pos + 1
                 mut return_type = Pointer[AstType](0)
                 if self.peek() == Token.Arrow:
                     self.pos = self.pos + 1
