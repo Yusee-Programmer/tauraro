@@ -241,17 +241,33 @@ extend Parser:
             b.push(self.parse_stmt())
             mut semi_going = True
             while semi_going:
+                semi_going = False
                 match self.peek():
                     case Token.Semicolon:
+                        # Explicit semicolon still present — consume and parse next stmt.
                         self.pos = self.pos + 1
                         match self.peek():
                             case Token.Newline | Token.Eof | Token.Dedent:
-                                semi_going = False
+                                pass
                             case _:
                                 b.push(box_stmt(Stmt.SLine(self.cur_line())))
                                 b.push(self.parse_stmt())
+                                semi_going = True
                     case _:
-                        semi_going = False
+                        # parse_stmt's expect_newline may have consumed the ';' already.
+                        # Check the previous token: if it was ';', there are more stmts.
+                        if self.pos > 0:
+                            match self.tokens.get(self.pos - 1):
+                                case Token.Semicolon:
+                                    match self.peek():
+                                        case Token.Newline | Token.Eof | Token.Dedent:
+                                            pass
+                                        case _:
+                                            b.push(box_stmt(Stmt.SLine(self.cur_line())))
+                                            b.push(self.parse_stmt())
+                                            semi_going = True
+                                case _:
+                                    pass
             return b
 
         mut going = True

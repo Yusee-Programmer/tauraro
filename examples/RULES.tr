@@ -104,15 +104,15 @@ def main():
     const MAX: int = 100
     print("max=" + str(MAX))
 
-    # RULE 1.4  Always annotate the type when the right-hand side is a
-    #           function call or complex expression.  Without an annotation the
-    #           bootstrap compiler infers void* and later operations break.
-    #
-    # WRONG:   mut result = some_fn()   # inferred void*, arithmetic/f-string fails
-    # CORRECT:
-    mut count: int = 0
+    # RULE 1.4  Type annotations are optional for variables — the compiler infers
+    #           the type from the initialiser.  Annotate when you want to be
+    #           explicit or when narrowing is required.
+    mut count = 0           # inferred int — fine for arithmetic and f-strings
     count = count + 1
     print("count=" + str(count))
+    mut count2: int = 0     # annotated — equally correct
+    count2 = count2 + 1
+    print("count2=" + str(count2))
 
     # ─────────────────────────────────────────────────────────────────────────
     # RULE 2 — TYPES & CASTING
@@ -162,25 +162,23 @@ def main():
     mut hello: str = "Hello" + ", " + "World!"
     print(hello)
 
-    # RULE 3.2  Every variable used inside f"{...}" MUST carry an explicit
-    #           type annotation (or be declared with 'mut').
-    #           Without one the variable is __auto_type in C and the
-    #           printf format specifier is chosen as %s with a void* cast
-    #           — which crashes for non-pointer types like int or float.
+    # RULE 3.2  Variables in f"{...}" work with or without explicit type annotations.
+    #           The compiler uses _TR_AUTO_STR (_Generic dispatch) for untyped vars
+    #           so int, float, and bool are all converted correctly at compile time.
     #
-    # WRONG:   result = calculate()
-    #          print(f"result={result}")   # crash if result is int/float
-    #
-    # CORRECT: annotate first, then embed.
-    mut score: int    = 95
-    mut ratio: float  = 0.85
-    mut is_pass: bool = true
+    # Both of these work:
+    mut score = 95          # untyped — works in f-string via _TR_AUTO_STR
+    mut ratio = 0.85        # untyped float — also works
+    mut is_pass = true      # untyped bool — also works
     print(f"score={score} ratio={ratio} pass={is_pass}")
 
-    # RULE 3.3  Method return values used in f-strings need a typed local variable.
-    #
-    # WRONG:   print(f"dsq={p.distance_sq()}")  # bool/int return → cast failure
-    # CORRECT:
+    # Explicit annotations are still fine and may be clearer in complex code:
+    mut score2: int   = 95
+    mut ratio2: float = 0.85
+    print(f"score2={score2} ratio2={ratio2}")
+
+    # RULE 3.3  Method return values can be embedded in f-strings directly
+    #           or stored first — both work.
     mut pt: Point = Point.init(3, 4)
     mut dsq: int = pt.distance_sq()
     print(f"distance_sq={dsq}")
@@ -651,5 +649,152 @@ def main():
 
     # RULE 15.7  String comparison with '==' tests content (strcmp), not
     #            pointer identity.  'is' tests pointer identity — rarely useful.
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 16 — COMPILER SAFETY RULES (automatic — no user annotations needed)
+    # ═════════════════════════════════════════════════════════════════════════
+    # These rules are enforced by the compiler.  You write zero safety
+    # annotations — the compiler carries all the complexity burden.
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 16: Compiler Safety Rules ===")
+
+    # ── Category M: Memory Safety ─────────────────────────────────────────────
+
+    # RULE M-1  Automatic ownership inference.
+    #           The compiler assigns Own / Borrow / Move / Shared to every variable.
+    #           No annotation is ever required.
+
+    # RULE M-2  No use-after-move.
+    #           Once a value is moved into a function it cannot be used again.
+    #
+    # WRONG:   send(data)
+    #          print(data.len)   # ERROR [M-2]: 'data' was moved into 'send'
+    # CORRECT:
+    mut nums: List[int] = [10, 20, 30]
+    mut nums_len: int = nums.len       # read before any move
+    print("nums len=" + str(nums_len))
+
+    # RULE M-3  No double-free.
+    #           Exactly one free is emitted per owned variable at scope exit.
+
+    # RULE M-4  No dangling pointer.
+    #           A borrowed reference cannot outlive its source.  Returning a
+    #           pointer to a local variable is a compile error.
+
+    # RULE M-5  No aliased mutation.
+    #           While a borrow to x is active, x cannot be reassigned.
+
+    # RULE M-6  Bounds checking — runtime check on every list index.
+    #           Out-of-bounds access: clear error message with index and length.
+    #
+    # WRONG:   items[99]    # RUNTIME ERROR: index 99 out of bounds (len=5)
+    # CORRECT: always check len first, or use .get() which also checks.
+    mut safe_items: List[int] = [1, 2, 3]
+    if 1 < safe_items.len:
+        mut si: int = safe_items.get(1)
+        print("item[1]=" + str(si))
+
+    # RULE M-7  Option safety — 'none' is only valid for Option[T].
+    #
+    # WRONG:   mut count: int = none   # ERROR: cannot assign none to int
+    # CORRECT:
+    mut maybe_n: Option[int] = Option.None    # OK — Optional
+    match maybe_n:
+        case Option.None:    print("no value")
+        case Option.Some(v): print("value=" + str(v))
+
+    # RULE M-9  No uninitialized variables.
+    #           Every variable must be assigned on every path before use.
+    #
+    # WRONG:   mut x: int
+    #          if flag: x = 1
+    #          print(x)   # ERROR: x may be uninitialized
+    # CORRECT: give a default value upfront.
+    mut init_val: int = 0      # always initialized
+
+    # ── Category C: Concurrency Safety ───────────────────────────────────────
+
+    # RULE C-1  spawn captures are moved — the caller loses access after spawn.
+    #
+    # WRONG:   spawn process(data); print(data.len)   # ERROR: data was moved
+    # CORRECT: use 'mut shared name = ...' for shared access across tasks.
+
+    # RULE C-3  task_group: joins all spawned threads before exiting.
+    #           Variables freed at scope exit cannot be accessed by workers.
+
+    # RULE C-4  'await' is only valid inside 'async def' functions.
+    #
+    # WRONG:   def fetch() -> str: result = await http_get()   # ERROR outside async
+    # CORRECT: async def fetch() -> str: result = await http_get()
+
+    # ── Category T: Type Safety ───────────────────────────────────────────────
+
+    # RULE T-1  No implicit numeric coercion — use 'as' to cast explicitly.
+    #
+    # WRONG:   mut r: float = get_int()     # ERROR: cannot coerce int to float
+    # CORRECT:
+    mut raw: int   = 7
+    mut as_f: float = raw as float
+    print("as float=" + str(as_f))
+
+    # RULE T-3  Exhaustive match — all enum variants must be covered.
+    #           Use 'case _:' as a catch-all for the remaining variants.
+    #
+    # WRONG:   match dir: case Direction.North: ...   # ERROR: missing South, East, West
+    # CORRECT: (shown in RULE 7 above — always include 'case _:')
+
+    # RULE T-4  Result from a throws function must be handled.
+    #           Silently discarding errors is not allowed.
+    #
+    # WRONG:   safe_div(1, 0)                  # ERROR: Result discarded
+    # CORRECT:
+    mut handled: Result[int, str] = safe_div(5, 2)
+    if handled.is_ok:
+        mut hv: int = handled.ok as int
+        print("handled ok=" + str(hv))
+
+    # RULE T-5  Integer cannot be used as a boolean condition directly.
+    #
+    # WRONG:   if count:       # ERROR: 'count' is int — be explicit
+    # CORRECT:
+    mut cnt: int = 3
+    if cnt != 0:
+        print("count is non-zero")
+    if cnt > 0:
+        print("count is positive")
+
+    # ── Category F: Control Flow Safety ──────────────────────────────────────
+
+    # RULE F-1  match arms never fall through.
+    #           Each arm is fully independent — no accidental C-switch fallthrough.
+
+    # RULE F-3  Definite return — every non-void function must return a value
+    #           on ALL control flow paths.
+    #
+    # WRONG:   def sign(x: int) -> str:
+    #              if x > 0: return "pos"   # ERROR: missing return for x <= 0
+    # CORRECT: cover every branch or add a default return after all ifs.
+
+    # ── Category N: Reserved Names ────────────────────────────────────────────
+
+    # RULE N-1  Built-in names cannot be redefined.
+    #
+    # WRONG:   mut true = "yes"    # ERROR: 'true' is a built-in constant
+    # WRONG:   mut none = 0        # ERROR: 'none' is a built-in constant
+    # WRONG:   def print(s: str):  # WARNING: shadows the built-in print()
+    # CORRECT: use distinct names that do not clash with builtins.
+    mut is_valid: bool = true       # OK — not shadowing a builtin
+    print("is_valid=" + str(is_valid))
+
+    # ── Category U: unsafe: Quarantine ───────────────────────────────────────
+
+    # RULE U-1  Raw pointer operations are only permitted inside 'unsafe:' blocks:
+    #           ptr.read(), ptr.write(), &x, ptr.offset(n), alloc[T](n), asm(...)
+    #
+    # WRONG:   p.write(42)          # ERROR: pointer write requires unsafe:
+    # CORRECT: unsafe: p.write(42)
+
+    # RULE U-2  Ownership rules still apply inside unsafe: — you cannot use a
+    #           moved variable or double-free even in an unsafe: block.
 
     print("=== done ===")

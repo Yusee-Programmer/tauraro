@@ -1264,6 +1264,8 @@ pub class CGenerator:
         if _is_float_type(ty0_n): return "printf(\"%g\\n\", (double)(" + s0 + "))"
         if ty0_n == "bool": return "printf(\"%s\\n\", (" + s0 + ") ? \"true\" : \"false\")"
         if ty0_n == "char": return "printf(\"%c\\n\", " + s0 + ")"
+        if ty0_n == "void" or ty0_n == "":
+            return "printf(\"%s\\n\", _TR_AUTO_STR(" + s0 + "))"
         return "printf(\"%s\\n\", (char*)(" + s0 + "))"
 
     pub def gen_args(self, args: Vec[Pointer[HirExpr]]) -> str:
@@ -1649,6 +1651,11 @@ pub class CGenerator:
                 elif ty_n == "char":
                     fmt = fmt + "%c"
                     fargs = fargs + ", (char)(" + s + ")"
+                elif ty_n == "void" or ty_n == "":
+                    # Unknown type (__auto_type in C) — use _Generic macro to pick
+                    # the right conversion at GCC compile time.
+                    fmt = fmt + "%s"
+                    fargs = fargs + ", _TR_AUTO_STR(" + s + ")"
                 else:
                     fmt = fmt + "%s"
                     fargs = fargs + ", (char*)(" + s + ")"
