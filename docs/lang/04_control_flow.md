@@ -62,7 +62,7 @@ sign    = 1 if x > 0 else -1
 abs_val = x if x >= 0 else -x
 ```
 
-Compiles to a C ternary: `(condition ? then_expr : else_expr)`. Both branches must produce the same type.
+Both branches must produce the same type.
 
 **Compiler rule:** If the two branches produce different types, the compiler errors with [T-2].
 
@@ -120,7 +120,7 @@ while true:
     execute(cmd)
 ```
 
-`while true:` compiles to `while(1)` in C. The optimizer knows this loop body always executes at least once and applies appropriate optimizations.
+The optimizer knows this loop body always executes at least once and applies appropriate optimizations.
 
 ### break and continue
 
@@ -175,7 +175,7 @@ for i in range(10, 0, -1):  # 10, 9, 8, ..., 1 (countdown)
 `range(start, stop)` → `range(start, stop, 1)`
 `range(start, stop, step)` → iterates from `start` up to (but not including) `stop`, stepping by `step`
 
-**How range compiles:** `for i in range(n):` → `for (long long i = 0; i < n; i++)` — direct C loop, zero allocation, maximum speed.
+`range` compiles to a direct loop with zero allocation, maximum speed.
 
 Hausa: `ga i cikin zango(10):` (using `zango` for range)
 
@@ -193,14 +193,7 @@ for score in scores:
     else: print("other")
 ```
 
-**How list iteration compiles:** Lowers to:
-```c
-for (long long _i = 0; _i < names->len; _i++) {
-    char* name = names->data[_i];
-    // body
-}
-```
-No iterator object, no allocation — identical to hand-written C array loop.
+List iteration compiles to a direct index loop with no allocation and no iterator object overhead.
 
 ### Iterating with enumerate
 
@@ -279,22 +272,7 @@ def area(s: Shape) -> int:
 
 The destructuring names (`r`, `w`, `h`, etc.) are bound as local variables in the arm body. They are immutable.
 
-**How enum matching compiles:**
-```c
-switch (s.tag) {
-    case Shape_Circle: {
-        long long r = s.data.Circle.radius;
-        return r * r * 3;
-    }
-    case Shape_Rect: {
-        long long w = s.data.Rect.width;
-        long long h = s.data.Rect.height;
-        return w * h;
-    }
-    // ...
-}
-```
-A direct `switch` on the tag integer — the most efficient possible dispatch.
+Enum matching compiles to a direct switch on the tag integer — the most efficient possible dispatch.
 
 ### Binding Patterns
 

@@ -4,14 +4,14 @@
 
 ## String Basics
 
-A `str` in Tauraro is a C `char*` — a pointer to a null-terminated UTF-8 byte sequence. There are two categories:
+A `str` in Tauraro is a pointer to a null-terminated UTF-8 byte sequence. There are two categories:
 
 | Category | Example | Storage | Freed? |
 |----------|---------|---------|--------|
-| String literal | `"hello"` | Read-only data segment | Never |
+| String literal | `"hello"` | Read-only (static) | Never |
 | Dynamic string | `f"..."`, `a + b` | Heap | At scope exit |
 
-The compiler tracks which is which and injects `free()` only for heap strings.
+The compiler tracks which is which and automatically frees only heap strings.
 
 ---
 
@@ -50,7 +50,7 @@ combined = first + ", " + second + "!"    # "Hello, world!"
 
 String concatenation with `+` allocates a new heap string. Each `+` is a separate allocation. For building strings with many pieces, use an f-string or a series of appends — see [StringBuilder pattern](#stringbuilder-pattern) below.
 
-**Compiler rule:** `+` on strings calls `_tr_str_concat(a, b)`, which allocates a new `char*` and copies both strings. The result is heap-owned and freed at scope exit.
+The result of `+` is a new heap-allocated string, freed at scope exit.
 
 ---
 
@@ -107,28 +107,9 @@ mut result = compute_complex_value(data, threshold, offset)
 f"result = {result}"
 ```
 
-### How F-Strings Compile
+### Performance Note
 
-The compiler analyzes the types of all embedded expressions and selects the correct C format specifier:
-
-| Tauraro type | Format specifier | C output |
-|---|---|---|
-| `int` / `i64` | `%lld` | `printf("...%lld...", val)` |
-| `i32` | `%d` | `printf("...%d...", val)` |
-| `float` / `f64` | `%g` | `printf("...%g...", val)` |
-| `str` | `%s` | `printf("...%s...", val)` |
-| `bool` | `%s` | `printf("...%s...", val ? "true" : "false")` |
-| `char` | `%c` | `printf("...%c...", val)` |
-
-For `print(f"...")` specifically, the compiler may emit a direct `printf` call (no intermediate allocation). For f-strings assigned to variables, the compiler uses `_tr_format(...)` which allocates a heap string.
-
-```python
-# Direct printf (no allocation):
-print(f"x = {x}, y = {y}")
-
-# Allocates a heap string, assigns to 'msg':
-mut msg = f"x = {x}, y = {y}"
-```
+When `print(f"...")` is used directly, the compiler emits efficient output with no intermediate allocation. When an f-string is assigned to a variable (`mut msg = f"..."`), it produces a heap-allocated string freed at scope exit.
 
 ---
 
@@ -141,7 +122,7 @@ mut s = "Hello"
 mut n = len(s)      # 5
 ```
 
-`len(s)` compiles to `_tr_strlen(s)` (a `strlen` wrapper). O(n) — scans the string. For frequently-needed lengths, cache the result in a variable.
+`len(s)` is O(n) — it scans the string. For frequently-needed lengths, cache the result in a variable.
 
 ### Indexing (Character Access)
 
@@ -151,7 +132,7 @@ mut first: char = s[0]      # 'H'
 mut last: char  = s[4]      # 'o'
 ```
 
-`s[i]` compiles to `s[i]` in C (direct array index). No bounds checking. Negative indices are not supported — use `s[len(s) - 1]` for the last character.
+`s[i]` is a direct index with no bounds checking. Negative indices are not supported — use `s[len(s) - 1]` for the last character.
 
 ### String Methods
 
@@ -191,7 +172,7 @@ s2 = str(f)     # "3.14"
 s3 = str(b)     # "true"
 ```
 
-`str()` compiles to `_tr_int_to_str`, `_tr_float_to_str`, or `_tr_bool_to_str` depending on the argument type.
+`str()` converts any primitive value to its string representation.
 
 ### String-to-Number Conversion
 
@@ -200,7 +181,7 @@ n = int("42")           # 42   — parses string as integer
 f = float("3.14")       # 3.14 — parses string as float
 ```
 
-These call `_tr_str_to_int` and `_tr_str_to_float` in the runtime. No error handling — passing a non-numeric string produces 0.
+No error handling — passing a non-numeric string produces 0.
 
 For safe conversion, use a `throws` wrapper:
 ```python
@@ -225,8 +206,7 @@ a != b         # true
 a < b          # true   (lexicographic: 'h' < 'w')
 ```
 
-`==` and `!=` on strings compile to `strcmp(a, b) == 0` and `strcmp(a, b) != 0`.
-`<`, `>`, `<=`, `>=` compile to `strcmp(a, b) < 0`, etc.
+String comparison is by content (byte-by-byte), not by pointer identity. `<`, `>`, `<=`, `>=` are lexicographic.
 
 ---
 

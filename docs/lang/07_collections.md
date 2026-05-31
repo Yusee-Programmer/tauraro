@@ -6,10 +6,10 @@
 
 Tauraro provides two built-in collection types:
 
-| Type | C backing | Use when |
-|------|-----------|----------|
-| `List[T]` | `List_T*` struct with contiguous array | Ordered sequence of same-typed elements |
-| `Dict` | `TrMap*` hash map | String-keyed associative lookup |
+| Type | Use when |
+|------|----------|
+| `List[T]` | Ordered sequence of same-typed elements |
+| `Dict` | String-keyed associative lookup |
 
 Both are heap-allocated. The compiler tracks ownership and injects `free()` at scope exit. You never call `free()` on them manually.
 
@@ -27,19 +27,7 @@ Both are heap-allocated. The compiler tracks ownership and injects `free()` at s
 
 ### Supported Element Types
 
-| List type | C struct | Element C type |
-|-----------|----------|----------------|
-| `List[int]` | `List_i64` | `long long` |
-| `List[i32]` | `List_i32` | `int` |
-| `List[float]` | `List_f64` | `double` |
-| `List[str]` | `List_str` | `char*` |
-| `List[bool]` | `List_bool` | `bool` |
-| `List[char]` | `List_char` | `char` |
-| `List[u8]` | `List_u8` | `uint8_t` |
-| `List[u32]` | `List_u32` | `unsigned int` |
-| `List[i8]` | `List_i8` | `int8_t` |
-| `List[MyClass]` | `List_ptr` | `MyClass*` |
-| `List[MyEnum]` | `List_MyEnum` | `MyEnum` (by value) |
+`List[T]` supports all primitive types (`int`, `i32`, `float`, `bool`, `str`, `char`, `u8`, `u32`, `i8`), class instances, and enum values. Elements are stored contiguously in memory — the same layout as a native array.
 
 ### Creating Lists
 
@@ -83,11 +71,6 @@ items.append(30)
 
 `.append(v)` adds `v` at the end. If the list is at capacity, it doubles its internal buffer (amortized O(1)).
 
-**How `.append` compiles:**
-```c
-List_i64_append(items, 10LL);
-```
-
 ### Reading Elements
 
 ```python
@@ -117,7 +100,7 @@ items[1] += 5      # arithmetic assignment on list element
 mut n = len(items)    # number of elements
 ```
 
-`len(items)` compiles to `((long long)items->len)`. O(1) — a simple field read.
+`len(items)` is O(1) — a simple field read.
 
 ### Removing the Last Element
 
@@ -157,7 +140,7 @@ mut squares: List[int] = [x * x for x in numbers]
 mut evens: List[int] = [x for x in numbers if x % 2 == 0]
 ```
 
-**How comprehensions compile:** To a C loop that builds a `List_T*` directly. No intermediate allocations.
+**How comprehensions work:** Directly builds the result list. No intermediate allocations.
 
 ### Common List Patterns
 
@@ -229,10 +212,10 @@ def sort_asc(items: List[int]) -> void:
 
 ### What Is Dict
 
-`Dict` is a hash map with **string keys** and dynamically-typed values. Values are stored as `void*` pointers internally, which means:
+`Dict` is a hash map with **string keys** and dynamically-typed values. This means:
 - Values are untyped at compile time
 - Works well for string values or pointer values
-- Numeric values must be cast to/from pointer size
+- Numeric values must be stored as strings and converted on read
 
 ```python
 # Create with literal:
@@ -303,7 +286,7 @@ def count_words(words: List[str]) -> Dict:
 ### Dict Limitations
 
 - Keys must be strings — no integer keys, no custom hash keys
-- Values are `void*` — no compile-time type safety on values
+- Values are untyped — no compile-time type safety on dict values
 - No iteration over keys (no `for k, v in dict:` yet)
 
 For integer-keyed maps, use an array with a computed offset. For typed maps with known structure, use a class.

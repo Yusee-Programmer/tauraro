@@ -67,36 +67,6 @@ def find_first(items: List[int], target: int) -> int:
 
 ---
 
-## How Functions Compile
-
-A Tauraro function:
-```python
-def add(a: int, b: int) -> int:
-    return a + b
-```
-
-Compiles to C:
-```c
-static inline __attribute__((always_inline))
-long long add(long long a, long long b) {
-    return a + b;
-}
-```
-
-The compiler applies these C attributes automatically:
-
-| Condition | C attribute |
-|-----------|-------------|
-| Small, non-recursive, non-public | `static inline __attribute__((always_inline))` |
-| Recursive | `static __attribute__((hot))` (never inlined) |
-| Contains `try/except` | `static __attribute__((hot))` (never inlined) |
-| Public API | `__attribute__((hot))` |
-| Named `main` / `_tr_main` | `static inline __attribute__((always_inline))` |
-
-You don't need to think about this. The compiler selects the optimal strategy.
-
----
-
 ## Decorators
 
 Decorators are compile-time hints applied above a function definition:
@@ -134,7 +104,7 @@ class MathUtils:
 mut s = MathUtils.square(5)    # 25
 ```
 
-Static methods compile to plain C functions with no `self*` pointer: `long long MathUtils_square(long long x)`.
+Static methods have no `self` parameter and are called on the class name, not an instance.
 
 ### `@packed`
 
@@ -148,7 +118,7 @@ class NetworkHeader:
     pub length: u32
 ```
 
-Generates `__attribute__((packed))` on the C struct. Use for hardware registers, network packets, or any struct where exact byte layout matters.
+Forces compact memory layout with no padding between fields. Use for hardware registers, network packets, or any struct where exact byte layout matters.
 
 ### `@hot` and `@cold`
 
@@ -162,54 +132,71 @@ def error_handler():    # tell GCC/Clang this is rarely called
     ...
 ```
 
-These map to GCC's `__attribute__((hot))` and `__attribute__((cold))`, which influence branch prediction and code placement decisions.
+These hint to the compiler that a function is on the hot or cold path, influencing branch prediction and code placement decisions.
 
 ---
 
 ## Closures
 
-A closure is an anonymous function that can capture variables from its surrounding scope:
+A closure is an anonymous function that captures variables from its surrounding scope. Use `def (params) -> RetType: body` to create one:
 
 ```python
-def make_adder(n: int) -> lambda:
-    return def (x: int) -> int:
-        return x + n
+def main():
+    mut count: int = 0
+    mut counter = def () -> int:
+        count = count + 1
+        return count
 
-mut add5 = make_adder(5)
-print(add5(3))    # 8
-print(add5(10))   # 15
+    print(counter())    # 1
+    print(counter())    # 2
+    print(counter())    # 3
 ```
 
-### Inline Closures
+Closures can take parameters:
+
+```python
+mut add = def (a: int, b: int) -> int:
+    return a + b
+print(add(3, 4))    # 7
+```
+
+Closures can both capture outer variables AND take parameters:
+
+```python
+mut base: int = 100
+mut add_to_base = def (n: int) -> int:
+    return base + n
+print(add_to_base(5))     # 105
+base = 200
+print(add_to_base(5))     # 205 — sees updated capture
+```
+
+### Capture Semantics
+
+Closures capture outer `mut` variables **by reference** — they see and can modify the current value of the outer variable. Modifications inside the closure affect the outer variable:
+
+```python
+mut total: int = 0
+mut accumulate = def (n: int):
+    total = total + n
+accumulate(5)
+accumulate(10)
+print(total)    # 15
+```
+
+### The lambda Type
+
+The type of a closure is `lambda`. Use it in function parameters or variable annotations:
 
 ```python
 def apply(f: lambda, x: int) -> int:
     return f(x)
 
-result = apply(def (x: int) -> int: return x * x, 7)    # 49
+mut square = def (x: int) -> int: return x * x
+print(apply(square, 7))    # 49
 ```
 
-### How Closures Compile
-
-Each closure generates a static C function plus a context struct that captures the closed-over variables:
-
-```python
-def make_adder(n: int) -> lambda:
-    return def (x: int) -> int: return x + n
-```
-
-Compiles to approximately:
-```c
-typedef struct _closure_1_ctx { long long n; } _closure_1_ctx;
-static long long _closure_1(void* _ctx, long long x) {
-    _closure_1_ctx* _c = (_closure_1_ctx*)_ctx;
-    return x + _c->n;
-}
-```
-
-The `lambda` type is a function pointer + context pointer. Captured variables are copied into the context struct at closure creation time.
-
-**Limitation:** Closures capture variables by value (copy). Modifying a captured variable inside the closure does not affect the outer variable, and vice versa.
+See `examples/20_closures.tr` and `examples/21_closure_params.tr` for full working examples.
 
 ---
 
@@ -231,7 +218,7 @@ swap_print[int](1, 2)
 swap_print[str]("x", "y")
 ```
 
-**How generics compile:** The compiler monomorphizes at each call site. `identity[int]` becomes `identity_int(long long x)` in C. `identity[str]` becomes `identity_str(char* x)`. No boxing, no type erasure, no runtime cost.
+**How generics compile:** The compiler monomorphizes at each call site — `identity[int]` and `identity[str]` become separate specialized functions. No boxing, no type erasure, no runtime cost.
 
 **Type inference for generics:** The compiler often infers the type argument from the value:
 ```python
@@ -275,16 +262,6 @@ def tripled(s: str) throws str -> int:
     return n * 3
 ```
 
-**How `?` compiles:**
-```c
-// mut n = parse_digit(s)?
-Result_i64_str _r1 = parse_digit(s);
-if (_r1.is_err) return _r1;       // propagate
-long long n = _r1.data.value;     // unwrap
-```
-
-Single branch, zero stack overhead, completely inlineable.
-
 See [Error Handling](12_error_handling.md) for the full error handling guide.
 
 ---
@@ -314,8 +291,6 @@ async def run():
 - Communicates that a function is I/O-bound or logically asynchronous
 - Makes code self-documenting about intended concurrent behavior
 - Type-checks correctly: `await f()` has the return type of `f`, not a future type
-
-**How async compiles:** `async def f()` and `def f()` produce identical C output today. The `async` annotation is recorded in the AST but has no C codegen effect.
 
 See [Concurrency](16_concurrency.md) for `spawn` and `task_group:`.
 

@@ -35,10 +35,10 @@ pub def raw_move(dst: Pointer[char], src: Pointer[char], n: int):
 
 # ── Generic allocators (used by src/*.tr: alloc[T], dealloc[T], etc.) ────
 
-pub def alloc[T](count: int) -> Pointer[T]:
+pub def alloc[T](n_elems: int) -> Pointer[T]:
     unsafe:
         sz = sizeof(T)
-        mut ptr = _tr_c_calloc(count, sz) as Pointer[T]
+        mut ptr = _tr_c_calloc(n_elems, sz) as Pointer[T]
         return ptr
 
 pub def dealloc[T](ptr: Pointer[T]):
@@ -49,7 +49,7 @@ pub def resize[T](ptr: Pointer[T], new_count: int) -> Pointer[T]:
         sz = sizeof(T)
         return _tr_c_realloc(ptr as Pointer[char], new_count * sz) as Pointer[T]
 
-pub def copy[T](dst: Pointer[T], src: Pointer[T], count: int):
+pub def copy[T](dst: Pointer[T], src: Pointer[T], n_elems: int):
     unsafe:
         sz = sizeof(T)
-        _tr_c_memcpy(dst as Pointer[char], src as Pointer[char], count * sz)
+        _tr_c_memcpy(dst as Pointer[char], src as Pointer[char], n_elems * sz)

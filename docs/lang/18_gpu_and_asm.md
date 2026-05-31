@@ -14,26 +14,7 @@ gpu:
         data[i] = compute(i)
 ```
 
-**How it compiles:**
-```c
-#ifdef _OPENMP
-#pragma omp parallel
-{
-    #pragma omp for
-    for (long long i = 0; i < 1000LL; i++) {
-        data[i] = compute(i);
-    }
-}
-#else
-for (long long i = 0; i < 1000LL; i++) {
-    data[i] = compute(i);
-}
-#endif
-```
-
-The `#ifdef _OPENMP` guard means:
-- With `-fopenmp`: the loop runs in parallel across all CPU cores
-- Without `-fopenmp`: the loop runs sequentially, as if `gpu:` wasn't there
+With `-fopenmp`: the loop runs in parallel across all CPU cores. Without `-fopenmp`: the loop runs sequentially, as if `gpu:` wasn't there.
 
 ### Enabling OpenMP
 
@@ -130,23 +111,12 @@ unsafe:
     asm("sti")           # x86: enable interrupts
 ```
 
-Compiles to:
-```c
-__asm__ volatile("nop");
-__asm__ volatile("pause");
-```
-
 ### Extended Form (With Operands)
 
 ```python
 unsafe:
     mut cycles: int = 0
     asm("rdtsc", "=A"(cycles), "", "")
-```
-
-Compiles to:
-```c
-__asm__ volatile("rdtsc" : "=A"(cycles) : : "");
 ```
 
 Four-argument `asm` syntax:
@@ -178,16 +148,11 @@ asm(code, outputs, inputs, clobbers)
 
 ### Memory Barrier
 
-A compiler memory barrier prevents the C compiler from reordering memory accesses across the barrier:
+A compiler memory barrier prevents the compiler from reordering memory accesses across the barrier:
 
 ```python
 unsafe:
     asm("", "", "", "memory")
-```
-
-Compiles to:
-```c
-__asm__ volatile("" : : : "memory");
 ```
 
 This does not emit any instruction — it's a pure compiler directive. Use it when you need to ensure all preceding memory writes are visible before subsequent reads, in lock-free data structures or device driver code.
@@ -336,22 +301,15 @@ def main():
 
 ---
 
-## Inspecting Generated Assembly
+## Inspecting What the Compiler Produces
 
-Use `--emit c` to see what C the compiler generates, then compile with GCC to see the assembly:
+Use `--emit c` to see what C the compiler generates before passing it to GCC:
 
 ```bash
-# See generated C:
 tauraroc --emit c program.tr
-
-# See assembly (GCC):
-gcc -O2 -S -o program.s main.c
-
-# See assembly with source annotations:
-gcc -O2 -fverbose-asm -S -o program.s main.c
 ```
 
-This is especially useful for verifying that `gpu:` blocks generate correct `#pragma omp` directives, and that `asm()` generates the intended `__asm__ volatile(...)` statements.
+This is useful for verifying that `gpu:` blocks generate the correct OpenMP directives and that `asm()` contains the intended instructions.
 
 ---
 

@@ -29,20 +29,7 @@ extern "C":
     def abort() -> void
 ```
 
-**How it compiles:** Each declaration becomes a C `extern` prototype in the generated header:
-```c
-extern int puts(char* s);
-extern unsigned long long strlen(char* s);
-extern void* malloc(unsigned long long size);
-extern void  free(void* ptr);
-```
-
-The compiler maps Tauraro types to C types using the same rules as `map_type`:
-- `int` → `long long`
-- `str` → `char*`
-- `usize` → `unsigned long long`
-- `Pointer[void]` → `void*`
-- `bool` → `bool`
+The compiler emits the appropriate C prototype for each declaration. Tauraro types map to C types: `int` → 64-bit integer, `str` → string pointer, `usize` → platform word size, `Pointer[void]` → typeless pointer.
 
 ---
 
@@ -59,7 +46,7 @@ extern "C":
     def sscanf(s: str, fmt: str, ...) -> int
 ```
 
-**How variadic calls compile:** Tauraro forwards the arguments as-is to the C function. The type safety of the variadic part is your responsibility — the compiler doesn't check that format strings match argument types.
+The type safety of the variadic part is your responsibility — the compiler doesn't check that format strings match argument types.
 
 ```python
 unsafe:
@@ -253,7 +240,7 @@ def main():
     for n in nums: print(n)    # 1 2 3 5 8 9
 ```
 
-**How function-pointer callbacks work:** A top-level Tauraro function generates a C function with the same signature. The function's address can be passed as a `lambda` (function pointer) to C.
+**How function-pointer callbacks work:** A top-level Tauraro function can be passed directly as a `lambda` (function pointer) to C.
 
 **Limitation:** Closures cannot be passed as C callbacks because they carry a context pointer that C functions don't know about. Only plain (non-capturing) functions work as C callbacks.
 

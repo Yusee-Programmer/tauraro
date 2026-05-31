@@ -66,6 +66,9 @@ pub class Sema:
     pub assign_froms:       Map[str, int] # block-local last use tracking
     pub current_line:       int
     pub current_func_generics: Vec[str]
+    pub closure_boundary: int           # scope depth just before entering a closure (-1 = not in closure)
+    pub closure_caps:     Vec[HirParam] # captures accumulated for the current innermost closure
+    pub closure_cap_set:  Map[str, bool] # dedup set for capture names
 
 extend Sema:
     pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
@@ -100,6 +103,9 @@ extend Sema:
         s.assign_froms       = Map[str, int].init(32)
         s.current_line       = 0
         s.current_func_generics = Vec[str].init(0)
+        s.closure_boundary  = -1
+        s.closure_caps      = Vec[HirParam].init(0)
+        s.closure_cap_set   = Map[str, bool].init(0)
 
         # ── Built-in functions ─────────────────────────────────────────────────
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -215,10 +221,10 @@ extend Sema:
             if scope.variables.contains(name):
                 return scope.variables.get(name)
             i = i - 1
-        
+
         if self.globals.contains(name):
             return self.globals.get(name)
-        
+
         return Symbol.init("", SymbolKind.SVariable, box_asttype(AstType.init("void")))
 
     pub def analyze(self, prog: Program) -> HirProgram:
@@ -952,7 +958,7 @@ extend Sema:
                 if ret_ty.name == "void" and (prop == "len" or prop == "length" or prop == "capacity"):
                     ret_ty = AstType.init("int")
                 return box_hirexpr(HirExpr.EPropAccess(hobj, prop, ret_ty))
-            case Expr.EIndex(obj, index):
+            case Expr.EIndex(obj, idx_inner):
                 mut hexpr_obj = self.lower_expr(obj)
                 mut obj_ty_n: str = hir_expr_type(hexpr_obj).name
                 mut obj_name = ""
@@ -961,9 +967,9 @@ extend Sema:
                     case _: pass
                 mut is_generic = false
                 mut generic_arg_n: str = ""
-                if index as usize == 0 as usize:
+                if idx_inner as usize == 0 as usize:
                     return hexpr_obj
-                match index.read():
+                match idx_inner.read():
                     case Expr.EIdent(iname):
                         mut is_param = false
                         if self.current_class_name != "":
@@ -983,7 +989,7 @@ extend Sema:
                             generic_arg_n = iname
                     case Expr.EIndex(_, _):
                         is_generic = true
-                        mut nested_ty = self.build_ast_type(index)
+                        mut nested_ty = self.build_ast_type(idx_inner)
                         if nested_ty as usize != 0 as usize:
                             generic_arg_n = nested_ty.read().name
                     case _: pass
@@ -994,7 +1000,7 @@ extend Sema:
                         container_ty.args = Vec[Pointer[AstType]].init(1)
                         container_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
                         if obj_name == "alloc" or obj_name == "dealloc" or obj_name == "resize" or obj_name == "copy":
-                             return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(index), container_ty))
+                             return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(idx_inner), container_ty))
                         return box_hirexpr(HirExpr.EIdent(obj_ty_n, container_ty, false))
                     # User-defined generic class or enum: preserve the concrete type arg
                     if (self.classes.contains(obj_name) or self.enums.contains(obj_name)) and generic_arg_n != "":
@@ -1005,7 +1011,7 @@ extend Sema:
                     return hexpr_obj
                 if not self.is_primitive_name(obj_ty_n) and obj_ty_n != "str" and obj_ty_n != "Pointer" and obj_ty_n != "List" and obj_ty_n != "Vec":
                     mut call_args = Vec[Pointer[HirExpr]].init(1)
-                    call_args.push(self.lower_expr(index))
+                    call_args.push(self.lower_expr(idx_inner))
                     return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", call_args, AstType.init("void")))
                 # EIndex type is the element type, not the container type
                 mut elem_ty = AstType.init("void")
@@ -1016,7 +1022,7 @@ extend Sema:
                     if hir_expr_type(hexpr_obj).args.len > 0:
                         elem_ty = hir_expr_type(hexpr_obj).args.get(0).read()
                 elif obj_ty_n == "str": elem_ty = AstType.init("char")
-                return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(index), elem_ty))
+                return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(idx_inner), elem_ty))
             case Expr.ESizeOf(ty):
                 if ty as usize == 0 as usize: return box_hirexpr(HirExpr.ESizeOf(AstType.init("void"), AstType.init("int")))
                 return box_hirexpr(HirExpr.ESizeOf(ty.read(), AstType.init("int")))
@@ -1069,7 +1075,7 @@ extend Sema:
                     l = l + 1
                 mut r_ty = AstType.init("void")
                 if ret_ty as usize != 0 as usize: r_ty = ret_ty.read()
-                mut hexpr = HirExpr.EClosure(hparams, r_ty, self.lower_block(body), is_async)
+                mut hexpr = HirExpr.EClosure(hparams, r_ty, self.lower_block(body), is_async, Vec[HirParam].init(0))
                 self.exit_scope()
                 return box_hirexpr(hexpr)
             case Expr.EIfElse(cond, then_e, else_e):

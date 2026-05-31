@@ -52,34 +52,14 @@ Each variant can carry zero or more named fields. Fields within a variant have n
 
 ---
 
-## How Enums Compile
+## Memory Representation
 
-Tauraro enums compile to **tagged unions** in C — the most efficient possible representation for a discriminated union:
+Tauraro enums are **tagged unions** — the most efficient possible representation for a discriminated union:
 
-```c
-typedef enum {
-    Shape_Circle = 0,
-    Shape_Rect   = 1,
-    Shape_Triangle = 2,
-    Shape_Point  = 3,
-} Shape_Tag;
-
-struct Shape {
-    Shape_Tag tag;
-    union {
-        struct { long long radius; }              Circle;
-        struct { long long width; long long height; } Rect;
-        struct { long long base; long long height; }  Triangle;
-    } data;
-};
-typedef struct Shape Shape;
-```
-
-- `tag` — a small integer that identifies which variant is active
-- `data` — a union with one struct per data-carrying variant
-- Total size = `sizeof(tag) + sizeof(largest_variant_data)`
-
-No heap allocation. No virtual dispatch. No boxing. Matching on tag is a single integer comparison.
+- A small integer tag identifies which variant is active
+- A union holds the data for each data-carrying variant
+- No heap allocation, no virtual dispatch, no boxing
+- Matching on an enum variant is a single integer comparison
 
 ---
 
@@ -100,16 +80,7 @@ mut close_msg = Message.Close
 mut err_msg   = Message.Error(404, "not found")
 ```
 
-**How variant construction compiles:**
-```c
-// Shape.Circle(5):
-Shape _v = { .tag = Shape_Circle, .data.Circle = { .radius = 5 } };
-
-// Shape.Rect(3, 4):
-Shape _v = { .tag = Shape_Rect, .data.Rect = { .width = 3, .height = 4 } };
-```
-
-Struct literal initialization — no function call, no allocation.
+Variant construction is a single struct literal — no function call, no allocation.
 
 ---
 
@@ -142,23 +113,7 @@ def area(s: Shape) -> int:
 
 The field names in the destructuring pattern (`r`, `w`, `h`) bind the variant's data fields as local immutable variables in the arm body.
 
-**How matching compiles:**
-```c
-switch (s.tag) {
-    case Shape_Circle: {
-        long long r = s.data.Circle.radius;
-        return r * r * 3;
-    }
-    case Shape_Rect: {
-        long long w = s.data.Rect.width;
-        long long h = s.data.Rect.height;
-        return w * h;
-    }
-    // ...
-}
-```
-
-A direct `switch` on the tag — one comparison, no indirection, maximum speed.
+Matching compiles to a direct switch on the tag — one comparison, no indirection, maximum speed.
 
 ---
 
@@ -194,7 +149,7 @@ extend Inbox:
             i = i + 1
 ```
 
-`List[Message]` compiles to `List_Message*` — a contiguous array of `Message` structs stored by value. No boxing.
+`List[Message]` stores `Message` values contiguously — no boxing, no indirection.
 
 ---
 
@@ -265,7 +220,7 @@ def main():
     print(d.is_vertical())    # true
 ```
 
-**How `self` works for enum methods:** The compiler passes the enum value by pointer: `Direction_opposite(Direction* self)`. Since enums are stack-allocated structs, `self` is a pointer to the caller's local variable.
+**Note:** Always declare the variable with an explicit type before calling methods on it: `mut d: Direction = Direction.North` rather than `mut d = Direction.North`.
 
 ---
 

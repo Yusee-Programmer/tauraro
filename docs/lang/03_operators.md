@@ -205,14 +205,6 @@ b: i8    = 300 as i8           # int → i8 (wraps: 300 % 256 = 44)
 u: u64   = -1 as u64           # signed → unsigned (all bits set → 2^64 - 1)
 ```
 
-**What `as` compiles to:**
-```python
-n as float     →   (double)(n)
-f as int       →   (long long)(f)
-n as i8        →   (int8_t)(n)
-n as u64       →   (unsigned long long)(n)
-```
-
 ### Pointer Casts (unsafe only)
 
 ```python
@@ -315,7 +307,7 @@ def main():
 | `__getitem__(self, i)` | `x[i]` | `a[i]` |
 | `__setitem__(self, i, v)` | `x[i] = v` | `a[i] = v` |
 
-**How operator overloading compiles:** `a + b` where `a` is a class type becomes `Vec2___add__(a, b)` in C. There is no dynamic dispatch — the types are known at compile time.
+Operator overloading is fully static — the types are known at compile time, no dynamic dispatch.
 
 ---
 

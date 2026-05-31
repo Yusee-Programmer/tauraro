@@ -113,56 +113,9 @@ loudest_first(dog, cat)     # both auto-converted
 
 ---
 
-## How It Compiles
+## How It Works
 
-When the compiler sees `class Dog implements Animal:`, it generates:
-
-**1. A vtable struct** — one function pointer per interface method:
-```c
-typedef struct {
-    void  (*speak)(void* self);
-    char* (*name)(void* self);
-    long long (*legs)(void* self);
-} Animal_vtable;
-```
-
-**2. A fat-pointer struct** — pairs data + vtable:
-```c
-typedef struct {
-    void*          data;
-    Animal_vtable* vtable;
-} Animal_obj;
-typedef Animal_obj Animal;
-```
-
-**3. Per-class vtable + wrapper** (auto-generated, never written by the user):
-```c
-static inline Animal_obj Dog_as_Animal(Dog* self) {
-    static const Animal_vtable _vtbl = {
-        .speak = (void(*)(void*))Dog_speak,
-        .name  = (char*(*)(void*))Dog_name,
-        .legs  = (long long(*)(void*))Dog_legs,
-    };
-    return (Animal_obj){ .vtable = &_vtbl, .data = (void*)self };
-}
-```
-
-**4. Every call site where a `Dog` is used as `Animal`** gets wrapped automatically:
-```c
-// introduce(dog)  becomes:
-introduce(Dog_as_Animal(dog));
-
-// mut a: Animal = dog  becomes:
-Animal a = Dog_as_Animal(dog);
-```
-
-**5. Method calls on an interface variable** go through the vtable:
-```c
-// a.speak()  compiles to:
-a.vtable->speak(a.data);
-```
-
-One pointer dereference to the vtable, one function pointer call — identical to C++ virtual dispatch.
+When the compiler sees `class Dog implements Animal:`, it generates a vtable for `Dog` (one function pointer per interface method) and a fat-pointer that pairs the object with its vtable. The conversion from `Dog` to `Animal` is automatically inserted at every call site — you never write it manually. Method calls on an interface variable go through the vtable: one pointer dereference, one function call — identical cost to C++ virtual dispatch.
 
 ---
 
@@ -239,8 +192,7 @@ mut s = to_json(emp)        # Employee → Serializable, auto-converted
 
 ## Interface Values Cannot Recover the Concrete Type
 
-Interface values carry a `void*` data pointer — the concrete type is erased. You cannot cast
-an `Animal` back to a `Dog` at runtime. If you need type-tagged dispatch, use an enum:
+Interface values erase the concrete type — you cannot cast an `Animal` back to a `Dog` at runtime. If you need type-tagged dispatch, use an enum:
 
 ```python
 # Use an enum when you need to recover the concrete type:

@@ -167,9 +167,9 @@ pub export def tauraro_init() -> void:
     print("library initialized")
 ```
 
-**Without `export`:** A function `add` in module `utils` generates `utils_add(long long, long long)` in C.
+**Without `export`:** A function `add` in module `utils` is accessible as `utils.add` — the module path is part of the name.
 
-**With `export`:** The same function generates `add(long long, long long)` — no module prefix. Also gets `__attribute__((visibility("default")))` for shared library exports.
+**With `export`:** The function is exported with its plain name `add` — no module prefix, with full shared library visibility.
 
 **`export` implies `pub`:** You can write `export def f()` without `pub` — the function is still public.
 
