@@ -119,6 +119,14 @@ extend Parser:
             case Token.KwExtend:
                 self.pos = self.pos + 1
                 return "extend"
+            # 'None' is KwNone but also a valid variant name in patterns like Option.None
+            case Token.KwNone:
+                self.pos = self.pos + 1
+                return "None"
+            # 'lambda' is KwLambda but used as a type name for function pointer params
+            case Token.KwLambda:
+                self.pos = self.pos + 1
+                return "lambda"
             case _:
                 pass
         return ""
@@ -772,6 +780,14 @@ extend Parser:
 
     pub def parse_comparison(self) -> Pointer[Expr]:
         mut left = self.parse_bitor_expr()
+        # Handle 'not in' compound operator before the standard match
+        if self.peek() == Token.KwNot:
+            mut saved_pos = self.pos
+            self.pos = self.pos + 1
+            if self.peek() == Token.KwIn:
+                self.pos = self.pos + 1
+                return box_expr(Expr.EUnaryOp("not", box_expr(Expr.EBinOp("in", left, self.parse_bitor_expr()))))
+            self.pos = saved_pos
         match self.peek():
             case Token.EqEq:
                 self.pos = self.pos + 1
@@ -1003,31 +1019,46 @@ extend Parser:
             case Token.KwVoid:
                 self.pos = self.pos + 1
                 return box_expr(Expr.EIdent("void"))
-            case Token.Ident(name):
+            case Token.KwSuper:
                 self.pos = self.pos + 1
-                if name == "super":
-                    mut base_class = ""
+                mut super_base: str = ""
+                if self.peek() == Token.LParen:
+                    self.pos = self.pos + 1
+                    super_base = self.consume_ident()
+                    if self.peek() == Token.RParen:
+                        self.pos = self.pos + 1
                     if self.peek() == Token.Dot:
                         self.pos = self.pos + 1
-                        mut next_id = self.consume_ident()
-                        if self.peek() == Token.Dot:
+                        mut super_method: str = self.consume_ident()
+                        if self.peek() == Token.LParen:
                             self.pos = self.pos + 1
-                            base_class = next_id
-                            mut method = self.consume_ident()
-                            if self.peek() == Token.LParen:
-                                self.pos = self.pos + 1
-                                mut args = self.parse_arg_list()
-                                return box_expr(Expr.ESuperMethodCall(base_class, method, args))
-                            else:
-                                return box_expr(Expr.ESuperPropAccess(base_class, method))
+                            mut super_args = self.parse_arg_list()
+                            return box_expr(Expr.ESuperMethodCall(super_base, super_method, super_args))
                         else:
-                            mut method = next_id
-                            if self.peek() == Token.LParen:
-                                self.pos = self.pos + 1
-                                mut args = self.parse_arg_list()
-                                return box_expr(Expr.ESuperMethodCall("", method, args))
-                            else:
-                                return box_expr(Expr.ESuperPropAccess("", method))
+                            return box_expr(Expr.ESuperPropAccess(super_base, super_method))
+                if self.peek() == Token.Dot:
+                    self.pos = self.pos + 1
+                    mut super_next: str = self.consume_ident()
+                    if self.peek() == Token.Dot:
+                        self.pos = self.pos + 1
+                        super_base = super_next
+                        mut super_method2: str = self.consume_ident()
+                        if self.peek() == Token.LParen:
+                            self.pos = self.pos + 1
+                            mut super_args2 = self.parse_arg_list()
+                            return box_expr(Expr.ESuperMethodCall(super_base, super_method2, super_args2))
+                        else:
+                            return box_expr(Expr.ESuperPropAccess(super_base, super_method2))
+                    else:
+                        if self.peek() == Token.LParen:
+                            self.pos = self.pos + 1
+                            mut super_args3 = self.parse_arg_list()
+                            return box_expr(Expr.ESuperMethodCall("", super_next, super_args3))
+                        else:
+                            return box_expr(Expr.ESuperPropAccess("", super_next))
+                return box_expr(Expr.EIdent("super"))
+            case Token.Ident(name):
+                self.pos = self.pos + 1
                 return box_expr(Expr.EIdent(name))
             case Token.KwSizeOf:
                 self.pos = self.pos + 1
@@ -1479,6 +1510,12 @@ extend Parser:
                     self.pos = self.pos + 1
             if self.peek() == Token.RBracket:
                 self.pos = self.pos + 1
+        if self.peek() == Token.KwExtends:
+            self.pos = self.pos + 1
+            c.base_classes.push(self.consume_ident())
+            while self.peek() == Token.Comma:
+                self.pos = self.pos + 1
+                c.base_classes.push(self.consume_ident())
         if self.peek() == Token.KwImplements:
             self.pos = self.pos + 1
             while True:
