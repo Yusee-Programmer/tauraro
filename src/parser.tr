@@ -348,6 +348,8 @@ extend Parser:
                         self.pos = self.pos + 1
                 body = self.parse_block()
                 return box_stmt(Stmt.SUnsafe(body))
+            case Token.KwWith:
+                return self.parse_with_stmt()
             case Token.KwTry:
                 return self.parse_try_stmt()
             case Token.KwAssert:
@@ -412,6 +414,34 @@ extend Parser:
             msg = self.parse_expr()
         self.expect_newline()
         return box_stmt(Stmt.SAssert(cond, msg))
+
+    pub def parse_with_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1  # consume 'with'
+        mut items = Vec[Pointer[Expr]].init(1)
+        mut aliases = Vec[str].init(1)
+        mut going = true
+        while going:
+            mut item_e = self.parse_expr()
+            mut alias = ""
+            # parse_expr() consumes `as AliasName` as ECast; unwrap it to get the alias
+            if item_e as usize != 0 as usize:
+                match item_e.read():
+                    case Expr.ECast(cast_inner, cast_ty_ptr):
+                        if cast_ty_ptr as usize != 0 as usize:
+                            alias = cast_ty_ptr.read().name
+                        item_e = cast_inner
+                    case _: pass
+            items.push(item_e)
+            aliases.push(alias)
+            if self.peek() == Token.Comma:
+                self.pos = self.pos + 1
+            else:
+                going = false
+        match self.peek():
+            case Token.Colon:
+                self.pos = self.pos + 1
+        mut body = self.parse_block()
+        return box_stmt(Stmt.SWith(items, aliases, body))
 
     pub def parse_asm_stmt(self) -> Pointer[Stmt]:
         self.pos = self.pos + 1  # consume 'asm'

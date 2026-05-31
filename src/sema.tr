@@ -591,12 +591,20 @@ extend Sema:
             case Stmt.SRaise(e): return box_hirstmt(HirStmt.SRaise(self.lower_expr(e)))
             case Stmt.SAssert(cond, msg): return box_hirstmt(HirStmt.SAssert(self.lower_expr(cond), self.lower_expr(msg)))
             case Stmt.SWith(items, aliases, body):
+                self.enter_scope()
                 mut h_items = Vec[Pointer[HirExpr]].init(items.len)
                 mut k = 0
                 while k < items.len:
-                    h_items.push(self.lower_expr(items.get(k)))
+                    mut h_wi = self.lower_expr(items.get(k))
+                    h_items.push(h_wi)
+                    # Declare the alias so body can reference it
+                    if k < aliases.len and aliases.get(k) != "":
+                        mut wi_ty = hir_expr_type(h_wi)
+                        self.declare(aliases.get(k), SymbolKind.SVariable, box_asttype(wi_ty), true)
                     k = k + 1
-                return box_hirstmt(HirStmt.SWith(h_items, aliases, self.lower_block(body)))
+                mut h_with_body = self.lower_block(body)
+                self.exit_scope()
+                return box_hirstmt(HirStmt.SWith(h_items, aliases, h_with_body))
             case Stmt.SAsm(code, outputs, inputs, clobbers):
                 return box_hirstmt(HirStmt.SAsm(code, outputs, inputs, clobbers))
             case Stmt.SSpawn(e):

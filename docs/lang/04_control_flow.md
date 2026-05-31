@@ -424,4 +424,25 @@ def collatz_length(n: int) -> int:
 
 ---
 
+## The `with` Statement
+
+The `with` statement provides deterministic resource cleanup via the context manager protocol.
+Any class that implements `__enter__` and `__exit__` can be used in a `with` block.
+
+```python
+with Resource.init("path") as res:
+    res.do_something()
+# __exit__ is called automatically here
+```
+
+The compiler expands `with X as alias:` into:
+1. Evaluate `X` and store it in a temporary
+2. Call `X.__enter__()` and bind the result to `alias`
+3. Run the body
+4. Call `X.__exit__(NULL, NULL, NULL)` after the body
+
+See [21 — Operator Overloading](21_operator_overloading.md) for how to implement `__enter__` and `__exit__`.
+
+---
+
 Next: [Functions →](05_functions.md)
