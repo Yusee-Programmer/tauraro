@@ -96,6 +96,7 @@ pub enum HirStmt:
     SIf(cond: Pointer[HirExpr], then_b: HirBlock, else_b: HirBlock)
     SWhile(cond: Pointer[HirExpr], body: HirBlock)
     SFor(var: str, iter: Pointer[HirExpr], body: HirBlock)
+    SForUnpack(vars: Vec[str], iter: Pointer[HirExpr], body: HirBlock)
     SMatch(expr: Pointer[HirExpr], arms: Vec[HirMatchArm])
     STry(try_body: HirBlock, catches: Vec[Pointer[HirCatchClause]], finally_b: HirBlock)
     SAssert(cond: Pointer[HirExpr], msg: Pointer[HirExpr])

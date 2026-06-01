@@ -1938,6 +1938,9 @@ pub class CGenerator:
             if method == "values":
                 if is_idict: return "_tr_idict_values(" + obj_s + ")"
                 return "_tr_dict_values(" + obj_s + ")"
+            if method == "items":
+                if is_idict: return "_tr_idict_items(" + obj_s + ")"
+                return "_tr_dict_items(" + obj_s + ")"
 
         mut extra_args = ""
         if args.len > 0:
@@ -2259,6 +2262,8 @@ pub class CGenerator:
                 self.prescan_block_spawns(body)
             case HirStmt.SFor(_, _, body):
                 self.prescan_block_spawns(body)
+            case HirStmt.SForUnpack(_, _, body):
+                self.prescan_block_spawns(body)
             case HirStmt.STry(tb, catches, fin):
                 self.prescan_block_spawns(tb)
                 if not _is_invalid_ptr(fin as usize):
@@ -2357,6 +2362,9 @@ pub class CGenerator:
                 self.prescan_expr_awaits(cond)
                 self.prescan_block_awaits(body)
             case HirStmt.SFor(_, iter, body):
+                self.prescan_expr_awaits(iter)
+                self.prescan_block_awaits(body)
+            case HirStmt.SForUnpack(_, iter, body):
                 self.prescan_expr_awaits(iter)
                 self.prescan_block_awaits(body)
             case HirStmt.STry(tb, catches, fin):
@@ -2643,6 +2651,8 @@ pub class CGenerator:
                 if self.in_gpu_block > 0:
                     self.w(pad + "#pragma omp for\n")
                 self.gen_for_loop(var, iter, body, indent)
+            case HirStmt.SForUnpack(vars, iter, body):
+                self.gen_for_unpack(vars, iter, body, indent)
             case HirStmt.SMatch(e, arms):
                 self.gen_match(e, arms, indent)
             case HirStmt.STry(try_body, catches, finally_b):
@@ -2865,6 +2875,140 @@ pub class CGenerator:
             self.w(pad + "    " + elem_c + " " + var + " = (" + elem_c + ")" + tmp + "_col->data[" + tmp + "_i];\n")
         self.gen_block(body, indent + 2)
         self.w(pad + "    " + tmp + "_i++;\n")
+        self.w(pad + "  }\n")
+        self.w(pad + "}\n")
+
+    pub def gen_for_unpack(self, vars: Vec[str], iter: Pointer[HirExpr], body: HirBlock, indent: int):
+        pad = _indent_str(indent)
+        mut tmp = self.next_temp()
+
+        # ── Case 1: enumerate(collection) ────────────────────────────────────
+        match iter.read():
+            case HirExpr.ECall(eu_callee, eu_args, _):
+                match eu_callee.read():
+                    case HirExpr.EIdent(eu_n, _, _):
+                        if eu_n == "enumerate" and eu_args.len == 1 and vars.len >= 2:
+                            mut eu_col = eu_args.get(0)
+                            mut eu_col_s = self.gen_expr(eu_col)
+                            mut eu_ty = hir_expr_type(eu_col)
+                            mut eu_elem_c = "__auto_type"
+                            if (eu_ty.name == "List" or eu_ty.name == "Vec") and eu_ty.args.len > 0:
+                                eu_elem_c = self.type_to_c(eu_ty.args.get(0).read())
+                            mut eu_v0 = _safe_c_varname(vars.get(0))
+                            mut eu_v1 = _safe_c_varname(vars.get(1))
+                            self.decl_vars.insert(vars.get(0), true)
+                            self.decl_vars.insert(vars.get(1), true)
+                            self.w(pad + "{ __auto_type " + tmp + "_c = " + eu_col_s + ";\n")
+                            self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < (long long)" + tmp + "_c->len; " + tmp + "_i++) {\n")
+                            self.w(pad + "    long long " + eu_v0 + " = " + tmp + "_i;\n")
+                            if eu_elem_c == "__auto_type":
+                                self.w(pad + "    __auto_type " + eu_v1 + " = " + tmp + "_c->data[" + tmp + "_i];\n")
+                            else:
+                                self.w(pad + "    " + eu_elem_c + " " + eu_v1 + " = (" + eu_elem_c + ")" + tmp + "_c->data[" + tmp + "_i];\n")
+                            self.gen_block(body, indent + 2)
+                            self.w(pad + "  }\n")
+                            self.w(pad + "}\n")
+                            return
+                        if eu_n == "zip" and eu_args.len == 2 and vars.len >= 2:
+                            mut za_col = eu_args.get(0)
+                            mut zb_col = eu_args.get(1)
+                            mut za_s = self.gen_expr(za_col)
+                            mut zb_s = self.gen_expr(zb_col)
+                            mut za_ty = hir_expr_type(za_col)
+                            mut zb_ty = hir_expr_type(zb_col)
+                            mut za_c = "__auto_type"
+                            mut zb_c = "__auto_type"
+                            if (za_ty.name == "List" or za_ty.name == "Vec") and za_ty.args.len > 0:
+                                za_c = self.type_to_c(za_ty.args.get(0).read())
+                            if (zb_ty.name == "List" or zb_ty.name == "Vec") and zb_ty.args.len > 0:
+                                zb_c = self.type_to_c(zb_ty.args.get(0).read())
+                            mut zv0 = _safe_c_varname(vars.get(0))
+                            mut zv1 = _safe_c_varname(vars.get(1))
+                            self.decl_vars.insert(vars.get(0), true)
+                            self.decl_vars.insert(vars.get(1), true)
+                            self.w(pad + "{ __auto_type " + tmp + "_a = " + za_s + "; __auto_type " + tmp + "_b = " + zb_s + ";\n")
+                            self.w(pad + "  long long " + tmp + "_n = (long long)(" + tmp + "_a->len < " + tmp + "_b->len ? " + tmp + "_a->len : " + tmp + "_b->len);\n")
+                            self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < " + tmp + "_n; " + tmp + "_i++) {\n")
+                            if za_c == "__auto_type":
+                                self.w(pad + "    __auto_type " + zv0 + " = " + tmp + "_a->data[" + tmp + "_i];\n")
+                            else:
+                                self.w(pad + "    " + za_c + " " + zv0 + " = (" + za_c + ")" + tmp + "_a->data[" + tmp + "_i];\n")
+                            if zb_c == "__auto_type":
+                                self.w(pad + "    __auto_type " + zv1 + " = " + tmp + "_b->data[" + tmp + "_i];\n")
+                            else:
+                                self.w(pad + "    " + zb_c + " " + zv1 + " = (" + zb_c + ")" + tmp + "_b->data[" + tmp + "_i];\n")
+                            self.gen_block(body, indent + 2)
+                            self.w(pad + "  }\n")
+                            self.w(pad + "}\n")
+                            return
+                    case _: pass
+            case _: pass
+
+        # ── Case 2: obj.items() — inline dict bucket walk ─────────────────────
+        match iter.read():
+            case HirExpr.EMethodCall(di_obj, di_meth, _, _):
+                if di_meth == "items":
+                    mut di_s = self.gen_expr(di_obj)
+                    mut di_ty = hir_expr_type(di_obj)
+                    mut di_idict = false
+                    if di_ty.args.len > 0:
+                        mut di_ka = di_ty.args.get(0).read()
+                        if _is_int_type(di_ka.name) or di_ka.name == "int" or di_ka.name == "i64" or di_ka.name == "i32" or di_ka.name == "usize":
+                            di_idict = true
+                    mut di_v0 = _safe_c_varname(vars.get(0))
+                    mut di_v1 = "_di_ign"
+                    if vars.len > 1: di_v1 = _safe_c_varname(vars.get(1))
+                    self.decl_vars.insert(vars.get(0), true)
+                    if vars.len > 1: self.decl_vars.insert(vars.get(1), true)
+                    if di_idict:
+                        mut di_val_c = "void*"
+                        if di_ty.args.len > 1: di_val_c = self.type_to_c(di_ty.args.get(1).read())
+                        self.w(pad + "{ TrIDict* " + tmp + "_d = " + di_s + ";\n")
+                        self.w(pad + "  for (size_t " + tmp + "_bi = 0; " + tmp + "_bi < " + tmp + "_d->cap; " + tmp + "_bi++) {\n")
+                        self.w(pad + "    _TrIDictNode* " + tmp + "_nd = " + tmp + "_d->buckets[" + tmp + "_bi];\n")
+                        self.w(pad + "    while (" + tmp + "_nd) {\n")
+                        self.w(pad + "      long long " + di_v0 + " = " + tmp + "_nd->key;\n")
+                        if di_val_c == "void*" or di_val_c == "void":
+                            self.w(pad + "      void* " + di_v1 + " = " + tmp + "_nd->value;\n")
+                        else:
+                            self.w(pad + "      " + di_val_c + " " + di_v1 + " = (" + di_val_c + ")(uintptr_t)" + tmp + "_nd->value;\n")
+                        self.gen_block(body, indent + 3)
+                        self.w(pad + "      " + tmp + "_nd = " + tmp + "_nd->next;\n")
+                        self.w(pad + "    }\n")
+                        self.w(pad + "  }\n")
+                        self.w(pad + "}\n")
+                    else:
+                        mut di_val_c = "void*"
+                        if di_ty.args.len > 1: di_val_c = self.type_to_c(di_ty.args.get(1).read())
+                        self.w(pad + "{ TrMap* " + tmp + "_d = " + di_s + ";\n")
+                        self.w(pad + "  for (size_t " + tmp + "_bi = 0; " + tmp + "_bi < " + tmp + "_d->cap; " + tmp + "_bi++) {\n")
+                        self.w(pad + "    _DictNode* " + tmp + "_nd = " + tmp + "_d->buckets[" + tmp + "_bi];\n")
+                        self.w(pad + "    while (" + tmp + "_nd) {\n")
+                        self.w(pad + "      char* " + di_v0 + " = " + tmp + "_nd->key;\n")
+                        if di_val_c == "void*" or di_val_c == "void":
+                            self.w(pad + "      void* " + di_v1 + " = " + tmp + "_nd->value;\n")
+                        else:
+                            self.w(pad + "      " + di_val_c + " " + di_v1 + " = (" + di_val_c + ")(uintptr_t)" + tmp + "_nd->value;\n")
+                        self.gen_block(body, indent + 3)
+                        self.w(pad + "      " + tmp + "_nd = " + tmp + "_nd->next;\n")
+                        self.w(pad + "    }\n")
+                        self.w(pad + "  }\n")
+                        self.w(pad + "}\n")
+                    return
+            case _: pass
+
+        # ── Generic fallback: List_ptr* of TrTuple* ──────────────────────────
+        mut fu_iter_s = self.gen_expr(iter)
+        self.w(pad + "{ __auto_type " + tmp + "_col = " + fu_iter_s + ";\n")
+        self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < (long long)" + tmp + "_col->len; " + tmp + "_i++) {\n")
+        self.w(pad + "    TrTuple* " + tmp + "_pair = (TrTuple*)" + tmp + "_col->data[" + tmp + "_i];\n")
+        mut fu_pi = 0
+        while fu_pi < vars.len:
+            mut fu_vn = _safe_c_varname(vars.get(fu_pi))
+            self.decl_vars.insert(vars.get(fu_pi), true)
+            self.w(pad + "    long long " + fu_vn + " = " + tmp + "_pair->data[" + fu_pi.to_str() + "];\n")
+            fu_pi = fu_pi + 1
+        self.gen_block(body, indent + 2)
         self.w(pad + "  }\n")
         self.w(pad + "}\n")
 
@@ -3111,6 +3255,8 @@ pub class CGenerator:
                 if cond_s2 as usize != 0 as usize: self.scan_mono_expr(cond_s2)
                 self.scan_mono_block(body)
             case HirStmt.SFor(_, _, body):
+                self.scan_mono_block(body)
+            case HirStmt.SForUnpack(_, _, body):
                 self.scan_mono_block(body)
             case HirStmt.SMatch(subj_s, arms):
                 if subj_s as usize != 0 as usize: self.scan_mono_expr(subj_s)

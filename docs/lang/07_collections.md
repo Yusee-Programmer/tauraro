@@ -302,15 +302,37 @@ mut msg = labels.get(404)      # str
 
 # Keys and values as lists
 mut ks = scores.keys()         # List[str]
-mut vs = scores.values()       # List[int] (as long long)
+mut vs = scores.values()       # List[int]
+
+# Iterate key-value pairs:
+for word, count in scores.items():
+    print(f"{word}: {count}")
 ```
 
 Supported key types: `str`, `int`, `i64`, `i32`, `usize`.
 
-### Dict Limitations
+### Iterating Dict Entries with `.items()`
 
-- No iteration over key-value pairs (`for k, v in d:`) yet — use `.keys()` + `.get(k)`
-- Values accessed via `.get()` may need a cast for non-int pointer types
+`.items()` returns all key-value pairs and is designed for use with `for k, v in d.items():`:
+
+```python
+mut http: Dict[int, str] = {}
+http.set(200, "OK")
+http.set(404, "Not Found")
+http.set(500, "Error")
+
+for code, msg in http.items():
+    print(f"  {code}: {msg}")
+
+mut freq: Dict[str, int] = {}
+freq.set("apple", 3)
+freq.set("banana", 1)
+
+for word, count in freq.items():
+    print(f"  {word} appears {count} times")
+```
+
+Iteration order follows the internal hash table order (not insertion order).
 
 ---
 
@@ -358,6 +380,46 @@ def main():
 
 - Up to 8 elements per tuple
 - All elements are stored as 64-bit integers internally; pointer types work correctly, but mixed-type tuples may need explicit casts when unpacking non-integer values
+
+---
+
+## Built-in Iteration Helpers
+
+### `enumerate(list)` — Index + Value
+
+`enumerate(list)` yields `(index, element)` pairs. Use with `for i, x in enumerate(items):`:
+
+```python
+mut fruits: List[str] = ["apple", "banana", "cherry"]
+for i, fruit in enumerate(fruits):
+    print(f"  [{i}] {fruit}")
+# [0] apple
+# [1] banana
+# [2] cherry
+
+mut nums: List[int] = [10, 20, 30]
+for idx, val in enumerate(nums):
+    print(f"  idx={idx} val={val}")
+```
+
+Compiles to a tight C `for` loop with no heap allocation. The index variable is always `int`.
+
+### `zip(a, b)` — Parallel Iteration
+
+`zip(a, b)` iterates two lists together, yielding pairs. Use with `for x, y in zip(a, b):`:
+
+```python
+mut names: List[str]  = ["Alice", "Bob", "Carol"]
+mut scores: List[int] = [95, 82, 78]
+
+for name, score in zip(names, scores):
+    print(f"  {name}: {score}")
+# Alice: 95
+# Bob: 82
+# Carol: 78
+```
+
+Iteration stops at the end of the shorter list. Compiles to a single C `for` loop with no allocation.
 
 ---
 

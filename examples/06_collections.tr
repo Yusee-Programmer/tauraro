@@ -1,6 +1,7 @@
-# 06 — Collections: List[T] and Dict
+# 06 — Collections: List[T], Dict[K,V], Tuple, enumerate, zip, dict.items()
 # Covers: List creation, append/pop/index/modify, iteration, enumerate,
-# list comprehension, Dict create/get/set/has, ownership rules.
+# zip, list comprehension, Dict create/get/set/has, typed Dict, tuples,
+# for k,v in dict.items() iteration, ownership rules.
 
 def sum_list(items: List[int]) -> int:
     mut total = 0
@@ -111,14 +112,14 @@ def main():
         i += 1
 
     # ── 7. enumerate — index + value ──────────────────────────────────────────
-    # Tauraro uses while + manual index for enumerated access:
     print("=== Enumerate ===")
     mut fruits: List[str] = ["apple", "banana", "cherry"]
-    mut ei = 0
-    while ei < len(fruits):
-        mut fn: str = fruits[ei + 0]
-        print(f"  [{ei}] {fn}")
-        ei += 1
+    for i, fruit in enumerate(fruits):
+        print(f"  [{i}] {fruit}")
+
+    mut countdown: List[int] = [10, 20, 30]
+    for idx, val in enumerate(countdown):
+        print(f"  idx={idx} val={val}")
 
     # ── 8. List building (comprehension-style) ───────────────────────────────
     print("=== Comprehension ===")
@@ -241,7 +242,19 @@ def main():
     print(f"the appears: {the_count} times")    # 3
     print(f"fox appears: {fox_count} times")    # 1
 
-    # ── 14. Typed Dict[str, int] — integer values, no string casting ─────────────
+    # ── 14. zip — parallel iteration over two lists ──────────────────────────
+    print("=== zip ===")
+    mut zip_names: List[str] = ["Alice", "Bob", "Carol"]
+    mut zip_scores: List[int] = [95, 82, 78]
+    for name, score in zip(zip_names, zip_scores):
+        print(f"  {name}: {score}")
+
+    mut zip_keys: List[str] = ["x", "y", "z"]
+    mut zip_vals: List[int] = [1, 2, 3]
+    for k, v in zip(zip_keys, zip_vals):
+        print(f"  {k}={v}")
+
+    # ── 15. Typed Dict[str, int] — integer values, no string casting ─────────────
     print("=== Typed Dict[str, int] ===")
     mut player_scores: Dict[str, int] = {}
     player_scores.set("alice", 95)
@@ -269,7 +282,16 @@ def main():
     mut go_count = freq.get("go")
     print(f"go appears {go_count} times")    # 3
 
-    # ── 15. Typed Dict[int, str] — integer keys ───────────────────────────────
+    # Iterate all entries with .items()
+    print("=== Dict[str,int].items() ===")
+    mut word_iter: Dict[str, int] = {}
+    word_iter.set("apple", 3)
+    word_iter.set("banana", 1)
+    word_iter.set("cherry", 5)
+    for word, cnt in word_iter.items():
+        print(f"  {word}: {cnt}")
+
+    # ── 16. Typed Dict[int, str] — integer keys ───────────────────────────────
     print("=== Typed Dict[int, str] ===")
     mut http: Dict[int, str] = {}
     http.set(200, "OK")
@@ -287,7 +309,12 @@ def main():
         mut msg_500 = http.get(500)
         print(f"500 -> {msg_500}")    # Internal Server Error
 
-    # ── 16. Tuples — fixed groups of values ──────────────────────────────────
+    # Iterate all entries with .items()
+    print("=== Dict[int,str].items() ===")
+    for code, msg in http.items():
+        print(f"  {code}: {msg}")
+
+    # ── 17. Tuples — fixed groups of values ──────────────────────────────────
     print("=== Tuples ===")
     # Tuple literal — elements can be any type
     mut point = (10, 20)
@@ -308,7 +335,7 @@ def main():
     mut q, r = divmod_pair(17, 5)
     print(f"17 div 5: quotient={q} remainder={r}")    # quotient=3 remainder=2
 
-    # ── 17. Ownership — lists returned from functions ─────────────────────────
+    # ── 18. Ownership — lists returned from functions ─────────────────────────
     # Returning a list transfers ownership to the caller.
     print("=== Ownership ===")
     mut my_range = make_range(5)    # my_range owns the returned list

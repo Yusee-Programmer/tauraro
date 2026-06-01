@@ -1600,6 +1600,37 @@ static inline List_ptr* _tr_idict_values(TrIDict* d) {
     return out;
 }
 
+/* Key-value pair structs for dict.items() */
+typedef struct { char* key; void* val; } TrKVPair;
+typedef struct { long long key; void* val; } TrIKVPair;
+
+static inline List_ptr* _tr_dict_items(TrMap* d) {
+    List_ptr* out = List_ptr_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) {
+        _DictNode* n = d->buckets[i];
+        while (n) {
+            TrKVPair* p = (TrKVPair*)malloc(sizeof(TrKVPair));
+            p->key = n->key; p->val = n->value;
+            List_ptr_append(out, p); n = n->next;
+        }
+    }
+    return out;
+}
+static inline List_ptr* _tr_idict_items(TrIDict* d) {
+    List_ptr* out = List_ptr_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) {
+        _TrIDictNode* n = d->buckets[i];
+        while (n) {
+            TrIKVPair* p = (TrIKVPair*)malloc(sizeof(TrIKVPair));
+            p->key = n->key; p->val = n->value;
+            List_ptr_append(out, p); n = n->next;
+        }
+    }
+    return out;
+}
+
 typedef struct { uint8_t* data; size_t len; size_t capacity; } List_u8;
 static inline List_u8* List_u8_new(void) { List_u8* l=(List_u8*)malloc(sizeof(List_u8)); l->data=(uint8_t*)malloc(sizeof(uint8_t)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_u8_append(List_u8* l, uint8_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint8_t*)realloc(l->data,sizeof(uint8_t)*l->capacity); } l->data[l->len++]=val; }

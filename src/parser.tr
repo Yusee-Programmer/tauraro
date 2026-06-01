@@ -621,6 +621,19 @@ extend Parser:
     pub def parse_for_stmt(self) -> Pointer[Stmt]:
         self.pos = self.pos + 1
         var = self.consume_ident()
+        # Multi-target: for a, b in ... → SForUnpack
+        if self.peek() == Token.Comma:
+            mut unpack_vars = Vec[str].init(4)
+            unpack_vars.push(var)
+            while self.peek() == Token.Comma:
+                self.pos = self.pos + 1
+                unpack_vars.push(self.consume_ident())
+            if self.peek() == Token.KwIn: self.pos = self.pos + 1
+            mut fu_iter = self.parse_expr()
+            self.skip_newlines()
+            if self.peek() == Token.Colon: self.pos = self.pos + 1
+            mut fu_body = self.parse_block()
+            return box_stmt(Stmt.SForUnpack(unpack_vars, fu_iter, fu_body))
         match self.peek():
             case Token.KwIn:
                 self.pos = self.pos + 1

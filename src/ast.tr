@@ -188,6 +188,7 @@ pub enum Stmt:
     SIf(cond: Pointer[Expr], then_b: Block, elifs: Vec[ElifClause], else_b: Block)
     SWhile(cond: Pointer[Expr], body: Block, decorators: Vec[Decorator])
     SFor(var: str, iter: Pointer[Expr], body: Block, decorators: Vec[Decorator])
+    SForUnpack(vars: Vec[str], iter: Pointer[Expr], body: Block)
     SMatch(expr: Pointer[Expr], arms: Vec[MatchArm])
     STry(try_body: Block, catches: Vec[Pointer[CatchClause]], finally_b: Block)
     SAssert(cond: Pointer[Expr], msg: Pointer[Expr])
