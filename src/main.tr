@@ -360,7 +360,7 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
             cross_flags = cross_flags + " --sysroot=\"" + sysroot + "\""
     mut static_flag = ""
     if static_link: static_flag = " -static"
-    mut warn_flags = " -Wno-parentheses-equality -Wno-string-compare -Wno-comment -Wno-unknown-attributes -Wno-unused-value"
+    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
     mut cmd = cc + " -O" + opt_level + static_flag + cross_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
     mut i = 0
     while i < c_files.len:
@@ -393,7 +393,7 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     mut cc = detect_c_compiler()
     mut opt_flag = "-O" + opt_level
     mut out_dir = strip_trailing_sep(dir_of_path(c_path))
-    mut cmd = cc + " " + opt_flag + " -Wno-parentheses-equality -Wno-string-compare -Wno-comment -Wno-unknown-attributes -Wno-unused-value -DTAURARO_NO_RT_HELPERS \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
+    mut cmd = cc + " " + opt_flag + " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -DTAURARO_NO_RT_HELPERS \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 

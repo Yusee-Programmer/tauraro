@@ -692,7 +692,7 @@ pub class CGenerator:
     pub def get_inline_attrs(self, f: HirFunction) -> str:
         mut i = 0
         while i < f.decorators.len:
-            if f.decorators.get(i).name == "inline": return "static __attribute__((always_inline,hot)) "
+            if f.decorators.get(i).name == "inline": return "static inline __attribute__((always_inline,hot)) "
             if f.decorators.get(i).name == "hot": return "static __attribute__((hot)) "
             if f.decorators.get(i).name == "noinline": return "static __attribute__((noinline)) "
             i = i + 1
@@ -706,7 +706,7 @@ pub class CGenerator:
     pub def get_proto_attrs(self, f: HirFunction) -> str:
         mut i = 0
         while i < f.decorators.len:
-            if f.decorators.get(i).name == "inline": return "__attribute__((always_inline,hot)) "
+            if f.decorators.get(i).name == "inline": return "inline __attribute__((always_inline,hot)) "
             if f.decorators.get(i).name == "hot": return "__attribute__((hot)) "
             if f.decorators.get(i).name == "noinline": return "__attribute__((noinline)) "
             i = i + 1
