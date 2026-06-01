@@ -1472,6 +1472,39 @@ static inline bool   _tr_dict_contains(TrMap* d, char* k) { return d&&Dict_has(d
 #define _tr_dict_remove(d, k) _tr_dict_set_impl((d), (k), NULL)
 static inline long long _tr_dict_len(TrMap* d) { return Dict_len(d); }
 
+/* ── Int-keyed Dict (Dict[int, V]) ────────────────────────────────────── */
+typedef struct _TrIDictNode { long long key; void* value; struct _TrIDictNode* next; } _TrIDictNode;
+typedef struct { _TrIDictNode** buckets; size_t cap; size_t len; } TrIDict;
+static inline TrIDict* _tr_idict_new(long long cap_hint) {
+    size_t cap = (size_t)(cap_hint > 8 ? cap_hint : 8);
+    TrIDict* d = (TrIDict*)calloc(1, sizeof(TrIDict));
+    d->buckets = (_TrIDictNode**)calloc(cap, sizeof(_TrIDictNode*));
+    d->cap = cap; d->len = 0; return d;
+}
+static inline void _tr_idict_set_impl(TrIDict* d, long long k, void* v) {
+    if (!d) return;
+    size_t idx = (size_t)((unsigned long long)k % d->cap);
+    _TrIDictNode* n = d->buckets[idx];
+    while (n) { if (n->key == k) { n->value = v; return; } n = n->next; }
+    _TrIDictNode* nd = (_TrIDictNode*)malloc(sizeof(_TrIDictNode));
+    nd->key = k; nd->value = v; nd->next = d->buckets[idx];
+    d->buckets[idx] = nd; d->len++;
+}
+#define _tr_idict_set(d, k, v) _tr_idict_set_impl((d), (k), (void*)(uintptr_t)(v))
+static inline void* _tr_idict_get(TrIDict* d, long long k) {
+    if (!d) return NULL;
+    size_t idx = (size_t)((unsigned long long)k % d->cap);
+    _TrIDictNode* n = d->buckets[idx];
+    while (n) { if (n->key == k) return n->value; n = n->next; }
+    return NULL;
+}
+static inline bool   _tr_idict_contains(TrIDict* d, long long k) { return _tr_idict_get(d,k) != NULL; }
+static inline void   _tr_idict_remove(TrIDict* d, long long k) { _tr_idict_set_impl(d, k, NULL); }
+static inline long long _tr_idict_len(TrIDict* d) { return d ? (long long)d->len : 0LL; }
+
+/* ── Built-in Tuple (up to 8 elements, all stored as long long) ────────── */
+typedef struct { long long data[8]; } TrTuple;
+
 /* ── List types (bootstrap phase) ─────────────────────────────────── */
 
 typedef struct { long long* data; size_t len; size_t capacity; } List_i64;
@@ -1528,6 +1561,75 @@ static inline void List_char_append(List_char* l, char val) { if(l->len==l->capa
 static inline char List_char_get(List_char* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_char_set(List_char* l, long long i, char v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_char_free(List_char* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
+/* ── Dict[str,V] key/value iteration (after List types are defined) ─────── */
+static inline List_str* _tr_dict_keys(TrMap* d) {
+    List_str* out = List_str_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) {
+        _DictNode* n = d->buckets[i];
+        while (n) { if (n->key && n->value) List_str_append(out, n->key); n = n->next; }
+    }
+    return out;
+}
+static inline List_ptr* _tr_dict_values(TrMap* d) {
+    List_ptr* out = List_ptr_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) {
+        _DictNode* n = d->buckets[i];
+        while (n) { if (n->key && n->value) List_ptr_append(out, n->value); n = n->next; }
+    }
+    return out;
+}
+static inline List_i64* _tr_idict_keys(TrIDict* d) {
+    List_i64* out = List_i64_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) {
+        _TrIDictNode* n = d->buckets[i];
+        while (n) { if (n->value) List_i64_append(out, n->key); n = n->next; }
+    }
+    return out;
+}
+static inline List_ptr* _tr_idict_values(TrIDict* d) {
+    List_ptr* out = List_ptr_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) {
+        _TrIDictNode* n = d->buckets[i];
+        while (n) { if (n->value) List_ptr_append(out, n->value); n = n->next; }
+    }
+    return out;
+}
+
+/* Key-value pair structs for dict.items() */
+typedef struct { char* key; void* val; } TrKVPair;
+typedef struct { long long key; void* val; } TrIKVPair;
+
+static inline List_ptr* _tr_dict_items(TrMap* d) {
+    List_ptr* out = List_ptr_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) {
+        _DictNode* n = d->buckets[i];
+        while (n) {
+            TrKVPair* p = (TrKVPair*)malloc(sizeof(TrKVPair));
+            p->key = n->key; p->val = n->value;
+            List_ptr_append(out, p); n = n->next;
+        }
+    }
+    return out;
+}
+static inline List_ptr* _tr_idict_items(TrIDict* d) {
+    List_ptr* out = List_ptr_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) {
+        _TrIDictNode* n = d->buckets[i];
+        while (n) {
+            TrIKVPair* p = (TrIKVPair*)malloc(sizeof(TrIKVPair));
+            p->key = n->key; p->val = n->value;
+            List_ptr_append(out, p); n = n->next;
+        }
+    }
+    return out;
+}
 
 typedef struct { uint8_t* data; size_t len; size_t capacity; } List_u8;
 static inline List_u8* List_u8_new(void) { List_u8* l=(List_u8*)malloc(sizeof(List_u8)); l->data=(uint8_t*)malloc(sizeof(uint8_t)*8); l->len=0; l->capacity=8; return l; }

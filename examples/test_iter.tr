@@ -1,0 +1,45 @@
+# Test: dict.items(), zip(), enumerate()
+
+def main():
+
+    # ── enumerate ─────────────────────────────────────────────────────────────
+    print("=== enumerate ===")
+    mut fruits = ["apple", "banana", "cherry", "date"]
+    for i, fruit in enumerate(fruits):
+        print(f"  [{i}] {fruit}")
+
+    mut nums = [10, 20, 30, 40]
+    for idx, val in enumerate(nums):
+        print(f"  idx={idx} val={val}")
+
+    # ── zip ───────────────────────────────────────────────────────────────────
+    print("=== zip ===")
+    mut names = ["Alice", "Bob", "Carol"]
+    mut scores = [95, 82, 78]
+    for name, score in zip(names, scores):
+        print(f"  {name}: {score}")
+
+    mut keys = ["a", "b", "c"]
+    mut vals = [1, 2, 3]
+    for k, v in zip(keys, vals):
+        print(f"  {k} -> {v}")
+
+    # ── dict.items() with Dict[str, int] ─────────────────────────────────────
+    print("=== dict.items() str-keyed ===")
+    mut word_freq: Dict[str, int] = {}
+    word_freq.set("hello", 3)
+    word_freq.set("world", 1)
+    word_freq.set("tauraro", 5)
+    for word, count in word_freq.items():
+        print(f"  {word}: {count}")
+
+    # ── dict.items() with Dict[int, str] ─────────────────────────────────────
+    print("=== dict.items() int-keyed ===")
+    mut http: Dict[int, str] = {}
+    http.set(200, "OK")
+    http.set(404, "Not Found")
+    http.set(500, "Error")
+    for code, msg in http.items():
+        print(f"  {code} -> {msg}")
+
+    print("=== done ===")

@@ -1,12 +1,12 @@
 # 15 — Concurrency
-# Covers: async/await (synchronous today, forward-compatible),
+# Covers: async/await (real OS thread per await call),
 # spawn (OS threads), task_group: (structured concurrency, joins threads),
 # shared (atomic reference-counted ownership across threads).
 
 # ── 1. async / await ──────────────────────────────────────────────────────────
-# 'async def' marks a function as a coroutine.
-# Today: 'await f(x)' is a direct function call — no scheduler, no heap future.
-# When a real async runtime is added, all async/await code will still work.
+# 'async def' marks a function as thread-dispatchable.
+# 'await f(x)' launches f on a real OS thread, blocks until it returns.
+# The return value comes back via an internal _TrTaskState handle.
 async def fetch(id: int) -> str:
     return f"item-{id}"
 
@@ -86,16 +86,16 @@ def heavy_compute(n: int) -> void:
 
 async def main():
 
-    # ── async/await ───────────────────────────────────────────────────────────
+    # ── async/await — each await spawns a real OS thread and waits ───────────
     print("=== async / await ===")
-    mut r1 = await process(1)
-    mut r2 = await process(42)
+    mut r1 = await process(1)     # runs on a new thread, blocks until done
+    mut r2 = await process(42)    # runs on a new thread, blocks until done
     print(f"process(1)  = {r1}")    # 6  (len("item-1"))
-    print(f"process(42) = {r2}")   # 7  (len("item-42"))
+    print(f"process(42) = {r2}")    # 7  (len("item-42"))
 
     mut ids = [1, 2, 3, 10]
     mut total = await pipeline(ids)
-    print(f"pipeline total chars = {total}")
+    print(f"pipeline total chars = {total}")    # 6+7+7+8 = 28
 
     # ── spawn (detached — no join) ────────────────────────────────────────────
     # WARNING: detached threads may outlive main() if main exits too quickly.

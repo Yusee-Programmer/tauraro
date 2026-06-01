@@ -283,13 +283,143 @@ def count_words(words: List[str]) -> Dict:
     return counts
 ```
 
-### Dict Limitations
+### Typed Dict[K, V]
 
-- Keys must be strings — no integer keys, no custom hash keys
-- Values are untyped — no compile-time type safety on dict values
-- No iteration over keys (no `for k, v in dict:` yet)
+Use `Dict[K, V]` to get typed key and value access:
 
-For integer-keyed maps, use an array with a computed offset. For typed maps with known structure, use a class.
+```python
+# String-keyed, int values
+mut scores: Dict[str, int] = {}
+scores.set("alice", 95)
+scores.set("bob", 87)
+mut a = scores.get("alice")    # int — no cast needed
+
+# Int-keyed, string values
+mut labels: Dict[int, str] = {}
+labels.set(404, "not found")
+labels.set(200, "ok")
+mut msg = labels.get(404)      # str
+
+# Keys and values as lists
+mut ks = scores.keys()         # List[str]
+mut vs = scores.values()       # List[int]
+
+# Iterate key-value pairs:
+for word, count in scores.items():
+    print(f"{word}: {count}")
+```
+
+Supported key types: `str`, `int`, `i64`, `i32`, `usize`.
+
+### Iterating Dict Entries with `.items()`
+
+`.items()` returns all key-value pairs and is designed for use with `for k, v in d.items():`:
+
+```python
+mut http: Dict[int, str] = {}
+http.set(200, "OK")
+http.set(404, "Not Found")
+http.set(500, "Error")
+
+for code, msg in http.items():
+    print(f"  {code}: {msg}")
+
+mut freq: Dict[str, int] = {}
+freq.set("apple", 3)
+freq.set("banana", 1)
+
+for word, count in freq.items():
+    print(f"  {word} appears {count} times")
+```
+
+Iteration order follows the internal hash table order (not insertion order).
+
+---
+
+## Tuples
+
+A tuple is a fixed-size group of values. Use parentheses with commas:
+
+```python
+mut point = (10, 20)             # 2-element tuple
+mut triple = (1, "hello", true)  # mixed types (all stored as int-width values)
+mut empty  = ()                  # empty tuple
+```
+
+### Tuple Unpacking
+
+Unpack a tuple into named variables with `mut a, b = expr`:
+
+```python
+mut x, y = (3, 7)
+print(x)    # 3
+print(y)    # 7
+
+mut a, b, c = (10, 20, 30)
+```
+
+### Functions Returning Tuples
+
+Annotate the return type as `(T1, T2, ...)`:
+
+```python
+def min_max(items: List[int]) -> (int, int):
+    mut lo = items.get(0)
+    mut hi = items.get(0)
+    for x in items:
+        if x < lo: lo = x
+        if x > hi: hi = x
+    return (lo, hi)
+
+def main():
+    mut lo, hi = min_max([3, 1, 4, 1, 5, 9])
+    print(f"min={lo} max={hi}")    # min=1 max=9
+```
+
+### Tuple Limits
+
+- Up to 8 elements per tuple
+- All elements are stored as 64-bit integers internally; pointer types work correctly, but mixed-type tuples may need explicit casts when unpacking non-integer values
+
+---
+
+## Built-in Iteration Helpers
+
+### `enumerate(list)` — Index + Value
+
+`enumerate(list)` yields `(index, element)` pairs. Use with `for i, x in enumerate(items):`:
+
+```python
+mut fruits: List[str] = ["apple", "banana", "cherry"]
+for i, fruit in enumerate(fruits):
+    print(f"  [{i}] {fruit}")
+# [0] apple
+# [1] banana
+# [2] cherry
+
+mut nums: List[int] = [10, 20, 30]
+for idx, val in enumerate(nums):
+    print(f"  idx={idx} val={val}")
+```
+
+Compiles to a tight C `for` loop with no heap allocation. The index variable is always `int`.
+
+### `zip(a, b)` — Parallel Iteration
+
+`zip(a, b)` iterates two lists together, yielding pairs. Use with `for x, y in zip(a, b):`:
+
+```python
+mut names: List[str]  = ["Alice", "Bob", "Carol"]
+mut scores: List[int] = [95, 82, 78]
+
+for name, score in zip(names, scores):
+    print(f"  {name}: {score}")
+# Alice: 95
+# Bob: 82
+# Carol: 78
+```
+
+Iteration stops at the end of the shorter list. Compiles to a single C `for` loop with no allocation.
 
 ---
 

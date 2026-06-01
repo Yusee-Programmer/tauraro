@@ -91,15 +91,35 @@ def apply_sq(x: int) -> int:
     return x * x
 
 # ── 11. Async functions ───────────────────────────────────────────────────────
-# 'async' marks a function as a coroutine. Today it compiles identically to a
-# normal function (synchronous), but the syntax is forward-compatible with a
-# future async runtime.
+# 'async def' marks a function as thread-dispatchable.
+# 'await f(x)' launches f on a real OS thread, blocks until done, returns value.
 async def fetch_data(id: int) -> str:
     return f"item-{id}"
 
 async def process(id: int) -> int:
     mut data: str = await fetch_data(id)
     return len(data)
+
+# ── 12. Tuple return types ────────────────────────────────────────────────────
+# Functions can return multiple values as a tuple using -> (T1, T2, ...).
+# Callers unpack with: mut a, b = fn(...)
+def min_max(items: List[int]) -> (int, int):
+    mut lo = items[0]
+    mut hi = items[0]
+    for x in items:
+        if x < lo: lo = x
+        if x > hi: hi = x
+    return (lo, hi)
+
+def stats(items: List[int]) -> (int, int, int):
+    mut total = 0
+    mut lo = items[0]
+    mut hi = items[0]
+    for x in items:
+        total += x
+        if x < lo: lo = x
+        if x > hi: hi = x
+    return (total, lo, hi)
 
 def main():
 
@@ -174,10 +194,22 @@ def main():
     mut result: int = apply_sq(7)
     print(f"apply_sq(7) = {result}")   # 49
 
-    # ── Async ─────────────────────────────────────────────────────────────────
-    # async functions compile identically to normal functions today
-    print("=== Async (synchronous today) ===")
-    mut r_proc: int = process(42)
-    print(f"process(42) = {r_proc}")   # length of "item-42" = 7
+    # ── Async — real OS thread per await ─────────────────────────────────────
+    print("=== Async ===")
+    mut r_proc: int = process(42)    # called from non-async: runs normally
+    print(f"process(42) = {r_proc}")    # 7 (len of "item-42")
+
+    # ── Tuple returns ─────────────────────────────────────────────────────────
+    print("=== Tuple Returns ===")
+    mut data_vals = [5, 2, 9, 1, 7, 3]
+    mut lo, hi = min_max(data_vals)
+    print(f"min={lo} max={hi}")    # min=1 max=9
+
+    mut total, mn, mx = stats(data_vals)
+    print(f"sum={total} min={mn} max={mx}")    # sum=27 min=1 max=9
+
+    # Inline tuple literal unpacking:
+    mut x, y, z = (10, 20, 30)
+    print(f"x={x} y={y} z={z}")    # x=10 y=20 z=30
 
     print("=== done ===")

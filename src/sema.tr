@@ -631,6 +631,51 @@ extend Sema:
                 mut hstmt = box_hirstmt(HirStmt.SFor(var, h_iter_for, self.lower_block(body)))
                 self.exit_scope()
                 return hstmt
+            case Stmt.SForUnpack(vars, iter, body):
+                self.enter_scope()
+                mut h_iter_fu = self.lower_expr(iter)
+                # Infer per-variable types from the iterator kind
+                mut fu_tys = Vec[AstType].init(vars.len)
+                mut fu_ti = 0
+                while fu_ti < vars.len:
+                    fu_tys.push(AstType.init("int"))
+                    fu_ti = fu_ti + 1
+                match h_iter_fu.read():
+                    case HirExpr.ECall(fu_callee, fu_args, _):
+                        match fu_callee.read():
+                            case HirExpr.EIdent(fu_fn, _, _):
+                                if fu_fn == "enumerate" and fu_args.len == 1 and vars.len >= 2:
+                                    # var0=index(int), var1=element type of collection
+                                    mut fu_col_ty_n = hir_expr_type(fu_args.get(0)).name
+                                    mut fu_col_al = hir_expr_type(fu_args.get(0)).args.len
+                                    if (fu_col_ty_n == "List" or fu_col_ty_n == "Vec") and fu_col_al > 0:
+                                        fu_tys.set(1, hir_expr_type(fu_args.get(0)).args.get(0).read())
+                                elif fu_fn == "zip" and fu_args.len == 2 and vars.len >= 2:
+                                    # var0=elem type of a, var1=elem type of b
+                                    mut fu_a_n = hir_expr_type(fu_args.get(0)).name
+                                    mut fu_a_al = hir_expr_type(fu_args.get(0)).args.len
+                                    mut fu_b_n = hir_expr_type(fu_args.get(1)).name
+                                    mut fu_b_al = hir_expr_type(fu_args.get(1)).args.len
+                                    if (fu_a_n == "List" or fu_a_n == "Vec") and fu_a_al > 0:
+                                        fu_tys.set(0, hir_expr_type(fu_args.get(0)).args.get(0).read())
+                                    if (fu_b_n == "List" or fu_b_n == "Vec") and fu_b_al > 0:
+                                        fu_tys.set(1, hir_expr_type(fu_args.get(1)).args.get(0).read())
+                            case _: pass
+                    case HirExpr.EMethodCall(fu_obj, fu_meth, _, _):
+                        if fu_meth == "items" and vars.len >= 2:
+                            mut fu_dty_n = hir_expr_type(fu_obj).name
+                            mut fu_dty_al = hir_expr_type(fu_obj).args.len
+                            if (fu_dty_n == "Dict" or fu_dty_n == "Map") and fu_dty_al >= 2:
+                                fu_tys.set(0, hir_expr_type(fu_obj).args.get(0).read())
+                                fu_tys.set(1, hir_expr_type(fu_obj).args.get(1).read())
+                    case _: pass
+                mut vi_fu = 0
+                while vi_fu < vars.len:
+                    self.declare(vars.get(vi_fu), SymbolKind.SVariable, box_asttype(fu_tys.get(vi_fu)), false)
+                    vi_fu = vi_fu + 1
+                mut hblk_fu = self.lower_block(body)
+                self.exit_scope()
+                return box_hirstmt(HirStmt.SForUnpack(vars, h_iter_fu, hblk_fu))
             case Stmt.SMatch(subj, arms):
                 mut h_arms = Vec[HirMatchArm].init(4)
                 mut k = 0
@@ -689,6 +734,13 @@ extend Sema:
             case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
             case Stmt.SPass: return box_hirstmt(HirStmt.SPass)
             case Stmt.SUnsafe(body): return box_hirstmt(HirStmt.SUnsafe(self.lower_block(body)))
+            case Stmt.SMultiLet(names, is_mut, val_ptr):
+                mut hval = self.lower_expr(val_ptr)
+                mut i = 0
+                while i < names.len:
+                    self.declare(names.get(i), SymbolKind.SVariable, box_asttype(AstType.init("int")), is_mut)
+                    i = i + 1
+                return box_hirstmt(HirStmt.SMultiLet(names, is_mut, hval))
             case Stmt.SLine(n):
                 self.current_line = n
                 return box_hirstmt(HirStmt.SPass)
@@ -1047,7 +1099,7 @@ extend Sema:
                 while n < items.len:
                     hitems.push(self.lower_expr(items.get(n)))
                     n = n + 1
-                return box_hirexpr(HirExpr.ETuple(hitems, AstType.init("tuple")))
+                return box_hirexpr(HirExpr.ETuple(hitems, AstType.init("Tuple")))
             case Expr.EList(items):
                 mut hitems = Vec[Pointer[HirExpr]].init(items.len)
                 mut n = 0
