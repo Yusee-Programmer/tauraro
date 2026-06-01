@@ -31,17 +31,16 @@ async def run():
     print(f"pipeline(42) = {r2}")
 ```
 
-### Current Semantics: Synchronous
+### Semantics: Thread-Based Execution
 
-In the current compiler, `async`/`await` executes **synchronously**. `await f(x)` is a direct function call — no scheduler, no event loop, no suspension, no heap future allocation.
+`await f(args)` launches `f` on a **real OS thread**, waits for it to complete, and returns the result. The calling thread blocks until the awaited function is done.
 
-**Why compile async as synchronous today?**
+This means:
+- The awaited function runs on a dedicated thread — true concurrency with the rest of the program
+- The return value is transferred back via an internal `_TrTaskState` handle
+- Spawning and joining has overhead; use `spawn`/`task_group:` for fire-and-forget parallelism
 
-1. **Forward compatibility:** The syntax is locked in now. When a true async runtime is added, all existing `async`/`await` code continues to work unchanged.
-
-2. **Correct single-threaded semantics:** For sequential I/O pipelines that don't need parallelism, synchronous execution *is* the correct behavior. The code reads as async and runs correctly.
-
-3. **Zero overhead today:** No future allocation, no scheduler, no executor. Just a function call.
+**Future direction:** A non-blocking async runtime with an event loop will allow multiple `await` calls to run truly concurrently without blocking the caller.
 
 ### Rules for async/await
 
@@ -280,8 +279,8 @@ while i < 200:
 
 | Construct | Behavior | Notes |
 |-----------|----------|-------|
-| `async def f()` | Synchronous function | Forward-compatible with future async runtime |
-| `await f(x)` | Direct call | Return type of `f`, not a future |
+| `async def f()` | Marks function as async-capable | Can be `await`-ed or called directly |
+| `await f(x)` | Runs `f(x)` on a new OS thread, blocks until done | Returns the value of `f(x)` |
 | `spawn f(x)` (outside group) | OS thread, detached | Fire-and-forget |
 | `task_group: { spawn f(x) }` | OS threads, joined | Structured concurrency; max 64 threads |
 | `shared x = val` | Ref-counted box | Refcount atomic; data is not |

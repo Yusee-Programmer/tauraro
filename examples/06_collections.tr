@@ -34,6 +34,17 @@ def make_range(n: int) -> List[int]:
         result.append(i)
     return result    # ownership transferred — no free here
 
+def min_max(items: List[int]) -> (int, int):
+    mut lo = items[0]
+    mut hi = items[0]
+    for x in items:
+        if x < lo: lo = x
+        if x > hi: hi = x
+    return (lo, hi)
+
+def divmod_pair(a: int, b: int) -> (int, int):
+    return (a / b, a % b)
+
 def main():
 
     # ── 1. Creating lists ──────────────────────────────────────────────────────
@@ -230,7 +241,74 @@ def main():
     print(f"the appears: {the_count} times")    # 3
     print(f"fox appears: {fox_count} times")    # 1
 
-    # ── 14. Ownership — lists returned from functions ─────────────────────────
+    # ── 14. Typed Dict[str, int] — integer values, no string casting ─────────────
+    print("=== Typed Dict[str, int] ===")
+    mut player_scores: Dict[str, int] = {}
+    player_scores.set("alice", 95)
+    player_scores.set("bob",   82)
+    player_scores.set("carol", 91)
+
+    mut alice_score = player_scores.get("alice")
+    mut bob_score   = player_scores.get("bob")
+    print(f"alice = {alice_score}")    # 95
+    print(f"bob   = {bob_score}")      # 82
+
+    if player_scores.has("carol"):
+        mut cs = player_scores.get("carol")
+        print(f"carol = {cs}")         # 91
+
+    # Word frequency counter — no str()/int() casts needed
+    mut freq: Dict[str, int] = {}
+    mut sample_words = ["go", "fast", "go", "run", "fast", "go"]
+    for w in sample_words:
+        if freq.has(w):
+            mut c = freq.get(w)
+            freq.set(w, c + 1)
+        else:
+            freq.set(w, 1)
+    mut go_count = freq.get("go")
+    print(f"go appears {go_count} times")    # 3
+
+    # ── 15. Typed Dict[int, str] — integer keys ───────────────────────────────
+    print("=== Typed Dict[int, str] ===")
+    mut http: Dict[int, str] = {}
+    http.set(200, "OK")
+    http.set(201, "Created")
+    http.set(400, "Bad Request")
+    http.set(404, "Not Found")
+    http.set(500, "Internal Server Error")
+
+    mut msg_200 = http.get(200)
+    mut msg_404 = http.get(404)
+    print(f"200 -> {msg_200}")    # OK
+    print(f"404 -> {msg_404}")    # Not Found
+
+    if http.has(500):
+        mut msg_500 = http.get(500)
+        print(f"500 -> {msg_500}")    # Internal Server Error
+
+    # ── 16. Tuples — fixed groups of values ──────────────────────────────────
+    print("=== Tuples ===")
+    # Tuple literal — elements can be any type
+    mut point = (10, 20)
+    mut triple = (1, "hello", 42)
+    mut empty_tup = ()
+
+    # Unpack into named variables
+    mut px, py = point
+    print(f"point: x={px} y={py}")    # x=10 y=20
+
+    mut a, b, c = (100, 200, 300)
+    print(f"triple unpack: a={a} b={b} c={c}")    # 100 200 300
+
+    # Function that returns a tuple (see min_max above)
+    mut lo, hi = min_max([3, 1, 4, 1, 5, 9, 2, 6])
+    print(f"min={lo} max={hi}")    # min=1 max=9
+
+    mut q, r = divmod_pair(17, 5)
+    print(f"17 div 5: quotient={q} remainder={r}")    # quotient=3 remainder=2
+
+    # ── 17. Ownership — lists returned from functions ─────────────────────────
     # Returning a list transfers ownership to the caller.
     print("=== Ownership ===")
     mut my_range = make_range(5)    # my_range owns the returned list

@@ -105,6 +105,7 @@ pub enum HirStmt:
     STaskGroup(body: HirBlock)
     SGpuBlock(body: HirBlock)
     SFree(name: str)
+    SMultiLet(names: Vec[str], is_mut: bool, val: Pointer[HirExpr])
 
 pub class HirBlock:
     pub stmts: Vec[Pointer[HirStmt]]

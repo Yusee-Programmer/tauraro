@@ -283,13 +283,81 @@ def count_words(words: List[str]) -> Dict:
     return counts
 ```
 
+### Typed Dict[K, V]
+
+Use `Dict[K, V]` to get typed key and value access:
+
+```python
+# String-keyed, int values
+mut scores: Dict[str, int] = {}
+scores.set("alice", 95)
+scores.set("bob", 87)
+mut a = scores.get("alice")    # int — no cast needed
+
+# Int-keyed, string values
+mut labels: Dict[int, str] = {}
+labels.set(404, "not found")
+labels.set(200, "ok")
+mut msg = labels.get(404)      # str
+
+# Keys and values as lists
+mut ks = scores.keys()         # List[str]
+mut vs = scores.values()       # List[int] (as long long)
+```
+
+Supported key types: `str`, `int`, `i64`, `i32`, `usize`.
+
 ### Dict Limitations
 
-- Keys must be strings — no integer keys, no custom hash keys
-- Values are untyped — no compile-time type safety on dict values
-- No iteration over keys (no `for k, v in dict:` yet)
+- No iteration over key-value pairs (`for k, v in d:`) yet — use `.keys()` + `.get(k)`
+- Values accessed via `.get()` may need a cast for non-int pointer types
 
-For integer-keyed maps, use an array with a computed offset. For typed maps with known structure, use a class.
+---
+
+## Tuples
+
+A tuple is a fixed-size group of values. Use parentheses with commas:
+
+```python
+mut point = (10, 20)             # 2-element tuple
+mut triple = (1, "hello", true)  # mixed types (all stored as int-width values)
+mut empty  = ()                  # empty tuple
+```
+
+### Tuple Unpacking
+
+Unpack a tuple into named variables with `mut a, b = expr`:
+
+```python
+mut x, y = (3, 7)
+print(x)    # 3
+print(y)    # 7
+
+mut a, b, c = (10, 20, 30)
+```
+
+### Functions Returning Tuples
+
+Annotate the return type as `(T1, T2, ...)`:
+
+```python
+def min_max(items: List[int]) -> (int, int):
+    mut lo = items.get(0)
+    mut hi = items.get(0)
+    for x in items:
+        if x < lo: lo = x
+        if x > hi: hi = x
+    return (lo, hi)
+
+def main():
+    mut lo, hi = min_max([3, 1, 4, 1, 5, 9])
+    print(f"min={lo} max={hi}")    # min=1 max=9
+```
+
+### Tuple Limits
+
+- Up to 8 elements per tuple
+- All elements are stored as 64-bit integers internally; pointer types work correctly, but mixed-type tuples may need explicit casts when unpacking non-integer values
 
 ---
 

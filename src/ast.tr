@@ -177,6 +177,7 @@ pub enum Expr:
 pub enum Stmt:
     SExpr(expr: Pointer[Expr])
     SLet(name: str, ownership: Ownership, is_mut: bool, is_const: bool, is_shared: bool, ty: Pointer[AstType], val: Pointer[Expr])
+    SMultiLet(names: Vec[str], is_mut: bool, val: Pointer[Expr])
     SAssign(target: Pointer[Expr], val: Pointer[Expr])
     SReturn(val: Pointer[Expr])
     SBreak

@@ -689,6 +689,13 @@ extend Sema:
             case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
             case Stmt.SPass: return box_hirstmt(HirStmt.SPass)
             case Stmt.SUnsafe(body): return box_hirstmt(HirStmt.SUnsafe(self.lower_block(body)))
+            case Stmt.SMultiLet(names, is_mut, val_ptr):
+                mut hval = self.lower_expr(val_ptr)
+                mut i = 0
+                while i < names.len:
+                    self.declare(names.get(i), SymbolKind.SVariable, box_asttype(AstType.init("int")), is_mut)
+                    i = i + 1
+                return box_hirstmt(HirStmt.SMultiLet(names, is_mut, hval))
             case Stmt.SLine(n):
                 self.current_line = n
                 return box_hirstmt(HirStmt.SPass)
@@ -1047,7 +1054,7 @@ extend Sema:
                 while n < items.len:
                     hitems.push(self.lower_expr(items.get(n)))
                     n = n + 1
-                return box_hirexpr(HirExpr.ETuple(hitems, AstType.init("tuple")))
+                return box_hirexpr(HirExpr.ETuple(hitems, AstType.init("Tuple")))
             case Expr.EList(items):
                 mut hitems = Vec[Pointer[HirExpr]].init(items.len)
                 mut n = 0

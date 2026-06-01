@@ -148,6 +148,7 @@ pub class CGenerator:
     pub closure_count:  int
     pub emitted_fns:    Map[str, bool]   # tracks emitted free-standing fn names to prevent duplicates
     pub spawn_wrappers:  Map[str, bool]   # fn_name → true once wrapper emitted
+    pub async_wrappers:  Map[str, bool]   # fn_name → true once async wrapper emitted
     pub prescanned_fns:  Map[str, bool]   # fn key → true once body prescanned (prevents re-scan after heap churn)
     pub shared_vars:     Map[str, str]    # var_name → type_name (for _TrSharedBox unwrap)
     pub cur_throws_ty:   str              # non-empty = current function has throws annotation
@@ -180,6 +181,7 @@ pub class CGenerator:
         g.closure_count = 0
         g.emitted_fns   = Map[str, bool].init(256)
         g.spawn_wrappers = Map[str, bool].init(16)
+        g.async_wrappers = Map[str, bool].init(16)
         g.prescanned_fns = Map[str, bool].init(256)
         g.shared_vars    = Map[str, str].init(16)
         g.cur_throws_ty  = ""
@@ -373,7 +375,14 @@ pub class CGenerator:
             return "List_ptr*"
 
         if n == "Map" or n == "Dict":
+            # Dict[int, V] → TrIDict*, Dict[str, V] → TrMap*
+            if ty.args.len > 0:
+                mut ka = ty.args.get(0).read()
+                if _is_int_type(ka.name) or ka.name == "int" or ka.name == "i64" or ka.name == "usize":
+                    return "TrIDict*"
             return "TrMap*"
+
+        if n == "Tuple" or n == "tuple": return "TrTuple"
 
         if n == "Result": return "Result"
         if n == "Option": return "Option"
@@ -933,7 +942,7 @@ pub class CGenerator:
                 return "((" + ok_c + "*)((" + inner_s2 + ").data.Ok.val))"
             case HirExpr.ETuple(items, _): return self.gen_tuple(items)
             case HirExpr.EList(items, ty): return self.gen_list_literal(items, ty)
-            case HirExpr.EDict(keys, vals, _): return self.gen_dict_literal(keys, vals)
+            case HirExpr.EDict(keys, vals, dict_ty): return self.gen_dict_literal(keys, vals, dict_ty)
             case HirExpr.EClosure(params, ret_ty, body, _, captures):
                 return self.gen_closure(params, ret_ty, body, captures)
             case HirExpr.ERange(start, end, inclusive, _):
@@ -951,7 +960,7 @@ pub class CGenerator:
             case HirExpr.ESuperPropAccess(base, prop, _):
                 return "(((" + base + "*)self)->" + prop + ")"
             case HirExpr.EAwait(expr, _):
-                return self.gen_expr(expr)
+                return self.gen_await_call(expr)
             case HirExpr.EYield(expr, _):
                 return self.gen_expr(expr)
             case HirExpr.ESet(items, _):
@@ -1889,17 +1898,46 @@ pub class CGenerator:
                 is_map_dict = true
 
         if is_map_dict:
-            if method == "init" or method == "new": return "_tr_dict_new(" + self.gen_args(args) + ")"
+            # Detect int-keyed dict from type args
+            mut obj_full_ty = hir_expr_type(obj)
+            mut dict_key_ty = "str"
+            if obj_full_ty.args.len > 0:
+                mut ka = obj_full_ty.args.get(0).read()
+                if _is_int_type(ka.name) or ka.name == "int" or ka.name == "i64" or ka.name == "i32" or ka.name == "usize":
+                    dict_key_ty = "int"
+            mut is_idict = dict_key_ty == "int"
+            if method == "init" or method == "new":
+                if is_idict: return "_tr_idict_new(" + self.gen_args(args) + ")"
+                return "_tr_dict_new(" + self.gen_args(args) + ")"
             if method == "get":
-                mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.gen_args(args) + ")"
                 mut c_ty_c = self.type_to_c(call_ty)
-                if c_ty_c != "void":
-                    return "((" + c_ty_c + ")" + mget_r + ")"
+                if is_idict:
+                    mut iget_r = "_tr_idict_get(" + obj_s + ", " + self.gen_args(args) + ")"
+                    if c_ty_c != "void" and c_ty_c != "":
+                        return "((" + c_ty_c + ")(uintptr_t)" + iget_r + ")"
+                    return iget_r
+                mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.gen_args(args) + ")"
+                if c_ty_c != "void" and c_ty_c != "":
+                    return "((" + c_ty_c + ")(uintptr_t)" + mget_r + ")"
                 return mget_r
-            if method == "set" or method == "insert": return "_tr_dict_set(" + obj_s + ", " + self.gen_args(args) + ")"
-            if method == "contains": return "_tr_dict_contains(" + obj_s + ", " + self.gen_args(args) + ")"
-            if method == "remove": return "_tr_dict_remove(" + obj_s + ", " + self.gen_args(args) + ")"
-            if method == "len" or method == "length": return "_tr_dict_len(" + obj_s + ")"
+            if method == "set" or method == "insert":
+                if is_idict: return "_tr_idict_set(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "_tr_dict_set(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "contains" or method == "has":
+                if is_idict: return "_tr_idict_contains(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "_tr_dict_contains(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "remove":
+                if is_idict: return "_tr_idict_remove(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "_tr_dict_remove(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "len" or method == "length":
+                if is_idict: return "_tr_idict_len(" + obj_s + ")"
+                return "_tr_dict_len(" + obj_s + ")"
+            if method == "keys":
+                if is_idict: return "_tr_idict_keys(" + obj_s + ")"
+                return "_tr_dict_keys(" + obj_s + ")"
+            if method == "values":
+                if is_idict: return "_tr_idict_values(" + obj_s + ")"
+                return "_tr_dict_values(" + obj_s + ")"
 
         mut extra_args = ""
         if args.len > 0:
@@ -1955,10 +1993,113 @@ pub class CGenerator:
         return "({ int _fz = snprintf(NULL,0,\"" + fmt + "\"" + fargs + "); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,\"" + fmt + "\"" + fargs + "); _fr; })"
 
     pub def gen_tuple(self, items: Vec[Pointer[HirExpr]]) -> str:
-        if items.len == 0: return "((TrTuple){0})"
-        if items.len == 2:
-            return "((TrTuple2){.first=" + self.gen_expr(items.get(0)) + ", .second=" + self.gen_expr(items.get(1)) + "})"
-        return "((TrTuple){.data={" + self.gen_args(items) + "}})"
+        if items.len == 0: return "((TrTuple){.data={0}})"
+        mut s = "((TrTuple){.data={"
+        mut i = 0
+        while i < items.len:
+            if i > 0: s = s + ", "
+            s = s + "(long long)(uintptr_t)(" + self.gen_expr(items.get(i)) + ")"
+            i = i + 1
+        return s + "}})"
+
+    # ── Real async/await ─────────────────────────────────────────────────────
+
+    pub def emit_async_wrapper_for_call(self, fn_name: str, args: Vec[Pointer[HirExpr]], ret_name: str):
+        if self.async_wrappers.contains(fn_name): return
+        self.async_wrappers.insert(fn_name, true)
+        mut nargs = args.len
+        # Emit: static void* _tr_async_wrap_FNAME(void* _vp) { ... }
+        self.w("static void* _tr_async_wrap_" + fn_name + "(void* _vp) {\n")
+        self.w("    long long* _a = (long long*)_vp;\n")
+        self.w("    _TrTaskState* _ts = (_TrTaskState*)(uintptr_t)_a[0];\n")
+        # Cast each arg back
+        mut ci = 0
+        while ci < nargs:
+            mut arg_ty_name = hir_expr_type(args.get(ci)).name
+            mut c_arg_ty = self.type_to_c(hir_expr_type(args.get(ci)))
+            if c_arg_ty == "void" or c_arg_ty == "": c_arg_ty = "long long"
+            mut is_int = _is_int_type(arg_ty_name) or arg_ty_name == "bool" or arg_ty_name == "char"
+            if is_int:
+                self.w("    " + c_arg_ty + " _arg" + ci.to_str() + " = (" + c_arg_ty + ")_a[" + (ci + 1).to_str() + "];\n")
+            else:
+                self.w("    " + c_arg_ty + " _arg" + ci.to_str() + " = (" + c_arg_ty + ")(uintptr_t)_a[" + (ci + 1).to_str() + "];\n")
+            ci = ci + 1
+        # Build the call
+        mut call_s = fn_name + "("
+        mut ai = 0
+        while ai < nargs:
+            if ai > 0: call_s = call_s + ", "
+            call_s = call_s + "_arg" + ai.to_str()
+            ai = ai + 1
+        call_s = call_s + ")"
+        if ret_name == "void" or ret_name == "":
+            self.w("    " + call_s + ";\n")
+            self.w("    _tr_task_complete(_ts, 0LL);\n")
+        else:
+            self.w("    long long _r = (long long)(uintptr_t)(" + call_s + ");\n")
+            self.w("    _tr_task_complete(_ts, _r);\n")
+        self.w("    free(_a);\n")
+        self.w("    return NULL;\n")
+        self.w("}\n")
+
+    pub def gen_await_call(self, expr: Pointer[HirExpr]) -> str:
+        if _is_invalid_ptr(expr as usize): return "0LL"
+        match expr.read():
+            case HirExpr.ECall(callee, args, call_ty):
+                mut fn_name = ""
+                match callee.read():
+                    case HirExpr.EIdent(n, _, _): fn_name = n
+                    case _: pass
+                if fn_name == "":
+                    # Fallback: can't wrap, call directly
+                    return self.gen_expr(expr)
+                mut ret_name = call_ty.name
+                if ret_name == "": ret_name = "void"
+                self.emit_async_wrapper_for_call(fn_name, args, ret_name)
+                mut nargs = args.len
+                mut tmp = self.next_temp()
+                mut buf_size = (nargs + 1).to_str()
+                mut s = "({ long long* _ab" + tmp + " = (long long*)_tr_checked_alloc(" + buf_size + " * sizeof(long long)); "
+                s = s + "_TrTaskState* _ts" + tmp + " = _tr_task_new(); "
+                s = s + "_ab" + tmp + "[0] = (long long)(uintptr_t)_ts" + tmp + "; "
+                mut ai = 0
+                while ai < nargs:
+                    mut arg_ty_name = hir_expr_type(args.get(ai)).name
+                    mut is_int = _is_int_type(arg_ty_name) or arg_ty_name == "bool" or arg_ty_name == "char"
+                    if is_int:
+                        s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(" + self.gen_expr(args.get(ai)) + "); "
+                    else:
+                        s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(uintptr_t)(" + self.gen_expr(args.get(ai)) + "); "
+                    ai = ai + 1
+                s = s + "_tr_thread_join_wait(_tr_thread_start(_tr_async_wrap_" + fn_name + ", _ab" + tmp + ")); "
+                s = s + "long long _r" + tmp + " = _tr_task_await(_ts" + tmp + "); "
+                s = s + "_tr_task_free(_ts" + tmp + "); "
+                if ret_name == "void":
+                    s = s + "0LL; })"
+                elif _is_int_type(ret_name) or ret_name == "bool" or ret_name == "char":
+                    mut c_ret = self.type_to_c(call_ty)
+                    s = s + "(" + c_ret + ")_r" + tmp + "; })"
+                else:
+                    mut c_ret2 = self.type_to_c(call_ty)
+                    if c_ret2 == "void" or c_ret2 == "": c_ret2 = "void*"
+                    s = s + "(" + c_ret2 + ")(uintptr_t)_r" + tmp + "; })"
+                return s
+            case _:
+                # Not a call — just evaluate synchronously
+                return self.gen_expr(expr)
+
+    # ── SMultiLet (tuple unpacking) ─────────────────────────────────────────
+
+    pub def gen_multi_let(self, names: Vec[str], is_mut: bool, val: Pointer[HirExpr], indent: int):
+        pad = _indent_str(indent)
+        mut tmp = "_tup" + self.next_temp()
+        self.w(pad + "TrTuple " + tmp + " = " + self.gen_expr(val) + ";\n")
+        mut i = 0
+        while i < names.len:
+            mut vname = _safe_c_varname(names.get(i))
+            self.w(pad + "long long " + vname + " = " + tmp + ".data[" + i.to_str() + "];\n")
+            self.decl_vars.insert(names.get(i), true)
+            i = i + 1
 
     pub def gen_list_literal(self, items: Vec[Pointer[HirExpr]], ty: AstType) -> str:
         mut sfx = "ptr"
@@ -1973,10 +2114,30 @@ pub class CGenerator:
             i = i + 1
         return s + l + "; })"
 
-    pub def gen_dict_literal(self, keys: Vec[Pointer[HirExpr]], vals: Vec[Pointer[HirExpr]]) -> str:
+    pub def gen_dict_literal(self, keys: Vec[Pointer[HirExpr]], vals: Vec[Pointer[HirExpr]], hint_ty: AstType) -> str:
+        # Detect int-keyed from type args (works for empty dicts too)
+        mut is_int_key = false
+        if hint_ty.args.len > 0:
+            mut ka_h = hint_ty.args.get(0).read()
+            if _is_int_type(ka_h.name) or ka_h.name == "int" or ka_h.name == "i64" or ka_h.name == "i32" or ka_h.name == "usize":
+                is_int_key = true
         if keys.len == 0:
+            if is_int_key: return "_tr_idict_new(0LL)"
             return "_tr_dict_new(0LL)"
+        # Detect int-keyed literal from key type (fallback when no hint)
+        if not is_int_key and keys.len > 0:
+            mut k0_ty = hir_expr_type(keys.get(0)).name
+            if _is_int_type(k0_ty) or k0_ty == "int" or k0_ty == "i64":
+                is_int_key = true
         mut tmp = self.next_temp()
+        if is_int_key:
+            mut s = "({ TrIDict* " + tmp + " = _tr_idict_new(" + str(keys.len) + "LL); "
+            mut i = 0
+            while i < keys.len:
+                s = s + "_tr_idict_set(" + tmp + ", " + self.gen_expr(keys.get(i)) + ", " + self.gen_expr(vals.get(i)) + "); "
+                i = i + 1
+            s = s + tmp + "; })"
+            return s
         mut s = "({ TrMap* " + tmp + " = _tr_dict_new(" + str(keys.len) + "LL); "
         mut i = 0
         while i < keys.len:
@@ -2141,6 +2302,98 @@ pub class CGenerator:
                         mi = mi + 1
             i = i + 1
 
+    # ── Async wrapper prescan ─────────────────────────────────────────────────
+
+    pub def prescan_expr_awaits(self, e: Pointer[HirExpr]):
+        if _is_invalid_ptr(e as usize): return
+        match e.read():
+            case HirExpr.EAwait(inner, _):
+                if not _is_invalid_ptr(inner as usize):
+                    match inner.read():
+                        case HirExpr.ECall(callee, args, call_ty):
+                            mut fn_name = ""
+                            match callee.read():
+                                case HirExpr.EIdent(n, _, _): fn_name = n
+                                case _: pass
+                            if fn_name != "":
+                                self.emit_async_wrapper_for_call(fn_name, args, call_ty.name)
+                        case _: pass
+                self.prescan_expr_awaits(inner)
+            case HirExpr.ECall(callee, args, _):
+                self.prescan_expr_awaits(callee)
+                mut ai = 0
+                while ai < args.len:
+                    self.prescan_expr_awaits(args.get(ai))
+                    ai = ai + 1
+            case HirExpr.EBinOp(_, l, r, _):
+                self.prescan_expr_awaits(l)
+                self.prescan_expr_awaits(r)
+            case HirExpr.EMethodCall(obj, _, margs, _):
+                self.prescan_expr_awaits(obj)
+                mut mi = 0
+                while mi < margs.len:
+                    self.prescan_expr_awaits(margs.get(mi))
+                    mi = mi + 1
+            case _: pass
+
+    pub def prescan_block_awaits(self, block: HirBlock):
+        if _is_invalid_ptr(block as usize): return
+        mut i = 0
+        while i < block.stmts.len:
+            self.prescan_stmt_awaits(block.stmts.get(i))
+            i = i + 1
+
+    pub def prescan_stmt_awaits(self, s: Pointer[HirStmt]):
+        if _is_invalid_ptr(s as usize): return
+        match s.read():
+            case HirStmt.SExpr(e): self.prescan_expr_awaits(e)
+            case HirStmt.SLet(_, _, _, _, _, _, v): self.prescan_expr_awaits(v)
+            case HirStmt.SReturn(v): self.prescan_expr_awaits(v)
+            case HirStmt.SIf(cond, t, e):
+                self.prescan_expr_awaits(cond)
+                self.prescan_block_awaits(t)
+                self.prescan_block_awaits(e)
+            case HirStmt.SWhile(cond, body):
+                self.prescan_expr_awaits(cond)
+                self.prescan_block_awaits(body)
+            case HirStmt.SFor(_, iter, body):
+                self.prescan_expr_awaits(iter)
+                self.prescan_block_awaits(body)
+            case HirStmt.STry(tb, catches, fin):
+                self.prescan_block_awaits(tb)
+                self.prescan_block_awaits(fin)
+                mut ci = 0
+                while ci < catches.len:
+                    mut cc = catches.get(ci).read()
+                    self.prescan_block_awaits(cc.body)
+                    ci = ci + 1
+            case HirStmt.STaskGroup(body): self.prescan_block_awaits(body)
+            case HirStmt.SMultiLet(_, _, v): self.prescan_expr_awaits(v)
+            case _: pass
+
+    pub def prescan_awaits(self, prog: HirProgram):
+        if _is_invalid_ptr(prog as usize): return
+        mut i = 0
+        while i < prog.functions.len:
+            mut f = prog.functions.get(i)
+            if not _is_invalid_ptr(f as usize):
+                if not _is_invalid_ptr(f.body as usize):
+                    self.prescan_block_awaits(f.body)
+            i = i + 1
+        i = 0
+        while i < prog.classes.len:
+            mut c = prog.classes.get(i)
+            if not _is_invalid_ptr(c as usize):
+                if not _is_invalid_ptr(c.methods as usize):
+                    mut mi = 0
+                    while mi < c.methods.len:
+                        mut m = c.methods.get(mi)
+                        if not _is_invalid_ptr(m as usize):
+                            if not _is_invalid_ptr(m.body as usize):
+                                self.prescan_block_awaits(m.body)
+                        mi = mi + 1
+            i = i + 1
+
     # ── Statement generation ──────────────────────────────────────────────────
 
     pub def gen_stmt(self, s_ptr: Pointer[HirStmt], indent: int):
@@ -2302,6 +2555,12 @@ pub class CGenerator:
                                         init_s = self.gen_list_literal(items, ty)
                                     else:
                                         init_s = self.gen_list_literal(items, list_ty)
+                                case HirExpr.EDict(d_keys, d_vals, d_ty):
+                                    # Propagate annotation type for empty dicts (sema stores plain "Dict" with no args)
+                                    if (d_ty.args.len == 0 or d_ty.name == "Dict") and (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 0:
+                                        init_s = self.gen_dict_literal(d_keys, d_vals, ty)
+                                    else:
+                                        init_s = self.gen_dict_literal(d_keys, d_vals, d_ty)
                                 case _:
                                     init_s = self.gen_expr(v)
                         self.w(" = " + init_s + ";\n")
@@ -2520,6 +2779,8 @@ pub class CGenerator:
             case HirStmt.SContinue: self.w(pad + "continue;\n")
             case HirStmt.SPass: self.w(pad + "/* pass */\n")
             case HirStmt.SFree(name): self.w(pad + "if (" + name + ") { free(" + name + "); " + name + " = NULL; }\n")
+            case HirStmt.SMultiLet(names, is_mut, val):
+                self.gen_multi_let(names, is_mut, val, indent)
             case _: pass
 
     pub def gen_for_loop(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
@@ -3032,8 +3293,9 @@ pub class CGenerator:
             i = i + 1
         self.w("\n")
 
-        # ── Phase 4.5: Spawn wrappers (static thread-entry functions) ─────────
+        # ── Phase 4.5: Spawn + async wrappers (static thread-entry functions) ──
         self.prescan_spawns(prog)
+        self.prescan_awaits(prog)
         self.w("\n")
 
         # ── Phase 5: Method implementations ───────────────────────────────────
@@ -3358,9 +3620,10 @@ pub class CGenerator:
             i = i + 1
         out.append("\n")
 
-        # ── Spawn wrappers (after prototypes so wrappers can call declared fns) ─
+        # ── Spawn + async wrappers (after prototypes so wrappers can call declared fns) ─
         self.buf = StringBuilder.init(1024)
         self.prescan_spawns(prog)
+        self.prescan_awaits(prog)
         mut sw_out = self.buf.to_string().as_str()
         self.buf = StringBuilder.init(256)
         if sw_out != "":
@@ -3597,8 +3860,9 @@ pub class CGenerator:
         self.w("#include \"tauraro_types.h\"\n")
         self.w("#pragma GCC optimize(\"O3,unroll-loops\")\n\n")
 
-        # Emit spawn wrappers (static thread-entry functions) before any function body
+        # Emit spawn + async wrappers (static thread-entry functions) before any function body
         self.prescan_spawns(prog)
+        self.prescan_awaits(prog)
         self.w("\n")
 
         # Main-module class / enum method implementations
