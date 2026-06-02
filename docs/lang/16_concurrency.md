@@ -2,161 +2,257 @@
 
 ---
 
-## Two Concurrency Models
+## Concurrency Primitives Overview
 
-| Model | Keyword | C implementation | Use when |
-|-------|---------|-----------------|---------|
-| Cooperative | `async def` / `await` | Synchronous call (forward-compatible) | I/O pipelines, logical async |
-| Preemptive | `spawn` / `task_group:` | OS threads (`pthreads` / Win32) | Parallel CPU work, real threading |
-| Shared state | `shared` | Atomic refcount box | Multiple owners of one value |
+| Primitive | Use when |
+|-----------|---------|
+| `async def` / `await` | I/O pipelines, logical async, sequential awaiting |
+| `spawn f(args)` | Fire-and-forget detached OS thread |
+| `task_group:` | Structured concurrency — wait for a batch of spawns |
+| `await_all(f1(), f2(), ...)` | Run multiple calls in parallel, wait for all |
+| `Chan[T]` | Producer-consumer pipelines between threads |
+| `Mutex[T]` | Thread-safe guarded value with exclusive lock |
+| `RwLock[T]` | Multiple readers or single writer |
+| `ThreadPool` | Fixed worker-pool for dispatching many short jobs |
+| `shared` | Atomic refcount box for shared ownership |
 
 ---
 
 ## Cooperative: async / await
 
-### Declaring Async Functions
-
 ```python
 async def fetch(id: int) -> str:
     return f"item-{id}"
 
-async def pipeline(n: int) -> int:
+async def process(n: int) -> int:
     mut data = await fetch(n)
     return len(data)
 
-async def run():
-    mut r1 = await pipeline(1)
-    mut r2 = await pipeline(42)
-    print(f"pipeline(1)  = {r1}")
-    print(f"pipeline(42) = {r2}")
+async def main():
+    mut r1 = await process(1)
+    mut r2 = await process(42)
+    print(f"process(1)  = {r1}")    # 6
+    print(f"process(42) = {r2}")    # 7
 ```
 
-### Semantics: Thread-Based Execution
+`await f(args)` launches `f` on an OS thread, blocks the caller until it completes, and returns the result. It enables a clear sequential pipeline style while running work on dedicated threads.
 
-`await f(args)` launches `f` on a **real OS thread**, waits for it to complete, and returns the result. The calling thread blocks until the awaited function is done.
-
-This means:
-- The awaited function runs on a dedicated thread — true concurrency with the rest of the program
-- The return value is transferred back via an internal `_TrTaskState` handle
-- Spawning and joining has overhead; use `spawn`/`task_group:` for fire-and-forget parallelism
-
-**Future direction:** A non-blocking async runtime with an event loop will allow multiple `await` calls to run truly concurrently without blocking the caller.
-
-### Rules for async/await
-
+Rules:
 - `async def` can `await` other `async def` functions
-- A non-async `def` can call an `async def` without `await` (just a normal call)
+- A non-async `def` can call `async def` without `await` — treated as a normal call
 - `await` on a non-async function is a no-op pass-through
-- Return type of `await f()` is the return type of `f`, not a future wrapper
-- `@inline` applies to `async def` exactly as to regular functions
-
-**Best practice:** Use `async`/`await` when your code models I/O or you expect to add real async scheduling later. Don't add it purely for style — it communicates something about the function's intended behavior.
 
 ---
 
 ## Preemptive: spawn
 
-`spawn f(arg)` starts a real OS thread that runs `f` with argument `arg`:
+`spawn f(arg)` starts a detached OS thread — fire-and-forget:
 
 ```python
 def worker(id: int) -> void:
     print(f"  worker {id} running")
-    # ... do work
-    print(f"  worker {id} done")
 
 def main():
-    spawn worker(1)    # starts OS thread, detaches it
-    spawn worker(2)    # starts another OS thread
-    spawn worker(3)
-    # program may exit before all workers finish (they're detached)
-    print("main thread continues immediately")
+    spawn worker(1)
+    spawn worker(2)
+    print("main continues — workers may still be running")
 ```
 
-### Detached Spawn
-
-A `spawn` outside a `task_group:` is **detached** — fire-and-forget. The spawning thread doesn't wait for it. Uses OS threads (`pthreads` on Linux/macOS, `CreateThread` on Windows).
-
-**Argument constraint:** The single-argument pack works correctly for:
-- Integer types up to 64 bits
-- Pointer types (class instances, strings)
-
-For multiple arguments, pack them into a class:
+**Multi-arg spawn works natively:**
 
 ```python
-class WorkArgs:
-    pub task_id: int
-    pub priority: int
-    pub data: str
-
-extend WorkArgs:
-    pub def init(id: int, pri: int, d: str) -> WorkArgs:
-        mut w = WorkArgs()
-        w.task_id = id
-        w.priority = pri
-        w.data = d
-        return w
-
-def worker(args: WorkArgs) -> void:
-    print(f"task {args.task_id} (pri {args.priority}): {args.data}")
+def compute2(a: int, b: int) -> void:
+    print(f"  compute2({a}, {b}) = {a * b}")
 
 def main():
-    spawn worker(WorkArgs.init(1, 5, "hello"))
-    spawn worker(WorkArgs.init(2, 3, "world"))
+    spawn compute2(3, 4)    # works with any number of arguments
+    spawn compute2(5, 6)
 ```
+
+The compiler automatically heap-packs the arguments into an array and generates a wrapper function.
 
 ---
 
 ## Structured Concurrency: task_group:
 
-`task_group:` creates a scope that waits for all threads spawned inside it before continuing:
+`task_group:` waits for all threads spawned inside it before continuing. The limit is unlimited — you can spawn as many threads as your OS allows:
 
 ```python
 def compute(n: int) -> void:
-    mut result = n * n
-    print(f"  compute({n}) = {result}")
+    print(f"  compute({n}) = {n * n}")
 
-def run_parallel():
+def main():
     task_group:
         spawn compute(4)
         spawn compute(7)
         spawn compute(12)
-    # ALL THREE are guaranteed done here
-    print("all workers finished")
-
-def main():
-    run_parallel()
-    print("main continues after all workers")
+        spawn compute(20)
+        spawn compute(50)    # no limit
+    print("all compute() finished")
 ```
 
-`task_group:` tracks all thread handles and waits for each one to complete (via `pthread_join` on Linux/macOS, `WaitForSingleObject` on Windows). After the block exits, all threads are guaranteed done.
+---
 
-### Task Group Limit
+## await_all — Parallel Concurrent Calls
 
-The task group holds a fixed array of `_TR_MAX_TG_THREADS` = 64 thread handles. Spawning more than 64 threads in one `task_group:` silently ignores extra handles. For workloads requiring more than 64 threads, use multiple `task_group:` blocks or a thread pool pattern.
-
-### Nested task_group: Blocks
-
-Nesting is supported:
+`await_all(f1(args), f2(args), ...)` runs all calls in parallel via `task_group:` internally and waits for all to complete:
 
 ```python
-task_group:
-    spawn phase1_worker(1)
-    spawn phase1_worker(2)
-# phase1 done
+def heavy(n: int) -> void:
+    mut s = 0
+    mut i = 0
+    while i < n:
+        s += i
+        i += 1
+    print(f"  heavy({n}) sum = {s}")
 
-task_group:
-    spawn phase2_worker(1)
-    spawn phase2_worker(2)
-# phase2 done
+def main():
+    await_all(heavy(1000), heavy(2000), heavy(3000))
+    print("all finished (ran in parallel)")
 ```
 
-Each `task_group:` block is independent — the previous group is joined before the next starts.
+---
+
+## Chan[T] — Typed Buffered Channel
+
+`Chan[T]` is a thread-safe buffered channel for producer-consumer pipelines:
+
+```python
+def producer(ch: Chan[int]) -> void:
+    mut i = 0
+    while i < 5:
+        ch.send(i * 10)
+        i += 1
+    ch.close()
+
+def consumer(ch: Chan[int]) -> void:
+    mut total = 0
+    for v in ch:          # blocks until item available or channel closed
+        total += v
+    print(f"  total = {total}")    # 0+10+20+30+40 = 100
+
+def main():
+    mut ch: Chan[int] = Chan.init(10)    # buffer size 10
+    task_group:
+        spawn producer(ch)
+        spawn consumer(ch)
+```
+
+### Chan[T] API
+
+| Method | Description |
+|--------|-------------|
+| `Chan.init(n)` | Create buffered channel with capacity `n` |
+| `ch.send(v)` | Send value; blocks if buffer full |
+| `ch.recv()` | Receive value; blocks if buffer empty |
+| `ch.close()` | Signal that no more values will be sent |
+| `for v in ch:` | Iterate until channel closed and drained |
+
+---
+
+## Mutex[T] — Thread-Safe Guarded Value
+
+`Mutex[T]` wraps a value and a mutex together. The only way to access the value is through the lock:
+
+```python
+def safe_inc(m: Mutex[int]) -> void:
+    mut v = m.get()     # acquires lock, returns current value
+    m.set(v + 1)        # stores new value, releases lock
+
+def main():
+    mut counter: Mutex[int] = Mutex.init(0)
+    task_group:
+        spawn safe_inc(counter)
+        spawn safe_inc(counter)
+        spawn safe_inc(counter)
+    mut final = counter.get()
+    counter.unlock()
+    print(f"counter after 3 threads: {final}")    # 3
+```
+
+### Mutex[T] API
+
+| Method | Description |
+|--------|-------------|
+| `Mutex.init(v)` | Create mutex wrapping initial value `v` |
+| `m.get()` | Acquire lock and return current value |
+| `m.set(v)` | Store new value and release lock |
+| `m.unlock()` | Release lock without storing (use after `get()` if no update needed) |
+
+**Rule:** Every `get()` must be followed by either `set()` or `unlock()`.
+
+---
+
+## RwLock[T] — Reader-Writer Lock
+
+`RwLock[T]` allows multiple concurrent readers or one exclusive writer:
+
+```python
+def read_config(rw: RwLock[int]) -> void:
+    mut v = rw.read()        # acquires read lock
+    rw.read_unlock()         # release read lock
+    print(f"  config: {v}")
+
+def main():
+    mut config: RwLock[int] = RwLock.init(42)
+    task_group:
+        spawn read_config(config)
+        spawn read_config(config)    # concurrent reads are safe
+
+    mut old = config.write()         # acquires write lock
+    config.write_set(100)            # store and release write lock
+    print(f"  updated from {old} to 100")
+```
+
+### RwLock[T] API
+
+| Method | Description |
+|--------|-------------|
+| `RwLock.init(v)` | Create rwlock wrapping initial value `v` |
+| `rw.read()` | Acquire read lock, return current value |
+| `rw.read_unlock()` | Release read lock |
+| `rw.write()` | Acquire write lock, return current value |
+| `rw.write_set(v)` | Store new value and release write lock |
+
+---
+
+## ThreadPool — Fixed Worker Pool
+
+`ThreadPool` maintains a pool of worker threads that pick up jobs from a queue:
+
+```python
+def job(id: int) -> void:
+    print(f"  pool job {id} done")
+
+def main():
+    mut pool: ThreadPool = ThreadPool.new(4)    # 4 worker threads
+    pool.spawn(job, 1)
+    pool.spawn(job, 2)
+    pool.spawn(job, 3)
+    pool.wait()     # wait for all queued jobs to complete
+    pool.free()     # shut down workers and free pool
+    print("all pool jobs done")
+```
+
+### ThreadPool API
+
+| Method | Description |
+|--------|-------------|
+| `ThreadPool.new(n)` | Create pool with `n` worker threads |
+| `ThreadPool.auto()` | Create pool with one thread per CPU core |
+| `pool.spawn(fn, arg)` | Dispatch `fn(arg)` to a worker |
+| `pool.wait()` | Block until all queued jobs complete |
+| `pool.free()` | Shutdown workers and free pool memory |
+
+**When to use ThreadPool vs task_group:**
+- `task_group:` — when you have a fixed known set of tasks
+- `ThreadPool` — when tasks arrive dynamically or you want to reuse threads across many jobs
 
 ---
 
 ## Shared Ownership Across Threads
 
-For shared mutable state, use `shared`. This wraps a value in an atomic reference-counted box:
+`shared` wraps a class instance in an atomic refcount box, allowing multiple threads to hold a reference to the same object:
 
 ```python
 class Counter:
@@ -167,125 +263,70 @@ extend Counter:
         mut c = Counter()
         c.value = 0
         return c
-
     pub def increment(self) -> void:
-        self.value = self.value + 1
-
+        self.value += 1
     pub def get(self) -> int:
         return self.value
 
+def increment_shared(c: Counter) -> void:
+    c.increment()
+
 def main():
-    mut c = Counter.init()
-    shared s1 = c           # ref count = 1
-    shared s2 = s1          # ref count = 2
+    mut sc = Counter.init()
+    shared s1 = sc
+    shared s2 = s1    # same underlying object
 
     task_group:
-        spawn s1.increment()    # thread 1 increments
-        spawn s2.increment()    # thread 2 increments (same Counter!)
-
-    # Both threads joined here
-    print(f"count = {s1.get()}")    # 2 (or potentially a race condition)
+        spawn increment_shared(s1)
+        spawn increment_shared(s2)
+    print(f"count: {s1.get()}")
 ```
 
-**Warning:** `shared` makes the refcount thread-safe. The underlying data (`Counter.value`) is NOT protected by a mutex. If two threads call `increment()` simultaneously, there's a data race. To fix:
-
-```python
-# Option 1: Use an atomic type for the value
-# (requires extern "C" to access atomic operations)
-
-# Option 2: Use mutex (requires extern "C" pthread_mutex_t)
-extern "C":
-    def pthread_mutex_lock(m: Pointer[void]) -> int
-    def pthread_mutex_unlock(m: Pointer[void]) -> int
-```
-
-**Best practice:** Use `shared` for read-only data, or data accessed by only one thread at a time. For mutable shared state, protect with an explicit mutex or use atomic operations.
+**Warning:** `shared` makes the refcount thread-safe, but the underlying data is NOT protected. For safe mutation use `Mutex[T]` instead.
 
 ---
 
-## Thread Safety Guidelines
+## Thread Safety Summary
 
 | Pattern | Thread safe? | Notes |
 |---------|-------------|-------|
-| `spawn f(val)` with value copy | ✓ | val is copied into the thread |
-| `shared x` reference count | ✓ | Refcount is `_Atomic int` |
-| Reading `shared x.field` | ✓ if no writes | Safe if no thread writes |
-| Writing `shared x.field` in parallel | ✗ | Data race — add mutex |
+| `spawn f(val)` | ✓ | Value is passed by copy |
+| `shared x` refcount | ✓ | Refcount is `_Atomic int` |
+| `Chan[T]` send/recv | ✓ | Fully synchronized |
+| `Mutex[T]` get/set | ✓ | Exclusive lock per access |
+| `RwLock[T]` read | ✓ | Multiple concurrent readers |
+| `RwLock[T]` write | ✓ | Exclusive write lock |
+| `ThreadPool` spawn | ✓ | Queue is synchronized |
+| `shared x.field` concurrent writes | ✗ | Data race — use `Mutex[T]` |
 | `List[T]` shared across threads | ✗ | No synchronization |
-| `Dict` shared across threads | ✗ | No synchronization |
-| Channels (future) | — | Not yet implemented |
 
 ---
 
-## Common Concurrency Errors
+## Common Patterns
 
-### Using local variable after spawn (use-after-free)
-
-```python
-def main():
-    mut local = Counter.init()         # local variable
-    spawn process(local)               # spawns thread with pointer to local
-    # local freed here when main() returns!
-    # but spawned thread is still running and accessing it → UB
-```
-
-**Fix:** Use `shared` so the data lives until the last reference drops:
-```python
-shared s = Counter.init()
-spawn process(s)   # s is refcounted — outlives main()
-```
-
-### Forgetting task_group: (data race)
+### Pipeline with Chan[T]
 
 ```python
-spawn update_state(1)    # starts thread 1
-spawn update_state(2)    # starts thread 2
-read_result()            # reads state — threads may not be done yet!
-```
-
-**Fix:**
-```python
+mut ch: Chan[int] = Chan.init(32)
 task_group:
-    spawn update_state(1)
-    spawn update_state(2)
-read_result()    # guaranteed after both threads complete
+    spawn producer(ch)
+    spawn consumer(ch)
 ```
 
-### Spawning too many threads in one group
+### Parallel batch with await_all
 
 ```python
-task_group:
-    mut i = 0
-    while i < 200:           # spawning 200 threads — exceeds limit of 64
-        spawn worker(i)
-        i = i + 1
+await_all(process(data1), process(data2), process(data3))
 ```
 
-**Fix:** Batch into groups of 64:
+### CPU-bound workload with ThreadPool
+
 ```python
+mut pool: ThreadPool = ThreadPool.auto()
 mut i = 0
-while i < 200:
-    task_group:
-        mut batch = 0
-        while batch < 64 and i < 200:
-            spawn worker(i)
-            i = i + 1
-            batch = batch + 1
+while i < num_jobs:
+    pool.spawn(do_work, i)
+    i += 1
+pool.wait()
+pool.free()
 ```
-
----
-
-## Summary
-
-| Construct | Behavior | Notes |
-|-----------|----------|-------|
-| `async def f()` | Marks function as async-capable | Can be `await`-ed or called directly |
-| `await f(x)` | Runs `f(x)` on a new OS thread, blocks until done | Returns the value of `f(x)` |
-| `spawn f(x)` (outside group) | OS thread, detached | Fire-and-forget |
-| `task_group: { spawn f(x) }` | OS threads, joined | Structured concurrency; max 64 threads |
-| `shared x = val` | Ref-counted box | Refcount atomic; data is not |
-| `shared y = x` (clone) | Share same box | Increments refcount atomically |
-
----
-
-Next: [Extern & FFI →](17_extern_and_ffi.md)

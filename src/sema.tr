@@ -173,7 +173,11 @@ extend Sema:
         s.globals.insert("Task",      Symbol.init("Task",      SymbolKind.SClass, box_asttype(AstType.init("Task"))))
         s.globals.insert("Future",    Symbol.init("Future",    SymbolKind.SClass, box_asttype(AstType.init("Future"))))
         s.globals.insert("Channel",   Symbol.init("Channel",   SymbolKind.SClass, box_asttype(AstType.init("Channel"))))
+        s.globals.insert("Chan",      Symbol.init("Chan",      SymbolKind.SClass, box_asttype(AstType.init("Chan"))))
         s.globals.insert("Mutex",     Symbol.init("Mutex",     SymbolKind.SClass, box_asttype(AstType.init("Mutex"))))
+        s.globals.insert("RwLock",    Symbol.init("RwLock",    SymbolKind.SClass, box_asttype(AstType.init("RwLock"))))
+        s.globals.insert("ThreadPool", Symbol.init("ThreadPool", SymbolKind.SClass, box_asttype(AstType.init("ThreadPool"))))
+        s.globals.insert("await_all", Symbol.init("await_all", SymbolKind.SFunction, box_asttype(AstType.init("void"))))
         s.globals.insert("Arc",       Symbol.init("Arc",       SymbolKind.SClass, box_asttype(AstType.init("Arc"))))
         s.globals.insert("Rc",        Symbol.init("Rc",        SymbolKind.SClass, box_asttype(AstType.init("Rc"))))
         s.globals.insert("WaitGroup", Symbol.init("WaitGroup", SymbolKind.SClass, box_asttype(AstType.init("WaitGroup"))))
@@ -625,6 +629,8 @@ extend Sema:
                 mut iter_hal = hir_expr_type(h_iter_for).args.len
                 if (iter_hn == "List" or iter_hn == "Vec") and iter_hal > 0:
                     var_ty_for = hir_expr_type(h_iter_for).args.get(0).read()
+                elif iter_hn == "Chan" and iter_hal > 0:
+                    var_ty_for = hir_expr_type(h_iter_for).args.get(0).read()
                 elif iter_hn == "str":
                     var_ty_for = AstType.init("char")
                 self.declare(var, SymbolKind.SVariable, box_asttype(var_ty_for), false)
@@ -939,6 +945,27 @@ extend Sema:
                             _gmi = _gmi + 1
                 elif method == "alloc": ret_ty = hobj_ty
                 elif method == "contains": ret_ty = AstType.init("bool")
+                # Chan[T] method return types
+                elif hobj_ty.name == "Chan":
+                    if method == "recv" or method == "try_recv":
+                        if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                        else: ret_ty = AstType.init("int")
+                    elif method == "len" or method == "cap": ret_ty = AstType.init("int")
+                    elif method == "is_closed" or method == "try_send": ret_ty = AstType.init("bool")
+                    elif method == "send_timeout": ret_ty = AstType.init("bool")
+                    elif method == "recv_timeout":
+                        if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                        else: ret_ty = AstType.init("int")
+                # Mutex[T] method return types
+                elif hobj_ty.name == "Mutex":
+                    if method == "lock" or method == "get":
+                        if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                        else: ret_ty = AstType.init("int")
+                # RwLock[T] method return types
+                elif hobj_ty.name == "RwLock":
+                    if method == "read" or method == "read_lock" or method == "write" or method == "write_lock":
+                        if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                        else: ret_ty = AstType.init("int")
                 elif hobj_ty.name == "StringBuilder" and method == "to_string": ret_ty = AstType.init("StringObj")
                 elif self.interfaces as usize != 0 as usize and self.interfaces.contains(hobj_ty.name):
                     mut _iface_def = self.interfaces.get(hobj_ty.name)
