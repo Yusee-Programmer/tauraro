@@ -172,6 +172,38 @@ pub enum Expr:
     ESizeOf(ty: Pointer[AstType])
     EIfElse(cond: Pointer[Expr], then_expr: Pointer[Expr], else_expr: Pointer[Expr])
 
+# ─── Chan-select arms ─────────────────────────────────────────────────────────
+
+pub class ChanSelectArm:
+    pub kind: int                   # 0=recv, 1=send, 2=timeout, 3=default
+    pub chan_expr: Pointer[Expr]
+    pub val_expr: Pointer[Expr]     # send value
+    pub var_name: str               # recv binding name
+    pub timeout_ms: Pointer[Expr]
+    pub body: Block
+
+extend ChanSelectArm:
+    pub def init_recv(chan: Pointer[Expr], var: str, body: Block) -> ChanSelectArm:
+        mut a = ChanSelectArm()
+        a.kind = 0; a.chan_expr = chan; a.val_expr = Pointer[Expr](0)
+        a.var_name = var; a.timeout_ms = Pointer[Expr](0); a.body = body
+        return a
+    pub def init_send(chan: Pointer[Expr], val: Pointer[Expr], body: Block) -> ChanSelectArm:
+        mut a = ChanSelectArm()
+        a.kind = 1; a.chan_expr = chan; a.val_expr = val
+        a.var_name = ""; a.timeout_ms = Pointer[Expr](0); a.body = body
+        return a
+    pub def init_timeout(ms: Pointer[Expr], body: Block) -> ChanSelectArm:
+        mut a = ChanSelectArm()
+        a.kind = 2; a.chan_expr = Pointer[Expr](0); a.val_expr = Pointer[Expr](0)
+        a.var_name = ""; a.timeout_ms = ms; a.body = body
+        return a
+    pub def init_default(body: Block) -> ChanSelectArm:
+        mut a = ChanSelectArm()
+        a.kind = 3; a.chan_expr = Pointer[Expr](0); a.val_expr = Pointer[Expr](0)
+        a.var_name = ""; a.timeout_ms = Pointer[Expr](0); a.body = body
+        return a
+
 # ─── Statements ───────────────────────────────────────────────────────────────
 
 pub enum Stmt:
@@ -197,6 +229,7 @@ pub enum Stmt:
     SSpawn(expr: Pointer[Expr])
     STaskGroup(body: Block)
     SGpuBlock(body: Block)
+    SChanSelect(cases: Vec[Pointer[ChanSelectArm]])
     SLine(n: int)
 
 pub class Block:

@@ -24,141 +24,34 @@
 #     mut tl: ThreadLocal[int] = ThreadLocal.new(0)
 #     tl.set(42)        only affects the calling thread
 #     tl.get()          returns calling thread's copy
-
-extern "C":
-    def _tr_threadobj_join_h(handle: Pointer[char])
-    def _tr_threadobj_detach_h(handle: Pointer[char])
-    def _tr_threadobj_free_h(handle: Pointer[char])
-    def _tr_thread_current_id_h() -> int
-    def _tr_thread_sleep_ms_h(ms: int)
-    def _tr_atomic_new_h(init: int) -> Pointer[char]
-    def _tr_atomic_load_h(a: Pointer[char]) -> int
-    def _tr_atomic_store_h(a: Pointer[char], v: int)
-    def _tr_atomic_add_h(a: Pointer[char], v: int) -> int
-    def _tr_atomic_sub_h(a: Pointer[char], v: int) -> int
-    def _tr_atomic_swap_h(a: Pointer[char], v: int) -> int
-    def _tr_atomic_cas_h(a: Pointer[char], expected: int, desired: int) -> bool
-    def _tr_atomic_free_h(a: Pointer[char])
-    def _tr_tls_new_h(init: int) -> Pointer[char]
-    def _tr_tls_get_h(t: Pointer[char]) -> int
-    def _tr_tls_set_h(t: Pointer[char], v: int)
-    def _tr_tls_free_h(t: Pointer[char])
+#
+# NOTE: These are built-in types handled by the compiler's built-in dispatch.
+# Importing this module makes the names available; no OOP wrapper is needed.
 
 # ─── Thread ────────────────────────────────────────────────────────────────────
 #
 # Thread.spawn(fn, arg) is a language-level operation dispatched by the compiler.
-# The Thread type here provides the join/detach/sleep/id operations on the handle.
+# The Thread type provides the join/detach/sleep/id operations on the handle.
+# All method calls are handled via compiler built-in dispatch.
 
 pub class Thread:
-    pub handle: Pointer[char]
-
-extend Thread:
-    # Block the calling thread until this thread finishes.
-    pub def join(self):
-        _tr_threadobj_join_h(self.handle)
-
-    # Detach: the OS cleans up the thread automatically when it exits.
-    # Do NOT call join() after detach().
-    pub def detach(self):
-        _tr_threadobj_detach_h(self.handle)
-
-    pub def free(self):
-        _tr_threadobj_free_h(self.handle)
-
-    # Get the OS thread ID of the CALLING thread (not this thread object).
-    pub def id() -> int:
-        return _tr_thread_current_id_h()
-
-    # Sleep the CALLING thread for ms milliseconds.
-    pub def sleep(ms: int):
-        _tr_thread_sleep_ms_h(ms)
+    pass
 
 # ─── Atomic ────────────────────────────────────────────────────────────────────
 #
-# Lock-free atomic integer.  All operations are sequentially consistent (memory_order_seq_cst).
+# Lock-free atomic integer.  All operations are sequentially consistent.
 # Backed by C11 _Atomic long long — zero OS overhead.
-#
-# Usage:
-#   mut hits: Atomic[int] = Atomic.new(0)
-#   hits.add(1)              # increment — safe from any thread
-#   print(f"total: {hits.load()}")
+# All method calls (new, load, store, add, sub, swap, cas, increment, decrement, free)
+# are handled via compiler built-in dispatch to _tr_atomic_* runtime functions.
 
 pub class Atomic:
-    pub handle: Pointer[char]
-
-extend Atomic:
-    # Create an atomic integer with the given initial value.
-    pub def new(init: int) -> Atomic:
-        mut a = Atomic()
-        a.handle = _tr_atomic_new_h(init)
-        return a
-
-    # Atomically load and return the current value.
-    pub def load(self) -> int:
-        return _tr_atomic_load_h(self.handle)
-
-    # Atomically replace the current value with v.
-    pub def store(self, v: int):
-        _tr_atomic_store_h(self.handle, v)
-
-    # Atomically add v to the value.  Returns the PREVIOUS value.
-    pub def add(self, v: int) -> int:
-        return _tr_atomic_add_h(self.handle, v)
-
-    # Atomically subtract v from the value.  Returns the PREVIOUS value.
-    pub def sub(self, v: int) -> int:
-        return _tr_atomic_sub_h(self.handle, v)
-
-    # Atomically exchange: store v, return the PREVIOUS value.
-    pub def swap(self, v: int) -> int:
-        return _tr_atomic_swap_h(self.handle, v)
-
-    # Compare-and-swap: if current == expected, store desired.
-    # Returns true on success, false if the current value differed.
-    pub def cas(self, expected: int, desired: int) -> bool:
-        return _tr_atomic_cas_h(self.handle, expected, desired)
-
-    # Atomically increment by 1.  Returns the PREVIOUS value.
-    pub def increment(self) -> int:
-        return _tr_atomic_add_h(self.handle, 1)
-
-    # Atomically decrement by 1.  Returns the PREVIOUS value.
-    pub def decrement(self) -> int:
-        return _tr_atomic_sub_h(self.handle, -1)
-
-    pub def free(self):
-        _tr_atomic_free_h(self.handle)
+    pass
 
 # ─── ThreadLocal ───────────────────────────────────────────────────────────────
 #
 # Thread-local storage: each OS thread sees its own independent copy of the value.
 # Backed by Win32 TLS slots on Windows, pthread_key_t on POSIX.
-#
-# NOTE: Only the creating thread's initial value is set via new().
-#       Other threads start with 0 until they call set().
-#
-# Usage:
-#   mut request_id: ThreadLocal[int] = ThreadLocal.new(0)
-#   request_id.set(42)        # only this thread sees 42
-#   print(f"id: {request_id.get()}")
+# All method calls (new, get, set, free) handled via compiler built-in dispatch.
 
 pub class ThreadLocal:
-    pub handle: Pointer[char]
-
-extend ThreadLocal:
-    # Create thread-local storage. init sets the value for the CREATING thread only.
-    pub def new(init: int) -> ThreadLocal:
-        mut tl = ThreadLocal()
-        tl.handle = _tr_tls_new_h(init)
-        return tl
-
-    # Get the calling thread's own copy of the value.
-    pub def get(self) -> int:
-        return _tr_tls_get_h(self.handle)
-
-    # Set the calling thread's own copy of the value.
-    pub def set(self, v: int):
-        _tr_tls_set_h(self.handle, v)
-
-    pub def free(self):
-        _tr_tls_free_h(self.handle)
+    pass

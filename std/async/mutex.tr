@@ -5,70 +5,22 @@
 #
 # RWLock: shared-exclusive (readers-writer) lock.
 #   Multiple readers OR one writer at a time.
-
-extern "C":
-    def _tr_mutex_new_h() -> Pointer[char]
-    def _tr_mutex_lock_h(m: Pointer[char])
-    def _tr_mutex_unlock_h(m: Pointer[char])
-    def _tr_mutex_trylock_h(m: Pointer[char]) -> bool
-    def _tr_mutex_free_h(m: Pointer[char])
-    def _tr_rwl_new_h() -> Pointer[char]
-    def _tr_rwl_read_lock_h(r: Pointer[char])
-    def _tr_rwl_read_unlock_h(r: Pointer[char])
-    def _tr_rwl_write_lock_h(r: Pointer[char])
-    def _tr_rwl_write_unlock_h(r: Pointer[char])
-    def _tr_rwl_free_h(r: Pointer[char])
+#
+# NOTE: These are built-in types handled by the compiler's built-in dispatch.
+# Importing this module makes the names available; no OOP wrapper is needed.
 
 # ─── Mutex ────────────────────────────────────────────────────────────────────
+#
+# Mutex[T] wraps a guarded value. All operations (init, get, set, unlock, free)
+# are handled via compiler built-in dispatch to _tr_mutexbox_* runtime functions.
 
 pub class Mutex:
-    pub handle: Pointer[char]
-
-extend Mutex:
-    pub def new() -> Mutex:
-        mut m = Mutex()
-        m.handle = _tr_mutex_new_h()
-        return m
-
-    # Acquire the lock.  Blocks until available.
-    pub def lock(self):
-        _tr_mutex_lock_h(self.handle)
-
-    # Release the lock.  Must be called by the thread that called lock().
-    pub def unlock(self):
-        _tr_mutex_unlock_h(self.handle)
-
-    # Try to acquire without blocking.  Returns false when already locked.
-    pub def try_lock(self) -> bool:
-        return _tr_mutex_trylock_h(self.handle)
-
-    pub def free(self):
-        _tr_mutex_free_h(self.handle)
+    pass
 
 # ─── RWLock ───────────────────────────────────────────────────────────────────
+#
+# RWLock[T] reader-writer lock. All operations (init, read, write, etc.)
+# are handled via compiler built-in dispatch to _tr_rwlbox_* runtime functions.
 
 pub class RWLock:
-    pub handle: Pointer[char]
-
-extend RWLock:
-    pub def new() -> RWLock:
-        mut r = RWLock()
-        r.handle = _tr_rwl_new_h()
-        return r
-
-    # Acquire shared (read) access.  Multiple readers allowed concurrently.
-    pub def read_lock(self):
-        _tr_rwl_read_lock_h(self.handle)
-
-    pub def read_unlock(self):
-        _tr_rwl_read_unlock_h(self.handle)
-
-    # Acquire exclusive (write) access.  Waits for all readers to release.
-    pub def write_lock(self):
-        _tr_rwl_write_lock_h(self.handle)
-
-    pub def write_unlock(self):
-        _tr_rwl_write_unlock_h(self.handle)
-
-    pub def free(self):
-        _tr_rwl_free_h(self.handle)
+    pass

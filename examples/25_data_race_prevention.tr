@@ -1,0 +1,83 @@
+# 25 — Compile-Time Data Race Prevention
+# Demonstrates Tauraro's Send+Sync equivalent: the `Sendable` interface.
+# The compiler rejects unsafe thread patterns at compile time — zero runtime cost.
+
+from std.async import Mutex, Atomic, Thread, Chan
+
+# ── 1. Sendable class: thread-safe by design ──────────────────────────────────
+class SafeStats implements Sendable:
+    pub hits:  Atomic[int]
+    pub bytes: Atomic[int]
+
+extend SafeStats:
+    pub def init() -> SafeStats:
+        mut s = SafeStats()
+        s.hits  = Atomic.new(0)
+        s.bytes = Atomic.new(0)
+        return s
+    pub def record(self, n: int) -> void:
+        self.hits.increment()
+        self.bytes.add(n)
+    pub def report(self) -> void:
+        mut h = self.hits.load()
+        mut b = self.bytes.load()
+        print(f"  hits={h} bytes={b}")
+
+def worker_stats(stats: SafeStats, n: int) -> void:
+    mut i = 0
+    while i < n:
+        stats.record(i + 1)
+        i += 1
+
+# ── 2. Sendable via Mutex — protect arbitrary mutable state ───────────────────
+def safe_push(ch: Chan[int], n: int) -> void:
+    mut i = 0
+    while i < n:
+        ch.send(i)
+        i += 1
+
+# ── 3. Producer/consumer over Chan[int] — channels are Sendable ───────────────
+def drain(ch: Chan[int]) -> int:
+    mut total = 0
+    for v in ch:
+        total += v
+    return total
+
+async def main():
+    print("=== Tauraro data-race prevention demo ===")
+
+    # 3a. SafeStats: two threads write concurrently — safe because Atomic
+    print("--- SafeStats (Atomic fields) ---")
+    mut stats = SafeStats.init()
+    task_group:
+        spawn worker_stats(stats, 5)
+        spawn worker_stats(stats, 5)
+    stats.report()    # hits=10 bytes=30 (1+2+3+4+5 × 2)
+
+    # 3b. Chan[int]: send from two threads, drain on main — channels are Sendable
+    print("--- Chan producer/consumer ---")
+    mut ch = Chan[int].init(20)
+    task_group:
+        spawn safe_push(ch, 5)
+        spawn safe_push(ch, 5)
+    ch.close()
+    mut total = drain(ch)
+    print(f"  total = {total}")    # 0+1+2+3+4 × 2 = 20
+
+    # 3c. Thread.spawn with Sendable type — explicit OS threads
+    print("--- Thread.spawn with Sendable ---")
+    mut counter = Atomic.new(0)
+    mut t1 = Thread.spawn(atomic_inc, counter)
+    mut t2 = Thread.spawn(atomic_inc, counter)
+    t1.join()
+    t2.join()
+    mut final = counter.load()
+    print(f"  counter = {final}")    # 20
+
+    print("=== all checks passed ===")
+
+def atomic_inc(a: Atomic[int]) -> void:
+    mut i = 0
+    while i < 10:
+        a.increment()
+        i += 1

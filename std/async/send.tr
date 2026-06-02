@@ -1,0 +1,26 @@
+# std.async.send — Sendable marker interface.
+#
+# Implement this interface on any user-defined class to declare that
+# it is safe to send across thread boundaries (i.e. it contains no
+# unsynchronized mutable shared state, or all mutable state is guarded
+# by Mutex[T] / Atomic[T]).
+#
+# The compiler enforces Sendable at spawn sites:
+#   - spawn f(arg)         — arg types are checked
+#   - Thread.spawn(fn, a)  — a is checked
+#   - pool.spawn(fn, a)    — a is checked
+#
+# Built-in types that are always Sendable:
+#   int, float, bool, char, str
+#   Atomic[T], Mutex[T], RwLock[T]
+#   Chan[T], ThreadPool, Thread, ThreadLocal[T]
+#
+# Built-in types that are NEVER Sendable:
+#   List[T], Vec[T], Dict, Map  — no internal synchronization
+#
+# Usage:
+#   class Counter implements Sendable:
+#       pub val: Atomic[int]
+
+pub interface Sendable:
+    pass
