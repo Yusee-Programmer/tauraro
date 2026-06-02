@@ -1314,6 +1314,7 @@ static inline bool  _tr_atomic_cas_acqrel_h(char* a, long long exp, long long de
 static inline char* _tr_tls_new_h(long long init)                              { return (char*)_tr_tls_new(init); }
 static inline long long _tr_tls_get_h(char* t)                                 { return _tr_tls_get((_TrTLS*)t); }
 static inline void  _tr_tls_set_h(char* t, long long v)                        { _tr_tls_set((_TrTLS*)t, v); }
+static inline void  _tr_tls_free_h(char* t)                                    { _tr_tls_free((_TrTLS*)t); }
 
 /* ── Core runtime helpers ────────────────────────────────────────────── */
 

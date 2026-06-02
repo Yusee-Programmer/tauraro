@@ -1016,6 +1016,16 @@ extend Sema:
                                         case _: pass
                             case _: pass
                     case _: pass
+                # await_all: all sub-calls run concurrently — each sub-call's args must be Sendable
+                if callee as usize != 0 as usize:
+                    match callee.read():
+                        case Expr.EIdent(aa_nm):
+                            if aa_nm == "await_all":
+                                mut aa_i = 0
+                                while aa_i < hl.len:
+                                    self.check_spawn_sendable(hl.get(aa_i))
+                                    aa_i = aa_i + 1
+                        case _: pass
                 return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
             case Expr.EMethodCall(obj, method, args):
                 if method == "__index__" and args.len > 0:
@@ -1072,6 +1082,16 @@ extend Sema:
                         if not self.is_sendable_type(_tsa_ty.name):
                             self.error("[T-1] Type '" + _tsa_ty.name + "' is not Sendable and cannot be passed to Thread.spawn.\n      FIX: Wrap in Mutex[" + _tsa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _tsa_ty.name + "' to confirm it is thread-safe.")
                         _tsi = _tsi + 1
+                # ThreadPool.spawn arg Sendable check
+                elif method == "spawn" and hobj_ty.name == "ThreadPool":
+                    ret_ty = AstType.init("void")
+                    # Check all args (skip fn name at index 0) are Sendable
+                    mut _psi = 1
+                    while _psi < hl.len:
+                        mut _psa_ty = hir_expr_type(hl.get(_psi))
+                        if not self.is_sendable_type(_psa_ty.name):
+                            self.error("[T-1] Type '" + _psa_ty.name + "' is not Sendable and cannot be passed to ThreadPool.spawn.\n      FIX: Wrap in Mutex[" + _psa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _psa_ty.name + "' to confirm it is thread-safe.")
+                        _psi = _psi + 1
                 # Atomic built-in method return types
                 elif hobj_ty.name == "Atomic":
                     if method == "load" or method == "get" or method == "add" or method == "sub" or method == "swap" or method == "exchange" or method == "fetch_add" or method == "fetch_sub" or method == "load_relaxed" or method == "load_acquire" or method == "load_seqcst" or method == "add_relaxed" or method == "add_release" or method == "add_acqrel" or method == "sub_relaxed" or method == "sub_release":

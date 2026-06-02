@@ -341,7 +341,8 @@ pub class CGenerator:
             return "void*"
 
         # User-defined generic class takes precedence over built-in Vec/Map/List
-        if self.classes.contains(n) and n != "Vec" and n != "Map" and n != "Dict" and n != "List":
+        # Exclude built-in concurrency types — they always map to their runtime _Tr* handles
+        if self.classes.contains(n) and n != "Vec" and n != "Map" and n != "Dict" and n != "List" and not self.is_rt_concurrency_type(n):
             mut ucls = self.classes.get(n)
             mut is_val = self.value_types.contains(n)
             if ucls.generics.len > 0 and ty.args.len > 0:
@@ -709,6 +710,16 @@ pub class CGenerator:
         if f.name == "init":
             return "static __attribute__((malloc,returns_nonnull,hot)) "
         return "static __attribute__((hot)) "
+
+    pub def is_rt_concurrency_type(self, name: str) -> bool:
+        if name == "Atomic": return true
+        if name == "Thread": return true
+        if name == "Mutex": return true
+        if name == "RwLock": return true
+        if name == "Chan": return true
+        if name == "ThreadPool": return true
+        if name == "ThreadLocal": return true
+        return false
 
     # Like get_inline_attrs but without `static` — for cross-module prototypes in tauraro_types.h.
     pub def get_proto_attrs(self, f: HirFunction) -> str:
@@ -4620,7 +4631,7 @@ pub class CGenerator:
                             mut key = sm + "_" + iface.name
                             if not seen.contains(key):
                                 seen.insert(key, true)
-                                out = out + "typedef " + iface.name + " " + key + ";\n\n"
+                                out = out + "typedef " + iface.name + "_obj " + key + ";\n\n"
                     case _: pass
             i = i + 1
 

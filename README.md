@@ -95,13 +95,14 @@ tauraroc --run hello.tr
 
 | Feature | Description |
 |---------|-------------|
-| **Classes** | Method dispatch, inheritance, interfaces |
+| **Classes** | Method dispatch, inheritance (`extends`), interfaces, operator overloading |
 | **Enums** | Tagged unions with pattern matching |
 | **Generics** | Monomorphized at compile time — no boxing |
 | **F-strings** | `f"result = {value}"` — zero overhead |
 | **Ownership** | Automatic memory management, no GC |
 | **Error handling** | `Result[T,E]`, `throws`, `?` operator |
-| **Concurrency** | `spawn`, `task_group:`, `shared` |
+| **Concurrency** | `spawn`, `task_group:`, `await_all`, `Thread.spawn`, `Chan[T]`, `Mutex[T]`, `Atomic[T]` |
+| **Data race safety** | `Sendable` interface enforced at compile time on all spawn/thread boundaries |
 | **Unsafe** | `unsafe:`, `Pointer[T]`, inline `asm()` |
 | **GPU** | `gpu:` blocks → OpenMP parallel loops |
 | **FFI** | `extern "C"` for calling C libraries |

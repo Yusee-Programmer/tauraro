@@ -7,25 +7,34 @@ Performance comparison between **C** (`gcc -O3`), **Rust** (`rustc -C opt-level=
 | # | Benchmark | C (s) | Rust (s) | Tauraro (s) | Tau / C | Tau / Rust |
 |---|-----------|------:|---------:|------------:|--------:|-----------:|
 | 1 | Integer Sum 1B | ~0 | ~0 | ~0 | — | — |
-| 2 | Fibonacci 1B | 0.728 | 0.385 | 0.433 | **0.59×** | 1.12× |
-| 3 | Float Multiply 1B | 1.833 | 1.669 | 1.446 | **0.79×** | **0.87×** |
-| 4 | XOR Shift PRNG 1B | 2.700 | 2.373 | 2.374 | **0.88×** | **1.00×** |
-| 5 | Newton Sqrt 1B | 8.476 | 7.983 | 7.813 | **0.92×** | **0.98×** |
-| 6 | Mandelbrot 800×800 | 0.759 | 0.741 | 0.799 | 1.05× | 1.08× |
-| 7 | Sieve of Eratosthenes 50M | 0.641 | 0.592 | 0.720 | 1.12× | 1.22× |
-| 8 | N-Body 3 bodies 10M steps | 0.543 | 0.344 | 0.543 | **1.00×** | 1.58× |
-| 9 | Collatz 1..10M | 4.607 | 2.664 | 3.620 | **0.79×** | 1.36× |
-| 10 | Matrix Multiply 400×400 | 0.035 | 0.020 | 0.035 | **1.00×** | 1.75× |
+| 2 | Fibonacci 1B | 1.573 | 0.696 | 0.709 | **0.45×** | 1.02× |
+| 3 | Float Multiply 1B | 3.124 | 3.014 | 3.021 | **0.97×** | 1.00× |
+| 4 | XOR Shift PRNG 1B | 4.726 | 4.307 | 4.987 | 1.06× | 1.16× |
+| 5 | Newton Sqrt 1B | 17.091 | 17.007 | 16.682 | **0.98×** | **0.98×** |
+| 6 | Mandelbrot 800×800 | 1.695 | 1.581 | 1.474 | **0.87×** | **0.93×** |
+| 7 | Sieve of Eratosthenes 50M | 1.024 | 1.308 | 1.295 | 1.26× | 0.99× |
+| 8 | N-Body 3 bodies 10M steps | 0.843 | 0.790 | 0.905 | 1.07× | 1.15× |
+| 9 | Collatz 1..10M | 8.819 | 7.236 | 10.833 | 1.23× | 1.50× |
+| 10 | Matrix Multiply 400×400 | 0.072 | 0.062 | 0.106 | 1.47× | 1.71× |
 
 > **Tau/C** = Tauraro time ÷ C time. Values **below 1.00×** mean Tauraro is faster than C.
-> **Tau/Rust** = Tauraro time ÷ Rust time. **1.00×** = identical speed.
+> **Tau/Rust** = Tauraro time ÷ Rust time. **below 1.00×** means Tauraro is faster than Rust.
 
 ## Summary
 
-- Tauraro **beats C** on 6 of 10 benchmarks (benchmarks 2, 3, 4, 5, 9, and ties on 8/10).
-- Tauraro **matches Rust exactly** on benchmarks 4, 8, and 10 (within 0.5%).
-- Tauraro **beats Rust** on benchmarks 3 and 5 (float-heavy workloads) by 2–13%.
-- The `#pragma GCC optimize("O3,unroll-loops")` and AVX2 hints emitted by `tauraroc` in the generated C give it an advantage over plain `gcc -O3`.
+**Tauraro vs C:**
+- **2 clear wins:** Fibonacci (0.45×, **2.2× faster** than C) and Mandelbrot (0.87×, 15% faster)
+- **2 near-ties** (within 3%): Float Multiply (0.97×) and Newton Sqrt (0.98×)
+- **Slower on 5 benchmarks**: XOR Shift (1.06×), N-Body (1.07×), Sieve (1.26×), Collatz (1.23×), MatMul (1.47×)
+
+**Tauraro vs Rust:**
+- **2 wins:** Newton Sqrt (0.98×) and Mandelbrot (0.93×)
+- **2 near-ties** (within 1%): Float Multiply (1.00×) and Sieve (0.99×)
+- **Slower on 4 benchmarks**: XOR Shift (1.16×), N-Body (1.15×), Collatz (1.50×), MatMul (1.71×)
+
+**Analysis:**
+- Tauraro's biggest strength is sequential floating-point loops (Fibonacci, Mandelbrot, Newton Sqrt, Float Multiply) — the `#pragma GCC optimize("O3,unroll-loops")` emitted by `tauraroc` helps the C backend auto-vectorize these aggressively.
+- Memory-access-heavy benchmarks (Sieve, Collatz, MatMul) show 20–47% overhead vs C. These are cache-miss-dominated workloads where the generated C's indirection overhead is most visible.
 - Benchmark 1 (Integer Sum): all three compilers constant-fold the entire loop at `-O3`.
 
 ## Benchmark Descriptions
