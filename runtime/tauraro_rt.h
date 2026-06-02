@@ -285,8 +285,18 @@ static inline Result Option_ok_or(Option self, void* err) {
 #include <windows.h>
 
 typedef HANDLE _TrThread;
+/* Trampoline: routes void*(*)(void*) through DWORD WINAPI to avoid
+ * __cdecl/__stdcall calling-convention mismatch on 32-bit Windows. */
+typedef struct { void*(*fn)(void*); void* arg; } _TrWin32StartArg;
+static DWORD WINAPI _tr_thread_start_trampoline(LPVOID raw) {
+    _TrWin32StartArg* s = (_TrWin32StartArg*)raw;
+    void*(*fn)(void*) = s->fn; void* arg = s->arg; free(s);
+    fn(arg); return 0;
+}
 static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
-    return CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)fn, arg, 0, NULL);
+    _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg));
+    s->fn = fn; s->arg = arg;
+    return CreateThread(NULL, 0, _tr_thread_start_trampoline, s, 0, NULL);
 }
 static void _tr_thread_detach(_TrThread t) { CloseHandle(t); }
 static void _tr_thread_join_wait(_TrThread t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
@@ -717,6 +727,15 @@ static void _tr_timer_stop(_TrTimerState* s) {
     if (s->ch) _tr_chan_close(s->ch);
 }
 
+/* ── BARE ThreadPool: runs jobs synchronously (no OS threads) ─────────── */
+typedef struct { int _dummy; } _TrThreadPool;
+static inline long long _tr_threadpool_auto_n(void)  { return 1LL; }
+static inline _TrThreadPool* _tr_threadpool_new(long long n)  { (void)n; return (_TrThreadPool*)calloc(1,sizeof(_TrThreadPool)); }
+static inline _TrThreadPool* _tr_threadpool_auto(void)        { return _tr_threadpool_new(1LL); }
+static inline void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) { (void)p; fn(arg); }
+static inline void _tr_threadpool_wait(_TrThreadPool* p)      { (void)p; }
+static inline void _tr_threadpool_free(_TrThreadPool* p)      { if(p)free(p); }
+
 #else /* POSIX ─────────────────────────────────────────────────────────── */
 
 typedef struct {
@@ -910,10 +929,12 @@ static void _tr_timer_stop(_TrTimerState* s) {
 #endif /* POSIX async primitives */
 
 /* ── MutexBox<T>: mutex-guarded single value ─────────────────────────── */
-typedef struct { _TrMutexH* mu; long long data; volatile int rc; } _TrMutexBox;
+/* _Atomic int rc: thread-safe refcount via C11 atomics (stdatomic.h included above) */
+typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; } _TrMutexBox;
 static inline _TrMutexBox* _tr_mutexbox_new(long long init) {
     _TrMutexBox* b = (_TrMutexBox*)malloc(sizeof(_TrMutexBox));
-    b->mu = _tr_mutex_new(); b->data = init; b->rc = 1; return b;
+    b->mu = _tr_mutex_new(); b->data = init;
+    atomic_store(&b->rc, 1); return b;
 }
 static inline long long _tr_mutexbox_lock_get(_TrMutexBox* b) {
     _tr_mutex_hlock(b->mu); return b->data;
@@ -926,17 +947,18 @@ static inline void _tr_mutexbox_free(_TrMutexBox* b) {
     if (!b) return; _tr_mutex_hfree(b->mu); free(b);
 }
 static inline _TrMutexBox* _tr_mutexbox_clone(_TrMutexBox* b) {
-    if (b) b->rc++; return b;
+    if (b) atomic_fetch_add(&b->rc, 1); return b;
 }
 static inline void _tr_mutexbox_drop(_TrMutexBox* b) {
-    if (!b || --b->rc > 0) return; _tr_mutexbox_free(b);
+    if (!b || atomic_fetch_sub(&b->rc, 1) > 1) return; _tr_mutexbox_free(b);
 }
 
 /* ── RwLockBox<T>: reader-writer guarded single value ────────────────── */
-typedef struct { _TrRWL* rw; long long data; volatile int rc; } _TrRWLBox;
+typedef struct { _TrRWL* rw; long long data; _Atomic int rc; } _TrRWLBox;
 static inline _TrRWLBox* _tr_rwlbox_new(long long init) {
     _TrRWLBox* b = (_TrRWLBox*)malloc(sizeof(_TrRWLBox));
-    b->rw = _tr_rwl_new(); b->data = init; b->rc = 1; return b;
+    b->rw = _tr_rwl_new(); b->data = init;
+    atomic_store(&b->rc, 1); return b;
 }
 static inline long long _tr_rwlbox_read_get(_TrRWLBox* b) {
     _tr_rwl_read_lock(b->rw); return b->data;
@@ -952,13 +974,15 @@ static inline void _tr_rwlbox_free(_TrRWLBox* b) {
     if (!b) return; _tr_rwl_free(b->rw); free(b);
 }
 static inline _TrRWLBox* _tr_rwlbox_clone(_TrRWLBox* b) {
-    if (b) b->rc++; return b;
+    if (b) atomic_fetch_add(&b->rc, 1); return b;
 }
 static inline void _tr_rwlbox_drop(_TrRWLBox* b) {
-    if (!b || --b->rc > 0) return; _tr_rwlbox_free(b);
+    if (!b || atomic_fetch_sub(&b->rc, 1) > 1) return; _tr_rwlbox_free(b);
 }
 
 /* ── ThreadPool: fixed-N worker pool with a channel work queue ────────── */
+/* BARE stub is defined inside the BARE platform block above. */
+#ifndef TAURARO_BARE
 typedef struct { void*(*fn)(void*); void* arg; } _TrPoolItem;
 typedef struct {
     _TrChan* queue; _TrThread* workers; int n_workers;
@@ -970,7 +994,8 @@ static void* _tr_pool_worker(void* arg) {
         int ok = 0;
         long long item_val = _tr_chan_recv_ok(pool->queue, &ok);
         if (!ok) break;
-        _TrPoolItem* item = (_TrPoolItem*)(void*)(intptr_t)item_val;
+        /* uintptr_t cast is safe on both 32-bit and 64-bit platforms */
+        _TrPoolItem* item = (_TrPoolItem*)(uintptr_t)(unsigned long long)item_val;
         item->fn(item->arg);
         free(item);
         _tr_wg_done(pool->wg);
@@ -980,10 +1005,14 @@ static void* _tr_pool_worker(void* arg) {
 static inline long long _tr_threadpool_auto_n(void) {
 #ifdef _WIN32
     SYSTEM_INFO si; GetSystemInfo(&si); return (long long)si.dwNumberOfProcessors;
-#elif defined(TAURARO_BARE)
-    return 1LL;
-#else
+#elif defined(_SC_NPROCESSORS_ONLN)
+    /* _SC_NPROCESSORS_ONLN may not exist on all POSIX systems (Haiku, QNX, old BSDs) */
     long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (long long)n : 1LL;
+#elif defined(HW_NCPU) /* BSD/macOS fallback via sysctl */
+    int mib[2] = {CTL_HW, HW_NCPU}; int ncpu = 1; size_t len = sizeof(ncpu);
+    sysctl(mib, 2, &ncpu, &len, NULL, 0); return (long long)(ncpu > 0 ? ncpu : 1);
+#else
+    return 1LL;
 #endif
 }
 static inline _TrThreadPool* _tr_threadpool_new(long long n) {
@@ -1004,7 +1033,8 @@ static inline void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), voi
     _TrPoolItem* item = (_TrPoolItem*)malloc(sizeof(_TrPoolItem));
     item->fn = fn; item->arg = arg;
     _tr_wg_add(p->wg, 1);
-    _tr_chan_send(p->queue, (long long)(intptr_t)(void*)item);
+    /* uintptr_t cast: safe on 32-bit and 64-bit; avoids sign-extension of intptr_t */
+    _tr_chan_send(p->queue, (long long)(uintptr_t)(void*)item);
 }
 static inline void _tr_threadpool_wait(_TrThreadPool* p) { _tr_wg_wait(p->wg); }
 static inline void _tr_threadpool_free(_TrThreadPool* p) {
@@ -1014,6 +1044,7 @@ static inline void _tr_threadpool_free(_TrThreadPool* p) {
     _tr_chan_free(p->queue); _tr_wg_free(p->wg);
     free(p->workers); free(p);
 }
+#endif /* !TAURARO_BARE */
 
 /* ── Platform-independent helpers ────────────────────────────────────── */
 static bool _tr_task_await_timeout_ok(_TrTaskState* t, long long ms) {
@@ -2332,7 +2363,15 @@ static inline char* _tr_hostname(void) { char* b=(char*)_tr_c_malloc(256); getho
 static inline char* _tr_username(void) {
     const char* u=getenv("USER"); if(!u) u=getenv("LOGNAME"); return u?(char*)u:(char*)"";
 }
-static inline int   _tr_cpu_count(void) { return (int)sysconf(_SC_NPROCESSORS_ONLN); }
+static inline int   _tr_cpu_count(void) {
+#if defined(_SC_NPROCESSORS_ONLN)
+    return (int)sysconf(_SC_NPROCESSORS_ONLN);
+#elif defined(HW_NCPU)
+    int mib[2]={CTL_HW,HW_NCPU}; int n=1; size_t l=sizeof(n); sysctl(mib,2,&n,&l,NULL,0); return n>0?n:1;
+#else
+    return 1;
+#endif
+}
 static inline char* _tr_cwd(void)       { char* b=(char*)_tr_c_malloc(4096); return getcwd(b,4096); }
 static inline int   _tr_chdir(const char* p) { return chdir(p); }
 #ifdef __APPLE__
