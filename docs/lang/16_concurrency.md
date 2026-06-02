@@ -15,6 +15,9 @@
 | `RwLock[T]` | Multiple readers or single writer |
 | `ThreadPool` | Fixed worker-pool for dispatching many short jobs |
 | `shared` | Atomic refcount box for shared ownership |
+| `Thread` | Explicit joinable OS thread with full lifecycle control |
+| `Atomic[T]` | Lock-free atomic integer operations |
+| `ThreadLocal[T]` | Per-thread storage — each thread sees its own value |
 
 ---
 
@@ -286,6 +289,137 @@ def main():
 
 ---
 
+## Thread — Explicit Joinable Thread
+
+`Thread` gives you a joinable handle to an OS thread, unlike `spawn` which is fire-and-forget:
+
+```python
+def work(ms: int) -> void:
+    Thread.sleep(ms)
+    print(f"  done after {ms}ms")
+
+def main():
+    mut t1: Thread = Thread.spawn(work, 50)
+    mut t2: Thread = Thread.spawn(work, 100)
+    t1.join()    # wait for t1 to finish
+    t2.join()    # wait for t2 to finish
+    print(f"current thread id: {Thread.id()}")
+```
+
+### Thread API
+
+| Method | Description |
+|--------|-------------|
+| `Thread.spawn(fn, arg)` | Start a new thread running `fn(arg)`, returns handle |
+| `t.join()` | Wait for thread to finish |
+| `t.detach()` | Detach thread (runs independently, no join needed) |
+| `t.free()` | Free the thread handle |
+| `Thread.sleep(ms)` | Sleep current thread for `ms` milliseconds |
+| `Thread.id()` | Return current thread's OS ID |
+
+**Thread vs spawn:** Use `Thread.spawn` when you need to join (wait for a result or ordering). Use `spawn` for fire-and-forget background work.
+
+---
+
+## Atomic[T] — Lock-Free Integer
+
+`Atomic[int]` wraps a value in a C11 `_Atomic` cell. All operations are lock-free and safe to call from multiple threads simultaneously:
+
+```python
+def inc_task(counter: Atomic[int]) -> void:
+    mut i = 0
+    while i < 1000:
+        counter.add(1)
+        i = i + 1
+
+def main():
+    mut counter: Atomic[int] = Atomic.new(0)
+    task_group:
+        spawn inc_task(counter)
+        spawn inc_task(counter)
+        spawn inc_task(counter)
+    print(f"total: {counter.load()}")    # 3000
+
+    # Compare-and-swap: atomically set to 42 only if current == 0
+    mut old = counter.swap(0)            # exchange, returns old value
+    mut ok = counter.cas(0, 42)         # ok=true when swap succeeded
+    counter.free()
+```
+
+### Atomic[T] API
+
+| Method | Description |
+|--------|-------------|
+| `Atomic.new(v)` | Create atomic initialized to `v` |
+| `a.load()` | Read current value |
+| `a.store(v)` | Write value |
+| `a.add(v)` | Atomic add, returns new value |
+| `a.sub(v)` | Atomic subtract, returns new value |
+| `a.swap(v)` | Exchange — stores `v`, returns old value |
+| `a.cas(expected, desired)` | Compare-and-swap — returns `true` if swap happened |
+| `a.increment()` | Shorthand for `a.add(1)` |
+| `a.decrement()` | Shorthand for `a.sub(1)` |
+| `a.free()` | Free the atomic |
+
+**When to use Atomic vs Mutex:** `Atomic[int]` is faster for counters and flags. Use `Mutex[T]` when you need to guard a complex value or need read-modify-write over multiple fields.
+
+---
+
+## ThreadLocal[T] — Per-Thread Storage
+
+`ThreadLocal[T]` gives each thread its own independent copy of a value. Changes in one thread are invisible to others:
+
+```python
+def worker(tl: ThreadLocal[int]) -> void:
+    tl.set(999)    # only affects THIS thread's slot
+    print(f"  worker sees: {tl.get()}")    # 999
+
+def main():
+    mut tl: ThreadLocal[int] = ThreadLocal.new(0)
+    tl.set(100)    # main thread's value
+
+    mut t: Thread = Thread.spawn(worker, tl)
+    t.join()
+
+    print(f"main still sees: {tl.get()}")    # still 100
+    tl.free()
+```
+
+### ThreadLocal[T] API
+
+| Method | Description |
+|--------|-------------|
+| `ThreadLocal.new(v)` | Create thread-local initialized to `v` for new threads |
+| `tl.get()` | Read current thread's value |
+| `tl.set(v)` | Write current thread's value |
+| `tl.free()` | Free the thread-local storage slot |
+
+---
+
+## Mutex Auto-Unlock (RAII)
+
+Calling `m.unlock()` after `m.get()` is optional. The compiler automatically emits a cleanup guard that releases the lock when the binding goes out of scope:
+
+```python
+def safe_read(m: Mutex[int]) -> void:
+    mut v = m.get()
+    # No m.unlock() needed — lock released automatically when v goes out of scope
+    print(f"  value = {v}")
+
+def main():
+    mut m: Mutex[int] = Mutex.init(0)
+    task_group:
+        spawn safe_read(m)
+        spawn safe_read(m)
+    # Explicit unlock is still accepted:
+    mut v = m.get()
+    m.unlock()
+```
+
+The same auto-unlock behavior applies to `RwLock.read()` and `RwLock.write()`.
+
+---
+
 ## Thread Safety Summary
 
 | Pattern | Thread safe? | Notes |
@@ -297,6 +431,9 @@ def main():
 | `RwLock[T]` read | ✓ | Multiple concurrent readers |
 | `RwLock[T]` write | ✓ | Exclusive write lock |
 | `ThreadPool` spawn | ✓ | Queue is synchronized |
+| `Atomic[int]` ops | ✓ | C11 lock-free `_Atomic` |
+| `ThreadLocal[T]` | ✓ | Per-thread — no sharing |
+| `Thread.spawn` | ✓ | Joinable OS thread |
 | `shared x.field` concurrent writes | ✗ | Data race — use `Mutex[T]` |
 | `List[T]` shared across threads | ✗ | No synchronization |
 

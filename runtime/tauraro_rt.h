@@ -596,6 +596,22 @@ static void _tr_timer_stop(_TrTimerState* s) {
     _tr_chan_close(s->ch);
 }
 
+/* ── Thread-local storage (Win32 TLS slots) ──────────────────────────── */
+typedef struct { DWORD key; } _TrTLS;
+static inline _TrTLS* _tr_tls_new(long long init) {
+    _TrTLS* t = (_TrTLS*)malloc(sizeof(_TrTLS));
+    t->key = TlsAlloc();
+    TlsSetValue(t->key, (LPVOID)(uintptr_t)(unsigned long long)init);
+    return t;
+}
+static inline long long _tr_tls_get(_TrTLS* t) {
+    return t ? (long long)(uintptr_t)TlsGetValue(t->key) : 0LL;
+}
+static inline void _tr_tls_set(_TrTLS* t, long long v) {
+    if (t) TlsSetValue(t->key, (LPVOID)(uintptr_t)(unsigned long long)v);
+}
+static inline void _tr_tls_free(_TrTLS* t) { if (!t) return; TlsFree(t->key); free(t); }
+
 #elif defined(TAURARO_BARE)
 /* ═══════════════════════════════════════════════════════════════════════════
  * BARE/WASM: single-threaded async stubs — no locking, no blocking.
@@ -726,6 +742,15 @@ static void _tr_timer_stop(_TrTimerState* s) {
     if (!s) return; s->stopped = 1;
     if (s->ch) _tr_chan_close(s->ch);
 }
+
+/* ── Thread-local storage (bare: single thread, single value) ────────── */
+typedef struct { long long val; } _TrTLS;
+static inline _TrTLS* _tr_tls_new(long long init) {
+    _TrTLS* t = (_TrTLS*)malloc(sizeof(_TrTLS)); t->val = init; return t;
+}
+static inline long long _tr_tls_get(_TrTLS* t) { return t ? t->val : 0LL; }
+static inline void _tr_tls_set(_TrTLS* t, long long v) { if (t) t->val = v; }
+static inline void _tr_tls_free(_TrTLS* t) { if (t) free(t); }
 
 /* ── BARE ThreadPool: runs jobs synchronously (no OS threads) ─────────── */
 typedef struct { int _dummy; } _TrThreadPool;
@@ -926,23 +951,44 @@ static void _tr_timer_stop(_TrTimerState* s) {
     _tr_chan_close(s->ch);
 }
 
+/* ── Thread-local storage (POSIX pthread_key_t) ──────────────────────── */
+typedef struct { pthread_key_t key; } _TrTLS;
+static inline _TrTLS* _tr_tls_new(long long init) {
+    _TrTLS* t = (_TrTLS*)malloc(sizeof(_TrTLS));
+    pthread_key_create(&t->key, NULL);
+    pthread_setspecific(t->key, (void*)(uintptr_t)(unsigned long long)init);
+    return t;
+}
+static inline long long _tr_tls_get(_TrTLS* t) {
+    return t ? (long long)(uintptr_t)pthread_getspecific(t->key) : 0LL;
+}
+static inline void _tr_tls_set(_TrTLS* t, long long v) {
+    if (t) pthread_setspecific(t->key, (void*)(uintptr_t)(unsigned long long)v);
+}
+static inline void _tr_tls_free(_TrTLS* t) {
+    if (!t) return; pthread_key_delete(t->key); free(t);
+}
+
 #endif /* POSIX async primitives */
 
 /* ── MutexBox<T>: mutex-guarded single value ─────────────────────────── */
 /* _Atomic int rc: thread-safe refcount via C11 atomics (stdatomic.h included above) */
-typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; } _TrMutexBox;
+/* _locked: 1 while this thread holds the lock; cleared by set_unlock/unlock.
+ * Only one thread can hold the lock at a time so _locked is safe without
+ * additional synchronization — it is always accessed under the mutex. */
+typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; volatile int _locked; } _TrMutexBox;
 static inline _TrMutexBox* _tr_mutexbox_new(long long init) {
     _TrMutexBox* b = (_TrMutexBox*)malloc(sizeof(_TrMutexBox));
-    b->mu = _tr_mutex_new(); b->data = init;
+    b->mu = _tr_mutex_new(); b->data = init; b->_locked = 0;
     atomic_store(&b->rc, 1); return b;
 }
 static inline long long _tr_mutexbox_lock_get(_TrMutexBox* b) {
-    _tr_mutex_hlock(b->mu); return b->data;
+    _tr_mutex_hlock(b->mu); b->_locked = 1; return b->data;
 }
 static inline void _tr_mutexbox_set_unlock(_TrMutexBox* b, long long v) {
-    b->data = v; _tr_mutex_hunlock(b->mu);
+    b->data = v; b->_locked = 0; _tr_mutex_hunlock(b->mu);
 }
-static inline void _tr_mutexbox_unlock(_TrMutexBox* b) { _tr_mutex_hunlock(b->mu); }
+static inline void _tr_mutexbox_unlock(_TrMutexBox* b) { b->_locked = 0; _tr_mutex_hunlock(b->mu); }
 static inline void _tr_mutexbox_free(_TrMutexBox* b) {
     if (!b) return; _tr_mutex_hfree(b->mu); free(b);
 }
@@ -952,23 +998,29 @@ static inline _TrMutexBox* _tr_mutexbox_clone(_TrMutexBox* b) {
 static inline void _tr_mutexbox_drop(_TrMutexBox* b) {
     if (!b || atomic_fetch_sub(&b->rc, 1) > 1) return; _tr_mutexbox_free(b);
 }
+/* Auto-unlock cleanup — used by __attribute__((cleanup)) RAII guard in codegen.
+ * Fires when the guard variable goes out of scope. No-op if already unlocked. */
+static inline void _tr_mutexbox_cleanup(_TrMutexBox** bp) {
+    if (bp && *bp && (*bp)->_locked) { (*bp)->_locked = 0; _tr_mutex_hunlock((*bp)->mu); }
+}
 
 /* ── RwLockBox<T>: reader-writer guarded single value ────────────────── */
-typedef struct { _TrRWL* rw; long long data; _Atomic int rc; } _TrRWLBox;
+/* _locked: 0=none, 1=write locked, 2=read locked. */
+typedef struct { _TrRWL* rw; long long data; _Atomic int rc; volatile int _locked; } _TrRWLBox;
 static inline _TrRWLBox* _tr_rwlbox_new(long long init) {
     _TrRWLBox* b = (_TrRWLBox*)malloc(sizeof(_TrRWLBox));
-    b->rw = _tr_rwl_new(); b->data = init;
+    b->rw = _tr_rwl_new(); b->data = init; b->_locked = 0;
     atomic_store(&b->rc, 1); return b;
 }
 static inline long long _tr_rwlbox_read_get(_TrRWLBox* b) {
-    _tr_rwl_read_lock(b->rw); return b->data;
+    _tr_rwl_read_lock(b->rw); b->_locked = 2; return b->data;
 }
-static inline void _tr_rwlbox_read_unlock(_TrRWLBox* b) { _tr_rwl_read_unlock(b->rw); }
+static inline void _tr_rwlbox_read_unlock(_TrRWLBox* b) { b->_locked = 0; _tr_rwl_read_unlock(b->rw); }
 static inline long long _tr_rwlbox_write_get(_TrRWLBox* b) {
-    _tr_rwl_write_lock(b->rw); return b->data;
+    _tr_rwl_write_lock(b->rw); b->_locked = 1; return b->data;
 }
 static inline void _tr_rwlbox_write_set_unlock(_TrRWLBox* b, long long v) {
-    b->data = v; _tr_rwl_write_unlock(b->rw);
+    b->data = v; b->_locked = 0; _tr_rwl_write_unlock(b->rw);
 }
 static inline void _tr_rwlbox_free(_TrRWLBox* b) {
     if (!b) return; _tr_rwl_free(b->rw); free(b);
@@ -978,6 +1030,13 @@ static inline _TrRWLBox* _tr_rwlbox_clone(_TrRWLBox* b) {
 }
 static inline void _tr_rwlbox_drop(_TrRWLBox* b) {
     if (!b || atomic_fetch_sub(&b->rc, 1) > 1) return; _tr_rwlbox_free(b);
+}
+/* Auto-unlock cleanup for read/write guards. */
+static inline void _tr_rwlbox_cleanup_r(_TrRWLBox** bp) {
+    if (bp && *bp && (*bp)->_locked == 2) { (*bp)->_locked = 0; _tr_rwl_read_unlock((*bp)->rw); }
+}
+static inline void _tr_rwlbox_cleanup_w(_TrRWLBox** bp) {
+    if (bp && *bp && (*bp)->_locked == 1) { (*bp)->_locked = 0; _tr_rwl_write_unlock((*bp)->rw); }
 }
 
 /* ── ThreadPool: fixed-N worker pool with a channel work queue ────────── */
@@ -1045,6 +1104,47 @@ static inline void _tr_threadpool_free(_TrThreadPool* p) {
     free(p->workers); free(p);
 }
 #endif /* !TAURARO_BARE */
+
+/* ── Atomic[T]: lock-free atomic integer (C11 _Atomic) ───────────────── */
+typedef struct { _Atomic long long val; } _TrAtomic;
+static inline _TrAtomic* _tr_atomic_new(long long init) {
+    _TrAtomic* a = (_TrAtomic*)malloc(sizeof(_TrAtomic));
+    atomic_store(&a->val, init); return a;
+}
+static inline long long _tr_atomic_load(_TrAtomic* a)               { return a ? atomic_load(&a->val) : 0LL; }
+static inline void      _tr_atomic_store(_TrAtomic* a, long long v)  { if (a) atomic_store(&a->val, v); }
+static inline long long _tr_atomic_add(_TrAtomic* a, long long v)    { return a ? atomic_fetch_add(&a->val, v) : 0LL; }
+static inline long long _tr_atomic_sub(_TrAtomic* a, long long v)    { return a ? atomic_fetch_sub(&a->val, v) : 0LL; }
+static inline long long _tr_atomic_swap(_TrAtomic* a, long long v)   { return a ? atomic_exchange(&a->val, v) : 0LL; }
+static inline bool _tr_atomic_cas(_TrAtomic* a, long long expected, long long desired) {
+    if (!a) return false;
+    return atomic_compare_exchange_strong(&a->val, &expected, desired);
+}
+static inline void _tr_atomic_free(_TrAtomic* a) { if (a) free(a); }
+
+/* ── Thread object: joinable OS-thread handle ────────────────────────── */
+typedef struct { _TrThread handle; volatile int done; } _TrThreadObj;
+static inline _TrThreadObj* _tr_threadobj_spawn(void*(*fn)(void*), void* arg) {
+    _TrThreadObj* t = (_TrThreadObj*)calloc(1, sizeof(_TrThreadObj));
+    t->handle = _tr_thread_start(fn, arg); return t;
+}
+static inline void _tr_threadobj_join(_TrThreadObj* t) {
+    if (!t || t->done) return; t->done = 1; _tr_thread_join_wait(t->handle);
+}
+static inline void _tr_threadobj_detach(_TrThreadObj* t) {
+    if (!t || t->done) return; t->done = 1; _tr_thread_detach(t->handle);
+}
+static inline void _tr_threadobj_free(_TrThreadObj* t) { if (t) free(t); }
+
+/* ── Thread utilities: current-thread ID and sleep ───────────────────── */
+#ifdef _WIN32
+static inline long long _tr_thread_current_id(void) { return (long long)(uintptr_t)GetCurrentThreadId(); }
+#elif defined(TAURARO_BARE)
+static inline long long _tr_thread_current_id(void) { return 0LL; }
+#else
+static inline long long _tr_thread_current_id(void) { return (long long)(uintptr_t)pthread_self(); }
+#endif
+static inline void _tr_thread_sleep_ms(long long ms) { _tr_sleep_ms((long)(ms < 0 ? 0 : ms)); }
 
 /* ── Platform-independent helpers ────────────────────────────────────── */
 static bool _tr_task_await_timeout_ok(_TrTaskState* t, long long ms) {
@@ -1125,6 +1225,29 @@ static inline void  _tr_once_free_h(char* o)                                   {
 static inline char* _tr_timer_new_h(long long ms, char* ch)                    { return (char*)_tr_timer_new(ms, (_TrChan*)ch); }
 static inline char* _tr_ticker_new_h(long long ms, char* ch)                   { return (char*)_tr_ticker_new(ms, (_TrChan*)ch); }
 static inline void  _tr_timer_stop_h(char* s)                                  { _tr_timer_stop((_TrTimerState*)s); }
+
+/* Thread object (joinable handle) */
+static inline char* _tr_threadobj_spawn_h(void*(*fn)(void*), void* arg)        { return (char*)_tr_threadobj_spawn(fn, arg); }
+static inline void  _tr_threadobj_join_h(char* t)                              { _tr_threadobj_join((_TrThreadObj*)t); }
+static inline void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
+static inline void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
+static inline long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
+static inline void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
+
+/* Atomic[T]: lock-free integer */
+static inline char* _tr_atomic_new_h(long long init)                           { return (char*)_tr_atomic_new(init); }
+static inline long long _tr_atomic_load_h(char* a)                             { return _tr_atomic_load((_TrAtomic*)a); }
+static inline void  _tr_atomic_store_h(char* a, long long v)                   { _tr_atomic_store((_TrAtomic*)a, v); }
+static inline long long _tr_atomic_add_h(char* a, long long v)                 { return _tr_atomic_add((_TrAtomic*)a, v); }
+static inline long long _tr_atomic_sub_h(char* a, long long v)                 { return _tr_atomic_sub((_TrAtomic*)a, v); }
+static inline long long _tr_atomic_swap_h(char* a, long long v)                { return _tr_atomic_swap((_TrAtomic*)a, v); }
+static inline bool  _tr_atomic_cas_h(char* a, long long expected, long long desired) { return _tr_atomic_cas((_TrAtomic*)a, expected, desired); }
+static inline void  _tr_atomic_free_h(char* a)                                 { _tr_atomic_free((_TrAtomic*)a); }
+
+/* ThreadLocal[T]: per-thread storage */
+static inline char* _tr_tls_new_h(long long init)                              { return (char*)_tr_tls_new(init); }
+static inline long long _tr_tls_get_h(char* t)                                 { return _tr_tls_get((_TrTLS*)t); }
+static inline void  _tr_tls_set_h(char* t, long long v)                        { _tr_tls_set((_TrTLS*)t, v); }
 
 /* ── Core runtime helpers ────────────────────────────────────────────── */
 
