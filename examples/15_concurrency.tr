@@ -70,19 +70,19 @@ def heavy(n: int) -> void:
         i += 1
     print(f"  heavy({n}) sum = {s}")
 
-# ── 10. Shared counter (old pattern, kept for compatibility) ──────────────────
-class SharedCounter:
-    pub value: int
+# ── 10. Shared counter — Atomic[int] for lock-free thread-safe counting ──────
+class SharedCounter implements Sendable:
+    pub value: Atomic[int]
 
 extend SharedCounter:
     pub def init() -> SharedCounter:
         mut c = SharedCounter()
-        c.value = 0
+        c.value = Atomic.new(0)
         return c
     pub def increment(self) -> void:
-        self.value += 1
+        self.value.increment()
     pub def get(self) -> int:
-        return self.value
+        return self.value.load()
 
 def increment_shared(c: SharedCounter) -> void:
     c.increment()
@@ -177,14 +177,12 @@ async def main():
     await_all(heavy(1000), heavy(2000), heavy(3000))
     print("  all heavy() finished (ran in parallel)")
 
-    # ── shared (existing feature) ─────────────────────────────────────────────
-    print("=== shared ===")
+    # ── shared counter (Atomic[int] — lock-free, Sendable) ───────────────────
+    print("=== shared counter ===")
     mut sc = SharedCounter.init()
-    shared s1 = sc
-    shared s2 = s1
     task_group:
-        spawn increment_shared(s1)
-        spawn increment_shared(s2)
-    print(f"  counter: {s1.get()}")
+        spawn increment_shared(sc)
+        spawn increment_shared(sc)
+    print(f"  counter: {sc.get()}")
 
     print("=== done ===")

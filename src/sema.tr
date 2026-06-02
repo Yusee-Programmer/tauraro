@@ -208,10 +208,10 @@ extend Sema:
                 while ii < cls.iface_names.len:
                     if cls.iface_names.get(ii) == "Sendable": return true
                     ii = ii + 1
-            # User class without Sendable — warn but allow (permissive mode)
-            self.warnings.push("line " + str(self.current_line) + ": [T-SAFETY] Class '" + ty_name + "' is passed to a thread but does not implement 'Sendable'.\n         FIX: Add 'implements Sendable' to confirm this class is thread-safe, or wrap mutable fields in Mutex[T].")
-            return true
-        return true
+            # User class without Sendable — hard error (strict mode)
+            return false
+        # Unknown type — conservative: assume not sendable
+        return false
 
     pub def check_spawn_sendable(self, e: Pointer[HirExpr]):
         if _is_invalid_ptr(e as usize): return
@@ -231,6 +231,16 @@ extend Sema:
                         self.error("[T-1] Type '" + arg_ty2.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty2.name + "].")
                     csmi = csmi + 1
             case _: pass
+
+    pub def check_class_sendable_fields(self, c: ClassDef):
+        mut cfi = 0
+        while cfi < c.fields.len:
+            mut fd = c.fields.get(cfi)
+            if fd.ty as usize != 0 as usize:
+                mut fty = fd.ty.read()
+                if not self.is_sendable_type(fty.name):
+                    self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but field '" + fd.name + ": " + fty.name + "' is not Sendable.\n      FIX: Wrap '" + fd.name + "' in Mutex[" + fty.name + "] for exclusive access, RwLock[" + fty.name + "] for reader-writer, or Atomic[T] for numeric/flag types.\n      Or remove 'implements Sendable' if '" + c.name + "' is only used on one thread.")
+            cfi = cfi + 1
 
     pub def enter_scope(self):
         mut s_obj = Scope.init()
@@ -453,7 +463,9 @@ extend Sema:
         while _ifc_i < c.iface_names.len:
             mut _ifc_nm = c.iface_names.get(_ifc_i)
             if _ifc_nm == "Sendable":
-                pass  # Sendable is a built-in compiler marker — no definition needed
+                # Validate all fields are Sendable; pass generics (T fields allowed)
+                if c.generics.len == 0:
+                    self.check_class_sendable_fields(c)
             elif not self.interfaces.contains(_ifc_nm):
                 self.error("[I-1] Class '" + c.name + "' declares 'implements " + _ifc_nm + "' but interface '" + _ifc_nm + "' is not defined.\n      FIX: Define 'interface " + _ifc_nm + ":' before this class, or check for typos.")
             else:
@@ -1053,6 +1065,13 @@ extend Sema:
                 # Thread built-in method return types
                 elif method == "spawn" and (hobj_ty.name == "Thread" or hobj_ty.name == "void"):
                     ret_ty = AstType.init("Thread")
+                    # Check all args (skip fn name at index 0) are Sendable
+                    mut _tsi = 1
+                    while _tsi < hl.len:
+                        mut _tsa_ty = hir_expr_type(hl.get(_tsi))
+                        if not self.is_sendable_type(_tsa_ty.name):
+                            self.error("[T-1] Type '" + _tsa_ty.name + "' is not Sendable and cannot be passed to Thread.spawn.\n      FIX: Wrap in Mutex[" + _tsa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _tsa_ty.name + "' to confirm it is thread-safe.")
+                        _tsi = _tsi + 1
                 # Atomic built-in method return types
                 elif hobj_ty.name == "Atomic":
                     if method == "load" or method == "get" or method == "add" or method == "sub" or method == "swap" or method == "exchange" or method == "fetch_add" or method == "fetch_sub" or method == "load_relaxed" or method == "load_acquire" or method == "load_seqcst" or method == "add_relaxed" or method == "add_release" or method == "add_acqrel" or method == "sub_relaxed" or method == "sub_release":
