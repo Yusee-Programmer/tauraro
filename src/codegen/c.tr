@@ -382,6 +382,11 @@ pub class CGenerator:
                     return "TrIDict*"
             return "TrMap*"
 
+        if n == "Chan": return "_TrChan*"
+        if n == "Mutex": return "_TrMutexBox*"
+        if n == "RwLock": return "_TrRWLBox*"
+        if n == "ThreadPool": return "_TrThreadPool*"
+
         if n == "Tuple" or n == "tuple": return "TrTuple"
 
         if n == "Result": return "Result"
@@ -1318,6 +1323,49 @@ pub class CGenerator:
         if base_callee == "type":
             return "\"<object>\""
 
+        # await_all(f1(args), f2(args), ...) — run all calls concurrently, wait for completion
+        if base_callee == "await_all":
+            if args.len == 0: return "0LL"
+            mut aa_code = "({ _tr_tg_begin(); "
+            mut aa_i = 0
+            while aa_i < args.len:
+                mut aa_fn = ""
+                mut aa_call_args: Vec[Pointer[HirExpr]] = []
+                match args.get(aa_i).read():
+                    case HirExpr.ECall(aa_c, aa_a, _):
+                        match aa_c.read():
+                            case HirExpr.EIdent(aa_n, _, _): aa_fn = aa_n
+                            case _: pass
+                        aa_call_args = aa_a
+                    case _: pass
+                if aa_fn != "":
+                    if aa_call_args.len == 0:
+                        aa_code = aa_code + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + aa_fn + ", NULL)); "
+                    elif aa_call_args.len == 1:
+                        mut aa_aty = hir_expr_type(aa_call_args.get(0)).name
+                        mut aa_vcast = "(void*)(uintptr_t)(" + self.gen_expr(aa_call_args.get(0)) + ")"
+                        if not _is_int_type(aa_aty) and aa_aty != "bool" and aa_aty != "char":
+                            aa_vcast = "(void*)(" + self.gen_expr(aa_call_args.get(0)) + ")"
+                        aa_code = aa_code + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + aa_fn + ", " + aa_vcast + ")); "
+                    else:
+                        # multi-arg: heap-pack
+                        mut aa_na = aa_call_args.len
+                        aa_code = aa_code + "{ long long* _aab" + str(aa_i) + " = (long long*)malloc(" + str(aa_na + 1) + " * sizeof(long long)); "
+                        mut aa_ai2 = 0
+                        while aa_ai2 < aa_na:
+                            mut aa_atn = hir_expr_type(aa_call_args.get(aa_ai2)).name
+                            if not _is_int_type(aa_atn) and aa_atn != "bool" and aa_atn != "char":
+                                aa_code = aa_code + "_aab" + str(aa_i) + "[" + str(aa_ai2 + 1) + "] = (long long)" + self.gen_expr(aa_call_args.get(aa_ai2)) + "; "
+                            else:
+                                aa_code = aa_code + "_aab" + str(aa_i) + "[" + str(aa_ai2 + 1) + "] = (long long)(" + self.gen_expr(aa_call_args.get(aa_ai2)) + "); "
+                            aa_ai2 = aa_ai2 + 1
+                        aa_code = aa_code + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + aa_fn + ", _aab" + str(aa_i) + ")); } "
+                else:
+                    aa_code = aa_code + self.gen_expr(args.get(aa_i)) + "; "
+                aa_i = aa_i + 1
+            aa_code = aa_code + "_tr_taskgroup_wait(); 0LL; })"
+            return aa_code
+
         # iter / enumerate / sorted / reversed — identity for now
         if base_callee == "iter" or base_callee == "enumerate" or base_callee == "sorted" or base_callee == "reversed":
             if args.len > 0: return self.gen_expr(args.get(0))
@@ -1448,6 +1496,33 @@ pub class CGenerator:
                 if self.enums.contains(n):
                     return "(" + n + "){.tag=" + n + "_" + n + "}"
             case HirExpr.EPropAccess(obj_inner, variant, _):
+                # Intercept Chan/Mutex/RwLock/ThreadPool static constructors
+                mut oi_ctor_name = ""
+                match obj_inner.read():
+                    case HirExpr.EIdent(oin, _, _): oi_ctor_name = oin
+                    case _: pass
+                if oi_ctor_name == "Chan":
+                    if variant == "init":
+                        mut ch_cap = "1LL"
+                        if args.len > 0: ch_cap = self.gen_expr(args.get(0))
+                        return "_tr_chan_new(" + ch_cap + ")"
+                if oi_ctor_name == "Mutex":
+                    if variant == "init":
+                        mut mx_val = "0LL"
+                        if args.len > 0: mx_val = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                        return "_tr_mutexbox_new(" + mx_val + ")"
+                if oi_ctor_name == "RwLock":
+                    if variant == "init":
+                        mut rw_val = "0LL"
+                        if args.len > 0: rw_val = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                        return "_tr_rwlbox_new(" + rw_val + ")"
+                if oi_ctor_name == "ThreadPool":
+                    if variant == "new":
+                        mut tp_n = "4LL"
+                        if args.len > 0: tp_n = self.gen_expr(args.get(0))
+                        return "_tr_threadpool_new(" + tp_n + ")"
+                    if variant == "auto":
+                        return "_tr_threadpool_auto()"
                 mut oi_type_n = hir_expr_type(obj_inner).name
                 if oi_type_n == "Result":
                     if variant == "ok":
@@ -1658,13 +1733,109 @@ pub class CGenerator:
         #       (handles chained results of .offset() whose HIR type is void/unknown).
         mut _ptr_intercept = t_n == "Pointer" or method == "offset"
         if not _ptr_intercept and (method == "read" or method == "write" or method == "as_ptr"):
-            if not self.classes.contains(t_n):
-                _ptr_intercept = true
+            # Don't intercept for concurrency types that have their own read/write semantics
+            if t_n != "Chan" and t_n != "Mutex" and t_n != "RwLock" and t_n != "ThreadPool" and obj_s != "Chan" and obj_s != "Mutex" and obj_s != "RwLock" and obj_s != "ThreadPool":
+                if not self.classes.contains(t_n):
+                    _ptr_intercept = true
         if _ptr_intercept:
             if method == "offset": return "(" + obj_s + " + " + self.gen_expr(args.get(0)) + ")"
             if method == "read": return "(*" + obj_s + ")"
             if method == "write": return "(*" + obj_s + " = " + self.gen_expr(args.get(0)) + ")"
             if method == "as_ptr": return obj_s
+
+        # Chan[T] method dispatch — also handles Chan.init() static constructor
+        if t_n == "Chan" or obj_s == "Chan":
+            if method == "init":
+                mut ch_cap_s = "1LL"
+                if args.len > 0: ch_cap_s = self.gen_expr(args.get(0))
+                return "_tr_chan_new(" + ch_cap_s + ")"
+            if method == "send":
+                mut ch_v = "0LL"
+                if args.len > 0: ch_v = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                return "_tr_chan_send(" + obj_s + ", " + ch_v + ")"
+            if method == "recv": return "_tr_chan_recv(" + obj_s + ")"
+            if method == "try_send":
+                mut ch_tv = "0LL"
+                if args.len > 0: ch_tv = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                return "_tr_chan_try_send(" + obj_s + ", " + ch_tv + ")"
+            if method == "try_recv": return "_tr_chan_try_recv_val(" + obj_s + ")"
+            if method == "close": return "_tr_chan_close(" + obj_s + ")"
+            if method == "is_closed": return "_tr_chan_is_closed(" + obj_s + ")"
+            if method == "len": return "_tr_chan_len(" + obj_s + ")"
+            if method == "cap": return "_tr_chan_cap(" + obj_s + ")"
+            if method == "free": return "_tr_chan_free(" + obj_s + ")"
+            if method == "send_timeout" and args.len >= 2:
+                return "_tr_chan_send_timeout(" + obj_s + ", (long long)(" + self.gen_expr(args.get(0)) + "), " + self.gen_expr(args.get(1)) + ")"
+            if method == "recv_timeout" and args.len >= 1:
+                return "_tr_chan_recv_timeout_val(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+
+        # Mutex[T] method dispatch — also handles Mutex.init() static constructor
+        if t_n == "Mutex" or obj_s == "Mutex":
+            if method == "init":
+                mut mx_init_v = "0LL"
+                if args.len > 0: mx_init_v = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                return "_tr_mutexbox_new(" + mx_init_v + ")"
+            if method == "lock" or method == "get":
+                return "_tr_mutexbox_lock_get(" + obj_s + ")"
+            if method == "set":
+                mut mx_sv = "0LL"
+                if args.len > 0: mx_sv = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                return "_tr_mutexbox_set_unlock(" + obj_s + ", " + mx_sv + ")"
+            if method == "unlock": return "_tr_mutexbox_unlock(" + obj_s + ")"
+            if method == "free": return "_tr_mutexbox_free(" + obj_s + ")"
+
+        # RwLock[T] method dispatch — also handles RwLock.init() static constructor
+        if t_n == "RwLock" or obj_s == "RwLock":
+            if method == "init":
+                mut rw_init_v = "0LL"
+                if args.len > 0: rw_init_v = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                return "_tr_rwlbox_new(" + rw_init_v + ")"
+            if method == "read" or method == "read_lock":
+                return "_tr_rwlbox_read_get(" + obj_s + ")"
+            if method == "read_unlock":
+                return "_tr_rwlbox_read_unlock(" + obj_s + ")"
+            if method == "write" or method == "write_lock":
+                return "_tr_rwlbox_write_get(" + obj_s + ")"
+            if method == "write_set" or method == "set":
+                mut rw_sv = "0LL"
+                if args.len > 0: rw_sv = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                return "_tr_rwlbox_write_set_unlock(" + obj_s + ", " + rw_sv + ")"
+            if method == "free": return "_tr_rwlbox_free(" + obj_s + ")"
+
+        # ThreadPool method dispatch — also handles ThreadPool.new() / ThreadPool.auto() static constructors
+        if t_n == "ThreadPool" or obj_s == "ThreadPool":
+            if method == "new":
+                mut tp_nw = "4LL"
+                if args.len > 0: tp_nw = self.gen_expr(args.get(0))
+                return "_tr_threadpool_new(" + tp_nw + ")"
+            if method == "auto":
+                return "_tr_threadpool_auto()"
+            if method == "spawn":
+                # ThreadPool.spawn(fn, arg) — dispatch work item to the pool
+                if args.len >= 2:
+                    mut tp_fn_s = self.gen_expr(args.get(0))
+                    mut tp_fn_nm = ""
+                    match args.get(0).read():
+                        case HirExpr.EIdent(tpn, _, _): tp_fn_nm = tpn
+                        case _: pass
+                    mut tp_arg_s = "(void*)(" + self.gen_expr(args.get(1)) + ")"
+                    mut tp_aty = hir_expr_type(args.get(1)).name
+                    if _is_int_type(tp_aty) or tp_aty == "bool" or tp_aty == "char":
+                        tp_arg_s = "(void*)(uintptr_t)(" + self.gen_expr(args.get(1)) + ")"
+                    if tp_fn_nm != "":
+                        return "_tr_threadpool_spawn(" + obj_s + ", _tr_spawn_wrap_" + tp_fn_nm + ", " + tp_arg_s + ")"
+                    return "_tr_threadpool_spawn(" + obj_s + ", (void*(*)(void*))(" + tp_fn_s + "), " + tp_arg_s + ")"
+                elif args.len == 1:
+                    mut tp_fn2_s = self.gen_expr(args.get(0))
+                    mut tp_fn2_nm = ""
+                    match args.get(0).read():
+                        case HirExpr.EIdent(tpn2, _, _): tp_fn2_nm = tpn2
+                        case _: pass
+                    if tp_fn2_nm != "":
+                        return "_tr_threadpool_spawn(" + obj_s + ", _tr_spawn_wrap_" + tp_fn2_nm + ", NULL)"
+                    return "_tr_threadpool_spawn(" + obj_s + ", (void*(*)(void*))(" + tp_fn2_s + "), NULL)"
+            if method == "wait": return "_tr_threadpool_wait(" + obj_s + ")"
+            if method == "free": return "_tr_threadpool_free(" + obj_s + ")"
 
         # Primitive conversion methods
         if method == "to_str" or method == "to_string":
@@ -2215,7 +2386,7 @@ pub class CGenerator:
     pub def emit_spawn_wrapper_for_expr(self, e: Pointer[HirExpr]):
         if _is_invalid_ptr(e as usize): return
         match e.read():
-            case HirExpr.ECall(callee, args, _):
+            case HirExpr.ECall(callee, args, ew_ret_ty):
                 mut fn_name = ""
                 match callee.read():
                     case HirExpr.EIdent(n, _, _): fn_name = n
@@ -2233,7 +2404,28 @@ pub class CGenerator:
                         cast_back = "(" + c_arg_ty + ")_vp"
                     self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { " + fn_name + "(" + cast_back + "); return NULL; }\n")
                 else:
-                    self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) { (void)_vp; /* multi-arg spawn not supported */ return NULL; }\n")
+                    # multi-arg: wrapper receives heap long long[N+1] where [0]=return slot, [1..N]=args
+                    mut ma_nargs = args.len
+                    mut ew_is_void = ew_ret_ty.name == "void" or ew_ret_ty.name == ""
+                    self.w("static void* _tr_spawn_wrap_" + fn_name + "(void* _vp) {\n")
+                    self.w("    long long* _ab = (long long*)_vp;\n")
+                    mut ma_call_s = ""
+                    mut ma_ai = 0
+                    while ma_ai < ma_nargs:
+                        if ma_ai > 0: ma_call_s = ma_call_s + ", "
+                        mut ma_atn = hir_expr_type(args.get(ma_ai)).name
+                        if not _is_int_type(ma_atn) and ma_atn != "bool" and ma_atn != "char":
+                            mut ma_cty = self.type_to_c(hir_expr_type(args.get(ma_ai)))
+                            ma_call_s = ma_call_s + "(" + ma_cty + ")_ab[" + str(ma_ai + 1) + "]"
+                        else:
+                            ma_call_s = ma_call_s + "_ab[" + str(ma_ai + 1) + "]"
+                        ma_ai = ma_ai + 1
+                    if ew_is_void:
+                        self.w("    " + fn_name + "(" + ma_call_s + ");\n")
+                    else:
+                        self.w("    _ab[0] = (long long)" + fn_name + "(" + ma_call_s + ");\n")
+                    self.w("    free(_ab); return NULL;\n")
+                    self.w("}\n")
             case _: pass
 
     pub def prescan_block_spawns(self, block: HirBlock):
@@ -2273,8 +2465,76 @@ pub class CGenerator:
                     mut cc = catches.get(ci).read()
                     self.prescan_block_spawns(cc.body)
                     ci = ci + 1
+            case HirStmt.SExpr(se):
+                self.prescan_await_all_in_expr(se)
+            case HirStmt.SLet(_, _, _, _, _, _, se_v):
+                self.prescan_await_all_in_expr(se_v)
+            case HirStmt.SReturn(se_r):
+                if not _is_invalid_ptr(se_r as usize):
+                    self.prescan_await_all_in_expr(se_r)
             case _:
                 pass
+
+    pub def prescan_await_all_in_expr(self, e: Pointer[HirExpr]):
+        if _is_invalid_ptr(e as usize): return
+        match e.read():
+            case HirExpr.ECall(aa_callee, aa_args, _):
+                mut aa_fn_n = ""
+                match aa_callee.read():
+                    case HirExpr.EIdent(nn, _, _): aa_fn_n = nn
+                    case _: pass
+                if aa_fn_n == "await_all":
+                    mut aa_pi = 0
+                    while aa_pi < aa_args.len:
+                        self.emit_spawn_wrapper_for_expr(aa_args.get(aa_pi))
+                        aa_pi = aa_pi + 1
+            case HirExpr.EMethodCall(pool_obj, pool_meth, pool_args, _):
+                # Emit spawn wrappers for pool.spawn(fn, args...) calls
+                if pool_meth == "spawn" and hir_expr_type(pool_obj).name == "ThreadPool":
+                    if pool_args.len >= 1:
+                        # Build a synthetic ECall with fn as callee and remaining args as args
+                        mut sp_fn_nm = ""
+                        match pool_args.get(0).read():
+                            case HirExpr.EIdent(spn, _, _): sp_fn_nm = spn
+                            case _: pass
+                        if sp_fn_nm != "":
+                            if not self.spawn_wrappers.contains(sp_fn_nm):
+                                self.spawn_wrappers.insert(sp_fn_nm, true)
+                                if pool_args.len == 1:
+                                    self.w("static void* _tr_spawn_wrap_" + sp_fn_nm + "(void* _vp) { (void)_vp; " + sp_fn_nm + "(); return NULL; }\n")
+                                elif pool_args.len == 2:
+                                    mut sp_aty = hir_expr_type(pool_args.get(1)).name
+                                    mut sp_cast = "(long long)(uintptr_t)_vp"
+                                    if not _is_int_type(sp_aty) and sp_aty != "bool" and sp_aty != "char":
+                                        mut sp_cty = self.type_to_c(hir_expr_type(pool_args.get(1)))
+                                        sp_cast = "(" + sp_cty + ")_vp"
+                                    self.w("static void* _tr_spawn_wrap_" + sp_fn_nm + "(void* _vp) { " + sp_fn_nm + "(" + sp_cast + "); return NULL; }\n")
+                                else:
+                                    mut sp_na = pool_args.len - 1
+                                    mut sp_is_void = true
+                                    if self.functions.contains(sp_fn_nm):
+                                        mut sp_hf = self.functions.get(sp_fn_nm)
+                                        sp_is_void = sp_hf.ret_ty.name == "void" or sp_hf.ret_ty.name == ""
+                                    self.w("static void* _tr_spawn_wrap_" + sp_fn_nm + "(void* _vp) {\n")
+                                    self.w("    long long* _ab = (long long*)_vp;\n")
+                                    mut sp_cs = ""
+                                    mut sp_ii = 0
+                                    while sp_ii < sp_na:
+                                        if sp_ii > 0: sp_cs = sp_cs + ", "
+                                        mut sp_atn2 = hir_expr_type(pool_args.get(sp_ii + 1)).name
+                                        if not _is_int_type(sp_atn2) and sp_atn2 != "bool" and sp_atn2 != "char":
+                                            mut sp_ct2 = self.type_to_c(hir_expr_type(pool_args.get(sp_ii + 1)))
+                                            sp_cs = sp_cs + "(" + sp_ct2 + ")_ab[" + str(sp_ii + 1) + "]"
+                                        else:
+                                            sp_cs = sp_cs + "_ab[" + str(sp_ii + 1) + "]"
+                                        sp_ii = sp_ii + 1
+                                    if sp_is_void:
+                                        self.w("    " + sp_fn_nm + "(" + sp_cs + ");\n")
+                                    else:
+                                        self.w("    _ab[0] = (long long)" + sp_fn_nm + "(" + sp_cs + ");\n")
+                                    self.w("    free(_ab); return NULL;\n")
+                                    self.w("}\n")
+            case _: pass
 
     pub def prescan_spawns(self, prog: HirProgram):
         if _is_invalid_ptr(prog as usize): return
@@ -2755,7 +3015,21 @@ pub class CGenerator:
                             else:
                                 self.w(pad + "_tr_thread_detach(_tr_thread_start(_tr_spawn_wrap_" + sp_fn + ", " + void_cast + "));\n")
                         else:
-                            self.w(pad + self.gen_expr(e) + "; /* spawn: multi-arg unsupported, sync fallback */\n")
+                            # multi-arg spawn: heap-pack args into long long[N+1] ([0]=result, [1..N]=args)
+                            mut sp_nargs = args.len
+                            self.w(pad + "{ long long* _sa = (long long*)malloc(" + str(sp_nargs + 1) + " * sizeof(long long));\n")
+                            mut sp_ai = 0
+                            while sp_ai < sp_nargs:
+                                mut sp_atn = hir_expr_type(args.get(sp_ai)).name
+                                if not _is_int_type(sp_atn) and sp_atn != "bool" and sp_atn != "char":
+                                    self.w(pad + "  _sa[" + str(sp_ai + 1) + "] = (long long)" + self.gen_expr(args.get(sp_ai)) + ";\n")
+                                else:
+                                    self.w(pad + "  _sa[" + str(sp_ai + 1) + "] = (long long)(" + self.gen_expr(args.get(sp_ai)) + ");\n")
+                                sp_ai = sp_ai + 1
+                            if self.in_task_group > 0:
+                                self.w(pad + "  _tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + sp_fn + ", _sa)); }\n")
+                            else:
+                                self.w(pad + "  _tr_thread_detach(_tr_thread_start(_tr_spawn_wrap_" + sp_fn + ", _sa)); }\n")
                     case _:
                         self.w(pad + self.gen_expr(e) + "; /* spawn: non-call sync */\n")
             case HirStmt.STaskGroup(body):
@@ -2857,6 +3131,21 @@ pub class CGenerator:
             self.w(pad + "  long long " + tmp + "_len = (long long)" + self.cls_method_c_call(iter_ty_n, "__len__", col_tmp, "") + ";\n")
             self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < " + tmp + "_len; " + tmp + "_i++) {\n")
             self.w(pad + "    __auto_type " + var + " = " + self.cls_method_c_call(iter_ty_n, "__getitem__", col_tmp, tmp + "_i") + ";\n")
+            self.gen_block(body, indent + 2)
+            self.w(pad + "  }\n")
+            self.w(pad + "}\n")
+            return
+
+        # Chan[T] iteration: receive until channel closed
+        if iter_ty_n == "Chan":
+            mut ch_elem_c = "long long"
+            if iter_ty.args.len > 0:
+                ch_elem_c = self.type_to_c(iter_ty.args.get(0).read())
+            mut ch_ok_v = self.next_temp()
+            self.w(pad + "{ int " + ch_ok_v + " = 1;\n")
+            self.w(pad + "  while (" + ch_ok_v + ") {\n")
+            self.w(pad + "    " + ch_elem_c + " " + var + " = (" + ch_elem_c + ")_tr_chan_recv_ok(" + iter_s + ", &" + ch_ok_v + ");\n")
+            self.w(pad + "    if (!" + ch_ok_v + ") break;\n")
             self.gen_block(body, indent + 2)
             self.w(pad + "  }\n")
             self.w(pad + "}\n")

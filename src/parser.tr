@@ -127,6 +127,14 @@ extend Parser:
             case Token.KwLambda:
                 self.pos = self.pos + 1
                 return "lambda"
+            # 'spawn' is KwSpawn but valid as a method name (e.g. pool.spawn(...))
+            case Token.KwSpawn:
+                self.pos = self.pos + 1
+                return "spawn"
+            # 'async' is KwAsync but valid as a module path segment
+            case Token.KwAsync:
+                self.pos = self.pos + 1
+                return "async"
             case _:
                 pass
         return ""
