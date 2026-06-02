@@ -50,7 +50,7 @@ def main():
 
 ## Installation
 
-Download the latest binary from the [Releases](https://github.com/Yusee-Programmer/tauraro/releases) page:
+Download the latest binary from the [Releases](https://github.com/tauraro/tauraro/releases) page:
 
 <div align="center">
 
