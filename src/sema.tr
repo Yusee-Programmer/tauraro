@@ -4,8 +4,8 @@ from core.vec import Vec
 from core.map import Map
 from core.alloc import alloc, dealloc
 from core.io import _tr_exit, write_file, append_file
-from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension
-from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type
+from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm
+from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
 
 
 pub enum SymbolKind:
@@ -189,6 +189,48 @@ extend Sema:
             self.errors.push("line " + str(self.current_line) + ": " + msg)
         else:
             self.errors.push(msg)
+
+    # ── Thread-safety / Sendable checks ──────────────────────────────────────
+
+    pub def is_sendable_type(self, ty_name: str) -> bool:
+        if ty_name == "int" or ty_name == "float" or ty_name == "bool" or ty_name == "char" or ty_name == "str": return true
+        if ty_name == "void" or ty_name == "" or ty_name == "auto" or ty_name == "usize" or ty_name == "isize": return true
+        if ty_name == "Atomic" or ty_name == "Mutex" or ty_name == "RwLock": return true
+        if ty_name == "Chan" or ty_name == "Channel" or ty_name == "ThreadPool": return true
+        if ty_name == "Thread" or ty_name == "ThreadLocal": return true
+        # Known non-thread-safe collections
+        if ty_name == "List" or ty_name == "Vec" or ty_name == "Dict" or ty_name == "Map": return false
+        # User-defined class: allow if it implements Sendable
+        if self.classes.contains(ty_name):
+            mut cls = self.classes.get(ty_name)
+            if not _is_invalid_ptr(cls.iface_names as usize):
+                mut ii = 0
+                while ii < cls.iface_names.len:
+                    if cls.iface_names.get(ii) == "Sendable": return true
+                    ii = ii + 1
+            # User class without Sendable — warn but allow (permissive mode)
+            self.warnings.push("line " + str(self.current_line) + ": [T-SAFETY] Class '" + ty_name + "' is passed to a thread but does not implement 'Sendable'.\n         FIX: Add 'implements Sendable' to confirm this class is thread-safe, or wrap mutable fields in Mutex[T].")
+            return true
+        return true
+
+    pub def check_spawn_sendable(self, e: Pointer[HirExpr]):
+        if _is_invalid_ptr(e as usize): return
+        match e.read():
+            case HirExpr.ECall(_, cs_args, _):
+                mut csi = 0
+                while csi < cs_args.len:
+                    mut arg_ty = hir_expr_type(cs_args.get(csi))
+                    if not self.is_sendable_type(arg_ty.name):
+                        self.error("[T-1] Type '" + arg_ty.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty.name + "] for exclusive access, or Atomic[T] for counters/flags.\n      Or add 'implements Sendable' to '" + arg_ty.name + "' to confirm it is thread-safe.")
+                    csi = csi + 1
+            case HirExpr.EMethodCall(_, _, cs_margs, _):
+                mut csmi = 0
+                while csmi < cs_margs.len:
+                    mut arg_ty2 = hir_expr_type(cs_margs.get(csmi))
+                    if not self.is_sendable_type(arg_ty2.name):
+                        self.error("[T-1] Type '" + arg_ty2.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty2.name + "].")
+                    csmi = csmi + 1
+            case _: pass
 
     pub def enter_scope(self):
         mut s_obj = Scope.init()
@@ -410,7 +452,9 @@ extend Sema:
         mut _ifc_i = 0
         while _ifc_i < c.iface_names.len:
             mut _ifc_nm = c.iface_names.get(_ifc_i)
-            if not self.interfaces.contains(_ifc_nm):
+            if _ifc_nm == "Sendable":
+                pass  # Sendable is a built-in compiler marker — no definition needed
+            elif not self.interfaces.contains(_ifc_nm):
                 self.error("[I-1] Class '" + c.name + "' declares 'implements " + _ifc_nm + "' but interface '" + _ifc_nm + "' is not defined.\n      FIX: Define 'interface " + _ifc_nm + ":' before this class, or check for typos.")
             else:
                 mut _idef = self.interfaces.get(_ifc_nm)
@@ -730,11 +774,50 @@ extend Sema:
             case Stmt.SSpawn(e):
                 if not self.in_async_fn:
                     self.error("[C-5] 'spawn:' used outside an async function. FIX: Declare '" + self.current_func_name + "' as 'async def " + self.current_func_name + "(...)' to use spawn inside it.")
-                return box_hirstmt(HirStmt.SSpawn(self.lower_expr(e)))
+                mut spawn_lowered = self.lower_expr(e)
+                self.check_spawn_sendable(spawn_lowered)
+                return box_hirstmt(HirStmt.SSpawn(spawn_lowered))
             case Stmt.STaskGroup(body):
                 if not self.in_async_fn:
                     self.error("[C-6] 'taskgroup:' used outside an async function. FIX: Declare '" + self.current_func_name + "' as 'async def " + self.current_func_name + "(...)' to use taskgroup inside it.")
                 return box_hirstmt(HirStmt.STaskGroup(self.lower_block(body)))
+            case Stmt.SChanSelect(cs_cases):
+                mut hcs_cases = Vec[Pointer[HirChanSelectArm]].init(cs_cases.len)
+                mut csi2 = 0
+                while csi2 < cs_cases.len:
+                    mut arm = cs_cases.get(csi2).read()
+                    mut harm = alloc[HirChanSelectArm](1)
+                    mut harm_v = HirChanSelectArm()
+                    harm_v.kind = arm.kind
+                    harm_v.var_name = arm.var_name
+                    if arm.chan_expr as usize != 0 as usize:
+                        harm_v.chan_expr = self.lower_expr(arm.chan_expr)
+                    else:
+                        harm_v.chan_expr = Pointer[HirExpr](0)
+                    if arm.val_expr as usize != 0 as usize:
+                        harm_v.val_expr = self.lower_expr(arm.val_expr)
+                    else:
+                        harm_v.val_expr = Pointer[HirExpr](0)
+                    if arm.timeout_ms as usize != 0 as usize:
+                        harm_v.timeout_ms = self.lower_expr(arm.timeout_ms)
+                    else:
+                        harm_v.timeout_ms = Pointer[HirExpr](0)
+                    # For recv arms, declare the binding variable
+                    self.enter_scope()
+                    if arm.kind == 0 and arm.var_name != "":
+                        mut recv_ty = AstType.init("int")
+                        if arm.chan_expr as usize != 0 as usize:
+                            mut chan_hir = harm_v.chan_expr
+                            mut chan_ty = hir_expr_type(chan_hir)
+                            if not _is_invalid_ptr(chan_ty.args as usize) and chan_ty.args.len > 0:
+                                recv_ty = chan_ty.args.get(0).read()
+                        self.declare(arm.var_name, SymbolKind.SVariable, box_asttype(recv_ty), true)
+                    harm_v.body = self.lower_block(arm.body)
+                    self.exit_scope()
+                    harm.write(harm_v)
+                    hcs_cases.push(harm)
+                    csi2 = csi2 + 1
+                return box_hirstmt(HirStmt.SChanSelect(hcs_cases))
             case Stmt.SGpuBlock(body): return box_hirstmt(HirStmt.SGpuBlock(self.lower_block(body)))
             case Stmt.SBreak: return box_hirstmt(HirStmt.SBreak)
             case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
@@ -822,6 +905,21 @@ extend Sema:
                 mut hexpr_inner = self.lower_expr(expr)
                 return box_hirexpr(HirExpr.EUnaryOp(op, hexpr_inner, hir_expr_type(hexpr_inner)))
             case Expr.ECall(callee, args):
+                # Special built-in: await_timeout(async_expr, ms) → EAwaitTimeout
+                if callee as usize != 0 as usize:
+                    match callee.read():
+                        case Expr.EIdent(ato_n):
+                            if ato_n == "await_timeout":
+                                if not self.in_async_fn:
+                                    self.error("[C-4] 'await_timeout' used outside an async function.")
+                                if args.len < 2:
+                                    self.error("await_timeout requires 2 arguments: await_timeout(expr, timeout_ms)")
+                                    return box_hirexpr(HirExpr.ELitInt(0, AstType.init("int")))
+                                mut ato_inner = self.lower_expr(args.get(0))
+                                mut ato_ms = self.lower_expr(args.get(1))
+                                mut ato_ty = hir_expr_type(ato_inner)
+                                return box_hirexpr(HirExpr.EAwaitTimeout(ato_inner, ato_ms, ato_ty))
+                        case _: pass
                 mut hl = Vec[Pointer[HirExpr]].init(4)
                 mut k = 0
                 while k < args.len:
@@ -920,7 +1018,14 @@ extend Sema:
                 mut ret_ty = AstType.init("void")
                 if method == "init" or method == "new":
                     # Preserve generic args so Vec[T].init(n) keeps the T info
-                    ret_ty = hobj_ty
+                    if hobj_ty.name == "void" or hobj_ty.name == "":
+                        # Built-in types used as static receivers (e.g. Atomic.new, Thread.new)
+                        # resolve to void; recover type from the receiver identifier name.
+                        match hobj.read():
+                            case HirExpr.EIdent(recv_nm, _, _): ret_ty = AstType.init(recv_nm)
+                            case _: ret_ty = hobj_ty
+                    else:
+                        ret_ty = hobj_ty
                 elif method == "offset": ret_ty = hobj_ty
                 elif method == "read":
                     if hobj_ty.name == "Pointer" and hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
@@ -945,6 +1050,17 @@ extend Sema:
                             _gmi = _gmi + 1
                 elif method == "alloc": ret_ty = hobj_ty
                 elif method == "contains": ret_ty = AstType.init("bool")
+                # Thread built-in method return types
+                elif method == "spawn" and (hobj_ty.name == "Thread" or hobj_ty.name == "void"):
+                    ret_ty = AstType.init("Thread")
+                # Atomic built-in method return types
+                elif hobj_ty.name == "Atomic":
+                    if method == "load" or method == "get" or method == "add" or method == "sub" or method == "swap" or method == "exchange" or method == "fetch_add" or method == "fetch_sub" or method == "load_relaxed" or method == "load_acquire" or method == "load_seqcst" or method == "add_relaxed" or method == "add_release" or method == "add_acqrel" or method == "sub_relaxed" or method == "sub_release":
+                        ret_ty = AstType.init("int")
+                    elif method == "cas" or method == "compare_exchange" or method == "cas_weak" or method == "cas_acqrel":
+                        ret_ty = AstType.init("bool")
+                    elif method == "store" or method == "set" or method == "store_relaxed" or method == "store_release" or method == "store_seqcst":
+                        ret_ty = AstType.init("void")
                 # Chan[T] method return types
                 elif hobj_ty.name == "Chan":
                     if method == "recv" or method == "try_recv":

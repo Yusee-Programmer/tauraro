@@ -37,6 +37,7 @@ pub enum HirExpr:
     EGeneratorExpr(element: Pointer[HirExpr], generators: Vec[Pointer[HirComprehension]], ty: AstType)
     ESlice(start: Pointer[HirExpr], stop: Pointer[HirExpr], step: Pointer[HirExpr], ty: AstType)
     EAwait(expr: Pointer[HirExpr], ty: AstType)
+    EAwaitTimeout(expr: Pointer[HirExpr], timeout_ms: Pointer[HirExpr], ty: AstType)
     EYield(expr: Pointer[HirExpr], ty: AstType)
     ETry(try_body: HirBlock, catches: Vec[Pointer[HirCatchClause]], finally_b: HirBlock, ty: AstType)
     ERange(start: Pointer[HirExpr], end: Pointer[HirExpr], inclusive: bool, ty: AstType)
@@ -81,6 +82,16 @@ extend HirMatchArm:
         a.body = body
         return a
 
+# ─── Chan-select arms ─────────────────────────────────────────────────────────
+
+pub class HirChanSelectArm:
+    pub kind: int                       # 0=recv, 1=send, 2=timeout, 3=default
+    pub chan_expr: Pointer[HirExpr]
+    pub val_expr: Pointer[HirExpr]
+    pub var_name: str
+    pub timeout_ms: Pointer[HirExpr]
+    pub body: HirBlock
+
 # ─── Statements ───────────────────────────────────────────────────────────────
 
 pub enum HirStmt:
@@ -107,6 +118,7 @@ pub enum HirStmt:
     SGpuBlock(body: HirBlock)
     SFree(name: str)
     SMultiLet(names: Vec[str], is_mut: bool, val: Pointer[HirExpr])
+    SChanSelect(cases: Vec[Pointer[HirChanSelectArm]])
 
 pub class HirBlock:
     pub stmts: Vec[Pointer[HirStmt]]
@@ -239,6 +251,7 @@ pub def hir_expr_type(e: Pointer[HirExpr]) -> AstType:
         case HirExpr.EGeneratorExpr(_, _, ty): return ty
         case HirExpr.ESlice(_, _, _, ty): return ty
         case HirExpr.EAwait(_, ty): return ty
+        case HirExpr.EAwaitTimeout(_, _, ty): return ty
         case HirExpr.EYield(_, ty): return ty
         case HirExpr.ETry(_, _, _, ty): return ty
         case HirExpr.ERange(_, _, _, ty): return ty

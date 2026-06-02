@@ -475,20 +475,24 @@ static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
 }
 
 /* ── Blocking task completion state ─────────────────────────────────── */
+/* refcount=2: one for caller (_tr_task_free), one for worker (_tr_task_complete).
+ * This prevents use-after-free when await_timeout abandons a still-running task. */
 typedef struct {
     volatile long long result; char* error;
-    volatile int done, cancelled;
+    volatile int done, cancelled, refcount;
     CRITICAL_SECTION mu; CONDITION_VARIABLE cv;
 } _TrTaskState;
 static _TrTaskState* _tr_task_new(void) {
     _TrTaskState* t=(_TrTaskState*)calloc(1,sizeof(_TrTaskState));
-    InitializeCriticalSection(&t->mu); InitializeConditionVariable(&t->cv); t->error=""; return t;
+    InitializeCriticalSection(&t->mu); InitializeConditionVariable(&t->cv); t->error=""; t->refcount=2; return t;
 }
 static void _tr_task_complete(_TrTaskState* t, long long r) {
-    EnterCriticalSection(&t->mu); if(!t->done){t->result=r;t->done=1;} WakeAllConditionVariable(&t->cv); LeaveCriticalSection(&t->mu);
+    int sf; EnterCriticalSection(&t->mu); if(!t->done){t->result=r;t->done=1;} WakeAllConditionVariable(&t->cv); sf=(--t->refcount<=0); LeaveCriticalSection(&t->mu);
+    if(sf){DeleteCriticalSection(&t->mu);free(t);}
 }
 static void _tr_task_complete_err(_TrTaskState* t, const char* msg) {
-    EnterCriticalSection(&t->mu); if(!t->done){t->error=msg?(char*)msg:"error";t->done=1;} WakeAllConditionVariable(&t->cv); LeaveCriticalSection(&t->mu);
+    int sf; EnterCriticalSection(&t->mu); if(!t->done){t->error=msg?(char*)msg:"error";t->done=1;} WakeAllConditionVariable(&t->cv); sf=(--t->refcount<=0); LeaveCriticalSection(&t->mu);
+    if(sf){DeleteCriticalSection(&t->mu);free(t);}
 }
 static void _tr_task_cancel(_TrTaskState* t) {
     EnterCriticalSection(&t->mu); if(!t->done){t->cancelled=1;t->done=1;} WakeAllConditionVariable(&t->cv); LeaveCriticalSection(&t->mu);
@@ -508,7 +512,10 @@ static bool  _tr_task_is_done(_TrTaskState* t)      { EnterCriticalSection(&t->m
 static bool  _tr_task_is_cancelled(_TrTaskState* t)  { EnterCriticalSection(&t->mu); bool r=t->cancelled!=0; LeaveCriticalSection(&t->mu); return r; }
 static bool  _tr_task_has_error(_TrTaskState* t)     { EnterCriticalSection(&t->mu); bool r=t->error&&t->error[0]; LeaveCriticalSection(&t->mu); return r; }
 static char* _tr_task_get_error(_TrTaskState* t)     { EnterCriticalSection(&t->mu); char* e=t->error?t->error:""; LeaveCriticalSection(&t->mu); return e; }
-static void  _tr_task_free(_TrTaskState* t)          { if(!t)return; DeleteCriticalSection(&t->mu); free(t); }
+static void  _tr_task_free(_TrTaskState* t) {
+    if(!t)return; int sf; EnterCriticalSection(&t->mu); sf=(--t->refcount<=0); LeaveCriticalSection(&t->mu);
+    if(sf){DeleteCriticalSection(&t->mu);free(t);}
+}
 
 /* ── Heap mutex ──────────────────────────────────────────────────────── */
 typedef struct { CRITICAL_SECTION cs; } _TrMutexH;
@@ -833,16 +840,23 @@ static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     pthread_mutex_unlock(&c->mu); return v;
 }
 
+/* refcount=2: one for caller (_tr_task_free), one for worker (_tr_task_complete). */
 typedef struct {
-    volatile long long result; char* error; volatile int done, cancelled;
+    volatile long long result; char* error; volatile int done, cancelled, refcount;
     pthread_mutex_t mu; pthread_cond_t cv;
 } _TrTaskState;
 static _TrTaskState* _tr_task_new(void) {
     _TrTaskState* t=(_TrTaskState*)calloc(1,sizeof(_TrTaskState));
-    pthread_mutex_init(&t->mu,NULL); pthread_cond_init(&t->cv,NULL); t->error=""; return t;
+    pthread_mutex_init(&t->mu,NULL); pthread_cond_init(&t->cv,NULL); t->error=""; t->refcount=2; return t;
 }
-static void _tr_task_complete(_TrTaskState* t, long long r)       { pthread_mutex_lock(&t->mu); if(!t->done){t->result=r;t->done=1;} pthread_cond_broadcast(&t->cv); pthread_mutex_unlock(&t->mu); }
-static void _tr_task_complete_err(_TrTaskState* t, const char* m) { pthread_mutex_lock(&t->mu); if(!t->done){t->error=m?(char*)m:"error";t->done=1;} pthread_cond_broadcast(&t->cv); pthread_mutex_unlock(&t->mu); }
+static void _tr_task_complete(_TrTaskState* t, long long r) {
+    int sf; pthread_mutex_lock(&t->mu); if(!t->done){t->result=r;t->done=1;} pthread_cond_broadcast(&t->cv); sf=(--t->refcount<=0); pthread_mutex_unlock(&t->mu);
+    if(sf){pthread_mutex_destroy(&t->mu);pthread_cond_destroy(&t->cv);free(t);}
+}
+static void _tr_task_complete_err(_TrTaskState* t, const char* m) {
+    int sf; pthread_mutex_lock(&t->mu); if(!t->done){t->error=m?(char*)m:"error";t->done=1;} pthread_cond_broadcast(&t->cv); sf=(--t->refcount<=0); pthread_mutex_unlock(&t->mu);
+    if(sf){pthread_mutex_destroy(&t->mu);pthread_cond_destroy(&t->cv);free(t);}
+}
 static void _tr_task_cancel(_TrTaskState* t)                      { pthread_mutex_lock(&t->mu); if(!t->done){t->cancelled=1;t->done=1;} pthread_cond_broadcast(&t->cv); pthread_mutex_unlock(&t->mu); }
 static long long _tr_task_await(_TrTaskState* t) {
     pthread_mutex_lock(&t->mu); while(!t->done) pthread_cond_wait(&t->cv,&t->mu);
@@ -860,7 +874,10 @@ static bool  _tr_task_is_done(_TrTaskState* t)      { pthread_mutex_lock(&t->mu)
 static bool  _tr_task_is_cancelled(_TrTaskState* t)  { pthread_mutex_lock(&t->mu); bool r=t->cancelled!=0; pthread_mutex_unlock(&t->mu); return r; }
 static bool  _tr_task_has_error(_TrTaskState* t)     { pthread_mutex_lock(&t->mu); bool r=t->error&&t->error[0]; pthread_mutex_unlock(&t->mu); return r; }
 static char* _tr_task_get_error(_TrTaskState* t)     { pthread_mutex_lock(&t->mu); char* e=t->error?t->error:""; pthread_mutex_unlock(&t->mu); return e; }
-static void  _tr_task_free(_TrTaskState* t)          { if(!t)return; pthread_mutex_destroy(&t->mu); pthread_cond_destroy(&t->cv); free(t); }
+static void  _tr_task_free(_TrTaskState* t) {
+    if(!t)return; int sf; pthread_mutex_lock(&t->mu); sf=(--t->refcount<=0); pthread_mutex_unlock(&t->mu);
+    if(sf){pthread_mutex_destroy(&t->mu);pthread_cond_destroy(&t->cv);free(t);}
+}
 
 typedef struct { pthread_mutex_t mu; } _TrMutexH;
 static _TrMutexH* _tr_mutex_new(void)          { _TrMutexH* m=(_TrMutexH*)malloc(sizeof(_TrMutexH)); pthread_mutex_init(&m->mu,NULL); return m; }
@@ -1105,6 +1122,12 @@ static inline void _tr_threadpool_free(_TrThreadPool* p) {
 }
 #endif /* !TAURARO_BARE */
 
+/* Global async pool — submits work to the thread pool; falls back to sync if pool is NULL */
+static inline void _tr_async_pool_submit(_TrThreadPool* p, void*(*fn)(void*), void* arg) {
+    if (p) _tr_threadpool_spawn(p, fn, arg);
+    else fn(arg); /* synchronous fallback (BARE / pre-init) */
+}
+
 /* ── Atomic[T]: lock-free atomic integer (C11 _Atomic) ───────────────── */
 typedef struct { _Atomic long long val; } _TrAtomic;
 static inline _TrAtomic* _tr_atomic_new(long long init) {
@@ -1121,6 +1144,24 @@ static inline bool _tr_atomic_cas(_TrAtomic* a, long long expected, long long de
     return atomic_compare_exchange_strong(&a->val, &expected, desired);
 }
 static inline void _tr_atomic_free(_TrAtomic* a) { if (a) free(a); }
+
+/* Atomic[T]: explicit memory-order variants (C11 stdatomic) */
+static inline long long _tr_atomic_load_relaxed(_TrAtomic* a)                     { return a ? atomic_load_explicit(&a->val, memory_order_relaxed) : 0LL; }
+static inline long long _tr_atomic_load_acquire(_TrAtomic* a)                     { return a ? atomic_load_explicit(&a->val, memory_order_acquire) : 0LL; }
+static inline long long _tr_atomic_load_seqcst(_TrAtomic* a)                      { return a ? atomic_load_explicit(&a->val, memory_order_seq_cst) : 0LL; }
+static inline void      _tr_atomic_store_relaxed(_TrAtomic* a, long long v)       { if (a) atomic_store_explicit(&a->val, v, memory_order_relaxed); }
+static inline void      _tr_atomic_store_release(_TrAtomic* a, long long v)       { if (a) atomic_store_explicit(&a->val, v, memory_order_release); }
+static inline void      _tr_atomic_store_seqcst(_TrAtomic* a, long long v)        { if (a) atomic_store_explicit(&a->val, v, memory_order_seq_cst); }
+static inline long long _tr_atomic_add_relaxed(_TrAtomic* a, long long v)         { return a ? atomic_fetch_add_explicit(&a->val, v, memory_order_relaxed) : 0LL; }
+static inline long long _tr_atomic_add_release(_TrAtomic* a, long long v)         { return a ? atomic_fetch_add_explicit(&a->val, v, memory_order_release) : 0LL; }
+static inline long long _tr_atomic_add_acqrel(_TrAtomic* a, long long v)          { return a ? atomic_fetch_add_explicit(&a->val, v, memory_order_acq_rel) : 0LL; }
+static inline long long _tr_atomic_sub_relaxed(_TrAtomic* a, long long v)         { return a ? atomic_fetch_sub_explicit(&a->val, v, memory_order_relaxed) : 0LL; }
+static inline long long _tr_atomic_sub_release(_TrAtomic* a, long long v)         { return a ? atomic_fetch_sub_explicit(&a->val, v, memory_order_release) : 0LL; }
+static inline bool      _tr_atomic_cas_weak(_TrAtomic* a, long long exp, long long des)    { return a ? atomic_compare_exchange_weak(&a->val, &exp, des) : false; }
+static inline bool      _tr_atomic_cas_acqrel(_TrAtomic* a, long long exp, long long des) {
+    if (!a) return false;
+    return atomic_compare_exchange_strong_explicit(&a->val, &exp, des, memory_order_acq_rel, memory_order_relaxed);
+}
 
 /* ── Thread object: joinable OS-thread handle ────────────────────────── */
 typedef struct { _TrThread handle; volatile int done; } _TrThreadObj;
@@ -1145,6 +1186,18 @@ static inline long long _tr_thread_current_id(void) { return 0LL; }
 static inline long long _tr_thread_current_id(void) { return (long long)(uintptr_t)pthread_self(); }
 #endif
 static inline void _tr_thread_sleep_ms(long long ms) { _tr_sleep_ms((long)(ms < 0 ? 0 : ms)); }
+
+/* Monotonic millisecond clock — used by chan_select timeout */
+static inline long long _tr_monotonic_ms(void) {
+#if defined(_WIN32)
+    return (long long)GetTickCount64();
+#elif defined(TAURARO_BARE)
+    return 0LL;
+#else
+    struct timespec _ts; clock_gettime(CLOCK_MONOTONIC, &_ts);
+    return (long long)_ts.tv_sec * 1000LL + (long long)(_ts.tv_nsec / 1000000LL);
+#endif
+}
 
 /* ── Platform-independent helpers ────────────────────────────────────── */
 static bool _tr_task_await_timeout_ok(_TrTaskState* t, long long ms) {
@@ -1243,6 +1296,19 @@ static inline long long _tr_atomic_sub_h(char* a, long long v)                 {
 static inline long long _tr_atomic_swap_h(char* a, long long v)                { return _tr_atomic_swap((_TrAtomic*)a, v); }
 static inline bool  _tr_atomic_cas_h(char* a, long long expected, long long desired) { return _tr_atomic_cas((_TrAtomic*)a, expected, desired); }
 static inline void  _tr_atomic_free_h(char* a)                                 { _tr_atomic_free((_TrAtomic*)a); }
+static inline long long _tr_atomic_load_relaxed_h(char* a)                     { return _tr_atomic_load_relaxed((_TrAtomic*)a); }
+static inline long long _tr_atomic_load_acquire_h(char* a)                     { return _tr_atomic_load_acquire((_TrAtomic*)a); }
+static inline long long _tr_atomic_load_seqcst_h(char* a)                      { return _tr_atomic_load_seqcst((_TrAtomic*)a); }
+static inline void  _tr_atomic_store_relaxed_h(char* a, long long v)           { _tr_atomic_store_relaxed((_TrAtomic*)a, v); }
+static inline void  _tr_atomic_store_release_h(char* a, long long v)           { _tr_atomic_store_release((_TrAtomic*)a, v); }
+static inline void  _tr_atomic_store_seqcst_h(char* a, long long v)            { _tr_atomic_store_seqcst((_TrAtomic*)a, v); }
+static inline long long _tr_atomic_add_relaxed_h(char* a, long long v)         { return _tr_atomic_add_relaxed((_TrAtomic*)a, v); }
+static inline long long _tr_atomic_add_release_h(char* a, long long v)         { return _tr_atomic_add_release((_TrAtomic*)a, v); }
+static inline long long _tr_atomic_add_acqrel_h(char* a, long long v)          { return _tr_atomic_add_acqrel((_TrAtomic*)a, v); }
+static inline long long _tr_atomic_sub_relaxed_h(char* a, long long v)         { return _tr_atomic_sub_relaxed((_TrAtomic*)a, v); }
+static inline long long _tr_atomic_sub_release_h(char* a, long long v)         { return _tr_atomic_sub_release((_TrAtomic*)a, v); }
+static inline bool  _tr_atomic_cas_weak_h(char* a, long long exp, long long des)   { return _tr_atomic_cas_weak((_TrAtomic*)a, exp, des); }
+static inline bool  _tr_atomic_cas_acqrel_h(char* a, long long exp, long long des) { return _tr_atomic_cas_acqrel((_TrAtomic*)a, exp, des); }
 
 /* ThreadLocal[T]: per-thread storage */
 static inline char* _tr_tls_new_h(long long init)                              { return (char*)_tr_tls_new(init); }
@@ -1525,6 +1591,7 @@ static inline char*     _tr_get_arg(long long n) { return (_tr_argv && n >= 0 &&
 /* ── TaskGroup: spawn threads + join all (dynamic, unlimited) ────────── */
 typedef struct { _TrThread* ths; int count; int cap; } _TrTaskGroup;
 _TR_GLOBAL _TrTaskGroup _tr_tg;
+_TR_GLOBAL _TrThreadPool* _tr_global_async_pool;
 static inline void _tr_tg_begin(void) {
     _tr_tg.cap = 16; _tr_tg.count = 0;
     _tr_tg.ths = (_TrThread*)malloc((size_t)_tr_tg.cap * sizeof(_TrThread));

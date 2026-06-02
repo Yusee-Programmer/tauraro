@@ -4,7 +4,7 @@ from core.vec import Vec
 from core.alloc import alloc, dealloc
 from token import Token
 from lexer import Lexer
-from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart, Ownership
+from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart, Ownership, ChanSelectArm, CatchClause
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -372,6 +372,11 @@ extend Parser:
                 return self.parse_try_stmt()
             case Token.KwAssert:
                 return self.parse_assert_stmt()
+        match self.peek():
+            case Token.Ident(cs_nm):
+                if cs_nm == "chan_select":
+                    return self.parse_chan_select_stmt()
+            case _: pass
         return self.parse_assign_or_expr_stmt()
 
     pub def parse_try_stmt(self) -> Pointer[Stmt]:
@@ -506,6 +511,88 @@ extend Parser:
                 self.pos = self.pos + 1
         body = self.parse_block()
         return box_stmt(Stmt.STaskGroup(body))
+
+    pub def parse_chan_select_stmt(self) -> Pointer[Stmt]:
+        # chan_select:
+        #   case v = ch.recv():   body
+        #   case ch.send(val):    body
+        #   case timeout(ms):     body
+        #   case default:         body
+        self.pos = self.pos + 1  # consume 'chan_select' ident
+        if self.peek() == Token.Colon: self.pos = self.pos + 1
+        self.skip_newlines()
+        if self.peek() == Token.Indent: self.pos = self.pos + 1
+        self.skip_newlines()
+        mut cases = Vec[Pointer[ChanSelectArm]].init(4)
+        mut going = true
+        while going:
+            match self.peek():
+                case Token.KwCase:
+                    self.pos = self.pos + 1  # consume 'case'
+                    # Peek to distinguish arm type
+                    mut arm_kind = -1
+                    mut var_nm = ""
+                    mut chan_e = Pointer[Expr](0)
+                    mut val_e = Pointer[Expr](0)
+                    mut timeout_e = Pointer[Expr](0)
+                    # Check for 'default', 'timeout', or binding/send expression
+                    match self.peek():
+                        case Token.Ident(arm_nm):
+                            if arm_nm == "default":
+                                self.pos = self.pos + 1
+                                if self.peek() == Token.Colon: self.pos = self.pos + 1
+                                arm_kind = 3
+                            elif arm_nm == "timeout":
+                                # timeout(ms):
+                                self.pos = self.pos + 1
+                                if self.peek() == Token.LParen: self.pos = self.pos + 1
+                                timeout_e = self.parse_expr()
+                                if self.peek() == Token.RParen: self.pos = self.pos + 1
+                                if self.peek() == Token.Colon: self.pos = self.pos + 1
+                                arm_kind = 2
+                            else:
+                                # Could be: v = ch.recv() → recv arm
+                                # Or: ch.send(val)        → send arm
+                                mut saved = self.pos
+                                self.pos = self.pos + 1  # consume ident
+                                match self.peek():
+                                    case Token.Eq:
+                                        # v = expr → recv arm: v = ch.recv()
+                                        self.pos = self.pos + 1
+                                        chan_e = self.parse_expr()
+                                        if self.peek() == Token.Colon: self.pos = self.pos + 1
+                                        var_nm = arm_nm
+                                        arm_kind = 0
+                                    case _:
+                                        # send arm: ch.send(val)
+                                        self.pos = saved
+                                        chan_e = self.parse_expr()
+                                        if self.peek() == Token.Colon: self.pos = self.pos + 1
+                                        arm_kind = 1
+                        case _:
+                            # send/recv without binding: parse as expression
+                            chan_e = self.parse_expr()
+                            if self.peek() == Token.Colon: self.pos = self.pos + 1
+                            arm_kind = 1
+                    mut arm_body = self.parse_block()
+                    mut arm_p = alloc[ChanSelectArm](1)
+                    if arm_kind == 0:
+                        arm_p.write(ChanSelectArm.init_recv(chan_e, var_nm, arm_body))
+                    elif arm_kind == 1:
+                        arm_p.write(ChanSelectArm.init_send(chan_e, Pointer[Expr](0), arm_body))
+                    elif arm_kind == 2:
+                        arm_p.write(ChanSelectArm.init_timeout(timeout_e, arm_body))
+                    else:
+                        arm_p.write(ChanSelectArm.init_default(arm_body))
+                    cases.push(arm_p)
+                case Token.Dedent | Token.Eof:
+                    going = false
+                case Token.Newline:
+                    self.pos = self.pos + 1
+                case _:
+                    going = false
+        if self.peek() == Token.Dedent: self.pos = self.pos + 1
+        return box_stmt(Stmt.SChanSelect(cases))
 
     pub def parse_gpu_stmt(self) -> Pointer[Stmt]:
         self.pos = self.pos + 1
