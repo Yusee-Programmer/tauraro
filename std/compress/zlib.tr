@@ -1,0 +1,48 @@
+# std.compress.zlib — zlib/deflate compression and decompression.
+#
+# Requires: compile with -DTAURARO_COMPRESS_ZLIB -lz
+# Without that flag all methods return safe stub results (empty or original input).
+#
+# Usage:
+#   from std.compress.zlib import Zlib
+#   mut compressed = Zlib.compress("hello world", 11)
+#   mut original   = Zlib.decompress(compressed, Zlib.compressed_len(compressed), 4096)
+
+extern "C":
+    def _tr_zlib_compress(input: str, ilen: int, out_len: Pointer[int]) -> str
+    def _tr_zlib_decompress(input: str, ilen: int, max_out: int) -> str
+    def _tr_deflate(input: str, ilen: int, out_len: Pointer[int]) -> str
+    def _tr_inflate(input: str, ilen: int, max_out: int) -> str
+
+from std.string.str import Str
+
+pub class Zlib:
+    _dummy: int
+
+extend Zlib:
+    # Compress `input` (first `ilen` bytes) using zlib/deflate with a zlib wrapper.
+    # Returns the compressed bytes as a str (may contain null bytes).
+    # Use Zlib.compressed_len() to get the result length.
+    pub def compress(input: str, ilen: int) -> str:
+        mut dummy_len = 0
+        mut dummy_ptr = dummy_len as Pointer[int]
+        return _tr_zlib_compress(input, ilen, dummy_ptr)
+
+    # Decompress a zlib-wrapped stream back to at most `max_out` bytes.
+    pub def decompress(input: str, ilen: int, max_out: int) -> str:
+        return _tr_zlib_decompress(input, ilen, max_out)
+
+    # Raw deflate (no zlib header). Useful for gzip member data.
+    pub def deflate(input: str, ilen: int) -> str:
+        mut dummy_len = 0
+        mut dummy_ptr = dummy_len as Pointer[int]
+        return _tr_deflate(input, ilen, dummy_ptr)
+
+    # Raw inflate. Matches deflate output.
+    pub def inflate(input: str, ilen: int, max_out: int) -> str:
+        return _tr_inflate(input, ilen, max_out)
+
+    # Helper: byte length of a null-terminated-or-binary str (via C strlen).
+    # For binary blobs you must track the length yourself.
+    pub def compressed_len(s: str) -> int:
+        return Str.len(s)

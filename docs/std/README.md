@@ -6,16 +6,20 @@ Complete reference for the Tauraro standard library (`std`).
 
 | Module | Description |
 |---|---|
-| [`std.async`](async.md) | Concurrency primitives: channels, tasks, mutexes, semaphores, barriers |
-| [`std.collections`](collections.md) | Data structures: stack, queue, deque, set, counter, tuple |
+| [`std.async`](async.md) | Concurrency: channels, tasks, mutexes, semaphores, barriers, StructuredGroup, IOPoll, EventLoop |
+| [`std.collections`](collections.md) | Data structures: Stack, Queue, Deque, Set (with algebra), Counter, Pair/Triple, MinHeap/MaxHeap, LinkedList, Graph |
+| [`std.compress`](compress.md) | Compression: zlib compress/decompress, raw deflate/inflate (`-lz` required) |
+| [`std.crypto`](crypto.md) | Cryptography: SHA-256, HMAC-SHA256, MD5, UUID v4 |
 | [`std.encoding`](encoding.md) | Data encoding: JSON, Base64, Hex |
-| [`std.io`](io.md) | File I/O, directory operations, path manipulation, console |
-| [`std.iter`](iter.md) | Range construction and vector transformations |
-| [`std.math`](math.md) | Integer math, floating-point math, bitwise operations |
-| [`std.string`](string.md) | String utilities and formatting |
-| [`std.sys`](sys.md) | Environment variables, file system, process control, timing, platform detection |
-| [`std.net`](net.md) | URL building, parsing, and encoding |
+| [`std.io`](io.md) | File I/O, directory operations, path manipulation, console, buffered I/O |
+| [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
+| [`std.math`](math.md) | Integer math, floating-point math, bitwise operations, statistics, random |
+| [`std.net`](net.md) | TCP, UDP, DNS, URL, HTTP client (7 verbs), HTTPS client (OpenSSL), HTTP server + router |
+| [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count |
+| [`std.string`](string.md) | String utilities (Str), formatting (Fmt), parsing, line/word splitting, `split_to_vec` |
+| [`std.sys`](sys.md) | Environment variables, file system, process control, timing, OS info, platform detection |
 | [`std.test`](test.md) | Lightweight unit-testing framework |
+| [`std.unicode`](unicode.md) | UTF-8 codepoint iteration, slicing, case conversion, Unicode classification |
 
 ## Import conventions
 

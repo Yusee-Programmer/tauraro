@@ -1,0 +1,183 @@
+# std.net.https — TLS/HTTPS client built on OpenSSL.
+#
+# Requires: compile with -DTAURARO_TLS_OPENSSL -lssl -lcrypto
+# Without that flag all methods return safe stub responses (status=0).
+#
+# Usage:
+#   from std.net.https import HttpsClient
+#   mut c = HttpsClient.init("api.example.com", 443)
+#   mut r = c.get("/v1/users")
+#   if r.is_ok(): print(r.body)
+
+from std.core.string import StringBuilder
+from std.net.http import HttpResponse
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.core.map import Map
+
+extern "C":
+    def _tr_tls_connect(host: str, port: int) -> Pointer[char]
+    def _tr_tls_send(handle: Pointer[char], data: str) -> int
+    def _tr_tls_recv(handle: Pointer[char], cap: int) -> str
+    def _tr_tls_close(handle: Pointer[char])
+
+pub class HttpsClient:
+    pub host:     str
+    pub port:     int
+    pub timeout:  int
+    pub _headers: Map[str]
+
+extend HttpsClient:
+    pub def init(host: str, port: int) -> HttpsClient:
+        mut c       = HttpsClient()
+        c.host      = host
+        c.port      = port
+        c.timeout   = 10000
+        c._headers  = Map[str].init(16)
+        return c
+
+    # Add a header sent with every subsequent request.
+    pub def set_header(self, name: str, value: str):
+        self._headers.insert(name, value)
+
+    pub def set_timeout(self, ms: int):
+        self.timeout = ms
+
+    def _build_headers(self) -> str:
+        mut sb = StringBuilder.init(256)
+        sb.append("Host: ")
+        sb.append(self.host)
+        sb.append("\r\nConnection: close\r\n")
+        return sb.to_owned()
+
+    def _parse_status(raw: str) -> int:
+        mut sp = Str.index_of(raw, " ")
+        if sp < 0: return 0
+        mut rlen = Str.len(raw)
+        if sp + 4 > rlen: return 0
+        mut d1 = Str.char_at(raw, sp + 1) - 48
+        mut d2 = Str.char_at(raw, sp + 2) - 48
+        mut d3 = Str.char_at(raw, sp + 3) - 48
+        if d1 < 0 or d1 > 9 or d2 < 0 or d2 > 9 or d3 < 0 or d3 > 9: return 0
+        return d1 * 100 + d2 * 10 + d3
+
+    def _parse_response(raw: str) -> HttpResponse:
+        mut code = HttpsClient._parse_status(raw)
+        if code == 0: code = 200
+        mut sep  = Str.index_of(raw, "\r\n\r\n")
+        mut body = raw
+        if sep >= 0: body = Str.slice(raw, sep + 4, Str.len(raw))
+        mut resp = HttpResponse.init(code, body)
+        if sep < 0: return resp
+        mut hdr_sec  = Str.slice(raw, 0, sep)
+        mut first_nl = Str.index_of(hdr_sec, "\r\n")
+        if first_nl < 0: return resp
+        mut hdr_start = first_nl + 2
+        mut hdr_len   = Str.len(hdr_sec)
+        while hdr_start < hdr_len:
+            mut tail     = Str.slice(hdr_sec, hdr_start, hdr_len)
+            mut line_end = Str.index_of(tail, "\r\n")
+            mut line     = tail
+            if line_end >= 0:
+                line      = Str.slice(tail, 0, line_end)
+                hdr_start = hdr_start + line_end + 2
+            else:
+                hdr_start = hdr_len
+            mut colon = Str.index_of(line, ": ")
+            if colon >= 0:
+                mut hname  = Str.slice(line, 0, colon)
+                mut hvalue = Str.slice(line, colon + 2, Str.len(line))
+                resp.headers.insert(hname, hvalue)
+        return resp
+
+    def _do_request(self, req: str) -> HttpResponse:
+        mut conn = _tr_tls_connect(self.host, self.port)
+        if conn as int == 0:
+            return HttpResponse.init(0, "tls connect failed")
+        _tr_tls_send(conn, req)
+        mut raw = _tr_tls_recv(conn, 131072)
+        _tr_tls_close(conn)
+        return HttpsClient._parse_response(raw)
+
+    pub def get(self, path: str) -> HttpResponse:
+        mut sb = StringBuilder.init(512)
+        sb.append("GET ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("\r\n")
+        return self._do_request(sb.to_owned())
+
+    pub def post(self, path: str, data: str) -> HttpResponse:
+        mut clen = Str.len(data)
+        mut sb   = StringBuilder.init(512)
+        sb.append("POST ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("Content-Length: ")
+        if clen == 0: sb.append("0")
+        else: sb.append(Fmt.int_to_str(clen))
+        sb.append("\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\n")
+        sb.append(data)
+        return self._do_request(sb.to_owned())
+
+    pub def post_json(self, path: str, data: str) -> HttpResponse:
+        mut clen = Str.len(data)
+        mut sb   = StringBuilder.init(512)
+        sb.append("POST ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("Content-Length: ")
+        if clen == 0: sb.append("0")
+        else: sb.append(Fmt.int_to_str(clen))
+        sb.append("\r\nContent-Type: application/json\r\n\r\n")
+        sb.append(data)
+        return self._do_request(sb.to_owned())
+
+    pub def put(self, path: str, data: str) -> HttpResponse:
+        mut clen = Str.len(data)
+        mut sb   = StringBuilder.init(512)
+        sb.append("PUT ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("Content-Length: ")
+        if clen == 0: sb.append("0")
+        else: sb.append(Fmt.int_to_str(clen))
+        sb.append("\r\nContent-Type: application/octet-stream\r\n\r\n")
+        sb.append(data)
+        return self._do_request(sb.to_owned())
+
+    pub def patch(self, path: str, data: str) -> HttpResponse:
+        mut clen = Str.len(data)
+        mut sb   = StringBuilder.init(512)
+        sb.append("PATCH ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("Content-Length: ")
+        if clen == 0: sb.append("0")
+        else: sb.append(Fmt.int_to_str(clen))
+        sb.append("\r\nContent-Type: application/octet-stream\r\n\r\n")
+        sb.append(data)
+        return self._do_request(sb.to_owned())
+
+    pub def delete(self, path: str) -> HttpResponse:
+        mut sb = StringBuilder.init(256)
+        sb.append("DELETE ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("\r\n")
+        return self._do_request(sb.to_owned())
+
+    pub def head(self, path: str) -> HttpResponse:
+        mut sb = StringBuilder.init(256)
+        sb.append("HEAD ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("\r\n")
+        return self._do_request(sb.to_owned())

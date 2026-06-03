@@ -1,0 +1,24 @@
+# std.crypto.hmac — HMAC-SHA256 message authentication codes.
+#
+# Usage:
+#   from std.crypto.hmac import Hmac
+#   mut tag = Hmac.sha256("secret-key", 10, "message")
+
+extern "C":
+    def _tr_hmac_sha256(key: str, klen: int, msg: str) -> str
+
+pub class Hmac:
+    _dummy: int
+
+extend Hmac:
+    # Compute HMAC-SHA256 over `msg` using `key` (first `klen` bytes).
+    # Returns 64-char lowercase hex digest.
+    pub def sha256(key: str, klen: int, msg: str) -> str:
+        return _tr_hmac_sha256(key, klen, msg)
+
+    # Convenience overload: treat key as a null-terminated string.
+    pub def sha256_str(key: str, msg: str) -> str:
+        mut i   = 0
+        mut kp  = key as Pointer[char]
+        while kp.offset(i).read() as int != 0: i = i + 1
+        return _tr_hmac_sha256(key, i, msg)

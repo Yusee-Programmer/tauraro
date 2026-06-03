@@ -337,3 +337,96 @@ extend Transform:
             out.push(i)
             i = i + w
         return out
+
+    # ── Folds ─────────────────────────────────────────────────────────────────
+
+    # Fold with addition starting from init.
+    pub def fold_add(v: Vec[int], init: int) -> int:
+        mut acc = init
+        mut i   = 0
+        while i < v.len:
+            acc = acc + v.get(i)
+            i   = i + 1
+        return acc
+
+    # Fold with multiplication starting from init.
+    pub def fold_mul(v: Vec[int], init: int) -> int:
+        mut acc = init
+        mut i   = 0
+        while i < v.len:
+            acc = acc * v.get(i)
+            i   = i + 1
+        return acc
+
+    # ── Element access ────────────────────────────────────────────────────────
+
+    # Return the first element, or 0 if empty.
+    pub def first(v: Vec[int]) -> int:
+        if v.len == 0: return 0
+        return v.get(0)
+
+    # Return the last element, or 0 if empty.
+    pub def last(v: Vec[int]) -> int:
+        if v.len == 0: return 0
+        return v.get(v.len - 1)
+
+    # Return the index of the first element equal to target, or -1 if absent.
+    pub def find_first(v: Vec[int], target: int) -> int:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) == target: return i
+            i = i + 1
+        return -1
+
+    # Alias for find_first.
+    pub def position(v: Vec[int], target: int) -> int:
+        return Transform.find_first(v, target)
+
+    # ── Drop-while ────────────────────────────────────────────────────────────
+
+    # Skip leading elements < threshold, return the rest.
+    pub def drop_while_lt(v: Vec[int], threshold: int) -> Vec[int]:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) >= threshold: break
+            i = i + 1
+        return Transform.drop(v, i)
+
+    # Skip leading elements > threshold, return the rest.
+    pub def drop_while_gt(v: Vec[int], threshold: int) -> Vec[int]:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) <= threshold: break
+            i = i + 1
+        return Transform.drop(v, i)
+
+    # ── Prefix sums ───────────────────────────────────────────────────────────
+
+    # Return cumulative sums: out[i] = v[0] + ... + v[i].
+    pub def prefix_sums(v: Vec[int]) -> Vec[int]:
+        mut out = Vec[int].init(v.len + 4)
+        mut acc = 0
+        mut i   = 0
+        while i < v.len:
+            acc = acc + v.get(i)
+            out.push(acc)
+            i = i + 1
+        return out
+
+    # ── Predicates ────────────────────────────────────────────────────────────
+
+    # True when every element is > 0.
+    pub def all_positive(v: Vec[int]) -> bool:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) <= 0: return false
+            i = i + 1
+        return true
+
+    # True when at least one element is > 0.
+    pub def any_positive(v: Vec[int]) -> bool:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) > 0: return true
+            i = i + 1
+        return false

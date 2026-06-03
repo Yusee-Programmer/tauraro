@@ -1,0 +1,270 @@
+# std.iter.float_transform — Filter, map, reduce, and statistics on Vec[float].
+
+from std.core.vec import Vec
+
+pub class FloatTransform:
+    _dummy: int
+
+extend FloatTransform:
+    # ── Filters ───────────────────────────────────────────────────────────────
+
+    pub def filter_gt(v: Vec[float], threshold: float) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) > threshold: out.push(v.get(i))
+            i = i + 1
+        return out
+
+    pub def filter_lt(v: Vec[float], threshold: float) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) < threshold: out.push(v.get(i))
+            i = i + 1
+        return out
+
+    pub def filter_ge(v: Vec[float], threshold: float) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) >= threshold: out.push(v.get(i))
+            i = i + 1
+        return out
+
+    pub def filter_le(v: Vec[float], threshold: float) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if v.get(i) <= threshold: out.push(v.get(i))
+            i = i + 1
+        return out
+
+    # ── Maps ──────────────────────────────────────────────────────────────────
+
+    pub def map_add(v: Vec[float], delta: float) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            out.push(v.get(i) + delta)
+            i = i + 1
+        return out
+
+    pub def map_mul(v: Vec[float], factor: float) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            out.push(v.get(i) * factor)
+            i = i + 1
+        return out
+
+    pub def map_sub(v: Vec[float], delta: float) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            out.push(v.get(i) - delta)
+            i = i + 1
+        return out
+
+    pub def map_div(v: Vec[float], divisor: float) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            if divisor != 0.0: out.push(v.get(i) / divisor)
+            else: out.push(0.0)
+            i = i + 1
+        return out
+
+    pub def map_abs(v: Vec[float]) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            mut x = v.get(i)
+            if x < 0.0: x = 0.0 - x
+            out.push(x)
+            i = i + 1
+        return out
+
+    pub def clamp_vec(v: Vec[float], lo: float, hi: float) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut i   = 0
+        while i < v.len:
+            mut x = v.get(i)
+            if x < lo: x = lo
+            if x > hi: x = hi
+            out.push(x)
+            i = i + 1
+        return out
+
+    # ── Reductions ────────────────────────────────────────────────────────────
+
+    pub def sum(v: Vec[float]) -> float:
+        mut total = 0.0
+        mut i     = 0
+        while i < v.len:
+            total = total + v.get(i)
+            i = i + 1
+        return total
+
+    pub def max(v: Vec[float]) -> float:
+        if v.len == 0: return 0.0
+        mut best = v.get(0)
+        mut i    = 1
+        while i < v.len:
+            if v.get(i) > best: best = v.get(i)
+            i = i + 1
+        return best
+
+    pub def min(v: Vec[float]) -> float:
+        if v.len == 0: return 0.0
+        mut best = v.get(0)
+        mut i    = 1
+        while i < v.len:
+            if v.get(i) < best: best = v.get(i)
+            i = i + 1
+        return best
+
+    pub def product(v: Vec[float]) -> float:
+        mut p = 1.0
+        mut i = 0
+        while i < v.len:
+            p = p * v.get(i)
+            i = i + 1
+        return p
+
+    pub def mean(v: Vec[float]) -> float:
+        if v.len == 0: return 0.0
+        return FloatTransform.sum(v) / v.len as float
+
+    # Population variance.
+    pub def variance(v: Vec[float]) -> float:
+        if v.len == 0: return 0.0
+        mut m   = FloatTransform.mean(v)
+        mut acc = 0.0
+        mut i   = 0
+        while i < v.len:
+            mut d = v.get(i) - m
+            acc = acc + d * d
+            i = i + 1
+        return acc / v.len as float
+
+    # ── Folds ─────────────────────────────────────────────────────────────────
+
+    pub def fold_add(v: Vec[float], init_: float) -> float:
+        mut acc = init_
+        mut i   = 0
+        while i < v.len:
+            acc = acc + v.get(i)
+            i = i + 1
+        return acc
+
+    pub def fold_mul(v: Vec[float], init_: float) -> float:
+        mut acc = init_
+        mut i   = 0
+        while i < v.len:
+            acc = acc * v.get(i)
+            i = i + 1
+        return acc
+
+    # ── Element access ────────────────────────────────────────────────────────
+
+    pub def first(v: Vec[float]) -> float:
+        if v.len == 0: return 0.0
+        return v.get(0)
+
+    pub def last(v: Vec[float]) -> float:
+        if v.len == 0: return 0.0
+        return v.get(v.len - 1)
+
+    pub def find_first_gt(v: Vec[float], threshold: float) -> float:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) > threshold: return v.get(i)
+            i = i + 1
+        return 0.0
+
+    pub def position(v: Vec[float], val: float) -> int:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) == val: return i
+            i = i + 1
+        return -1
+
+    # ── Prefix sums ───────────────────────────────────────────────────────────
+
+    pub def prefix_sums(v: Vec[float]) -> Vec[float]:
+        mut out = Vec[float].init(v.len + 4)
+        mut acc = 0.0
+        mut i   = 0
+        while i < v.len:
+            acc = acc + v.get(i)
+            out.push(acc)
+            i = i + 1
+        return out
+
+    # ── Predicates ────────────────────────────────────────────────────────────
+
+    pub def all_positive(v: Vec[float]) -> bool:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) <= 0.0: return false
+            i = i + 1
+        return true
+
+    pub def any_positive(v: Vec[float]) -> bool:
+        mut i = 0
+        while i < v.len:
+            if v.get(i) > 0.0: return true
+            i = i + 1
+        return false
+
+    pub def all_finite(v: Vec[float]) -> bool:
+        mut i = 0
+        while i < v.len:
+            mut x = v.get(i)
+            if x != x: return false
+            i = i + 1
+        return true
+
+    # ── Normalization ─────────────────────────────────────────────────────────
+
+    # Rescale all values to [0, 1] relative to the min/max of the vector.
+    pub def normalize(v: Vec[float]) -> Vec[float]:
+        if v.len == 0: return Vec[float].init(0)
+        mut lo  = FloatTransform.min(v)
+        mut hi  = FloatTransform.max(v)
+        mut rng = hi - lo
+        if rng == 0.0: return FloatTransform.map_mul(v, 0.0)
+        return FloatTransform.map_div(FloatTransform.map_sub(v, lo), rng)
+
+    # ── Sorting ───────────────────────────────────────────────────────────────
+
+    pub def sort_asc(v: Vec[float]) -> Vec[float]:
+        mut n   = v.len
+        mut out = Vec[float].init(n)
+        mut i   = 0
+        while i < n:
+            out.push(v.get(i))
+            i = i + 1
+        mut changed = true
+        while changed:
+            changed = false
+            mut j   = 0
+            while j < n - 1:
+                if out.get(j) > out.get(j + 1):
+                    mut tmp = out.get(j)
+                    out.set(j, out.get(j + 1))
+                    out.set(j + 1, tmp)
+                    changed = true
+                j = j + 1
+        return out
+
+    pub def sort_desc(v: Vec[float]) -> Vec[float]:
+        mut asc = FloatTransform.sort_asc(v)
+        mut n   = asc.len
+        mut out = Vec[float].init(n)
+        mut i   = n - 1
+        while i >= 0:
+            out.push(asc.get(i))
+            i = i - 1
+        return out

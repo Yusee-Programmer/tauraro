@@ -8,6 +8,7 @@ from std.collections.set     import Set
 from std.collections.counter import Counter
 from std.collections.tuple   import Pair, StrPair, Triple
 from std.collections.heap    import MinHeap, MaxHeap
+from std.collections.list    import LinkedList, ListNode
 from std.collections.graph   import Graph, GraphEdge
 ```
 
@@ -125,12 +126,15 @@ print(str(dq.pop_back()))   # 2
 | `contains` | `(key: str) -> bool` | `bool` | `true` if `key` is present. |
 | `is_empty` | `() -> bool` | `bool` | |
 | `len` | `() -> int` | `int` | Number of unique keys. |
-| `to_vec` | `() -> Vec[str]` | `Vec[str]` | All keys as a vector (unordered). |
+| `clear` | `()` | `void` | Remove all elements and reset the hash table. |
+| `to_vec` | `() -> Vec[str]` | `Vec[str]` | All live keys as a vector (insertion order). |
+| `union` | `(other: Set) -> Set` | `Set` | Keys present in either set (no duplicates). |
 | `intersection` | `(other: Set) -> Set` | `Set` | Keys present in both sets. |
-| `union` | `(other: Set) -> Set` | `Set` | Keys present in either set. |
 | `difference` | `(other: Set) -> Set` | `Set` | Keys in `self` but not in `other`. |
+| `symmetric_difference` | `(other: Set) -> Set` | `Set` | Keys in exactly one of the two sets. |
 | `is_subset` | `(other: Set) -> bool` | `bool` | `true` if every key of `self` is in `other`. |
 | `is_superset` | `(other: Set) -> bool` | `bool` | `true` if every key of `other` is in `self`. |
+| `equals` | `(other: Set) -> bool` | `bool` | `true` if both sets contain exactly the same keys. |
 
 ### Example
 
@@ -147,8 +151,13 @@ print(str(s.contains("banana")))  # true
 mut s2 = Set.init(8)
 s2.add("banana")
 s2.add("cherry")
-mut inter = s.intersection(s2)
-print(str(inter.len()))      # 1  ("banana")
+mut inter  = s.intersection(s2)
+mut sym    = s.symmetric_difference(s2)
+print(str(inter.len()))           # 1  ("banana")
+print(str(sym.len()))             # 2  ("apple", "cherry")
+print(str(s.is_subset(s2)))       # false
+print(str(s2.is_superset(s)))     # false
+print(str(s.equals(s)))           # true
 ```
 
 ---
@@ -345,15 +354,19 @@ Represents a directed weighted edge.
 
 | Method | Signature | Returns | Description |
 |---|---|---|---|
-| `init` | `(max_nodes: int, directed: bool) -> Graph` | `Graph` | Create a graph for up to `max_nodes` nodes. Pass `directed=false` for undirected graphs (edges added in both directions). |
+| `init` | `(max_nodes: int, directed: bool) -> Graph` | `Graph` | Create a graph for up to `max_nodes` nodes. Pass `directed=false` for undirected (edges added both ways). |
 | `add_edge` | `(src: int, to: int, weight: int)` | `void` | Add a weighted edge `src → to`. Undirected graphs also add `to → src`. |
-| `bfs` | `(start: int) -> Vec[int]` | `Vec[int]` | Return node IDs reachable from `start` in level order. |
-| `dfs` | `(start: int) -> Vec[int]` | `Vec[int]` | Return node IDs reachable from `start` in DFS pre-order. |
-| `has_path` | `(src: int, dst: int) -> bool` | `bool` | `true` when there is any path from `src` to `dst`. |
+| `bfs` | `(start: int) -> Vec[int]` | `Vec[int]` | Node IDs reachable from `start` in level order. |
+| `dfs` | `(start: int) -> Vec[int]` | `Vec[int]` | Node IDs reachable from `start` in DFS pre-order. |
+| `has_path` | `(src: int, dst: int) -> bool` | `bool` | `true` when any path exists from `src` to `dst`. |
 | `neighbors` | `(node: int) -> Vec[int]` | `Vec[int]` | All direct neighbors of `node`. |
-| `edge_weight` | `(src: int, to: int) -> int` | `int` | Weight of the edge `src → to`, or `-1` if no such edge exists. |
+| `edge_weight` | `(src: int, to: int) -> int` | `int` | Weight of `src → to`, or `-1` if no such edge. |
 | `in_degree` | `(node: int) -> int` | `int` | Number of edges arriving at `node`. |
 | `out_degree` | `(node: int) -> int` | `int` | Number of edges leaving `node`. |
+| `degree` | `(node: int) -> int` | `int` | Total degree: `in_degree + out_degree` for directed; `out_degree` for undirected. |
+| `all_nodes` | `() -> Vec[int]` | `Vec[int]` | All node IDs from `0` to `node_count - 1`. |
+| `has_cycle` | `() -> bool` | `bool` | `true` when the directed graph contains at least one cycle (DFS back-edge). |
+| `topological_sort` | `() -> Vec[int]` | `Vec[int]` | Nodes in topological order (valid on DAGs only; DFS post-order reversed). |
 
 ### Fields
 
@@ -383,4 +396,68 @@ print(str(order.len()))            # 3
 
 mut nb = g.neighbors(0)            # [1, 2]
 print(str(nb.get(0)))              # 1
+
+# Degree, all_nodes, cycle detection, topological sort
+print(str(g.out_degree(0)))        # 2
+print(str(g.degree(0)))            # 2 (in_degree=0, so same)
+mut all = g.all_nodes()            # [0, 1, 2]
+print(str(g.has_cycle()))          # false  (acyclic DAG)
+mut topo = g.topological_sort()    # e.g. [0, 1, 2]
+print(str(topo.len()))             # 3
+
+# Add back-edge to create a cycle
+g.add_edge(2, 0, 1)
+print(str(g.has_cycle()))          # true
 ```
+
+---
+
+## LinkedList
+
+**When**: You need O(1) prepend, cheap removal from front, or want to build algorithms that work pointer-by-pointer — e.g. merge sort, LRU cache eviction, undo chains.
+**Why**: Heap-allocated nodes with a `next` pointer; `prepend` and `pop_front` are O(1). Use `Vec` for random access instead.
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `init` | `() -> LinkedList` | `LinkedList` | Create an empty list. |
+| `prepend` | `(value: int)` | `void` | Insert at the head in O(1). |
+| `append` | `(value: int)` | `void` | Insert at the tail in O(n). |
+| `pop_front` | `() -> int` | `int` | Remove and return the head value. Returns `0` if empty. |
+| `remove` | `(v: int)` | `void` | Remove the first node whose value equals `v`. No-op if absent. |
+| `insert_at` | `(index: int, value: int)` | `void` | Insert before the node at `index` (0 = new head). |
+| `get` | `(index: int) -> int` | `int` | Value at `index`. Returns `0` if out of range. |
+| `contains` | `(value: int) -> bool` | `bool` | `true` if any node holds `value`. |
+| `is_empty` | `() -> bool` | `bool` | `true` when the list has no nodes. |
+| `len` | `int` field | `int` | Current node count. |
+| `to_vec` | `() -> Vec[int]` | `Vec[int]` | Copy all elements head→tail into a `Vec[int]`. |
+| `reverse` | `()` | `void` | Reverse the list in place in O(n). |
+| `clear` | `()` | `void` | Free all nodes and reset to empty. |
+
+### Example
+
+```tauraro
+from std.collections.list import LinkedList
+
+mut ll = LinkedList.init()
+ll.append(1)
+ll.append(2)
+ll.append(3)
+ll.prepend(0)               # [0, 1, 2, 3]
+print(str(ll.len))          # 4
+print(str(ll.get(2)))       # 2
+
+ll.remove(2)                # [0, 1, 3]
+ll.insert_at(1, 99)         # [0, 99, 1, 3]
+print(str(ll.get(1)))       # 99
+
+ll.reverse()                # [3, 1, 99, 0]
+mut v = ll.to_vec()
+print(str(v.get(0)))        # 3
+
+print(str(ll.pop_front()))  # 3  → removes head
+ll.clear()
+print(str(ll.is_empty()))   # true
+```
+

@@ -1,11 +1,10 @@
 # std.collections.list — Singly-linked list of integers.
-#
-# Uses Pointer[ListNode] for node chaining and extern "C" malloc for nodes.
-# No bootstrap compiler dependency.
 
 extern "C":
     def _tr_checked_alloc(size: int) -> Pointer[char]
     def _tr_c_free(ptr: Pointer[char])
+
+from std.core.vec import Vec
 
 pub class ListNode:
     pub value: int
@@ -19,14 +18,14 @@ extend ListNode:
         return n
 
 pub class LinkedList:
-    pub head:   Pointer[ListNode]
-    pub len: int
+    pub head: Pointer[ListNode]
+    pub len:  int
 
 extend LinkedList:
     pub def init() -> LinkedList:
         mut l = LinkedList()
-        l.head   = 0 as Pointer[ListNode]
-        l.len = 0
+        l.head = 0 as Pointer[ListNode]
+        l.len  = 0
         return l
 
     pub def prepend(self, value: int):
@@ -36,7 +35,7 @@ extend LinkedList:
         n.next = self.head
         node.write(n)
         self.head = node
-        self.len = self.len + 1
+        self.len  = self.len + 1
 
     pub def append(self, value: int):
         mut node = _tr_checked_alloc(sizeof(ListNode)) as Pointer[ListNode]
@@ -61,6 +60,47 @@ extend LinkedList:
         self.len = self.len - 1
         return val
 
+    # Remove the first node whose value equals v.  No-op if not found.
+    pub def remove(self, v: int):
+        if self.head as int == 0: return
+        if self.head.read().value == v:
+            mut old   = self.head
+            self.head = self.head.read().next
+            _tr_c_free(old as Pointer[char])
+            self.len = self.len - 1
+            return
+        mut cur = self.head
+        while cur.read().next as int != 0:
+            mut nxt = cur.read().next
+            if nxt.read().value == v:
+                mut upd  = cur.read()
+                upd.next = nxt.read().next
+                cur.write(upd)
+                _tr_c_free(nxt as Pointer[char])
+                self.len = self.len - 1
+                return
+            cur = cur.read().next
+
+    # Insert value before the node at index (0 = new head).
+    pub def insert_at(self, index: int, value: int):
+        if index <= 0:
+            self.prepend(value)
+            return
+        mut cur = self.head
+        mut i   = 0
+        while cur as int != 0 and i < index - 1:
+            cur = cur.read().next
+            i   = i + 1
+        if cur as int == 0: return
+        mut node = _tr_checked_alloc(sizeof(ListNode)) as Pointer[ListNode]
+        mut n    = ListNode.init(value)
+        n.next = cur.read().next
+        node.write(n)
+        mut upd  = cur.read()
+        upd.next = node
+        cur.write(upd)
+        self.len = self.len + 1
+
     pub def is_empty(self) -> bool:
         return self.head as int == 0
 
@@ -79,3 +119,35 @@ extend LinkedList:
             if cur.read().value == value: return true
             cur = cur.read().next
         return false
+
+    # Copy all elements into a Vec[int] (head → tail order).
+    pub def to_vec(self) -> Vec[int]:
+        mut out = Vec[int].init(self.len + 4)
+        mut cur = self.head
+        while cur as int != 0:
+            out.push(cur.read().value)
+            cur = cur.read().next
+        return out
+
+    # Reverse the list in place.
+    pub def reverse(self):
+        mut prev = 0 as Pointer[ListNode]
+        mut cur  = self.head
+        while cur as int != 0:
+            mut node = cur.read()
+            mut nxt  = node.next
+            node.next = prev
+            cur.write(node)
+            prev = cur
+            cur  = nxt
+        self.head = prev
+
+    # Free all nodes and reset.
+    pub def clear(self):
+        mut cur = self.head
+        while cur as int != 0:
+            mut nxt = cur.read().next
+            _tr_c_free(cur as Pointer[char])
+            cur = nxt
+        self.head = 0 as Pointer[ListNode]
+        self.len  = 0

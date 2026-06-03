@@ -1,0 +1,18 @@
+# std.crypto.uuid — UUID v4 generation.
+#
+# On POSIX uses /dev/urandom; on Windows falls back to rand().
+#
+# Usage:
+#   from std.crypto.uuid import UUID
+#   mut id = UUID.v4()   # e.g. "550e8400-e29b-41d4-a716-446655440000"
+
+extern "C":
+    def _tr_uuid_v4() -> str
+
+pub class UUID:
+    _dummy: int
+
+extend UUID:
+    # Generate a random UUID v4 string in canonical 8-4-4-4-12 hex format.
+    pub def v4() -> str:
+        return _tr_uuid_v4()

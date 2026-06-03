@@ -5,16 +5,16 @@
 #
 #   def main():
 #       mut t = TestRunner.init("my tests")
+#       t.section("arithmetic")
 #       t.assert_eq_int(1 + 1, 2, "basic addition")
-#       t.assert_eq_str("hello", "hello", "string equal")
-#       t.assert_true(3 > 2, "three is greater than two")
-#       if not t.summary(): return   # non-zero exit on failure
+#       t.assert_eq_str("hi", "hi", "string equal")
+#       t.assert_true(3 > 2, "ordering")
+#       t.assert_contains("hello world", "world", "substring")
+#       t.summary()
 
 extern "C":
     def _tr_int_to_str(n: int) -> str
     def _tr_float_to_str(n: float) -> str
-
-# ─── TestRunner ────────────────────────────────────────────────────────────────
 
 pub class TestRunner:
     pub name:   str
@@ -41,56 +41,117 @@ extend TestRunner:
     # ── Boolean assertions ────────────────────────────────────────────────────
 
     pub def assert_true(self, cond: bool, msg: str):
-        if cond:
-            self._pass()
-        else:
-            self._fail(f"{msg} — expected true, got false")
+        if cond: self._pass()
+        else:    self._fail(f"{msg} — expected true, got false")
 
     pub def assert_false(self, cond: bool, msg: str):
-        if not cond:
-            self._pass()
+        if not cond: self._pass()
+        else:        self._fail(f"{msg} — expected false, got true")
+
+    pub def assert_eq_bool(self, got: bool, want: bool, msg: str):
+        if got == want: self._pass()
         else:
-            self._fail(f"{msg} — expected false, got true")
+            mut gs = "false"
+            mut ws = "false"
+            if got:  gs = "true"
+            if want: ws = "true"
+            self._fail(f"{msg} — expected {ws}, got {gs}")
 
     # ── Integer assertions ────────────────────────────────────────────────────
 
     pub def assert_eq_int(self, got: int, want: int, msg: str):
-        if got == want:
-            self._pass()
-        else:
-            self._fail(f"{msg} — expected {_tr_int_to_str(want)}, got {_tr_int_to_str(got)}")
+        if got == want: self._pass()
+        else:           self._fail(f"{msg} — expected {_tr_int_to_str(want)}, got {_tr_int_to_str(got)}")
 
     pub def assert_ne_int(self, a: int, b: int, msg: str):
-        if a != b:
-            self._pass()
-        else:
-            self._fail(f"{msg} — expected values to differ (both are {_tr_int_to_str(a)})")
+        if a != b: self._pass()
+        else:      self._fail(f"{msg} — expected values to differ (both are {_tr_int_to_str(a)})")
 
     pub def assert_gt_int(self, a: int, b: int, msg: str):
-        if a > b:
-            self._pass()
-        else:
-            self._fail(f"{msg} — expected {_tr_int_to_str(a)} > {_tr_int_to_str(b)}")
+        if a > b: self._pass()
+        else:     self._fail(f"{msg} — expected {_tr_int_to_str(a)} > {_tr_int_to_str(b)}")
 
     pub def assert_lt_int(self, a: int, b: int, msg: str):
-        if a < b:
-            self._pass()
-        else:
-            self._fail(f"{msg} — expected {_tr_int_to_str(a)} < {_tr_int_to_str(b)}")
+        if a < b: self._pass()
+        else:     self._fail(f"{msg} — expected {_tr_int_to_str(a)} < {_tr_int_to_str(b)}")
+
+    pub def assert_ge_int(self, a: int, b: int, msg: str):
+        if a >= b: self._pass()
+        else:      self._fail(f"{msg} — expected {_tr_int_to_str(a)} >= {_tr_int_to_str(b)}")
+
+    pub def assert_le_int(self, a: int, b: int, msg: str):
+        if a <= b: self._pass()
+        else:      self._fail(f"{msg} — expected {_tr_int_to_str(a)} <= {_tr_int_to_str(b)}")
+
+    # Pass when lo <= value <= hi.
+    pub def assert_in_range(self, value: int, lo: int, hi: int, msg: str):
+        if value >= lo and value <= hi: self._pass()
+        else: self._fail(f"{msg} — {_tr_int_to_str(value)} not in [{_tr_int_to_str(lo)}, {_tr_int_to_str(hi)}]")
 
     # ── String assertions ─────────────────────────────────────────────────────
 
     pub def assert_eq_str(self, got: str, want: str, msg: str):
-        if got == want:
-            self._pass()
-        else:
-            self._fail(f"{msg} — expected \"{want}\", got \"{got}\"")
+        if got == want: self._pass()
+        else:           self._fail(f"{msg} — expected \"{want}\", got \"{got}\"")
 
     pub def assert_ne_str(self, a: str, b: str, msg: str):
-        if a != b:
-            self._pass()
-        else:
-            self._fail(f"{msg} — expected strings to differ, both are \"{a}\"")
+        if a != b: self._pass()
+        else:      self._fail(f"{msg} — expected strings to differ, both are \"{a}\"")
+
+    # Pass when s contains the substring sub.
+    pub def assert_contains(self, s: str, sub: str, msg: str):
+        mut sp   = s as Pointer[char]
+        mut subp = sub as Pointer[char]
+        mut slen = 0
+        mut subl = 0
+        while sp.offset(slen).read() as int != 0: slen = slen + 1
+        while subp.offset(subl).read() as int != 0: subl = subl + 1
+        mut found = false
+        mut i = 0
+        while i <= slen - subl and not found:
+            mut j = 0
+            mut ok = true
+            while j < subl and ok:
+                if sp.offset(i + j).read() as int != subp.offset(j).read() as int: ok = false
+                j = j + 1
+            if ok: found = true
+            i = i + 1
+        if found: self._pass()
+        else:     self._fail(f"{msg} — \"{s}\" does not contain \"{sub}\"")
+
+    pub def assert_starts_with(self, s: str, prefix: str, msg: str):
+        mut sp = s as Pointer[char]
+        mut pp = prefix as Pointer[char]
+        mut i  = 0
+        while True:
+            mut pc = pp.offset(i).read() as int
+            if pc == 0:
+                self._pass()
+                return
+            mut sc = sp.offset(i).read() as int
+            if sc == 0 or sc != pc:
+                self._fail(f"{msg} — \"{s}\" does not start with \"{prefix}\"")
+                return
+            i = i + 1
+
+    pub def assert_ends_with(self, s: str, suffix: str, msg: str):
+        mut sp   = s as Pointer[char]
+        mut ep   = suffix as Pointer[char]
+        mut sl   = 0
+        mut el   = 0
+        while sp.offset(sl).read() as int != 0: sl = sl + 1
+        while ep.offset(el).read() as int != 0: el = el + 1
+        if el > sl:
+            self._fail(f"{msg} — \"{s}\" does not end with \"{suffix}\"")
+            return
+        mut off = sl - el
+        mut i   = 0
+        while i < el:
+            if sp.offset(off + i).read() as int != ep.offset(i).read() as int:
+                self._fail(f"{msg} — \"{s}\" does not end with \"{suffix}\"")
+                return
+            i = i + 1
+        self._pass()
 
     # ── Float assertions ──────────────────────────────────────────────────────
 
@@ -98,35 +159,43 @@ extend TestRunner:
     pub def assert_eq_float(self, got: float, want: float, eps: float, msg: str):
         mut diff = got - want
         if diff < 0.0: diff = 0.0 - diff
-        if diff <= eps:
-            self._pass()
-        else:
-            self._fail(f"{msg} — floats not equal within epsilon {_tr_float_to_str(eps)}")
+        if diff <= eps: self._pass()
+        else:           self._fail(f"{msg} — floats not equal within epsilon {_tr_float_to_str(eps)}")
 
     # Pass if |a - b| > eps.
     pub def assert_ne_float(self, a: float, b: float, eps: float, msg: str):
         mut diff = a - b
         if diff < 0.0: diff = 0.0 - diff
-        if diff > eps:
-            self._pass()
-        else:
-            self._fail(f"{msg} — expected floats to differ by more than {_tr_float_to_str(eps)}")
+        if diff > eps: self._pass()
+        else:          self._fail(f"{msg} — expected floats to differ by more than {_tr_float_to_str(eps)}")
 
-    # ── Unconditional failure ─────────────────────────────────────────────────
+    # ── Unconditional ─────────────────────────────────────────────────────────
 
-    # Always records a failure — useful in unreachable branches.
     pub def fail(self, msg: str):
         self._fail(msg)
 
-    # ── Grouping helpers ──────────────────────────────────────────────────────
+    pub def skip(self, msg: str):
+        print(f"  SKIP: {msg}")
 
-    # Print a section header (cosmetic only, no effect on pass/fail counts).
+    # ── Grouping ──────────────────────────────────────────────────────────────
+
     pub def section(self, label: str):
         print(f"  [{label}]")
 
+    # ── State ─────────────────────────────────────────────────────────────────
+
+    # True when no assertions have failed so far.
+    pub def ok(self) -> bool:
+        return self.failed == 0
+
+    # Reset pass/fail counters (reuse runner for multiple sub-suites).
+    pub def reset(self):
+        self.passed = 0
+        self.failed = 0
+
     # ── Summary ───────────────────────────────────────────────────────────────
 
-    # Print a one-line summary and return true iff all assertions passed.
+    # Print one-line summary.  Returns true iff all assertions passed.
     pub def summary(self) -> bool:
         mut total = self.passed + self.failed
         if self.failed == 0:

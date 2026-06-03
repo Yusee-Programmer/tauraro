@@ -1,0 +1,106 @@
+# std.unicode — UTF-8 string operations and Unicode character classification.
+#
+# All functions operate on UTF-8 encoded strings.
+# Codepoint indices (not byte indices) are used in slice/char_at.
+#
+# Usage:
+#   from std.unicode import Unicode
+#   mut n = Unicode.len("héllo")   # 5 codepoints
+#   mut c = Unicode.char_at("café", 3)  # codepoint for 'é'
+
+extern "C":
+    def _tr_utf8_len(s: str) -> int
+    def _tr_utf8_valid(s: str) -> bool
+    def _tr_utf8_char_at(s: str, idx: int) -> int
+    def _tr_utf8_slice(s: str, start: int, end_: int) -> str
+    def _tr_unicode_is_letter(cp: int) -> bool
+    def _tr_unicode_is_digit(cp: int) -> bool
+    def _tr_unicode_to_upper(cp: int) -> int
+    def _tr_unicode_to_lower(cp: int) -> int
+    def _tr_utf8_to_upper(s: str) -> str
+    def _tr_utf8_to_lower(s: str) -> str
+    def _tr_unicode_category(cp: int) -> str
+
+pub class Unicode:
+    _dummy: int
+
+extend Unicode:
+    # ── String-level operations ───────────────────────────────────────────────
+
+    # Number of Unicode codepoints in a UTF-8 string (not byte count).
+    pub def len(s: str) -> int:
+        return _tr_utf8_len(s)
+
+    # True when `s` is valid UTF-8.
+    pub def valid(s: str) -> bool:
+        return _tr_utf8_valid(s)
+
+    # Codepoint (int) at the given codepoint index.
+    pub def char_at(s: str, idx: int) -> int:
+        return _tr_utf8_char_at(s, idx)
+
+    # Slice by codepoint indices [start, end_).
+    pub def slice(s: str, start: int, end_: int) -> str:
+        return _tr_utf8_slice(s, start, end_)
+
+    # Convert all codepoints to their upper-case equivalents.
+    pub def to_upper(s: str) -> str:
+        return _tr_utf8_to_upper(s)
+
+    # Convert all codepoints to their lower-case equivalents.
+    pub def to_lower(s: str) -> str:
+        return _tr_utf8_to_lower(s)
+
+    # True when the string contains only letter codepoints.
+    pub def is_alpha(s: str) -> bool:
+        mut n = _tr_utf8_len(s)
+        if n == 0: return false
+        mut i = 0
+        while i < n:
+            if not _tr_unicode_is_letter(_tr_utf8_char_at(s, i)): return false
+            i = i + 1
+        return true
+
+    # True when the string contains only decimal digit codepoints.
+    pub def is_digit(s: str) -> bool:
+        mut n = _tr_utf8_len(s)
+        if n == 0: return false
+        mut i = 0
+        while i < n:
+            if not _tr_unicode_is_digit(_tr_utf8_char_at(s, i)): return false
+            i = i + 1
+        return true
+
+    # True when the string contains only letters or digits.
+    pub def is_alnum(s: str) -> bool:
+        mut n = _tr_utf8_len(s)
+        if n == 0: return false
+        mut i = 0
+        while i < n:
+            mut cp = _tr_utf8_char_at(s, i)
+            if not _tr_unicode_is_letter(cp) and not _tr_unicode_is_digit(cp): return false
+            i = i + 1
+        return true
+
+    # ── Codepoint-level operations ────────────────────────────────────────────
+
+    # True when `cp` is a Unicode letter.
+    pub def is_letter(cp: int) -> bool:
+        return _tr_unicode_is_letter(cp)
+
+    # True when `cp` is a Unicode decimal digit.
+    pub def is_digit_cp(cp: int) -> bool:
+        return _tr_unicode_is_digit(cp)
+
+    # Upper-case mapping of a single codepoint.
+    pub def upper(cp: int) -> int:
+        return _tr_unicode_to_upper(cp)
+
+    # Lower-case mapping of a single codepoint.
+    pub def lower(cp: int) -> int:
+        return _tr_unicode_to_lower(cp)
+
+    # One-letter Unicode general category: "L"=letter, "N"=number,
+    # "Z"=separator, "C"=control, "P"=punctuation, "S"=symbol, "M"=mark.
+    pub def category(cp: int) -> str:
+        return _tr_unicode_category(cp)

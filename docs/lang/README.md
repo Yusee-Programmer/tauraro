@@ -23,7 +23,7 @@
 | 13 | [Memory & Ownership](13_memory_and_ownership.md) | Own/Borrow/Move/Shared, safety rules, scope exit |
 | 14 | [Unsafe & Pointers](14_unsafe_and_pointers.md) | unsafe:, Pointer[T], alloc, dealloc, pointer arithmetic |
 | 15 | [Modules](15_modules.md) | import, from, pub, export, module resolution |
-| 16 | [Concurrency](16_concurrency.md) | async/await, spawn, task_group:, shared ownership |
+| 16 | [Concurrency](16_concurrency.md) | async/await, spawn, task_group:, shared ownership, StructuredGroup, IOPoll/EventLoop, thread panic recovery |
 | 17 | [Extern & FFI](17_extern_and_ffi.md) | extern "C", variadic functions, linking, ABI |
 | 18 | [GPU & Inline Assembly](18_gpu_and_asm.md) | gpu: blocks, OpenMP, asm(), memory barriers |
 | 19 | [Compiler Error Reference](19_compiler_errors.md) | Every error code with cause, example, and fix |

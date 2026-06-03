@@ -99,6 +99,16 @@ pub def detect_c_compiler() -> str:
     if _tr_system("cc --version >" + null_dev + " 2>&1") == 0: return "cc"
     return "gcc"
 
+# True when `cc` is Clang (clang or apple clang).  Used to gate Clang-only flags.
+pub def is_clang_compiler(cc: str) -> bool:
+    mut null_dev = "/dev/null"
+    if _tr_is_windows(): null_dev = "nul"
+    if _tr_str_contains(cc, "clang"): return true
+    # 'cc' on macOS is Apple Clang — check its --version output
+    if _tr_str_eq(cc, "cc"):
+        return _tr_system(cc + " --version 2>&1 | grep -qi clang") == 0
+    return false
+
 # Expand friendly target shorthands to LLVM target triples.
 # Raw triples (containing '-') are passed through unchanged.
 pub def resolve_target_triple(target: str) -> str:
@@ -362,7 +372,11 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
             cross_flags = cross_flags + " --sysroot=\"" + sysroot + "\""
     mut static_flag = ""
     if static_link: static_flag = " -static"
+    # Flags valid on both GCC and Clang.
     mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    # Clang-only: suppress warnings that are Clang-specific or have no GCC equivalent.
+    if is_clang_compiler(cc):
+        warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
     mut native_flags = ""
     if target == "" and opt_level == "3":
         native_flags = " -march=native -funroll-loops"
@@ -405,7 +419,10 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     mut cc = detect_c_compiler()
     mut opt_flag = "-O" + opt_level
     mut out_dir = strip_trailing_sep(dir_of_path(c_path))
-    mut cmd = cc + " " + opt_flag + " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -DTAURARO_NO_RT_HELPERS \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
+    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    if is_clang_compiler(cc):
+        warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
+    mut cmd = cc + " " + opt_flag + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 

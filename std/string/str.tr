@@ -374,6 +374,36 @@ extend Str:
     pub def split(s: str, sep: str) -> List[str]:
         return _tr_str_split(s, sep)
 
+    # Like split() but returns Vec[str] for use with std.iter and std.collections.
+    pub def split_to_vec(s: str, sep: str) -> Vec[str]:
+        mut out  = Vec[str].init(8)
+        mut sl   = Str.len(s)
+        mut sepl = Str.len(sep)
+        if sepl == 0:
+            mut i = 0
+            while i < sl:
+                out.push(Str.slice(s, i, i + 1))
+                i = i + 1
+            return out
+        mut start = 0
+        mut i     = 0
+        while i <= sl - sepl:
+            mut j     = 0
+            mut match_ = true
+            while j < sepl:
+                if Str.char_at(s, i + j) != Str.char_at(sep, j):
+                    match_ = false
+                    j      = sepl
+                j = j + 1
+            if match_:
+                out.push(Str.slice(s, start, i))
+                start = i + sepl
+                i     = start
+            else:
+                i = i + 1
+        out.push(Str.slice(s, start, sl))
+        return out
+
     pub def join(parts: List[str], sep: str) -> str:
         return _tr_str_join(parts, sep)
 
@@ -420,3 +450,128 @@ extend Str:
             result = Str.replace_first(result, "{}", values.get(i))
             i = i + 1
         return result
+
+    # ── Parsing ───────────────────────────────────────────────────────────────
+
+    # Parse a decimal integer string (leading '-' or '+' accepted).
+    pub def parse_int(s: str) -> int:
+        mut p   = s as Pointer[char]
+        mut i   = 0
+        mut neg = false
+        mut c   = p.offset(0).read() as int
+        if c == 45:
+            neg = true
+            i   = 1
+        elif c == 43:
+            i = 1
+        mut result = 0
+        mut c2     = p.offset(i).read() as int
+        while c2 >= 48 and c2 <= 57:
+            result = result * 10 + (c2 - 48)
+            i      = i + 1
+            c2     = p.offset(i).read() as int
+        if neg: return 0 - result
+        return result
+
+    # Parse a decimal float string (integer + optional fractional part).
+    pub def parse_float(s: str) -> float:
+        mut p        = s as Pointer[char]
+        mut i        = 0
+        mut neg      = false
+        mut c        = p.offset(0).read() as int
+        if c == 45:
+            neg = true
+            i   = 1
+        elif c == 43:
+            i = 1
+        mut int_part  = 0
+        mut frac_part = 0
+        mut frac_div  = 1
+        mut in_frac   = false
+        mut c2        = p.offset(i).read() as int
+        while c2 != 0:
+            if c2 >= 48 and c2 <= 57:
+                if not in_frac:
+                    int_part = int_part * 10 + (c2 - 48)
+                else:
+                    frac_part = frac_part * 10 + (c2 - 48)
+                    frac_div  = frac_div * 10
+            elif c2 == 46:
+                in_frac = true
+            else:
+                break
+            i  = i + 1
+            c2 = p.offset(i).read() as int
+        mut result = int_part as float + frac_part as float / frac_div as float
+        if neg: return 0.0 - result
+        return result
+
+    # Return true for "true", "1", or "yes"; false otherwise.
+    pub def parse_bool(s: str) -> bool:
+        if Str.eq(s, "true"): return true
+        if Str.eq(s, "1"):    return true
+        if Str.eq(s, "yes"):  return true
+        return false
+
+    # ── Line / word splitting ─────────────────────────────────────────────────
+
+    # Split on '\n'.  A trailing newline does not produce an empty trailing element.
+    pub def lines(s: str) -> Vec[str]:
+        mut out   = Vec[str].init(8)
+        mut slen  = Str.len(s)
+        mut sp    = s as Pointer[char]
+        mut start = 0
+        mut i     = 0
+        while i < slen:
+            mut c = sp.offset(i).read() as int
+            if c == 10:
+                out.push(Str.slice(s, start, i))
+                start = i + 1
+            i = i + 1
+        if start < slen:
+            out.push(Str.slice(s, start, slen))
+        return out
+
+    # Split on runs of whitespace (space, tab, CR, LF).
+    pub def words(s: str) -> Vec[str]:
+        mut out   = Vec[str].init(8)
+        mut slen  = Str.len(s)
+        mut sp    = s as Pointer[char]
+        mut start = -1
+        mut i     = 0
+        while i < slen:
+            mut c  = sp.offset(i).read() as int
+            mut ws = c == 32 or c == 9 or c == 10 or c == 13
+            if not ws and start < 0:
+                start = i
+            elif ws and start >= 0:
+                out.push(Str.slice(s, start, i))
+                start = -1
+            i = i + 1
+        if start >= 0:
+            out.push(Str.slice(s, start, slen))
+        return out
+
+    # ── Prefix / suffix removal ───────────────────────────────────────────────
+
+    # Return s with prefix stripped, or s if it does not start with prefix.
+    pub def strip_prefix(s: str, prefix: str) -> str:
+        if Str.starts_with(s, prefix): return Str.slice(s, Str.len(prefix), Str.len(s))
+        return s
+
+    # Return s with suffix stripped, or s if it does not end with suffix.
+    pub def strip_suffix(s: str, suffix: str) -> str:
+        if Str.ends_with(s, suffix): return Str.slice(s, 0, Str.len(s) - Str.len(suffix))
+        return s
+
+    # Return s with every occurrence of the character (ASCII code) removed.
+    pub def remove_char(s: str, c: int) -> str:
+        mut slen = Str.len(s)
+        mut sb   = StringBuilder.init(slen + 1)
+        mut p    = s as Pointer[char]
+        mut i    = 0
+        while i < slen:
+            mut ch = p.offset(i).read() as int
+            if ch != c: sb.append_char(ch)
+            i = i + 1
+        return sb.to_owned()

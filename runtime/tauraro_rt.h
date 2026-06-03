@@ -99,6 +99,21 @@
 #  endif
 #endif
 
+/* ── Thread stack size ───────────────────────────────────────────────────── *
+ * Override before including this header: -DTAURARO_THREAD_STACK_SIZE=N       *
+ * 0 = use OS default (POSIX: skips setstacksize; Win32: passes 0 to          *
+ * CreateThread which uses the executable's PE default, typically 1 MiB).     *
+ * Platform defaults are applied below inside their respective #ifdef blocks.  */
+#ifndef TAURARO_THREAD_STACK_SIZE
+#  ifdef _WIN32
+     /* Windows default: 2 MiB — matches legacy behaviour */
+#    define TAURARO_THREAD_STACK_SIZE (2 * 1024 * 1024)
+#  else
+     /* POSIX default: 0 — let pthread use the OS default (typically 8 MiB) */
+#    define TAURARO_THREAD_STACK_SIZE 0
+#  endif
+#endif
+
 /* ── Panic / OOM hooks ───────────────────────────────────────────────────── */
 #if defined(TAURARO_KERNEL) && defined(__KERNEL__)
 #  define _TR_OOM_ABORT()    do { pr_err("tauraro: out of memory\n"); BUG(); } while(0)
@@ -388,13 +403,6 @@ typedef struct { int panicked; char* panic_msg; } _TrSpawnResult;
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-
-/* ── Thread stack size ────────────────────────────────────────────── *
- * Override with -DTAURARO_THREAD_STACK_SIZE=N before including.      *
- * 0 = use OS default. Recommendation: 2 MiB for most workloads.      */
-#ifndef TAURARO_THREAD_STACK_SIZE
-#  define TAURARO_THREAD_STACK_SIZE (2 * 1024 * 1024)
-#endif
 
 typedef HANDLE _TrThread;
 /* Trampoline: routes void*(*)(void*) through DWORD WINAPI, installs
@@ -3366,6 +3374,438 @@ static inline bool _tr_is_mobile(void) {
 #else
     return false;
 #endif
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * REGEX — POSIX regex.h on Linux/Mac/MinGW; stubs elsewhere.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#ifndef TAURARO_BARE
+#  if defined(__linux__) || defined(__APPLE__) || defined(__unix__) || \
+      defined(__MINGW32__) || defined(__MINGW64__)
+#    include <regex.h>
+#    define TAURARO_HAVE_REGEX 1
+#  endif
+#endif
+
+#ifdef TAURARO_HAVE_REGEX
+typedef struct { regex_t re; } _TrRegex;
+static inline char* _tr_regex_compile(char* pattern, int icase) {
+    _TrRegex* r = (_TrRegex*)TAURARO_ALLOC(sizeof(_TrRegex));
+    if (!r) return NULL;
+    int flags = REG_EXTENDED; if (icase) flags |= REG_ICASE;
+    if (regcomp(&r->re, pattern, flags) != 0) { TAURARO_FREE(r); return NULL; }
+    return (char*)r;
+}
+static inline bool _tr_regex_match(char* handle, char* text) {
+    if (!handle || !text) return false;
+    return regexec(&((_TrRegex*)handle)->re, text, 0, NULL, 0) == 0;
+}
+static inline int _tr_regex_find_start(char* handle, char* text, int from) {
+    if (!handle || !text) return -1;
+    regmatch_t m;
+    if (regexec(&((_TrRegex*)handle)->re, text + from, 1, &m, 0) != 0) return -1;
+    return from + (int)m.rm_so;
+}
+static inline int _tr_regex_find_len(char* handle, char* text, int from) {
+    if (!handle || !text) return -1;
+    regmatch_t m;
+    if (regexec(&((_TrRegex*)handle)->re, text + from, 1, &m, 0) != 0) return -1;
+    return (int)(m.rm_eo - m.rm_so);
+}
+static inline char* _tr_regex_replace_first(char* handle, char* text, char* repl) {
+    if (!handle || !text || !repl) return _tr_strdup(text ? text : "");
+    regmatch_t m;
+    if (regexec(&((_TrRegex*)handle)->re, text, 1, &m, 0) != 0) return _tr_strdup(text);
+    size_t pre = (size_t)m.rm_so, rlen = strlen(repl), post = strlen(text) - (size_t)m.rm_eo;
+    char* out = (char*)TAURARO_ALLOC(pre + rlen + post + 1); if (!out) return _tr_strdup(text);
+    memcpy(out, text, pre); memcpy(out+pre, repl, rlen); memcpy(out+pre+rlen, text+m.rm_eo, post);
+    out[pre+rlen+post] = '\0'; return out;
+}
+static inline char* _tr_regex_replace_all(char* handle, char* text, char* repl) {
+    if (!handle || !text || !repl) return _tr_strdup(text ? text : "");
+    _TrRegex* r = (_TrRegex*)handle; regmatch_t m;
+    size_t rlen = strlen(repl), cur = 0, tlen = strlen(text);
+    char* result = _tr_strdup("");
+    while (cur < tlen && regexec(&r->re, text + cur, 1, &m, 0) == 0) {
+        size_t pre = (size_t)m.rm_so, olen = strlen(result);
+        char* tmp = (char*)TAURARO_ALLOC(olen + pre + rlen + 1); if (!tmp) break;
+        memcpy(tmp, result, olen); memcpy(tmp+olen, text+cur, pre);
+        memcpy(tmp+olen+pre, repl, rlen); tmp[olen+pre+rlen] = '\0';
+        TAURARO_FREE(result); result = tmp;
+        size_t adv = (size_t)(m.rm_eo - m.rm_so); if (adv == 0) adv = 1;
+        cur += pre + adv;
+    }
+    size_t rem = tlen - cur, olen2 = strlen(result);
+    char* out = (char*)TAURARO_ALLOC(olen2 + rem + 1);
+    if (out) { memcpy(out, result, olen2); memcpy(out+olen2, text+cur, rem); out[olen2+rem]='\0'; TAURARO_FREE(result); return out; }
+    return result;
+}
+static inline int _tr_regex_count(char* handle, char* text) {
+    if (!handle || !text) return 0;
+    regmatch_t m; int n = 0; size_t cur = 0, tlen = strlen(text);
+    while (cur < tlen && regexec(&((_TrRegex*)handle)->re, text+cur, 1, &m, 0) == 0) {
+        n++; size_t adv=(size_t)(m.rm_eo-m.rm_so); if(adv==0)adv=1; cur+=(size_t)m.rm_so+adv;
+    }
+    return n;
+}
+static inline void _tr_regex_free(char* handle) {
+    if (!handle) return; regfree(&((_TrRegex*)handle)->re); TAURARO_FREE(handle);
+}
+#else
+static inline char* _tr_regex_compile(char* p, int i) { (void)p;(void)i; return NULL; }
+static inline bool  _tr_regex_match(char* h, char* t) { (void)h;(void)t; return false; }
+static inline int   _tr_regex_find_start(char* h, char* t, int f) { (void)h;(void)t;(void)f; return -1; }
+static inline int   _tr_regex_find_len(char* h, char* t, int f) { (void)h;(void)t;(void)f; return -1; }
+static inline char* _tr_regex_replace_first(char* h, char* t, char* r) { (void)h;(void)r; return _tr_strdup(t?t:""); }
+static inline char* _tr_regex_replace_all(char* h, char* t, char* r) { (void)h;(void)r; return _tr_strdup(t?t:""); }
+static inline int   _tr_regex_count(char* h, char* t) { (void)h;(void)t; return 0; }
+static inline void  _tr_regex_free(char* h) { (void)h; }
+#endif
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * SHA-256 — pure C, no external dependencies.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#define _TR_ROTR32(x,n) (((x)>>(n))|((x)<<(32-(n))))
+#define _TR_S0(x) (_TR_ROTR32(x,2)^_TR_ROTR32(x,13)^_TR_ROTR32(x,22))
+#define _TR_S1(x) (_TR_ROTR32(x,6)^_TR_ROTR32(x,11)^_TR_ROTR32(x,25))
+#define _TR_s0(x) (_TR_ROTR32(x,7)^_TR_ROTR32(x,18)^((x)>>3))
+#define _TR_s1(x) (_TR_ROTR32(x,17)^_TR_ROTR32(x,19)^((x)>>10))
+#define _TR_CH(x,y,z) (((x)&(y))^(~(x)&(z)))
+#define _TR_MAJ(x,y,z) (((x)&(y))^((x)&(z))^((y)&(z)))
+
+static const uint32_t _tr_sha256_K[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+};
+
+typedef struct { uint32_t h[8]; uint8_t buf[64]; uint64_t bits; uint32_t buf_len; } _TrSHA256Ctx;
+
+static inline void _tr_sha256_init(_TrSHA256Ctx* c) {
+    c->h[0]=0x6a09e667;c->h[1]=0xbb67ae85;c->h[2]=0x3c6ef372;c->h[3]=0xa54ff53a;
+    c->h[4]=0x510e527f;c->h[5]=0x9b05688c;c->h[6]=0x1f83d9ab;c->h[7]=0x5be0cd19;
+    c->bits=0; c->buf_len=0;
+}
+static inline void _tr_sha256_block(_TrSHA256Ctx* c, const uint8_t* blk) {
+    uint32_t w[64],a,b,cc,d,e,f,g,h,t1,t2; int i;
+    for(i=0;i<16;i++) w[i]=((uint32_t)blk[i*4]<<24)|((uint32_t)blk[i*4+1]<<16)|((uint32_t)blk[i*4+2]<<8)|(uint32_t)blk[i*4+3];
+    for(i=16;i<64;i++) w[i]=_TR_s1(w[i-2])+w[i-7]+_TR_s0(w[i-15])+w[i-16];
+    a=c->h[0];b=c->h[1];cc=c->h[2];d=c->h[3];e=c->h[4];f=c->h[5];g=c->h[6];h=c->h[7];
+    for(i=0;i<64;i++){
+        t1=h+_TR_S1(e)+_TR_CH(e,f,g)+_tr_sha256_K[i]+w[i];
+        t2=_TR_S0(a)+_TR_MAJ(a,b,cc);
+        h=g;g=f;f=e;e=d+t1;d=cc;cc=b;b=a;a=t1+t2;
+    }
+    c->h[0]+=a;c->h[1]+=b;c->h[2]+=cc;c->h[3]+=d;c->h[4]+=e;c->h[5]+=f;c->h[6]+=g;c->h[7]+=h;
+}
+static inline void _tr_sha256_update(_TrSHA256Ctx* c, const uint8_t* data, size_t len) {
+    for(size_t i=0;i<len;i++){
+        c->buf[c->buf_len++]=data[i]; c->bits+=8;
+        if(c->buf_len==64){_tr_sha256_block(c,c->buf);c->buf_len=0;}
+    }
+}
+static inline void _tr_sha256_final(_TrSHA256Ctx* c, uint8_t* dig) {
+    uint64_t bits=c->bits;
+    c->buf[c->buf_len++]=0x80;
+    while(c->buf_len!=56){if(c->buf_len==64){_tr_sha256_block(c,c->buf);c->buf_len=0;}c->buf[c->buf_len++]=0;}
+    for(int i=7;i>=0;i--){c->buf[56+(7-i)]=(uint8_t)(bits>>((uint64_t)i*8));}
+    _tr_sha256_block(c,c->buf);
+    for(int i=0;i<8;i++){dig[i*4]=(uint8_t)(c->h[i]>>24);dig[i*4+1]=(uint8_t)(c->h[i]>>16);dig[i*4+2]=(uint8_t)(c->h[i]>>8);dig[i*4+3]=(uint8_t)c->h[i];}
+}
+static const char _tr_hex_lc[] = "0123456789abcdef";
+static inline char* _tr_sha256_hex(char* input) {
+    _TrSHA256Ctx ctx; uint8_t dig[32];
+    _tr_sha256_init(&ctx);
+    if(input) _tr_sha256_update(&ctx,(const uint8_t*)input,strlen(input));
+    _tr_sha256_final(&ctx,dig);
+    char* out=(char*)TAURARO_ALLOC(65); if(!out) return NULL;
+    for(int i=0;i<32;i++){out[i*2]=_tr_hex_lc[dig[i]>>4];out[i*2+1]=_tr_hex_lc[dig[i]&15];}
+    out[64]='\0'; return out;
+}
+static inline char* _tr_sha256_bytes_of(char* input, int ilen) {
+    _TrSHA256Ctx ctx; uint8_t dig[32];
+    _tr_sha256_init(&ctx);
+    if(input&&ilen>0) _tr_sha256_update(&ctx,(const uint8_t*)input,(size_t)ilen);
+    _tr_sha256_final(&ctx,dig);
+    char* out=(char*)TAURARO_ALLOC(32); if(!out) return NULL;
+    memcpy(out,dig,32); return out;
+}
+
+/* ── HMAC-SHA256 ────────────────────────────────────────────────────────── */
+static inline char* _tr_hmac_sha256(char* key, int klen, char* msg) {
+    uint8_t k[64]={0}; _TrSHA256Ctx ctx;
+    if(klen>64){_tr_sha256_init(&ctx);_tr_sha256_update(&ctx,(const uint8_t*)key,(size_t)klen);uint8_t tmp[32];_tr_sha256_final(&ctx,tmp);memcpy(k,tmp,32);}
+    else memcpy(k,key,(size_t)klen);
+    uint8_t ipad[64],opad[64];
+    for(int i=0;i<64;i++){ipad[i]=k[i]^0x36;opad[i]=k[i]^0x5c;}
+    uint8_t inner[32];
+    _tr_sha256_init(&ctx);_tr_sha256_update(&ctx,ipad,64);
+    if(msg)_tr_sha256_update(&ctx,(const uint8_t*)msg,strlen(msg));
+    _tr_sha256_final(&ctx,inner);
+    _tr_sha256_init(&ctx);_tr_sha256_update(&ctx,opad,64);_tr_sha256_update(&ctx,inner,32);
+    uint8_t dig[32]; _tr_sha256_final(&ctx,dig);
+    char* out=(char*)TAURARO_ALLOC(65); if(!out) return NULL;
+    for(int i=0;i<32;i++){out[i*2]=_tr_hex_lc[dig[i]>>4];out[i*2+1]=_tr_hex_lc[dig[i]&15];}
+    out[64]='\0'; return out;
+}
+
+/* ── UUID v4 ────────────────────────────────────────────────────────────── */
+static inline char* _tr_uuid_v4(void) {
+    uint8_t b[16];
+#if !defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)
+    FILE* f=fopen("/dev/urandom","rb");
+    if(f){fread(b,1,16,f);fclose(f);}
+    else{for(int i=0;i<16;i++)b[i]=(uint8_t)(rand()&0xff);}
+#else
+    for(int i=0;i<16;i++)b[i]=(uint8_t)(rand()&0xff);
+#endif
+    b[6]=(b[6]&0x0f)|0x40; b[8]=(b[8]&0x3f)|0x80;
+    char* out=(char*)TAURARO_ALLOC(37); if(!out) return NULL;
+    snprintf(out,37,"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15]);
+    return out;
+}
+
+/* ── MD5 (compact, for legacy use) ─────────────────────────────────────── */
+static inline char* _tr_md5_hex(char* s) {
+    /* Minimal MD5; message expanded inline. */
+    static const uint32_t T[64]={
+        0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
+        0x698098d8,0x8b44f7af,0xffff5bb1,0x895cd7be,0x6b901122,0xfd987193,0xa679438e,0x49b40821,
+        0xf61e2562,0xc040b340,0x265e5a51,0xe9b6c7aa,0xd62f105d,0x02441453,0xd8a1e681,0xe7d3fbc8,
+        0x21e1cde6,0xc33707d6,0xf4d50d87,0x455a14ed,0xa9e3e905,0xfcefa3f8,0x676f02d9,0x8d2a4c8a,
+        0xfffa3942,0x8771f681,0x6d9d6122,0xfde5380c,0xa4beea44,0x4bdecfa9,0xf6bb4b60,0xbebfbc70,
+        0x289b7ec6,0xeaa127fa,0xd4ef3085,0x04881d05,0xd9d4d039,0xe6db99e5,0x1fa27cf8,0xc4ac5665,
+        0xf4292244,0x432aff97,0xab9423a7,0xfc93a039,0x655b59c3,0x8f0ccc92,0xffeff47d,0x85845dd1,
+        0x6fa87e4f,0xfe2ce6e0,0xa3014314,0x4e0811a1,0xf7537e82,0xbd3af235,0x2ad7d2bb,0xeb86d391
+    };
+    static const int S[64]={7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,
+                             5, 9,14,20,5, 9,14,20,5, 9,14,20,5, 9,14,20,
+                             4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
+                             6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21};
+    size_t ilen = s ? strlen(s) : 0;
+    size_t padlen = ((ilen+8)/64+1)*64;
+    uint8_t* msg = (uint8_t*)TAURARO_CALLOC(1,padlen);
+    if(!msg) return _tr_strdup("00000000000000000000000000000000");
+    if(s) memcpy(msg,s,ilen);
+    msg[ilen]=0x80;
+    uint64_t bits=(uint64_t)ilen*8;
+    for(int i=0;i<8;i++) msg[padlen-8+i]=(uint8_t)(bits>>(uint64_t)(i*8));
+    uint32_t a=0x67452301,b=0xefcdab89,cc=0x98badcfe,d=0x10325476;
+    for(size_t off=0;off<padlen;off+=64){
+        uint32_t M[16],A=a,B=b,C=cc,D=d;
+        for(int i=0;i<16;i++) M[i]=((uint32_t)msg[off+i*4])|((uint32_t)msg[off+i*4+1]<<8)|((uint32_t)msg[off+i*4+2]<<16)|((uint32_t)msg[off+i*4+3]<<24);
+        for(int i=0;i<64;i++){
+            uint32_t F,g2;
+            if(i<16){F=(_TR_CH(B,C,D));g2=(uint32_t)i;}
+            else if(i<32){F=(D^(B&(C^D)));g2=(uint32_t)(5*i+1)%16;}
+            else if(i<48){F=(B^C^D);g2=(uint32_t)(3*i+5)%16;}
+            else{F=(C^(B|(~D)));g2=(uint32_t)(7*i)%16;}
+            F=F+A+T[i]+M[g2];
+            A=D;D=C;C=B;B=B+((F<<S[i])|(F>>(32-S[i])));
+        }
+        a+=A;b+=B;cc+=C;d+=D;
+    }
+    TAURARO_FREE(msg);
+    char* out=(char*)TAURARO_ALLOC(33); if(!out) return _tr_strdup("00000000000000000000000000000000");
+    uint32_t r[4]={a,b,cc,d};
+    for(int i=0;i<4;i++) for(int j=0;j<4;j++){
+        uint8_t byte=(uint8_t)(r[i]>>(j*8));
+        out[i*8+j*2]=_tr_hex_lc[byte>>4]; out[i*8+j*2+1]=_tr_hex_lc[byte&15];
+    }
+    out[32]='\0'; return out;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * TLS/HTTPS — OpenSSL (opt-in: -DTAURARO_TLS_OPENSSL -lssl -lcrypto).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#ifdef TAURARO_TLS_OPENSSL
+#  include <openssl/ssl.h>
+#  include <openssl/err.h>
+typedef struct { SSL_CTX* ctx; SSL* ssl; int fd; } _TrTLSConn;
+#  ifdef _WIN32
+#    define _TR_SOCK_CLOSE(fd) closesocket(fd)
+#  else
+#    define _TR_SOCK_CLOSE(fd) close(fd)
+#  endif
+static inline char* _tr_tls_connect(char* host, int port) {
+    static _Atomic int _tr_ssl_once = 0;
+    if (atomic_fetch_add(&_tr_ssl_once,1)==0){SSL_library_init();SSL_load_error_strings();OpenSSL_add_all_algorithms();}
+    struct addrinfo hints={0},*res=NULL;
+    hints.ai_family=AF_UNSPEC;hints.ai_socktype=SOCK_STREAM;
+    char pbuf[16]; snprintf(pbuf,sizeof(pbuf),"%d",port);
+    if(getaddrinfo(host,pbuf,&hints,&res)!=0) return NULL;
+    int fd=(int)socket(res->ai_family,res->ai_socktype,res->ai_protocol);
+    if(fd<0){freeaddrinfo(res);return NULL;}
+    if(connect(fd,res->ai_addr,(int)res->ai_addrlen)!=0){freeaddrinfo(res);_TR_SOCK_CLOSE(fd);return NULL;}
+    freeaddrinfo(res);
+    SSL_CTX* ctx=SSL_CTX_new(TLS_client_method());
+    if(!ctx){_TR_SOCK_CLOSE(fd);return NULL;}
+    SSL* ssl=SSL_new(ctx); SSL_set_fd(ssl,fd); SSL_set_tlsext_host_name(ssl,host);
+    if(SSL_connect(ssl)!=1){SSL_free(ssl);SSL_CTX_free(ctx);_TR_SOCK_CLOSE(fd);return NULL;}
+    _TrTLSConn* c=(_TrTLSConn*)TAURARO_ALLOC(sizeof(_TrTLSConn));
+    if(!c){SSL_free(ssl);SSL_CTX_free(ctx);_TR_SOCK_CLOSE(fd);return NULL;}
+    c->ctx=ctx;c->ssl=ssl;c->fd=fd; return (char*)c;
+}
+static inline int   _tr_tls_send(char* h, char* d) { if(!h||!d) return -1; return SSL_write(((_TrTLSConn*)h)->ssl,d,(int)strlen(d)); }
+static inline char* _tr_tls_recv(char* h, int cap) {
+    if(!h||cap<=0) return _tr_strdup("");
+    char* buf=(char*)TAURARO_ALLOC((size_t)cap+1); if(!buf) return _tr_strdup("");
+    int n=SSL_read(((_TrTLSConn*)h)->ssl,buf,cap);
+    if(n<=0){TAURARO_FREE(buf);return _tr_strdup("");}
+    buf[n]='\0'; return buf;
+}
+static inline void _tr_tls_close(char* h) {
+    if(!h) return; _TrTLSConn* c=(_TrTLSConn*)h;
+    SSL_shutdown(c->ssl);SSL_free(c->ssl);SSL_CTX_free(c->ctx);_TR_SOCK_CLOSE(c->fd);TAURARO_FREE(c);
+}
+#else
+static inline char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
+static inline int   _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
+static inline char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
+static inline void  _tr_tls_close(char* h)          { (void)h; }
+#endif
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * COMPRESS — zlib (opt-in: -DTAURARO_COMPRESS_ZLIB -lz).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#ifdef TAURARO_COMPRESS_ZLIB
+#  include <zlib.h>
+static inline char* _tr_zlib_compress(char* input, int ilen, int* out_len) {
+    if(!input||ilen<=0){if(out_len)*out_len=0;return NULL;}
+    uLong bound=compressBound((uLong)ilen);
+    char* out=(char*)TAURARO_ALLOC(bound);if(!out){if(out_len)*out_len=0;return NULL;}
+    uLong dlen=bound;
+    if(compress2((Bytef*)out,&dlen,(const Bytef*)input,(uLong)ilen,Z_BEST_COMPRESSION)!=Z_OK){TAURARO_FREE(out);if(out_len)*out_len=0;return NULL;}
+    if(out_len)*out_len=(int)dlen; return out;
+}
+static inline char* _tr_zlib_decompress(char* input, int ilen, int max_out) {
+    if(!input||ilen<=0) return _tr_strdup("");
+    char* out=(char*)TAURARO_ALLOC((size_t)max_out+1);if(!out) return _tr_strdup("");
+    uLong dlen=(uLong)max_out;
+    if(uncompress((Bytef*)out,&dlen,(const Bytef*)input,(uLong)ilen)!=Z_OK){TAURARO_FREE(out);return _tr_strdup("");}
+    out[dlen]='\0'; return out;
+}
+static inline char* _tr_deflate(char* input, int ilen, int* out_len) {
+    if(!input||ilen<=0){if(out_len)*out_len=0;return NULL;}
+    z_stream s={0}; deflateInit2(&s,Z_BEST_COMPRESSION,Z_DEFLATED,-15,8,Z_DEFAULT_STRATEGY);
+    uLong bound=deflateBound(&s,(uLong)ilen);
+    char* out=(char*)TAURARO_ALLOC(bound);if(!out){deflateEnd(&s);if(out_len)*out_len=0;return NULL;}
+    s.next_in=(Bytef*)input;s.avail_in=(uInt)ilen;s.next_out=(Bytef*)out;s.avail_out=(uInt)bound;
+    deflate(&s,Z_FINISH);if(out_len)*out_len=(int)s.total_out;deflateEnd(&s);return out;
+}
+static inline char* _tr_inflate(char* input, int ilen, int max_out) {
+    if(!input||ilen<=0) return _tr_strdup("");
+    z_stream s={0};inflateInit2(&s,-15);
+    char* out=(char*)TAURARO_ALLOC((size_t)max_out+1);if(!out){inflateEnd(&s);return _tr_strdup("");}
+    s.next_in=(Bytef*)input;s.avail_in=(uInt)ilen;s.next_out=(Bytef*)out;s.avail_out=(uInt)max_out;
+    inflate(&s,Z_FINISH);int n=(int)s.total_out;inflateEnd(&s);out[n]='\0';return out;
+}
+#else
+static inline char* _tr_zlib_compress(char* i, int il, int* n) { (void)i;(void)il;if(n)*n=0;return NULL; }
+static inline char* _tr_zlib_decompress(char* i, int il, int m) { (void)i;(void)il;(void)m;return _tr_strdup(""); }
+static inline char* _tr_deflate(char* i, int il, int* n) { (void)i;(void)il;if(n)*n=0;return NULL; }
+static inline char* _tr_inflate(char* i, int il, int m) { (void)i;(void)il;(void)m;return _tr_strdup(""); }
+#endif
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * UNICODE / UTF-8 — pure C, no external dependencies.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+static inline uint32_t _tr_utf8_next(const char** pp) {
+    const uint8_t* p=(const uint8_t*)*pp; uint32_t cp;
+    if(!*p){return 0;}
+    if(p[0]<0x80){cp=p[0];*pp=(const char*)(p+1);return cp;}
+    if((p[0]&0xe0)==0xc0&&(p[1]&0xc0)==0x80){cp=((p[0]&0x1f)<<6)|(p[1]&0x3f);*pp=(const char*)(p+2);return cp;}
+    if((p[0]&0xf0)==0xe0&&(p[1]&0xc0)==0x80&&(p[2]&0xc0)==0x80){cp=((p[0]&0x0f)<<12)|((p[1]&0x3f)<<6)|(p[2]&0x3f);*pp=(const char*)(p+3);return cp;}
+    if((p[0]&0xf8)==0xf0&&(p[1]&0xc0)==0x80&&(p[2]&0xc0)==0x80&&(p[3]&0xc0)==0x80){cp=((p[0]&0x07)<<18)|((p[1]&0x3f)<<12)|((p[2]&0x3f)<<6)|(p[3]&0x3f);*pp=(const char*)(p+4);return cp;}
+    *pp=(const char*)(p+1);return 0xFFFD;
+}
+static inline int _tr_utf8_encode_cp(uint32_t cp, char* buf) {
+    if(cp<0x80){buf[0]=(char)cp;return 1;}
+    if(cp<0x800){buf[0]=(char)(0xc0|(cp>>6));buf[1]=(char)(0x80|(cp&0x3f));return 2;}
+    if(cp<0x10000){buf[0]=(char)(0xe0|(cp>>12));buf[1]=(char)(0x80|((cp>>6)&0x3f));buf[2]=(char)(0x80|(cp&0x3f));return 3;}
+    buf[0]=(char)(0xf0|(cp>>18));buf[1]=(char)(0x80|((cp>>12)&0x3f));buf[2]=(char)(0x80|((cp>>6)&0x3f));buf[3]=(char)(0x80|(cp&0x3f));return 4;
+}
+static inline int _tr_utf8_len(char* s) {
+    if(!s) return 0; int n=0; const char* p=s; while(*p){_tr_utf8_next(&p);n++;} return n;
+}
+static inline bool _tr_utf8_valid(char* s) {
+    if(!s) return false;
+    const uint8_t* p=(const uint8_t*)s;
+    while(*p){
+        int seq;
+        if(p[0]<0x80){p++;continue;}
+        else if((p[0]&0xe0)==0xc0)seq=2;
+        else if((p[0]&0xf0)==0xe0)seq=3;
+        else if((p[0]&0xf8)==0xf0)seq=4;
+        else return false;
+        for(int i=1;i<seq;i++) if((p[i]&0xc0)!=0x80) return false;
+        p+=seq;
+    }
+    return true;
+}
+static inline int _tr_utf8_char_at(char* s, int idx) {
+    if(!s) return -1; const char* p=s; int n=0;
+    while(*p){uint32_t cp=_tr_utf8_next(&p);if(n==idx)return(int)cp;n++;}
+    return -1;
+}
+static inline char* _tr_utf8_slice(char* s, int start, int end_) {
+    if(!s||start>=end_) return _tr_strdup("");
+    const char* p=s; int n=0;
+    while(*p&&n<start){_tr_utf8_next(&p);n++;}
+    const char* begin=p;
+    while(*p&&n<end_){_tr_utf8_next(&p);n++;}
+    size_t len=(size_t)(p-begin);
+    char* out=(char*)TAURARO_ALLOC(len+1);if(!out) return _tr_strdup("");
+    memcpy(out,begin,len);out[len]='\0';return out;
+}
+static inline bool _tr_unicode_is_letter(int cp) {
+    if((cp>=65&&cp<=90)||(cp>=97&&cp<=122)) return true;
+    if(cp>=0xC0&&cp<=0x2AF) return true;
+    if(cp>=0x4E00&&cp<=0x9FFF) return true;
+    if(cp>=0x0400&&cp<=0x04FF) return true;
+    if(cp>=0x0600&&cp<=0x06FF) return true;
+    if(cp>=0xAC00&&cp<=0xD7AF) return true;
+    return false;
+}
+static inline bool _tr_unicode_is_digit(int cp) {
+    return (cp>=48&&cp<=57)||(cp>=0x0660&&cp<=0x0669)||(cp>=0x06F0&&cp<=0x06F9);
+}
+static inline int _tr_unicode_to_upper(int cp) {
+    if(cp>=97&&cp<=122) return cp-32;
+    if(cp>=0xE0&&cp<=0xFE&&cp!=0xF7) return cp-32;
+    return cp;
+}
+static inline int _tr_unicode_to_lower(int cp) {
+    if(cp>=65&&cp<=90) return cp+32;
+    if(cp>=0xC0&&cp<=0xDE&&cp!=0xD7) return cp+32;
+    return cp;
+}
+static inline char* _tr_utf8_to_upper(char* s) {
+    if(!s) return _tr_strdup("");
+    size_t cap=strlen(s)*4+4; char* out=(char*)TAURARO_ALLOC(cap);if(!out) return _tr_strdup("");
+    const char* p=s; char* q=out; char tmp[5];
+    while(*p){uint32_t cp=_tr_utf8_next(&p);int n=_tr_utf8_encode_cp((uint32_t)_tr_unicode_to_upper((int)cp),tmp);memcpy(q,tmp,(size_t)n);q+=n;}
+    *q='\0'; return out;
+}
+static inline char* _tr_utf8_to_lower(char* s) {
+    if(!s) return _tr_strdup("");
+    size_t cap=strlen(s)*4+4; char* out=(char*)TAURARO_ALLOC(cap);if(!out) return _tr_strdup("");
+    const char* p=s; char* q=out; char tmp[5];
+    while(*p){uint32_t cp=_tr_utf8_next(&p);int n=_tr_utf8_encode_cp((uint32_t)_tr_unicode_to_lower((int)cp),tmp);memcpy(q,tmp,(size_t)n);q+=n;}
+    *q='\0'; return out;
+}
+/* Return the codepoint category string: "L"=letter, "N"=digit, "Z"=space, "C"=other */
+static inline char* _tr_unicode_category(int cp) {
+    if(_tr_unicode_is_letter(cp)) return _tr_strdup("L");
+    if(_tr_unicode_is_digit(cp))  return _tr_strdup("N");
+    if(cp==32||cp==9||cp==10||cp==13) return _tr_strdup("Z");
+    return _tr_strdup("C");
 }
 
 #endif /* TAURARO_RT_H */

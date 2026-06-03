@@ -1,12 +1,13 @@
 # std.iter — Ranges and Vector Transforms
 
 ```tauraro
-from std.iter.range     import Range
-from std.iter.transform import Transform
+from std.iter.range            import Range
+from std.iter.transform        import Transform
+from std.iter.float_transform  import FloatTransform
 ```
 
-All methods are **static** — called as `Range.method(...)` or `Transform.method(...)`.  
-All transform functions operate on `Vec[int]` and return **new** vectors; originals are never modified.
+All methods are **static** — called as `Range.method(...)`, `Transform.method(...)`, or `FloatTransform.method(...)`.  
+All transform functions return **new** vectors; originals are never modified.
 
 ---
 
@@ -128,6 +129,46 @@ Produce new vectors from multiple inputs.
 
 > **Note** — `windows` and `chunks` return index vectors, not sub-vectors. Use the indices with `v.get(i)` to `v.get(i+w-1)` to access each window or chunk.
 
+### Folds
+
+Reduce a vector using a custom starting value.
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Transform.fold_add` | `(v: Vec[int], init: int) -> int` | `int` | Fold with `+`, starting from `init`. |
+| `Transform.fold_mul` | `(v: Vec[int], init: int) -> int` | `int` | Fold with `*`, starting from `init`. |
+
+### Element access
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Transform.first` | `(v: Vec[int]) -> int` | `int` | First element, or `0` if empty. |
+| `Transform.last` | `(v: Vec[int]) -> int` | `int` | Last element, or `0` if empty. |
+| `Transform.find_first` | `(v: Vec[int], target: int) -> int` | `int` | Index of the first element equal to `target`, or `-1` if not found. |
+| `Transform.position` | `(v: Vec[int], target: int) -> int` | `int` | Alias for `find_first`. |
+
+### Drop-while
+
+Skip leading elements satisfying a condition.
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Transform.drop_while_lt` | `(v: Vec[int], threshold: int) -> Vec[int]` | `Vec[int]` | Skip leading elements `< threshold`; return the rest. |
+| `Transform.drop_while_gt` | `(v: Vec[int], threshold: int) -> Vec[int]` | `Vec[int]` | Skip leading elements `> threshold`; return the rest. |
+
+### Prefix sums
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Transform.prefix_sums` | `(v: Vec[int]) -> Vec[int]` | `Vec[int]` | Cumulative sum: `out[i] = v[0] + … + v[i]`. |
+
+### Positivity predicates
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Transform.all_positive` | `(v: Vec[int]) -> bool` | `bool` | `true` when every element is `> 0`. |
+| `Transform.any_positive` | `(v: Vec[int]) -> bool` | `bool` | `true` when at least one element is `> 0`. |
+
 ### Example
 
 ```tauraro
@@ -150,4 +191,111 @@ print(str(Transform.count(big)))         # 4
 mut a = Range.stepped(0, 6, 1)           # [0,1,2,3,4,5]
 mut b = Range.stepped(10, 16, 1)         # [10,11,12,13,14,15]
 mut zipped = Transform.zip_sum(a, b)     # [10,12,14,16,18,20]
+
+# Folds, element access, prefix sums
+mut nums = Range.iota(5)                        # [0,1,2,3,4]
+print(str(Transform.fold_add(nums, 100)))       # 110
+print(str(Transform.fold_mul(nums, 1)))         # 0  (0*1*2*3*4)
+print(str(Transform.first(nums)))               # 0
+print(str(Transform.last(nums)))                # 4
+print(str(Transform.find_first(nums, 3)))       # 3  (index)
+mut ps = Transform.prefix_sums(nums)            # [0,1,3,6,10]
+print(str(ps.get(4)))                           # 10
+
+# Drop-while, positivity
+mut d = Range.iota(8)                           # [0..7]
+mut dropped = Transform.drop_while_lt(d, 5)    # [5,6,7]
+print(str(Transform.all_positive(Transform.map_add(d, 1))))   # true
+print(str(Transform.any_positive(d)))                         # true  (1..7)
+```
+
+---
+
+## std.iter.float_transform — FloatTransform class
+
+**When**: You need `Transform`-style operations on `Vec[float]` — data science, statistics, signal processing.
+**Why**: Mirrors `Transform` exactly for floating-point data, plus `variance`, `normalize`, and `all_finite`.
+
+### Filtering
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `FloatTransform.filter_gt` | `(v: Vec[float], t: float) -> Vec[float]` | `Vec[float]` | Keep elements `> t`. |
+| `FloatTransform.filter_lt` | `(v: Vec[float], t: float) -> Vec[float]` | `Vec[float]` | Keep elements `< t`. |
+| `FloatTransform.filter_ge` | `(v: Vec[float], t: float) -> Vec[float]` | `Vec[float]` | Keep elements `>= t`. |
+| `FloatTransform.filter_le` | `(v: Vec[float], t: float) -> Vec[float]` | `Vec[float]` | Keep elements `<= t`. |
+
+### Mapping
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `FloatTransform.map_add` | `(v, delta: float) -> Vec[float]` | `Vec[float]` | Add `delta` to every element. |
+| `FloatTransform.map_sub` | `(v, delta: float) -> Vec[float]` | `Vec[float]` | Subtract `delta`. |
+| `FloatTransform.map_mul` | `(v, factor: float) -> Vec[float]` | `Vec[float]` | Multiply by `factor`. |
+| `FloatTransform.map_div` | `(v, divisor: float) -> Vec[float]` | `Vec[float]` | Divide (returns `0.0` when divisor is `0.0`). |
+| `FloatTransform.map_abs` | `(v: Vec[float]) -> Vec[float]` | `Vec[float]` | Absolute value of every element. |
+| `FloatTransform.clamp_vec` | `(v, lo, hi: float) -> Vec[float]` | `Vec[float]` | Clamp every element to `[lo, hi]`. |
+
+### Reductions
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `FloatTransform.sum` | `(v: Vec[float]) -> float` | `float` | Sum. |
+| `FloatTransform.max` | `(v: Vec[float]) -> float` | `float` | Maximum (`0.0` if empty). |
+| `FloatTransform.min` | `(v: Vec[float]) -> float` | `float` | Minimum (`0.0` if empty). |
+| `FloatTransform.product` | `(v: Vec[float]) -> float` | `float` | Product. |
+| `FloatTransform.mean` | `(v: Vec[float]) -> float` | `float` | Arithmetic mean. |
+| `FloatTransform.variance` | `(v: Vec[float]) -> float` | `float` | Population variance. |
+
+### Element access
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `FloatTransform.first` | `(v: Vec[float]) -> float` | `float` | First element, or `0.0`. |
+| `FloatTransform.last` | `(v: Vec[float]) -> float` | `float` | Last element, or `0.0`. |
+| `FloatTransform.find_first_gt` | `(v, threshold: float) -> float` | `float` | First element `> threshold`, or `0.0`. |
+| `FloatTransform.position` | `(v: Vec[float], val: float) -> int` | `int` | Index of first element `== val`, or `-1`. |
+
+### Normalization and sorting
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `FloatTransform.normalize` | `(v: Vec[float]) -> Vec[float]` | `Vec[float]` | Rescale all values to `[0.0, 1.0]` relative to min/max. |
+| `FloatTransform.sort_asc` | `(v: Vec[float]) -> Vec[float]` | `Vec[float]` | Sort ascending (new vector). |
+| `FloatTransform.sort_desc` | `(v: Vec[float]) -> Vec[float]` | `Vec[float]` | Sort descending (new vector). |
+| `FloatTransform.prefix_sums` | `(v: Vec[float]) -> Vec[float]` | `Vec[float]` | Cumulative sum. |
+| `FloatTransform.all_positive` | `(v: Vec[float]) -> bool` | `bool` | `true` when every element is `> 0.0`. |
+| `FloatTransform.any_positive` | `(v: Vec[float]) -> bool` | `bool` | `true` when at least one element is `> 0.0`. |
+| `FloatTransform.all_finite` | `(v: Vec[float]) -> bool` | `bool` | `true` when no element is NaN. |
+
+### Folds
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `FloatTransform.fold_add` | `(v: Vec[float], init: float) -> float` | `float` | Fold with `+`. |
+| `FloatTransform.fold_mul` | `(v: Vec[float], init: float) -> float` | `float` | Fold with `*`. |
+
+### Example
+
+```tauraro
+from std.iter.float_transform import FloatTransform
+from std.core.vec import Vec
+
+mut data = Vec[float].init(5)
+data.push(1.0)
+data.push(3.0)
+data.push(5.0)
+data.push(2.0)
+data.push(4.0)
+
+print(str(FloatTransform.mean(data)))      # 3.0
+print(str(FloatTransform.variance(data)))  # 2.0
+
+mut norm = FloatTransform.normalize(data)  # [0.0, 0.5, 1.0, 0.25, 0.75]
+mut big  = FloatTransform.filter_gt(data, 2.5)  # [3.0, 5.0, 4.0]
+mut sc   = FloatTransform.map_mul(big, 10.0)    # [30.0, 50.0, 40.0]
+print(str(FloatTransform.sum(sc)))              # 120.0
+
+mut sorted = FloatTransform.sort_asc(data)      # [1.0, 2.0, 3.0, 4.0, 5.0]
+print(str(FloatTransform.last(sorted)))         # 5.0
 ```

@@ -19,6 +19,8 @@
 | `Atomic[T]` | Lock-free atomic integer operations |
 | `ThreadLocal[T]` | Per-thread storage — each thread sees its own value |
 | `Sendable` | Compile-time marker: type is safe to cross thread boundaries |
+| `StructuredGroup` | Fault-tolerant batch — panicked threads are caught, not fatal |
+| `IOPoll` / `EventLoop` | Non-blocking event-driven I/O with epoll/IOCP/kqueue |
 
 ---
 
@@ -532,6 +534,9 @@ async def main():
 | `Thread.spawn` | ✓ | Joinable OS thread |
 | `shared x.field` concurrent writes | ✗ | Data race — use `Mutex[T]` |
 | `List[T]` shared across threads | ✗ | No synchronization |
+| `StructuredGroup` spawns | ✓ | Panics caught at thread boundary |
+| `IOPoll` (epoll/IOCP/kqueue) | ✓ | Platform-native event poll |
+| `TcpStream` non-blocking | ✓ | Returns WOULD_BLOCK instead of blocking |
 
 ---
 
@@ -563,3 +568,142 @@ while i < num_jobs:
 pool.wait()
 pool.free()
 ```
+
+---
+
+## StructuredGroup — Structured Concurrency with Panic Recovery
+
+`StructuredGroup` (from `std.async.structured`) is a structured-concurrency container that:
+1. Runs each task in its own OS thread (similar to `task_group:`)
+2. **Catches thread panics** — a thread that calls `panic(msg)` does not crash the process; the group records the error and continues waiting for other threads
+3. Reports which tasks panicked after all threads finish
+
+```tauraro
+from std.async.structured import StructuredGroup
+
+def risky(id: int) -> void:
+    if id == 2:
+        panic("task 2 intentionally failed")
+    print(f"  task {id} OK")
+
+def main():
+    mut sg = StructuredGroup.init()
+    sg.spawn(risky, 1)
+    sg.spawn(risky, 2)    # will panic
+    sg.spawn(risky, 3)
+    sg.wait()             # blocks until all threads finish (panicked or not)
+
+    print(f"panics: {sg.panic_count}")
+    if sg.panic_count > 0:
+        print("last panic: " + sg.last_panic_msg)
+    sg.free()
+```
+
+### StructuredGroup API
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `StructuredGroup.init` | `() -> StructuredGroup` | `StructuredGroup` | Create an empty group. |
+| `spawn` | `(fn, arg)` | `void` | Spawn a thread running `fn(arg)` and add it to the group. |
+| `wait` | `()` | `void` | Wait for all threads to finish. Panicked threads are caught, not re-raised. |
+| `free` | `()` | `void` | Free the group's resources. |
+
+**Fields:** `panic_count: int`, `last_panic_msg: str`.
+
+**When to use vs `task_group:`** — use `task_group:` when any panic should abort the batch; use `StructuredGroup` when you need fault tolerance (some tasks may fail and that's acceptable).
+
+---
+
+## Thread Panic Recovery
+
+Any OS thread can call `panic(msg)` to signal a fatal error. Normally `panic` terminates the process. When a thread is spawned through `StructuredGroup` (or a `Thread.spawn` handle), the panic is caught at the thread boundary:
+
+```tauraro
+from std.async.thread import Thread
+
+def fragile_work(n: int) -> void:
+    if n < 0:
+        panic("negative input not allowed")
+    print(f"  computed {n * n}")
+
+def main():
+    mut t = Thread.spawn(fragile_work, -1)
+    t.join()
+    if t.panicked():
+        print("thread panicked: " + t.panic_msg())
+    t.free()
+```
+
+The per-thread `setjmp` boundary installed by the runtime captures the `longjmp` from `panic` and stores the message in `_TrSpawnResult`, which `.panicked()` and `.panic_msg()` read after join.
+
+**Rule:** A panic inside a thread never terminates the process — it terminates only that thread and records the message for the joiner to inspect.
+
+---
+
+## Async I/O — IOPoll and EventLoop
+
+For non-blocking, event-driven I/O Tauraro provides a cross-platform poll abstraction backed by `epoll` (Linux), `IOCP` (Windows), and `kqueue` (macOS/BSD).
+
+### IOPoll — raw event loop
+
+```tauraro
+from std.io.poll import IOPoll, IOEvent
+
+mut poll = IOPoll.init()
+poll.add(fd, POLLIN, 0)      # watch fd for readable events (userdata=0)
+
+mut events = poll.wait(200)  # wait up to 200 ms
+mut i = 0
+while i < events.len:
+    mut ev = events.get(i)
+    print(f"  fd={ev.fd} events={ev.events} data={ev.userdata}")
+    i = i + 1
+poll.destroy()
+```
+
+### EventLoop — reactor-style
+
+`EventLoop` (from `std.io.event_loop`) wraps `IOPoll` with a run loop that fires `n` iterations:
+
+```tauraro
+from std.io.event_loop import EventLoop
+
+mut el = EventLoop.init()
+el.add_fd(server_fd, POLLIN, 0)
+
+el.run(5)     # run 5 poll cycles with a 100 ms timeout each
+el.free()
+```
+
+### Non-blocking TCP
+
+`TcpStream` supports non-blocking sockets via `set_nonblocking()`:
+
+```tauraro
+from std.net.tcp import TcpStream
+
+mut s = TcpStream.connect("127.0.0.1", 9000)
+s.set_nonblocking()
+
+mut n = s.recv_nb(256)      # returns immediately; n = WOULD_BLOCK (-2) if no data
+if n == -2:
+    print("no data yet — would block")
+else:
+    print(f"received {n} bytes")
+s.close()
+```
+
+| Method | Returns | Description |
+|---|---|---|
+| `set_nonblocking()` | `bool` | Switch socket to non-blocking mode. |
+| `recv_nb(cap)` | `int` | Non-blocking receive. Returns byte count, `0` on disconnect, `-1` on error, `-2` (WOULD_BLOCK) if no data available. |
+| `send_nb(data)` | `int` | Non-blocking send. Returns bytes sent, `0` on disconnect, `-1` on error, `-2` if socket buffer full. |
+
+### When to use each
+
+| Pattern | Use when |
+|---|---|
+| `task_group:` / `ThreadPool` | CPU-bound parallel work; blocking I/O is acceptable |
+| `StructuredGroup` | Same, but some threads may panic and you need fault tolerance |
+| `IOPoll` / `EventLoop` | Many file descriptors, non-blocking I/O, event-driven server |
+| `await_timeout` | Single async call with a hard deadline |
