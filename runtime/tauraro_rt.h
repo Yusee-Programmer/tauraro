@@ -2936,6 +2936,7 @@ static inline bool file_exists(char* path) {
 static inline char* _tr_c_strdup(char* s) {
     return s ? strdup(s) : (char*)0;
 }
+#define _tr_strdup _tr_c_strdup
 
 
 static inline double _tr_get_inf(void) { return (double)INFINITY; }
@@ -3377,11 +3378,42 @@ static inline bool _tr_is_mobile(void) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * REGEX — POSIX regex.h on Linux/Mac/MinGW; stubs elsewhere.
+ * Executable directory — returns directory containing the running binary.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#if defined(__APPLE__)
+#  include <mach-o/dyld.h>
+#endif
+static inline char* _tr_exe_dir(void) {
+#if defined(_WIN32)
+    char* buf=(char*)_tr_c_malloc(4096);
+    DWORD n=GetModuleFileNameA(NULL,buf,4096);
+    if(!n){buf[0]='.';buf[1]='\0';return buf;}
+    for(int i=(int)n-1;i>0;i--){if(buf[i]=='\\'||buf[i]=='/'){buf[i]='\0';break;}}
+    return buf;
+#elif defined(__APPLE__)
+    char tmp[4096]; uint32_t sz=sizeof(tmp);
+    if(_NSGetExecutablePath(tmp,&sz)!=0) return (char*)".";
+    char* buf=(char*)_tr_c_malloc(4096);
+    if(!realpath(tmp,buf)){strcpy(buf,".");return buf;}
+    for(int i=(int)strlen(buf)-1;i>0;i--){if(buf[i]=='/'){buf[i]='\0';break;}}
+    return buf;
+#elif defined(__linux__)
+    char* buf=(char*)_tr_c_malloc(4096);
+    ssize_t n=readlink("/proc/self/exe",buf,4095);
+    if(n<=0){buf[0]='.';buf[1]='\0';return buf;}
+    buf[n]='\0';
+    for(int i=(int)n-1;i>0;i--){if(buf[i]=='/'){buf[i]='\0';break;}}
+    return buf;
+#else
+    return (char*)".";
+#endif
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * REGEX — POSIX regex.h on Linux/Mac; stubs on Windows and bare-metal.
  * ═══════════════════════════════════════════════════════════════════════════ */
 #ifndef TAURARO_BARE
-#  if defined(__linux__) || defined(__APPLE__) || defined(__unix__) || \
-      defined(__MINGW32__) || defined(__MINGW64__)
+#  if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
 #    include <regex.h>
 #    define TAURARO_HAVE_REGEX 1
 #  endif

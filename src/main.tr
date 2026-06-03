@@ -518,9 +518,17 @@ pub def main(args: Vec[str]):
     # packages/ (future third-party packages). All resolved relative to the binary's
     # own directory so the distribution works regardless of CWD.
     mut bin_dir = strip_trailing_sep_inline(dir_of_path(args.get(0)))
+    # Paths relative to the compiler binary (distribution layout):
+    #   <bin>/std/          — standard library
+    #   <bin>/packages/     — installed third-party packages (root)
+    #   <bin>/packages/sites/ — site-specific installs (mirrors pip's site-packages)
     resolver.add_search_path(bin_dir)
     resolver.add_search_path(bin_dir + "/std")
     resolver.add_search_path(bin_dir + "/packages")
+    resolver.add_search_path(bin_dir + "/packages/sites")
+    # CWD-relative fallbacks — allow project-local package trees that travel with the source.
+    resolver.add_search_path("packages")
+    resolver.add_search_path("packages/sites")
     mut prog = resolver.resolve_main(input_path)
 
     if emit_mode == "ast":
