@@ -62,15 +62,11 @@ pub enum Pattern:
     PVariantBind(type_name: str, variant: str, field: str)
     PVariantBindMany(type_name: str, variant: str, fields: Vec[str])
     PTuple(first: str, second: str)
-    PRange(start: Pointer[Pattern], end: Pointer[Pattern])
     POr(patterns: Vec[Pattern])
 
 pub enum Ownership:
     Own
-    Borrow
-    Move
     Shared
-    Stack
 
 pub class Comprehension:
     pub target: str

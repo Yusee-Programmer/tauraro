@@ -52,6 +52,7 @@ pub def print_usage():
     print("                    Or pass a raw LLVM triple (e.g. aarch64-linux-gnu)")
     print("  --sysroot <path>  Override sysroot for the cross-compiler")
     print("  --debug           Compile with ASAN and bounds-check assertions")
+    print("  --strict          Treat alloc/dealloc outside 'unsafe:' as a hard error [U-1]")
     print("Bilingual: all English keywords have Hausa equivalents (aiki=def, aji=class, ...)")
 
 pub def str_ends_with_dot_tr(path: str) -> bool:
@@ -365,7 +366,12 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     mut native_flags = ""
     if target == "" and opt_level == "3":
         native_flags = " -march=native -funroll-loops"
-    mut cmd = cc + " -O" + opt_level + static_flag + native_flags + cross_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
+    # -ftrapv: make signed integer overflow a runtime trap (defined behavior) instead of UB.
+    # Disabled at O3/Os where the user explicitly prioritises speed over safety checks.
+    mut overflow_flag = ""
+    if opt_level != "3" and opt_level != "s":
+        overflow_flag = " -ftrapv"
+    mut cmd = cc + " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
     mut i = 0
     while i < c_files.len:
         cmd = cmd + " \"" + c_files.get(i) + "\""
@@ -428,6 +434,7 @@ pub def main(args: Vec[str]):
     mut target      = ""                 # --target <name> : cross-compilation target
     mut sysroot     = ""                 # --sysroot <path>: explicit sysroot
     mut debug_mode  = false              # --debug         : ASAN + assertions
+    mut strict_mode = false              # --strict        : alloc outside unsafe → hard error
 
     mut i = 1
     while i < args.len:
@@ -472,6 +479,8 @@ pub def main(args: Vec[str]):
             sysroot = args.get(i)
         elif arg == "--debug":
             debug_mode = true
+        elif arg == "--strict":
+            strict_mode = true
         elif not str_starts_with(arg, "-"):
             if input_path == "":
                 input_path = arg
@@ -504,6 +513,7 @@ pub def main(args: Vec[str]):
     if verbose: print("[2/5] Semantic analysis...")
 
     mut sema = Sema.init()
+    sema.strict_mode = strict_mode
     mut hir = sema.analyze(prog)
 
     if sema.warnings.len > 0:

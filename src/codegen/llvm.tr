@@ -215,6 +215,8 @@ extend LlvmGenerator:
         mut callee_name = ""
         match callee.read():
             case HirExpr.EIdent(n, _, is_move): callee_name = n
+            case _:
+                pass
         if callee_name == "": callee_name = "unknown"
         self.w("    "); self.w(reg); self.w(" = call ptr @"); self.w(callee_name); self.w("(")
         mut i = 0
