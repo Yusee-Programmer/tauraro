@@ -105,6 +105,26 @@ static inline void _tr_shared_drop(_TrSharedBox* b) {
         _tr_free(b);
     }
 }
+/* ── Weak[T] — non-owning reference to a Shared[T] box ── */
+typedef struct _TrWeakBox {
+    _TrSharedBox* box;
+} _TrWeakBox;
+static inline _TrWeakBox* _tr_weak_new(_TrSharedBox* b) {
+    _TrWeakBox* w = (_TrWeakBox*)_tr_checked_alloc(sizeof(_TrWeakBox));
+    w->box = b;
+    return w;
+}
+static inline bool _tr_weak_is_alive(_TrWeakBox* w) {
+    if (!w || !w->box) return false;
+    return atomic_load(&w->box->refcount) > 0;
+}
+static inline _TrSharedBox* _tr_weak_upgrade(_TrWeakBox* w) {
+    if (!w || !w->box) return NULL;
+    int old = atomic_load(&w->box->refcount);
+    if (old <= 0) return NULL;
+    atomic_fetch_add(&w->box->refcount, 1);
+    return w->box;
+}
 
 static inline void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
 static inline void* _tr_c_memset(void* ptr, int val, size_t n) { return memset(ptr, val, n); }

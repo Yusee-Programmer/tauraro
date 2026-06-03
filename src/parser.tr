@@ -180,11 +180,29 @@ extend Parser:
                     if self.peek() == Token.Comma: self.pos = self.pos + 1
                 if self.peek() == Token.RParen: self.pos = self.pos + 1
                 return tup_t
+            case Token.KwMut:
+                # "mut ref T" — mutable reference/borrow type (optional, advanced)
+                self.pos = self.pos + 1
+                mut mr_name = self.consume_ident()
+                if mr_name == "ref":
+                    mut mr_inner = self.parse_type()
+                    mut mr_t = AstType.init("mut_ref")
+                    mr_t.args.push(box_asttype(mr_inner))
+                    return mr_t
+                # Malformed — just return void
+                return AstType.init("void")
             case _:
                 name = self.consume_ident()
 
         if name == "":
             return AstType.init("void")
+
+        # "ref T" — immutable borrow type (optional lifetime syntax, Proposal 3)
+        if name == "ref":
+            mut ref_inner = self.parse_type()
+            mut ref_t = AstType.init("ref")
+            ref_t.args.push(box_asttype(ref_inner))
+            return ref_t
 
         match self.peek():
             case Token.LBracket:
@@ -229,6 +247,11 @@ extend Parser:
                             ty = self.parse_type()
                             ty_ptr = box_asttype(ty)
                     p = Param.init(item_name, ty_ptr)
+                    if ty_ptr as usize != 0 as usize:
+                        if ty_ptr.read().name == "ref":
+                            p.is_ref = true
+                        if ty_ptr.read().name == "mut_ref":
+                            p.is_mut_ref = true
                     pl.push(p)
                     match self.peek():
                         case Token.Comma:
@@ -1668,7 +1691,11 @@ extend Parser:
                 pass
         if self.peek() == Token.Arrow:
             self.pos = self.pos + 1
-            f.ret_ty = box_asttype(self.parse_type())
+            mut ret_t = self.parse_type()
+            if self.peek() == Token.KwFrom:
+                self.pos = self.pos + 1
+                ret_t.from_param = self.consume_ident()
+            f.ret_ty = box_asttype(ret_t)
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
             f.body = self.parse_block()

@@ -257,6 +257,10 @@ pub class CGenerator:
         mut n: str = ty.name
         if n == "" or n == "void" or n == "None": return "void"
 
+        # Gap 4: 'ref T' and 'mut ref T' are transparent wrappers — map to inner type
+        if (n == "ref" or n == "mut_ref") and ty.args.len > 0:
+            return self.type_to_c(ty.args.get(0).read())
+
         # Check active type substitution first (used during monomorphization)
         if self.type_subst.contains(n): return self.type_subst.get(n)
 
@@ -390,6 +394,8 @@ pub class CGenerator:
         if n == "Thread": return "_TrThreadObj*"
         if n == "Atomic": return "_TrAtomic*"
         if n == "ThreadLocal": return "_TrTLS*"
+        if n == "Shared": return "_TrSharedBox*"
+        if n == "Weak": return "_TrWeakBox*"
 
         if n == "Tuple" or n == "tuple": return "TrTuple"
 
@@ -1723,6 +1729,12 @@ pub class CGenerator:
         # Shared var: unwrap _TrSharedBox* → (TypeName*)obj->data for method dispatch
         if self.shared_vars.contains(obj_s):
             mut sh_ty = self.shared_vars.get(obj_s)
+            # Shared-specific built-in methods — operate on the box, NOT the inner object
+            if method == "clone": return "_tr_shared_clone(" + obj_s + ")"
+            if method == "drop": return "_tr_shared_drop(" + obj_s + ")"
+            if method == "is_null": return "(" + obj_s + " == NULL || " + obj_s + "->data == NULL)"
+            if method == "downgrade": return "_tr_weak_new(" + obj_s + ")"
+            # All other methods: unwrap and dispatch as user-defined class method
             mut sh_unwrapped = "((" + sh_ty + "*)(" + obj_s + "->data))"
             mut sh_sig = sh_ty + "_" + method + "(" + sh_unwrapped
             if args.len > 0:
