@@ -37,49 +37,110 @@
 #if defined(TAURARO_NO_OS) || (defined(TAURARO_WASM) && !defined(__wasi__))
 #  define TAURARO_BARE 1
 #endif
+/* KERNEL = Linux kernel module / bare-metal with user-supplied allocator.
+ * Implies BARE (no OS threads/sockets), disables setjmp exceptions. */
+#if defined(TAURARO_KERNEL)
+#  if !defined(TAURARO_BARE)
+#    define TAURARO_BARE 1
+#  endif
+#  define TAURARO_NO_EXCEPTIONS 1
+#endif
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <string.h>
-#include <stdarg.h>
-#include <time.h>
-#include <math.h>
-#include <stdatomic.h>
-#include <setjmp.h>
-#include <ctype.h>
+#ifndef TAURARO_KERNEL
+#  include <stdio.h>
+#  include <stdlib.h>
+#  include <stdbool.h>
+#  include <stdint.h>
+#  include <string.h>
+#  include <stdarg.h>
+#  include <time.h>
+#  include <math.h>
+#  include <stdatomic.h>
+#  include <setjmp.h>
+#  include <ctype.h>
+#else
+/* Kernel / freestanding: caller supplies context headers.
+ * At minimum: stddef.h, stdbool.h, stdint.h, stdatomic.h must exist. */
+#  include <stddef.h>
+#  include <stdbool.h>
+#  include <stdint.h>
+#  include <stdatomic.h>
+#  ifdef __KERNEL__
+#    include <linux/kernel.h>
+#    include <linux/slab.h>
+#    include <linux/string.h>
+#  endif
+#endif
+
+/* ── Pluggable allocator macros ──────────────────────────────────────────── *
+ * Override before including this header to redirect all runtime allocations: *
+ *   #define TAURARO_ALLOC(sz)      kmalloc(sz, GFP_KERNEL)                   *
+ *   #define TAURARO_FREE(p)        kfree(p)                                   *
+ *   #define TAURARO_REALLOC(p,sz)  krealloc(p, sz, GFP_KERNEL)               *
+ *   #define TAURARO_CALLOC(n,sz)   kzalloc((n)*(sz), GFP_KERNEL)             *
+ * TAURARO_KERNEL mode requires all four to be defined externally.             */
+#if defined(TAURARO_KERNEL)
+#  if !defined(TAURARO_ALLOC) || !defined(TAURARO_FREE) || \
+      !defined(TAURARO_REALLOC) || !defined(TAURARO_CALLOC)
+#    error "TAURARO_KERNEL requires TAURARO_ALLOC/FREE/REALLOC/CALLOC to be defined"
+#  endif
+#else
+#  ifndef TAURARO_ALLOC
+#    define TAURARO_ALLOC(sz)      malloc(sz)
+#  endif
+#  ifndef TAURARO_FREE
+#    define TAURARO_FREE(p)        free(p)
+#  endif
+#  ifndef TAURARO_REALLOC
+#    define TAURARO_REALLOC(p,sz)  realloc(p,sz)
+#  endif
+#  ifndef TAURARO_CALLOC
+#    define TAURARO_CALLOC(n,sz)   calloc(n,sz)
+#  endif
+#endif
+
+/* ── Panic / OOM hooks ───────────────────────────────────────────────────── */
+#if defined(TAURARO_KERNEL) && defined(__KERNEL__)
+#  define _TR_OOM_ABORT()    do { pr_err("tauraro: out of memory\n"); BUG(); } while(0)
+#  define _TR_PANIC(msg)     do { pr_err("tauraro panic: %s\n", (msg)); BUG(); } while(0)
+#elif defined(TAURARO_KERNEL)
+#  define _TR_OOM_ABORT()    do { while(1); } while(0)
+#  define _TR_PANIC(msg)     do { (void)(msg); while(1); } while(0)
+#else
+#  define _TR_OOM_ABORT()    do { fprintf(stderr, "tauraro: out of memory\n"); abort(); } while(0)
+#  define _TR_PANIC(msg)     do { fprintf(stderr, "tauraro panic: %s\n", (msg)); abort(); } while(0)
+#endif
 
 // Wrappers for core library to avoid signature conflicts
 static inline void* _tr_c_malloc(size_t size) {
-    void* p = malloc(size);
-    return p;
+    return TAURARO_ALLOC(size);
 }
 static inline void* _tr_c_calloc(size_t count, size_t size) {
-    void* p = calloc(count, size);
-    if (!p && count * size > 0) { fprintf(stderr, "tauraro: calloc out of memory\n"); abort(); }
+    void* p = TAURARO_CALLOC(count, size);
+    if (!p && count * size > 0) { _TR_OOM_ABORT(); }
     return p;
 }
-
 static inline void _tr_free(void* p) {
-    if (p) {
-        free(p);
-    }
+    if (p) TAURARO_FREE(p);
 }
 static inline void _tr_c_free(void* ptr) { _tr_free(ptr); }
 
+#ifndef TAURARO_KERNEL
 static inline void _tr_print(char* s) { printf("%s\n", s); }
 static inline void _tr_print_raw(char* s) { printf("%s", s); fflush(stdout); }
 static inline void _tr_eprint(char* s) { fprintf(stderr, "%s\n", s); fflush(stderr); }
+#else
+static inline void _tr_print(char* s) { (void)s; }
+static inline void _tr_print_raw(char* s) { (void)s; }
+static inline void _tr_eprint(char* s) { (void)s; }
+#endif
 
 static inline void* _tr_c_realloc(void* ptr, size_t size) {
-    void* p = realloc(ptr, size);
-    return p;
+    return TAURARO_REALLOC(ptr, size);
 }
-
 static inline void* _tr_checked_alloc(size_t sz) {
-    void* p = calloc(1, sz);
-    if (!p && sz > 0) { fprintf(stderr, "tauraro: out of memory\n"); abort(); }
+    void* p = TAURARO_CALLOC(1, sz);
+    if (!p && sz > 0) { _TR_OOM_ABORT(); }
     return p;
 }
 /* ── Shared ownership: reference-counted box (replaces Rc/Arc/Mutex in one keyword) ── */
@@ -157,11 +218,11 @@ static inline char* _tr_popen_read(const char* cmd) {
     FILE* fp = popen(cmd, "r");
 #  endif
     if (!fp) return "";
-    size_t cap = 4096, total = 0; char* buf = (char*)malloc(cap); char tmp[512];
+    size_t cap = 4096, total = 0; char* buf = (char*)TAURARO_ALLOC(cap); char tmp[512];
     if (!buf) { fclose(fp); return ""; }
     while (fgets(tmp, sizeof(tmp), fp)) {
         size_t n = strlen(tmp);
-        if (total + n + 1 > cap) { cap = cap * 2 + n + 1; buf = (char*)realloc(buf, cap); if (!buf) break; }
+        if (total + n + 1 > cap) { cap = cap * 2 + n + 1; buf = (char*)TAURARO_REALLOC(buf, cap); if (!buf) break; }
         memcpy(buf + total, tmp, n); total += n;
     }
     if (buf) buf[total] = '\0';
@@ -310,11 +371,11 @@ typedef HANDLE _TrThread;
 typedef struct { void*(*fn)(void*); void* arg; } _TrWin32StartArg;
 static DWORD WINAPI _tr_thread_start_trampoline(LPVOID raw) {
     _TrWin32StartArg* s = (_TrWin32StartArg*)raw;
-    void*(*fn)(void*) = s->fn; void* arg = s->arg; free(s);
+    void*(*fn)(void*) = s->fn; void* arg = s->arg; free(s); /* Win32-only path */
     fn(arg); return 0;
 }
 static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
-    _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg));
+    _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg)); /* Win32-only */
     s->fn = fn; s->arg = arg;
     return CreateThread(NULL, 0, _tr_thread_start_trampoline, s, 0, NULL);
 }
@@ -590,11 +651,18 @@ static void _tr_barrier_wait(_TrBarrier* b) {
 }
 static void _tr_barrier_free(_TrBarrier* b) { if(!b)return; DeleteCriticalSection(&b->mu); free(b); }
 
-/* ── Run-once guard ──────────────────────────────────────────────────── */
-typedef struct { volatile int done; CRITICAL_SECTION mu; } _TrOnce;
-static _TrOnce* _tr_once_new(void)   { _TrOnce* o=(_TrOnce*)calloc(1,sizeof(_TrOnce)); InitializeCriticalSection(&o->mu); return o; }
-static bool _tr_once_do(_TrOnce* o)  { if(o->done)return false; EnterCriticalSection(&o->mu); bool f=!o->done; if(f)o->done=1; LeaveCriticalSection(&o->mu); return f; }
-static void _tr_once_free(_TrOnce* o){ if(!o)return; DeleteCriticalSection(&o->mu); free(o); }
+/* ── Run-once guard: lockless atomic CAS — zero kernel object, zero heap mutex */
+typedef struct { _Atomic int done; } _TrOnce;
+static _TrOnce* _tr_once_new(void) {
+    _TrOnce* o = (_TrOnce*)calloc(1, sizeof(_TrOnce));
+    atomic_init(&o->done, 0); return o;
+}
+static bool _tr_once_do(_TrOnce* o) {
+    int z = 0;
+    return atomic_compare_exchange_strong_explicit(&o->done, &z, 1,
+        memory_order_acq_rel, memory_order_relaxed);
+}
+static void _tr_once_free(_TrOnce* o) { if (o) free(o); }
 
 /* ── Timer / Ticker ──────────────────────────────────────────────────── */
 typedef struct { _TrChan* ch; long long ms; int periodic; volatile int stopped; CRITICAL_SECTION stop_mu; } _TrTimerState;
@@ -650,8 +718,8 @@ typedef struct {
 } _TrChan;
 static _TrChan* _tr_chan_new(long long cap) {
     if (cap < 1) cap = 1;
-    _TrChan* c = (_TrChan*)calloc(1, sizeof(_TrChan));
-    c->buf = (long long*)calloc((size_t)cap, sizeof(long long)); c->cap = cap;
+    _TrChan* c = (_TrChan*)TAURARO_CALLOC(1, sizeof(_TrChan));
+    c->buf = (long long*)TAURARO_CALLOC((size_t)cap, sizeof(long long)); c->cap = cap;
     return c;
 }
 static void _tr_chan_send(_TrChan* c, long long val) {
@@ -677,7 +745,7 @@ static void  _tr_chan_close(_TrChan* c)          { if (c) c->closed = 1; }
 static bool  _tr_chan_is_closed(_TrChan* c)      { return c && c->closed; }
 static long long _tr_chan_len(_TrChan* c)         { return c ? c->count : 0LL; }
 static long long _tr_chan_cap(_TrChan* c)         { return c ? c->cap : 0LL; }
-static void  _tr_chan_free(_TrChan* c)            { if (!c) return; free(c->buf); free(c); }
+static void  _tr_chan_free(_TrChan* c)            { if (!c) return; TAURARO_FREE(c->buf); TAURARO_FREE(c); }
 static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     if (c && c->count > 0) {
         long long v = c->buf[c->head]; c->head = (c->head+1)%c->cap; c->count--;
@@ -688,7 +756,7 @@ static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
 
 typedef struct { volatile long long result; char* error; volatile int done, cancelled; } _TrTaskState;
 static _TrTaskState* _tr_task_new(void) {
-    _TrTaskState* t = (_TrTaskState*)calloc(1, sizeof(_TrTaskState)); t->error = ""; return t;
+    _TrTaskState* t = (_TrTaskState*)TAURARO_CALLOC(1, sizeof(_TrTaskState)); t->error = ""; return t;
 }
 static void   _tr_task_complete(_TrTaskState* t, long long r)           { if (t&&!t->done){t->result=r;t->done=1;} }
 static void   _tr_task_complete_err(_TrTaskState* t, const char* msg)   { if (t&&!t->done){t->error=msg?(char*)msg:"error";t->done=1;} }
@@ -701,67 +769,76 @@ static bool   _tr_task_is_done(_TrTaskState* t)      { return t && t->done; }
 static bool   _tr_task_is_cancelled(_TrTaskState* t) { return t && t->cancelled; }
 static bool   _tr_task_has_error(_TrTaskState* t)    { return t && t->error && t->error[0]; }
 static char*  _tr_task_get_error(_TrTaskState* t)    { return t && t->error ? t->error : ""; }
-static void   _tr_task_free(_TrTaskState* t)          { if (t) free(t); }
+static void   _tr_task_free(_TrTaskState* t)          { if (t) TAURARO_FREE(t); }
 
 typedef struct { int dummy; } _TrMutexH;
-static _TrMutexH* _tr_mutex_new(void)             { return (_TrMutexH*)calloc(1, sizeof(_TrMutexH)); }
+static _TrMutexH* _tr_mutex_new(void)             { return (_TrMutexH*)TAURARO_CALLOC(1, sizeof(_TrMutexH)); }
 static void _tr_mutex_hlock(_TrMutexH* m)         { (void)m; }
 static void _tr_mutex_hunlock(_TrMutexH* m)       { (void)m; }
 static bool _tr_mutex_htrylock(_TrMutexH* m)      { (void)m; return true; }
-static void _tr_mutex_hfree(_TrMutexH* m)         { if (m) free(m); }
+static void _tr_mutex_hfree(_TrMutexH* m)         { if (m) TAURARO_FREE(m); }
 
 typedef struct { int dummy; } _TrRWL;
-static _TrRWL* _tr_rwl_new(void)                  { return (_TrRWL*)calloc(1, sizeof(_TrRWL)); }
+static _TrRWL* _tr_rwl_new(void)                  { return (_TrRWL*)TAURARO_CALLOC(1, sizeof(_TrRWL)); }
 static void _tr_rwl_read_lock(_TrRWL* r)          { (void)r; }
 static void _tr_rwl_read_unlock(_TrRWL* r)        { (void)r; }
 static void _tr_rwl_write_lock(_TrRWL* r)         { (void)r; }
 static void _tr_rwl_write_unlock(_TrRWL* r)       { (void)r; }
-static void _tr_rwl_free(_TrRWL* r)               { if (r) free(r); }
+static void _tr_rwl_free(_TrRWL* r)               { if (r) TAURARO_FREE(r); }
 
 typedef struct { volatile long long count, maxv; } _TrSema;
 static _TrSema* _tr_sema_new(long long init, long long maxv) {
-    _TrSema* s = (_TrSema*)calloc(1, sizeof(_TrSema));
+    _TrSema* s = (_TrSema*)TAURARO_CALLOC(1, sizeof(_TrSema));
     s->count = init; s->maxv = maxv > 0 ? maxv : (long long)0x7fffffffffffffffLL; return s;
 }
 static void _tr_sema_acquire(_TrSema* s)           { if (s && s->count > 0) s->count--; }
 static bool _tr_sema_try_acquire(_TrSema* s)       { if (s && s->count > 0) { s->count--; return true; } return false; }
 static bool _tr_sema_acquire_timeout(_TrSema* s, long long ms) { (void)ms; return _tr_sema_try_acquire(s); }
 static void _tr_sema_release(_TrSema* s)           { if (s && s->count < s->maxv) s->count++; }
-static void _tr_sema_free(_TrSema* s)              { if (s) free(s); }
+static void _tr_sema_free(_TrSema* s)              { if (s) TAURARO_FREE(s); }
 
 typedef struct { volatile long long count; } _TrWG;
-static _TrWG* _tr_wg_new(void) { return (_TrWG*)calloc(1, sizeof(_TrWG)); }
+static _TrWG* _tr_wg_new(void) { return (_TrWG*)TAURARO_CALLOC(1, sizeof(_TrWG)); }
 static void _tr_wg_add(_TrWG* w, long long n)      { if (w) w->count += n; }
 static void _tr_wg_done(_TrWG* w)                  { if (w && w->count > 0) w->count--; }
 static void _tr_wg_wait(_TrWG* w)                  { (void)w; /* no blocking */ }
 static bool _tr_wg_wait_timeout(_TrWG* w, long long ms) { (void)ms; return w ? w->count == 0 : true; }
-static void _tr_wg_free(_TrWG* w)                  { if (w) free(w); }
+static void _tr_wg_free(_TrWG* w)                  { if (w) TAURARO_FREE(w); }
 
 typedef struct { long long total, count, gen; } _TrBarrier;
 static _TrBarrier* _tr_barrier_new(long long n) {
-    _TrBarrier* b = (_TrBarrier*)calloc(1, sizeof(_TrBarrier)); b->total = b->count = n; return b;
+    _TrBarrier* b = (_TrBarrier*)TAURARO_CALLOC(1, sizeof(_TrBarrier)); b->total = b->count = n; return b;
 }
 static void _tr_barrier_wait(_TrBarrier* b) {
     if (!b) return;
     if (--b->count == 0) { b->gen++; b->count = b->total; }
 }
-static void _tr_barrier_free(_TrBarrier* b) { if (b) free(b); }
+static void _tr_barrier_free(_TrBarrier* b) { if (b) TAURARO_FREE(b); }
 
-typedef struct { volatile int done; } _TrOnce;
-static _TrOnce* _tr_once_new(void)   { return (_TrOnce*)calloc(1, sizeof(_TrOnce)); }
-static bool _tr_once_do(_TrOnce* o)  { if (!o || o->done) return false; o->done = 1; return true; }
-static void _tr_once_free(_TrOnce* o){ if (o) free(o); }
+/* _TrOnce: zero-cost run-once guard via atomic CAS — no mutex, no OS object */
+typedef struct { _Atomic int done; } _TrOnce;
+static _TrOnce* _tr_once_new(void) {
+    _TrOnce* o = (_TrOnce*)TAURARO_CALLOC(1, sizeof(_TrOnce));
+    atomic_init(&o->done, 0); return o;
+}
+static bool _tr_once_do(_TrOnce* o) {
+    if (!o) return false;
+    int z = 0;
+    return atomic_compare_exchange_strong_explicit(&o->done, &z, 1,
+        memory_order_acq_rel, memory_order_relaxed);
+}
+static void _tr_once_free(_TrOnce* o) { if (o) TAURARO_FREE(o); }
 
 typedef struct { _TrChan* ch; long long ms; int periodic; volatile int stopped; } _TrTimerState;
 static void* _tr_timer_thread_fn(void* arg) { (void)arg; return NULL; }
 static _TrTimerState* _tr_timer_new(long long ms, _TrChan* ch) {
-    _TrTimerState* s = (_TrTimerState*)calloc(1, sizeof(_TrTimerState));
+    _TrTimerState* s = (_TrTimerState*)TAURARO_CALLOC(1, sizeof(_TrTimerState));
     s->ch = ch; s->ms = ms;
     _tr_chan_try_send(ch, 1LL); /* fire immediately — no background thread */
     return s;
 }
 static _TrTimerState* _tr_ticker_new(long long ms, _TrChan* ch) {
-    _TrTimerState* s = (_TrTimerState*)calloc(1, sizeof(_TrTimerState));
+    _TrTimerState* s = (_TrTimerState*)TAURARO_CALLOC(1, sizeof(_TrTimerState));
     s->ch = ch; s->ms = ms; s->periodic = 1;
     _tr_chan_try_send(ch, 1LL); return s;
 }
@@ -773,20 +850,20 @@ static void _tr_timer_stop(_TrTimerState* s) {
 /* ── Thread-local storage (bare: single thread, single value) ────────── */
 typedef struct { long long val; } _TrTLS;
 static inline _TrTLS* _tr_tls_new(long long init) {
-    _TrTLS* t = (_TrTLS*)malloc(sizeof(_TrTLS)); t->val = init; return t;
+    _TrTLS* t = (_TrTLS*)TAURARO_ALLOC(sizeof(_TrTLS)); t->val = init; return t;
 }
 static inline long long _tr_tls_get(_TrTLS* t) { return t ? t->val : 0LL; }
 static inline void _tr_tls_set(_TrTLS* t, long long v) { if (t) t->val = v; }
-static inline void _tr_tls_free(_TrTLS* t) { if (t) free(t); }
+static inline void _tr_tls_free(_TrTLS* t) { if (t) TAURARO_FREE(t); }
 
 /* ── BARE ThreadPool: runs jobs synchronously (no OS threads) ─────────── */
 typedef struct { int _dummy; } _TrThreadPool;
 static inline long long _tr_threadpool_auto_n(void)  { return 1LL; }
-static inline _TrThreadPool* _tr_threadpool_new(long long n)  { (void)n; return (_TrThreadPool*)calloc(1,sizeof(_TrThreadPool)); }
+static inline _TrThreadPool* _tr_threadpool_new(long long n)  { (void)n; return (_TrThreadPool*)TAURARO_CALLOC(1,sizeof(_TrThreadPool)); }
 static inline _TrThreadPool* _tr_threadpool_auto(void)        { return _tr_threadpool_new(1LL); }
 static inline void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) { (void)p; fn(arg); }
 static inline void _tr_threadpool_wait(_TrThreadPool* p)      { (void)p; }
-static inline void _tr_threadpool_free(_TrThreadPool* p)      { if(p)free(p); }
+static inline void _tr_threadpool_free(_TrThreadPool* p)      { if(p)TAURARO_FREE(p); }
 
 #else /* POSIX ─────────────────────────────────────────────────────────── */
 
@@ -957,10 +1034,18 @@ static void _tr_barrier_wait(_TrBarrier* b) {
 }
 static void _tr_barrier_free(_TrBarrier* b) { if(!b)return; pthread_mutex_destroy(&b->mu); pthread_cond_destroy(&b->cv); free(b); }
 
-typedef struct { volatile int done; pthread_mutex_t mu; } _TrOnce;
-static _TrOnce* _tr_once_new(void)   { _TrOnce* o=(_TrOnce*)calloc(1,sizeof(_TrOnce)); pthread_mutex_init(&o->mu,NULL); return o; }
-static bool _tr_once_do(_TrOnce* o)  { if(o->done)return false; pthread_mutex_lock(&o->mu); bool f=!o->done; if(f)o->done=1; pthread_mutex_unlock(&o->mu); return f; }
-static void _tr_once_free(_TrOnce* o){ if(!o)return; pthread_mutex_destroy(&o->mu); free(o); }
+/* _TrOnce: lockless atomic CAS — no pthread_mutex, no heap lock object */
+typedef struct { _Atomic int done; } _TrOnce;
+static _TrOnce* _tr_once_new(void) {
+    _TrOnce* o = (_TrOnce*)calloc(1, sizeof(_TrOnce));
+    atomic_init(&o->done, 0); return o;
+}
+static bool _tr_once_do(_TrOnce* o) {
+    int z = 0;
+    return atomic_compare_exchange_strong_explicit(&o->done, &z, 1,
+        memory_order_acq_rel, memory_order_relaxed);
+}
+static void _tr_once_free(_TrOnce* o) { if (o) free(o); }
 
 typedef struct { _TrChan* ch; long long ms; int periodic; volatile int stopped; pthread_mutex_t stop_mu; } _TrTimerState;
 static void* _tr_timer_thread_fn(void* arg) {
@@ -1015,7 +1100,7 @@ static inline void _tr_tls_free(_TrTLS* t) {
  * additional synchronization — it is always accessed under the mutex. */
 typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; volatile int _locked; } _TrMutexBox;
 static inline _TrMutexBox* _tr_mutexbox_new(long long init) {
-    _TrMutexBox* b = (_TrMutexBox*)malloc(sizeof(_TrMutexBox));
+    _TrMutexBox* b = (_TrMutexBox*)TAURARO_ALLOC(sizeof(_TrMutexBox));
     b->mu = _tr_mutex_new(); b->data = init; b->_locked = 0;
     atomic_store(&b->rc, 1); return b;
 }
@@ -1027,7 +1112,7 @@ static inline void _tr_mutexbox_set_unlock(_TrMutexBox* b, long long v) {
 }
 static inline void _tr_mutexbox_unlock(_TrMutexBox* b) { b->_locked = 0; _tr_mutex_hunlock(b->mu); }
 static inline void _tr_mutexbox_free(_TrMutexBox* b) {
-    if (!b) return; _tr_mutex_hfree(b->mu); free(b);
+    if (!b) return; _tr_mutex_hfree(b->mu); TAURARO_FREE(b);
 }
 static inline _TrMutexBox* _tr_mutexbox_clone(_TrMutexBox* b) {
     if (b) atomic_fetch_add(&b->rc, 1); return b;
@@ -1045,7 +1130,7 @@ static inline void _tr_mutexbox_cleanup(_TrMutexBox** bp) {
 /* _locked: 0=none, 1=write locked, 2=read locked. */
 typedef struct { _TrRWL* rw; long long data; _Atomic int rc; volatile int _locked; } _TrRWLBox;
 static inline _TrRWLBox* _tr_rwlbox_new(long long init) {
-    _TrRWLBox* b = (_TrRWLBox*)malloc(sizeof(_TrRWLBox));
+    _TrRWLBox* b = (_TrRWLBox*)TAURARO_ALLOC(sizeof(_TrRWLBox));
     b->rw = _tr_rwl_new(); b->data = init; b->_locked = 0;
     atomic_store(&b->rc, 1); return b;
 }
@@ -1060,7 +1145,7 @@ static inline void _tr_rwlbox_write_set_unlock(_TrRWLBox* b, long long v) {
     b->data = v; b->_locked = 0; _tr_rwl_write_unlock(b->rw);
 }
 static inline void _tr_rwlbox_free(_TrRWLBox* b) {
-    if (!b) return; _tr_rwl_free(b->rw); free(b);
+    if (!b) return; _tr_rwl_free(b->rw); TAURARO_FREE(b);
 }
 static inline _TrRWLBox* _tr_rwlbox_clone(_TrRWLBox* b) {
     if (b) atomic_fetch_add(&b->rc, 1); return b;
@@ -1093,7 +1178,7 @@ static void* _tr_pool_worker(void* arg) {
         /* uintptr_t cast is safe on both 32-bit and 64-bit platforms */
         _TrPoolItem* item = (_TrPoolItem*)(uintptr_t)(unsigned long long)item_val;
         item->fn(item->arg);
-        free(item);
+        TAURARO_FREE(item);
         _tr_wg_done(pool->wg);
     }
     return NULL;
@@ -1113,9 +1198,9 @@ static inline long long _tr_threadpool_auto_n(void) {
 }
 static inline _TrThreadPool* _tr_threadpool_new(long long n) {
     if (n < 1) n = 1;
-    _TrThreadPool* p = (_TrThreadPool*)calloc(1, sizeof(_TrThreadPool));
+    _TrThreadPool* p = (_TrThreadPool*)TAURARO_CALLOC(1, sizeof(_TrThreadPool));
     p->n_workers = (int)n;
-    p->workers = (_TrThread*)malloc((size_t)n * sizeof(_TrThread));
+    p->workers = (_TrThread*)TAURARO_ALLOC((size_t)n * sizeof(_TrThread));
     p->queue = _tr_chan_new(n * 4 + 16);
     p->wg = _tr_wg_new();
     for (int i = 0; i < (int)n; i++)
@@ -1126,7 +1211,7 @@ static inline _TrThreadPool* _tr_threadpool_auto(void) {
     return _tr_threadpool_new(_tr_threadpool_auto_n());
 }
 static inline void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) {
-    _TrPoolItem* item = (_TrPoolItem*)malloc(sizeof(_TrPoolItem));
+    _TrPoolItem* item = (_TrPoolItem*)TAURARO_ALLOC(sizeof(_TrPoolItem));
     item->fn = fn; item->arg = arg;
     _tr_wg_add(p->wg, 1);
     /* uintptr_t cast: safe on 32-bit and 64-bit; avoids sign-extension of intptr_t */
@@ -1138,7 +1223,7 @@ static inline void _tr_threadpool_free(_TrThreadPool* p) {
     _tr_chan_close(p->queue);
     for (int i = 0; i < p->n_workers; i++) _tr_thread_join_wait(p->workers[i]);
     _tr_chan_free(p->queue); _tr_wg_free(p->wg);
-    free(p->workers); free(p);
+    TAURARO_FREE(p->workers); TAURARO_FREE(p);
 }
 #endif /* !TAURARO_BARE */
 
@@ -1151,42 +1236,41 @@ static inline void _tr_async_pool_submit(_TrThreadPool* p, void*(*fn)(void*), vo
 /* ── Atomic[T]: lock-free atomic integer (C11 _Atomic) ───────────────── */
 typedef struct { _Atomic long long val; } _TrAtomic;
 static inline _TrAtomic* _tr_atomic_new(long long init) {
-    _TrAtomic* a = (_TrAtomic*)malloc(sizeof(_TrAtomic));
-    atomic_store(&a->val, init); return a;
+    _TrAtomic* a = (_TrAtomic*)TAURARO_ALLOC(sizeof(_TrAtomic));
+    atomic_init(&a->val, init); return a;
 }
-static inline long long _tr_atomic_load(_TrAtomic* a)               { return a ? atomic_load(&a->val) : 0LL; }
-static inline void      _tr_atomic_store(_TrAtomic* a, long long v)  { if (a) atomic_store(&a->val, v); }
-static inline long long _tr_atomic_add(_TrAtomic* a, long long v)    { return a ? atomic_fetch_add(&a->val, v) : 0LL; }
-static inline long long _tr_atomic_sub(_TrAtomic* a, long long v)    { return a ? atomic_fetch_sub(&a->val, v) : 0LL; }
-static inline long long _tr_atomic_swap(_TrAtomic* a, long long v)   { return a ? atomic_exchange(&a->val, v) : 0LL; }
+/* Hot-path ops: null-check removed — codegen never emits NULL _TrAtomic* */
+static inline long long _tr_atomic_load(_TrAtomic* a)               { return atomic_load(&a->val); }
+static inline void      _tr_atomic_store(_TrAtomic* a, long long v)  { atomic_store(&a->val, v); }
+static inline long long _tr_atomic_add(_TrAtomic* a, long long v)    { return atomic_fetch_add(&a->val, v); }
+static inline long long _tr_atomic_sub(_TrAtomic* a, long long v)    { return atomic_fetch_sub(&a->val, v); }
+static inline long long _tr_atomic_swap(_TrAtomic* a, long long v)   { return atomic_exchange(&a->val, v); }
 static inline bool _tr_atomic_cas(_TrAtomic* a, long long expected, long long desired) {
-    if (!a) return false;
     return atomic_compare_exchange_strong(&a->val, &expected, desired);
 }
-static inline void _tr_atomic_free(_TrAtomic* a) { if (a) free(a); }
+static inline void _tr_atomic_free(_TrAtomic* a) { if (a) TAURARO_FREE(a); }
 
 /* Atomic[T]: explicit memory-order variants (C11 stdatomic) */
-static inline long long _tr_atomic_load_relaxed(_TrAtomic* a)                     { return a ? atomic_load_explicit(&a->val, memory_order_relaxed) : 0LL; }
-static inline long long _tr_atomic_load_acquire(_TrAtomic* a)                     { return a ? atomic_load_explicit(&a->val, memory_order_acquire) : 0LL; }
-static inline long long _tr_atomic_load_seqcst(_TrAtomic* a)                      { return a ? atomic_load_explicit(&a->val, memory_order_seq_cst) : 0LL; }
-static inline void      _tr_atomic_store_relaxed(_TrAtomic* a, long long v)       { if (a) atomic_store_explicit(&a->val, v, memory_order_relaxed); }
-static inline void      _tr_atomic_store_release(_TrAtomic* a, long long v)       { if (a) atomic_store_explicit(&a->val, v, memory_order_release); }
-static inline void      _tr_atomic_store_seqcst(_TrAtomic* a, long long v)        { if (a) atomic_store_explicit(&a->val, v, memory_order_seq_cst); }
-static inline long long _tr_atomic_add_relaxed(_TrAtomic* a, long long v)         { return a ? atomic_fetch_add_explicit(&a->val, v, memory_order_relaxed) : 0LL; }
-static inline long long _tr_atomic_add_release(_TrAtomic* a, long long v)         { return a ? atomic_fetch_add_explicit(&a->val, v, memory_order_release) : 0LL; }
-static inline long long _tr_atomic_add_acqrel(_TrAtomic* a, long long v)          { return a ? atomic_fetch_add_explicit(&a->val, v, memory_order_acq_rel) : 0LL; }
-static inline long long _tr_atomic_sub_relaxed(_TrAtomic* a, long long v)         { return a ? atomic_fetch_sub_explicit(&a->val, v, memory_order_relaxed) : 0LL; }
-static inline long long _tr_atomic_sub_release(_TrAtomic* a, long long v)         { return a ? atomic_fetch_sub_explicit(&a->val, v, memory_order_release) : 0LL; }
-static inline bool      _tr_atomic_cas_weak(_TrAtomic* a, long long exp, long long des)    { return a ? atomic_compare_exchange_weak(&a->val, &exp, des) : false; }
-static inline bool      _tr_atomic_cas_acqrel(_TrAtomic* a, long long exp, long long des) {
-    if (!a) return false;
+static inline long long _tr_atomic_load_relaxed(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_relaxed); }
+static inline long long _tr_atomic_load_acquire(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_acquire); }
+static inline long long _tr_atomic_load_seqcst(_TrAtomic* a)  { return atomic_load_explicit(&a->val, memory_order_seq_cst); }
+static inline void _tr_atomic_store_relaxed(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_relaxed); }
+static inline void _tr_atomic_store_release(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_release); }
+static inline void _tr_atomic_store_seqcst(_TrAtomic* a, long long v)  { atomic_store_explicit(&a->val, v, memory_order_seq_cst); }
+static inline long long _tr_atomic_add_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_relaxed); }
+static inline long long _tr_atomic_add_release(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_release); }
+static inline long long _tr_atomic_add_acqrel(_TrAtomic* a, long long v)  { return atomic_fetch_add_explicit(&a->val, v, memory_order_acq_rel); }
+static inline long long _tr_atomic_sub_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_relaxed); }
+static inline long long _tr_atomic_sub_release(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_release); }
+static inline bool _tr_atomic_cas_weak(_TrAtomic* a, long long exp, long long des)   { return atomic_compare_exchange_weak(&a->val, &exp, des); }
+static inline bool _tr_atomic_cas_acqrel(_TrAtomic* a, long long exp, long long des) {
     return atomic_compare_exchange_strong_explicit(&a->val, &exp, des, memory_order_acq_rel, memory_order_relaxed);
 }
 
 /* ── Thread object: joinable OS-thread handle ────────────────────────── */
 typedef struct { _TrThread handle; volatile int done; } _TrThreadObj;
 static inline _TrThreadObj* _tr_threadobj_spawn(void*(*fn)(void*), void* arg) {
-    _TrThreadObj* t = (_TrThreadObj*)calloc(1, sizeof(_TrThreadObj));
+    _TrThreadObj* t = (_TrThreadObj*)TAURARO_CALLOC(1, sizeof(_TrThreadObj));
     t->handle = _tr_thread_start(fn, arg); return t;
 }
 static inline void _tr_threadobj_join(_TrThreadObj* t) {
@@ -1195,7 +1279,7 @@ static inline void _tr_threadobj_join(_TrThreadObj* t) {
 static inline void _tr_threadobj_detach(_TrThreadObj* t) {
     if (!t || t->done) return; t->done = 1; _tr_thread_detach(t->handle);
 }
-static inline void _tr_threadobj_free(_TrThreadObj* t) { if (t) free(t); }
+static inline void _tr_threadobj_free(_TrThreadObj* t) { if (t) TAURARO_FREE(t); }
 
 /* ── Thread utilities: current-thread ID and sleep ───────────────────── */
 #ifdef _WIN32
@@ -1422,6 +1506,253 @@ static inline void _tr_enable_vt100(void) {
 #endif
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * _TrIOPoll — Async I/O readiness abstraction
+ *
+ * Unified API over platform-specific event demultiplexers:
+ *   Linux:       epoll (default) + io_uring (opt-in: -DTAURARO_IO_URING)
+ *   Windows:     IOCP (I/O Completion Ports)
+ *   macOS/BSD:   kqueue
+ *   BARE/kernel: polling stub (returns immediately, no OS call)
+ *
+ * Use:
+ *   _TrIOPoll* p = _tr_iopoll_create();
+ *   _tr_iopoll_add(p, fd, TAURARO_POLLIN, userdata);
+ *   int n = _tr_iopoll_wait(p, events, 64, timeout_ms);
+ *   for (int i = 0; i < n; i++) { ... events[i].userdata ... }
+ *   _tr_iopoll_destroy(p);
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+#define TAURARO_POLLIN   0x01u
+#define TAURARO_POLLOUT  0x02u
+#define TAURARO_POLLERR  0x04u
+#define TAURARO_POLLHUP  0x08u
+
+typedef struct {
+    int      fd;
+    uint32_t events;
+    void*    userdata;
+} _TrIOEvent;
+
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+/* ── BARE/Kernel: polling stub (no OS event loop) ────────────────────── */
+typedef struct { int _dummy; } _TrIOPoll;
+static inline _TrIOPoll* _tr_iopoll_create(void) {
+    return (_TrIOPoll*)TAURARO_CALLOC(1, sizeof(_TrIOPoll));
+}
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if (p) TAURARO_FREE(p); }
+static inline int  _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+    { (void)p;(void)fd;(void)ev;(void)ud; return 0; }
+static inline int  _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+    { (void)p;(void)fd;(void)ev;(void)ud; return 0; }
+static inline int  _tr_iopoll_del(_TrIOPoll* p, int fd)
+    { (void)p;(void)fd; return 0; }
+static inline int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int timeout_ms)
+    { (void)p;(void)ev;(void)maxev;(void)timeout_ms; return 0; }
+
+#elif defined(_WIN32)
+/* ── Windows: IOCP-backed _TrIOPoll ──────────────────────────────────── */
+#ifndef _TR_NET_INCLUDED
+#define _TR_NET_INCLUDED
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#endif
+typedef struct {
+    HANDLE   iocp;
+    void**   ud_map;
+    int*     fd_map;
+    int      map_cap;
+    int      map_cnt;
+} _TrIOPoll;
+static inline _TrIOPoll* _tr_iopoll_create(void) {
+    _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
+    p->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+    p->map_cap = 64;
+    p->ud_map  = (void**)calloc((size_t)p->map_cap, sizeof(void*));
+    p->fd_map  = (int*)calloc((size_t)p->map_cap, sizeof(int));
+    return p;
+}
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+    if (!p) return;
+    if (p->iocp) CloseHandle(p->iocp);
+    free(p->ud_map); free(p->fd_map); free(p);
+}
+static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+    if (!p) return -1;
+    /* Associate socket with IOCP; completion key = index into ud_map */
+    if (p->map_cnt >= p->map_cap) {
+        p->map_cap *= 2;
+        p->ud_map = (void**)realloc(p->ud_map, (size_t)p->map_cap * sizeof(void*));
+        p->fd_map = (int*)realloc(p->fd_map, (size_t)p->map_cap * sizeof(int));
+    }
+    int idx = p->map_cnt++;
+    p->ud_map[idx] = ud; p->fd_map[idx] = fd; (void)ev;
+    CreateIoCompletionPort((HANDLE)(uintptr_t)fd, p->iocp, (ULONG_PTR)idx, 0);
+    return 0;
+}
+static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+    { return _tr_iopoll_add(p, fd, ev, ud); }
+static inline int _tr_iopoll_del(_TrIOPoll* p, int fd)
+    { (void)p;(void)fd; return 0; }
+static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+    if (!p || !out || maxev <= 0) return 0;
+    OVERLAPPED_ENTRY entries[64];
+    ULONG n = 0;
+    DWORD ms = timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms;
+    if (!GetQueuedCompletionStatusEx(p->iocp, entries,
+            (ULONG)(maxev < 64 ? maxev : 64), &n, ms, FALSE)) return 0;
+    for (ULONG i = 0; i < n; i++) {
+        int idx = (int)entries[i].lpCompletionKey;
+        out[i].fd       = (idx >= 0 && idx < p->map_cnt) ? p->fd_map[idx] : -1;
+        out[i].userdata = (idx >= 0 && idx < p->map_cnt) ? p->ud_map[idx] : NULL;
+        out[i].events   = TAURARO_POLLIN | TAURARO_POLLOUT;
+    }
+    return (int)n;
+}
+
+#elif defined(__linux__)
+/* ── Linux: epoll-backed _TrIOPoll ───────────────────────────────────── */
+#include <sys/epoll.h>
+#include <unistd.h>
+typedef struct { int epfd; } _TrIOPoll;
+static inline _TrIOPoll* _tr_iopoll_create(void) {
+    _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
+    p->epfd = epoll_create1(EPOLL_CLOEXEC);
+    return p;
+}
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+    if (!p) return; if (p->epfd >= 0) close(p->epfd); free(p);
+}
+static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+    if (!p) return -1;
+    struct epoll_event e = {0};
+    if (ev & TAURARO_POLLIN)  e.events |= EPOLLIN;
+    if (ev & TAURARO_POLLOUT) e.events |= EPOLLOUT;
+    e.data.ptr = ud;
+    return epoll_ctl(p->epfd, EPOLL_CTL_ADD, fd, &e);
+}
+static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+    if (!p) return -1;
+    struct epoll_event e = {0};
+    if (ev & TAURARO_POLLIN)  e.events |= EPOLLIN;
+    if (ev & TAURARO_POLLOUT) e.events |= EPOLLOUT;
+    e.data.ptr = ud;
+    return epoll_ctl(p->epfd, EPOLL_CTL_MOD, fd, &e);
+}
+static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+    if (!p) return -1;
+    return epoll_ctl(p->epfd, EPOLL_CTL_DEL, fd, NULL);
+}
+static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+    if (!p || !out || maxev <= 0) return 0;
+    struct epoll_event evs[64];
+    int n = epoll_wait(p->epfd, evs, maxev < 64 ? maxev : 64, timeout_ms);
+    if (n <= 0) return 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t e = 0;
+        if (evs[i].events & EPOLLIN)  e |= TAURARO_POLLIN;
+        if (evs[i].events & EPOLLOUT) e |= TAURARO_POLLOUT;
+        if (evs[i].events & EPOLLERR) e |= TAURARO_POLLERR;
+        if (evs[i].events & EPOLLHUP) e |= TAURARO_POLLHUP;
+        out[i].fd       = -1; /* epoll doesn't return fd in event */
+        out[i].events   = e;
+        out[i].userdata = evs[i].data.ptr;
+    }
+    return n;
+}
+
+#if defined(TAURARO_IO_URING)
+/* ── io_uring support (Linux ≥5.1, opt-in with -DTAURARO_IO_URING) ─── *
+ * Provides zero-syscall-per-op submission/completion ring interface.   *
+ * WARNING: incorrect ring usage can crash/oops the kernel. Only use   *
+ * after thorough testing. The epoll backend is the safe default.       */
+#include <liburing.h>
+typedef struct { struct io_uring ring; } _TrIOUring;
+static inline _TrIOUring* _tr_iouring_create(unsigned entries) {
+    _TrIOUring* u = (_TrIOUring*)calloc(1, sizeof(_TrIOUring));
+    if (io_uring_queue_init(entries ? entries : 256u, &u->ring, 0) < 0) {
+        free(u); return NULL;
+    }
+    return u;
+}
+static inline void _tr_iouring_destroy(_TrIOUring* u) {
+    if (!u) return; io_uring_queue_exit(&u->ring); free(u);
+}
+static inline struct io_uring_sqe* _tr_iouring_get_sqe(_TrIOUring* u) {
+    return u ? io_uring_get_sqe(&u->ring) : NULL;
+}
+static inline int _tr_iouring_submit(_TrIOUring* u) {
+    return u ? io_uring_submit(&u->ring) : -1;
+}
+static inline int _tr_iouring_wait_cqe(_TrIOUring* u, struct io_uring_cqe** cqe) {
+    return u ? io_uring_wait_cqe(&u->ring, cqe) : -1;
+}
+static inline void _tr_iouring_cqe_seen(_TrIOUring* u, struct io_uring_cqe* cqe) {
+    if (u) io_uring_cqe_seen(&u->ring, cqe);
+}
+#endif /* TAURARO_IO_URING */
+
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+/* ── macOS/BSD: kqueue-backed _TrIOPoll ──────────────────────────────── */
+#include <sys/event.h>
+#include <unistd.h>
+typedef struct { int kqfd; } _TrIOPoll;
+static inline _TrIOPoll* _tr_iopoll_create(void) {
+    _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
+    p->kqfd = kqueue(); return p;
+}
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+    if (!p) return; if (p->kqfd >= 0) close(p->kqfd); free(p);
+}
+static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+    if (!p) return -1;
+    struct kevent changes[2]; int n = 0;
+    if (ev & TAURARO_POLLIN)
+        EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_READ,  EV_ADD|EV_ENABLE, 0, 0, ud);
+    if (ev & TAURARO_POLLOUT)
+        EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD|EV_ENABLE, 0, 0, ud);
+    return kevent(p->kqfd, changes, n, NULL, 0, NULL);
+}
+static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+    { return _tr_iopoll_add(p, fd, ev, ud); }
+static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+    if (!p) return -1;
+    struct kevent changes[2];
+    EV_SET(&changes[0], (uintptr_t)fd, EVFILT_READ,  EV_DELETE, 0, 0, NULL);
+    EV_SET(&changes[1], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    return kevent(p->kqfd, changes, 2, NULL, 0, NULL);
+}
+static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+    if (!p || !out || maxev <= 0) return 0;
+    struct kevent evs[64];
+    struct timespec ts = { timeout_ms / 1000, (timeout_ms % 1000) * 1000000L };
+    struct timespec* tsp = timeout_ms < 0 ? NULL : &ts;
+    int n = kevent(p->kqfd, NULL, 0, evs, maxev < 64 ? maxev : 64, tsp);
+    if (n <= 0) return 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t e = 0;
+        if (evs[i].filter == EVFILT_READ)  e |= TAURARO_POLLIN;
+        if (evs[i].filter == EVFILT_WRITE) e |= TAURARO_POLLOUT;
+        if (evs[i].flags & EV_ERROR)       e |= TAURARO_POLLERR;
+        if (evs[i].flags & EV_EOF)         e |= TAURARO_POLLHUP;
+        out[i].fd       = (int)evs[i].ident;
+        out[i].events   = e;
+        out[i].userdata = evs[i].udata;
+    }
+    return n;
+}
+#else
+/* ── Fallback: no async I/O on unknown platform ───────────────────────── */
+typedef struct { int _dummy; } _TrIOPoll;
+static inline _TrIOPoll* _tr_iopoll_create(void) { return (_TrIOPoll*)calloc(1,sizeof(_TrIOPoll)); }
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if(p) free(p); }
+static inline int  _tr_iopoll_add(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
+static inline int  _tr_iopoll_mod(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
+static inline int  _tr_iopoll_del(_TrIOPoll* p,int fd){(void)p;(void)fd;return -1;}
+static inline int  _tr_iopoll_wait(_TrIOPoll* p,_TrIOEvent* ev,int m,int t){(void)p;(void)ev;(void)m;(void)t;return 0;}
+#endif /* _TrIOPoll platform backends */
+
 /* ── TCP socket helpers ─────────────────────────────────────────────── */
 #if defined(TAURARO_BARE) || defined(TAURARO_WASM)
 /* No networking on bare WASM or freestanding targets */
@@ -1602,6 +1933,17 @@ static inline void _tr_bounds_check(long long i, size_t len) {
   #define _TR_GLOBAL extern
 #endif
 
+/* Thread-local storage qualifier for per-thread exception stacks */
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+#  define _TR_THREAD_LOCAL
+#elif defined(_MSC_VER)
+#  define _TR_THREAD_LOCAL __declspec(thread)
+#elif defined(__GNUC__) || defined(__clang__)
+#  define _TR_THREAD_LOCAL __thread
+#else
+#  define _TR_THREAD_LOCAL _Thread_local
+#endif
+
 /* argc/argv made available to std.sys.env at runtime. */
 _TR_GLOBAL int    _tr_argc;
 _TR_GLOBAL char** _tr_argv;
@@ -1615,27 +1957,27 @@ _TR_GLOBAL _TrTaskGroup _tr_tg;
 _TR_GLOBAL _TrThreadPool* _tr_global_async_pool;
 static inline void _tr_tg_begin(void) {
     _tr_tg.cap = 16; _tr_tg.count = 0;
-    _tr_tg.ths = (_TrThread*)malloc((size_t)_tr_tg.cap * sizeof(_TrThread));
+    _tr_tg.ths = (_TrThread*)TAURARO_ALLOC((size_t)_tr_tg.cap * sizeof(_TrThread));
 }
 static inline void _tr_tg_push(_TrThread t) {
     if (_tr_tg.count >= _tr_tg.cap) {
         _tr_tg.cap *= 2;
-        _tr_tg.ths = (_TrThread*)realloc(_tr_tg.ths, (size_t)_tr_tg.cap * sizeof(_TrThread));
+        _tr_tg.ths = (_TrThread*)TAURARO_REALLOC(_tr_tg.ths, (size_t)_tr_tg.cap * sizeof(_TrThread));
     }
     _tr_tg.ths[_tr_tg.count++] = t;
 }
 static inline void _tr_taskgroup_wait(void) {
     for (int i = 0; i < _tr_tg.count; i++) _tr_thread_join_wait(_tr_tg.ths[i]);
-    if (_tr_tg.ths) { free(_tr_tg.ths); _tr_tg.ths = NULL; }
+    if (_tr_tg.ths) { TAURARO_FREE(_tr_tg.ths); _tr_tg.ths = NULL; }
     _tr_tg.count = 0; _tr_tg.cap = 0;
 }
 
-/* ── Exception stack (setjmp/longjmp based) ─────────────────────────── */
+/* ── Exception stack (setjmp/longjmp based, per-thread) ─────────────── */
 
 #define _TR_MAX_EXC 64
-_TR_GLOBAL jmp_buf*  _tr_exc_bufs[_TR_MAX_EXC];
-_TR_GLOBAL char**    _tr_exc_msgs[_TR_MAX_EXC];
-_TR_GLOBAL int       _tr_exc_sp;
+_TR_GLOBAL _TR_THREAD_LOCAL jmp_buf*  _tr_exc_bufs[_TR_MAX_EXC];
+_TR_GLOBAL _TR_THREAD_LOCAL char**    _tr_exc_msgs[_TR_MAX_EXC];
+_TR_GLOBAL _TR_THREAD_LOCAL int       _tr_exc_sp;
 
 static void _tr_exc_push(jmp_buf* b, char** m) {
     if (_tr_exc_sp < _TR_MAX_EXC) {
@@ -1660,19 +2002,19 @@ static void _tr_exc_raise(char* msg) {
 static char* _tr_str_concat(const char* a, const char* b) {
     if (!a) a=""; if (!b) b="";
     size_t la=strlen(a), lb=strlen(b);
-    char* r=(char*)malloc(la+lb+1);
+    char* r=(char*)TAURARO_ALLOC(la+lb+1);
     memcpy(r,a,la); memcpy(r+la,b,lb+1);
     return r;
 }
 static char* _tr_str_upper(const char* s) {
     if (!s) return "";
-    char* r=(char*)malloc(strlen(s)+1);
+    char* r=(char*)TAURARO_ALLOC(strlen(s)+1);
     for (int i=0; (r[i]=(char)toupper((unsigned char)s[i])) || s[i]; i++);
     return r;
 }
 static char* _tr_str_lower(const char* s) {
     if (!s) return "";
-    char* r=(char*)malloc(strlen(s)+1);
+    char* r=(char*)TAURARO_ALLOC(strlen(s)+1);
     for (int i=0; (r[i]=(char)tolower((unsigned char)s[i])) || s[i]; i++);
     return r;
 }
@@ -1690,18 +2032,18 @@ static bool _tr_str_ends_with(const char* s, const char* suf) {
 static char* _tr_str_strip(const char* s) {
     if (!s) return "";
     while (isspace((unsigned char)*s)) s++;
-    if (!*s) { char* e=(char*)malloc(1); *e='\0'; return e; }
+    if (!*s) { char* e=(char*)TAURARO_ALLOC(1); *e='\0'; return e; }
     const char* end = s+strlen(s)-1;
     while (end>s && isspace((unsigned char)*end)) end--;
     size_t len=(size_t)(end-s+1);
-    char* r=(char*)malloc(len+1); memcpy(r,s,len); r[len]='\0'; return r;
+    char* r=(char*)TAURARO_ALLOC(len+1); memcpy(r,s,len); r[len]='\0'; return r;
 }
 static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
     if (!s||!old||!nw) return (char*)s;
     size_t sl=strlen(s), ol=strlen(old), nl=strlen(nw);
     int cnt=0; const char* p=s;
     while ((p=strstr(p,old))) { cnt++; p+=ol; }
-    char* r=(char*)malloc(sl+(size_t)cnt*(nl>ol?nl-ol:0)+1);
+    char* r=(char*)TAURARO_ALLOC(sl+(size_t)cnt*(nl>ol?nl-ol:0)+1);
     char* dst=r; p=s;
     while (*p) {
         if (strncmp(p,old,ol)==0) { memcpy(dst,nw,nl); dst+=nl; p+=ol; }
@@ -1709,10 +2051,10 @@ static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
     }
     *dst='\0'; return r;
 }
-static char*     _tr_int_to_str(long long n)   { char* b=(char*)malloc(32); snprintf(b,32,"%lld",n); return b; }
-static char*     _tr_float_to_str(double n)    { char* b=(char*)malloc(32); snprintf(b,32,"%g",n);   return b; }
-static char*     _tr_float_to_c_lit(double n)  { char* b=(char*)malloc(32); snprintf(b,32,"%.17g",n); return b; }
-static char*     _tr_bool_to_str(bool b)       { return b ? "true" : "false"; }
+static char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
+static char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
+static char* _tr_float_to_c_lit(double n)  { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%.17g",n); return b; }
+static char* _tr_bool_to_str(bool b)       { return b ? "true" : "false"; }
 
 /* _TR_AUTO_STR — convert any scalar to char* for f-string / print with unknown type.
  * Uses _Generic so __auto_type variables work without an explicit type annotation.
@@ -2343,7 +2685,7 @@ static inline void StringBuilder_append(StringBuilder* sb, char* s) {
     if (slen <= 0) return;
     if (sb->buf->len + slen >= sb->buf->capacity) {
         sb->buf->capacity = (sb->buf->len + slen) * 2 + 8;
-        sb->buf->data = (char*)realloc(sb->buf->data, (size_t)sb->buf->capacity);
+        sb->buf->data = (char*)TAURARO_REALLOC(sb->buf->data, (size_t)sb->buf->capacity);
     }
     memcpy(sb->buf->data + sb->buf->len, s, (size_t)slen);
     sb->buf->len += slen;
@@ -2352,7 +2694,7 @@ static inline void StringBuilder_append(StringBuilder* sb, char* s) {
 static inline void StringBuilder_append_char(StringBuilder* sb, long long c) {
     if (sb->buf->len + 1 >= sb->buf->capacity) {
         sb->buf->capacity = sb->buf->capacity * 2 + 8;
-        sb->buf->data = (char*)realloc(sb->buf->data, (size_t)sb->buf->capacity);
+        sb->buf->data = (char*)TAURARO_REALLOC(sb->buf->data, (size_t)sb->buf->capacity);
     }
     sb->buf->data[sb->buf->len++] = (char)c;
     sb->buf->data[sb->buf->len] = '\0';
@@ -2377,7 +2719,7 @@ static inline void StringBuilder_append_float(StringBuilder* sb, double f) {
 }
 static inline long long StringBuilder_length(StringBuilder* sb) { return sb->buf->len; }
 static inline void StringBuilder_free(StringBuilder* sb) {
-    free(sb->buf->data); free(sb->buf); free(sb);
+    TAURARO_FREE(sb->buf->data); TAURARO_FREE(sb->buf); TAURARO_FREE(sb);
 }
 #endif /* TAURARO_RT_NO_STRINGBUILDER */
 
