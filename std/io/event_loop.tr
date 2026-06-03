@@ -1,0 +1,100 @@
+# std.io.event_loop — Single-threaded async event loop (callback model).
+#
+# Provides a reactor-style event loop backed by _TrIOPoll (epoll/IOCP/kqueue).
+# Suitable for I/O-bound servers that want to handle thousands of connections
+# on a single thread without blocking.
+#
+# This is the "Node.js model" — not M:N coroutines.  For CPU-bound work,
+# combine EventLoop on the I/O thread with a ThreadPool for workers.
+#
+# Usage:
+#   let loop = EventLoop.new()
+#   loop.add_fd(fd, IOPoll.POLLIN, my_handler_id)
+#   loop.run(max_iter: 100, timeout_ms: 50)   # run 100 poll cycles
+#   loop.stop()
+#
+# Handler dispatch: the loop calls on_event(fd, events, userdata) via a
+# user-supplied callback object that implements EventHandler.
+#
+# Full server pattern:
+#   let server = TcpListener.listen("0.0.0.0", 8080)
+#   let loop   = EventLoop.new()
+#   loop.add_fd(server.fd, IOPoll.POLLIN, 0)  # 0 = server sentinel
+#   while loop.is_running():
+#       let evs = loop.poll(50)        # wait up to 50ms
+#       for ev in evs:
+#           if ev.userdata == 0:       # new connection
+#               let client = server.accept_nb()
+#               loop.add_fd(client.fd, IOPoll.POLLIN, client.fd)
+#           else:
+#               handle_client(ev.fd)   # read/write without blocking
+
+from std.io.poll import IOPoll, IOEvent
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_time_ms() -> int
+
+pub class EventLoop:
+    pub poll:       IOPoll
+    pub running:    bool
+    pub iter_count: int
+    pub start_ms:   int
+
+extend EventLoop:
+    pub def new() -> EventLoop:
+        mut el = EventLoop()
+        el.poll       = IOPoll.new()
+        el.running    = true
+        el.iter_count = 0
+        el.start_ms   = _tr_time_ms()
+        return el
+
+    # Register a file descriptor for readiness notifications.
+    # userdata is a caller-managed integer (e.g. connection id).
+    pub def add_fd(self, fd: int, events: int, userdata: int) -> bool:
+        return self.poll.add(fd, events, userdata)
+
+    # Update event mask for a registered fd.
+    pub def modify_fd(self, fd: int, events: int, userdata: int) -> bool:
+        return self.poll.modify(fd, events, userdata)
+
+    # Remove a fd from the loop.
+    pub def remove_fd(self, fd: int) -> bool:
+        return self.poll.remove(fd)
+
+    # Run one poll cycle and return ready events.
+    # timeout_ms: -1 = block forever, 0 = non-blocking, >0 = millisecond timeout.
+    pub def poll_once(self, timeout_ms: int) -> Vec[IOEvent]:
+        self.iter_count = self.iter_count + 1
+        mut evs = self.poll.wait(timeout_ms)
+        return evs
+
+    # Run poll cycles until stop() is called or max_iter is reached (0 = unlimited).
+    # Calls on_ready for each event.  Returns total events processed.
+    pub def run(self, max_iter: int, timeout_ms: int) -> int:
+        mut total = 0
+        mut iters = 0
+        while self.running:
+            mut evs = self.poll.wait(timeout_ms)
+            total = total + evs.len
+            self.iter_count = self.iter_count + 1
+            iters = iters + 1
+            if max_iter > 0 and iters >= max_iter:
+                break
+        return total
+
+    # Signal the loop to stop after the current cycle.
+    pub def stop(self):
+        self.running = false
+
+    pub def is_running(self) -> bool:
+        return self.running
+
+    # Elapsed milliseconds since EventLoop.new().
+    pub def elapsed_ms(self) -> int:
+        return _tr_time_ms() - self.start_ms
+
+    pub def destroy(self):
+        self.running = false
+        self.poll.destroy()

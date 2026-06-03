@@ -359,25 +359,71 @@ static inline Result Option_ok_or(Option self, void* err) {
 
 /* ── Threading (cross-platform) ──────────────────────────────────────── */
 
+/* Thread panic state — forward-declared before platform blocks so trampolines
+ * can reference them.  Actual storage definitions live in the _TR_GLOBAL section. */
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+static int     _tr_thread_has_panic_buf   = 0;
+static jmp_buf _tr_thread_panic_jmpbuf;
+static char*   _tr_thread_panic_message   = NULL;
+#elif defined(__GNUC__) || defined(__clang__)
+/* MinGW also defines _WIN32 but is GCC-based — must use __thread, not __declspec(thread) */
+extern __thread int     _tr_thread_has_panic_buf;
+extern __thread jmp_buf _tr_thread_panic_jmpbuf;
+extern __thread char*   _tr_thread_panic_message;
+#elif defined(_MSC_VER)
+extern __declspec(thread) int     _tr_thread_has_panic_buf;
+extern __declspec(thread) jmp_buf _tr_thread_panic_jmpbuf;
+extern __declspec(thread) char*   _tr_thread_panic_message;
+#else
+extern _Thread_local int     _tr_thread_has_panic_buf;
+extern _Thread_local jmp_buf _tr_thread_panic_jmpbuf;
+extern _Thread_local char*   _tr_thread_panic_message;
+#endif
+
+/* Panic result: written by thread, read by joiner via _TrThreadObj */
+typedef struct { int panicked; char* panic_msg; } _TrSpawnResult;
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
 
+/* ── Thread stack size ────────────────────────────────────────────── *
+ * Override with -DTAURARO_THREAD_STACK_SIZE=N before including.      *
+ * 0 = use OS default. Recommendation: 2 MiB for most workloads.      */
+#ifndef TAURARO_THREAD_STACK_SIZE
+#  define TAURARO_THREAD_STACK_SIZE (2 * 1024 * 1024)
+#endif
+
 typedef HANDLE _TrThread;
-/* Trampoline: routes void*(*)(void*) through DWORD WINAPI to avoid
- * __cdecl/__stdcall calling-convention mismatch on 32-bit Windows. */
-typedef struct { void*(*fn)(void*); void* arg; } _TrWin32StartArg;
+/* Trampoline: routes void*(*)(void*) through DWORD WINAPI, installs
+ * per-thread panic handler (setjmp), and enforces stack size.        */
+typedef struct { void*(*fn)(void*); void* arg; _TrSpawnResult* result; } _TrWin32StartArg;
 static DWORD WINAPI _tr_thread_start_trampoline(LPVOID raw) {
     _TrWin32StartArg* s = (_TrWin32StartArg*)raw;
-    void*(*fn)(void*) = s->fn; void* arg = s->arg; free(s); /* Win32-only path */
-    fn(arg); return 0;
+    void*(*fn)(void*) = s->fn; void* arg = s->arg;
+    _TrSpawnResult* result = s->result;
+    free(s);
+    /* Install per-thread panic handler */
+    _tr_thread_has_panic_buf = 1;
+    _tr_thread_panic_message = NULL;
+    if (setjmp(_tr_thread_panic_jmpbuf) == 0) {
+        fn(arg);
+        if (result) { result->panicked = 0; result->panic_msg = NULL; }
+    } else {
+        if (result) { result->panicked = 1; result->panic_msg = _tr_thread_panic_message; }
+        else { fprintf(stderr, "thread panic (detached): %s\n",
+               _tr_thread_panic_message ? _tr_thread_panic_message : "?"); }
+    }
+    _tr_thread_has_panic_buf = 0;
+    return 0;
 }
 static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
-    _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg)); /* Win32-only */
-    s->fn = fn; s->arg = arg;
-    return CreateThread(NULL, 0, _tr_thread_start_trampoline, s, 0, NULL);
+    _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg));
+    s->fn = fn; s->arg = arg; s->result = NULL;
+    SIZE_T ss = (SIZE_T)TAURARO_THREAD_STACK_SIZE;
+    return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
 }
 static void _tr_thread_detach(_TrThread t) { CloseHandle(t); }
 static void _tr_thread_join_wait(_TrThread t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
@@ -432,8 +478,35 @@ static void _tr_sleep_ms(long ms) { (void)ms; }
 #include <time.h>
 
 typedef pthread_t _TrThread;
+/* POSIX panic trampoline — installs per-thread setjmp handler */
+typedef struct { void*(*fn)(void*); void* arg; _TrSpawnResult* result; } _TrPosixStartArg;
+static void* _tr_posix_thread_trampoline(void* raw) {
+    _TrPosixStartArg* s = (_TrPosixStartArg*)raw;
+    void*(*fn)(void*) = s->fn; void* arg = s->arg;
+    _TrSpawnResult* result = s->result;
+    free(s);
+    _tr_thread_has_panic_buf = 1;
+    _tr_thread_panic_message = NULL;
+    if (setjmp(_tr_thread_panic_jmpbuf) == 0) {
+        fn(arg);
+        if (result) { result->panicked = 0; result->panic_msg = NULL; }
+    } else {
+        if (result) { result->panicked = 1; result->panic_msg = _tr_thread_panic_message; }
+        else { fprintf(stderr, "thread panic (detached): %s\n",
+               _tr_thread_panic_message ? _tr_thread_panic_message : "?"); }
+    }
+    _tr_thread_has_panic_buf = 0;
+    return NULL;
+}
 static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
-    pthread_t t; pthread_create(&t, NULL, fn, arg); return t;
+    _TrPosixStartArg* s = (_TrPosixStartArg*)malloc(sizeof(_TrPosixStartArg));
+    s->fn = fn; s->arg = arg; s->result = NULL;
+    pthread_attr_t attr; pthread_attr_init(&attr);
+    if (TAURARO_THREAD_STACK_SIZE > 0)
+        pthread_attr_setstacksize(&attr, (size_t)TAURARO_THREAD_STACK_SIZE);
+    pthread_attr_setguardsize(&attr, 4096);  /* one-page guard against overflow */
+    pthread_t t; pthread_create(&t, &attr, _tr_posix_thread_trampoline, s);
+    pthread_attr_destroy(&attr); return t;
 }
 static void _tr_thread_detach(_TrThread t) { pthread_detach(t); }
 static void _tr_thread_join_wait(_TrThread t) { pthread_join(t, NULL); }
@@ -1267,14 +1340,53 @@ static inline bool _tr_atomic_cas_acqrel(_TrAtomic* a, long long exp, long long 
     return atomic_compare_exchange_strong_explicit(&a->val, &exp, des, memory_order_acq_rel, memory_order_relaxed);
 }
 
-/* ── Thread object: joinable OS-thread handle ────────────────────────── */
-typedef struct { _TrThread handle; volatile int done; } _TrThreadObj;
+/* ── Thread object: joinable OS-thread handle with panic recovery ──── */
+typedef struct {
+    _TrThread     handle;
+    volatile int  done;
+    _TrSpawnResult result; /* filled by trampoline on thread exit */
+} _TrThreadObj;
+
+/* Internal: thread_start variant that wires result into the trampoline. */
+#ifdef _WIN32
+static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _TrSpawnResult* res) {
+    _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg));
+    s->fn = fn; s->arg = arg; s->result = res;
+    SIZE_T ss = (SIZE_T)TAURARO_THREAD_STACK_SIZE;
+    return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
+}
+#elif !defined(TAURARO_BARE)
+static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _TrSpawnResult* res) {
+    _TrPosixStartArg* s = (_TrPosixStartArg*)malloc(sizeof(_TrPosixStartArg));
+    s->fn = fn; s->arg = arg; s->result = res;
+    pthread_attr_t attr; pthread_attr_init(&attr);
+    if (TAURARO_THREAD_STACK_SIZE > 0)
+        pthread_attr_setstacksize(&attr, (size_t)TAURARO_THREAD_STACK_SIZE);
+    pthread_attr_setguardsize(&attr, 4096);
+    pthread_t t; pthread_create(&t, &attr, _tr_posix_thread_trampoline, s);
+    pthread_attr_destroy(&attr); return t;
+}
+#else
+static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _TrSpawnResult* res) {
+    (void)res; return _tr_thread_start(fn, arg);
+}
+#endif
+
 static inline _TrThreadObj* _tr_threadobj_spawn(void*(*fn)(void*), void* arg) {
     _TrThreadObj* t = (_TrThreadObj*)TAURARO_CALLOC(1, sizeof(_TrThreadObj));
-    t->handle = _tr_thread_start(fn, arg); return t;
+    t->result.panicked = 0; t->result.panic_msg = NULL;
+    t->handle = _tr_thread_start_result(fn, arg, &t->result);
+    return t;
 }
 static inline void _tr_threadobj_join(_TrThreadObj* t) {
     if (!t || t->done) return; t->done = 1; _tr_thread_join_wait(t->handle);
+}
+/* Re-raise the thread's panic in the calling thread after join */
+static inline bool _tr_threadobj_panicked(_TrThreadObj* t) {
+    return t && t->result.panicked;
+}
+static inline char* _tr_threadobj_panic_msg(_TrThreadObj* t) {
+    return (t && t->result.panic_msg) ? t->result.panic_msg : "";
 }
 static inline void _tr_threadobj_detach(_TrThreadObj* t) {
     if (!t || t->done) return; t->done = 1; _tr_thread_detach(t->handle);
@@ -1384,10 +1496,13 @@ static inline char* _tr_ticker_new_h(long long ms, char* ch)                   {
 static inline void  _tr_timer_stop_h(char* s)                                  { _tr_timer_stop((_TrTimerState*)s); }
 
 /* Thread object (joinable handle) */
-static inline char* _tr_threadobj_spawn_h(void*(*fn)(void*), void* arg)        { return (char*)_tr_threadobj_spawn(fn, arg); }
+typedef void*(*_TrThreadFn)(void*);
+static inline char* _tr_threadobj_spawn_h(char* fn, char* arg)                 { return (char*)_tr_threadobj_spawn((_TrThreadFn)(uintptr_t)fn, (void*)arg); }
 static inline void  _tr_threadobj_join_h(char* t)                              { _tr_threadobj_join((_TrThreadObj*)t); }
 static inline void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
 static inline void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
+static inline bool  _tr_threadobj_panicked_h(char* t)                          { return _tr_threadobj_panicked((_TrThreadObj*)t); }
+static inline char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_threadobj_panic_msg((_TrThreadObj*)t); }
 static inline long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
 static inline void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
 
@@ -1753,6 +1868,39 @@ static inline int  _tr_iopoll_del(_TrIOPoll* p,int fd){(void)p;(void)fd;return -
 static inline int  _tr_iopoll_wait(_TrIOPoll* p,_TrIOEvent* ev,int m,int t){(void)p;(void)ev;(void)m;(void)t;return 0;}
 #endif /* _TrIOPoll platform backends */
 
+/* _tr_iopoll_wait_raw: Tauraro-callable version.
+ * out_buf is a caller-allocated byte array; each slot is sizeof(_TrIOEvent).
+ * Returns number of events written.  Tauraro code reads fd/events/userdata
+ * at offsets 0/4/8 within each 16-byte slot. */
+static inline int _tr_iopoll_wait_raw(char* p_raw, char* out_buf, int maxev, int timeout_ms) {
+    _TrIOPoll* p = (_TrIOPoll*)p_raw;
+    _TrIOEvent tmp[64];
+    if (maxev > 64) maxev = 64;
+    int n = _tr_iopoll_wait(p, tmp, maxev, timeout_ms);
+    for (int i = 0; i < n; i++) {
+        char* slot = out_buf + i * 16;
+        int   fd   = tmp[i].fd;
+        int   ev   = (int)tmp[i].events;
+        int   ud   = (int)(long long)tmp[i].userdata;
+        memcpy(slot + 0, &fd, 4);
+        memcpy(slot + 4, &ev, 4);
+        memcpy(slot + 8, &ud, 4);
+    }
+    return n;
+}
+
+/* IOPoll char*-typed _h wrappers for Tauraro Pointer[char] interop */
+static inline char* _tr_iopoll_create_h(void)
+    { return (char*)_tr_iopoll_create(); }
+static inline void  _tr_iopoll_destroy_h(char* p)
+    { _tr_iopoll_destroy((_TrIOPoll*)p); }
+static inline int   _tr_iopoll_add_h(char* p, long long fd, long long ev, long long ud)
+    { return _tr_iopoll_add((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
+static inline int   _tr_iopoll_mod_h(char* p, long long fd, long long ev, long long ud)
+    { return _tr_iopoll_mod((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
+static inline int   _tr_iopoll_del_h(char* p, long long fd)
+    { return _tr_iopoll_del((_TrIOPoll*)p,(int)fd); }
+
 /* ── TCP socket helpers ─────────────────────────────────────────────── */
 #if defined(TAURARO_BARE) || defined(TAURARO_WASM)
 /* No networking on bare WASM or freestanding targets */
@@ -1972,6 +2120,13 @@ static inline void _tr_taskgroup_wait(void) {
     _tr_tg.count = 0; _tr_tg.cap = 0;
 }
 
+/* ── Per-thread panic state (storage definitions for _TR_MAIN TU) ─── */
+#if !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+_TR_GLOBAL _TR_THREAD_LOCAL int     _tr_thread_has_panic_buf;
+_TR_GLOBAL _TR_THREAD_LOCAL jmp_buf _tr_thread_panic_jmpbuf;
+_TR_GLOBAL _TR_THREAD_LOCAL char*   _tr_thread_panic_message;
+#endif
+
 /* ── Exception stack (setjmp/longjmp based, per-thread) ─────────────── */
 
 #define _TR_MAX_EXC 64
@@ -1992,6 +2147,11 @@ static void _tr_exc_raise(char* msg) {
         _tr_exc_sp--;
         *_tr_exc_msgs[_tr_exc_sp] = msg;
         longjmp(*_tr_exc_bufs[_tr_exc_sp], 1);
+    }
+    /* No user try-handler: escalate to thread panic handler if in a spawned thread */
+    if (_tr_thread_has_panic_buf) {
+        _tr_thread_panic_message = msg;
+        longjmp(_tr_thread_panic_jmpbuf, 1);
     }
     fprintf(stderr, "Unhandled exception: %s\n", msg ? msg : "(null)");
     abort();
@@ -2128,6 +2288,11 @@ static inline int _tr_system(const char* cmd) { return system(cmd); }
 
 /* ── Panic / error ───────────────────────────────────────────────────── */
 static inline void _tr_panic(const char* msg) {
+    if (_tr_thread_has_panic_buf) {
+        /* In a spawned thread: unwind to thread boundary, not abort() */
+        _tr_thread_panic_message = (char*)msg;
+        longjmp(_tr_thread_panic_jmpbuf, 1);
+    }
     fprintf(stderr, "panic: %s\n", msg ? msg : "(null)");
     abort();
 }
@@ -3006,6 +3171,108 @@ static inline void _tr_console_color(int code) { printf("\033[%dm",code); fflush
 static inline void _tr_console_reset(void)     { printf("\033[0m"); fflush(stdout); }
 static inline void _tr_console_clear(void)     { printf("\033[2J\033[H"); fflush(stdout); }
 #endif
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Non-blocking socket API
+ *
+ * Return values:
+ *   >= 0  : success / bytes transferred
+ *   -1    : hard error
+ *   TAURARO_WOULD_BLOCK (-2) : operation would block (EAGAIN/EWOULDBLOCK/WSAEWOULDBLOCK)
+ *
+ * Typical pattern with _TrIOPoll:
+ *   int fd = _tr_tcp_connect_nb(host, port);   // initiates connect, may return fd immediately
+ *   _tr_iopoll_add(poll, fd, TAURARO_POLLOUT, ctx); // wait for writable = connect done
+ *   int n = _tr_tcp_recv_nb(fd, buf, cap);      // -2 means try again later
+ * ══════════════════════════════════════════════════════════════════════════ */
+#define TAURARO_WOULD_BLOCK (-2)
+
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+static inline int  _tr_tcp_set_nonblocking(int fd)                    { (void)fd; return -1; }
+static inline int  _tr_tcp_recv_nb(int fd, char* b, int c)            { (void)fd;(void)b;(void)c; return -1; }
+static inline int  _tr_tcp_send_nb(int fd, const char* d, int l)      { (void)fd;(void)d;(void)l; return -1; }
+static inline int  _tr_tcp_accept_nb(int fd)                          { (void)fd; return TAURARO_WOULD_BLOCK; }
+static inline int  _tr_tcp_connect_nb(const char* h, int p)           { (void)h;(void)p; return -1; }
+
+#elif defined(_WIN32)
+#ifndef _TR_NET_INCLUDED
+#define _TR_NET_INCLUDED
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#endif
+static inline int _tr_tcp_set_nonblocking(int fd) {
+    u_long mode = 1;
+    return ioctlsocket((SOCKET)fd, FIONBIO, &mode) == 0 ? 0 : -1;
+}
+static inline int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
+    int n = recv((SOCKET)fd, buf, cap, 0);
+    if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) return TAURARO_WOULD_BLOCK;
+    return n;
+}
+static inline int _tr_tcp_send_nb(int fd, const char* data, int len) {
+    int n = send((SOCKET)fd, data, len, 0);
+    if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) return TAURARO_WOULD_BLOCK;
+    return n;
+}
+static inline int _tr_tcp_accept_nb(int server_fd) {
+    SOCKET s = accept((SOCKET)server_fd, NULL, NULL);
+    if (s == INVALID_SOCKET) {
+        return (WSAGetLastError() == WSAEWOULDBLOCK) ? TAURARO_WOULD_BLOCK : -1;
+    }
+    return (int)s;
+}
+static inline int _tr_tcp_connect_nb(const char* host, int port) {
+    _tr_net_init();
+    struct addrinfo hints = {0}, *res = NULL;
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
+    char pbuf[16]; sprintf(pbuf, "%d", port);
+    if (getaddrinfo(host, pbuf, &hints, &res) != 0) return -1;
+    SOCKET fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd == INVALID_SOCKET) { freeaddrinfo(res); return -1; }
+    u_long mode = 1; ioctlsocket(fd, FIONBIO, &mode);
+    connect(fd, res->ai_addr, (int)res->ai_addrlen); /* WSAEWOULDBLOCK is expected */
+    freeaddrinfo(res);
+    return (int)fd;
+}
+
+#else /* POSIX */
+#include <fcntl.h>
+#include <errno.h>
+static inline int _tr_tcp_set_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return -1;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 ? 0 : -1;
+}
+static inline int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
+    int n = (int)recv(fd, buf, (size_t)cap, 0);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return TAURARO_WOULD_BLOCK;
+    return n;
+}
+static inline int _tr_tcp_send_nb(int fd, const char* data, int len) {
+    int n = (int)send(fd, data, (size_t)len, 0);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return TAURARO_WOULD_BLOCK;
+    return n;
+}
+static inline int _tr_tcp_accept_nb(int server_fd) {
+    int fd = accept(server_fd, NULL, NULL);
+    if (fd < 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? TAURARO_WOULD_BLOCK : -1;
+    return fd;
+}
+static inline int _tr_tcp_connect_nb(const char* host, int port) {
+    struct addrinfo hints = {0}, *res = NULL;
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
+    char pbuf[16]; snprintf(pbuf, sizeof(pbuf), "%d", port);
+    if (getaddrinfo(host, pbuf, &hints, &res) != 0) return -1;
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); return -1; }
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    connect(fd, res->ai_addr, res->ai_addrlen); /* EINPROGRESS expected */
+    freeaddrinfo(res);
+    return fd;
+}
+#endif /* non-blocking socket API */
 
 /* -- Random (LCG-64) ------------------------------------------------------- */
 typedef struct { unsigned long long s; } _TrRng;

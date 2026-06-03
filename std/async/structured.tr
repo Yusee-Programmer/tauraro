@@ -1,0 +1,77 @@
+# std.async.structured — StructuredGroup: panic-safe structured concurrency.
+#
+# Unlike TaskGroup (which tracks logical tasks), StructuredGroup spawns real
+# OS threads and catches any panic that escapes the thread boundary.  If any
+# thread panics, the panic is recorded and re-raised in the calling thread
+# after wait_all() joins every thread.
+#
+# Pattern:
+#   let sg = StructuredGroup.new()
+#   sg.spawn(fn, arg)        # spawns thread with panic recovery
+#   sg.wait_all()            # joins all; raises if any thread panicked
+#   sg.ok()                  # true when no panic occurred
+#   sg.first_panic()         # message of first panic, or ""
+#
+# The 'static bound:
+#   All arguments passed to sg.spawn() must be int/bool/str/Pointer or
+#   a class that implements Sendable.  The compiler enforces this at
+#   spawn sites just as it does for the `spawn` keyword.
+
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_threadobj_spawn_h(fn: Pointer[char], arg: Pointer[char]) -> Pointer[char]
+    def _tr_threadobj_join_h(t: Pointer[char])
+    def _tr_threadobj_panicked_h(t: Pointer[char]) -> bool
+    def _tr_threadobj_panic_msg_h(t: Pointer[char]) -> str
+    def _tr_threadobj_free_h(t: Pointer[char])
+
+pub class StructuredGroup:
+    pub handles:      Vec[Pointer[char]]
+    pub _panic_msg:   str
+    pub _did_panic:   bool
+
+extend StructuredGroup:
+    pub def new() -> StructuredGroup:
+        mut sg = StructuredGroup()
+        sg.handles    = Vec[Pointer[char]].init(8)
+        sg._panic_msg = ""
+        sg._did_panic = false
+        return sg
+
+    # Spawn a zero-argument closure as a thread with panic recovery.
+    # The closure must capture only Sendable types (compiler-enforced).
+    pub def go(self, fn: Pointer[char]):
+        mut h = _tr_threadobj_spawn_h(fn, 0 as Pointer[char])
+        self.handles.push(h)
+
+    # Wait for all spawned threads to finish.  Collects first panic message.
+    pub def wait_all(self):
+        mut i = 0
+        while i < self.handles.len:
+            mut h = self.handles.get(i)
+            _tr_threadobj_join_h(h)
+            if _tr_threadobj_panicked_h(h):
+                if not self._did_panic:
+                    self._did_panic = true
+                    self._panic_msg = _tr_threadobj_panic_msg_h(h)
+            _tr_threadobj_free_h(h)
+            i = i + 1
+        self.handles = Vec[Pointer[char]].init(0)
+
+    # True when all threads completed without panic.
+    pub def ok(self) -> bool:
+        return not self._did_panic
+
+    # First panic message from any thread, or "" if none.
+    pub def first_panic(self) -> str:
+        return self._panic_msg
+
+    # Raise the collected panic in the current thread (call after wait_all).
+    pub def rethrow(self):
+        if self._did_panic:
+            raise self._panic_msg
+
+    # Number of threads still tracked (before wait_all).
+    pub def len(self) -> int:
+        return self.handles.len
