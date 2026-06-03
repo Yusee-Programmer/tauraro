@@ -230,6 +230,22 @@ tauraroc --backend llvm program.tr
 | `--target <triple>` | Cross-compile for a different target (see below) |
 | `--sysroot <path>` | Override the C compiler sysroot for cross-compilation |
 
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `TAURARO_PATH` | Extra module search paths, colon-separated on POSIX or semicolon-separated on Windows. Appended to the resolver's path list after all built-in paths. Equivalent to Python's `PYTHONPATH`. |
+
+```bash
+# Linux / macOS — add two extra library directories
+export TAURARO_PATH=/opt/mylibs:/home/user/pkgs
+tauraroc --run myapp.tr
+
+# Windows (PowerShell)
+$env:TAURARO_PATH = "C:\mylibs;C:\Users\user\pkgs"
+tauraroc --run myapp.tr
+```
+
 ### Cross-Compilation (`--target`)
 
 `tauraroc` can cross-compile Tauraro programs to any target that the host C compiler supports.

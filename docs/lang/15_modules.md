@@ -101,6 +101,16 @@ The first match wins.
 | 8 | `<compiler_bin>/packages/sites/` | Site-specific installs (e.g. pip-style) |
 | 9 | `packages/` | Project-local packages (CWD-relative) |
 | 10 | `packages/sites/` | Project-local site packages (CWD-relative) |
+| 11+ | `TAURARO_PATH` entries | User-specified extra paths (see below) |
+
+**`TAURARO_PATH` environment variable:** Set this before running `tauraroc` to add extra search directories — exactly like Python's `PYTHONPATH`. Uses `:` as separator on POSIX, `;` on Windows:
+
+```bash
+export TAURARO_PATH=/opt/mylibs:/home/user/pkgs   # Linux / macOS
+$env:TAURARO_PATH = "C:\mylibs;C:\pkgs"           # Windows PowerShell
+```
+
+**`Env.path` in user programs:** `from std.sys.env import Env` gives a running program a `Vec[str]` pre-populated with the standard search directories. Programs can append to it and use the list to build a `TAURARO_PATH` value when spawning a child `tauraroc` process. See [std.sys.env →](../std/env.md).
 
 **Recursive resolution:** Each imported module is scanned for its own imports, which are resolved transitively. The compiler builds the full dependency graph before emitting any C.
 
