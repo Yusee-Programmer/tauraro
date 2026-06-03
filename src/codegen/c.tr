@@ -706,7 +706,7 @@ pub class CGenerator:
             if f.decorators.get(i).name == "noinline": return "static __attribute__((noinline)) "
             i = i + 1
         if f.name == "main" or f.name == "_tr_main":
-            return "__attribute__((hot,optimize(\"O3,unroll-loops\"))) "
+            return "__attribute__((hot)) "
         if f.name == "init":
             return "static __attribute__((malloc,returns_nonnull,hot)) "
         return "static __attribute__((hot)) "
@@ -730,7 +730,7 @@ pub class CGenerator:
             if f.decorators.get(i).name == "noinline": return "__attribute__((noinline)) "
             i = i + 1
         if f.name == "main" or f.name == "_tr_main":
-            return "__attribute__((hot,optimize(\"O3,unroll-loops\"))) "
+            return "__attribute__((hot)) "
         if f.name == "init":
             return "__attribute__((malloc,returns_nonnull,hot)) "
         return "__attribute__((hot)) "
@@ -4083,7 +4083,6 @@ pub class CGenerator:
         # ── Phase 1: Runtime header include + file-wide optimization pragmas ────
         self.w("#define _TR_MAIN\n")
         self.w("#include \"tauraro_rt.h\"\n")
-        self.w("#pragma GCC optimize(\"O3,unroll-loops\")\n")
 
         # ── Phase 2: Forward declarations (opaque struct pointers) ────────────
         # Skip generic classes — their mono versions are handled in Phase 2.75
@@ -4277,7 +4276,7 @@ pub class CGenerator:
             i = i + 1
 
         # ── Phase 7: C main entry point ───────────────────────────────────────
-        self.w("__attribute__((hot,optimize(\"O3,unroll-loops\"))) int main(int argc, char** argv) {\n")
+        self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")
         self.w("#ifndef TAURARO_BARE\n")
@@ -4683,8 +4682,7 @@ pub class CGenerator:
             inc_prefix = inc_prefix + "../"
             d = d + 1
 
-        self.w("#include \"" + inc_prefix + "tauraro_types.h\"\n")
-        self.w("#pragma GCC optimize(\"O3,unroll-loops\")\n\n")
+        self.w("#include \"" + inc_prefix + "tauraro_types.h\"\n\n")
 
         # ── Class / enum method implementations ──────────────────────────────
         mut i = 0
@@ -4768,8 +4766,7 @@ pub class CGenerator:
         self.buf = StringBuilder.init(65536)
 
         self.w("#define _TR_MAIN\n")
-        self.w("#include \"tauraro_types.h\"\n")
-        self.w("#pragma GCC optimize(\"O3,unroll-loops\")\n\n")
+        self.w("#include \"tauraro_types.h\"\n\n")
 
         # Emit spawn + async wrappers (static thread-entry functions) before any function body
         self.prescan_spawns(prog)
@@ -4871,7 +4868,7 @@ pub class CGenerator:
                 i = i + 1
 
         # C main() entry point
-        self.w("__attribute__((hot,optimize(\"O3,unroll-loops\"))) int main(int argc, char** argv) {\n")
+        self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")
         self.w("#ifndef TAURARO_BARE\n")

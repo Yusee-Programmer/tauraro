@@ -1570,7 +1570,7 @@ static inline long long _tr_file_size(const char* path) {
 /* _tr_c_memset defined above */
 
 static inline void _tr_bounds_check(long long i, size_t len) {
-    if (i < 0 || (size_t)i >= len) {
+    if (__builtin_expect(i < 0 || (size_t)i >= len, 0)) {
         fprintf(stderr, "Index %lld out of bounds (length %zu)\n", i, len);
         abort();
     }
@@ -1870,7 +1870,7 @@ typedef struct { long long data[8]; } TrTuple;
 
 /* ── List types (bootstrap phase) ─────────────────────────────────── */
 
-typedef struct { long long* data; size_t len; size_t capacity; } List_i64;
+typedef struct { long long* __restrict__ data; size_t len; size_t capacity; } List_i64;
 static inline List_i64* List_i64_new(void) { List_i64* l=(List_i64*)malloc(sizeof(List_i64)); l->data=(long long*)malloc(sizeof(long long)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_i64_append(List_i64* l, long long val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(long long*)realloc(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; }
 static inline bool List_i64_contains(List_i64* l, long long val) { for (size_t i = 0; i < l->len; i++) { if (l->data[i] == val) return true; } return false; }
@@ -1879,7 +1879,7 @@ static inline void List_i64_set(List_i64* l, long long i, long long v) { if(l&&(
 static inline long long List_i64_get(List_i64* l, long long i) { if(l&&(size_t)i<l->len) return l->data[i]; return 0LL; }
 static inline void List_i64_free(List_i64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
-typedef struct { double* data; size_t len; size_t capacity; } List_f64;
+typedef struct { double* __restrict__ data; size_t len; size_t capacity; } List_f64;
 static inline List_f64* List_f64_new(void) { List_f64* l=(List_f64*)malloc(sizeof(List_f64)); l->data=(double*)malloc(sizeof(double)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_f64_append(List_f64* l, double val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(double*)realloc(l->data,sizeof(double)*l->capacity); } l->data[l->len++]=val; }
 static inline double List_f64_pop(List_f64* l) { if(!l||l->len==0) return 0.0; l->len--; return l->data[l->len]; }

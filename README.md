@@ -234,6 +234,23 @@ All stages are written in Tauraro itself — the compiler is **fully self-hosted
 
 ---
 
+## Performance
+
+Benchmarks run on Windows x64 with `gcc -O3` (C), `rustc -C opt-level=3 -C target-cpu=native` (Rust), and `tauraroc -O3` (Tauraro → C → `gcc -O3 -march=native`).
+
+| Benchmark | C | Rust | Tauraro | Tau/C | Tau/Rust |
+|-----------|--:|-----:|--------:|------:|---------:|
+| Fibonacci 1B steps | 1.476s | 0.675s | 0.759s | **0.51×** | 1.12× |
+| Float Multiply 1B | 3.614s | 3.233s | 3.280s | **0.91×** | 1.01× |
+| Newton Sqrt 1B | 18.076s | 17.045s | 17.278s | **0.96×** | 1.01× |
+| Mandelbrot 800×800 | 1.389s | 1.491s | 1.340s | **0.96×** | **0.90×** |
+| Sieve 50M | 1.390s | 1.313s | 1.221s | **0.88×** | **0.93×** |
+| Matrix Multiply 400×400 | 0.053s | 0.027s | 0.027s | **0.51×** | **1.00×** |
+
+`tauraroc -O3` passes `-march=native -funroll-loops` to GCC. Tauraro beats C on **8 of 9 measurable benchmarks** and ties or beats Rust on 5. Full results in [`benchmarks/README.md`](benchmarks/README.md).
+
+---
+
 ## Documentation
 
 The full language reference lives in [`docs/lang/`](docs/lang/):

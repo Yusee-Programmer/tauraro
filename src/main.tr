@@ -361,7 +361,10 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     mut static_flag = ""
     if static_link: static_flag = " -static"
     mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
-    mut cmd = cc + " -O" + opt_level + static_flag + cross_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
+    mut native_flags = ""
+    if target == "" and opt_level == "3":
+        native_flags = " -march=native -funroll-loops"
+    mut cmd = cc + " -O" + opt_level + static_flag + native_flags + cross_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
     mut i = 0
     while i < c_files.len:
         cmd = cmd + " \"" + c_files.get(i) + "\""

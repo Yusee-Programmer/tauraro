@@ -10,14 +10,15 @@
 | `spawn f(args)` | Fire-and-forget detached OS thread |
 | `task_group:` | Structured concurrency — wait for a batch of spawns |
 | `await_all(f1(), f2(), ...)` | Run multiple calls in parallel, wait for all |
+| `await_timeout(fn(), ms)` | Parallel call with a millisecond deadline |
 | `Chan[T]` | Producer-consumer pipelines between threads |
 | `Mutex[T]` | Thread-safe guarded value with exclusive lock |
 | `RwLock[T]` | Multiple readers or single writer |
 | `ThreadPool` | Fixed worker-pool for dispatching many short jobs |
-| `shared` | Atomic refcount box for shared ownership |
 | `Thread` | Explicit joinable OS thread with full lifecycle control |
 | `Atomic[T]` | Lock-free atomic integer operations |
 | `ThreadLocal[T]` | Per-thread storage — each thread sees its own value |
+| `Sendable` | Compile-time marker: type is safe to cross thread boundaries |
 
 ---
 
@@ -417,6 +418,101 @@ def main():
 ```
 
 The same auto-unlock behavior applies to `RwLock.read()` and `RwLock.write()`.
+
+---
+
+## Sendable — Compile-Time Data Race Prevention
+
+The `Sendable` interface is a **compile-time marker** that declares a type is safe to send across thread boundaries. The compiler enforces it statically at every spawn site.
+
+### Declaring a type Sendable
+
+```python
+from std.async.send import Sendable
+
+class SafeStats implements Sendable:
+    pub hits:   Atomic[int]
+    pub misses: Atomic[int]
+```
+
+Rules:
+- A class that declares `implements Sendable` must have **only Sendable fields** — the compiler rejects the class definition otherwise.
+- Primitive types (`int`, `float`, `bool`, `str`) are always Sendable.
+- Built-in concurrency types (`Atomic[T]`, `Mutex[T]`, `RwLock[T]`, `Chan[T]`, `Thread`, `ThreadPool`, `ThreadLocal[T]`) are always Sendable.
+- `List[T]`, `Vec[T]`, `Dict`, `Map` are **never Sendable** — they have no internal synchronization.
+
+### Enforcement at spawn sites
+
+```python
+class UnsafeStats:
+    pub hits: int              # plain int — NOT Sendable
+
+def tally(s: UnsafeStats) -> void:
+    s.hits += 1
+
+def main():
+    mut s = UnsafeStats()
+    spawn tally(s)             # [T-1] compile error — UnsafeStats is not Sendable
+    Thread.spawn(tally, s)     # [T-1] compile error
+```
+
+The `[T-1]` error fires for `spawn`, `Thread.spawn`, `pool.spawn`, and `await_all` sub-calls. It does **not** fire for plain `await f(...)` (sequential — caller blocks, no concurrent access).
+
+### Full example
+
+```python
+from std.async.send   import Sendable
+from std.async.thread import Thread, Atomic
+
+class Counter implements Sendable:
+    pub value: Atomic[int]
+
+extend Counter:
+    pub def init() -> Counter:
+        mut c = Counter()
+        c.value = Atomic.new(0)
+        return c
+
+def increment(c: Counter) -> void:
+    mut i = 0
+    while i < 1000:
+        c.value.add(1)
+        i += 1
+
+def main():
+    mut c = Counter.init()
+    mut t1: Thread = Thread.spawn(increment, c)
+    mut t2: Thread = Thread.spawn(increment, c)
+    t1.join()
+    t2.join()
+    print(f"total: {c.value.load()}")    # 2000
+    c.value.free()
+```
+
+---
+
+## await_timeout — Time-Bounded Await
+
+`await_timeout(fn(args), ms)` calls an `async def` function and waits up to `ms` milliseconds for it to complete. Returns `true` if the function finished in time, `false` if it timed out:
+
+```python
+async def slow_fetch(n: int) -> int:
+    Thread.sleep(200)
+    return n * 2
+
+async def main():
+    mut ok = await_timeout(slow_fetch(10), 500)    # true — completes in ~200ms
+    if ok:
+        print("done in time")
+    else:
+        print("timed out")
+
+    mut ok2 = await_timeout(slow_fetch(10), 50)    # false — 200ms > 50ms deadline
+    if not ok2:
+        print("timed out as expected")
+```
+
+`await_timeout` is backed by `_TrTaskState` with a refcount-safe design: both the caller and the spawned thread hold a reference, and the last one to finish frees the state.
 
 ---
 
