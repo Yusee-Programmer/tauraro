@@ -152,6 +152,7 @@ pub class HirFunction:
     pub is_public: bool
     pub is_static: bool
     pub is_variadic: bool
+    pub is_decorator: bool
 
 pub class HirField:
     pub name: str
@@ -189,12 +190,13 @@ pub class HirInterface:
     pub is_public: bool
 
 pub class HirProgram:
-    pub functions:      Vec[HirFunction]
-    pub classes:        Vec[HirClass]
-    pub enums:          Vec[HirEnum]
-    pub interfaces:     Vec[HirInterface]
+    pub functions:       Vec[HirFunction]
+    pub classes:         Vec[HirClass]
+    pub enums:           Vec[HirEnum]
+    pub interfaces:      Vec[HirInterface]
     pub top_level_stmts: Vec[Pointer[HirStmt]]
-    pub extern_funcs:   Vec[HirFunction]   # extern "C" declarations
+    pub extern_funcs:    Vec[HirFunction]   # extern "C" declarations
+    pub decorator_defs:  Vec[HirFunction]   # decorator def ... functions
 
 extend HirProgram:
     pub def init() -> HirProgram:
@@ -205,6 +207,7 @@ extend HirProgram:
         p.interfaces = Vec[HirInterface].init(4)
         p.top_level_stmts = Vec[Pointer[HirStmt]].init(16)
         p.extern_funcs = Vec[HirFunction].init(4)
+        p.decorator_defs = Vec[HirFunction].init(4)
         return p
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

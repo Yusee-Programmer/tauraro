@@ -1281,6 +1281,9 @@ extend Parser:
             case Token.StrLit(s):
                 self.pos = self.pos + 1
                 return box_expr(Expr.ELitStr(s))
+            case Token.TripleStrLit(s):
+                self.pos = self.pos + 1
+                return box_expr(Expr.ELitStr(s))
             case Token.RawStrLit(s):
                 self.pos = self.pos + 1
                 return box_expr(Expr.ERawStr(s))
@@ -1718,6 +1721,13 @@ extend Parser:
                 return i_ptr
             case Token.KwExtend:
                 return self.parse_extend_decl()
+            case Token.KwDecorator:
+                self.pos = self.pos + 1   # consume 'decorator'
+                mut _dl = self.cur_line()
+                mut _df = self.parse_function_def(False)
+                _df.line = _dl
+                _df.is_public = is_public
+                return box_decl(Decl.DDecoratorDef(_df))
             case Token.KwExtern:
                 return self.parse_extern_decl()
             case Token.KwAsync:

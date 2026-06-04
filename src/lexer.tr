@@ -266,6 +266,16 @@ pub class Lexer:
                 return Token.FloatLit(result)
             return Token.IntLit(val)
 
+    pub def read_triple_string(self, quote: int) -> Token:
+        # Called after consuming the first three quote characters.
+        mut sb = StringBuilder.init(128)
+        while not self.at_end():
+            if self.peek() == quote and self.peek_at(1) == quote and self.peek_at(2) == quote:
+                self.advance(); self.advance(); self.advance()
+                return Token.TripleStrLit(sb.to_string().as_str())
+            sb.append_char(self.advance())
+        return Token.TripleStrLit(sb.to_string().as_str())
+
     pub def read_string(self, quote: int) -> Token:
         self.advance()
         mut sb = StringBuilder.init(64)
@@ -435,7 +445,11 @@ pub class Lexer:
                 self.token_lines.push(self.line)
                 continue
             if c == 34 or c == 39:
-                if c == 39 and (self.peek_at(2) == 39 or self.peek_at(1) == 92):
+                if c == 34 and self.peek_at(1) == 34 and self.peek_at(2) == 34:
+                    self.advance(); self.advance(); self.advance()
+                    tokens.push(self.read_triple_string(34))
+                    self.token_lines.push(self.line)
+                elif c == 39 and (self.peek_at(2) == 39 or self.peek_at(1) == 92):
                     tokens.push(self.read_char())
                     self.token_lines.push(self.line)
                 else:

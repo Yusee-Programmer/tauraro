@@ -1,0 +1,67 @@
+# examples/25 — New features: triple-quoted strings, assert, str methods, decorators
+
+# ── Triple-quoted strings ─────────────────────────────────────────────────────
+def test_triple_string():
+    mut sql = """
+SELECT *
+FROM users
+WHERE active = 1
+"""
+    assert sql.len() > 0, "triple string should not be empty"
+    print("triple-quoted string ok")
+
+# ── assert statement ──────────────────────────────────────────────────────────
+def test_assert():
+    assert 2 + 2 == 4
+    assert 2 + 2 == 4, "basic arithmetic must hold"
+    print("assert ok")
+
+# ── str method syntax ─────────────────────────────────────────────────────────
+def test_str_methods():
+    mut s = "  hello world  "
+    mut trimmed = s.trim()
+    assert trimmed == "hello world", "trim failed"
+
+    mut upper = trimmed.to_upper()
+    assert upper == "HELLO WORLD", "to_upper failed"
+
+    mut lower = upper.to_lower()
+    assert lower == "hello world", "to_lower failed"
+
+    mut parts = "a,b,c".split(",")
+    assert parts.len == 3, "split count wrong"
+
+    mut joined = Str.join(parts, "-")
+    assert joined == "a-b-c", "join failed"
+
+    assert "hello".starts_with("hel"), "starts_with failed"
+    assert "hello".ends_with("llo"), "ends_with failed"
+    assert "hello".contains("ell"), "contains failed"
+    assert "hello".len() == 5, "len failed"
+
+    print("str methods ok")
+
+# ── User-defined decorator ────────────────────────────────────────────────────
+decorator def hot_fn() -> str:
+    return "hot"
+
+@hot_fn
+def compute_sum(n: int) -> int:
+    mut s = 0
+    mut i = 0
+    while i < n:
+        s = s + i
+        i = i + 1
+    return s
+
+def test_decorator():
+    mut result = compute_sum(100)
+    assert result == 4950, "decorator function result wrong"
+    print("decorator ok")
+
+def main():
+    test_triple_string()
+    test_assert()
+    test_str_methods()
+    test_decorator()
+    print("all new features pass")

@@ -157,6 +157,7 @@ pub class CGenerator:
     pub value_types:     Map[str, bool]  # classes with is_class=false — no * in C type
     pub closure_cap_set: Map[str, bool]  # captured var names for the current closure being generated
     pub closure_env_var: str             # env var name inside a closure body (empty = not in closure body)
+    pub decorator_defs: Map[str, HirFunction]  # user-defined decorator registry
 
     pub def init() -> CGenerator:
         mut g = CGenerator()
@@ -190,6 +191,7 @@ pub class CGenerator:
         g.value_types    = Map[str, bool].init(32)
         g.closure_cap_set = Map[str, bool].init(0)
         g.closure_env_var = ""
+        g.decorator_defs  = Map[str, HirFunction].init(16)
         return g
 
     pub def next_temp(self) -> str:
@@ -704,12 +706,29 @@ pub class CGenerator:
 
     # ── Attributes & signatures ───────────────────────────────────────────────
 
+    pub def get_user_decorator_attr(self, name: str) -> str:
+        if not self.decorator_defs.contains(name): return ""
+        mut df = self.decorator_defs.get(name)
+        # A decorator body with a single return of a string literal → use as C attribute suffix
+        if df.body.stmts.len == 1:
+            match df.body.stmts.get(0).read():
+                case HirStmt.SReturn(rv):
+                    if rv as usize != 0 as usize:
+                        match rv.read():
+                            case HirExpr.ELitStr(attr_s, _):
+                                return "__attribute__((" + attr_s + ")) "
+                            case _: pass
+                case _: pass
+        return ""
+
     pub def get_inline_attrs(self, f: HirFunction) -> str:
         mut i = 0
         while i < f.decorators.len:
             if f.decorators.get(i).name == "inline": return "static inline __attribute__((always_inline,hot)) "
             if f.decorators.get(i).name == "hot": return "static __attribute__((hot)) "
             if f.decorators.get(i).name == "noinline": return "static __attribute__((noinline)) "
+            mut user_attr = self.get_user_decorator_attr(f.decorators.get(i).name)
+            if user_attr != "": return "static " + user_attr
             i = i + 1
         if f.name == "main" or f.name == "_tr_main":
             return "__attribute__((hot)) "
@@ -734,6 +753,8 @@ pub class CGenerator:
             if f.decorators.get(i).name == "inline": return "inline __attribute__((always_inline,hot)) "
             if f.decorators.get(i).name == "hot": return "__attribute__((hot)) "
             if f.decorators.get(i).name == "noinline": return "__attribute__((noinline)) "
+            mut user_attr_p = self.get_user_decorator_attr(f.decorators.get(i).name)
+            if user_attr_p != "": return user_attr_p
             i = i + 1
         if f.name == "main" or f.name == "_tr_main":
             return "__attribute__((hot)) "
@@ -1795,6 +1816,60 @@ pub class CGenerator:
                 opt_extra = ", " + self.gen_args(args)
             return "Option_" + method + "(" + obj_s + opt_extra + ")"
 
+        # Str.join static call: Str.join(parts, sep) → _tr_str_join((List_str*)parts, sep)
+        if obj_s == "Str" and method == "join":
+            if args.len >= 2: return "_tr_str_join((List_str*)" + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
+            if args.len == 1: return "_tr_str_join((List_str*)" + self.gen_expr(args.get(0)) + ", \"\")"
+
+        # str primitive method dispatch — "hello".trim() → _tr_str_strip("hello")
+        if t_n == "str":
+            mut str_arg0 = ""
+            if args.len > 0: str_arg0 = self.gen_expr(args.get(0))
+            mut str_arg1 = ""
+            if args.len > 1: str_arg1 = self.gen_expr(args.get(1))
+            if method == "split":         return "(void*)_tr_str_split(" + obj_s + ", " + str_arg0 + ")"
+            if method == "split_to_vec":  return "(void*)_tr_str_split(" + obj_s + ", " + str_arg0 + ")"
+            if method == "trim" or method == "strip": return "_tr_str_strip(" + obj_s + ")"
+            if method == "trim_left":     return "_tr_str_trim_left(" + obj_s + ")"
+            if method == "trim_right":    return "_tr_str_trim_right(" + obj_s + ")"
+            if method == "to_upper":      return "_tr_str_upper(" + obj_s + ")"
+            if method == "to_lower":      return "_tr_str_lower(" + obj_s + ")"
+            if method == "capitalize":    return "_tr_str_capitalize(" + obj_s + ")"
+            if method == "title":         return "_tr_str_title(" + obj_s + ")"
+            if method == "reverse":       return "_tr_str_reverse(" + obj_s + ")"
+            if method == "repeat":        return "_tr_str_repeat(" + obj_s + ", " + str_arg0 + ")"
+            if method == "replace":       return "_tr_str_replace(" + obj_s + ", " + str_arg0 + ", " + str_arg1 + ")"
+            if method == "replace_first": return "_tr_str_replace_first(" + obj_s + ", " + str_arg0 + ", " + str_arg1 + ")"
+            if method == "slice":         return "_tr_str_slice(" + obj_s + ", " + str_arg0 + ", " + str_arg1 + ")"
+            if method == "strip_prefix":  return "_tr_str_strip_prefix(" + obj_s + ", " + str_arg0 + ")"
+            if method == "strip_suffix":  return "_tr_str_strip_suffix(" + obj_s + ", " + str_arg0 + ")"
+            if method == "remove_char":   return "_tr_str_remove_char(" + obj_s + ", " + str_arg0 + ")"
+            if method == "join":          return "_tr_str_join((List_str*)(void*)" + obj_s + ", " + str_arg0 + ")"
+            if method == "len":           return "_tr_strlen((char*)" + obj_s + ")"
+            if method == "index_of":      return "_tr_str_index_of(" + obj_s + ", " + str_arg0 + ")"
+            if method == "last_index_of": return "_tr_str_last_index_of(" + obj_s + ", " + str_arg0 + ")"
+            if method == "count":         return "_tr_str_count_occ(" + obj_s + ", " + str_arg0 + ")"
+            if method == "char_at":       return "_tr_str_char_at_code(" + obj_s + ", " + str_arg0 + ")"
+            if method == "starts_with":   return "_tr_str_starts_with(" + obj_s + ", " + str_arg0 + ")"
+            if method == "ends_with":     return "_tr_str_ends_with(" + obj_s + ", " + str_arg0 + ")"
+            if method == "contains":      return "_tr_str_contains(" + obj_s + ", " + str_arg0 + ")"
+            if method == "contains_char": return "_tr_str_contains_char(" + obj_s + ", " + str_arg0 + ")"
+            if method == "eq":            return "_tr_str_eq(" + obj_s + ", " + str_arg0 + ")"
+            if method == "is_digit":      return "_tr_str_is_digit(" + obj_s + ")"
+            if method == "is_alpha":      return "_tr_str_is_alpha(" + obj_s + ")"
+            if method == "is_alnum":      return "_tr_str_is_alnum(" + obj_s + ")"
+            if method == "is_space":      return "_tr_str_is_space(" + obj_s + ")"
+            if method == "is_upper":      return "_tr_str_is_upper(" + obj_s + ")"
+            if method == "is_lower":      return "_tr_str_is_lower(" + obj_s + ")"
+            if method == "parse_int":     return "_tr_str_to_int(" + obj_s + ")"
+            if method == "parse_float":   return "_tr_str_to_float(" + obj_s + ")"
+            if method == "parse_bool":    return "_tr_str_parse_bool(" + obj_s + ")"
+            if method == "lines":         return "_tr_str_lines(" + obj_s + ")"
+            if method == "words":         return "_tr_str_words(" + obj_s + ")"
+            if method == "lpad":          return "_tr_str_lpad(" + obj_s + ", " + str_arg0 + ", " + str_arg1 + ")"
+            if method == "rpad":          return "_tr_str_rpad(" + obj_s + ", " + str_arg0 + ", " + str_arg1 + ")"
+            if method == "center":        return "_tr_str_center(" + obj_s + ", " + str_arg0 + ")"
+
         # Pointer method calls — intercept when:
         #   (a) receiver is explicitly Pointer[T], or
         #   (b) method is "offset" (only valid on pointers), or
@@ -2085,7 +2160,7 @@ pub class CGenerator:
             if method == "replace" and args.len == 2:
                 return "_tr_str_replace(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
             if method == "split" and args.len > 0:
-                return "_tr_str_split(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "(void*)_tr_str_split(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             if method == "find" and args.len > 0:
                 mut tmp_find: str = self.next_temp()
                 return "({ char* " + tmp_find + " = strstr(" + obj_s + ", " + self.gen_expr(args.get(0)) + "); " + tmp_find + " ? (long long)(" + tmp_find + " - (" + obj_s + ")) : -1LL; })"
@@ -2096,6 +2171,9 @@ pub class CGenerator:
         # Static call: Task.init(...) — obj is a type-name ident, hir_expr_type returns void/empty.
         # Recover class_name from obj_s when it matches a known user class.
         if (class_name == "void" or class_name == "") and self.classes.contains(obj_s):
+            class_name = obj_s
+        # Also recover for built-in collection types used in static calls (Vec.init, List.init, etc.)
+        if (class_name == "void" or class_name == "") and (obj_s == "Vec" or obj_s == "List" or obj_s == "Map" or obj_s == "Dict"):
             class_name = obj_s
 
         # StringBuilder special handling (must be before len/length shortcut)
@@ -2264,7 +2342,7 @@ pub class CGenerator:
                 return get_r
             if method == "len" or method == "length": return "((long long)" + obj_s + "->len)"
             if method == "new" or method == "init":
-                return "List_" + elem_sfx + "_new()"
+                return "(void*)List_" + elem_sfx + "_new()"
             if method == "remove":
                 return "List_" + elem_sfx + "_remove(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "swap":
@@ -3400,24 +3478,14 @@ pub class CGenerator:
                 self.w(pad + "}\n")
                 self.w(pad + "_tr_taskgroup_wait();\n")
             case HirStmt.SGpuBlock(body):
-                # gpu: compiles to OpenMP-parallelized C (CPU fallback).
-                # For real GPU kernels, use extern "C": to call CUDA/HIP/OpenCL kernels.
-                self.w(pad + "#ifdef _OPENMP\n")
-                self.w(pad + "/* gpu: parallel block (OpenMP) */\n")
-                self.w(pad + "#pragma omp parallel\n")
+                # gpu: keyword is deprecated in core. Use std.gpu instead.
+                # Emits the block body sequentially with no OpenMP wrappers.
+                self.w(pad + "/* deprecated gpu: block — use std.gpu for GPU dispatch */\n")
                 self.w(pad + "{\n")
                 self.in_gpu_block = self.in_gpu_block + 1
                 self.gen_block(body, indent + 1)
                 self.in_gpu_block = self.in_gpu_block - 1
                 self.w(pad + "}\n")
-                self.w(pad + "#else\n")
-                self.w(pad + "/* gpu: sequential fallback (compile with -fopenmp for parallelism) */\n")
-                self.w(pad + "{\n")
-                self.in_gpu_block = self.in_gpu_block + 1
-                self.gen_block(body, indent + 1)
-                self.in_gpu_block = self.in_gpu_block - 1
-                self.w(pad + "}\n")
-                self.w(pad + "#endif\n")
             case HirStmt.SBreak: self.w(pad + "break;\n")
             case HirStmt.SContinue: self.w(pad + "continue;\n")
             case HirStmt.SPass: self.w(pad + "/* pass */\n")
@@ -3944,6 +4012,11 @@ pub class CGenerator:
         i = 0
         while i < prog.functions.len:
             self.functions.insert(prog.functions.get(i).name, prog.functions.get(i))
+            i = i + 1
+        i = 0
+        while i < prog.decorator_defs.len:
+            mut _dd = prog.decorator_defs.get(i)
+            self.decorator_defs.insert(_dd.name, _dd)
             i = i + 1
 
     # ── Generic type pre-scan (collect all instantiations before codegen) ────

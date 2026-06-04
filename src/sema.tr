@@ -91,6 +91,7 @@ pub class Sema:
     pub in_unsafe: bool                 # Gap 6: inside an unsafe: block
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
     pub strict_mode: bool               # --strict: alloc outside unsafe → hard [U-1] error
+    pub decorator_names: Map[str, bool]  # decorator def registry (name → true)
 
 extend Sema:
     pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
@@ -138,6 +139,7 @@ extend Sema:
         s.in_unsafe              = false
         s.current_func_ret_from  = ""
         s.strict_mode            = false
+        s.decorator_names        = Map[str, bool].init(16)
 
         # ── Built-in functions ─────────────────────────────────────────────────
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -177,8 +179,9 @@ extend Sema:
         s.globals.insert("_tr_system", Symbol.init("_tr_system", SymbolKind.SFunction, box_asttype(AstType.init("int"))))
 
         # ── Built-in container classes ──────────────────────────────────────────
+        # Vec is NOT a built-in — it is the OOP class imported from core.vec.
+        # List is the only built-in C-backed array type.
         s.globals.insert("List",         Symbol.init("List",         SymbolKind.SClass, box_asttype(AstType.init("List"))))
-        s.globals.insert("Vec",          Symbol.init("Vec",          SymbolKind.SClass, box_asttype(AstType.init("Vec"))))
         s.globals.insert("Pointer",      Symbol.init("Pointer",      SymbolKind.SClass, box_asttype(AstType.init("Pointer"))))
         s.globals.insert("StringBuilder",Symbol.init("StringBuilder",SymbolKind.SClass, box_asttype(AstType.init("StringBuilder"))))
         s.globals.insert("StringObj",    Symbol.init("StringObj",    SymbolKind.SClass, box_asttype(AstType.init("StringObj"))))
@@ -505,11 +508,16 @@ extend Sema:
         if name != "self" and name != "_" and _tr_strlen(name) > 1:
             mut cat = self.is_reserved_error(name)
             if cat != "":
-                self.error("[N-1] '" + name + "' is a " + cat + " and cannot be used as a variable name. Choose a different name (e.g. 'my_" + name + "').")
+                self.error("[N-1] '" + name + "' is a " + cat + " and cannot be used as a name. Choose a different name (e.g. 'my_" + name + "').")
             else:
-                mut wcat = self.is_reserved_warn(name)
-                if wcat != "":
-                    self.warnings.push("[N-1] '" + name + "' shadows the built-in " + wcat + ". Choose a different name to avoid confusion.")
+                # Class members (fields and methods) are exempt — names are scoped to the class.
+                # Local variables (SVariable) are also exempt — local shadowing is intentional.
+                # Only top-level function/type declarations are checked.
+                mut is_toplevel_decl = self.current_class_name == "" and kind != SymbolKind.SVariable
+                if is_toplevel_decl:
+                    mut kcat = self.is_reserved_keyword(name)
+                    if kcat != "":
+                        self.error("[N-1] '" + name + "' is a " + kcat + " and is reserved. Choose a different name (e.g. 'my_" + name + "').")
         mut sym = Symbol.init(name, kind, ty)
         sym.scope_depth = self.current_scope_depth
         sym.is_mut = is_mut
@@ -572,6 +580,10 @@ extend Sema:
                         hef.is_extern = true
                         hp.extern_funcs.push(hef)
                         ei = ei + 1
+                case Decl.DDecoratorDef(f):
+                    mut hdf = self.lower_func(f)
+                    hdf.is_decorator = true
+                    hp.decorator_defs.push(hdf)
                 case _: pass
             i = i + 1
         return hp
@@ -612,15 +624,24 @@ extend Sema:
                     if f.ret_ty as usize != 0 as usize: _e_ret = f.ret_ty
                     self.declare(f.name, SymbolKind.SFunction, _e_ret, false)
                     ei = ei + 1
+            case Decl.DDecoratorDef(f):
+                self.decorator_names.insert(f.name, true)
+                self.declare(f.name, SymbolKind.SFunction, box_asttype(AstType.init("void")), false)
             case _: pass
 
     pub def lower_func(self, f: FunctionDef) -> HirFunction:
         self.current_line = f.line
         # Rule N-1: Function name check
+        # Top-level functions cannot shadow reserved built-ins.
+        # Methods (current_class_name != "") are exempt — len/abs/etc. are valid method names.
         if f.name != "main" and f.name != "" and _tr_strlen(f.name) > 1:
             mut fn_cat = self.is_reserved_error(f.name)
             if fn_cat != "":
                 self.error("[N-1] '" + f.name + "' is a " + fn_cat + " and cannot be used as a function name.")
+            elif self.current_class_name == "":
+                mut fn_kcat = self.is_reserved_keyword(f.name)
+                if fn_kcat != "":
+                    self.error("[N-1] '" + f.name + "' is a " + fn_kcat + " and is reserved. Choose a different function name.")
         # Save async context, set function context
         mut saved_async = self.in_async_fn
         self.in_async_fn = f.is_async
@@ -702,6 +723,7 @@ extend Sema:
             _si = _si + 1
         hf.is_static = self.current_class_name != "" and not _has_self
         hf.is_variadic = f.is_variadic
+        hf.is_decorator = false
 
         # Rule F-3: Definite return check for non-void, non-extern functions
         # Skip for interface method signatures (empty body = no stmts)
@@ -1430,6 +1452,48 @@ extend Sema:
                     i = i + 1
             case _: pass
 
+    pub def str_method_ret_ty(self, method: str) -> AstType:
+        if method == "split": return AstType.init("List")
+        if method == "split_to_vec": return AstType.init("Vec")
+        if method == "strip": return AstType.init("str")
+        if method == "trim": return AstType.init("str")
+        if method == "trim_left": return AstType.init("str")
+        if method == "trim_right": return AstType.init("str")
+        if method == "to_upper": return AstType.init("str")
+        if method == "to_lower": return AstType.init("str")
+        if method == "capitalize": return AstType.init("str")
+        if method == "title": return AstType.init("str")
+        if method == "reverse": return AstType.init("str")
+        if method == "repeat": return AstType.init("str")
+        if method == "replace": return AstType.init("str")
+        if method == "replace_first": return AstType.init("str")
+        if method == "slice": return AstType.init("str")
+        if method == "strip_prefix": return AstType.init("str")
+        if method == "strip_suffix": return AstType.init("str")
+        if method == "remove_char": return AstType.init("str")
+        if method == "join": return AstType.init("str")
+        if method == "len": return AstType.init("int")
+        if method == "index_of": return AstType.init("int")
+        if method == "last_index_of": return AstType.init("int")
+        if method == "count": return AstType.init("int")
+        if method == "char_at": return AstType.init("int")
+        if method == "parse_int": return AstType.init("int")
+        if method == "starts_with": return AstType.init("bool")
+        if method == "ends_with": return AstType.init("bool")
+        if method == "contains_char": return AstType.init("bool")
+        if method == "eq": return AstType.init("bool")
+        if method == "is_digit": return AstType.init("bool")
+        if method == "is_alpha": return AstType.init("bool")
+        if method == "is_alnum": return AstType.init("bool")
+        if method == "is_space": return AstType.init("bool")
+        if method == "is_upper": return AstType.init("bool")
+        if method == "is_lower": return AstType.init("bool")
+        if method == "parse_bool": return AstType.init("bool")
+        if method == "parse_float": return AstType.init("float")
+        if method == "lines": return AstType.init("Vec")
+        if method == "words": return AstType.init("Vec")
+        return AstType.init("void")
+
     pub def lower_expr(self, e_ptr: Pointer[Expr]) -> Pointer[HirExpr]:
         if e_ptr as usize == 0 as usize: return Pointer[HirExpr](0)
         e = e_ptr.read()
@@ -1680,6 +1744,9 @@ extend Sema:
                             _gmi = _gmi + 1
                 elif method == "alloc": ret_ty = hobj_ty
                 elif method == "contains": ret_ty = AstType.init("bool")
+                # str primitive method dispatch — str.split/strip/join/etc.
+                elif hobj_ty.name == "str":
+                    ret_ty = self.str_method_ret_ty(method)
                 # Thread built-in method return types
                 elif method == "spawn" and (hobj_ty.name == "Thread" or hobj_ty.name == "void"):
                     ret_ty = AstType.init("Thread")
@@ -2098,17 +2165,20 @@ extend Sema:
         if name == "Err": return "built-in Result constructor 'Err'"
         return ""
 
-    pub def is_reserved_warn(self, name: str) -> str:
-        if name == "print": return "built-in print function"
-        if name == "input": return "built-in input function"
+    # Reserved built-in names that cannot be shadowed at the top level.
+    # Methods are EXEMPT — a method named 'len' or 'abs' is namespaced to its
+    # class and does not shadow the global built-in.  Vec is intentionally absent:
+    # it is the OOP class imported from core.vec, not a built-in.
+    pub def is_reserved_keyword(self, name: str) -> str:
+        if name == "print" or name == "input": return "built-in I/O function"
         if name == "range": return "built-in range function"
         if name == "len" or name == "tsawon": return "built-in len function"
-        if name == "type" or name == "zuwa_rubutu": return "built-in type/str function"
+        if name == "type" or name == "zuwa_rubutu": return "built-in type function"
         if name == "abs" or name == "max" or name == "min" or name == "sum": return "built-in math function"
-        if name == "str" or name == "int" or name == "float" or name == "bool": return "built-in type-conversion function"
-        if name == "List" or name == "Dict" or name == "Vec": return "built-in container type"
+        if name == "str" or name == "int" or name == "float" or name == "bool": return "built-in primitive type"
+        if name == "List" or name == "Dict": return "built-in container type"
         if name == "Option" or name == "Result": return "built-in enum type"
-        if name == "Exception" or name == "Error": return "built-in exception class"
+        if name == "Exception" or name == "Error": return "built-in exception type"
         return ""
 
     # ── Rule F-3: Definite return check ───────────────────────────────────────

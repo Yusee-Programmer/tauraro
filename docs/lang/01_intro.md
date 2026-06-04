@@ -8,7 +8,7 @@ Tauraro is a **compiled, statically-typed, systems programming language** with P
 
 > **Core promise:** Python syntax. C performance. The compiler handles the hard parts.
 
-The name "Tauraro" (تارارو) is Hausa for "star." The language is bilingual: every keyword has both an English and a Hausa spelling, and either works anywhere in any program.
+The name "Tauraro" (تارارو) is Hausa for "star."
 
 ---
 
@@ -32,9 +32,11 @@ Tauraro's answer to the trilemma: **move the burden to the compiler**. You write
 ## Core Design Principles
 
 ### 1. The Compiler Carries the Complexity
+
 Every heap-allocated variable is tracked. Every `free()` is injected automatically at scope exit. Every type conversion is explicit. The user writes intent; the compiler handles mechanics.
 
 ### 2. Zero-Cost Abstractions
+
 - Classes → C structs (no vtables unless you use interfaces)
 - Methods → C functions with a `self*` parameter
 - Interfaces → vtable structs (one pointer dereference per virtual call)
@@ -44,17 +46,16 @@ Every heap-allocated variable is tracked. Every `free()` is injected automatical
 There is no abstraction in Tauraro that costs more than its direct C equivalent would.
 
 ### 3. Safe by Default, Unsafe by Choice
+
 All code is memory-safe unless you explicitly write `unsafe:`. Inside `unsafe:` you get raw pointers, pointer arithmetic, and inline assembly. Outside it, the compiler prevents dangling pointers, double-frees, and use-after-move. The unsafe surface is auditable — one keyword, clearly marked.
 
 ### 4. Compiled, Not Interpreted
+
 There is no runtime, no REPL, no interpreter. Source goes through:
 ```
 .tr → Lexer → Parser → AST → Sema → HIR → C → GCC/Clang → native binary
 ```
 The binary runs standalone. No Tauraro runtime needs to be installed on the target machine.
-
-### 5. Bilingual (English + Hausa)
-Every keyword has a Hausa equivalent. Both are accepted anywhere. A program can mix them or use one exclusively. This is not cosmetic — it makes the language accessible to Hausa-speaking programmers who may think in Hausa more naturally.
 
 ---
 
@@ -65,7 +66,6 @@ source.tr
     │
     ├─ Lexer          (src/lexer.tr)
     │   Tokenizes the source into tokens with indentation tracking.
-    │   Handles both English and Hausa keywords.
     │   Produces: tokens with Indent/Dedent tokens for blocks.
     │
     ├─ Parser          (src/parser.tr)
@@ -107,6 +107,20 @@ source.tr
 ---
 
 ## Getting Started
+
+### When to Use Tauraro
+
+Use Tauraro when you want:
+- **Systems programming** (daemons, CLI tools, embedded systems, compilers) with Python-like ergonomics
+- **Performance-critical applications** without manual memory management
+- **A readable codebase** that non-C programmers can contribute to
+- **Cross-compilation** to Android, iOS, embedded ARM, WASM, etc.
+
+### When NOT to Use Tauraro
+
+- You need a mature ecosystem with thousands of libraries (use Rust or Go)
+- You're building a simple web service where latency doesn't matter much (use Python or Node)
+- You need dynamic typing or reflection (use Python or JavaScript)
 
 ### Installation
 
@@ -177,11 +191,13 @@ distance squared = 25
 
 ## CLI Reference
 
+### How to Use the Compiler
+
 ```bash
 # Print version
 tauraroc --version
 
-# Compile and run immediately
+# Compile and run immediately (no output file kept)
 tauraroc --run program.tr
 
 # Compile to an executable
@@ -190,7 +206,7 @@ tauraroc -o program.exe program.tr
 # Compile and run with optimization level 3
 tauraroc -O3 --run program.tr
 
-# Write per-module C files to build/ without compiling (inspect what the compiler produces)
+# Write per-module C files to build/ without compiling
 tauraroc --emit c program.tr
 
 # Print AST and stop (inspect the parse tree)
@@ -205,8 +221,11 @@ tauraroc --check program.tr
 # Show all pipeline phases (verbose output)
 tauraroc --verbose program.tr
 
-# Use the LLVM backend (experimental, not production-ready)
+# Use the LLVM backend (experimental)
 tauraroc --backend llvm program.tr
+
+# Strict mode: treat unsafe-outside-unsafe as an error
+tauraroc --strict program.tr
 ```
 
 ### CLI Flag Reference
@@ -221,10 +240,11 @@ tauraroc --backend llvm program.tr
 | `--emit mir` | Print MIR basic blocks and stop |
 | `--check` | Semantic analysis only, no code generation |
 | `--backend llvm` | Use LLVM IR backend (experimental) |
+| `--strict` | Enable strict mode: `alloc` outside `unsafe:` is error [U-1] |
 | `-O0` | No optimization |
 | `-O1` | Basic optimization |
 | `-O2` | Standard optimization (default) |
-| `-O3` | Aggressive optimization (enables AVX2 on x86-64) |
+| `-O3` | Aggressive optimization (enables `-march=native -funroll-loops` on x86-64) |
 | `--verbose` | Show all pipeline phases |
 | `--static` | Link the output binary statically (no shared libs) |
 | `--target <triple>` | Cross-compile for a different target (see below) |
@@ -246,10 +266,38 @@ $env:TAURARO_PATH = "C:\mylibs;C:\Users\user\pkgs"
 tauraroc --run myapp.tr
 ```
 
-### Cross-Compilation (`--target`)
+### Common Mistakes with the CLI
 
-`tauraroc` can cross-compile Tauraro programs to any target that the host C compiler supports.
-Pass a shorthand alias or a raw LLVM triple:
+**Forgetting `-o` in a pipeline:**
+```bash
+tauraroc program.tr          # ERROR: no output — use --run or -o
+tauraroc --run program.tr    # OK: compile and run
+tauraroc -o out program.tr   # OK: produce binary named 'out'
+```
+
+**Using `--emit c` when you want to compile:**
+```bash
+tauraroc --emit c program.tr   # Writes .c files, does NOT compile
+tauraroc --run program.tr      # Compiles AND runs
+```
+
+**Optimization level with `--run`:**
+```bash
+tauraroc -O3 --run program.tr  # -O3 applies to the C compilation step
+```
+
+### Best Practices for the CLI
+
+- Use `--check` during development for fast feedback without full compilation
+- Use `--emit c` to inspect what the compiler generates and verify correctness
+- Use `--static` for deployment to machines without the matching glibc version
+- Keep `TAURARO_PATH` in your shell profile for shared library directories
+
+---
+
+## Cross-Compilation (`--target`)
+
+`tauraroc` can cross-compile to any target the host C compiler supports.
 
 | Shorthand | Triple | Notes |
 |-----------|--------|-------|
@@ -285,16 +333,29 @@ tauraroc --target embedded-arm -o firmware.elf firmware.tr
 
 # Cross-compile with a custom sysroot
 tauraroc --target linux-arm64 --sysroot /opt/aarch64-sysroot -o app app.tr
-
-# Static Android binary (runs on Termux without modifications)
-tauraroc --target android-arm64 --static --run hello.tr
 ```
+
+**Common cross-compilation mistakes:**
+- Forgetting to install the cross-compiler toolchain (GCC/Clang cross target)
+- Using host-specific headers that don't exist on the target
+- Not using `--static` for Android/embedded targets (dynamic linker path differs)
 
 ---
 
 ## The Self-Hosted Compiler
 
 Tauraro's compiler is **self-hosted** — written in Tauraro itself (`src/main.tr`). The distributed `tauraroc` binary is produced by compiling the compiler source with itself. This means the compiler is its own reference implementation: any feature that works in example programs also works in the compiler source.
+
+**Bootstrap process:**
+```bash
+# Stage 1: old tauraroc compiles the new source
+tauraroc src/main.tr -o tau.exe
+
+# Stage 2: new binary compiles itself (verifies correctness)
+tau.exe src/main.tr -o tau2.exe
+
+# If both produce identical output, the bootstrap is confirmed
+```
 
 ---
 

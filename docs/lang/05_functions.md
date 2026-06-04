@@ -1,8 +1,33 @@
 # 05 — Functions
 
+Functions are the fundamental unit of reusable logic in Tauraro. They are statically typed, compiled directly to C functions (no runtime dispatch overhead), and support generics, error propagation, closures, and async/await.
+
+---
+
+## Table of Contents
+
+1. [Defining Functions](#defining-functions)
+2. [Parameters and Return Types](#parameters-and-return-types)
+3. [Decorators](#decorators)
+4. [Closures and Lambdas](#closures-and-lambdas)
+5. [Generic Functions](#generic-functions)
+6. [Error Propagation with `throws`](#error-propagation-with-throws)
+7. [Async Functions](#async-functions)
+8. [Variadic Functions (FFI Only)](#variadic-functions-ffi-only)
+9. [Visibility: `pub` and `export`](#visibility-pub-and-export)
+10. [Function Rules Quick Reference](#function-rules-quick-reference)
+
 ---
 
 ## Defining Functions
+
+### When to use
+
+Define a function whenever a block of logic needs a name, needs to be called more than once, or needs to be tested in isolation. If you are writing the same three-line pattern in two places, extract it into a function.
+
+### How it works
+
+Use the `def` keyword followed by the function name, parameter list, optional return type, and an indented body:
 
 ```python
 def add(a: int, b: int) -> int:
@@ -11,24 +36,62 @@ def add(a: int, b: int) -> int:
 def greet(name: str) -> void:
     print(f"Hello, {name}!")
 
-def log(msg: str):           # void return type is optional
+def log(msg: str):           # void return type may be omitted
     print(msg)
 ```
 
-### Parameters
+### Common Mistakes
 
-All parameter types must be annotated. There are no default parameters and no keyword arguments.
+**Missing return type on non-void function:**
+```python
+def area(w: int, h: int):    # ERROR: return type missing for non-void function
+    return w * h
+```
+Fix: `def area(w: int, h: int) -> int:`
+
+**Omitting `return` on a branch:**
+```python
+def sign(n: int) -> str:
+    if n > 0: return "positive"
+    elif n < 0: return "negative"
+    # ERROR [F-3]: missing return on the else path
+```
+Fix: add `else: return "zero"` or a final `return "zero"` after the chain.
+
+**Using default parameter values:**
+```python
+def connect(host: str, port: int = 8080) -> void:   # ERROR: default parameters not supported
+    ...
+```
+Fix: Use overloaded static methods in a class, or require the caller to pass the value explicitly.
+
+### Best Practices
+
+- Name functions as verb phrases: `parse_input`, `build_config`, `find_user`, `render_frame`.
+- Annotate return types explicitly — even `-> void` — to make the contract readable and searchable.
+- One function, one responsibility. If you are adding a third `elif` inside a function, consider splitting it.
+- Return values rather than mutating through side effects. The ownership system manages returned values automatically.
+
+---
+
+## Parameters and Return Types
+
+### When to use
+
+Every function that operates on external data needs parameters. Every function that produces a value needs a return type annotation. Tauraro has no default parameters and no keyword arguments, so the parameter list is the complete contract.
+
+### How it works
+
+**Basic parameters:**
 
 ```python
 def compute(x: int, y: float, label: str) -> void:
     print(f"{label}: {x as float + y}")
 ```
 
-**Compiler rule [F-1]:** Functions must declare parameter types. Omitting a parameter type is a parse error.
+All parameter types must be annotated. Omitting a type is a parse error (`[F-1]`).
 
-**Compiler rule [F-2]:** Functions must not shadow parameter names with local variables of the same name.
-
-### Return Values
+**Return values:**
 
 ```python
 def max_of(a: int, b: int) -> int:
@@ -36,7 +99,31 @@ def max_of(a: int, b: int) -> int:
     return b
 ```
 
-**Compiler rule [F-3]:** A function that declares a non-void return type must have a `return` statement on every possible code path. If any path is missing a `return`, the compiler errors:
+**Multiple return paths — all must return:**
+
+```python
+def classify(n: int) -> str:
+    if n > 0:   return "positive"
+    elif n < 0: return "negative"
+    else:       return "zero"     # all paths covered — [F-3] satisfied
+```
+
+**Early return:**
+
+```python
+def find_first(items: List[int], target: int) -> int:
+    mut i = 0
+    while i < len(items):
+        if items[i] == target: return i    # exit as soon as found
+        i = i + 1
+    return -1    # not found
+```
+
+**Compiler rule [F-1]:** All parameters must have type annotations. Omitting a type is a parse error.
+
+**Compiler rule [F-2]:** Parameters may not be shadowed by local variables of the same name.
+
+**Compiler rule [F-3]:** A non-void function must have a `return` on every reachable code path:
 
 ```
 ERROR [F-3]: Function 'max_of' returns 'int' but is missing a return statement
@@ -44,36 +131,45 @@ ERROR [F-3]: Function 'max_of' returns 'int' but is missing a return statement
              all if/elif/else branches return.
 ```
 
-**Fix:** Add a final `return` or complete the `if/elif/else` chain:
+### Common Mistakes
+
+**Shadowing a parameter name:**
 ```python
-def classify(n: int) -> str:
-    if n > 0:   return "positive"
-    elif n < 0: return "negative"
-    else:       return "zero"    # all paths covered
+def scale(value: int, factor: int) -> int:
+    mut value = value * factor    # ERROR [F-2]: shadows parameter 'value'
+    return value
 ```
+Fix: Use a different name: `mut result = value * factor`
 
-### Early Return
-
-Use `return` anywhere in the function body:
-
+**Non-void function with a missing return branch:**
 ```python
-def find_first(items: List[int], target: int) -> int:
-    mut i = 0
-    while i < len(items):
-        if items[i] == target: return i    # early exit
-        i = i + 1
-    return -1    # not found
+def parity(n: int) -> str:
+    if n % 2 == 0: return "even"
+    # falls off the end with no return — ERROR [F-3]
 ```
+Fix: `else: return "odd"` or add `return "odd"` after the `if`.
+
+### Best Practices
+
+- Keep parameter lists short (3–4 parameters is a natural limit). If you need more, consider grouping them in a class or struct.
+- Use explicit `-> void` rather than omitting the return type. The intent is clearer.
+- For "optional" parameters, provide a distinct function or use a dedicated sentinel value explicitly passed by the caller.
 
 ---
 
 ## Decorators
 
-Decorators are compile-time hints applied above a function definition:
+### When to use
 
-### `@inline`
+Decorators are compile-time annotations that change how the compiler treats a function. Use them when you need fine-grained control over inlining, calling convention, or method dispatch. Most code never needs a decorator.
 
-Forces inlining even on functions that wouldn't normally be inlined:
+### How it works
+
+Place the decorator on the line immediately above `def`:
+
+#### `@inline`
+
+Forces inlining even when the compiler would not inline automatically:
 
 ```python
 @inline
@@ -83,13 +179,41 @@ def clamp(v: int, lo: int, hi: int) -> int:
     return v
 ```
 
-**When to use:** For hot, very small functions called in tight loops that the compiler might not automatically inline. The compiler already inlines most small functions automatically — use `@inline` sparingly.
+Use for hot, very small functions called in tight loops. The compiler already inlines most small functions automatically — `@inline` is a manual override.
 
-**Compiler rule:** `@inline` is silently ignored on recursive functions and functions with `try/except`, because those cannot be inlined.
+Note: `@inline` is silently ignored on recursive functions and functions with `try/except` blocks, because those cannot be safely inlined.
 
-### `@staticmethod`
+#### `@noinline`
 
-Marks a method that has no `self` parameter. Called on the class name:
+Prevents inlining even when the compiler would inline:
+
+```python
+@noinline
+def log_error(msg: str) -> void:
+    print(f"ERROR: {msg}")
+```
+
+Use when you want the function to appear as a distinct symbol in profiler output, or when inlining would bloat a hot loop with cold error-handling code.
+
+#### `@hot` and `@cold`
+
+```python
+@hot
+def inner_loop(buf: List[int], n: int) -> void:
+    # tell GCC/Clang this is on the critical path
+    ...
+
+@cold
+def handle_parse_error(msg: str) -> void:
+    # tell GCC/Clang this is rarely called
+    ...
+```
+
+`@hot` hints that the function is frequently executed; `@cold` hints that it is rarely called. The compiler uses these to influence branch prediction and code placement in the compiled binary.
+
+#### `@staticmethod`
+
+Marks a class method that has no `self` parameter. Called on the class name, not an instance:
 
 ```python
 class MathUtils:
@@ -101,14 +225,29 @@ class MathUtils:
     def cube(x: int) -> int:
         return x * x * x
 
-mut s = MathUtils.square(5)    # 25
+mut s = MathUtils.square(5)    # 25, no instance needed
 ```
 
-Static methods have no `self` parameter and are called on the class name, not an instance.
+#### `@property`
 
-### `@packed`
+Marks a zero-argument method as a readable property:
 
-Applied to a class (not function), makes the struct use packed layout (no padding):
+```python
+class Circle:
+    pub radius: float
+
+    @property
+    def area(self) -> float:
+        return 3.14159 * self.radius * self.radius
+
+def main():
+    mut c = Circle.init(5.0)
+    print(c.area)    # called without parentheses
+```
+
+#### `@packed` (class decorator)
+
+Applied to a class (not a function), forces compact struct layout with no padding:
 
 ```python
 @packed
@@ -118,83 +257,152 @@ class NetworkHeader:
     pub length: u32
 ```
 
-Forces compact memory layout with no padding between fields. Use for hardware registers, network packets, or any struct where exact byte layout matters.
+Use for hardware registers, network packets, or any struct where exact byte layout matters.
 
-### `@hot` and `@cold`
+### Common Mistakes
 
+**Expecting `@inline` to inline recursive functions:**
 ```python
-@hot
-def critical_loop():    # tell GCC/Clang this is on the hot path
-    ...
-
-@cold
-def error_handler():    # tell GCC/Clang this is rarely called
-    ...
+@inline
+def factorial(n: int) -> int:    # @inline silently ignored — recursion cannot be inlined
+    if n <= 1: return 1
+    return n * factorial(n - 1)
 ```
 
-These hint to the compiler that a function is on the hot or cold path, influencing branch prediction and code placement decisions.
+**Using `@staticmethod` with a `self` parameter:**
+```python
+class Foo:
+    @staticmethod
+    def bar(self, x: int) -> int:   # ERROR: static method must not have self
+        return x
+```
+
+### Best Practices
+
+- Do not add `@hot` or `@inline` speculatively. Profile first, annotate second.
+- Never add `@inline` or `__attribute__((optimize(...)))` if you are dealing with GCC 15.x on MinGW — this can trigger an implicit LTO crash. The `@hot` decorator is safe.
+- Use `@staticmethod` for utility and factory methods that logically belong to a class but do not operate on instance state.
 
 ---
 
-## Closures
+## Closures and Lambdas
 
-A closure is an anonymous function that captures variables from its surrounding scope. Use `def (params) -> RetType: body` to create one:
+### When to use
 
+Use a closure when you need a short anonymous function — especially one that captures a variable from the enclosing scope — for callbacks, transformations, or state machines. Closures are more expressive than passing plain function names because they carry their own captured state.
+
+### How it works
+
+Create a closure with `def (params) -> RetType: body` and assign it to a `mut` variable:
+
+**Basic closure:**
+```python
+mut square = def (x: int) -> int:
+    return x * x
+
+print(square(7))    # 49
+```
+
+**Lambda shorthand** (single-expression body):
+```python
+mut double = lambda x: x * 2
+mut add    = lambda x, y: x + y
+
+print(double(5))     # 10
+print(add(3, 4))     # 7
+```
+
+**Capturing outer variables:**
 ```python
 def main():
-    mut count: int = 0
-    mut counter = def () -> int:
-        count = count + 1
-        return count
+    mut base: int = 100
+    mut add_to_base = def (n: int) -> int:
+        return base + n
 
-    print(counter())    # 1
-    print(counter())    # 2
-    print(counter())    # 3
+    print(add_to_base(5))     # 105
+    base = 200
+    print(add_to_base(5))     # 205 — closure sees the updated value
 ```
 
-Closures can take parameters:
-
-```python
-mut add = def (a: int, b: int) -> int:
-    return a + b
-print(add(3, 4))    # 7
-```
-
-Closures can both capture outer variables AND take parameters:
-
-```python
-mut base: int = 100
-mut add_to_base = def (n: int) -> int:
-    return base + n
-print(add_to_base(5))     # 105
-base = 200
-print(add_to_base(5))     # 205 — sees updated capture
-```
-
-### Capture Semantics
-
-Closures capture outer `mut` variables **by reference** — they see and can modify the current value of the outer variable. Modifications inside the closure affect the outer variable:
+Closures capture `mut` variables **by reference** — they see and can modify the current value of the outer variable:
 
 ```python
 mut total: int = 0
-mut accumulate = def (n: int):
+mut accumulate = def (n: int) -> void:
     total = total + n
+
 accumulate(5)
 accumulate(10)
-print(total)    # 15
+print(total)    # 15 — outer variable was modified
 ```
 
-### The lambda Type
+**Stateful counter:**
+```python
+def make_counter() -> lambda:
+    mut count: int = 0
+    return def () -> int:
+        count = count + 1
+        return count
 
-The type of a closure is `lambda`. Use it in function parameters or variable annotations:
+mut counter = make_counter()
+print(counter())    # 1
+print(counter())    # 2
+print(counter())    # 3
+```
+
+**Passing closures as function parameters:**
+
+The type of any closure is `lambda`. Use it as a parameter type:
 
 ```python
 def apply(f: lambda, x: int) -> int:
     return f(x)
 
-mut square = def (x: int) -> int: return x * x
-print(apply(square, 7))    # 49
+mut triple = def (x: int) -> int: return x * 3
+print(apply(triple, 7))    # 21
 ```
+
+**Passing a closure to transform a list:**
+```python
+def map_list(items: List[int], f: lambda) -> List[int]:
+    mut result: List[int] = []
+    for x in items:
+        result.append(f(x))
+    return result
+
+mut doubled = map_list([1, 2, 3, 4], lambda x: x * 2)
+# doubled = [2, 4, 6, 8]
+```
+
+### Common Mistakes
+
+**Forgetting `mut` on the closure variable:**
+```python
+square = def (x: int) -> int: return x * x    # ERROR: closure must be assigned to mut var
+```
+Fix: `mut square = def (x: int) -> int: return x * x`
+
+**Expecting closures to have a concrete callable type other than `lambda`:**
+```python
+def run(f: def(int) -> int) -> void:    # ERROR: not valid syntax
+    ...
+```
+Fix: Always use `lambda` as the parameter type: `def run(f: lambda) -> void:`
+
+**Closing over a loop variable and expecting a snapshot:**
+```python
+mut fns: List[lambda] = []
+for i in range(3):
+    fns.append(lambda: i)    # all three closures share the same 'i' by reference
+# After the loop, i = 2 — all closures return 2
+```
+Fix: Capture a copy by passing as a parameter or use an intermediate variable.
+
+### Best Practices
+
+- Prefer `lambda x: expr` for single-expression closures; use `def (params) -> T: body` when the body needs multiple statements.
+- Use closures for short-lived logic (callbacks, filters, comparators). For complex reusable logic, define a named function.
+- Be aware that captured variables are shared by reference. Modifying the outer variable after creating a closure affects what the closure sees.
 
 See `examples/20_closures.tr` and `examples/21_closure_params.tr` for full working examples.
 
@@ -202,7 +410,13 @@ See `examples/20_closures.tr` and `examples/21_closure_params.tr` for full worki
 
 ## Generic Functions
 
-Generic functions work with any type. The compiler generates a concrete version for each type argument used:
+### When to use
+
+Use a generic function when the logic is identical regardless of the type — identity functions, swap, min/max, map/filter operations. Generics avoid duplicating the same function for every type, with zero runtime cost.
+
+### How it works
+
+Declare type parameters in square brackets after the function name:
 
 ```python
 def identity[T](x: T) -> T:
@@ -211,28 +425,71 @@ def identity[T](x: T) -> T:
 def swap_print[T](a: T, b: T) -> void:
     print(f"a={a}")
     print(f"b={b}")
+```
 
-mut n = identity[int](42)        # generates identity specialized for int
-mut s = identity[str]("hello")   # generates identity specialized for str
+**Explicit instantiation:**
+```python
+mut n = identity[int](42)        # specialized for int
+mut s = identity[str]("hello")   # specialized for str
 swap_print[int](1, 2)
 swap_print[str]("x", "y")
 ```
 
-**How generics compile:** The compiler monomorphizes at each call site — `identity[int]` and `identity[str]` become separate specialized functions. No boxing, no type erasure, no runtime cost.
-
-**Type inference for generics:** The compiler often infers the type argument from the value:
+**Type inference** — the compiler often infers the type argument from the argument value:
 ```python
 mut n = identity(42)     # inferred as identity[int]
 mut s = identity("hi")   # inferred as identity[str]
 ```
 
-**Limitation:** Complex generic bodies involving pointer arithmetic on `T` or unsafe operations may not always monomorphize correctly. Use concrete types for performance-critical unsafe code.
+**Generic with constraint pattern:**
+```python
+def min_of[T](a: T, b: T) -> T:
+    if a < b: return a
+    return b
+
+mut smaller = min_of(3, 7)          # int
+mut earlier = min_of("alpha", "beta")   # str (lexicographic)
+```
+
+**How generics compile:** The compiler monomorphizes at each call site. `identity[int]` and `identity[str]` become two separate C functions. No boxing, no type erasure, no runtime overhead.
+
+### Common Mistakes
+
+**Forgetting the type argument when inference fails:**
+```python
+def wrap[T](x: T) -> List[T]:
+    mut result: List[T] = []
+    result.append(x)
+    return result
+
+mut w = wrap([])    # ERROR: cannot infer T from empty list
+```
+Fix: `mut w = wrap[int](42)`
+
+**Using generic functions for unsafe pointer arithmetic:**
+```python
+def offset[T](ptr: T, n: int) -> T:
+    return ptr + n    # may not monomorphize correctly for all T
+```
+Fix: Use concrete pointer types for unsafe/FFI code.
+
+### Best Practices
+
+- Let the compiler infer the type argument whenever possible — explicit `[T]` annotation is only needed when inference fails.
+- Keep generic function bodies simple. Complex bodies with unsafe operations or raw pointer arithmetic should use concrete types.
+- Generic functions work best for container-like patterns (wrap, unwrap, transform) and comparison patterns (min, max, clamp).
 
 ---
 
 ## Error Propagation with `throws`
 
-The `throws` keyword declares that a function can fail and automatically changes its return type to `Result[ReturnType, ErrorType]`:
+### When to use
+
+Use `throws` when a function can fail in a predictable way — parsing user input, reading a file, network operations, validating data. It is the Tauraro equivalent of returning `Result<T, E>` in Rust or raising a checked exception in Java.
+
+### How it works
+
+Add `throws ErrorType` between the parameter list and the return type:
 
 ```python
 def parse_digit(s: str) throws str -> int:
@@ -245,30 +502,79 @@ def parse_digit(s: str) throws str -> int:
 ```
 
 Inside a `throws` function:
-- `return value` → wraps as `Result { is_err: false, value: value }`
-- `raise(err)` → wraps as `Result { is_err: true, error: err }` and returns immediately
+- `return value` wraps as `Result { is_err: false, value: value }`
+- `raise(err)` wraps as `Result { is_err: true, error: err }` and returns immediately
 
-### The `?` Propagation Operator
-
-`?` after a `throws` call unwraps the success value or propagates the error to the caller:
+**The `?` propagation operator** unwraps the success value or propagates the error to the caller:
 
 ```python
 def doubled(s: str) throws str -> int:
-    mut n = parse_digit(s)?     # if parse_digit fails, return its error
+    mut n = parse_digit(s)?     # if parse_digit fails, return its error immediately
     return n * 2
 
 def tripled(s: str) throws str -> int:
-    mut n = doubled(s)?
+    mut n = doubled(s)?         # propagate through the chain
     return n * 3
 ```
 
-See [Error Handling](12_error_handling.md) for the full error handling guide.
+**Handling a `throws` result at the call site:**
+```python
+def main() -> void:
+    mut result = parse_digit("7")
+    if result.is_err:
+        print(f"error: {result.error}")
+    else:
+        print(f"digit: {result.value}")
+```
+
+**Compiler rule [T-4]:** The result of a `throws` call must be handled — either with `?`, with an `if result.is_err` check, or explicitly discarded. Silently ignoring it is a compile error.
+
+### Common Mistakes
+
+**Using `raise` in a non-`throws` function:**
+```python
+def parse(s: str) -> int:
+    raise("bad input")    # ERROR: raise() only valid in throws functions
+```
+Fix: Add `throws str` to the signature.
+
+**Not propagating `?` and reading `.value` blindly:**
+```python
+def process(s: str) -> int:
+    mut r = parse_digit(s)
+    return r.value    # ERROR [T-4]: unhandled Result — must check is_err first
+```
+Fix: Either `return parse_digit(s)?` (if this is also a `throws` function) or check `r.is_err` before using `r.value`.
+
+**Mismatched error types in `?` chain:**
+```python
+def parse_digit(s: str) throws str -> int: ...
+def read_line() throws IOError -> str: ...
+
+def run(s: str) throws str -> int:
+    mut line = read_line()?    # ERROR: read_line throws IOError, not str
+    return parse_digit(line)?
+```
+Fix: The caller must handle `read_line`'s `IOError` explicitly rather than propagating with `?` if the error types differ.
+
+### Best Practices
+
+- Use `throws` for all I/O operations, parsing, and any operation that can fail due to external input.
+- Use `?` to propagate errors through chains rather than checking each result manually — this keeps happy-path logic readable.
+- Keep the error type consistent across a function chain so `?` can propagate without conversion.
+- Document what conditions trigger `raise()` with a comment near the function signature.
+
+See [Error Handling](12_error_handling.md) for the complete error handling guide.
 
 ---
 
 ## Async Functions
 
-Mark a function `async` to declare it as a coroutine:
+### When to use
+
+Mark a function `async` when it represents logically asynchronous work — I/O operations, network calls, tasks that will eventually be suspended and resumed. Even though the current implementation executes synchronously, using `async`/`await` now makes the code forward-compatible with the full async runtime.
+
+### How it works
 
 ```python
 async def fetch(id: int) -> str:
@@ -278,33 +584,144 @@ async def pipeline(n: int) -> int:
     mut data = await fetch(n)
     return len(data)
 
-async def run():
+async def run() -> void:
     mut r1 = await pipeline(1)
     mut r2 = await pipeline(42)
     print(f"pipeline(1)={r1}")
     print(f"pipeline(42)={r2}")
 ```
 
-**Current semantics:** `async`/`await` executes **synchronously** in the current compiler. `await fn()` is a direct function call — there is no scheduler, no event loop, no suspension. The syntax is forward-compatible: when a true async runtime is added, all `async`/`await` code will continue to work.
+**Current semantics:** `async`/`await` executes synchronously in the current compiler. `await fn()` is a direct function call — there is no scheduler, no event loop, no coroutine suspension. The syntax is intentionally forward-compatible: when a true async runtime is added, all `async`/`await` code will continue to work without changes.
 
-**What `async` enables today:**
-- Communicates that a function is I/O-bound or logically asynchronous
-- Makes code self-documenting about intended concurrent behavior
-- Type-checks correctly: `await f()` has the return type of `f`, not a future type
+**`spawn` and task groups** are available for concurrent task dispatch:
 
-See [Concurrency](16_concurrency.md) for `spawn` and `task_group:`.
+```python
+async def main() -> void:
+    task_group:
+        spawn worker(1)
+        spawn worker(2)
+        spawn worker(3)
+    print("all workers done")
+```
+
+See [Concurrency](16_concurrency.md) for `spawn`, `task_group`, `await_timeout`, and the full async I/O model.
+
+### Common Mistakes
+
+**Forgetting `await` on an async call:**
+```python
+async def main() -> void:
+    mut data = fetch(1)    # ERROR: fetch returns a Future[str], not str — missing await
+    print(data)
+```
+Fix: `mut data = await fetch(1)`
+
+**Using `async def` for purely CPU-bound functions:**
+```python
+async def square(x: int) -> int:    # unnecessary — no I/O or suspension
+    return x * x
+```
+`async` adds no overhead today, but it signals intent. Reserve it for I/O-bound or logically concurrent operations.
+
+### Best Practices
+
+- Prefix all I/O functions with `async` even when I/O is currently synchronous — this documents intent and enables future migration.
+- `await` every call to an `async` function; never discard the future.
+- Put `spawn` calls inside `task_group:` blocks so the compiler can enforce structured concurrency.
 
 ---
 
 ## Variadic Functions (FFI Only)
 
+### When to use
+
+Use variadic declarations when calling C library functions that accept a variable number of arguments (`printf`, `sprintf`, `ioctl`, etc.). You cannot define variadic functions in Tauraro itself.
+
+### How it works
+
 ```python
 extern "C":
     def printf(fmt: str, ...) -> int
     def snprintf(buf: str, n: int, fmt: str, ...) -> int
+    def fprintf(stream: ptr, fmt: str, ...) -> int
 ```
 
-`...` in an `extern "C"` declaration allows variadic C functions to be called. Tauraro user-defined functions cannot be variadic.
+`...` in an `extern "C"` declaration marks the function as variadic. The Tauraro compiler emits the correct C variadic call:
+
+```python
+printf("value = %d\n", 42)
+printf("x=%d y=%d\n", x, y)
+snprintf(buf, 256, "result: %f", result)
+```
+
+### Common Mistakes
+
+**Trying to define a variadic Tauraro function:**
+```python
+def log(msg: str, ...) -> void:    # ERROR: variadic user functions not supported
+    ...
+```
+Fix: Use `List[str]` or overloaded methods instead of variadic parameters.
+
+### Best Practices
+
+- Prefer Tauraro's `f"..."` and `print()` for formatted output — they are safer and type-checked. Use `printf` only when you need direct C interop.
+- Always include the `-> int` return type on variadic C functions that return a value — the compiler uses it for correct call-site code generation.
+
+---
+
+## Visibility: `pub` and `export`
+
+### When to use
+
+Use `pub def` when you are writing a library module and want other Tauraro modules to import and call the function. Use `export def` when you need the function to be callable from C code (or another language) by a stable C symbol name.
+
+### How it works
+
+**`pub def` — importable from other Tauraro modules:**
+```python
+# math_utils.tr
+pub def gcd(a: int, b: int) -> int:
+    while b != 0:
+        mut t = b
+        b = a % b
+        a = t
+    return a
+```
+
+```python
+# main.tr
+import math_utils
+
+mut d = math_utils.gcd(48, 18)    # 6
+```
+
+**`export def` — C-ABI stable symbol:**
+```python
+export def tauraro_add(a: int, b: int) -> int:
+    return a + b
+```
+
+This generates a C function with external linkage and the exact name `tauraro_add`, usable from C, Python (via ctypes), or any language with C FFI.
+
+### Common Mistakes
+
+**Importing a non-`pub` function from another module:**
+```python
+# utils.tr
+def helper() -> void:    # not pub
+    ...
+
+# main.tr
+import utils
+utils.helper()    # ERROR: 'helper' is not exported from utils
+```
+Fix: Add `pub` to `def helper()` in utils.tr.
+
+### Best Practices
+
+- Default to private (no prefix). Only add `pub` when the function is part of a deliberate public API.
+- Use `export def` sparingly — it bypasses Tauraro's name mangling and type safety at the boundary. Always document the ABI contract.
 
 ---
 
@@ -313,34 +730,10 @@ extern "C":
 | Rule | Description | Error |
 |------|-------------|-------|
 | F-1 | All parameters must have type annotations | `[F-1] Parameter type missing` |
-| F-2 | No shadowing of parameter names | `[F-2] Parameter name shadowed` |
-| F-3 | Non-void function must return on all paths | `[F-3] Missing return on code path` |
-| T-4 | Result from `throws` function must be handled | `[T-4] Unhandled Result from throws call` |
+| F-2 | Parameters may not be shadowed by local variables | `[F-2] Parameter name shadowed` |
+| F-3 | Non-void function must return on all code paths | `[F-3] Missing return on code path` |
+| T-4 | Result from a `throws` call must be handled | `[T-4] Unhandled Result from throws call` |
 
 ---
 
-## Best Practices
-
-**Keep functions small.** A function should do one thing. If you find yourself adding an `elif` for a third code path, consider splitting into two functions.
-
-**Return values, not void+mutation.** Functions that build a value should return it, not take a mutable pointer. This is cleaner and enables the ownership system to manage memory automatically.
-
-```python
-# GOOD:
-def build_report(data: List[int]) -> str:
-    mut s = ""
-    for x in data: s = s + f"{x}\n"
-    return s
-
-# AVOID (mutation via side effect):
-def fill_report(data: List[int], out: str) -> void:
-    # out cannot be mutated this way in Tauraro — str is by value
-```
-
-**Annotate return types explicitly.** Even though void is inferred, writing `-> void` makes the function's contract explicit and searchable.
-
-**Name functions as verb phrases.** `parse_input`, `build_config`, `find_user`, `render_frame` — the name should describe what the function does.
-
----
-
-Next: [Strings & F-Strings →](06_strings.md)
+Next: [Strings and F-Strings →](06_strings.md)
