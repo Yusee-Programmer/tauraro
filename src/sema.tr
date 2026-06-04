@@ -177,8 +177,9 @@ extend Sema:
         s.globals.insert("_tr_system", Symbol.init("_tr_system", SymbolKind.SFunction, box_asttype(AstType.init("int"))))
 
         # ── Built-in container classes ──────────────────────────────────────────
+        # Vec is NOT a built-in — it is the OOP class imported from core.vec.
+        # List is the only built-in C-backed array type.
         s.globals.insert("List",         Symbol.init("List",         SymbolKind.SClass, box_asttype(AstType.init("List"))))
-        s.globals.insert("Vec",          Symbol.init("Vec",          SymbolKind.SClass, box_asttype(AstType.init("Vec"))))
         s.globals.insert("Pointer",      Symbol.init("Pointer",      SymbolKind.SClass, box_asttype(AstType.init("Pointer"))))
         s.globals.insert("StringBuilder",Symbol.init("StringBuilder",SymbolKind.SClass, box_asttype(AstType.init("StringBuilder"))))
         s.globals.insert("StringObj",    Symbol.init("StringObj",    SymbolKind.SClass, box_asttype(AstType.init("StringObj"))))
@@ -505,11 +506,15 @@ extend Sema:
         if name != "self" and name != "_" and _tr_strlen(name) > 1:
             mut cat = self.is_reserved_error(name)
             if cat != "":
-                self.error("[N-1] '" + name + "' is a " + cat + " and cannot be used as a variable name. Choose a different name (e.g. 'my_" + name + "').")
+                self.error("[N-1] '" + name + "' is a " + cat + " and cannot be used as a name. Choose a different name (e.g. 'my_" + name + "').")
             else:
-                mut wcat = self.is_reserved_warn(name)
-                if wcat != "":
-                    self.warnings.push("[N-1] '" + name + "' shadows the built-in " + wcat + ". Choose a different name to avoid confusion.")
+                # Methods (SFunction inside a class) are exempt from keyword reservation:
+                # a method named 'len' or 'abs' is scoped to its class, not the global namespace.
+                mut is_method = kind == SymbolKind.SFunction and self.current_class_name != ""
+                if not is_method:
+                    mut kcat = self.is_reserved_keyword(name)
+                    if kcat != "":
+                        self.error("[N-1] '" + name + "' is a " + kcat + " and is reserved. Choose a different name (e.g. 'my_" + name + "').")
         mut sym = Symbol.init(name, kind, ty)
         sym.scope_depth = self.current_scope_depth
         sym.is_mut = is_mut
@@ -617,10 +622,16 @@ extend Sema:
     pub def lower_func(self, f: FunctionDef) -> HirFunction:
         self.current_line = f.line
         # Rule N-1: Function name check
+        # Top-level functions cannot shadow reserved built-ins.
+        # Methods (current_class_name != "") are exempt — len/abs/etc. are valid method names.
         if f.name != "main" and f.name != "" and _tr_strlen(f.name) > 1:
             mut fn_cat = self.is_reserved_error(f.name)
             if fn_cat != "":
                 self.error("[N-1] '" + f.name + "' is a " + fn_cat + " and cannot be used as a function name.")
+            elif self.current_class_name == "":
+                mut fn_kcat = self.is_reserved_keyword(f.name)
+                if fn_kcat != "":
+                    self.error("[N-1] '" + f.name + "' is a " + fn_kcat + " and is reserved. Choose a different function name.")
         # Save async context, set function context
         mut saved_async = self.in_async_fn
         self.in_async_fn = f.is_async
@@ -2098,17 +2109,20 @@ extend Sema:
         if name == "Err": return "built-in Result constructor 'Err'"
         return ""
 
-    pub def is_reserved_warn(self, name: str) -> str:
-        if name == "print": return "built-in print function"
-        if name == "input": return "built-in input function"
+    # Reserved built-in names that cannot be shadowed at the top level.
+    # Methods are EXEMPT — a method named 'len' or 'abs' is namespaced to its
+    # class and does not shadow the global built-in.  Vec is intentionally absent:
+    # it is the OOP class imported from core.vec, not a built-in.
+    pub def is_reserved_keyword(self, name: str) -> str:
+        if name == "print" or name == "input": return "built-in I/O function"
         if name == "range": return "built-in range function"
         if name == "len" or name == "tsawon": return "built-in len function"
-        if name == "type" or name == "zuwa_rubutu": return "built-in type/str function"
+        if name == "type" or name == "zuwa_rubutu": return "built-in type function"
         if name == "abs" or name == "max" or name == "min" or name == "sum": return "built-in math function"
-        if name == "str" or name == "int" or name == "float" or name == "bool": return "built-in type-conversion function"
-        if name == "List" or name == "Dict" or name == "Vec": return "built-in container type"
+        if name == "str" or name == "int" or name == "float" or name == "bool": return "built-in primitive type"
+        if name == "List" or name == "Dict": return "built-in container type"
         if name == "Option" or name == "Result": return "built-in enum type"
-        if name == "Exception" or name == "Error": return "built-in exception class"
+        if name == "Exception" or name == "Error": return "built-in exception type"
         return ""
 
     # ── Rule F-3: Definite return check ───────────────────────────────────────
