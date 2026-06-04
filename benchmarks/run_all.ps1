@@ -3,7 +3,7 @@
 
 $ROOT    = Resolve-Path "$PSScriptRoot\..\.."
 $BENCH   = $PSScriptRoot
-$TAU_EXE = "$ROOT\tauraro\src\build\tauraroc.exe"
+$TAU_EXE = "$ROOT\tauraro\tauraroc.exe"
 
 function Run-Bench($exe) {
     $out = & $exe 2>&1

@@ -508,10 +508,11 @@ extend Sema:
             if cat != "":
                 self.error("[N-1] '" + name + "' is a " + cat + " and cannot be used as a name. Choose a different name (e.g. 'my_" + name + "').")
             else:
-                # Methods (SFunction inside a class) are exempt from keyword reservation:
-                # a method named 'len' or 'abs' is scoped to its class, not the global namespace.
-                mut is_method = kind == SymbolKind.SFunction and self.current_class_name != ""
-                if not is_method:
+                # Class members (fields and methods) are exempt — names are scoped to the class.
+                # Local variables (SVariable) are also exempt — local shadowing is intentional.
+                # Only top-level function/type declarations are checked.
+                mut is_toplevel_decl = self.current_class_name == "" and kind != SymbolKind.SVariable
+                if is_toplevel_decl:
                     mut kcat = self.is_reserved_keyword(name)
                     if kcat != "":
                         self.error("[N-1] '" + name + "' is a " + kcat + " and is reserved. Choose a different name (e.g. 'my_" + name + "').")

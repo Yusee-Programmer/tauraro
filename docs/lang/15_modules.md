@@ -11,6 +11,11 @@ A **module** is a `.tr` source file. Every file is a module. Modules have:
 
 There are no explicit module declarations, no separate header files, no build manifests. The file system is the module system.
 
+**When to use modules:**
+- Any time you split code across multiple `.tr` files, you're working with modules
+- Every non-trivial project uses at least 2 modules — your `main.tr` and at least one helper
+- Standard library modules (`std.core.vec`, `std.fs`, etc.) are always imported when needed
+
 ---
 
 ## Module Naming
@@ -27,11 +32,22 @@ A module's name is its file path relative to the project root, with path separat
 
 The `mod.tr` form: a directory with a `mod.tr` file inside. This lets you split a large module across sub-files while exposing a single import path.
 
+**Best practice:** Use `mod.tr` when a module grows beyond ~300 lines. Break it into sub-files inside a directory, and re-export the public API from `mod.tr` using `from ... import`.
+
 ---
 
 ## Importing Modules
 
-### import
+### When to Use Each Import Style
+
+| Style | When to use |
+|-------|-------------|
+| `import mod` | Importing a whole module, keeping names namespaced |
+| `import mod as alias` | Long module paths; alias makes usage concise |
+| `from mod import name` | Using 1-3 specific names from a module |
+| `from mod import name as alias` | Avoiding name collisions between two imports |
+
+### `import`
 
 ```python
 import math.geometry
@@ -41,7 +57,16 @@ def main():
     print(f"area = {area}")
 ```
 
-### import ... as (alias)
+**How it works:** The module name becomes a prefix for all its public symbols. Access using `module.symbol` syntax.
+
+**Common mistake:** Forgetting the full module path:
+```python
+import math.geometry
+mut area = circle_area(5.0)       # ERROR: 'circle_area' not defined
+mut area = math.geometry.circle_area(5.0)  # OK
+```
+
+### `import ... as` (alias)
 
 ```python
 import math.geometry as geo
@@ -52,7 +77,9 @@ def main():
     mut upper = cstr.to_upper("hello")
 ```
 
-### from ... import (selective import)
+**Best practice:** Use short aliases for frequently-used modules. Keep aliases consistent across files (`geo` always means `math.geometry`).
+
+### `from ... import` (selective import)
 
 ```python
 from math.geometry import circle_area, rect_area
@@ -63,7 +90,19 @@ def main():
     mut u = to_upper("hello")
 ```
 
-### from ... import ... as (aliased selective import)
+**How it works:** `from ... import` registers the imported names directly in the current scope. A name collision between two imported symbols is a compile error.
+
+**Common mistake — collision:**
+```python
+from math.vec import Vec2
+from graphics.vec import Vec2   # ERROR: 'Vec2' already imported in this scope
+```
+**Fix:** Use aliased import:
+```python
+from graphics.vec import Vec2 as GVec2
+```
+
+### `from ... import ... as` (aliased selective import)
 
 ```python
 from math.geometry import circle_area as area
@@ -74,11 +113,11 @@ def main():
     print(upper_case("hello"))
 ```
 
-**Compiler behavior:** `from ... import` registers the imported names directly in the current scope. A name collision between two imported symbols is a compile error.
-
 ---
 
 ## Module Resolution
+
+### How the Compiler Finds Modules
 
 When the compiler encounters `import foo.bar`, it tries two patterns inside each search path:
 
@@ -103,15 +142,6 @@ The first match wins.
 | 10 | `packages/sites/` | Project-local site packages (CWD-relative) |
 | 11+ | `TAURARO_PATH` entries | User-specified extra paths (see below) |
 
-**`TAURARO_PATH` environment variable:** Set this before running `tauraroc` to add extra search directories — exactly like Python's `PYTHONPATH`. Uses `:` as separator on POSIX, `;` on Windows:
-
-```bash
-export TAURARO_PATH=/opt/mylibs:/home/user/pkgs   # Linux / macOS
-$env:TAURARO_PATH = "C:\mylibs;C:\pkgs"           # Windows PowerShell
-```
-
-**`Env.path` in user programs:** `from std.sys.env import Env` gives a running program a `Vec[str]` pre-populated with the standard search directories. Programs can append to it and use the list to build a `TAURARO_PATH` value when spawning a child `tauraroc` process. See [std.sys.env →](../std/env.md).
-
 **Recursive resolution:** Each imported module is scanned for its own imports, which are resolved transitively. The compiler builds the full dependency graph before emitting any C.
 
 **Error for missing module:**
@@ -123,13 +153,41 @@ ERROR: cannot find module 'math.geometry'
   FIX: check the file path and ensure it exists in a search path
 ```
 
+### `TAURARO_PATH` — Extending the Search Path
+
+**When to use:** Add extra module search directories without modifying your project layout.
+
+Set this before running `tauraroc` to add extra search directories — exactly like Python's `PYTHONPATH`. Uses `:` as separator on POSIX, `;` on Windows:
+
+```bash
+export TAURARO_PATH=/opt/mylibs:/home/user/pkgs   # Linux / macOS
+$env:TAURARO_PATH = "C:\mylibs;C:\pkgs"           # Windows PowerShell
+```
+
+**Common mistake:** Using the wrong separator for your platform:
+```bash
+# Windows — wrong (POSIX separator)
+$env:TAURARO_PATH = "/opt/mylibs:/home/user/pkgs"
+
+# Windows — correct
+$env:TAURARO_PATH = "C:\mylibs;C:\pkgs"
+```
+
+**Best practice:** Put `TAURARO_PATH` in your shell profile (`.bashrc`, `profile.ps1`) for project-persistent paths. For per-project paths, use `packages/` inside the project directory instead.
+
+**`Env.path` in user programs:** `from std.sys.env import Env` gives a running program a `Vec[str]` pre-populated with the standard search directories. Programs can append to it and use the list to build a `TAURARO_PATH` value when spawning a child `tauraroc` process. See [std.sys.env →](../std/env.md).
+
 ---
 
-## Visibility: pub
+## Visibility: `pub`
 
-All declarations are **private by default**. Use `pub` to expose them to other modules.
+### When to Use `pub`
 
-### Public vs Private
+- `pub` on a function, class, or field makes it accessible from other modules
+- Everything is **private by default** — only expose what is genuinely part of your module's API
+- Think of `pub` as your module's contract with the outside world
+
+### How It Works
 
 ```python
 # geometry.tr
@@ -165,20 +223,56 @@ extend Circle:
 | `pub class C` | Yes | Yes |
 | `pub class C` with field `x` | No `pub` on field | Field not accessible |
 | `pub class C` with `pub x` | Yes `pub` on field | Field accessible |
-| Method in `extend` | No `pub` | Not callable from other modules |
+| Method in `extend` without `pub` | No | Not callable from other modules |
 | Method in `extend` with `pub` | Yes | Callable from other modules |
 
-**Compiler rule:** Accessing a private symbol from outside its module is a compile error:
+**Compiler error for visibility violation:**
 ```
 ERROR: function '_deg_to_rad' in module 'math.geometry' is private
   FIX: add 'pub' to the declaration, or access it through a public interface
 ```
 
+### Common Mistakes with Visibility
+
+**Exposing a class but not its fields:**
+```python
+pub class Config:
+    host: str        # private — callers can't read it!
+    pub port: int
+
+# in caller:
+cfg = Config.init()
+print(cfg.host)     # ERROR: 'host' is private
+```
+**Fix:** Add `pub` to the fields you intend callers to access, or provide public accessor methods.
+
+**Importing a private class:**
+```python
+# config.tr:
+class InternalConfig:   # no pub!
+    pub host: str
+
+# main.tr:
+from config import InternalConfig  # ERROR: 'InternalConfig' is private
+```
+
+### Best Practices for Visibility
+
+- **Minimal exposure:** Start with everything private. Add `pub` only when another module actually needs it.
+- **Accessor methods over public fields:** Prefer `pub def get_host(self) -> str:` over `pub host: str` when you want to validate or transform values.
+- **Public API = contract:** Once you `pub` something and ship it, changing it breaks callers. Private things can be freely refactored.
+
 ---
 
-## Exporting for C Interop: export
+## Exporting for C Interop: `export`
 
-The `export` keyword makes a function visible with a stable, unmangled C symbol name:
+### When to Use `export`
+
+- Building a `.so`/`.dll` library callable from C
+- Building the Tauraro compiler in self-hosted mode (the runtime calls specific functions by exact C name)
+- Interop with dynamic linkers that need known symbol names
+
+### How It Works
 
 ```python
 pub export def add(a: int, b: int) -> int:
@@ -188,16 +282,29 @@ pub export def tauraro_init() -> void:
     print("library initialized")
 ```
 
-**Without `export`:** A function `add` in module `utils` is accessible as `utils.add` — the module path is part of the name.
+**Without `export`:** A function `add` in module `utils` is accessible as `utils.add` — the module path is part of the name. In C it becomes `utils_add`.
 
 **With `export`:** The function is exported with its plain name `add` — no module prefix, with full shared library visibility.
 
 **`export` implies `pub`:** You can write `export def f()` without `pub` — the function is still public.
 
-**Use cases:**
-- Building a `.so`/`.dll` library callable from C
-- Building the Tauraro compiler in self-hosted mode (the runtime calls specific functions by exact C name)
-- Interop with dynamic linkers that need known symbol names
+### Common Mistakes with `export`
+
+**Name conflicts across modules:**
+```python
+# math.tr
+pub export def max(a: int, b: int) -> int: ...
+
+# utils.tr
+pub export def max(a: float, b: float) -> float: ...  # CONFLICT: same C symbol 'max'
+```
+**Fix:** Only export from one module, or use distinct names.
+
+### Best Practices for `export`
+
+- Use `export` sparingly — it removes the module namespace guarantee
+- Prefix exported names with your library name to avoid conflicts: `mylib_init()`, `mylib_process()`
+- Never `export` internal helpers — only export your stable public API
 
 ---
 
@@ -231,12 +338,7 @@ gcc -O2 build/main.c build/module_utils.c build/include/std/io.c … -o program
 
 **With `--emit c`:** No compilation occurs. The `.c` files are written to `build/` and kept. Use this to inspect generated C or integrate with an external build system.
 
-**Why one invocation with separate files:**
-- GCC and Clang can inline and constant-fold across module boundaries at the object level
-- The `build/` directory gives you a per-module view of the generated code
-- The linker step is handled by the compiler driver, so no separate `ld` invocation is needed
-
-**Symbol naming:** Functions from module `math.geometry` are prefixed `math_geometry_` in C (dots → underscores). This prevents collisions between modules defining the same name:
+**Symbol naming:** Functions from module `math.geometry` are prefixed `math_geometry_` in C (dots → underscores):
 
 | Tauraro | C symbol |
 |---------|----------|
@@ -249,6 +351,14 @@ gcc -O2 build/main.c build/module_utils.c build/include/std/io.c … -o program
 ---
 
 ## Organizing a Project
+
+### When to Structure
+
+| Project size | Structure |
+|-------------|-----------|
+| < 200 lines | Single `main.tr` |
+| 200-1000 lines | `main.tr` + 2-4 helper `.tr` files |
+| 1000+ lines | Subdirectories with `mod.tr` re-export hubs |
 
 ### Small Project
 
@@ -281,7 +391,7 @@ project/
   network/
     http.tr        # import as: network.http
     tcp.tr         # import as: network.tcp
-    mod.tr         # re-exports vec2 + matrix: import as network
+    mod.tr         # re-exports: import as network
 ```
 
 ```python
@@ -302,9 +412,17 @@ from math.matrix import Matrix4
 # from math import Vec2, Matrix4
 ```
 
+**Best practice:** The `mod.tr` re-export hub is your module's public API. Keep it thin — just re-exports. All implementation lives in sub-files.
+
 ### Circular Import Warning
 
-Circular imports (module A imports B, and B imports A) are not supported. The compiler will error with a cycle detection message. Restructure by extracting the shared types into a third module that both A and B import.
+Circular imports (module A imports B, and B imports A) are not supported. The compiler will error with a cycle detection message:
+
+```
+ERROR: circular import: main → utils → main
+```
+
+**Fix:** Extract the shared types into a third module that both A and B import.
 
 ---
 
@@ -314,7 +432,7 @@ The standard library is installed alongside the compiler binary in `<bin>/std/`.
 
 | Module | Import | Contents |
 |--------|--------|---------|
-| `std.core.vec` | `from std.core.vec import Vec` | `Vec[T]` growable array |
+| `std.core.vec` | `from std.core.vec import Vec` | `Vec[T]` growable array (OOP class) |
 | `std.core.map` | `from std.core.map import Map` | Hash map |
 | `std.core.string` | `from std.core.string import StringBuilder` | String builder |
 | `std.core.ptr` | `from std.core.ptr import Pointer` | Raw pointer wrapper |
@@ -337,6 +455,7 @@ The standard library is installed alongside the compiler binary in `<bin>/std/`.
 | `std.async.task` | `from std.async.task import Task, Pool` | Async task runtime |
 | `std.sync` | `from std.sync import Mutex, Atomic` | Synchronization primitives |
 | `std.time` | `from std.time import Time, Clock` | Time and clock |
+| `std.sys.env` | `from std.sys.env import Env` | Environment variables and `Env.path` |
 
 For the full API of each module see `docs/std/`.
 
@@ -356,7 +475,7 @@ ERROR: cannot find module 'utils.parser'
 - File is named `Parser.tr` (wrong case — Tauraro module paths are case-sensitive on Linux)
 - Third-party package is not installed in `packages/` or `<bin>/packages/`
 
-**Fix:** Check the file path and working directory. For third-party packages, place them in `packages/<pkg>/mod.tr` (or the layout distributed by the package).
+**Fix:** Check the file path and working directory. For third-party packages, place them in `packages/<pkg>/mod.tr`.
 
 ### Accessing private symbol
 
@@ -380,6 +499,19 @@ from graphics.vec import Vec2 as GVec2   # OK: aliased
 ERROR: circular import: main → utils → main
 ```
 **Fix:** Extract shared types into a new module that both import.
+
+---
+
+## Best Practices Summary
+
+1. **One concept per file** — don't mix networking and math in one module
+2. **Private by default** — only `pub` what callers actually need
+3. **Use `mod.tr` for large modules** — keeps a clean public API while splitting implementation
+4. **Don't use `export` unless you're building a C library** — it bypasses the module namespace
+5. **Prefer `from ... import` for 1-3 symbols** — more readable than `module.symbol` everywhere
+6. **Set `TAURARO_PATH` in your profile** for shared library paths, not per-invocation
+7. **Avoid circular imports** — refactor to a shared `types.tr` or `common.tr`
+8. **Test imports early** — run `tauraroc --check main.tr` to validate the entire import graph
 
 ---
 

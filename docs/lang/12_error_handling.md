@@ -11,13 +11,24 @@ Tauraro provides two error handling styles that complement each other:
 | **Exception-style** | `try / except / finally` + `raise` | `setjmp` / `longjmp` | Small per `try`, none on happy path |
 | **Result-type** | `throws` + `?` + `Result[T, E]` | Struct return | Zero — plain C struct |
 
-The models are orthogonal: you choose based on where you are in the call stack and what you need to communicate.
+The models are orthogonal: you choose based on where you are in the call stack and what you need to communicate. They also interoperate freely — you can call a `throws` function from inside a `try` block.
 
 ---
 
 ## Exception-Style: try / except / finally
 
-### Basic try/except
+### When to Use
+
+Use `try / except / finally` when:
+
+- You are at a **boundary** — the point where errors are caught and a recovery decision is made.
+- You need `finally` for cleanup that must always run regardless of success or failure.
+- You want to catch errors from a **block of multiple operations** in one place.
+- You are writing top-level recovery code (e.g., in `main()`).
+
+### How It Works
+
+**Basic try / except:**
 
 ```python
 try:
@@ -27,17 +38,9 @@ except e:
     print(f"error: {e}")
 ```
 
-If code inside `try:` calls `raise(msg)`, execution immediately jumps to the `except e:` block. The variable `e` receives the string message passed to `raise`.
+If code inside `try:` calls `raise`, execution immediately jumps to the matching `except` clause. The variable `e` receives the error value passed to `raise`.
 
-Hausa syntax:
-```python
-gwada:
-    ...
-kama e:
-    buga(f"kuskure: {e}")
-```
-
-### raise
+**Raising an exception:**
 
 ```python
 def validate_age(age: int) -> void:
@@ -45,14 +48,11 @@ def validate_age(age: int) -> void:
         raise("age cannot be negative")
     if age > 150:
         raise("age is unreasonably large: " + str(age))
-    # valid
 ```
 
-`raise(msg)` takes a `str` and jumps to the nearest enclosing `try` block.
+`raise(msg)` takes a `str` and jumps to the nearest enclosing `try` block. If there is no enclosing `try`, the runtime prints the error and calls `abort()` — correct behavior for unrecoverable errors.
 
-**What happens without a try/catch:** If `raise` is called and there is no enclosing `try`, the runtime prints the error message and calls `abort()` — the program terminates. This is the correct behavior for unrecoverable errors.
-
-### Multiple except Clauses
+**Multiple except clauses:**
 
 ```python
 try:
@@ -63,17 +63,15 @@ except ConnectionError as e:
     retry()
 except TimeoutError as e:
     print(f"timed out: {e}")
-except e:
+except Exception as e:
     print(f"unexpected error: {e}")
 ```
 
-Clauses are checked top-to-bottom. The first matching clause executes. The bare `except e:` is a catch-all.
+Clauses are checked top-to-bottom. The first matching clause executes. `except Exception as e:` is the catch-all base case.
 
-**Note:** Exception type matching (e.g., `except ConnectionError`) is string-based — it checks whether the error message starts with the given type name. This is a lightweight convention, not a full exception hierarchy.
+**Note on type matching:** `except ConnectionError as e:` is a string-prefix convention — it matches errors whose message starts with the type name. It is lightweight, not a full exception hierarchy.
 
-### finally
-
-The `finally` block always runs, whether or not an exception was raised:
+**finally — always runs:**
 
 ```python
 def process_resource(path: str) -> void:
@@ -83,32 +81,65 @@ def process_resource(path: str) -> void:
     except e:
         print(f"work failed: {e}")
     finally:
-        close_resource(handle)    # always runs — even if exception was raised
+        close_resource(handle)    # runs on both success and exception paths
 ```
 
-`finally` always runs — on both the success path and the exception path.
+**assert — contract checking:**
 
-### try/except Performance Notes
+```python
+assert len(input) > 0, "input must not be empty"
+```
 
-**Happy path:** A `setjmp` call — stores the CPU registers. On x86-64, this is roughly 20 instructions. On the happy path (no exception thrown), this is the only overhead.
+`assert` aborts with the message if the condition is false. Use it for invariants and programmer contracts, not user input validation.
 
-**Exception thrown:** `longjmp` restores registers and jumps. This is fast but should not be used for flow control — only for truly exceptional conditions.
+### Common Mistakes
 
-**Inlining:** Functions containing `try/except` are **never inlined** by the C backend. GCC/Clang cannot inline functions that use `setjmp`. Keep `try/except` at boundary functions.
+```python
+# WRONG: Using try/except for expected, routine control flow
+try:
+    mut item = list[i]
+except e:
+    break    # use bounds checking instead — try/except is for exceptional conditions
+
+# WRONG: Bare except with no variable — silently swallows the error
+try:
+    risky()
+except:
+    pass    # you never see what went wrong
+
+# WRONG: Putting heavy computation inside try — setjmp stores all registers
+try:
+    big_computation()    # fine, but setjmp overhead is paid on every entry
+    another_big_thing()
+except e:
+    ...
+# BETTER: narrow the try block to just the risky call
+```
+
+### Best Practices
+
+- Keep `try` blocks narrow — wrap only the operations that can actually raise.
+- Always inspect `e` in the `except` clause; never silently swallow errors.
+- Use `finally` for resource cleanup so cleanup runs even if an exception is raised mid-block.
+- Reserve `try / except` for boundaries; use `throws + ?` for deep chains (see below).
+- Functions containing `try/except` are **never inlined** by the C backend — `setjmp` prevents it. Keep `try/except` at boundary call sites, not deep in hot loops.
 
 ---
 
 ## Result-Type: throws + ? + Result[T, E]
 
-### Why Result Types
+### When to Use
 
-For deep call chains where every function can fail, `try/except` has two problems:
-1. The `setjmp` overhead accumulates at every level
-2. The control flow is implicit — you can't see from the call site whether a function can fail
+Use `throws` + `?` when:
 
-The `throws` keyword solves both: explicit in the signature, zero overhead.
+- You are building a **deep call chain** where every level can fail.
+- Performance on the error path matters (zero overhead vs. `setjmp`).
+- You want the failure mode to be **visible in the function signature**.
+- You are writing a library where callers need to know a function can fail.
 
-### Declaring a throws Function
+### How It Works
+
+**Declaring a throws function:**
 
 ```python
 def parse_int(s: str) throws str -> int:
@@ -126,14 +157,12 @@ def parse_int(s: str) throws str -> int:
 ```
 
 The `throws ErrorType` annotation changes the return type to `Result[ReturnType, ErrorType]`. Inside a `throws` function:
-- `return value` → wraps as a success result
-- `raise(err)` → wraps as an error result and returns immediately
+- `return value` wraps the value as a success result.
+- `raise(err)` wraps the error and returns immediately.
 
-`Result[T, E]` is a plain struct — no heap allocation, no exceptions, no overhead.
+`Result[T, E]` is a plain C struct — no heap allocation, no `setjmp`, zero overhead.
 
-### The ? Propagation Operator
-
-`?` after a throws call unwraps the success value or immediately propagates the error to the caller:
+**The `?` propagation operator:**
 
 ```python
 def doubled(s: str) throws str -> int:
@@ -145,131 +174,110 @@ def tripled(s: str) throws str -> int:
     return n * 3
 ```
 
-On the happy path (no error), `?` is a single conditional branch. On error, it propagates immediately.
+On the happy path, `?` is a single conditional branch. On error, it propagates immediately without unwinding a stack.
 
-### Handling a Result Value
-
-When you call a `throws` function without `?`, you get back a `Result[T, E]` value:
+**Handling a Result value:**
 
 ```python
 mut r = parse_int("42")
 
-# Check and use:
-if r.is_ok:
-    print(f"parsed: {r.ok}")      # the T value
-if r.is_err:
-    print(f"error: {r.err}")      # the E value
+if r.is_ok():
+    print(f"parsed: {r.unwrap()}")
 
-# Or access directly (unsafe if wrong):
-mut val = r.ok                     # only valid if r.is_ok is true
+if r.is_err():
+    print(f"error: {r.unwrap_or(0)}")
 ```
 
-| Property | Type | C field |
-|----------|------|---------|
-| `r.is_err` | `bool` | `r.is_err` |
-| `r.is_ok` | `bool` | `!r.is_err` |
-| `r.ok` | `T` | `r.data.value` |
-| `r.err` | `E` | `r.data.error` |
+| Method | Meaning |
+|--------|---------|
+| `r.is_ok()` | Returns `true` if the result holds a success value |
+| `r.is_err()` | Returns `true` if the result holds an error |
+| `r.unwrap()` | Returns the success value — panics if error |
+| `r.unwrap_or(default)` | Returns success value or `default` if error |
 
-### Explicit Result[T, E] Variables
+**Explicit `Result[T, E]` variables:**
 
 ```python
 mut r1: Result[int, str] = tripled("7")
-if r1.is_ok:
-    print(f"tripled('7') = {r1.ok}")    # 21
+if r1.is_ok():
+    print(f"tripled('7') = {r1.unwrap()}")    # 21
 
 mut r2: Result[int, str] = tripled("x")
-if r2.is_err:
-    print(f"error: {r2.err}")           # "not a digit at position 0: x"
+if r2.is_err():
+    print(f"error: {r2.unwrap_or(0)}")
 ```
 
----
+**Option[T] — nullable values:**
 
-## Compiler Rule T-4: Handle Throws Results
-
-If a `throws` function is called as a statement (not assigned to a variable, not using `?`), the compiler warns:
+For values that may or may not exist (without an error reason), use `Option[T]`:
 
 ```python
-def dangerous() throws str -> int:
-    return 42
+def find_user(id: int) -> Option[User]:
+    if id == 0:
+        return None
+    return Some(User.init(id, "alice"))
 
-dangerous()    # WARNING [T-4]: 'dangerous()' returns a Result — its error must be handled
-               # FIX: use '? to propagate, assign to a variable, or '_ = dangerous()'
+mut result = find_user(42)
+if result.is_some():
+    mut u = result.unwrap()
+    print(u.name)
+
+# Or with a default:
+mut u2 = find_user(0).unwrap_or(User.init(-1, "guest"))
 ```
 
-**Fix options:**
-```python
-dangerous()?                  # propagate with ?
-mut r = dangerous()           # assign and inspect
-_ = dangerous()               # explicitly discard (suppresses the warning)
-```
+| Method | Meaning |
+|--------|---------|
+| `opt.is_some()` | Returns `true` if the option holds a value |
+| `opt.is_none()` | Returns `true` if the option is `None` |
+| `opt.unwrap()` | Returns the value — panics if `None` |
+| `opt.unwrap_or(default)` | Returns value or `default` if `None` |
 
----
-
-## Choosing Between try/except and throws
-
-### Use try/except when:
-- You're at a **boundary** — the point where errors are caught and recovery happens
-- You need `finally` for cleanup that must always run
-- You want to catch errors from a **block of multiple operations**
-- You're writing top-level error recovery (e.g., in `main()`)
-
-```python
-def main():
-    try:
-        mut cfg = load_config()      # may raise
-        mut db  = connect_db(cfg)    # may raise
-        run_server(db)               # may raise
-    except e:
-        print(f"startup failed: {e}")
-```
-
-### Use throws + ? when:
-- You're building a **deep call chain** where every level can fail
-- Performance on the error path matters
-- You want the failure mode **visible in the function signature**
-- You're building a library where callers need to know about failure
+### Common Mistakes
 
 ```python
-# Deep chain — all use throws + ?
-def parse_config(text: str) throws str -> Config: ...
-def connect_from_config(cfg: Config) throws str -> Db: ...
-def run_query(db: Db, sql: str) throws str -> List[Row]: ...
+# WRONG: Calling a throws function and ignoring the result
+parse_int(s)    # ERROR [T-4]: unhandled Result — assign, use ?, or discard with _
 
-# Top-level — uses try/except for recovery
-def main():
-    try:
-        mut cfg = parse_config(read_file("config.toml"))
-        mut db  = connect_from_config(cfg)
-        mut rows = run_query(db, "SELECT * FROM users")
-        for row in rows: print_row(row)
-    except e:
-        print(f"error: {e}")
+# WRONG: Using ? outside a throws function
+def not_throws(s: str) -> int:
+    mut n = parse_int(s)?    # ERROR: ? can only appear in a throws function
+
+# WRONG: Mismatched error types with ?
+def f() throws str -> int: ...
+def g() throws int -> float:
+    mut n = f()?    # ERROR: f() throws str but g() throws int — incompatible
+
+# WRONG: Calling unwrap() without checking is_ok() first
+mut r = parse_int("bad")
+mut val = r.unwrap()    # panics at runtime — always check first
 ```
 
-### Mixed Pattern
-
-The two models interoperate freely. Call `throws` functions inside `try` blocks, and vice versa:
+**Fix for T-4 (unhandled Result):**
 
 ```python
-def safe_parse(s: str) -> int:
-    mut r: Result[int, str] = parse_int(s)   # call throws fn
-    if r.is_ok: return r.ok
-    return 0    # default on error
-
-def resilient_run() -> void:
-    try:
-        mut n = safe_parse(user_input())
-        print(f"parsed: {n}")
-    except e:
-        print(f"caught: {e}")
+parse_int(s)?             # propagate with ?
+mut r = parse_int(s)      # assign and inspect manually
+_ = parse_int(s)          # explicitly discard (suppresses the warning)
 ```
+
+### Best Practices
+
+- Use `throws str` for simple error messages; use a custom class for structured errors with extra fields.
+- Always annotate every function that can fail with `throws` — this makes failure visible in the call graph.
+- Use `?` to propagate errors up the chain rather than writing `if r.is_err(): raise(r.unwrap_or(...))` manually.
+- Match error types across `throws` boundaries — mismatched types require an explicit conversion.
+- Never call `unwrap()` without a preceding `is_ok()` / `is_some()` check unless you have a strict invariant that the value is present.
 
 ---
 
 ## Custom Error Types
 
-Use a string (`throws str`) for simple errors. Use a class for richer errors:
+### When to Use
+
+Use a custom error class when the caller needs structured information beyond a plain string — position, code, context.
+
+### How It Works
 
 ```python
 class ParseError:
@@ -292,22 +300,79 @@ extend ParseError:
 def parse_expr(s: str) throws ParseError -> int:
     if len(s) == 0:
         raise(ParseError.init("empty expression", 0, s))
-    # ...
     return 0
+```
+
+### Common Mistakes
+
+```python
+# WRONG: Using a class error with throws str — the types must match
+def f() throws str -> int:
+    raise(ParseError.init("oops", 0, ""))    # ERROR: throws str expects a str, not ParseError
+```
+
+### Best Practices
+
+- Use `throws str` during prototyping; switch to a class when callers need to branch on error fields.
+- Keep error classes small — message, code, context. Avoid embedding large objects.
+- Implement a `describe()` method on every error class for consistent printing.
+
+---
+
+## Choosing Between try/except and throws
+
+```
+throws + ?          — deep chains, library code, performance-critical paths
+try / except        — boundary recovery, multi-operation blocks, top-level main()
+```
+
+```python
+# Deep chain — all use throws + ?
+def parse_config(text: str) throws str -> Config: ...
+def connect_from_config(cfg: Config) throws str -> Db: ...
+def run_query(db: Db, sql: str) throws str -> List[Row]: ...
+
+# Top-level — uses try/except for recovery
+def main():
+    try:
+        mut cfg = parse_config(read_file("config.toml"))
+        mut db  = connect_from_config(cfg)
+        mut rows = run_query(db, "SELECT * FROM users")
+        for row in rows: print_row(row)
+    except e:
+        print(f"error: {e}")
+```
+
+### Mixed Pattern
+
+The two models interoperate freely:
+
+```python
+def safe_parse(s: str) -> int:
+    mut r: Result[int, str] = parse_int(s)   # call a throws fn without ?
+    if r.is_ok(): return r.unwrap()
+    return 0    # default on error
+
+def resilient_run() -> void:
+    try:
+        mut n = safe_parse(user_input())
+        print(f"parsed: {n}")
+    except e:
+        print(f"caught: {e}")
 ```
 
 ---
 
 ## Error Propagation Across Module Boundaries
 
-`throws` errors propagate naturally across module boundaries using `?`. The caller's function must also declare `throws` with a compatible error type:
+`throws` errors propagate naturally across module boundaries. The caller's function must also declare `throws` with a compatible error type:
 
 ```python
 # In math.tr:
 pub def safe_sqrt(x: float) throws str -> float:
     if x < 0.0:
         raise("cannot take sqrt of negative number")
-    return 1.0   # simplified
+    return 1.0
 
 # In main.tr:
 from math import safe_sqrt
@@ -319,32 +384,39 @@ def compute(x: float) throws str -> float:
 
 ---
 
-## Common Errors
+## Compiler Rule T-4: Handle Throws Results
 
-### Calling throws without handling
-
-```python
-parse_int(s)    # ERROR [T-4]: unhandled Result — assign, use ?, or discard with _
-```
-**Fix:** `_ = parse_int(s)` or `mut r = parse_int(s)` or `parse_int(s)?`
-
-### Using ? outside a throws function
+If a `throws` function is called as a statement (not assigned to a variable and not using `?`), the compiler emits a warning:
 
 ```python
-def not_throws(s: str) -> int:
-    mut n = parse_int(s)?    # ERROR: ? can only be used in a throws function
-    return n
+def dangerous() throws str -> int:
+    return 42
+
+dangerous()    # WARNING [T-4]: 'dangerous()' returns a Result — its error must be handled
 ```
-**Fix:** Add `throws ErrorType` to the enclosing function, or handle the Result explicitly.
 
-### Wrong error type in ?
-
+**Fix options:**
 ```python
-def f() throws str -> int: ...
-def g() throws int -> float:
-    mut n = f()?    # ERROR: f() throws str but g() throws int — incompatible
+dangerous()?             # propagate with ?
+mut r = dangerous()      # assign and inspect
+_ = dangerous()          # explicitly discard (suppresses the warning)
 ```
-**Fix:** Match the error type, or convert: `mut r = f(); if r.is_err: raise(0)`
+
+---
+
+## Summary
+
+| Feature | Keyword | Notes |
+|---------|---------|-------|
+| Exception block | `try` | `setjmp`-based |
+| Catch exception | `except` | Multiple clauses allowed |
+| Always-run cleanup | `finally` | Runs on success and error |
+| Raise exception | `raise` | Jumps to nearest `try` |
+| Contract check | `assert` | Aborts on false |
+| Fallible function | `throws` | Changes return to `Result[T,E]` |
+| Error propagation | `?` | Propagates or unwraps |
+| Nullable value | `Option[T]` | `Some(v)` / `None` |
+| Success-or-error | `Result[T, E]` | `Ok(v)` / `Err(e)` |
 
 ---
 

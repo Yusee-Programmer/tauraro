@@ -1,127 +1,112 @@
-# 07 — Collections: List[T] and Dict
+# 07 — Collections: List, Dict, Set, and Tuples
+
+Tauraro provides four built-in collection types. All heap-allocated collections are owned by the compiler's ownership system — they are allocated automatically when created and freed automatically when they leave scope. You never call `free()` on a collection manually.
+
+| Type | When to use |
+|------|-------------|
+| `List[T]` | Ordered sequence of same-typed elements |
+| `Dict` / `Dict[K, V]` | Key-to-value lookup by string or numeric key |
+| `Set[T]` | Unordered collection of unique values |
+| `(a, b, c)` | Fixed-size group of heterogeneous values, function multi-return |
 
 ---
 
-## Overview
+## Table of Contents
 
-Tauraro provides two built-in collection types:
-
-| Type | Use when |
-|------|----------|
-| `List[T]` | Ordered sequence of same-typed elements |
-| `Dict` | String-keyed associative lookup |
-
-Both are heap-allocated. The compiler tracks ownership and injects `free()` at scope exit. You never call `free()` on them manually.
+1. [List\[T\] — Typed Dynamic Array](#listt--typed-dynamic-array)
+2. [Dict — Hash Map](#dict--hash-map)
+3. [Set\[T\] — Unique Collection](#sett--unique-collection)
+4. [Tuples](#tuples)
+5. [List Comprehensions and Generator Expressions](#list-comprehensions-and-generator-expressions)
+6. [Built-in Iteration Helpers](#built-in-iteration-helpers)
+7. [Slicing](#slicing)
+8. [Ownership and Collections](#ownership-and-collections)
+9. [Common Collection Errors](#common-collection-errors)
 
 ---
 
 ## List[T] — Typed Dynamic Array
 
-### What Is List[T]
+### When to use
 
-`List[T]` is a growable array. Elements are stored **contiguously** in memory — the same layout as a C array. This means:
-- Random access is O(1)
-- Appending is amortized O(1) (doubles capacity on growth)
-- Iteration is cache-friendly
-- No boxing, no indirection, no garbage collector
+Use `List[T]` whenever you need an ordered, indexable, growable sequence of same-typed values. It is the go-to collection for most tasks: storing results, accumulating items in a loop, passing sequences to functions.
 
-### Supported Element Types
+`List[T]` maps directly to a C array with a length and capacity field. There is no boxing, no GC, no type erasure.
 
-`List[T]` supports all primitive types (`int`, `i32`, `float`, `bool`, `str`, `char`, `u8`, `u32`, `i8`), class instances, and enum values. Elements are stored contiguously in memory — the same layout as a native array.
+### How it works
 
-### Creating Lists
+**Creating lists:**
 
 ```python
-# Empty list with explicit type
+# Empty list — type annotation required when the list starts empty
 mut scores: List[int] = []
 
 # List literal — type inferred from elements
 mut primes = [2, 3, 5, 7, 11]
 
-# List of strings
-mut names = ["Alice", "Bob", "Charlie"]
-
-# List of floats
-mut temps: List[float] = [98.6, 97.1, 99.2]
-
-# List of booleans
-mut flags: List[bool] = [true, false, true, false]
+# Other element types
+mut names:  List[str]   = ["Alice", "Bob", "Charlie"]
+mut temps:  List[float] = [98.6, 97.1, 99.2]
+mut flags:  List[bool]  = [true, false, true, false]
 
 # List of class instances
 mut points: List[Point] = []
 ```
 
-**Compiler rule:** All elements in a list literal must be the same type. A mixed-type literal is a compiler error.
+**Memory layout:** Elements are stored contiguously in memory — the same layout as a C array. Random access is O(1), iteration is cache-friendly, and appending is amortized O(1) (capacity doubles on growth).
 
-**Common error — wrong type for empty list:**
-```python
-mut data = []         # ERROR: cannot infer type of empty list
-mut data: List[int] = []  # OK: type annotation required for empty lists
-```
-
-### Appending Elements
+**Core operations:**
 
 ```python
 mut items: List[int] = []
+
+# Append (amortized O(1)):
 items.append(10)
 items.append(20)
 items.append(30)
-# items is now [10, 20, 30]
+
+# Read by index (O(1)):
+mut first  = items[0]              # 10
+mut last   = items[len(items) - 1] # 30  (negative indexing not supported)
+
+# Modify in place:
+items[0] = 99
+items[1] = items[1] + 5
+
+# Length (O(1)):
+mut n = len(items)
+
+# Remove and return last element (O(1)):
+mut popped = items.pop()
+
+# Insert at index (O(n)):
+items.insert(1, 42)
+
+# Remove at index (O(n)):
+items.remove(0)
+
+# Check membership (O(n)):
+mut found = items.contains(20)
+
+# Sort in place:
+items.sort()
+
+# Reverse in place:
+items.reverse()
 ```
 
-`.append(v)` adds `v` at the end. If the list is at capacity, it doubles its internal buffer (amortized O(1)).
-
-### Reading Elements
+**Iterating:**
 
 ```python
-mut first = items[0]      # 10
-mut second = items[1]     # 20
-mut last = items[len(items) - 1]   # last element
-```
-
-**Compiler rule:** There is no automatic bounds checking. Accessing `items[i]` where `i >= len(items)` is undefined behavior. Check bounds manually when the index is not statically known:
-
-```python
-def safe_get(items: List[int], i: int) -> int:
-    if i < 0 or i >= len(items): return -1
-    return items[i]
-```
-
-### Modifying Elements
-
-```python
-items[0] = 99      # replace element at index 0
-items[1] += 5      # arithmetic assignment on list element
-```
-
-### Getting the Length
-
-```python
-mut n = len(items)    # number of elements
-```
-
-`len(items)` is O(1) — a simple field read.
-
-### Removing the Last Element
-
-```python
-mut last = items.pop()    # removes and returns the last element
-```
-
-`.pop()` decrements the length and returns the last value. Does not shrink the allocation.
-
-### Iterating
-
-```python
-# For loop (most idiomatic):
+# For loop — most idiomatic:
 for x in items:
     print(x)
 
-# With index:
+# With index via enumerate:
 for i, x in enumerate(items):
     print(f"  [{i}] = {x}")
 
-# While loop (when you need full control):
+# While loop when you need full index control:
 mut i = 0
 while i < len(items):
     print(f"  items[{i}] = {items[i]}")
@@ -130,75 +115,43 @@ while i < len(items):
 
 All three compile to equivalent C loops with no allocation overhead.
 
-### List Comprehension
+**Common patterns:**
 
 ```python
-# Build a new list by transforming another:
-mut squares: List[int] = [x * x for x in numbers]
-
-# With filter:
-mut evens: List[int] = [x for x in numbers if x % 2 == 0]
-```
-
-**How comprehensions work:** Directly builds the result list. No intermediate allocations.
-
-### Common List Patterns
-
-**Building a list from a range:**
-```python
+# Build from range:
 def range_list(n: int) -> List[int]:
     mut result: List[int] = []
     for i in range(n):
         result.append(i)
     return result
-```
 
-**Filtering:**
-```python
-def filter_positive(nums: List[int]) -> List[int]:
+# Filter:
+def positives(nums: List[int]) -> List[int]:
     mut result: List[int] = []
     for x in nums:
         if x > 0: result.append(x)
     return result
-```
 
-**Summing:**
-```python
+# Sum:
 def sum_list(items: List[int]) -> int:
     mut total = 0
-    for x in items:
-        total = total + x
+    for x in items: total = total + x
     return total
-```
 
-**Searching:**
-```python
+# Linear search:
 def index_of(items: List[int], target: int) -> int:
     mut i = 0
     while i < len(items):
         if items[i] == target: return i
         i = i + 1
     return -1
-```
 
-**Reversing:**
-```python
-def reverse(items: List[int]) -> List[int]:
-    mut result: List[int] = []
-    mut i = len(items) - 1
-    while i >= 0:
-        result.append(items[i])
-        i = i - 1
-    return result
-```
-
-**Sorting (insertion sort):**
-```python
+# Manual sort (insertion sort):
 def sort_asc(items: List[int]) -> void:
     mut i = 1
     while i < len(items):
         mut key = items[i]
-        mut j = i - 1
+        mut j   = i - 1
         while j >= 0 and items[j] > key:
             items[j + 1] = items[j]
             j = j - 1
@@ -206,72 +159,140 @@ def sort_asc(items: List[int]) -> void:
         i = i + 1
 ```
 
+### Common Mistakes
+
+**Empty list without type annotation:**
+```python
+mut data = []    # ERROR: cannot infer element type from empty list literal
+```
+Fix: `mut data: List[int] = []`
+
+**Mixed element types:**
+```python
+mut nums: List[int] = [1, 2, "three"]    # ERROR [T-2]: "three" has type str, expected int
+```
+Fix: All elements must be the same type.
+
+**Incompatible List assignment:**
+```python
+mut ints:   List[int]   = []
+mut floats: List[float] = [1.0, 2.0]
+ints = floats    # ERROR [T-2]: incompatible List types
+```
+Fix: Convert explicitly: `for x in floats: ints.append(x as int)`
+
+**Out-of-bounds access:**
+```python
+mut items = [10, 20]
+mut x     = items[5]    # undefined behavior — no automatic bounds check
+```
+Fix: `if i < len(items): x = items[i]`
+
+**Using negative indices:**
+```python
+mut last = items[-1]    # NOT supported — undefined behavior
+```
+Fix: `mut last = items[len(items) - 1]`
+
+### Best Practices
+
+- When the list starts empty, always provide the type annotation: `mut data: List[int] = []`.
+- Prefer `for x in items:` over index-based while loops unless you specifically need the index.
+- Use `enumerate(items)` when you need both the index and the value — it is cleaner than a manual counter.
+- For index-based access from user input or computed values, always validate: `if i >= 0 and i < len(items):`.
+- Use list comprehensions for simple transforms and filters — they are concise and produce no intermediate allocations.
+
 ---
 
-## Dict — String-Keyed Hash Map
+## Dict — Hash Map
 
-### What Is Dict
+### When to use
 
-`Dict` is a hash map with **string keys** and dynamically-typed values. This means:
-- Values are untyped at compile time
-- Works well for string values or pointer values
-- Numeric values must be stored as strings and converted on read
+Use `Dict` for key-to-value lookups when you need to retrieve a value by name at runtime. Common uses: configuration maps, frequency counts, label lookup tables, caches keyed by identifier.
+
+Use the untyped `Dict` when all values are strings. Use the typed `Dict[K, V]` when you need typed values or non-string keys.
+
+### How it works
+
+**Untyped `Dict` (string keys, string values):**
 
 ```python
-# Create with literal:
+# Dict literal:
 mut config = {"host": "localhost", "port": "8080", "debug": "true"}
 
 # Empty Dict:
 mut store: Dict = {}
-```
 
-### Dict Operations
-
-```python
-# Write a value:
+# Write:
 config.set("timeout", "30")
 
-# Read a value:
-mut host = config.get("host")     # returns the value (as str for string values)
+# Read:
+mut host = config.get("host")    # returns str
 
-# Check if key exists:
+# Check existence:
 if config.has("debug"):
     print("debug mode on")
 
-# Get size:
+# Size:
 mut n = len(config)
-
-# Delete (via set to none — not yet native):
 ```
 
-### Hausa Aliases
+**Typed `Dict[K, V]` (typed keys and values):**
 
 ```python
-config.makomashi("key")   # same as config.get("key")
-config.kafa("key", val)   # same as config.set("key", val)
-config.akwai("key")       # same as config.has("key")
+# String keys, int values:
+mut scores: Dict[str, int] = {}
+scores.set("alice", 95)
+scores.set("bob",   87)
+mut a = scores.get("alice")    # int — no cast needed
+
+# Int keys, string values:
+mut http_status: Dict[int, str] = {}
+http_status.set(200, "OK")
+http_status.set(404, "Not Found")
+http_status.set(500, "Internal Server Error")
+mut msg = http_status.get(404)    # "Not Found"
 ```
 
-### Dict Patterns
+Supported key types: `str`, `int`, `i64`, `i32`, `usize`.
 
-**Configuration map:**
+**Iterating with `.items()`:**
+
 ```python
+for code, msg in http_status.items():
+    print(f"  {code}: {msg}")
+
+for word, count in scores.items():
+    print(f"  {word}: {count}")
+```
+
+Iteration order follows the internal hash table order — not insertion order.
+
+**Keys and values as lists:**
+
+```python
+mut ks = scores.keys()     # List[str]
+mut vs = scores.values()   # List[int]
+```
+
+**Common patterns:**
+
+```python
+# Configuration map:
 def get_config() -> Dict:
     return {
-        "host":    "localhost",
-        "port":    "5432",
-        "dbname":  "myapp",
-        "user":    "admin"
+        "host":   "localhost",
+        "port":   "5432",
+        "dbname": "myapp",
+        "user":   "admin"
     }
 
-def main():
+def main() -> void:
     mut cfg = get_config()
     if cfg.has("host"):
         print(f"connecting to {cfg.get("host")}:{cfg.get("port")}")
-```
 
-**Counting occurrences (using string values):**
-```python
+# Word frequency count (untyped Dict, values stored as strings):
 def count_words(words: List[str]) -> Dict:
     mut counts: Dict = {}
     for word in words:
@@ -281,74 +302,153 @@ def count_words(words: List[str]) -> Dict:
         else:
             counts.set(word, "1")
     return counts
+
+# Word frequency count (typed Dict[str, int]):
+def count_words_typed(words: List[str]) -> Dict[str, int]:
+    mut counts: Dict[str, int] = {}
+    for word in words:
+        if counts.has(word):
+            counts.set(word, counts.get(word) + 1)
+        else:
+            counts.set(word, 1)
+    return counts
 ```
 
-### Typed Dict[K, V]
+### Common Mistakes
 
-Use `Dict[K, V]` to get typed key and value access:
+**Calling `.get()` without checking `.has()` first:**
+```python
+mut cfg: Dict = {}
+mut val = cfg.get("host")    # undefined behavior if "host" was never set
+```
+Fix:
+```python
+if cfg.has("host"):
+    mut val = cfg.get("host")
+```
+
+**Storing numbers in untyped `Dict` without converting to string:**
+```python
+mut d: Dict = {}
+d.set("count", 5)    # ERROR: untyped Dict only accepts str values
+```
+Fix: Use `str(5)` or switch to `Dict[str, int]`.
+
+**Modifying a Dict while iterating over `.items()`:**
+```python
+for k, v in scores.items():
+    scores.set(k + "_copy", v)    # undefined behavior — modifying during iteration
+```
+Fix: Collect modifications in a separate list and apply them after the loop.
+
+### Best Practices
+
+- Prefer `Dict[K, V]` over untyped `Dict` for new code — typed access avoids manual `str()`/`int()` conversions and catches type errors at compile time.
+- Always `.has()` before `.get()` unless the key is guaranteed to exist.
+- For small, fixed key sets (e.g., 3–5 configuration keys), consider using a class with named fields instead of a `Dict` — named fields are faster and type-safe.
+- Use `.items()` for iteration rather than iterating `.keys()` and calling `.get()` for each — it is more efficient.
+
+---
+
+## Set[T] — Unique Collection
+
+### When to use
+
+Use `Set[T]` when you need to track whether elements have been seen, remove duplicates from a collection, or perform set operations (union, intersection, difference). Sets provide O(1) average membership testing.
+
+### How it works
 
 ```python
-# String-keyed, int values
-mut scores: Dict[str, int] = {}
-scores.set("alice", 95)
-scores.set("bob", 87)
-mut a = scores.get("alice")    # int — no cast needed
+# Create a set from a literal:
+mut seen: Set[int] = {1, 2, 3, 4, 5}
 
-# Int-keyed, string values
-mut labels: Dict[int, str] = {}
-labels.set(404, "not found")
-labels.set(200, "ok")
-mut msg = labels.get(404)      # str
+# Empty set:
+mut visited: Set[str] = {}
 
-# Keys and values as lists
-mut ks = scores.keys()         # List[str]
-mut vs = scores.values()       # List[int]
+# Add an element (no-op if already present):
+seen.add(6)
+seen.add(3)    # already in set — no change
 
-# Iterate key-value pairs:
-for word, count in scores.items():
-    print(f"{word}: {count}")
+# Check membership (O(1) average):
+if seen.contains(4):
+    print("4 is in the set")
+
+# Remove an element:
+seen.remove(2)
+
+# Size:
+mut n = len(seen)
+
+# Iterate (order is unspecified):
+for x in seen:
+    print(x)
 ```
 
-Supported key types: `str`, `int`, `i64`, `i32`, `usize`.
-
-### Iterating Dict Entries with `.items()`
-
-`.items()` returns all key-value pairs and is designed for use with `for k, v in d.items():`:
-
+**Removing duplicates from a list:**
 ```python
-mut http: Dict[int, str] = {}
-http.set(200, "OK")
-http.set(404, "Not Found")
-http.set(500, "Error")
-
-for code, msg in http.items():
-    print(f"  {code}: {msg}")
-
-mut freq: Dict[str, int] = {}
-freq.set("apple", 3)
-freq.set("banana", 1)
-
-for word, count in freq.items():
-    print(f"  {word} appears {count} times")
+def deduplicate(items: List[int]) -> List[int]:
+    mut seen: Set[int] = {}
+    mut result: List[int] = []
+    for x in items:
+        if not seen.contains(x):
+            seen.add(x)
+            result.append(x)
+    return result
 ```
 
-Iteration order follows the internal hash table order (not insertion order).
+**Membership testing (faster than `.contains()` on `List`):**
+```python
+mut valid_codes: Set[int] = {200, 201, 204, 301, 302, 304, 400, 401, 403, 404, 500}
+
+def is_valid_status(code: int) -> bool:
+    return valid_codes.contains(code)
+```
+
+Supported element types: `int`, `str`, `i32`, `i64`, `usize`.
+
+### Common Mistakes
+
+**Expecting sorted or insertion-order iteration:**
+```python
+mut s: Set[int] = {3, 1, 4, 1, 5}
+for x in s:
+    print(x)    # order is unspecified — do not rely on any particular order
+```
+Fix: If you need ordered output, collect into a `List[int]` and sort it.
+
+**Using `Set` when you also need to track counts:**
+```python
+mut seen: Set[str] = {}
+for word in words:
+    seen.add(word)    # counts not available — just presence/absence
+```
+Fix: Use `Dict[str, int]` for frequency counting.
+
+### Best Practices
+
+- Use `Set[T]` over `List[T]` when the primary operation is membership testing — `.contains()` on a `Set` is O(1), but O(n) on a `List`.
+- For deduplication, prefer the pattern of building a `Set` then reconstructing the `List` if order matters.
+- Do not iterate a `Set` and expect any specific order.
 
 ---
 
 ## Tuples
 
-A tuple is a fixed-size group of values. Use parentheses with commas:
+### When to use
+
+Use tuples to return multiple values from a function, or to group a small, fixed set of related values of different types without creating a class. Tuples are zero-allocation — they are passed directly in registers or on the stack.
+
+### How it works
+
+**Creating tuples:**
 
 ```python
-mut point = (10, 20)             # 2-element tuple
-mut triple = (1, "hello", true)  # mixed types (all stored as int-width values)
-mut empty  = ()                  # empty tuple
+mut point  = (10, 20)              # 2-element tuple
+mut triple = (1, "hello", true)    # mixed types
+mut empty  = ()                    # empty tuple (unit)
 ```
 
-### Tuple Unpacking
-
-Unpack a tuple into named variables with `mut a, b = expr`:
+**Unpacking:**
 
 ```python
 mut x, y = (3, 7)
@@ -358,58 +458,165 @@ print(y)    # 7
 mut a, b, c = (10, 20, 30)
 ```
 
-### Functions Returning Tuples
-
-Annotate the return type as `(T1, T2, ...)`:
+**Functions returning tuples:**
 
 ```python
 def min_max(items: List[int]) -> (int, int):
-    mut lo = items.get(0)
-    mut hi = items.get(0)
+    mut lo = items[0]
+    mut hi = items[0]
     for x in items:
         if x < lo: lo = x
         if x > hi: hi = x
     return (lo, hi)
 
-def main():
+def main() -> void:
     mut lo, hi = min_max([3, 1, 4, 1, 5, 9])
     print(f"min={lo} max={hi}")    # min=1 max=9
 ```
 
-### Tuple Limits
+**Returning error + value pairs (alternative to `throws`):**
+```python
+def divide(a: int, b: int) -> (bool, int):
+    if b == 0: return (false, 0)
+    return (true, a / b)
 
-- Up to 8 elements per tuple
-- All elements are stored as 64-bit integers internally; pointer types work correctly, but mixed-type tuples may need explicit casts when unpacking non-integer values
+def main() -> void:
+    mut ok, result = divide(10, 2)
+    if ok:
+        print(f"result = {result}")
+    else:
+        print("division by zero")
+```
+
+**Tuple limits:**
+- Up to 8 elements per tuple.
+- All elements are stored as 64-bit integers internally. Pointer types work correctly. Mixed-type tuples with non-integer values may need explicit `as` casts when unpacking.
+
+### Common Mistakes
+
+**Exceeding 8 elements:**
+```python
+mut t = (1, 2, 3, 4, 5, 6, 7, 8, 9)    # ERROR: tuples support at most 8 elements
+```
+Fix: Use a class or `List`.
+
+**Forgetting to unpack before using tuple elements:**
+```python
+mut result = min_max(items)
+print(result)       # prints the raw tuple — probably not what you want
+print(result[0])    # ERROR: tuple element access by index not supported
+```
+Fix: Unpack: `mut lo, hi = min_max(items)`
+
+### Best Practices
+
+- Use tuples for function return values only — for stored data with more than 2–3 fields, define a class.
+- Name the unpacked variables descriptively: `mut lo, hi =` is better than `mut a, b =`.
+- Prefer `throws` over `(bool, value)` tuples for error signaling — `throws` integrates with the `?` propagation operator.
+
+---
+
+## List Comprehensions and Generator Expressions
+
+### When to use
+
+Use list comprehensions to build a new list by transforming or filtering an existing collection in a single concise expression. Use generator expressions for lazy evaluation when you only need to iterate once without building a new list.
+
+### How it works
+
+**List comprehension — transform all elements:**
+
+```python
+mut numbers = [1, 2, 3, 4, 5]
+mut squares: List[int] = [x * x for x in numbers]
+# squares = [1, 4, 9, 16, 25]
+```
+
+**List comprehension with filter:**
+
+```python
+mut evens: List[int] = [x for x in numbers if x % 2 == 0]
+# evens = [2, 4]
+```
+
+**Comprehension over a string list:**
+
+```python
+mut names  = ["Alice", "Bob", "Charlie"]
+mut upper_names: List[str] = [n.upper() for n in names]
+# upper_names = ["ALICE", "BOB", "CHARLIE"]
+```
+
+**Nested computation in comprehension:**
+
+```python
+mut data: List[int] = [1, -3, 5, -2, 4]
+mut abs_vals: List[int] = [x if x >= 0 else -x for x in data]
+# abs_vals = [1, 3, 5, 2, 4]
+```
+
+**Generator expression — lazy, no intermediate list:**
+
+```python
+# Compute the sum without building an intermediate list:
+mut total = sum(x * x for x in numbers)
+
+# Filter and consume once:
+for x in (x for x in numbers if x > 2):
+    print(x)    # 3, 4, 5
+```
+
+Generator expressions use `()` instead of `[]`. They produce values on demand and do not allocate a new list.
+
+**How comprehensions compile:** The compiler translates list comprehensions directly to a tight C `for` loop that builds the result list. No intermediate allocations, no boxing.
+
+### Common Mistakes
+
+**Missing type annotation on a comprehension result:**
+```python
+mut squares = [x * x for x in numbers]    # OK if numbers is List[int] — type inferred
+mut evens   = []                           # ERROR: type cannot be inferred from empty literal
+```
+
+**Complex logic inside a comprehension (hard to read):**
+```python
+mut results = [transform(normalize(validate(x))) for x in data if expensive_check(x)]
+```
+Fix: Use a regular `for` loop with intermediate variables when the body is complex.
+
+### Best Practices
+
+- Use comprehensions for simple, one-level transforms and filters. Switch to a `for` loop when the body needs more than one operation.
+- Use generator expressions when you only need to iterate once — they avoid the allocation of a new list.
+- Keep comprehension conditions simple (`if x > 0`). For complex filtering logic, extract a helper function.
 
 ---
 
 ## Built-in Iteration Helpers
 
-### `enumerate(list)` — Index + Value
+### When to use
 
-`enumerate(list)` yields `(index, element)` pairs. Use with `for i, x in enumerate(items):`:
+Use `enumerate` when you need both the index and the value during iteration. Use `zip` to iterate two lists in parallel (e.g., names and scores, keys and values).
+
+### How it works
+
+**`enumerate(list)` — index + value:**
 
 ```python
-mut fruits: List[str] = ["apple", "banana", "cherry"]
+mut fruits = ["apple", "banana", "cherry"]
 for i, fruit in enumerate(fruits):
     print(f"  [{i}] {fruit}")
 # [0] apple
 # [1] banana
 # [2] cherry
-
-mut nums: List[int] = [10, 20, 30]
-for idx, val in enumerate(nums):
-    print(f"  idx={idx} val={val}")
 ```
 
-Compiles to a tight C `for` loop with no heap allocation. The index variable is always `int`.
+The index variable is always `int`, starting at 0. Compiles to a tight C `for` loop with no heap allocation.
 
-### `zip(a, b)` — Parallel Iteration
-
-`zip(a, b)` iterates two lists together, yielding pairs. Use with `for x, y in zip(a, b):`:
+**`zip(a, b)` — parallel iteration:**
 
 ```python
-mut names: List[str]  = ["Alice", "Bob", "Carol"]
+mut names:  List[str] = ["Alice", "Bob", "Carol"]
 mut scores: List[int] = [95, 82, 78]
 
 for name, score in zip(names, scores):
@@ -421,49 +628,183 @@ for name, score in zip(names, scores):
 
 Iteration stops at the end of the shorter list. Compiles to a single C `for` loop with no allocation.
 
+**`range(n)` — integer range:**
+
+```python
+for i in range(10):
+    print(i)    # 0 through 9
+
+for i in range(2, 8):
+    print(i)    # 2 through 7
+
+for i in range(0, 10, 2):
+    print(i)    # 0, 2, 4, 6, 8
+```
+
+`range(n)`, `range(start, stop)`, and `range(start, stop, step)` are all supported.
+
+### Common Mistakes
+
+**Using `zip` and expecting it to pad shorter lists:**
+```python
+mut a = [1, 2, 3]
+mut b = [10, 20]
+for x, y in zip(a, b):
+    print(f"{x}, {y}")    # prints only two pairs — stops at len(b)
+# 1, 10
+# 2, 20
+# (3 is never reached)
+```
+If you need all elements, ensure both lists have the same length.
+
+**Forgetting that `enumerate` provides `int` index starting at 0:**
+```python
+for i, x in enumerate(items):
+    print(i + 1)    # 1-based numbering — must add 1 explicitly
+```
+
+### Best Practices
+
+- Always prefer `enumerate(items)` over a manual `mut i = 0` counter — it is cleaner and less error-prone.
+- Use `zip` when processing two parallel arrays together. If the lengths may differ, document whether truncation is intentional.
+- `range(n)` is the standard way to iterate a fixed number of times when you need the index value.
+
+---
+
+## Slicing
+
+### When to use
+
+Use slices to work with a sub-sequence of a list without copying elements. Slices are useful for windowing, splitting data into segments, or passing a partial list to a function.
+
+### How it works
+
+```python
+mut items = [10, 20, 30, 40, 50]
+
+mut first_three = items[0:3]    # [10, 20, 30]  — indices 0, 1, 2
+mut last_two    = items[3:5]    # [40, 50]       — indices 3, 4
+mut middle      = items[1:4]    # [20, 30, 40]   — indices 1, 2, 3
+mut step_two    = items[0:5:2]  # [10, 30, 50]   — every second element
+```
+
+Slice syntax: `list[start:stop:step]`
+- `start` — inclusive start index (default: 0)
+- `stop`  — exclusive end index (default: `len(list)`)
+- `step`  — increment (default: 1)
+
+Omitting parameters uses the default:
+
+```python
+mut copy  = items[:]      # full copy — [10, 20, 30, 40, 50]
+mut tail  = items[2:]     # from index 2 to end — [30, 40, 50]
+mut head  = items[:3]     # from start to index 2 — [10, 20, 30]
+```
+
+**Note:** Negative indexing is not supported. Use `len(items) - n` for end-relative indices:
+
+```python
+mut last_two = items[len(items) - 2:]    # [40, 50]
+```
+
+### Common Mistakes
+
+**Expecting slices to be views (they are copies):**
+```python
+mut sub = items[1:3]
+sub[0] = 99    # modifies sub, NOT items
+```
+Slices produce a new `List[T]`. Modifying a slice does not affect the original.
+
+**Using negative indices in slices:**
+```python
+mut last = items[-2:]    # ERROR or undefined behavior — negative indices not supported
+```
+Fix: `mut last = items[len(items) - 2:]`
+
+### Best Practices
+
+- Use slices to pass sub-ranges to functions rather than copying manually.
+- Remember that slices are copies — if you need a reference to a sub-range, pass the list and explicit index bounds to the function.
+
 ---
 
 ## Ownership and Collections
 
-Both `List[T]` and `Dict` are heap-allocated. The compiler marks them as `Own` and injects `free()` at scope exit:
+### When to use
+
+Understanding ownership matters when you return, pass, or reassign collections. The rule is simple: the compiler injects a `free()` exactly once, at the scope where ownership ends.
+
+### How it works
+
+**Scope-owned collection — freed at end of function:**
 
 ```python
 def demo() -> void:
     mut items: List[int] = []    # Own — heap allocated
     items.append(1)
     items.append(2)
-    # scope ends: compiler injects List_i64_free(items)
+    # scope ends: compiler injects List_i64_free(items) automatically
 ```
 
-**Returning a collection transfers ownership:**
+**Returning a collection transfers ownership to the caller:**
+
 ```python
 def build_list() -> List[int]:
     mut result: List[int] = []
     result.append(42)
-    return result     # ownership transferred to caller — no free injected here
+    return result    # ownership transferred — no free injected here
 
-def main():
-    mut nums = build_list()    # nums owns the list
+def main() -> void:
+    mut nums = build_list()    # nums now owns the list
     print(nums[0])
-    # scope ends: List_i64_free(nums) injected
+    # scope ends: List_i64_free(nums) injected here
 ```
 
-**Passing a collection to a function borrows it:**
+**Passing a collection borrows it (caller retains ownership):**
+
 ```python
 def print_all(items: List[int]) -> void:    # borrows items
     for x in items: print(x)
-    # no free injected — caller still owns items
+    # no free injected — caller still owns the list
 
-def main():
+def main() -> void:
     mut nums = [1, 2, 3]
     print_all(nums)        # borrow
-    print(nums[0])         # still valid — not moved
+    print(nums[0])         # still valid — nums was not freed
     # scope ends: List_i64_free(nums) injected
 ```
 
+**Compiler rule:** You must never manually call `free()` on a `List` or `Dict`. The compiler tracks ownership and inserts exactly one `free()` call. Calling `free()` manually would cause a double-free.
+
+### Common Mistakes
+
+**Accessing a collection after it has left scope:**
+```python
+mut ptr: List[int] = none
+def fill() -> void:
+    mut local: List[int] = [1, 2, 3]
+    ptr = local    # UNSAFE: ptr holds a reference to a local that is freed on return
+fill()
+print(ptr[0])    # use-after-free
+```
+Fix: Return the list and assign it in the calling scope.
+
+**Manually freeing a collection:**
+```python
+free(items)    # ERROR or double-free — compiler already injects free at scope exit
+```
+
+### Best Practices
+
+- Do not worry about when collections are freed — the compiler handles it. Focus on scope boundaries.
+- When you need a collection to outlive a function, return it.
+- When you need a function to read a collection without owning it, pass it normally — borrowing is the default.
+- Never store a `List` or `Dict` inside a raw pointer and free it manually. Use the ownership system.
+
 ---
 
-## Common Errors
+## Common Collection Errors
 
 ### Empty list without type annotation
 
@@ -471,24 +812,24 @@ def main():
 mut data = []
 # ERROR: cannot infer element type from empty list literal
 ```
-**Fix:** `mut data: List[int] = []`
+Fix: `mut data: List[int] = []`
 
-### Wrong element type
+### Wrong element type in list literal
 
 ```python
 mut nums: List[int] = [1, 2, "three"]
 # ERROR [T-2]: element "three" has type str, expected int
 ```
-**Fix:** Use a consistent element type.
+Fix: Use a consistent element type. All elements must be the same type.
 
-### List[int] assigned from List[float]
+### Incompatible List types in assignment
 
 ```python
-mut ints: List[int] = []
+mut ints:   List[int]   = []
 mut floats: List[float] = [1.0, 2.0]
 ints = floats    # ERROR [T-2]: incompatible List types
 ```
-**Fix:** Convert explicitly: `for x in floats: ints.append(x as int)`
+Fix: Convert explicitly: `for x in floats: ints.append(x as int)`
 
 ### Dict missing key
 
@@ -496,8 +837,24 @@ ints = floats    # ERROR [T-2]: incompatible List types
 mut cfg: Dict = {}
 mut val = cfg.get("host")    # undefined behavior if "host" not set
 ```
-**Fix:** Always check first: `if cfg.has("host"): val = cfg.get("host")`
+Fix: `if cfg.has("host"): val = cfg.get("host")`
+
+### Out-of-bounds list access
+
+```python
+mut items = [1, 2, 3]
+mut x = items[10]    # undefined behavior — no automatic bounds check
+```
+Fix: `if i < len(items): x = items[i]`
+
+### Modifying a list while iterating it
+
+```python
+for x in items:
+    if x < 0: items.remove(0)    # undefined behavior — modifying during for-in iteration
+```
+Fix: Collect indices to remove first, then remove after the loop. Or use a `while` loop with manual index management.
 
 ---
 
-Next: [Classes & Extend →](08_classes.md)
+Next: [Classes and Extend →](08_classes.md)
