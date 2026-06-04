@@ -234,15 +234,35 @@ pub def strip_trailing_sep(s: str) -> str:
     if last == 47 or last == 92: return _tr_str_slice(s, 0, n - 1)
     return s
 
-# Split a PATH-style environment variable string into individual directory entries.
+# Walk a PATH-style env-var string and call add_fn for each non-empty entry.
 # Uses ';' as separator on Windows, ':' on POSIX.
-pub def split_path_env_list(s: str) -> List[str]:
-    mut result = List[str]()
+# Returns the number of paths found.
+pub def count_path_env_entries(s: str) -> int:
     mut sep = 58  # ':' on POSIX
     if _tr_is_windows(): sep = 59  # ';' on Windows
     mut p = s as Pointer[char]
     mut n = 0
     while p.offset(n).read() as int != 0: n = n + 1
+    mut count = 0
+    mut start = 0
+    mut i = 0
+    while i <= n:
+        mut c = 0
+        if i < n: c = p.offset(i).read() as int
+        if c == sep or i == n:
+            if i > start: count = count + 1
+            start = i + 1
+        i = i + 1
+    return count
+
+# Return the idx-th entry (0-based) from a PATH-style env-var string, or "" if out of range.
+pub def get_path_env_entry(s: str, idx: int) -> str:
+    mut sep = 58  # ':' on POSIX
+    if _tr_is_windows(): sep = 59  # ';' on Windows
+    mut p = s as Pointer[char]
+    mut n = 0
+    while p.offset(n).read() as int != 0: n = n + 1
+    mut cur = 0
     mut start = 0
     mut i = 0
     while i <= n:
@@ -250,10 +270,11 @@ pub def split_path_env_list(s: str) -> List[str]:
         if i < n: c = p.offset(i).read() as int
         if c == sep or i == n:
             if i > start:
-                result.push(_tr_str_slice(s, start, i))
+                if cur == idx: return _tr_str_slice(s, start, i)
+                cur = cur + 1
             start = i + 1
         i = i + 1
-    return result
+    return ""
 
 pub def path_to_native(s: str) -> str:
     mut n = 0
@@ -554,10 +575,10 @@ pub def main(args: Vec[str]):
     # Works like Python's PYTHONPATH: set it in the shell before running tauraroc.
     mut tauraro_path_env = _tr_getenv("TAURARO_PATH")
     if tauraro_path_env != "":
-        mut extra_paths = split_path_env_list(tauraro_path_env)
+        mut ep_count = count_path_env_entries(tauraro_path_env)
         mut epi = 0
-        while epi < extra_paths.len:
-            resolver.add_search_path(extra_paths.get(epi))
+        while epi < ep_count:
+            resolver.add_search_path(get_path_env_entry(tauraro_path_env, epi))
             epi = epi + 1
     mut prog = resolver.resolve_main(input_path)
 
