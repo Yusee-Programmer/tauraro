@@ -162,7 +162,6 @@ extend HttpResponse:
         sb.append("\r\nContent-Length: ")
         sb.append(Fmt.int_to_str(Str.len(self.body)))
         sb.append("\r\n")
-        sb.append(self.headers.to_str())
         sb.append("\r\n")
         sb.append(self.body)
         return sb.to_owned()
