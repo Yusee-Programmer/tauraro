@@ -1,0 +1,464 @@
+# std.net.http_server — Full HTTP/1.1 server foundation for web frameworks.
+#
+# Architecture (FastAPI / Flask style on top):
+#   HttpRequest  — parsed incoming request (method, path, query, headers, body, path params)
+#   HttpResponse — response builder (status, headers, body)
+#   HttpConn     — combines request + live socket for writing responses
+#   HttpRouter   — route registration and matching (static + :param segments)
+#   HttpServer   — accept loop, dispatches through HttpRouter
+#
+# Usage:
+#   from std.net.http_server import HttpServer, HttpRequest, HttpConn, HttpRouter
+#
+#   mut router = HttpRouter.init()
+#   router.get("/", 0)
+#   router.post("/users", 1)
+#   router.get("/users/:id", 2)
+#
+#   mut srv = HttpServer.init("0.0.0.0", 8080)
+#   srv.start()
+#   while srv.is_running():
+#       mut conn = srv.accept()
+#       mut req  = conn.request
+#       if req.route_id == 0:
+#           conn.send_text(200, "Hello, World!")
+#       elif req.route_id == 2:
+#           mut uid = req.get_param("id")
+#           conn.send_json(200, "{\"id\": \"" + uid + "\"}")
+#       else:
+#           conn.send_status(404)
+#       conn.close()
+
+from std.core.string import StringBuilder
+from std.net.tcp import TcpStream, TcpListener
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.core.map import Map
+from std.core.vec import Vec
+
+# ── HttpRequest ───────────────────────────────────────────────────────────────
+
+pub class HttpRequest:
+    pub method:   str       # "GET", "POST", etc.
+    pub path:     str       # "/users/42"
+    pub query:    str       # raw query string without '?'
+    pub body:     str       # request body
+    pub headers:  Map[str]  # request headers
+    pub params:   Map[str]  # path parameters extracted by router (:id → "42")
+    pub route_id: int       # matched route identifier (-1 if unmatched)
+    pub version:  str       # "HTTP/1.1" or "HTTP/1.0"
+
+extend HttpRequest:
+    pub def init() -> HttpRequest:
+        mut r        = HttpRequest()
+        r.method     = ""
+        r.path       = "/"
+        r.query      = ""
+        r.body       = ""
+        r.headers    = Map[str].init(16)
+        r.params     = Map[str].init(4)
+        r.route_id   = -1
+        r.version    = "HTTP/1.1"
+        return r
+
+    # Return a header value by name, or "" when absent.
+    pub def header(self, name: str) -> str:
+        if self.headers.contains(name): return self.headers.get(name)
+        return ""
+
+    # Return a path parameter by name (set by router), or "" when absent.
+    pub def get_param(self, name: str) -> str:
+        if self.params.contains(name): return self.params.get(name)
+        return ""
+
+    # Return the first value of a query parameter (simple key=value parsing).
+    pub def query_param(self, key: str) -> str:
+        mut ql  = Str.len(self.query)
+        if ql == 0: return ""
+        mut pos = 0
+        while pos < ql:
+            mut amp  = Str.index_of(Str.slice(self.query, pos, ql), "&")
+            mut end_ = ql
+            if amp >= 0: end_ = pos + amp
+            mut pair = Str.slice(self.query, pos, end_)
+            mut eq   = Str.index_of(pair, "=")
+            if eq >= 0:
+                mut k = Str.slice(pair, 0, eq)
+                if Str.eq(k, key):
+                    return Str.slice(pair, eq + 1, Str.len(pair))
+            pos = end_ + 1
+        return ""
+
+    # Content-Type header value, or "" when absent.
+    pub def content_type(self) -> str:
+        return HttpRequest.header(self, "Content-Type")
+
+    # True when the request carries a JSON body.
+    pub def is_json(self) -> bool:
+        return Str.contains(HttpRequest.header(self, "Content-Type"), "application/json")
+
+    # True when the request is a multipart/form-data upload.
+    pub def is_multipart(self) -> bool:
+        return Str.contains(HttpRequest.header(self, "Content-Type"), "multipart/form-data")
+
+    # True when the client has sent a Cookie header.
+    pub def has_cookie(self) -> bool:
+        return self.headers.contains("Cookie")
+
+    # Return the raw Cookie header value.
+    pub def cookies(self) -> str:
+        return HttpRequest.header(self, "Cookie")
+
+# ── HttpResponse ──────────────────────────────────────────────────────────────
+
+pub class HttpResponse:
+    pub status:  int
+    pub body:    str
+    pub headers: Map[str]
+
+extend HttpResponse:
+    pub def init(status: int, body: str) -> HttpResponse:
+        mut r    = HttpResponse()
+        r.status = status
+        r.body   = body
+        r.headers = Map[str].init(8)
+        return r
+
+    pub def set_header(self, name: str, value: str):
+        self.headers.insert(name, value)
+
+    pub def is_ok(self) -> bool:
+        return self.status >= 200 and self.status < 300
+
+    pub def is_redirect(self) -> bool:
+        return self.status >= 300 and self.status < 400
+
+    pub def is_error(self) -> bool:
+        return self.status >= 400
+
+    pub def to_wire(self) -> str:
+        mut sb = StringBuilder.init(256)
+        sb.append("HTTP/1.1 ")
+        sb.append(Fmt.int_to_str(self.status))
+        sb.append(" ")
+        if self.status == 200:      sb.append("OK")
+        elif self.status == 201:    sb.append("Created")
+        elif self.status == 204:    sb.append("No Content")
+        elif self.status == 301:    sb.append("Moved Permanently")
+        elif self.status == 302:    sb.append("Found")
+        elif self.status == 304:    sb.append("Not Modified")
+        elif self.status == 400:    sb.append("Bad Request")
+        elif self.status == 401:    sb.append("Unauthorized")
+        elif self.status == 403:    sb.append("Forbidden")
+        elif self.status == 404:    sb.append("Not Found")
+        elif self.status == 405:    sb.append("Method Not Allowed")
+        elif self.status == 409:    sb.append("Conflict")
+        elif self.status == 422:    sb.append("Unprocessable Entity")
+        elif self.status == 429:    sb.append("Too Many Requests")
+        elif self.status == 500:    sb.append("Internal Server Error")
+        elif self.status == 502:    sb.append("Bad Gateway")
+        elif self.status == 503:    sb.append("Service Unavailable")
+        else:                       sb.append("Unknown")
+        sb.append("\r\nContent-Length: ")
+        sb.append(Fmt.int_to_str(Str.len(self.body)))
+        sb.append("\r\n")
+        sb.append(self.headers.to_str())
+        sb.append("\r\n")
+        sb.append(self.body)
+        return sb.to_owned()
+
+# ── HttpConn ──────────────────────────────────────────────────────────────────
+
+pub class HttpConn:
+    pub request: HttpRequest
+    pub _stream: TcpStream
+    pub _closed: bool
+
+extend HttpConn:
+    pub def init(req: HttpRequest, stream: TcpStream) -> HttpConn:
+        mut c      = HttpConn()
+        c.request  = req
+        c._stream  = stream
+        c._closed  = false
+        return c
+
+    # Send a pre-built HttpResponse.
+    pub def send_response(self, resp: HttpResponse):
+        if not self._closed:
+            self._stream.send(resp.to_wire())
+
+    # Convenience: plain-text response.
+    pub def send_text(self, status: int, text: str):
+        mut resp = HttpResponse.init(status, text)
+        resp.set_header("Content-Type", "text/plain; charset=utf-8")
+        HttpConn.send_response(self, resp)
+
+    # Convenience: JSON response.
+    pub def send_json(self, status: int, json: str):
+        mut resp = HttpResponse.init(status, json)
+        resp.set_header("Content-Type", "application/json")
+        HttpConn.send_response(self, resp)
+
+    # Convenience: HTML response.
+    pub def send_html(self, status: int, html: str):
+        mut resp = HttpResponse.init(status, html)
+        resp.set_header("Content-Type", "text/html; charset=utf-8")
+        HttpConn.send_response(self, resp)
+
+    # Convenience: status-only response with empty body.
+    pub def send_status(self, status: int):
+        HttpConn.send_text(self, status, "")
+
+    # Redirect to another URL.
+    pub def redirect(self, url: str, permanent: bool):
+        mut code = 302
+        if permanent: code = 301
+        mut resp = HttpResponse.init(code, "")
+        resp.set_header("Location", url)
+        HttpConn.send_response(self, resp)
+
+    # Set a cookie header on the next send_response call (call before sending).
+    pub def set_cookie(self, name: str, value: str, path: str, http_only: bool):
+        mut sb = StringBuilder.init(64)
+        sb.append(name)
+        sb.append("=")
+        sb.append(value)
+        sb.append("; Path=")
+        sb.append(path)
+        if http_only: sb.append("; HttpOnly")
+        self.request.headers.insert("Set-Cookie", sb.to_owned())
+
+    # Close the underlying TCP connection.
+    pub def close(self):
+        if not self._closed:
+            self._stream.close()
+            self._closed = true
+
+# ── HttpRoute ─────────────────────────────────────────────────────────────────
+
+pub class HttpRoute:
+    pub method:   str
+    pub pattern:  str
+    pub route_id: int
+
+extend HttpRoute:
+    pub def init(method: str, pattern: str, route_id: int) -> HttpRoute:
+        mut r        = HttpRoute()
+        r.method     = method
+        r.pattern    = pattern
+        r.route_id   = route_id
+        return r
+
+# ── HttpRouter ────────────────────────────────────────────────────────────────
+
+pub class HttpRouter:
+    pub _routes: Vec[HttpRoute]
+
+extend HttpRouter:
+    pub def init() -> HttpRouter:
+        mut r     = HttpRouter()
+        r._routes = Vec[HttpRoute].init(16)
+        return r
+
+    # Register a route. route_id is application-defined (e.g. an enum int).
+    pub def add(self, method: str, pattern: str, route_id: int):
+        self._routes.push(HttpRoute.init(method, pattern, route_id))
+
+    pub def get(self, pattern: str, route_id: int):
+        HttpRouter.add(self, "GET", pattern, route_id)
+
+    pub def post(self, pattern: str, route_id: int):
+        HttpRouter.add(self, "POST", pattern, route_id)
+
+    pub def put(self, pattern: str, route_id: int):
+        HttpRouter.add(self, "PUT", pattern, route_id)
+
+    pub def patch(self, pattern: str, route_id: int):
+        HttpRouter.add(self, "PATCH", pattern, route_id)
+
+    pub def delete(self, pattern: str, route_id: int):
+        HttpRouter.add(self, "DELETE", pattern, route_id)
+
+    pub def head(self, pattern: str, route_id: int):
+        HttpRouter.add(self, "HEAD", pattern, route_id)
+
+    pub def options(self, pattern: str, route_id: int):
+        HttpRouter.add(self, "OPTIONS", pattern, route_id)
+
+    # Match req.method + req.path against registered routes.
+    # On match: sets req.route_id and populates req.params.
+    pub def dispatch(self, req: HttpRequest) -> bool:
+        mut i = 0
+        while i < self._routes.len:
+            mut route = self._routes.get(i)
+            if Str.eq(route.method, req.method) or Str.eq(route.method, "*"):
+                if HttpRouter._match_path(self, route.pattern, req):
+                    req.route_id = route.route_id
+                    return true
+            i = i + 1
+        return false
+
+    # Pattern matching: split both on '/' and compare segment by segment.
+    # Segments starting with ':' are path parameters.
+    def _match_path(self, pattern: str, req: HttpRequest) -> bool:
+        mut pp   = Str.split_to_vec(pattern, "/")
+        mut rp   = Str.split_to_vec(req.path, "/")
+        if pp.len != rp.len: return false
+        mut i    = 0
+        while i < pp.len:
+            mut ps = pp.get(i)
+            mut rs = rp.get(i)
+            if Str.len(ps) > 0 and Str.char_at(ps, 0) == 58:
+                mut pname = Str.slice(ps, 1, Str.len(ps))
+                req.params.insert(pname, rs)
+            elif not Str.eq(ps, rs):
+                return false
+            i = i + 1
+        return true
+
+# ── Request parsing ───────────────────────────────────────────────────────────
+
+pub class HttpParser:
+    _dummy: int
+
+extend HttpParser:
+    # Parse a raw HTTP request string into an HttpRequest.
+    pub def parse(raw: str) -> HttpRequest:
+        mut req = HttpRequest.init()
+        if Str.len(raw) == 0: return req
+        mut header_end = Str.index_of(raw, "\r\n\r\n")
+        mut body_start = 0
+        if header_end >= 0:
+            body_start  = header_end + 4
+            req.body    = Str.slice(raw, body_start, Str.len(raw))
+        else:
+            header_end  = Str.len(raw)
+        mut hdr_sec     = Str.slice(raw, 0, header_end)
+        mut first_line  = Str.index_of(hdr_sec, "\r\n")
+        mut request_ln  = hdr_sec
+        mut rest_hdrs   = ""
+        if first_line >= 0:
+            request_ln  = Str.slice(hdr_sec, 0, first_line)
+            rest_hdrs   = Str.slice(hdr_sec, first_line + 2, Str.len(hdr_sec))
+        mut sp1 = Str.index_of(request_ln, " ")
+        if sp1 >= 0:
+            req.method  = Str.slice(request_ln, 0, sp1)
+            mut after   = Str.slice(request_ln, sp1 + 1, Str.len(request_ln))
+            mut sp2     = Str.index_of(after, " ")
+            mut full_path = after
+            if sp2 >= 0:
+                full_path     = Str.slice(after, 0, sp2)
+                req.version   = Str.slice(after, sp2 + 1, Str.len(after))
+            mut q = Str.index_of(full_path, "?")
+            if q >= 0:
+                req.path  = Str.slice(full_path, 0, q)
+                req.query = Str.slice(full_path, q + 1, Str.len(full_path))
+            else:
+                req.path  = full_path
+        mut hdr_pos = 0
+        mut hdr_len = Str.len(rest_hdrs)
+        while hdr_pos < hdr_len:
+            mut tail     = Str.slice(rest_hdrs, hdr_pos, hdr_len)
+            mut line_end = Str.index_of(tail, "\r\n")
+            mut line     = tail
+            if line_end >= 0:
+                line    = Str.slice(tail, 0, line_end)
+                hdr_pos = hdr_pos + line_end + 2
+            else:
+                hdr_pos = hdr_len
+            mut colon = Str.index_of(line, ": ")
+            if colon >= 0:
+                mut hname  = Str.slice(line, 0, colon)
+                mut hvalue = Str.slice(line, colon + 2, Str.len(line))
+                req.headers.insert(hname, hvalue)
+        return req
+
+# ── HttpMiddleware interface ───────────────────────────────────────────────────
+
+pub interface HttpMiddleware:
+    def before(req: HttpRequest) -> bool
+    def after(conn: HttpConn)
+
+# ── HttpServer ────────────────────────────────────────────────────────────────
+
+pub class HttpServer:
+    pub host:        str
+    pub port:        int
+    pub _listener:   TcpListener
+    pub _running:    bool
+    pub _router:     HttpRouter
+    pub _recv_buf:   int
+
+extend HttpServer:
+    pub def init(host: str, port: int) -> HttpServer:
+        mut s        = HttpServer()
+        s.host       = host
+        s.port       = port
+        s._running   = false
+        s._router    = HttpRouter.init()
+        s._recv_buf  = 65536
+        return s
+
+    # Attach a pre-built router (optional — use server.router() to get the internal one).
+    pub def set_router(self, router: HttpRouter):
+        self._router = router
+
+    # Access the internal router for inline route registration.
+    pub def router(self) -> HttpRouter:
+        return self._router
+
+    # Set the recv buffer size (default 64 KiB). Increase for large uploads.
+    pub def set_recv_buf(self, bytes: int):
+        self._recv_buf = bytes
+
+    # Bind and listen. Returns true on success.
+    pub def start(self) -> bool:
+        self._listener = TcpListener.listen(self.host, self.port)
+        if not self._listener.listening:
+            return false
+        self._running = true
+        return true
+
+    pub def is_running(self) -> bool:
+        return self._running
+
+    # Block until the next client connects, parse the request, run the router,
+    # and return an HttpConn ready for the handler to write a response.
+    pub def accept(self) -> HttpConn:
+        mut stream = self._listener.accept()
+        mut raw    = stream.recv(self._recv_buf)
+        mut req    = HttpParser.parse(raw)
+        self._router.dispatch(req)
+        return HttpConn.init(req, stream)
+
+    # Stop accepting new connections.
+    pub def stop(self):
+        self._running = false
+        self._listener.close()
+
+    # ── Shorthand route-registration helpers (delegates to internal router) ──
+
+    pub def get(self, pattern: str, route_id: int):
+        self._router.get(pattern, route_id)
+
+    pub def post(self, pattern: str, route_id: int):
+        self._router.post(pattern, route_id)
+
+    pub def put(self, pattern: str, route_id: int):
+        self._router.put(pattern, route_id)
+
+    pub def patch(self, pattern: str, route_id: int):
+        self._router.patch(pattern, route_id)
+
+    pub def delete(self, pattern: str, route_id: int):
+        self._router.delete(pattern, route_id)
+
+    pub def head(self, pattern: str, route_id: int):
+        self._router.head(pattern, route_id)
+
+    pub def options(self, pattern: str, route_id: int):
+        self._router.options(pattern, route_id)
+
+    # Register the same handler id for multiple methods (e.g. GET + HEAD).
+    pub def any(self, pattern: str, route_id: int):
+        self._router.add("*", pattern, route_id)

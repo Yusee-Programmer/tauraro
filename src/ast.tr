@@ -6,15 +6,16 @@ from core.alloc import alloc, dealloc
 # ─── Type annotations ─────────────────────────────────────────────────────────
 
 pub class AstType:
-    pub name: str                        
-    pub args: Vec[Pointer[AstType]]      
+    pub name: str
+    pub args: Vec[Pointer[AstType]]
+    pub from_param: str  # 'from X' lifetime annotation — empty means none
 
 extend AstType:
     pub def init(name: str) -> AstType:
-        # print("DEBUG: AstType.init " + name)
         mut t = AstType()
         t.name = name
         t.args = Vec[Pointer[AstType]].init(0)
+        t.from_param = ""
         return t
 
     pub def init_generic(name: str, arg: Pointer[AstType]) -> AstType:
@@ -22,6 +23,7 @@ extend AstType:
         t.name = name
         t.args = Vec[Pointer[AstType]].init(1)
         t.args.push(arg)
+        t.from_param = ""
         return t
 
 pub class GenericConstraint:
@@ -60,15 +62,11 @@ pub enum Pattern:
     PVariantBind(type_name: str, variant: str, field: str)
     PVariantBindMany(type_name: str, variant: str, fields: Vec[str])
     PTuple(first: str, second: str)
-    PRange(start: Pointer[Pattern], end: Pointer[Pattern])
     POr(patterns: Vec[Pattern])
 
 pub enum Ownership:
     Own
-    Borrow
-    Move
     Shared
-    Stack
 
 pub class Comprehension:
     pub target: str
@@ -265,13 +263,17 @@ extend ElifClause:
 
 pub class Param:
     pub name: str
-    pub ty: Pointer[AstType]    
+    pub ty: Pointer[AstType]
+    pub is_ref: bool      # 'ref T' parameter — immutable borrow, not a copy
+    pub is_mut_ref: bool  # 'mut ref T' parameter — mutable borrow
 
 extend Param:
     pub def init(name: str, ty: Pointer[AstType]) -> Param:
         mut p = Param()
         p.name = name
         p.ty = ty
+        p.is_ref = false
+        p.is_mut_ref = false
         return p
 
 # ─── Top-level declarations ───────────────────────────────────────────────────

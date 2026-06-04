@@ -80,26 +80,47 @@ def main():
 
 ## Module Resolution
 
-When the compiler encounters `import foo.bar`, it searches for the module in this order:
+When the compiler encounters `import foo.bar`, it tries two patterns inside each search path:
 
-1. `foo/bar.tr` in each search path
-2. `foo/bar/mod.tr` in each search path
+1. `<search_path>/foo/bar.tr`
+2. `<search_path>/foo/bar/mod.tr`
+
+The first match wins.
 
 **Search paths checked (in order):**
-1. `.` — current working directory at compile time
-2. Directory containing the main source file
-3. `std/` if it exists
-4. `stdlib/` if it exists
-5. Paths from `-I <dir>` flags
 
-**Recursive resolution:** Each imported module is scanned for its own imports, which are resolved transitively. The compiler builds the full dependency graph and compiles all modules together.
+| Priority | Path | Notes |
+|----------|------|-------|
+| 1 | `.` | Current working directory at compile time |
+| 2 | Directory of the entry `.tr` file | Lets a project import its own siblings |
+| 3 | Parent of the entry file's directory | Useful when entry lives in `src/` |
+| 4 | Grandparent of the entry file's directory | Needed when entry lives in `src/cmd/` |
+| 5 | `<compiler_bin>/` | Compiler installation root |
+| 6 | `<compiler_bin>/std/` | Built-in standard library |
+| 7 | `<compiler_bin>/packages/` | Globally installed third-party packages |
+| 8 | `<compiler_bin>/packages/sites/` | Site-specific installs (e.g. pip-style) |
+| 9 | `packages/` | Project-local packages (CWD-relative) |
+| 10 | `packages/sites/` | Project-local site packages (CWD-relative) |
+| 11+ | `TAURARO_PATH` entries | User-specified extra paths (see below) |
+
+**`TAURARO_PATH` environment variable:** Set this before running `tauraroc` to add extra search directories — exactly like Python's `PYTHONPATH`. Uses `:` as separator on POSIX, `;` on Windows:
+
+```bash
+export TAURARO_PATH=/opt/mylibs:/home/user/pkgs   # Linux / macOS
+$env:TAURARO_PATH = "C:\mylibs;C:\pkgs"           # Windows PowerShell
+```
+
+**`Env.path` in user programs:** `from std.sys.env import Env` gives a running program a `Vec[str]` pre-populated with the standard search directories. Programs can append to it and use the list to build a `TAURARO_PATH` value when spawning a child `tauraroc` process. See [std.sys.env →](../std/env.md).
+
+**Recursive resolution:** Each imported module is scanned for its own imports, which are resolved transitively. The compiler builds the full dependency graph before emitting any C.
 
 **Error for missing module:**
 ```
 ERROR: cannot find module 'math.geometry'
   searched: ./math/geometry.tr
             ./math/geometry/mod.tr
-  FIX: check the file path and ensure it exists relative to the project root
+            (+ all other search paths)
+  FIX: check the file path and ensure it exists in a search path
 ```
 
 ---
@@ -180,18 +201,40 @@ pub export def tauraro_init() -> void:
 
 ---
 
-## The Unity Build
+## How Modules Are Compiled
 
-All modules are compiled together into **one C compilation unit**. The compiler:
+Each module gets its own `.c` file. The compiler:
 
 1. Resolves all imports recursively from the main entry file
-2. Merges all classes, enums, interfaces, and functions into one `HirProgram`
-3. Emits one or more `.c` files (one per module for the multi-module path, or one merged file)
+2. Builds a unified `HirProgram` (semantic analysis, type checking, ownership inference)
+3. Emits **one `.c` file per module** into the `build/` directory:
 
-**Why unity build:**
-- GCC and Clang can inline and constant-fold across the entire program
-- No link-time optimization flags needed
-- Generated C is easy to inspect — one file per module
+```
+build/
+  tauraro_rt.h          — runtime header (copied from the compiler's runtime/)
+  tauraro_types.h       — shared type definitions and all forward prototypes
+  main.c                — entry-point module
+  module_utils.c        — one file for each user/third-party module
+  module_math.c
+  include/std/io.c      — one file per standard-library module
+  include/std/string/str.c
+  …
+```
+
+4. Invokes the detected C compiler **once** with every `.c` file in `build/`:
+
+```bash
+gcc -O2 build/main.c build/module_utils.c build/include/std/io.c … -o program
+```
+
+**With `-o <output>`:** The `.c` files in `build/` are removed after a successful link. Only the executable survives.
+
+**With `--emit c`:** No compilation occurs. The `.c` files are written to `build/` and kept. Use this to inspect generated C or integrate with an external build system.
+
+**Why one invocation with separate files:**
+- GCC and Clang can inline and constant-fold across module boundaries at the object level
+- The `build/` directory gives you a per-module view of the generated code
+- The linker step is handled by the compiler driver, so no separate `ld` invocation is needed
 
 **Symbol naming:** Functions from module `math.geometry` are prefixed `math_geometry_` in C (dots → underscores). This prevents collisions between modules defining the same name:
 
@@ -267,17 +310,37 @@ Circular imports (module A imports B, and B imports A) are not supported. The co
 
 ## The Standard Library Modules
 
-The standard library lives in `tauraro/src/include/core/`:
+The standard library is installed alongside the compiler binary in `<bin>/std/`. It is always on the search path — no `-I` or path configuration needed.
 
 | Module | Import | Contents |
 |--------|--------|---------|
-| `core.vec` | `from core.vec import Vec` | `Vec[T]` growable array |
-| `core.map` | `from core.map import Map` | String-keyed hash map |
-| `core.string` | `from core.string import StringBuilder` | String builder utility |
-| `core.alloc` | `from core.alloc import alloc` | Typed heap allocation |
-| `core.io` | `from core.io import write_file, read_file` | File I/O |
+| `std.core.vec` | `from std.core.vec import Vec` | `Vec[T]` growable array |
+| `std.core.map` | `from std.core.map import Map` | Hash map |
+| `std.core.string` | `from std.core.string import StringBuilder` | String builder |
+| `std.core.ptr` | `from std.core.ptr import Pointer` | Raw pointer wrapper |
+| `std.string.str` | `from std.string.str import Str` | String utilities |
+| `std.string.fmt` | `from std.string.fmt import Fmt` | Number formatting |
+| `std.fs` | `from std.fs import File, Dir, Path` | File system |
+| `std.net.http` | `from std.net.http import HttpClient` | HTTP client |
+| `std.net.https` | `from std.net.https import HttpsClient` | HTTPS client (opt-in) |
+| `std.net.tcp` | `from std.net.tcp import TcpStream, TcpListener` | TCP sockets |
+| `std.net.http_server` | `from std.net.http_server import HttpServer` | HTTP server |
+| `std.iter.range` | `from std.iter.range import Range` | Integer range iteration |
+| `std.iter.transform` | `from std.iter.transform import Transform` | `Vec[int]` transforms |
+| `std.iter.float_transform` | `from std.iter.float_transform import FloatTransform` | `Vec[float]` transforms |
+| `std.regex` | `from std.regex import Regex` | Regular expressions |
+| `std.crypto.hash` | `from std.crypto.hash import Hash` | SHA-256, MD5 |
+| `std.crypto.hmac` | `from std.crypto.hmac import Hmac` | HMAC-SHA256 |
+| `std.crypto.uuid` | `from std.crypto.uuid import UUID` | UUID v4 generation |
+| `std.compress.zlib` | `from std.compress.zlib import Zlib` | zlib compress/decompress |
+| `std.unicode` | `from std.unicode import Unicode` | Unicode utilities |
+| `std.async.task` | `from std.async.task import Task, Pool` | Async task runtime |
+| `std.sync` | `from std.sync import Mutex, Atomic` | Synchronization primitives |
+| `std.time` | `from std.time import Time, Clock` | Time and clock |
 
-These are the modules used by the self-hosted compiler itself. For application code, the built-in `List[T]`, `Dict`, and string operations cover most needs without imports.
+For the full API of each module see `docs/std/`.
+
+**Third-party packages** installed into `<bin>/packages/` or `packages/` are imported the same way — by their module path. No special syntax distinguishes stdlib from packages.
 
 ---
 
@@ -291,9 +354,9 @@ ERROR: cannot find module 'utils.parser'
 **Causes:**
 - File is at `utils/parser.tr` but you're running from a different working directory
 - File is named `Parser.tr` (wrong case — Tauraro module paths are case-sensitive on Linux)
-- Missing `-I` flag to add the search path
+- Third-party package is not installed in `packages/` or `<bin>/packages/`
 
-**Fix:** Check the file path and working directory. Add `-I <dir>` if needed.
+**Fix:** Check the file path and working directory. For third-party packages, place them in `packages/<pkg>/mod.tr` (or the layout distributed by the package).
 
 ### Accessing private symbol
 

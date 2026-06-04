@@ -1,0 +1,10 @@
+# std.crypto — Cryptographic primitives.
+#
+# Sub-modules:
+#   from std.crypto.hash import Hash
+#   from std.crypto.hmac import Hmac
+#   from std.crypto.uuid import UUID
+
+from std.crypto.hash import Hash
+from std.crypto.hmac import Hmac
+from std.crypto.uuid import UUID

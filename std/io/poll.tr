@@ -1,0 +1,110 @@
+# std.io.poll — IOPoll: async I/O readiness (epoll/IOCP/kqueue).
+#
+# Wraps the _TrIOPoll C runtime abstraction in a clean Tauraro interface.
+#
+# Supported platforms:
+#   Linux      : epoll  (default) + io_uring (opt-in: compile with TAURARO_IO_URING)
+#   Windows    : IOCP  (I/O Completion Ports)
+#   macOS/BSD  : kqueue
+#   BARE/kernel: no-op stub — all ops succeed/return 0
+#
+# Usage:
+#   let poll = IOPoll.new()
+#   poll.add(fd, IOPoll.POLLIN, my_ctx_int)
+#   let events = poll.wait(100)   # 100 ms timeout
+#   for ev in events:
+#       print(f"fd ready: events={ev.events} ctx={ev.userdata}")
+#   poll.destroy()
+#
+# Event flags (combine with |):
+#   IOPoll.POLLIN  = 0x01  — readable
+#   IOPoll.POLLOUT = 0x02  — writable
+#   IOPoll.POLLERR = 0x04  — error condition
+#   IOPoll.POLLHUP = 0x08  — connection closed / hangup
+
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_iopoll_create_h()       -> Pointer[char]
+    def _tr_iopoll_destroy_h(p: Pointer[char])
+    def _tr_iopoll_add_h(p: Pointer[char], fd: int, events: int, userdata: int) -> int
+    def _tr_iopoll_mod_h(p: Pointer[char], fd: int, events: int, userdata: int) -> int
+    def _tr_iopoll_del_h(p: Pointer[char], fd: int) -> int
+    def _tr_iopoll_wait_raw(p: Pointer[char], out: Pointer[char], maxev: int, timeout_ms: int) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_free(p: Pointer[char])
+
+# ─── IOEvent ─────────────────────────────────────────────────────────────────
+
+pub class IOEvent:
+    pub fd:       int
+    pub events:   int
+    pub userdata: int
+
+extend IOEvent:
+    pub def readable(self) -> bool:
+        return (self.events & 1) != 0
+
+    pub def writable(self) -> bool:
+        return (self.events & 2) != 0
+
+    pub def error(self) -> bool:
+        return (self.events & 4) != 0
+
+    pub def hangup(self) -> bool:
+        return (self.events & 8) != 0
+
+# ─── IOPoll ──────────────────────────────────────────────────────────────────
+
+pub class IOPoll:
+    pub handle: Pointer[char]
+
+extend IOPoll:
+    # Event flag constants
+    pub def POLLIN()  -> int: return 1
+    pub def POLLOUT() -> int: return 2
+    pub def POLLERR() -> int: return 4
+    pub def POLLHUP() -> int: return 8
+
+    pub def new() -> IOPoll:
+        mut p = IOPoll()
+        p.handle = _tr_iopoll_create_h()
+        return p
+
+    # Register fd for readiness events. userdata is an opaque int (index / id).
+    pub def add(self, fd: int, events: int, userdata: int) -> bool:
+        return _tr_iopoll_add_h(self.handle, fd, events, userdata) == 0
+
+    # Update registered events for fd.
+    pub def modify(self, fd: int, events: int, userdata: int) -> bool:
+        return _tr_iopoll_mod_h(self.handle, fd, events, userdata) == 0
+
+    # Remove fd from poll set.
+    pub def remove(self, fd: int) -> bool:
+        return _tr_iopoll_del_h(self.handle, fd) == 0
+
+    # Wait up to timeout_ms milliseconds for events.
+    # Pass timeout_ms = -1 to block indefinitely.
+    # Returns a Vec[IOEvent] of ready descriptors (may be empty on timeout).
+    pub def wait(self, timeout_ms: int) -> Vec[IOEvent]:
+        mut ev_size = 16
+        mut max_evs = 64
+        mut raw_buf = _tr_c_malloc(ev_size * max_evs)
+        mut n = _tr_iopoll_wait_raw(self.handle, raw_buf, max_evs, timeout_ms)
+        mut result = Vec[IOEvent].init(n)
+        mut i = 0
+        while i < n:
+            mut ev = IOEvent()
+            unsafe:
+                mut base = raw_buf.offset(i * ev_size)
+                ev.fd       = base.offset(0).read() as int
+                ev.events   = base.offset(4).read() as int
+                ev.userdata = base.offset(8).read() as int
+            result.push(ev)
+            i = i + 1
+        _tr_free(raw_buf)
+        return result
+
+    pub def destroy(self):
+        _tr_iopoll_destroy_h(self.handle)
+        self.handle = 0 as Pointer[char]

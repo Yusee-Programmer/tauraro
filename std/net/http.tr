@@ -109,11 +109,35 @@ extend HttpClient:
         if d1 < 0 or d1 > 9 or d2 < 0 or d2 > 9 or d3 < 0 or d3 > 9: return 0
         return d1 * 100 + d2 * 10 + d3
 
-    # Extract body after the blank header separator (\r\n\r\n).
-    def _extract_body(self, raw: str) -> str:
-        mut sep = Str.index_of(raw, "\r\n\r\n")
-        if sep >= 0: return Str.slice(raw, sep + 4, Str.len(raw))
-        return raw
+    # Parse a raw HTTP response into an HttpResponse (status + headers + body).
+    def _parse_response(self, raw: str) -> HttpResponse:
+        mut code = self._parse_status(raw)
+        if code == 0: code = 200
+        mut sep  = Str.index_of(raw, "\r\n\r\n")
+        mut body = raw
+        if sep >= 0: body = Str.slice(raw, sep + 4, Str.len(raw))
+        mut resp = HttpResponse.init(code, body)
+        if sep < 0: return resp
+        mut hdr_sec   = Str.slice(raw, 0, sep)
+        mut first_nl  = Str.index_of(hdr_sec, "\r\n")
+        if first_nl < 0: return resp
+        mut hdr_start = first_nl + 2
+        mut hdr_len   = Str.len(hdr_sec)
+        while hdr_start < hdr_len:
+            mut tail     = Str.slice(hdr_sec, hdr_start, hdr_len)
+            mut line_end = Str.index_of(tail, "\r\n")
+            mut line     = tail
+            if line_end >= 0:
+                line      = Str.slice(tail, 0, line_end)
+                hdr_start = hdr_start + line_end + 2
+            else:
+                hdr_start = hdr_len
+            mut colon = Str.index_of(line, ": ")
+            if colon >= 0:
+                mut hname  = Str.slice(line, 0, colon)
+                mut hvalue = Str.slice(line, colon + 2, Str.len(line))
+                resp.headers.insert(hname, hvalue)
+        return resp
 
     # Send a GET request and return the response.
     pub def get(self, path: str) -> HttpResponse:
@@ -127,13 +151,11 @@ extend HttpClient:
         sb.append(self._build_headers())
         sb.append("\r\n")
         stream.send(sb.to_owned())
-        mut raw  = stream.recv(65536)
+        mut raw = stream.recv(65536)
         stream.close()
-        mut code = self._parse_status(raw)
-        if code == 0: code = 200
-        return HttpResponse.init(code, self._extract_body(raw))
+        return self._parse_response(raw)
 
-    # Send a POST request with a string body.
+    # Send a POST request with an application/x-www-form-urlencoded body.
     pub def post(self, path: str, data: str) -> HttpResponse:
         mut stream = TcpStream.connect(self.host, self.port)
         if not stream.is_connected():
@@ -150,11 +172,30 @@ extend HttpClient:
         sb.append("\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\n")
         sb.append(data)
         stream.send(sb.to_owned())
-        mut raw  = stream.recv(65536)
+        mut raw = stream.recv(65536)
         stream.close()
-        mut code = self._parse_status(raw)
-        if code == 0: code = 200
-        return HttpResponse.init(code, self._extract_body(raw))
+        return self._parse_response(raw)
+
+    # Send a POST request with an application/json body.
+    pub def post_json(self, path: str, data: str) -> HttpResponse:
+        mut stream = TcpStream.connect(self.host, self.port)
+        if not stream.is_connected():
+            return HttpResponse.init(0, "connection failed")
+        mut clen = Str.len(data)
+        mut sb   = StringBuilder.init(512)
+        sb.append("POST ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("Content-Length: ")
+        if clen == 0: sb.append("0")
+        else: sb.append(Fmt.int_to_str(clen))
+        sb.append("\r\nContent-Type: application/json\r\n\r\n")
+        sb.append(data)
+        stream.send(sb.to_owned())
+        mut raw = stream.recv(65536)
+        stream.close()
+        return self._parse_response(raw)
 
     # Send a PUT request.
     pub def put(self, path: str, data: str) -> HttpResponse:
@@ -170,14 +211,33 @@ extend HttpClient:
         sb.append("Content-Length: ")
         if clen == 0: sb.append("0")
         else: sb.append(Fmt.int_to_str(clen))
-        sb.append("\r\n\r\n")
+        sb.append("\r\nContent-Type: application/octet-stream\r\n\r\n")
         sb.append(data)
         stream.send(sb.to_owned())
-        mut raw  = stream.recv(65536)
+        mut raw = stream.recv(65536)
         stream.close()
-        mut code = self._parse_status(raw)
-        if code == 0: code = 200
-        return HttpResponse.init(code, self._extract_body(raw))
+        return self._parse_response(raw)
+
+    # Send a PATCH request.
+    pub def patch(self, path: str, data: str) -> HttpResponse:
+        mut stream = TcpStream.connect(self.host, self.port)
+        if not stream.is_connected():
+            return HttpResponse.init(0, "connection failed")
+        mut clen = Str.len(data)
+        mut sb   = StringBuilder.init(512)
+        sb.append("PATCH ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("Content-Length: ")
+        if clen == 0: sb.append("0")
+        else: sb.append(Fmt.int_to_str(clen))
+        sb.append("\r\nContent-Type: application/octet-stream\r\n\r\n")
+        sb.append(data)
+        stream.send(sb.to_owned())
+        mut raw = stream.recv(65536)
+        stream.close()
+        return self._parse_response(raw)
 
     # Send a DELETE request.
     pub def delete(self, path: str) -> HttpResponse:
@@ -191,8 +251,22 @@ extend HttpClient:
         sb.append(self._build_headers())
         sb.append("\r\n")
         stream.send(sb.to_owned())
-        mut raw  = stream.recv(65536)
+        mut raw = stream.recv(65536)
         stream.close()
-        mut code = self._parse_status(raw)
-        if code == 0: code = 200
-        return HttpResponse.init(code, self._extract_body(raw))
+        return self._parse_response(raw)
+
+    # Send a HEAD request (response body will be empty per HTTP spec).
+    pub def head(self, path: str) -> HttpResponse:
+        mut stream = TcpStream.connect(self.host, self.port)
+        if not stream.is_connected():
+            return HttpResponse.init(0, "connection failed")
+        mut sb = StringBuilder.init(256)
+        sb.append("HEAD ")
+        sb.append(path)
+        sb.append(" HTTP/1.0\r\n")
+        sb.append(self._build_headers())
+        sb.append("\r\n")
+        stream.send(sb.to_owned())
+        mut raw = stream.recv(65536)
+        stream.close()
+        return self._parse_response(raw)

@@ -1,24 +1,26 @@
 # std.net.url — URL parsing and building.
 
 from std.core.string import StringBuilder
-from std.string import int_to_str
-from std.string.str import str_len, str_char_at, str_contains_char, str_slice
+from std.string.str import Str
+from std.string.fmt import Fmt
 
 pub class Url:
-    pub scheme: str
-    pub host:   str
-    pub port:   int
-    pub path:   str
-    pub query:  str
+    pub scheme:   str
+    pub host:     str
+    pub port:     int
+    pub path:     str
+    pub query:    str
+    pub fragment: str
 
 extend Url:
     pub def init(host: str, port: int, path: str) -> Url:
         mut u = Url()
-        u.scheme = "http"
-        u.host   = host
-        u.port   = port
-        u.path   = path
-        u.query  = ""
+        u.scheme   = "http"
+        u.host     = host
+        u.port     = port
+        u.path     = path
+        u.query    = ""
+        u.fragment = ""
         return u
 
     pub def with_scheme(self, scheme: str) -> Url:
@@ -29,19 +31,157 @@ extend Url:
         self.query = query
         return self
 
+    pub def with_fragment(self, fragment: str) -> Url:
+        self.fragment = fragment
+        return self
+
+    # ── Parsing ───────────────────────────────────────────────────────────────
+
+    # Parse a full URL string into a Url.  Unrecognised parts are left empty.
+    pub def parse(url_str: str) -> Url:
+        mut u      = Url()
+        u.scheme   = ""
+        u.host     = ""
+        u.port     = 0
+        u.path     = "/"
+        u.query    = ""
+        u.fragment = ""
+        mut slen   = Str.len(url_str)
+        mut sep    = Str.index_of(url_str, "://")
+        if sep < 0: return u
+        u.scheme = Str.slice(url_str, 0, sep)
+        mut rest = Str.slice(url_str, sep + 3, slen)
+        mut rlen = Str.len(rest)
+        # Isolate authority (before first '/')
+        mut slash_pos = Str.index_of(rest, "/")
+        mut authority = rest
+        mut after_auth = "/"
+        if slash_pos >= 0:
+            authority  = Str.slice(rest, 0, slash_pos)
+            after_auth = Str.slice(rest, slash_pos, rlen)
+        # Split authority by ':' for port
+        mut colon = Str.index_of(authority, ":")
+        if colon >= 0:
+            u.host = Str.slice(authority, 0, colon)
+            u.port = Str.parse_int(Str.slice(authority, colon + 1, Str.len(authority)))
+        else:
+            u.host = authority
+            u.port = Url._default_port_for(u.scheme)
+        # Separate path, query, fragment from after_auth
+        mut alen  = Str.len(after_auth)
+        mut q_pos = Str.index_of(after_auth, "?")
+        mut h_pos = Str.index_of(after_auth, "#")
+        if q_pos >= 0:
+            u.path       = Str.slice(after_auth, 0, q_pos)
+            mut after_q  = Str.slice(after_auth, q_pos + 1, alen)
+            mut aq_len   = Str.len(after_q)
+            mut h_in_q   = Str.index_of(after_q, "#")
+            if h_in_q >= 0:
+                u.query    = Str.slice(after_q, 0, h_in_q)
+                u.fragment = Str.slice(after_q, h_in_q + 1, aq_len)
+            else:
+                u.query = after_q
+        elif h_pos >= 0:
+            u.path     = Str.slice(after_auth, 0, h_pos)
+            u.fragment = Str.slice(after_auth, h_pos + 1, alen)
+        else:
+            if alen == 0:
+                u.path = "/"
+            else:
+                u.path = after_auth
+        return u
+
+    # ── Info ──────────────────────────────────────────────────────────────────
+
+    # Return the conventional port for the scheme (0 if unknown).
+    pub def default_port(self) -> int:
+        return Url._default_port_for(self.scheme)
+
+    def _default_port_for(scheme: str) -> int:
+        if Str.eq(scheme, "https"): return 443
+        if Str.eq(scheme, "http"):  return 80
+        if Str.eq(scheme, "ftp"):   return 21
+        if Str.eq(scheme, "ssh"):   return 22
+        if Str.eq(scheme, "smtp"):  return 25
+        return 0
+
+    pub def is_https(self) -> bool:
+        return Str.eq(self.scheme, "https")
+
+    # True when scheme and host are both non-empty.
+    pub def is_valid(self) -> bool:
+        return Str.len(self.scheme) > 0 and Str.len(self.host) > 0
+
+    # ── Serialisation ─────────────────────────────────────────────────────────
+
     pub def to_string(self) -> str:
         mut sb = StringBuilder.init(128)
         sb.append(self.scheme)
         sb.append("://")
         sb.append(self.host)
-        if self.port != 80 and self.port != 443 and self.port != 0:
+        mut def_port = Url._default_port_for(self.scheme)
+        if self.port != 0 and self.port != def_port:
             sb.append(":")
-            sb.append(int_to_str(self.port))
+            sb.append(Fmt.int_to_str(self.port))
         sb.append(self.path)
-        if str_len(self.query) > 0:
+        if Str.len(self.query) > 0:
             sb.append("?")
             sb.append(self.query)
+        if Str.len(self.fragment) > 0:
+            sb.append("#")
+            sb.append(self.fragment)
         return sb.to_owned()
 
-    pub def is_https(self) -> bool:
-        return self.scheme == "https"
+    # ── Percent-encoding ──────────────────────────────────────────────────────
+
+    # Percent-encode a URL component value (keeps unreserved chars as-is).
+    pub def encode_component(s: str) -> str:
+        mut slen = Str.len(s)
+        mut sb   = StringBuilder.init(slen * 3 + 1)
+        mut p    = s as Pointer[char]
+        mut i    = 0
+        while i < slen:
+            mut c          = p.offset(i).read() as int
+            mut unreserved = false
+            if c >= 65 and c <= 90:  unreserved = true
+            if c >= 97 and c <= 122: unreserved = true
+            if c >= 48 and c <= 57:  unreserved = true
+            if c == 45 or c == 95 or c == 46 or c == 126: unreserved = true
+            if unreserved:
+                sb.append_char(c)
+            else:
+                sb.append_char(37)
+                mut hi = c / 16
+                mut lo = c - hi * 16
+                if hi < 10: sb.append_char(hi + 48)
+                else:       sb.append_char(hi - 10 + 65)
+                if lo < 10: sb.append_char(lo + 48)
+                else:       sb.append_char(lo - 10 + 65)
+            i = i + 1
+        return sb.to_owned()
+
+    # Decode a percent-encoded URL component.
+    pub def decode_component(s: str) -> str:
+        mut slen = Str.len(s)
+        mut sb   = StringBuilder.init(slen + 1)
+        mut p    = s as Pointer[char]
+        mut i    = 0
+        while i < slen:
+            mut c = p.offset(i).read() as int
+            if c == 37 and i + 2 < slen:
+                mut h1 = p.offset(i + 1).read() as int
+                mut h2 = p.offset(i + 2).read() as int
+                mut v1 = 0
+                mut v2 = 0
+                if h1 >= 48 and h1 <= 57:   v1 = h1 - 48
+                elif h1 >= 65 and h1 <= 70: v1 = h1 - 55
+                elif h1 >= 97 and h1 <= 102: v1 = h1 - 87
+                if h2 >= 48 and h2 <= 57:   v2 = h2 - 48
+                elif h2 >= 65 and h2 <= 70: v2 = h2 - 55
+                elif h2 >= 97 and h2 <= 102: v2 = h2 - 87
+                sb.append_char(v1 * 16 + v2)
+                i = i + 3
+            else:
+                sb.append_char(c)
+                i = i + 1
+        return sb.to_owned()

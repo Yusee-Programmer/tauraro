@@ -4,32 +4,34 @@
 # Zero fake synchronous implementations.
 #
 # Quick import:
-#   from std.async import Task, Future, Channel, TaskGroup
+#   from std.async import Task, Future, Channel, TaskGroup, StructuredGroup
 #   from std.async import Mutex, RWLock, Semaphore, WaitGroup, Barrier, Once
 #   from std.async import Timer, Ticker
 #   from std.async import Thread, Atomic, ThreadLocal, Sendable
 #
 # Or per-module:
-#   from std.async.task      import Task, Future
-#   from std.async.channel   import Channel
-#   from std.async.group     import TaskGroup
-#   from std.async.mutex     import Mutex, RWLock
-#   from std.async.semaphore import Semaphore
-#   from std.async.waitgroup import WaitGroup
-#   from std.async.barrier   import Barrier
-#   from std.async.once      import Once
-#   from std.async.timer     import Timer, Ticker
-#   from std.async.thread    import Thread, Atomic, ThreadLocal
-#   from std.async.send      import Sendable
+#   from std.async.task       import Task, Future
+#   from std.async.channel    import Channel
+#   from std.async.group      import TaskGroup
+#   from std.async.structured import StructuredGroup
+#   from std.async.mutex      import Mutex, RWLock
+#   from std.async.semaphore  import Semaphore
+#   from std.async.waitgroup  import WaitGroup
+#   from std.async.barrier    import Barrier
+#   from std.async.once       import Once
+#   from std.async.timer      import Timer, Ticker
+#   from std.async.thread     import Thread, Atomic, ThreadLocal
+#   from std.async.send       import Sendable
 
-from std.async.task      import Task, Future
-from std.async.channel   import Channel
-from std.async.group     import TaskGroup
-from std.async.mutex     import Mutex, RWLock
-from std.async.semaphore import Semaphore
-from std.async.waitgroup import WaitGroup
-from std.async.barrier   import Barrier
-from std.async.once      import Once
-from std.async.timer     import Timer, Ticker
-from std.async.thread    import Thread, Atomic, ThreadLocal
-from std.async.send      import Sendable
+from std.async.task       import Task, Future
+from std.async.channel    import Channel
+from std.async.group      import TaskGroup
+from std.async.structured import StructuredGroup
+from std.async.mutex      import Mutex, RWLock
+from std.async.semaphore  import Semaphore
+from std.async.waitgroup  import WaitGroup
+from std.async.barrier    import Barrier
+from std.async.once       import Once
+from std.async.timer      import Timer, Ticker
+from std.async.thread     import Thread, Atomic, ThreadLocal
+from std.async.send       import Sendable

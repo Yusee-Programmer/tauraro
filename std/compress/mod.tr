@@ -1,0 +1,6 @@
+# std.compress — Compression utilities.
+#
+# Sub-modules:
+#   from std.compress.zlib import Zlib
+
+from std.compress.zlib import Zlib

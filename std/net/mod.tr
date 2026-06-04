@@ -1,17 +1,25 @@
 # std.net — Package index.
 #
 # Sub-modules:
-#   from std.net.tcp  import TcpStream, TcpListener
-#   from std.net.http import HttpClient, HttpResponse, HttpHeader
-#   from std.net.url  import Url
-#   from std.net.udp  import UdpSocket
-#   from std.net.dns  import Dns
+#   from std.net.tcp         import TcpStream, TcpListener
+#   from std.net.http        import HttpClient, HttpResponse, HttpHeader
+#   from std.net.https       import HttpsClient
+#   from std.net.http_server import HttpServer, HttpRequest, HttpConn, HttpRouter, HttpParser
+#   from std.net.url         import Url
+#   from std.net.udp         import UdpSocket
+#   from std.net.dns         import Dns
 
-from std.net.tcp  import TcpStream
-from std.net.tcp  import TcpListener
-from std.net.http import HttpClient
-from std.net.http import HttpResponse
-from std.net.http import HttpHeader
-from std.net.url  import Url
-from std.net.udp  import UdpSocket
-from std.net.dns  import Dns
+from std.net.tcp         import TcpStream
+from std.net.tcp         import TcpListener
+from std.net.http        import HttpClient
+from std.net.http        import HttpResponse
+from std.net.http        import HttpHeader
+from std.net.https       import HttpsClient
+from std.net.http_server import HttpServer
+from std.net.http_server import HttpRequest
+from std.net.http_server import HttpConn
+from std.net.http_server import HttpRouter
+from std.net.http_server import HttpParser
+from std.net.url         import Url
+from std.net.udp         import UdpSocket
+from std.net.dns         import Dns

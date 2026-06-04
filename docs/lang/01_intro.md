@@ -82,19 +82,27 @@ source.tr
     │   Produces: HIR (high-level intermediate representation)
     │
     ├─ C Code Generation  (src/codegen/c.tr)
-    │   Walks the HIR and emits C source code.
+    │   Walks the HIR and emits one .c file per module into build/:
+    │     build/tauraro_rt.h          — runtime header (copied from runtime/)
+    │     build/tauraro_types.h       — shared type definitions + all prototypes
+    │     build/include/<path>.c      — one file per stdlib/core module
+    │     build/module_<name>.c       — one file per user/third-party module
+    │     build/main.c                — program entry point
     │   Classes → structs + ClassName_method() functions
     │   Interfaces → vtable structs + wrapper functions
     │   Enums → tagged unions
     │   Generics → monomorphized per type argument
-    │   Produces: one or more .c files
     │
-    └─ Compilation      (GCC or Clang)
-        Links generated C with the runtime header (tauraro_rt.h).
-        Produces: native executable (.exe on Windows, ELF on Linux)
+    └─ Compilation      (GCC or Clang, auto-detected)
+        Invokes the C compiler once with every .c file in build/:
+          gcc -O2 build/main.c build/module_foo.c build/include/std/io.c …
+        The compiler links them directly (no separate linker invocation).
+        With -o:   temporary .c files are deleted; only the exe survives.
+        With --emit c: .c files are kept; no compilation happens.
+        Produces: native executable (.exe on Windows, ELF/Mach-O elsewhere)
 ```
 
-**Module resolution:** The compiler scans imports recursively from the entry file, loading each referenced `.tr` file or `mod.tr` directory. All modules are compiled together in a single C compilation unit (unity build), enabling whole-program inlining.
+**Module resolution:** The compiler scans imports recursively from the entry file, loading each referenced `.tr` file or `mod.tr` directory. Each module produces its own `.c` file; the C compiler then links all of them in one pass, allowing GCC/Clang to inline across module boundaries at the object level.
 
 ---
 
@@ -182,7 +190,7 @@ tauraroc -o program.exe program.tr
 # Compile and run with optimization level 3
 tauraroc -O3 --run program.tr
 
-# Print generated C to stdout (inspect what the compiler produces)
+# Write per-module C files to build/ without compiling (inspect what the compiler produces)
 tauraroc --emit c program.tr
 
 # Print AST and stop (inspect the parse tree)
@@ -208,7 +216,7 @@ tauraroc --backend llvm program.tr
 | `--version` | Print version and exit |
 | `--run` | Compile and execute immediately |
 | `-o <path>` | Set output executable path |
-| `--emit c` | Print generated C source to stdout |
+| `--emit c` | Write per-module `.c` files to `build/` (no compilation) |
 | `--emit ast` | Print the AST and stop |
 | `--emit mir` | Print MIR basic blocks and stop |
 | `--check` | Semantic analysis only, no code generation |
@@ -221,6 +229,22 @@ tauraroc --backend llvm program.tr
 | `--static` | Link the output binary statically (no shared libs) |
 | `--target <triple>` | Cross-compile for a different target (see below) |
 | `--sysroot <path>` | Override the C compiler sysroot for cross-compilation |
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `TAURARO_PATH` | Extra module search paths, colon-separated on POSIX or semicolon-separated on Windows. Appended to the resolver's path list after all built-in paths. Equivalent to Python's `PYTHONPATH`. |
+
+```bash
+# Linux / macOS — add two extra library directories
+export TAURARO_PATH=/opt/mylibs:/home/user/pkgs
+tauraroc --run myapp.tr
+
+# Windows (PowerShell)
+$env:TAURARO_PATH = "C:\mylibs;C:\Users\user\pkgs"
+tauraroc --run myapp.tr
+```
 
 ### Cross-Compilation (`--target`)
 

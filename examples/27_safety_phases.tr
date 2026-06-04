@@ -1,0 +1,48 @@
+# 26 — Safety Phases C, D, F verification
+# Tests that the new compiler catches:
+#   [D-1] use-before-init   (Phase D)
+#   [M-4] mutate-while-borrowed  (Phase C)
+#   [S-1] self-referential Shared cycle  (Phase F)
+#
+# Each test is commented out — uncomment to confirm the error fires.
+
+class Node:
+    pub value: int
+
+# ── Phase D: use before init ─────────────────────────────────────────────────
+# Uncomment to test [I-1]:
+# def test_uninit():
+#     mut x: int
+#     print(x)   # [I-1] x used before being assigned
+
+# ── Phase C: mutate while borrowed ──────────────────────────────────────────
+# Uncomment to test [M-4]:
+# def test_borrow_mut():
+#     mut data = Vec[Node].init(4)
+#     mut item = data.get(0)   # borrows 'data'
+#     data.push(Node())        # [M-4] cannot mutate 'data' while 'item' holds a ref
+
+# ── Phase F: Shared cycle ────────────────────────────────────────────────────
+# Uncomment to test [S-1]:
+# class Tree:
+#     pub left: Shared[Tree]   # [S-1] self-referential cycle — use Weak[Tree]
+
+# ── All passing: normal usage works fine ─────────────────────────────────────
+def main():
+    # Phase D: variable initialised before use — fine
+    mut x: int
+    x = 42
+    print(f"x = {x}")
+
+    # Phase C: borrow ends before mutation — fine
+    mut items = Vec[int].init(4)
+    items.push(1)
+    items.push(2)
+    mut total = 0
+    mut i = 0
+    while i < items.len:
+        total += items.get(i)
+        i += 1
+    print(f"total = {total}")
+
+    print("All Phase C/D/F normal-usage checks passed.")

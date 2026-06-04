@@ -1,0 +1,43 @@
+# examples/25_safety_model.tr — Tauraro safety model showcase
+# Demonstrates: move semantics, borrow tracking, Shared[T]
+
+class Counter:
+    pub value: int
+
+extend Counter:
+    pub def init(n: int) -> Counter:
+        mut c = Counter()
+        c.value = n
+        return c
+
+    pub def increment(self) -> void:
+        self.value = self.value + 1
+
+    pub def get(self) -> int:
+        return self.value
+
+def process(c: Counter) -> int:
+    return c.value * 2
+
+def main():
+    # ── Normal borrow: pass to function, still valid after ──
+    mut a = Counter.init(10)
+    mut result = process(a)
+    print("borrow: result=" + str(result) + ", a.value=" + str(a.value))
+
+    # ── Move semantics: b = a moves a, a is no longer accessible ──
+    mut b = Counter.init(42)
+    mut c2 = b              # b is moved into c2
+    print("move: c2.value=" + str(c2.value))
+    # Using b here would trigger [M-1] error — b was moved
+
+    # ── Shared[T]: reference-counted shared ownership ──
+    shared s1 = Counter.init(100)
+    shared s2 = s1           # s2 clones the shared box (refcount=2)
+    print("shared: s1.value=" + str(s1.value) + ", s2.value=" + str(s2.value))
+
+    # Mutations through shared are visible to all handles
+    s1.increment()
+    print("after increment via s1: s2.value=" + str(s2.value))
+
+    print("All safety model checks passed.")

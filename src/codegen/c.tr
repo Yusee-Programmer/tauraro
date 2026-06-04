@@ -6,7 +6,7 @@ from core.map import Map
 from core.string import StringBuilder
 from core.alloc import alloc
 from core.io import write_file
-from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, HirChanSelectArm, _tr_str_len, hir_stmt_ownership, hir_expr_type
+from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, HirChanSelectArm, _tr_str_len, hir_expr_type
 from ast import AstType, Decorator, Pattern, Ownership, Decl
 
 extern "C":
@@ -214,7 +214,7 @@ pub class CGenerator:
         self.wlt("typedef struct List_" + n + " { " + n + "* data; size_t len; size_t capacity; } List_" + n + ";\n")
         self.wlt("static inline List_" + n + "* List_" + n + "_new(void) { List_" + n + "* l=(List_" + n + "*)malloc(sizeof(List_" + n + ")); l->data=(" + n + "*)malloc(sizeof(" + n + ")*8); l->len=0; l->capacity=8; return l; }\n")
         self.wlt("static inline void List_" + n + "_append(List_" + n + "* l, " + n + " val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(" + n + "*)realloc(l->data,sizeof(" + n + ")*l->capacity); } l->data[l->len++]=val; }\n")
-        self.wlt("static inline " + n + " List_" + n + "_get(List_" + n + "* l, long long i) { if(!l||(size_t)i>=l->len) return (" + n + "){0}; return l->data[i]; }\n")
+        self.wlt("static inline " + n + " List_" + n + "_get(List_" + n + "* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }\n")
         self.wlt("static inline " + n + " List_" + n + "_pop(List_" + n + "* l) { if(!l||l->len==0) return (" + n + "){0}; l->len--; return l->data[l->len]; }\n")
         self.wlt("static inline void List_" + n + "_free(List_" + n + "* l) { if(l){ free(l->data); free(l); } }\n")
 
@@ -256,6 +256,10 @@ pub class CGenerator:
         if ty as usize == 0 as usize: return "void"
         mut n: str = ty.name
         if n == "" or n == "void" or n == "None": return "void"
+
+        # Gap 4: 'ref T' and 'mut ref T' are transparent wrappers — map to inner type
+        if (n == "ref" or n == "mut_ref") and ty.args.len > 0:
+            return self.type_to_c(ty.args.get(0).read())
 
         # Check active type substitution first (used during monomorphization)
         if self.type_subst.contains(n): return self.type_subst.get(n)
@@ -390,6 +394,8 @@ pub class CGenerator:
         if n == "Thread": return "_TrThreadObj*"
         if n == "Atomic": return "_TrAtomic*"
         if n == "ThreadLocal": return "_TrTLS*"
+        if n == "Shared": return "_TrSharedBox*"
+        if n == "Weak": return "_TrWeakBox*"
 
         if n == "Tuple" or n == "tuple": return "TrTuple"
 
@@ -706,7 +712,7 @@ pub class CGenerator:
             if f.decorators.get(i).name == "noinline": return "static __attribute__((noinline)) "
             i = i + 1
         if f.name == "main" or f.name == "_tr_main":
-            return "__attribute__((hot,optimize(\"O3,unroll-loops\"))) "
+            return "__attribute__((hot)) "
         if f.name == "init":
             return "static __attribute__((malloc,returns_nonnull,hot)) "
         return "static __attribute__((hot)) "
@@ -730,7 +736,7 @@ pub class CGenerator:
             if f.decorators.get(i).name == "noinline": return "__attribute__((noinline)) "
             i = i + 1
         if f.name == "main" or f.name == "_tr_main":
-            return "__attribute__((hot,optimize(\"O3,unroll-loops\"))) "
+            return "__attribute__((hot)) "
         if f.name == "init":
             return "__attribute__((malloc,returns_nonnull,hot)) "
         return "__attribute__((hot)) "
@@ -1158,14 +1164,14 @@ pub class CGenerator:
                 mut full_ty = hir_expr_type(o)
                 if full_ty.args.len > 0:
                     mut ok_ct = self.type_to_c(full_ty.args.get(0).read())
-                    return "((" + ok_ct + ")(" + obj_s + ".data.Ok.val))"
-                return obj_s + ".data.Ok.val"
+                    return "((" + ok_ct + ")Result_unwrap(" + obj_s + "))"
+                return "Result_unwrap(" + obj_s + ")"
             if p == "err":
                 mut full_ty2 = hir_expr_type(o)
                 if full_ty2.args.len > 1:
                     mut err_ct = self.type_to_c(full_ty2.args.get(1).read())
-                    return "((" + err_ct + ")(" + obj_s + ".data.Err.err))"
-                return "(char*)(" + obj_s + ".data.Err.err)"
+                    return "((" + err_ct + ")Result_unwrap_err(" + obj_s + "))"
+                return "(char*)Result_unwrap_err(" + obj_s + ")"
             return obj_s + "." + p
         if t_n == "Option":
             if p == "is_some": return "(" + obj_s + ".tag == Option_Some)"
@@ -1174,11 +1180,11 @@ pub class CGenerator:
                 mut full_opt_ty = hir_expr_type(o)
                 if full_opt_ty.args.len > 0:
                     mut opt_ct = self.type_to_c(full_opt_ty.args.get(0).read())
-                    return "((" + opt_ct + ")(" + obj_s + ".data.Some.val))"
-                return obj_s + ".data.Some.val"
+                    return "((" + opt_ct + ")Option_unwrap(" + obj_s + "))"
+                return "Option_unwrap(" + obj_s + ")"
             # Handle Option.None / Option.Some as static constructors (p may be empty if None is a keyword)
             if p == "" or p == "None" or p == "none": return "((Option){.tag=Option_None})"
-            if p == "Some" or p == "some": return "((Option){.tag=Option_None})"
+            if p == "Some" or p == "some": return "((Option){.tag=Option_Some})"
             return obj_s + "." + p
         if self.interfaces.contains(t_n) and self.interfaces as usize != 0 as usize:
             return obj_s + "." + p
@@ -1189,7 +1195,10 @@ pub class CGenerator:
         mut is_idx = self.gen_expr(idx)
         mut ty_n: str = hir_expr_type(o).name
         if ty_n == "Pointer": return os + "[" + is_idx + "]"
-        if ty_n == "List" or ty_n == "Vec": return os + "->data[" + is_idx + "]"
+        if ty_n == "List" or ty_n == "Vec":
+            # Bounds-checked access — works as both lvalue and rvalue.
+            # The comma operator in the subscript runs the check then uses the index.
+            return os + "->data[(_tr_bounds_check(" + is_idx + ", " + os + "->len), " + is_idx + ")]"
         if self.classes.contains(ty_n) and ty_n != "Vec" and ty_n != "List" and ty_n != "Map" and ty_n != "Dict":
             if self.has_method(ty_n, "__getitem__"):
                 return self.cls_method_c_call(ty_n, "__getitem__", os, is_idx)
@@ -1224,8 +1233,8 @@ pub class CGenerator:
         # Mangle C reserved keywords used as call targets
         if _is_c_keyword(base_callee): base_callee = "_tr_fn_" + base_callee
 
-        # print / buga builtins
-        if base_callee == "print" or base_callee == "buga":
+        # print builtin
+        if base_callee == "print":
             return self.gen_print_call(args)
 
         # len builtin
@@ -1723,6 +1732,12 @@ pub class CGenerator:
         # Shared var: unwrap _TrSharedBox* → (TypeName*)obj->data for method dispatch
         if self.shared_vars.contains(obj_s):
             mut sh_ty = self.shared_vars.get(obj_s)
+            # Shared-specific built-in methods — operate on the box, NOT the inner object
+            if method == "clone": return "_tr_shared_clone(" + obj_s + ")"
+            if method == "drop": return "_tr_shared_drop(" + obj_s + ")"
+            if method == "is_null": return "(" + obj_s + " == NULL || " + obj_s + "->data == NULL)"
+            if method == "downgrade": return "_tr_weak_new(" + obj_s + ")"
+            # All other methods: unwrap and dispatch as user-defined class method
             mut sh_unwrapped = "((" + sh_ty + "*)(" + obj_s + "->data))"
             mut sh_sig = sh_ty + "_" + method + "(" + sh_unwrapped
             if args.len > 0:
@@ -4083,7 +4098,6 @@ pub class CGenerator:
         # ── Phase 1: Runtime header include + file-wide optimization pragmas ────
         self.w("#define _TR_MAIN\n")
         self.w("#include \"tauraro_rt.h\"\n")
-        self.w("#pragma GCC optimize(\"O3,unroll-loops\")\n")
 
         # ── Phase 2: Forward declarations (opaque struct pointers) ────────────
         # Skip generic classes — their mono versions are handled in Phase 2.75
@@ -4277,7 +4291,7 @@ pub class CGenerator:
             i = i + 1
 
         # ── Phase 7: C main entry point ───────────────────────────────────────
-        self.w("__attribute__((hot,optimize(\"O3,unroll-loops\"))) int main(int argc, char** argv) {\n")
+        self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")
         self.w("#ifndef TAURARO_BARE\n")
@@ -4683,8 +4697,7 @@ pub class CGenerator:
             inc_prefix = inc_prefix + "../"
             d = d + 1
 
-        self.w("#include \"" + inc_prefix + "tauraro_types.h\"\n")
-        self.w("#pragma GCC optimize(\"O3,unroll-loops\")\n\n")
+        self.w("#include \"" + inc_prefix + "tauraro_types.h\"\n\n")
 
         # ── Class / enum method implementations ──────────────────────────────
         mut i = 0
@@ -4768,8 +4781,7 @@ pub class CGenerator:
         self.buf = StringBuilder.init(65536)
 
         self.w("#define _TR_MAIN\n")
-        self.w("#include \"tauraro_types.h\"\n")
-        self.w("#pragma GCC optimize(\"O3,unroll-loops\")\n\n")
+        self.w("#include \"tauraro_types.h\"\n\n")
 
         # Emit spawn + async wrappers (static thread-entry functions) before any function body
         self.prescan_spawns(prog)
@@ -4871,7 +4883,7 @@ pub class CGenerator:
                 i = i + 1
 
         # C main() entry point
-        self.w("__attribute__((hot,optimize(\"O3,unroll-loops\"))) int main(int argc, char** argv) {\n")
+        self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")
         self.w("#ifndef TAURARO_BARE\n")

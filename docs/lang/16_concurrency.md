@@ -10,14 +10,17 @@
 | `spawn f(args)` | Fire-and-forget detached OS thread |
 | `task_group:` | Structured concurrency — wait for a batch of spawns |
 | `await_all(f1(), f2(), ...)` | Run multiple calls in parallel, wait for all |
+| `await_timeout(fn(), ms)` | Parallel call with a millisecond deadline |
 | `Chan[T]` | Producer-consumer pipelines between threads |
 | `Mutex[T]` | Thread-safe guarded value with exclusive lock |
 | `RwLock[T]` | Multiple readers or single writer |
 | `ThreadPool` | Fixed worker-pool for dispatching many short jobs |
-| `shared` | Atomic refcount box for shared ownership |
 | `Thread` | Explicit joinable OS thread with full lifecycle control |
 | `Atomic[T]` | Lock-free atomic integer operations |
 | `ThreadLocal[T]` | Per-thread storage — each thread sees its own value |
+| `Sendable` | Compile-time marker: type is safe to cross thread boundaries |
+| `StructuredGroup` | Fault-tolerant batch — panicked threads are caught, not fatal |
+| `IOPoll` / `EventLoop` | Non-blocking event-driven I/O with epoll/IOCP/kqueue |
 
 ---
 
@@ -420,6 +423,101 @@ The same auto-unlock behavior applies to `RwLock.read()` and `RwLock.write()`.
 
 ---
 
+## Sendable — Compile-Time Data Race Prevention
+
+The `Sendable` interface is a **compile-time marker** that declares a type is safe to send across thread boundaries. The compiler enforces it statically at every spawn site.
+
+### Declaring a type Sendable
+
+```python
+from std.async.send import Sendable
+
+class SafeStats implements Sendable:
+    pub hits:   Atomic[int]
+    pub misses: Atomic[int]
+```
+
+Rules:
+- A class that declares `implements Sendable` must have **only Sendable fields** — the compiler rejects the class definition otherwise.
+- Primitive types (`int`, `float`, `bool`, `str`) are always Sendable.
+- Built-in concurrency types (`Atomic[T]`, `Mutex[T]`, `RwLock[T]`, `Chan[T]`, `Thread`, `ThreadPool`, `ThreadLocal[T]`) are always Sendable.
+- `List[T]`, `Vec[T]`, `Dict`, `Map` are **never Sendable** — they have no internal synchronization.
+
+### Enforcement at spawn sites
+
+```python
+class UnsafeStats:
+    pub hits: int              # plain int — NOT Sendable
+
+def tally(s: UnsafeStats) -> void:
+    s.hits += 1
+
+def main():
+    mut s = UnsafeStats()
+    spawn tally(s)             # [T-1] compile error — UnsafeStats is not Sendable
+    Thread.spawn(tally, s)     # [T-1] compile error
+```
+
+The `[T-1]` error fires for `spawn`, `Thread.spawn`, `pool.spawn`, and `await_all` sub-calls. It does **not** fire for plain `await f(...)` (sequential — caller blocks, no concurrent access).
+
+### Full example
+
+```python
+from std.async.send   import Sendable
+from std.async.thread import Thread, Atomic
+
+class Counter implements Sendable:
+    pub value: Atomic[int]
+
+extend Counter:
+    pub def init() -> Counter:
+        mut c = Counter()
+        c.value = Atomic.new(0)
+        return c
+
+def increment(c: Counter) -> void:
+    mut i = 0
+    while i < 1000:
+        c.value.add(1)
+        i += 1
+
+def main():
+    mut c = Counter.init()
+    mut t1: Thread = Thread.spawn(increment, c)
+    mut t2: Thread = Thread.spawn(increment, c)
+    t1.join()
+    t2.join()
+    print(f"total: {c.value.load()}")    # 2000
+    c.value.free()
+```
+
+---
+
+## await_timeout — Time-Bounded Await
+
+`await_timeout(fn(args), ms)` calls an `async def` function and waits up to `ms` milliseconds for it to complete. Returns `true` if the function finished in time, `false` if it timed out:
+
+```python
+async def slow_fetch(n: int) -> int:
+    Thread.sleep(200)
+    return n * 2
+
+async def main():
+    mut ok = await_timeout(slow_fetch(10), 500)    # true — completes in ~200ms
+    if ok:
+        print("done in time")
+    else:
+        print("timed out")
+
+    mut ok2 = await_timeout(slow_fetch(10), 50)    # false — 200ms > 50ms deadline
+    if not ok2:
+        print("timed out as expected")
+```
+
+`await_timeout` is backed by `_TrTaskState` with a refcount-safe design: both the caller and the spawned thread hold a reference, and the last one to finish frees the state.
+
+---
+
 ## Thread Safety Summary
 
 | Pattern | Thread safe? | Notes |
@@ -436,6 +534,9 @@ The same auto-unlock behavior applies to `RwLock.read()` and `RwLock.write()`.
 | `Thread.spawn` | ✓ | Joinable OS thread |
 | `shared x.field` concurrent writes | ✗ | Data race — use `Mutex[T]` |
 | `List[T]` shared across threads | ✗ | No synchronization |
+| `StructuredGroup` spawns | ✓ | Panics caught at thread boundary |
+| `IOPoll` (epoll/IOCP/kqueue) | ✓ | Platform-native event poll |
+| `TcpStream` non-blocking | ✓ | Returns WOULD_BLOCK instead of blocking |
 
 ---
 
@@ -467,3 +568,142 @@ while i < num_jobs:
 pool.wait()
 pool.free()
 ```
+
+---
+
+## StructuredGroup — Structured Concurrency with Panic Recovery
+
+`StructuredGroup` (from `std.async.structured`) is a structured-concurrency container that:
+1. Runs each task in its own OS thread (similar to `task_group:`)
+2. **Catches thread panics** — a thread that calls `panic(msg)` does not crash the process; the group records the error and continues waiting for other threads
+3. Reports which tasks panicked after all threads finish
+
+```tauraro
+from std.async.structured import StructuredGroup
+
+def risky(id: int) -> void:
+    if id == 2:
+        panic("task 2 intentionally failed")
+    print(f"  task {id} OK")
+
+def main():
+    mut sg = StructuredGroup.init()
+    sg.spawn(risky, 1)
+    sg.spawn(risky, 2)    # will panic
+    sg.spawn(risky, 3)
+    sg.wait()             # blocks until all threads finish (panicked or not)
+
+    print(f"panics: {sg.panic_count}")
+    if sg.panic_count > 0:
+        print("last panic: " + sg.last_panic_msg)
+    sg.free()
+```
+
+### StructuredGroup API
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `StructuredGroup.init` | `() -> StructuredGroup` | `StructuredGroup` | Create an empty group. |
+| `spawn` | `(fn, arg)` | `void` | Spawn a thread running `fn(arg)` and add it to the group. |
+| `wait` | `()` | `void` | Wait for all threads to finish. Panicked threads are caught, not re-raised. |
+| `free` | `()` | `void` | Free the group's resources. |
+
+**Fields:** `panic_count: int`, `last_panic_msg: str`.
+
+**When to use vs `task_group:`** — use `task_group:` when any panic should abort the batch; use `StructuredGroup` when you need fault tolerance (some tasks may fail and that's acceptable).
+
+---
+
+## Thread Panic Recovery
+
+Any OS thread can call `panic(msg)` to signal a fatal error. Normally `panic` terminates the process. When a thread is spawned through `StructuredGroup` (or a `Thread.spawn` handle), the panic is caught at the thread boundary:
+
+```tauraro
+from std.async.thread import Thread
+
+def fragile_work(n: int) -> void:
+    if n < 0:
+        panic("negative input not allowed")
+    print(f"  computed {n * n}")
+
+def main():
+    mut t = Thread.spawn(fragile_work, -1)
+    t.join()
+    if t.panicked():
+        print("thread panicked: " + t.panic_msg())
+    t.free()
+```
+
+The per-thread `setjmp` boundary installed by the runtime captures the `longjmp` from `panic` and stores the message in `_TrSpawnResult`, which `.panicked()` and `.panic_msg()` read after join.
+
+**Rule:** A panic inside a thread never terminates the process — it terminates only that thread and records the message for the joiner to inspect.
+
+---
+
+## Async I/O — IOPoll and EventLoop
+
+For non-blocking, event-driven I/O Tauraro provides a cross-platform poll abstraction backed by `epoll` (Linux), `IOCP` (Windows), and `kqueue` (macOS/BSD).
+
+### IOPoll — raw event loop
+
+```tauraro
+from std.io.poll import IOPoll, IOEvent
+
+mut poll = IOPoll.init()
+poll.add(fd, POLLIN, 0)      # watch fd for readable events (userdata=0)
+
+mut events = poll.wait(200)  # wait up to 200 ms
+mut i = 0
+while i < events.len:
+    mut ev = events.get(i)
+    print(f"  fd={ev.fd} events={ev.events} data={ev.userdata}")
+    i = i + 1
+poll.destroy()
+```
+
+### EventLoop — reactor-style
+
+`EventLoop` (from `std.io.event_loop`) wraps `IOPoll` with a run loop that fires `n` iterations:
+
+```tauraro
+from std.io.event_loop import EventLoop
+
+mut el = EventLoop.init()
+el.add_fd(server_fd, POLLIN, 0)
+
+el.run(5)     # run 5 poll cycles with a 100 ms timeout each
+el.free()
+```
+
+### Non-blocking TCP
+
+`TcpStream` supports non-blocking sockets via `set_nonblocking()`:
+
+```tauraro
+from std.net.tcp import TcpStream
+
+mut s = TcpStream.connect("127.0.0.1", 9000)
+s.set_nonblocking()
+
+mut n = s.recv_nb(256)      # returns immediately; n = WOULD_BLOCK (-2) if no data
+if n == -2:
+    print("no data yet — would block")
+else:
+    print(f"received {n} bytes")
+s.close()
+```
+
+| Method | Returns | Description |
+|---|---|---|
+| `set_nonblocking()` | `bool` | Switch socket to non-blocking mode. |
+| `recv_nb(cap)` | `int` | Non-blocking receive. Returns byte count, `0` on disconnect, `-1` on error, `-2` (WOULD_BLOCK) if no data available. |
+| `send_nb(data)` | `int` | Non-blocking send. Returns bytes sent, `0` on disconnect, `-1` on error, `-2` if socket buffer full. |
+
+### When to use each
+
+| Pattern | Use when |
+|---|---|
+| `task_group:` / `ThreadPool` | CPU-bound parallel work; blocking I/O is acceptable |
+| `StructuredGroup` | Same, but some threads may panic and you need fault tolerance |
+| `IOPoll` / `EventLoop` | Many file descriptors, non-blocking I/O, event-driven server |
+| `await_timeout` | Single async call with a hard deadline |

@@ -257,10 +257,9 @@ pub def hir_expr_type(e: Pointer[HirExpr]) -> AstType:
         case HirExpr.ERange(_, _, _, ty): return ty
         case HirExpr.ESizeOf(_, ty): return ty
         case HirExpr.EIfElse(_, _, _, ty): return ty
+        case _:
+            pass
     return AstType.init("void")
-
-pub def hir_stmt_ownership(s: Pointer[HirStmt]) -> Ownership:
-    return Ownership.Own
 
 pub def _tr_str_len(s: str) -> int:
     unsafe:

@@ -1,21 +1,23 @@
-# std.sys.process — Process control via the Process static-method class.
+# std.sys.process — Process lifecycle: exit, PID, shell execution, and sleep.
+#
+# Overlapping OS identity functions (hostname, username) are in std.sys.os.
+# Overlapping shell execution (system, shell_output) are in std.sys.os.
+# This module focuses on process control, child execution, and timing.
 
 extern "C":
     def _tr_exit(code: int)
     def _tr_getpid() -> int
     def _tr_system(cmd: str) -> int
     def _tr_popen_read(cmd: str) -> str
-    def _tr_hostname() -> str
-    def _tr_username() -> str
     def _tr_sleep_ms(ms: int)
 
 pub class Process:
     _dummy: int
 
 extend Process:
-    # ── Control ───────────────────────────────────────────────────────────────
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    # Terminate the process.  0 = success, non-zero = failure.
+    # Terminate the current process.  0 = success, non-zero = failure.
     pub def exit(code: int):
         _tr_exit(code)
 
@@ -37,18 +39,12 @@ extend Process:
     pub def check_call(cmd: str) -> bool:
         return _tr_system(cmd) == 0
 
-    # ── Identity ──────────────────────────────────────────────────────────────
-
-    # Network hostname of this machine.
-    pub def hostname() -> str:
-        return _tr_hostname()
-
-    # Logged-in username running this process.
-    pub def username() -> str:
-        return _tr_username()
-
     # ── Timing ────────────────────────────────────────────────────────────────
 
     # Sleep for at least ms milliseconds.
     pub def sleep_ms(ms: int):
         _tr_sleep_ms(ms)
+
+    # Sleep for at least s seconds.
+    pub def sleep(s: int):
+        _tr_sleep_ms(s * 1000)

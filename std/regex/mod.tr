@@ -1,0 +1,123 @@
+# std.regex — POSIX regex wrapper.
+#
+# Requires TAURARO_HAVE_REGEX to be defined (MinGW/GCC/Clang auto-detect it).
+# On MSVC without <regex.h>, all methods return safe no-op results.
+#
+# Usage:
+#   from std.regex import Regex
+#   mut re = Regex.compile("^[a-z]+$")
+#   if re.match("hello"): print("ok")
+#   re.free()
+
+from std.string.str import Str
+
+extern "C":
+    def _tr_regex_compile(pattern: str, icase: int) -> Pointer[char]
+    def _tr_regex_match(handle: Pointer[char], text: str) -> bool
+    def _tr_regex_find_start(handle: Pointer[char], text: str, from_: int) -> int
+    def _tr_regex_find_len(handle: Pointer[char], text: str, from_: int) -> int
+    def _tr_regex_replace_first(handle: Pointer[char], text: str, repl: str) -> str
+    def _tr_regex_replace_all(handle: Pointer[char], text: str, repl: str) -> str
+    def _tr_regex_count(handle: Pointer[char], text: str) -> int
+    def _tr_regex_free(handle: Pointer[char])
+
+pub class Regex:
+    handle: Pointer[char]
+    pattern_: str
+    ignore_case: bool
+
+extend Regex:
+    # Compile a POSIX extended regex. Pass ignore_case=true for case-insensitive matching.
+    pub def compile(pattern: str) -> Regex:
+        mut r         = Regex.init()
+        r.pattern_    = pattern
+        r.ignore_case = false
+        r.handle      = _tr_regex_compile(pattern, 0)
+        return r
+
+    pub def compile_icase(pattern: str) -> Regex:
+        mut r         = Regex.init()
+        r.pattern_    = pattern
+        r.ignore_case = true
+        r.handle      = _tr_regex_compile(pattern, 1)
+        return r
+
+    # True when the entire string is matched by the pattern.
+    pub def match(self, text: str) -> bool:
+        return _tr_regex_match(self.handle, text)
+
+    # Return the byte offset of the first match at or after `from`, or -1.
+    pub def find_start(self, text: str, from_: int) -> int:
+        return _tr_regex_find_start(self.handle, text, from_)
+
+    # Return the byte length of the first match at or after `from`, or 0.
+    pub def find_len(self, text: str, from_: int) -> int:
+        return _tr_regex_find_len(self.handle, text, from_)
+
+    # Return the matched substring starting at `from`, or "" if no match.
+    pub def find(self, text: str, from_: int) -> str:
+        mut start = Regex.find_start(self, text, from_)
+        if start < 0:
+            return ""
+        mut len_ = Regex.find_len(self, text, start)
+        return Str.slice(text, start, start + len_)
+
+    # Return all non-overlapping matched substrings.
+    pub def find_all(self, text: str) -> Vec[str]:
+        mut out = Vec[str].init(4)
+        mut pos = 0
+        mut tl  = Str.len(text)
+        while pos < tl:
+            mut start = Regex.find_start(self, text, pos)
+            if start < 0:
+                break
+            mut len_ = Regex.find_len(self, text, start)
+            if len_ == 0:
+                pos = start + 1
+            else:
+                out.push(Str.slice(text, start, start + len_))
+                pos = start + len_
+        return out
+
+    # Replace only the first match.
+    pub def replace_first(self, text: str, repl: str) -> str:
+        return _tr_regex_replace_first(self.handle, text, repl)
+
+    # Replace every non-overlapping match.
+    pub def replace_all(self, text: str, repl: str) -> str:
+        return _tr_regex_replace_all(self.handle, text, repl)
+
+    # Count non-overlapping matches.
+    pub def count(self, text: str) -> int:
+        return _tr_regex_count(self.handle, text)
+
+    # True when the string contains at least one match.
+    pub def contains(self, text: str) -> bool:
+        return _tr_regex_find_start(self.handle, text, 0) >= 0
+
+    # Split text on every match, returning the pieces between matches.
+    pub def split(self, text: str) -> Vec[str]:
+        mut out  = Vec[str].init(4)
+        mut pos  = 0
+        mut tl   = Str.len(text)
+        while pos < tl:
+            mut start = Regex.find_start(self, text, pos)
+            if start < 0:
+                out.push(Str.slice(text, pos, tl))
+                pos = tl
+            else:
+                out.push(Str.slice(text, pos, start))
+                mut len_ = Regex.find_len(self, text, start)
+                if len_ == 0:
+                    pos = start + 1
+                else:
+                    pos = start + len_
+        return out
+
+    # Free underlying regex resources. Call when done.
+    pub def free(self):
+        _tr_regex_free(self.handle)
+
+    def init() -> Regex:
+        mut r         = Regex { handle: none as Pointer[char], pattern_: "", ignore_case: false }
+        return r

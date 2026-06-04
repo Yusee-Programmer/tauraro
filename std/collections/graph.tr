@@ -137,3 +137,84 @@ extend Graph:
             if self._adj_from.get(i) == node: n = n + 1
             i = i + 1
         return n
+
+    # Total degree: in_degree + out_degree (for undirected graphs edges are stored
+    # both ways, so out_degree already equals the graph degree).
+    pub def degree(self, node: int) -> int:
+        if self.directed: return Graph.in_degree(self, node) + Graph.out_degree(self, node)
+        return Graph.out_degree(self, node)
+
+    # Return all node IDs 0..node_count-1.
+    pub def all_nodes(self) -> Vec[int]:
+        mut out = Vec[int].init(self.node_count + 4)
+        mut i   = 0
+        while i < self.node_count:
+            out.push(i)
+            i = i + 1
+        return out
+
+    # ── Cycle detection ───────────────────────────────────────────────────────
+
+    # True when the directed graph contains at least one cycle.
+    # (Meaningful only for directed graphs; undirected always forms pseudo-cycles.)
+    pub def has_cycle(self) -> bool:
+        mut color = Vec[int].init(self.node_count + 4)
+        mut i     = 0
+        while i < self.node_count:
+            color.push(0)
+            i = i + 1
+        i = 0
+        while i < self.node_count:
+            if color.get(i) == 0:
+                if Graph._dfs_cycle(self, i, color): return true
+            i = i + 1
+        return false
+
+    def _dfs_cycle(self, node: int, color: Vec[int]) -> bool:
+        color.set(node, 1)
+        mut i = 0
+        while i < self._adj_from.len:
+            if self._adj_from.get(i) == node:
+                mut nb = self._adj_to.get(i)
+                if nb < color.len:
+                    if color.get(nb) == 1: return true
+                    if color.get(nb) == 0:
+                        if Graph._dfs_cycle(self, nb, color): return true
+            i = i + 1
+        color.set(node, 2)
+        return false
+
+    # ── Topological sort ──────────────────────────────────────────────────────
+
+    # Return nodes in topological order (valid only for DAGs).
+    # Nodes with no outgoing edges appear last.
+    pub def topological_sort(self) -> Vec[int]:
+        mut color  = Vec[int].init(self.node_count + 4)
+        mut order  = Vec[int].init(self.node_count + 4)
+        mut i      = 0
+        while i < self.node_count:
+            color.push(0)
+            i = i + 1
+        i = 0
+        while i < self.node_count:
+            if color.get(i) == 0:
+                Graph._topo_dfs(self, i, color, order)
+            i = i + 1
+        mut result = Vec[int].init(order.len + 4)
+        mut j      = order.len - 1
+        while j >= 0:
+            result.push(order.get(j))
+            j = j - 1
+        return result
+
+    def _topo_dfs(self, node: int, color: Vec[int], order: Vec[int]):
+        color.set(node, 1)
+        mut i = 0
+        while i < self._adj_from.len:
+            if self._adj_from.get(i) == node:
+                mut nb = self._adj_to.get(i)
+                if nb < color.len and color.get(nb) == 0:
+                    Graph._topo_dfs(self, nb, color, order)
+            i = i + 1
+        color.set(node, 2)
+        order.push(node)

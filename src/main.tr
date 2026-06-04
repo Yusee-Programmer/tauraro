@@ -51,6 +51,8 @@ pub def print_usage():
     print("                      wasm, wasm-wasi")
     print("                    Or pass a raw LLVM triple (e.g. aarch64-linux-gnu)")
     print("  --sysroot <path>  Override sysroot for the cross-compiler")
+    print("  --debug           Compile with ASAN and bounds-check assertions")
+    print("  --strict          Treat alloc/dealloc outside 'unsafe:' as a hard error [U-1]")
     print("Bilingual: all English keywords have Hausa equivalents (aiki=def, aji=class, ...)")
 
 pub def str_ends_with_dot_tr(path: str) -> bool:
@@ -96,6 +98,16 @@ pub def detect_c_compiler() -> str:
     if _tr_system("clang --version >" + null_dev + " 2>&1") == 0: return "clang"
     if _tr_system("cc --version >" + null_dev + " 2>&1") == 0: return "cc"
     return "gcc"
+
+# True when `cc` is Clang (clang or apple clang).  Used to gate Clang-only flags.
+pub def is_clang_compiler(cc: str) -> bool:
+    mut null_dev = "/dev/null"
+    if _tr_is_windows(): null_dev = "nul"
+    if _tr_str_contains(cc, "clang"): return true
+    # 'cc' on macOS is Apple Clang — check its --version output
+    if _tr_str_eq(cc, "cc"):
+        return _tr_system(cc + " --version 2>&1 | grep -qi clang") == 0
+    return false
 
 # Expand friendly target shorthands to LLVM target triples.
 # Raw triples (containing '-') are passed through unchanged.
@@ -222,6 +234,48 @@ pub def strip_trailing_sep(s: str) -> str:
     if last == 47 or last == 92: return _tr_str_slice(s, 0, n - 1)
     return s
 
+# Walk a PATH-style env-var string and call add_fn for each non-empty entry.
+# Uses ';' as separator on Windows, ':' on POSIX.
+# Returns the number of paths found.
+pub def count_path_env_entries(s: str) -> int:
+    mut sep = 58  # ':' on POSIX
+    if _tr_is_windows(): sep = 59  # ';' on Windows
+    mut p = s as Pointer[char]
+    mut n = 0
+    while p.offset(n).read() as int != 0: n = n + 1
+    mut count = 0
+    mut start = 0
+    mut i = 0
+    while i <= n:
+        mut c = 0
+        if i < n: c = p.offset(i).read() as int
+        if c == sep or i == n:
+            if i > start: count = count + 1
+            start = i + 1
+        i = i + 1
+    return count
+
+# Return the idx-th entry (0-based) from a PATH-style env-var string, or "" if out of range.
+pub def get_path_env_entry(s: str, idx: int) -> str:
+    mut sep = 58  # ':' on POSIX
+    if _tr_is_windows(): sep = 59  # ';' on Windows
+    mut p = s as Pointer[char]
+    mut n = 0
+    while p.offset(n).read() as int != 0: n = n + 1
+    mut cur = 0
+    mut start = 0
+    mut i = 0
+    while i <= n:
+        mut c = 0
+        if i < n: c = p.offset(i).read() as int
+        if c == sep or i == n:
+            if i > start:
+                if cur == idx: return _tr_str_slice(s, start, i)
+                cur = cur + 1
+            start = i + 1
+        i = i + 1
+    return ""
+
 pub def path_to_native(s: str) -> str:
     mut n = 0
     mut p = s as Pointer[char]
@@ -347,7 +401,7 @@ pub def make_dir(path: str):
 pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
                       link_paths: Vec[str], lib_flags: Vec[str],
                       opt_level: str, verbose: bool, static_link: bool,
-                      target: str, sysroot: str) -> int:
+                      target: str, sysroot: str, debug_mode: bool) -> int:
     mut cc = detect_c_compiler()
     mut triple = ""
     mut cross_flags = ""
@@ -360,8 +414,20 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
             cross_flags = cross_flags + " --sysroot=\"" + sysroot + "\""
     mut static_flag = ""
     if static_link: static_flag = " -static"
+    # Flags valid on both GCC and Clang.
     mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
-    mut cmd = cc + " -O" + opt_level + static_flag + cross_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
+    # Clang-only: suppress warnings that are Clang-specific or have no GCC equivalent.
+    if is_clang_compiler(cc):
+        warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
+    mut native_flags = ""
+    if target == "" and opt_level == "3":
+        native_flags = " -march=native -funroll-loops"
+    # -ftrapv: make signed integer overflow a runtime trap (defined behavior) instead of UB.
+    # Disabled at O3/Os where the user explicitly prioritises speed over safety checks.
+    mut overflow_flag = ""
+    if opt_level != "3" and opt_level != "s":
+        overflow_flag = " -ftrapv"
+    mut cmd = cc + " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
     mut i = 0
     while i < c_files.len:
         cmd = cmd + " \"" + c_files.get(i) + "\""
@@ -375,6 +441,8 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
         cmd = cmd + " " + lib_flags.get(i)
         i = i + 1
     cmd = cmd + " -lm"
+    if debug_mode:
+        cmd = cmd + " -fsanitize=address,undefined -g"
     # On Windows: link Winsock2 when any networking module is present
     if _tr_is_windows():
         mut need_wsa: bool = false
@@ -393,7 +461,10 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     mut cc = detect_c_compiler()
     mut opt_flag = "-O" + opt_level
     mut out_dir = strip_trailing_sep(dir_of_path(c_path))
-    mut cmd = cc + " " + opt_flag + " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -DTAURARO_NO_RT_HELPERS \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
+    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    if is_clang_compiler(cc):
+        warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
+    mut cmd = cc + " " + opt_flag + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 
@@ -421,6 +492,8 @@ pub def main(args: Vec[str]):
     mut static_link = false              # --static        : pass -static to GCC
     mut target      = ""                 # --target <name> : cross-compilation target
     mut sysroot     = ""                 # --sysroot <path>: explicit sysroot
+    mut debug_mode  = false              # --debug         : ASAN + assertions
+    mut strict_mode = false              # --strict        : alloc outside unsafe → hard error
 
     mut i = 1
     while i < args.len:
@@ -463,6 +536,10 @@ pub def main(args: Vec[str]):
         elif arg == "--sysroot" and i + 1 < args.len:
             i = i + 1
             sysroot = args.get(i)
+        elif arg == "--debug":
+            debug_mode = true
+        elif arg == "--strict":
+            strict_mode = true
         elif not str_starts_with(arg, "-"):
             if input_path == "":
                 input_path = arg
@@ -483,9 +560,26 @@ pub def main(args: Vec[str]):
     # packages/ (future third-party packages). All resolved relative to the binary's
     # own directory so the distribution works regardless of CWD.
     mut bin_dir = strip_trailing_sep_inline(dir_of_path(args.get(0)))
+    # Paths relative to the compiler binary (distribution layout):
+    #   <bin>/std/          — standard library
+    #   <bin>/packages/     — installed third-party packages (root)
+    #   <bin>/packages/sites/ — site-specific installs (mirrors pip's site-packages)
     resolver.add_search_path(bin_dir)
     resolver.add_search_path(bin_dir + "/std")
     resolver.add_search_path(bin_dir + "/packages")
+    resolver.add_search_path(bin_dir + "/packages/sites")
+    # CWD-relative fallbacks — allow project-local package trees that travel with the source.
+    resolver.add_search_path("packages")
+    resolver.add_search_path("packages/sites")
+    # TAURARO_PATH — user-specified extra search paths, split on ':' (POSIX) or ';' (Windows).
+    # Works like Python's PYTHONPATH: set it in the shell before running tauraroc.
+    mut tauraro_path_env = _tr_getenv("TAURARO_PATH")
+    if tauraro_path_env != "":
+        mut ep_count = count_path_env_entries(tauraro_path_env)
+        mut epi = 0
+        while epi < ep_count:
+            resolver.add_search_path(get_path_env_entry(tauraro_path_env, epi))
+            epi = epi + 1
     mut prog = resolver.resolve_main(input_path)
 
     if emit_mode == "ast":
@@ -495,7 +589,14 @@ pub def main(args: Vec[str]):
     if verbose: print("[2/5] Semantic analysis...")
 
     mut sema = Sema.init()
+    sema.strict_mode = strict_mode
     mut hir = sema.analyze(prog)
+
+    if sema.warnings.len > 0:
+        mut wk = 0
+        while wk < sema.warnings.len:
+            print("warning: " + sema.warnings.get(wk))
+            wk = wk + 1
 
     if sema.errors.len > 0:
         mut k = 0
@@ -661,7 +762,7 @@ pub def main(args: Vec[str]):
         exe_path = build_dir + exe_name + exe_ext
 
     if verbose: print("[5/5] Linking " + str(all_c_files.len) + " modules → " + exe_path)
-    mut rc = compile_all_c(all_c_files, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot)
+    mut rc = compile_all_c(all_c_files, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode)
     if rc != 0:
         print("error: compilation failed (exit code " + str(rc) + ")")
         _tr_exit(rc)

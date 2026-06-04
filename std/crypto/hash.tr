@@ -1,0 +1,31 @@
+# std.crypto.hash — SHA-256, MD5 hashing.
+#
+# SHA-256 is pure-C, no external library needed.
+# All methods are static — no instance required.
+#
+# Usage:
+#   from std.crypto.hash import Hash
+#   mut digest = Hash.sha256("hello")     # 64-char lowercase hex
+#   mut raw    = Hash.sha256_bytes("hi", 2)  # 32-byte raw digest as str
+
+extern "C":
+    def _tr_sha256_hex(input: str) -> str
+    def _tr_sha256_bytes_of(input: str, ilen: int) -> str
+    def _tr_md5_hex(s: str) -> str
+
+pub class Hash:
+    _dummy: int
+
+extend Hash:
+    # SHA-256 digest of a null-terminated string. Returns 64-char lowercase hex.
+    pub def sha256(s: str) -> str:
+        return _tr_sha256_hex(s)
+
+    # SHA-256 digest of exactly `len` bytes of `data`. Returns 64-char lowercase hex.
+    pub def sha256_bytes(data: str, len_: int) -> str:
+        return _tr_sha256_bytes_of(data, len_)
+
+    # MD5 digest of a null-terminated string. Returns 32-char lowercase hex.
+    # Note: MD5 is cryptographically broken — use SHA-256 for security-sensitive work.
+    pub def md5(s: str) -> str:
+        return _tr_md5_hex(s)

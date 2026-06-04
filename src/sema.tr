@@ -26,6 +26,12 @@ pub class Symbol:
     pub is_moved: bool
     pub active_borrows: int
     pub borrowed_by: Vec[str]
+    pub is_init: bool
+    pub is_param: bool
+    pub is_maybe_moved: bool  # moved in SOME but not ALL branches
+    pub is_maybe_init: bool   # init in SOME but not ALL branches
+    pub ptr_region: int       # 0=LOCAL, 1=HEAP(alloc), 2=PARAM, 3=GLOBAL
+    pub is_freed: bool        # [M-6] dealloc() was called on this pointer
 
 extend Symbol:
     pub def init(name: str, kind: SymbolKind, ty: Pointer[AstType]) -> Symbol:
@@ -40,6 +46,12 @@ extend Symbol:
         s.is_moved = false
         s.active_borrows = 0
         s.borrowed_by = Vec[str].init(0)
+        s.is_init = true
+        s.is_param = false
+        s.is_maybe_moved = false
+        s.is_maybe_init = false
+        s.ptr_region = 0
+        s.is_freed = false
         return s
 
 pub class Scope:
@@ -69,6 +81,16 @@ pub class Sema:
     pub closure_boundary: int           # scope depth just before entering a closure (-1 = not in closure)
     pub closure_caps:     Vec[HirParam] # captures accumulated for the current innermost closure
     pub closure_cap_set:  Map[str, bool] # dedup set for capture names
+    pub in_assign_target: bool          # Phase D: suppress is_init check on assignment LHS
+    pub container_borrows: Map[str, str] # Phase C: container_var → borrowing_var
+    pub capturing_moves: bool           # Fix 1: branch snapshot — are we tracking move deltas?
+    pub branch_moved_buf: Vec[str]      # Fix 1: names moved in current branch
+    pub capturing_inits: bool           # Fix 4: branch snapshot for init deltas
+    pub branch_init_buf: Vec[str]       # Fix 4: names init'd in current branch
+    pub copy_classes: Map[str, bool]    # Fix 3: auto-inferred Copy classes (all-primitive fields)
+    pub in_unsafe: bool                 # Gap 6: inside an unsafe: block
+    pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
+    pub strict_mode: bool               # --strict: alloc outside unsafe → hard [U-1] error
 
 extend Sema:
     pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
@@ -106,10 +128,19 @@ extend Sema:
         s.closure_boundary  = -1
         s.closure_caps      = Vec[HirParam].init(0)
         s.closure_cap_set   = Map[str, bool].init(0)
+        s.in_assign_target  = false
+        s.container_borrows = Map[str, str].init(16)
+        s.capturing_moves   = false
+        s.branch_moved_buf  = Vec[str].init(0)
+        s.capturing_inits   = false
+        s.branch_init_buf   = Vec[str].init(0)
+        s.copy_classes           = Map[str, bool].init(32)
+        s.in_unsafe              = false
+        s.current_func_ret_from  = ""
+        s.strict_mode            = false
 
         # ── Built-in functions ─────────────────────────────────────────────────
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
-        s.globals.insert("buga",     Symbol.init("buga",     SymbolKind.SFunction, box_asttype(AstType.init("void"))))
         s.globals.insert("input",    Symbol.init("input",    SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("len",      Symbol.init("len",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
         s.globals.insert("range",    Symbol.init("range",    SymbolKind.SFunction, box_asttype(AstType.init("List"))))
@@ -182,6 +213,10 @@ extend Sema:
         s.globals.insert("Rc",        Symbol.init("Rc",        SymbolKind.SClass, box_asttype(AstType.init("Rc"))))
         s.globals.insert("WaitGroup", Symbol.init("WaitGroup", SymbolKind.SClass, box_asttype(AstType.init("WaitGroup"))))
 
+        # ── Ownership / shared types (Phase 4) ─────────────────────────────────
+        s.globals.insert("Shared", Symbol.init("Shared", SymbolKind.SClass, box_asttype(AstType.init("Shared"))))
+        s.globals.insert("Weak",   Symbol.init("Weak",   SymbolKind.SClass, box_asttype(AstType.init("Weak"))))
+
         return s
 
     pub def error(self, msg: str):
@@ -198,6 +233,7 @@ extend Sema:
         if ty_name == "Atomic" or ty_name == "Mutex" or ty_name == "RwLock": return true
         if ty_name == "Chan" or ty_name == "Channel" or ty_name == "ThreadPool": return true
         if ty_name == "Thread" or ty_name == "ThreadLocal": return true
+        if ty_name == "Shared" or ty_name == "Weak": return true   # ref-counted pointers are Sendable
         # Known non-thread-safe collections
         if ty_name == "List" or ty_name == "Vec" or ty_name == "Dict" or ty_name == "Map": return false
         # User-defined class: allow if it implements Sendable
@@ -220,14 +256,22 @@ extend Sema:
                 mut csi = 0
                 while csi < cs_args.len:
                     mut arg_ty = hir_expr_type(cs_args.get(csi))
-                    if not self.is_sendable_type(arg_ty.name):
+                    if (arg_ty.name == "Shared" or arg_ty.name == "Weak") and arg_ty.args.len > 0:
+                        mut inner_nm = arg_ty.args.get(0).read().name
+                        if not self.is_sendable_type(inner_nm):
+                            self.error("[T-1] 'Shared[" + inner_nm + "]' cannot safely cross thread boundaries because '" + inner_nm + "' is not Sendable.\n      FIX: Add 'implements Sendable' to '" + inner_nm + "' and ensure all mutable fields use Atomic[T] or Mutex[T].")
+                    elif not self.is_sendable_type(arg_ty.name):
                         self.error("[T-1] Type '" + arg_ty.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty.name + "] for exclusive access, or Atomic[T] for counters/flags.\n      Or add 'implements Sendable' to '" + arg_ty.name + "' to confirm it is thread-safe.")
                     csi = csi + 1
             case HirExpr.EMethodCall(_, _, cs_margs, _):
                 mut csmi = 0
                 while csmi < cs_margs.len:
                     mut arg_ty2 = hir_expr_type(cs_margs.get(csmi))
-                    if not self.is_sendable_type(arg_ty2.name):
+                    if (arg_ty2.name == "Shared" or arg_ty2.name == "Weak") and arg_ty2.args.len > 0:
+                        mut inner_nm2 = arg_ty2.args.get(0).read().name
+                        if not self.is_sendable_type(inner_nm2):
+                            self.error("[T-1] 'Shared[" + inner_nm2 + "]' cannot safely cross thread boundaries because '" + inner_nm2 + "' is not Sendable.\n      FIX: Add 'implements Sendable' to '" + inner_nm2 + "' and protect mutable fields with Atomic[T] or Mutex[T].")
+                    elif not self.is_sendable_type(arg_ty2.name):
                         self.error("[T-1] Type '" + arg_ty2.name + "' is not Sendable and cannot be safely shared across threads.\n      FIX: Wrap in Mutex[" + arg_ty2.name + "].")
                     csmi = csmi + 1
             case _: pass
@@ -240,7 +284,212 @@ extend Sema:
                 mut fty = fd.ty.read()
                 if not self.is_sendable_type(fty.name):
                     self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but field '" + fd.name + ": " + fty.name + "' is not Sendable.\n      FIX: Wrap '" + fd.name + "' in Mutex[" + fty.name + "] for exclusive access, RwLock[" + fty.name + "] for reader-writer, or Atomic[T] for numeric/flag types.\n      Or remove 'implements Sendable' if '" + c.name + "' is only used on one thread.")
+                elif fty.name == "int" or fty.name == "float" or fty.name == "bool":
+                    self.warnings.push("[T-3] Sendable class '" + c.name + "' has primitive field '" + fd.name + ": " + fty.name + "' that may cause data races if mutated from multiple threads.\n      FIX: Use 'Atomic[" + fty.name + "]' for safe concurrent mutation, or ensure this field is written only before the object is shared across threads.")
             cfi = cfi + 1
+
+    # ── Phase 1-3: Ownership / borrow tracking ───────────────────────────────
+
+    pub def mark_moved(self, name: str):
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name):
+                mut sym = self.scopes.get(i).variables.get(name)
+                if not sym.is_moved:
+                    sym.is_moved = true
+                    self.scopes.get(i).variables.insert(name, sym)
+                    if self.capturing_moves:
+                        self.branch_moved_buf.push(name)
+                return
+            i = i - 1
+        if self.globals.contains(name):
+            mut sym = self.globals.get(name)
+            if not sym.is_moved:
+                sym.is_moved = true
+                self.globals.insert(name, sym)
+                if self.capturing_moves:
+                    self.branch_moved_buf.push(name)
+
+    pub def mark_freed(self, name: str):
+        mut mf_i = self.scopes.len - 1
+        while mf_i >= 0:
+            if self.scopes.get(mf_i).variables.contains(name):
+                mut mf_sym = self.scopes.get(mf_i).variables.get(name)
+                mf_sym.is_freed = true
+                mf_sym.is_moved = true
+                self.scopes.get(mf_i).variables.insert(name, mf_sym)
+                if self.capturing_moves:
+                    self.branch_moved_buf.push(name)
+                return
+            mf_i = mf_i - 1
+        if self.globals.contains(name):
+            mut mf_sym = self.globals.get(name)
+            mf_sym.is_freed = true
+            mf_sym.is_moved = true
+            self.globals.insert(name, mf_sym)
+            if self.capturing_moves:
+                self.branch_moved_buf.push(name)
+
+    pub def check_not_moved(self, name: str, ty_name: str):
+        if self.is_primitive_name(ty_name): return
+        mut sym = self.resolve(name)
+        if sym.name != "" and sym.is_moved:
+            self.error("[M-1] '" + name + "' was moved and cannot be used again.\n      FIX: Use the variable that now owns it, or call .clone() to copy before moving.")
+
+    pub def mark_borrow(self, name: str):
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name):
+                mut sym = self.scopes.get(i).variables.get(name)
+                sym.active_borrows = sym.active_borrows + 1
+                self.scopes.get(i).variables.insert(name, sym)
+                return
+            i = i - 1
+        if self.globals.contains(name):
+            mut sym = self.globals.get(name)
+            sym.active_borrows = sym.active_borrows + 1
+            self.globals.insert(name, sym)
+
+    pub def unmark_borrow(self, name: str):
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name):
+                mut sym = self.scopes.get(i).variables.get(name)
+                if sym.active_borrows > 0:
+                    sym.active_borrows = sym.active_borrows - 1
+                self.scopes.get(i).variables.insert(name, sym)
+                return
+            i = i - 1
+        if self.globals.contains(name):
+            mut sym = self.globals.get(name)
+            if sym.active_borrows > 0:
+                sym.active_borrows = sym.active_borrows - 1
+            self.globals.insert(name, sym)
+
+    pub def check_no_active_borrows(self, name: str, ty_name: str):
+        if self.is_primitive_name(ty_name): return
+        mut sym = self.resolve(name)
+        if sym.name != "" and sym.active_borrows > 0:
+            self.error("[M-2] Cannot move '" + name + "' while it is borrowed.\n      FIX: The borrow must end before '" + name + "' can be moved.")
+
+    # Phase D: mark a variable as initialized (e.g. after assignment)
+    pub def mark_init(self, name: str):
+        mut mi_i = self.scopes.len - 1
+        while mi_i >= 0:
+            if self.scopes.get(mi_i).variables.contains(name):
+                mut mi_sym = self.scopes.get(mi_i).variables.get(name)
+                if not mi_sym.is_init:
+                    # Track the transition uninit→init so we can roll it back per-branch
+                    mi_sym.is_init = true
+                    mi_sym.is_maybe_init = false
+                    self.scopes.get(mi_i).variables.insert(name, mi_sym)
+                    if self.capturing_inits:
+                        self.branch_init_buf.push(name)
+                return
+            mi_i = mi_i - 1
+        if self.globals.contains(name):
+            mut mi_sym = self.globals.get(name)
+            if not mi_sym.is_init:
+                mi_sym.is_init = true
+                mi_sym.is_maybe_init = false
+                self.globals.insert(name, mi_sym)
+                if self.capturing_inits:
+                    self.branch_init_buf.push(name)
+
+    # Phase C: remove any container borrow where var_name is the borrow key
+    pub def clear_container_borrow(self, var_name: str):
+        if self.container_borrows.contains(var_name):
+            self.container_borrows.remove(var_name)
+
+    # Fix 1: reverse of mark_moved — used to roll back per-branch move state
+    pub def unmark_moved(self, name: str):
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name):
+                mut sym = self.scopes.get(i).variables.get(name)
+                sym.is_moved = false
+                self.scopes.get(i).variables.insert(name, sym)
+                return
+            i = i - 1
+        if self.globals.contains(name):
+            mut sym = self.globals.get(name)
+            sym.is_moved = false
+            self.globals.insert(name, sym)
+
+    # Fix 1: mark as maybe-moved (moved in some branches, not all) — sticky warning flag
+    pub def mark_maybe_moved(self, name: str):
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name):
+                mut sym = self.scopes.get(i).variables.get(name)
+                sym.is_maybe_moved = true
+                self.scopes.get(i).variables.insert(name, sym)
+                return
+            i = i - 1
+        if self.globals.contains(name):
+            mut sym = self.globals.get(name)
+            sym.is_maybe_moved = true
+            self.globals.insert(name, sym)
+
+    # Fix 4: reverse of mark_init — used to roll back per-branch init state
+    pub def unmark_init(self, name: str):
+        mut mi_i = self.scopes.len - 1
+        while mi_i >= 0:
+            if self.scopes.get(mi_i).variables.contains(name):
+                mut mi_sym = self.scopes.get(mi_i).variables.get(name)
+                mi_sym.is_init = false
+                self.scopes.get(mi_i).variables.insert(name, mi_sym)
+                return
+            mi_i = mi_i - 1
+        if self.globals.contains(name):
+            mut mi_sym = self.globals.get(name)
+            mi_sym.is_init = false
+            self.globals.insert(name, mi_sym)
+
+    # Fix 4: mark as maybe-init (init in some branches, not all)
+    pub def mark_maybe_init(self, name: str):
+        mut mi_i = self.scopes.len - 1
+        while mi_i >= 0:
+            if self.scopes.get(mi_i).variables.contains(name):
+                mut mi_sym = self.scopes.get(mi_i).variables.get(name)
+                mi_sym.is_maybe_init = true
+                self.scopes.get(mi_i).variables.insert(name, mi_sym)
+                return
+            mi_i = mi_i - 1
+        if self.globals.contains(name):
+            mut mi_sym = self.globals.get(name)
+            mi_sym.is_maybe_init = true
+            self.globals.insert(name, mi_sym)
+
+    # Fix 1/4: linear scan of a Vec[str] for membership (no built-in set)
+    pub def vec_str_contains(self, v: Vec[str], s: str) -> bool:
+        mut vi = 0
+        while vi < v.len:
+            if v.get(vi) == s: return true
+            vi = vi + 1
+        return false
+
+    # Fix 3: lazy recursive check — classes with only primitive/copy fields are Copy
+    # Inserts false as a sentinel to break self-referential cycles before recursing
+    pub def is_copy_class(self, name: str) -> bool:
+        if self.is_primitive_name(name): return true
+        if self.copy_classes.contains(name): return self.copy_classes.get(name)
+        if not self.classes.contains(name): return false
+        # Insert false sentinel to break cycles (self-referential structs are not Copy)
+        self.copy_classes.insert(name, false)
+        mut cls = self.classes.get(name)
+        if cls.fields.len == 0: return false   # empty/opaque class — not Copy
+        mut all_copy = true
+        mut fi = 0
+        while fi < cls.fields.len:
+            mut fd = cls.fields.get(fi)
+            if fd.ty as usize != 0 as usize:
+                mut fty = fd.ty.read()
+                if not self.is_copy_class(fty.name):
+                    all_copy = false
+            fi = fi + 1
+        self.copy_classes.insert(name, all_copy)
+        return all_copy
 
     pub def enter_scope(self):
         mut s_obj = Scope.init()
@@ -378,6 +627,32 @@ extend Sema:
         self.current_func_name = f.name
         mut saved_func_generics = self.current_func_generics
         self.current_func_generics = f.generics
+        # Phase C: clear container-borrow state — it must not leak between functions
+        self.container_borrows = Map[str, str].init(16)
+        # Gap 1: capture 'from' lifetime param for escape-analysis check in SReturn
+        mut saved_ret_from = self.current_func_ret_from
+        self.current_func_ret_from = ""
+        if f.ret_ty as usize != 0 as usize:
+            self.current_func_ret_from = f.ret_ty.read().from_param
+        # Auto-infer 'from' when no explicit annotation: if return is Pointer/ref and there is
+        # exactly one non-primitive parameter, that parameter is the inferred lifetime source.
+        # This covers the common single-param borrow pattern without requiring any annotation.
+        if self.current_func_ret_from == "" and f.ret_ty as usize != 0 as usize:
+            mut infer_ret_nm = f.ret_ty.read().name
+            if infer_ret_nm == "Pointer" or infer_ret_nm == "ref" or infer_ret_nm == "mut_ref":
+                mut infer_from = ""
+                mut infer_count = 0
+                mut infer_i = 0
+                while infer_i < f.params.len:
+                    mut infer_p = f.params.get(infer_i)
+                    if infer_p.name != "self" and infer_p.ty as usize != 0 as usize:
+                        mut infer_pty = infer_p.ty.read()
+                        if not self.is_primitive_name(infer_pty.name):
+                            infer_from = infer_p.name
+                            infer_count = infer_count + 1
+                    infer_i = infer_i + 1
+                if infer_count == 1:
+                    self.current_func_ret_from = infer_from
         self.enter_scope()
 
         mut hparams = Vec[HirParam].init(4)
@@ -391,7 +666,15 @@ extend Sema:
                 p_ty = AstType.init(self.current_class_name)
             
             self.declare(p.name, SymbolKind.SVariable, box_asttype(p_ty), false)
-            
+            # Phase B: mark as parameter so return-of-local-pointer check is skipped
+            if self.scopes.len > 0:
+                mut pb_scope = self.scopes.get(self.scopes.len - 1)
+                if pb_scope.variables.contains(p.name):
+                    mut pb_sym = pb_scope.variables.get(p.name)
+                    pb_sym.is_param = true
+                    pb_sym.ptr_region = 2  # PARAM region
+                    pb_scope.variables.insert(p.name, pb_sym)
+
             mut hp = HirParam()
             hp.name = p.name
             hp.ty = p_ty
@@ -430,10 +713,11 @@ extend Sema:
                     self.error("[F-3] Function '" + f.name + "' returns '" + ret_nm + "' but is missing a return statement on at least one code path. FIX: Add a return at the end, or ensure all if/elif/else branches return.")
 
         self.exit_scope()
-        # Restore async context
+        # Restore async context and lifetime context
         self.in_async_fn = saved_async
         self.current_func_name = ""
         self.current_func_generics = saved_func_generics
+        self.current_func_ret_from = saved_ret_from
         return hf
 
     pub def lower_class(self, c: ClassDef) -> HirClass:
@@ -450,7 +734,19 @@ extend Sema:
             hf.ty = f_ty
             hfields.push(hf)
             i = i + 1
-            
+
+        # Phase F: detect self-referential Shared[ClassName] fields (creates ref cycle → leak)
+        mut pf_i = 0
+        while pf_i < c.fields.len:
+            mut pf_f = c.fields.get(pf_i)
+            if pf_f.ty as usize != 0 as usize:
+                mut pf_ty = pf_f.ty.read()
+                if pf_ty.name == "Shared" and pf_ty.args.len > 0:
+                    mut pf_inner = pf_ty.args.get(0).read()
+                    if pf_inner.name == c.name:
+                        self.error("[S-1] '" + c.name + "' has a 'Shared[" + c.name + "]' field '" + pf_f.name + "' — this creates a reference cycle that leaks memory.\n      FIX: Use 'Weak[" + c.name + "]' for back-references to break the cycle.")
+            pf_i = pf_i + 1
+
         mut hmethods = Vec[HirFunction].init(4)
         i = 0
         while i < c.methods.len:
@@ -623,7 +919,18 @@ extend Sema:
                                     case _: pass
                         case _: pass
                 return h_s_expr
-            case Stmt.SReturn(e): return box_hirstmt(HirStmt.SReturn(self.lower_expr(e)))
+            case Stmt.SReturn(e):
+                # Gap 1: [L-1] escape check — returning a LOCAL-region Pointer without 'from' annotation
+                if e as usize != 0 as usize and not self.in_unsafe and self.current_func_ret_from == "":
+                    match e.read():
+                        case Expr.EIdent(ret_name):
+                            mut ret_sym = self.resolve(ret_name)
+                            if ret_sym.name != "" and ret_sym.ptr_region == 0:
+                                if ret_sym.ty as usize != 0 as usize:
+                                    if ret_sym.ty.read().name == "Pointer":
+                                        self.error("[L-1] '" + ret_name + "' is a local Pointer that may not outlive this function call. Returning it is unsafe.\n      FIX: Annotate the return type with 'from <param>' if the pointer borrows from a parameter, or wrap the allocation in 'unsafe:' if it is heap-allocated.")
+                        case _: pass
+                return box_hirstmt(HirStmt.SReturn(self.lower_expr(e)))
             case Stmt.SLet(name, ownership, is_mut, is_const, is_shared, ty_ptr, val_ptr):
                 # Rule M-7: none must not be assigned to a non-Optional type
                 if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize:
@@ -637,11 +944,94 @@ extend Sema:
                 if ty_ptr as usize != 0 as usize: ty = ty_ptr.read()
                 mut hval = self.lower_expr(val_ptr)
                 if ty.name == "void" or ty.name == "None": ty = hir_expr_type(hval)
+                # Phase 1: plain-identifier RHS of non-primitive type = ownership move
+                # Skip for shared lets (shared = clone via refcount, not a move)
+                # Phase 1: plain variable-to-variable move (mut newvar = old_obj)
+                # Field/index access is NOT a move in Tauraro (C value semantics copy fields)
+                if val_ptr as usize != 0 as usize and not is_shared:
+                    match val_ptr.read():
+                        case Expr.EIdent(m1_src):
+                            mut m1_sym = self.resolve(m1_src)
+                            mut m1_ty = m1_sym.ty.read()
+                            # Shared + primitive + Copy-class sources are exempt from move tracking
+                            if not self.is_primitive(m1_ty) and not self.is_copy_class(m1_ty.name) and m1_sym.name != "" and not m1_sym.is_shared:
+                                self.check_not_moved(m1_src, m1_ty.name)
+                                self.check_no_active_borrows(m1_src, m1_ty.name)
+                                self.mark_moved(m1_src)
+                        case _: pass
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
+                # Gap 1: infer ptr_region for Pointer-typed variables.
+                # Conservative rule: any call-expression RHS is assumed HEAP (functions may alloc).
+                # Only a variable without initializer OR initialized with Pointer[T](0) is LOCAL.
+                if val_ptr as usize != 0 as usize and ty.name == "Pointer":
+                    mut heap_rhs = false
+                    match val_ptr.read():
+                        case Expr.ECall(_, _): heap_rhs = true
+                        case Expr.EMethodCall(_, _, _): heap_rhs = true
+                        case _: pass
+                    if heap_rhs:
+                        if self.scopes.len > 0:
+                            mut alloc_scope = self.scopes.get(self.scopes.len - 1)
+                            if alloc_scope.variables.contains(name):
+                                mut alloc_sym = alloc_scope.variables.get(name)
+                                alloc_sym.ptr_region = 1  # HEAP (function call result)
+                                alloc_scope.variables.insert(name, alloc_sym)
+                # Phase D: variable declared without a value — mark as uninitialised
+                if val_ptr as usize == 0 as usize:
+                    if self.scopes.len > 0:
+                        mut pd_scope = self.scopes.get(self.scopes.len - 1)
+                        if pd_scope.variables.contains(name):
+                            mut pd_sym = pd_scope.variables.get(name)
+                            pd_sym.is_init = false
+                            pd_scope.variables.insert(name, pd_sym)
+                # Phase C: track borrow if RHS is vec.get / vec.first / vec.last on a non-primitive
+                if val_ptr as usize != 0 as usize:
+                    mut pc_cont_nm = ""
+                    mut pc_meth = ""
+                    match val_ptr.read():
+                        case Expr.EMethodCall(pc_obj, pc_m, _):
+                            pc_meth = pc_m
+                            match pc_obj.read():
+                                case Expr.EIdent(pc_src): pc_cont_nm = pc_src
+                                case _: pass
+                        case _: pass
+                    if pc_cont_nm != "" and (pc_meth == "get" or pc_meth == "first" or pc_meth == "last"):
+                        mut pc_cont_sym = self.resolve(pc_cont_nm)
+                        mut pc_cont_ty = pc_cont_sym.ty.read()
+                        if pc_cont_ty.name == "Vec" or pc_cont_ty.name == "List":
+                            if not self.is_primitive(hir_expr_type(hval)):
+                                self.container_borrows.insert(pc_cont_nm, name)
                 return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, hval))
             case Stmt.SAssign(target, val):
+                self.in_assign_target = true
                 mut htgt = self.lower_expr(target)
+                self.in_assign_target = false
                 mut hv = self.lower_expr(val)
+                # Phase 1 SAssign: plain-variable RHS of non-primitive non-Copy type = ownership move
+                # Lower first (EIdent checks current is_moved), then mark moved for subsequent uses.
+                # SAssign is guarded by branch snapshots (Fix 1) so sibling else-branches correctly
+                # roll back and re-check — no false positives across if/else chains.
+                # Skip for generic type parameters (unknown type = possibly Copy; conservative).
+                if val as usize != 0 as usize:
+                    match val.read():
+                        case Expr.EIdent(sa_src):
+                            mut sa_sym = self.resolve(sa_src)
+                            mut sa_ty = sa_sym.ty.read()
+                            mut sa_is_known = self.classes.contains(sa_ty.name) or self.enums.contains(sa_ty.name)
+                            if sa_is_known and not self.is_primitive(sa_ty) and not self.is_copy_class(sa_ty.name) and sa_sym.name != "" and not sa_sym.is_shared:
+                                self.check_no_active_borrows(sa_src, sa_ty.name)
+                                self.mark_moved(sa_src)
+                        case _: pass
+                # Phase D: mark assignment target as initialised after any assignment
+                if target as usize != 0 as usize:
+                    match target.read():
+                        case Expr.EIdent(pd_tgt): self.mark_init(pd_tgt)
+                        case _: pass
+                # Phase C: clear container borrow when the borrowing variable is reassigned
+                if target as usize != 0 as usize:
+                    match target.read():
+                        case Expr.EIdent(pc_tgt): self.clear_container_borrow(pc_tgt)
+                        case _: pass
                 return box_hirstmt(HirStmt.SAssign(htgt, hv))
             case Stmt.SIf(cond, then_b, elifs, else_b):
                 # Rule T-5: numeric variable used directly as boolean condition
@@ -653,13 +1043,34 @@ extend Sema:
                             if t5_ty == "int" or t5_ty == "i64" or t5_ty == "i32" or t5_ty == "float" or t5_ty == "f64":
                                 self.error("[T-5] '" + t5_name + "' is a number (" + t5_ty + ") and cannot be used as an 'if' condition. FIX: Write 'if " + t5_name + " != 0:' to explicitly check for non-zero.")
                         case _: pass
-                # Lower if/elif/else chain into nested SIf nodes
+                # Fix 1+4: branch-scoped snapshot — save parent capturing state
+                mut si_outer_cap_m = self.capturing_moves
+                mut si_outer_buf_m = self.branch_moved_buf
+                mut si_outer_cap_i = self.capturing_inits
+                mut si_outer_buf_i = self.branch_init_buf
+                # ── Then branch (with fresh capture buffers) ──
+                self.capturing_moves = true
+                self.capturing_inits = true
+                self.branch_moved_buf = Vec[str].init(4)
+                self.branch_init_buf = Vec[str].init(4)
                 mut hcond = self.lower_expr(cond)
                 mut hthen = self.lower_block(then_b)
+                mut si_then_moved = self.branch_moved_buf
+                mut si_then_inited = self.branch_init_buf
+                # Roll back then-branch moves/inits so else-branch sees clean slate
+                mut si_uti = 0
+                while si_uti < si_then_moved.len:
+                    self.unmark_moved(si_then_moved.get(si_uti))
+                    si_uti = si_uti + 1
+                mut si_uii = 0
+                while si_uii < si_then_inited.len:
+                    self.unmark_init(si_then_inited.get(si_uii))
+                    si_uii = si_uii + 1
+                # ── Else/elif branch (fresh capture buffers, same capturing=true) ──
+                self.branch_moved_buf = Vec[str].init(4)
+                self.branch_init_buf = Vec[str].init(4)
                 mut helse = HirBlock.init()
-                # Process elifs: build a chain of nested if-else blocks
                 if elifs.len > 0:
-                    # Build from the last elif backwards
                     mut base_else = self.lower_block(else_b)
                     mut chain = base_else
                     mut k = elifs.len - 1
@@ -674,9 +1085,76 @@ extend Sema:
                     helse = chain
                 else:
                     helse = self.lower_block(else_b)
+                mut si_else_moved = self.branch_moved_buf
+                mut si_else_inited = self.branch_init_buf
+                # Roll back else-branch moves/inits
+                mut si_uei = 0
+                while si_uei < si_else_moved.len:
+                    self.unmark_moved(si_else_moved.get(si_uei))
+                    si_uei = si_uei + 1
+                mut si_uei2 = 0
+                while si_uei2 < si_else_inited.len:
+                    self.unmark_init(si_else_inited.get(si_uei2))
+                    si_uei2 = si_uei2 + 1
+                # Restore parent capturing state before applying merged results
+                self.capturing_moves = si_outer_cap_m
+                self.branch_moved_buf = si_outer_buf_m
+                self.capturing_inits = si_outer_cap_i
+                self.branch_init_buf = si_outer_buf_i
+                # ── Merge move state: both→definitive, one-only→maybe ──
+                mut si_mi = 0
+                while si_mi < si_then_moved.len:
+                    mut si_mn = si_then_moved.get(si_mi)
+                    if self.vec_str_contains(si_else_moved, si_mn):
+                        self.mark_moved(si_mn)
+                    else:
+                        self.mark_maybe_moved(si_mn)
+                    si_mi = si_mi + 1
+                mut si_ei = 0
+                while si_ei < si_else_moved.len:
+                    mut si_en = si_else_moved.get(si_ei)
+                    if not self.vec_str_contains(si_then_moved, si_en):
+                        self.mark_maybe_moved(si_en)
+                    si_ei = si_ei + 1
+                # ── Merge init state: both→definitive, one-only→maybe ──
+                mut si_ini = 0
+                while si_ini < si_then_inited.len:
+                    mut si_inn = si_then_inited.get(si_ini)
+                    if self.vec_str_contains(si_else_inited, si_inn):
+                        self.mark_init(si_inn)
+                    else:
+                        self.mark_maybe_init(si_inn)
+                    si_ini = si_ini + 1
                 return box_hirstmt(HirStmt.SIf(hcond, hthen, helse))
             case Stmt.SWhile(cond, body, decorators):
-                return box_hirstmt(HirStmt.SWhile(self.lower_expr(cond), self.lower_block(body)))
+                mut sw_cond = self.lower_expr(cond)
+                # Fix 1+4: loop body might not run → all moves/inits are "maybe"
+                mut sw_outer_cap_m = self.capturing_moves
+                mut sw_outer_buf_m = self.branch_moved_buf
+                mut sw_outer_cap_i = self.capturing_inits
+                mut sw_outer_buf_i = self.branch_init_buf
+                self.capturing_moves = true
+                self.capturing_inits = true
+                self.branch_moved_buf = Vec[str].init(4)
+                self.branch_init_buf = Vec[str].init(4)
+                mut sw_body = self.lower_block(body)
+                mut sw_loop_moved = self.branch_moved_buf
+                mut sw_loop_inited = self.branch_init_buf
+                self.capturing_moves = sw_outer_cap_m
+                self.branch_moved_buf = sw_outer_buf_m
+                self.capturing_inits = sw_outer_cap_i
+                self.branch_init_buf = sw_outer_buf_i
+                mut sw_mi = 0
+                while sw_mi < sw_loop_moved.len:
+                    self.unmark_moved(sw_loop_moved.get(sw_mi))
+                    self.mark_maybe_moved(sw_loop_moved.get(sw_mi))
+                    sw_mi = sw_mi + 1
+                mut sw_ii = 0
+                while sw_ii < sw_loop_inited.len:
+                    self.unmark_init(sw_loop_inited.get(sw_ii))
+                    self.mark_maybe_init(sw_loop_inited.get(sw_ii))
+                    sw_ii = sw_ii + 1
+                return box_hirstmt(HirStmt.SWhile(sw_cond, sw_body))
             case Stmt.SFor(var, iter, body, decorators):
                 self.enter_scope()
                 mut h_iter_for = self.lower_expr(iter)
@@ -690,7 +1168,33 @@ extend Sema:
                 elif iter_hn == "str":
                     var_ty_for = AstType.init("char")
                 self.declare(var, SymbolKind.SVariable, box_asttype(var_ty_for), false)
-                mut hstmt = box_hirstmt(HirStmt.SFor(var, h_iter_for, self.lower_block(body)))
+                # Fix 1+4: for-loop body might not run → moves/inits are "maybe"
+                mut sf_outer_cap_m = self.capturing_moves
+                mut sf_outer_buf_m = self.branch_moved_buf
+                mut sf_outer_cap_i = self.capturing_inits
+                mut sf_outer_buf_i = self.branch_init_buf
+                self.capturing_moves = true
+                self.capturing_inits = true
+                self.branch_moved_buf = Vec[str].init(4)
+                self.branch_init_buf = Vec[str].init(4)
+                mut sf_body = self.lower_block(body)
+                mut sf_loop_moved = self.branch_moved_buf
+                mut sf_loop_inited = self.branch_init_buf
+                self.capturing_moves = sf_outer_cap_m
+                self.branch_moved_buf = sf_outer_buf_m
+                self.capturing_inits = sf_outer_cap_i
+                self.branch_init_buf = sf_outer_buf_i
+                mut sf_mi = 0
+                while sf_mi < sf_loop_moved.len:
+                    self.unmark_moved(sf_loop_moved.get(sf_mi))
+                    self.mark_maybe_moved(sf_loop_moved.get(sf_mi))
+                    sf_mi = sf_mi + 1
+                mut sf_ii = 0
+                while sf_ii < sf_loop_inited.len:
+                    self.unmark_init(sf_loop_inited.get(sf_ii))
+                    self.mark_maybe_init(sf_loop_inited.get(sf_ii))
+                    sf_ii = sf_ii + 1
+                mut hstmt = box_hirstmt(HirStmt.SFor(var, h_iter_for, sf_body))
                 self.exit_scope()
                 return hstmt
             case Stmt.SForUnpack(vars, iter, body):
@@ -739,16 +1243,49 @@ extend Sema:
                 self.exit_scope()
                 return box_hirstmt(HirStmt.SForUnpack(vars, h_iter_fu, hblk_fu))
             case Stmt.SMatch(subj, arms):
+                mut hsubj = self.lower_expr(subj)
+                mut ex_ty_name = hir_expr_type(hsubj).name
                 mut h_arms = Vec[HirMatchArm].init(4)
+                mut ex_has_wild = false
+                mut ex_covered = Vec[str].init(8)
                 mut k = 0
                 while k < arms.len:
                     mut arm = arms.get(k)
+                    # Collect exhaustiveness info from the pattern
+                    match arm.pat:
+                        case Pattern.PWild: ex_has_wild = true
+                        case Pattern.PBind(_): ex_has_wild = true
+                        case Pattern.PVariant(_, ex_vn): ex_covered.push(ex_vn)
+                        case Pattern.PVariantBind(_, ex_vn2, _): ex_covered.push(ex_vn2)
+                        case Pattern.PVariantBindMany(_, ex_vn3, _): ex_covered.push(ex_vn3)
+                        case _: pass
                     self.enter_scope()
                     self.declare_pattern_binds(arm.pat)
                     h_arms.push(HirMatchArm.init(arm.pat, self.lower_block(arm.body.read())))
                     self.exit_scope()
                     k = k + 1
-                return box_hirstmt(HirStmt.SMatch(self.lower_expr(subj), h_arms))
+                # [E-1] Exhaustiveness check — only for known enum types
+                if not ex_has_wild and self.enums.contains(ex_ty_name):
+                    mut ex_edef = self.enums.get(ex_ty_name)
+                    mut ex_missing = Vec[str].init(4)
+                    mut ex_vi = 0
+                    while ex_vi < ex_edef.variants.len:
+                        mut ex_vname = ex_edef.variants.get(ex_vi).name
+                        if not ex_covered.contains(ex_vname):
+                            ex_missing.push(ex_vname)
+                        ex_vi = ex_vi + 1
+                    if ex_missing.len > 0:
+                        mut ex_msg = "[E-1] Non-exhaustive match on '" + ex_ty_name + "': missing variant"
+                        if ex_missing.len > 1: ex_msg = ex_msg + "s"
+                        ex_msg = ex_msg + ": "
+                        mut ex_mi = 0
+                        while ex_mi < ex_missing.len:
+                            if ex_mi > 0: ex_msg = ex_msg + ", "
+                            ex_msg = ex_msg + ex_missing.get(ex_mi)
+                            ex_mi = ex_mi + 1
+                        ex_msg = ex_msg + ".\n      FIX: Add a 'case " + ex_ty_name + ".VariantName:' arm for each missing variant, or add 'case _:' to handle all remaining cases."
+                        self.error(ex_msg)
+                return box_hirstmt(HirStmt.SMatch(hsubj, h_arms))
             case Stmt.STry(try_body, catches, finally_b):
                 mut h_catches = Vec[Pointer[HirCatchClause]].init(catches.len)
                 mut k = 0
@@ -834,7 +1371,13 @@ extend Sema:
             case Stmt.SBreak: return box_hirstmt(HirStmt.SBreak)
             case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
             case Stmt.SPass: return box_hirstmt(HirStmt.SPass)
-            case Stmt.SUnsafe(body): return box_hirstmt(HirStmt.SUnsafe(self.lower_block(body)))
+            case Stmt.SUnsafe(body):
+                # Gap 6: track unsafe boundary
+                mut saved_unsafe = self.in_unsafe
+                self.in_unsafe = true
+                mut unsafe_hir = self.lower_block(body)
+                self.in_unsafe = saved_unsafe
+                return box_hirstmt(HirStmt.SUnsafe(unsafe_hir))
             case Stmt.SMultiLet(names, is_mut, val_ptr):
                 mut hval = self.lower_expr(val_ptr)
                 mut i = 0
@@ -902,6 +1445,21 @@ extend Sema:
             case Expr.EIdent(name):
                 mut sym = self.resolve(name)
                 mut ty = sym.ty.read()
+                # [M-6] use-after-free: dealloc() was called on this pointer
+                if sym.is_freed and sym.name != "":
+                    self.error("[M-6] '" + name + "' was freed by 'dealloc()' and can no longer be used.\n      FIX: Remove all uses of '" + name + "' after 'dealloc()', or restructure so the pointer is freed only when no longer needed.")
+                # Phase 1: use-after-definite-move (hard error)
+                elif sym.is_moved and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
+                    self.error("[M-1] '" + name + "' was moved and cannot be used again.\n      FIX: Use the variable that now owns it, or call .clone() to copy before moving.")
+                # Fix 1: use-after-maybe-move — hard error (moved in some branch = definitely unsafe to use)
+                elif sym.is_maybe_moved and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
+                    self.error("[M-5] '" + name + "' may have been moved on some code paths, making this use unsafe.\n      FIX: Ensure '" + name + "' is not moved before this point on any branch, or restructure so the use is inside the branch where it's still valid.")
+                # Phase D: use-before-definite-init (hard error)
+                if not sym.is_init and not sym.is_maybe_init and sym.name != "" and sym.kind == SymbolKind.SVariable and not self.in_assign_target:
+                    self.error("[I-1] Variable '" + name + "' is used before being assigned a value.\n      FIX: Assign a value before use, e.g. 'mut " + name + " = <default>'.")
+                # Fix 4: use-before-maybe-init — hard error (uninitialized on some path = unsafe)
+                elif sym.is_maybe_init and not sym.is_init and sym.name != "" and sym.kind == SymbolKind.SVariable and not self.in_assign_target:
+                    self.error("[I-2] '" + name + "' is not initialized on all code paths before this use.\n      FIX: Initialize '" + name + "' before the if/loop, or ensure every branch assigns a value.")
                 mut is_move = false
                 if self.assign_froms.contains(name) and not self.is_primitive(ty): is_move = true
                 return box_hirexpr(HirExpr.EIdent(name, ty, is_move))
@@ -932,11 +1490,36 @@ extend Sema:
                                 mut ato_ty = hir_expr_type(ato_inner)
                                 return box_hirexpr(HirExpr.EAwaitTimeout(ato_inner, ato_ms, ato_ty))
                         case _: pass
+                # Phase 2+3: iterate AST args — mark borrows (P2) and detect aliasing (P3)
+                mut p23_borrow_names = Vec[str].init(4)
+                mut p23_seen = Map[str, bool].init(4)
+                mut p23_k = 0
+                while p23_k < args.len:
+                    mut p23_arg = args.get(p23_k)
+                    mut p23_nm = ""
+                    if p23_arg as usize != 0 as usize:
+                        match p23_arg.read():
+                            case Expr.EIdent(p23_n): p23_nm = p23_n
+                            case _: pass
+                    if p23_nm != "":
+                        mut p23_sym = self.resolve(p23_nm)
+                        if not self.is_primitive(p23_sym.ty.read()) and p23_sym.name != "":
+                            self.mark_borrow(p23_nm)
+                            p23_borrow_names.push(p23_nm)
+                            if p23_seen.contains(p23_nm):
+                                self.error("[M-3] '" + p23_nm + "' appears twice in the same call, creating aliased mutable access.\n      FIX: Clone one of the arguments: " + p23_nm + ".clone()")
+                            p23_seen.insert(p23_nm, true)
+                    p23_k = p23_k + 1
                 mut hl = Vec[Pointer[HirExpr]].init(4)
                 mut k = 0
                 while k < args.len:
                     hl.push(self.lower_expr(args.get(k)))
                     k = k + 1
+                # Phase 2: release borrows after call
+                mut p23_ui = 0
+                while p23_ui < p23_borrow_names.len:
+                    self.unmark_borrow(p23_borrow_names.get(p23_ui))
+                    p23_ui = p23_ui + 1
                 mut hcallee = self.lower_expr(callee)
                 mut ret_ty = AstType.init("void")
                 if callee as usize == 0 as usize: return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
@@ -964,6 +1547,8 @@ extend Sema:
                                             ret_ty.args.push(box_asttype(AstType.init(tn)))
                                         case _:
                                             ret_ty = AstType.init("Pointer")
+                                    if self.strict_mode and not self.in_unsafe:
+                                        self.error("[U-1] 'alloc'/'dealloc' used outside an 'unsafe:' block.\n      FIX: Wrap raw memory operations in 'unsafe:' to signal manual memory management.\n      Or remove --strict to allow this pattern.")
                                 elif gn == "Pointer" or gn == "List" or gn == "Vec" or gn == "Map" or gn == "Dict":
                                     match idx.read():
                                         case Expr.EIdent(tn):
@@ -1026,6 +1611,20 @@ extend Sema:
                                     self.check_spawn_sendable(hl.get(aa_i))
                                     aa_i = aa_i + 1
                         case _: pass
+                # [M-6] dealloc tracking: mark pointer as freed to catch use-after-free and double-free
+                if callee as usize != 0 as usize:
+                    match callee.read():
+                        case Expr.EIdent(df_nm):
+                            if df_nm == "dealloc" and args.len > 0:
+                                mut df_arg0 = args.get(0)
+                                if df_arg0 as usize != 0 as usize:
+                                    match df_arg0.read():
+                                        case Expr.EIdent(df_ptr):
+                                            mut df_sym = self.resolve(df_ptr)
+                                            if df_sym.name != "":
+                                                self.mark_freed(df_ptr)
+                                        case _: pass
+                        case _: pass
                 return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
             case Expr.EMethodCall(obj, method, args):
                 if method == "__index__" and args.len > 0:
@@ -1037,6 +1636,15 @@ extend Sema:
                     k = k + 1
                 mut hobj = self.lower_expr(obj)
                 mut hobj_ty = hir_expr_type(hobj)
+                # Phase C: error if mutating a container that has an active borrow
+                if method == "push" or method == "pop" or method == "insert" or method == "remove":
+                    mut pc_obj_nm = ""
+                    match obj.read():
+                        case Expr.EIdent(pc_src): pc_obj_nm = pc_src
+                        case _: pass
+                    if pc_obj_nm != "" and self.container_borrows.contains(pc_obj_nm):
+                        mut pc_borrow_var = self.container_borrows.get(pc_obj_nm)
+                        self.error("[M-4] Cannot mutate '" + pc_obj_nm + "' while '" + pc_borrow_var + "' holds a reference into it.\n      FIX: Finish using '" + pc_borrow_var + "' before modifying '" + pc_obj_nm + "', or copy it first: 'mut copy = " + pc_borrow_var + "'.")
                 mut ret_ty = AstType.init("void")
                 if method == "init" or method == "new":
                     # Preserve generic args so Vec[T].init(n) keeps the T info
@@ -1122,6 +1730,28 @@ extend Sema:
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                         else: ret_ty = AstType.init("int")
                 elif hobj_ty.name == "StringBuilder" and method == "to_string": ret_ty = AstType.init("StringObj")
+                # Phase 4: Shared[T] method return types
+                # Note: s1's HIR type is the inner T (not Shared[T]), so these branches
+                # are reached only when an explicit Shared[T] annotation is used.
+                elif hobj_ty.name == "Shared":
+                    if method == "clone": ret_ty = hobj_ty
+                    elif method == "is_null": ret_ty = AstType.init("bool")
+                    elif method == "downgrade":
+                        mut weak_ty = AstType.init("Weak")
+                        if hobj_ty.args.len > 0:
+                            weak_ty.args = Vec[Pointer[AstType]].init(1)
+                            weak_ty.args.push(box_asttype(hobj_ty.args.get(0).read()))
+                        ret_ty = weak_ty
+                    elif method == "drop": ret_ty = AstType.init("void")
+                # Phase 4: Weak[T] method return types
+                elif hobj_ty.name == "Weak":
+                    if method == "upgrade":
+                        mut opt_ty = AstType.init("Option")
+                        if hobj_ty.args.len > 0:
+                            opt_ty.args = Vec[Pointer[AstType]].init(1)
+                            opt_ty.args.push(box_asttype(hobj_ty.args.get(0).read()))
+                        ret_ty = opt_ty
+                    elif method == "is_alive": ret_ty = AstType.init("bool")
                 elif self.interfaces as usize != 0 as usize and self.interfaces.contains(hobj_ty.name):
                     mut _iface_def = self.interfaces.get(hobj_ty.name)
                     mut _imi = 0
@@ -1469,7 +2099,7 @@ extend Sema:
         return ""
 
     pub def is_reserved_warn(self, name: str) -> str:
-        if name == "print" or name == "buga": return "built-in print function"
+        if name == "print": return "built-in print function"
         if name == "input": return "built-in input function"
         if name == "range": return "built-in range function"
         if name == "len" or name == "tsawon": return "built-in len function"
@@ -1515,8 +2145,18 @@ extend Sema:
     pub def is_primitive_name(self, name: str) -> bool:
         if name == "int" or name == "float" or name == "bool" or name == "char" or name == "void" or name == "None": return true
         if name == "i64" or name == "i32" or name == "i16" or name == "i8": return true
-        if name == "u64" or name == "u32" or name == "u16" or name == "u8" or name == "usize": return true     
+        if name == "u64" or name == "u32" or name == "u16" or name == "u8" or name == "usize": return true
         if name == "f64" or name == "f32" or name == "lambda": return true
+        # Built-in reference-counted / shared types — exempt from ownership-move tracking.
+        # These types carry their own reference counting or atomic synchronisation;
+        # passing them to multiple functions or spawned threads is always safe.
+        if name == "str" or name == "Str" or name == "StringObj" or name == "Bytes": return true
+        if name == "Chan" or name == "Channel": return true
+        if name == "Mutex" or name == "RwLock" or name == "Atomic": return true
+        if name == "Thread" or name == "ThreadPool" or name == "ThreadLocal": return true
+        if name == "Pointer": return true
+        # Gap 4: 'ref T' and 'mut ref T' params are borrow annotations, not owning values
+        if name == "ref" or name == "mut_ref": return true
         return false
 
 pub def box_asttype(t: AstType) -> Pointer[AstType]:

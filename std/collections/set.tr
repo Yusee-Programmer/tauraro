@@ -1,24 +1,28 @@
-# std.collections.set — Hash set of string keys.
+# std.collections.set — Hash set of string keys with full set algebra.
 #
-# Backed by Map[bool] — key presence means membership.
-# O(1) average insert/contains/remove.
+# Backed by Map[bool] for O(1) membership.
+# _keys Vec[str] tracks insertion order for iteration, union, diff, etc.
 
 from std.core.map import Map
+from std.core.vec import Vec
 
 pub class Set:
     pub data:  Map[bool]
     pub count: int
+    pub _keys: Vec[str]
 
 extend Set:
     pub def init(cap: int) -> Set:
         mut s = Set()
         s.data  = Map[bool].init(cap)
+        s._keys = Vec[str].init(cap + 4)
         s.count = 0
         return s
 
     pub def add(self, key: str):
         if not self.data.contains(key):
             self.data.insert(key, true)
+            self._keys.push(key)
             self.count = self.count + 1
 
     pub def remove(self, key: str):
@@ -34,3 +38,83 @@ extend Set:
 
     pub def len(self) -> int:
         return self.count
+
+    # Remove all elements.
+    pub def clear(self):
+        self.data  = Map[bool].init(16)
+        self._keys = Vec[str].init(16)
+        self.count = 0
+
+    # Return all live keys as a Vec[str] (insertion order, duplicating removed keys).
+    pub def to_vec(self) -> Vec[str]:
+        mut out = Vec[str].init(self.count + 4)
+        mut i   = 0
+        while i < self._keys.len:
+            mut k = self._keys.get(i)
+            if self.data.contains(k):
+                out.push(k)
+            i = i + 1
+        return out
+
+    # ── Set algebra ──────────────────────────────────────────────────────────
+
+    # Elements in self OR other (no duplicates).
+    pub def union(self, other: Set) -> Set:
+        mut out = Set.init(self.count + other.count + 4)
+        mut i   = 0
+        while i < self._keys.len:
+            mut k = self._keys.get(i)
+            if self.data.contains(k): out.add(k)
+            i = i + 1
+        i = 0
+        while i < other._keys.len:
+            mut k = other._keys.get(i)
+            if other.data.contains(k): out.add(k)
+            i = i + 1
+        return out
+
+    # Elements in BOTH self AND other.
+    pub def intersection(self, other: Set) -> Set:
+        mut out = Set.init(self.count + 4)
+        mut i   = 0
+        while i < self._keys.len:
+            mut k = self._keys.get(i)
+            if self.data.contains(k) and other.contains(k):
+                out.add(k)
+            i = i + 1
+        return out
+
+    # Elements in self but NOT in other.
+    pub def difference(self, other: Set) -> Set:
+        mut out = Set.init(self.count + 4)
+        mut i   = 0
+        while i < self._keys.len:
+            mut k = self._keys.get(i)
+            if self.data.contains(k) and not other.contains(k):
+                out.add(k)
+            i = i + 1
+        return out
+
+    # Elements in self OR other but NOT both.
+    pub def symmetric_difference(self, other: Set) -> Set:
+        mut a = self.difference(other)
+        mut b = other.difference(self)
+        return a.union(b)
+
+    # True when every element of self is also in other.
+    pub def is_subset(self, other: Set) -> bool:
+        mut i = 0
+        while i < self._keys.len:
+            mut k = self._keys.get(i)
+            if self.data.contains(k) and not other.contains(k): return false
+            i = i + 1
+        return true
+
+    # True when self contains every element of other.
+    pub def is_superset(self, other: Set) -> bool:
+        return other.is_subset(self)
+
+    # True when self and other have the same elements.
+    pub def equals(self, other: Set) -> bool:
+        if self.count != other.count: return false
+        return self.is_subset(other)

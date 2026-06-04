@@ -1,368 +1,386 @@
 # std.async — Concurrency Primitives
 
-All async primitives are backed by real OS-level threading (Win32 on Windows, pthreads on POSIX).  
-They are safe to use across threads and are deadlock-free by design (single lock per primitive, condvar waits use `while` loops, `WakeAll`/`broadcast` on close/cancel).
+All concurrency primitives are backed by real OS-level threading (Win32 on Windows, pthreads on POSIX). Zero fake synchronous implementations.
 
-> **Async context rule** — `spawn:`, `taskgroup:`, and `await` are only permitted inside `async def` functions. The sync-only primitives (`Mutex`, `Semaphore`, `WaitGroup`, `Barrier`, `Once`) may be used anywhere.
+## Quick Import
+
+```python
+# Import individual types
+from std.async.thread  import Thread, Atomic, ThreadLocal
+from std.async.mutex   import Mutex, RWLock
+from std.async.send    import Sendable
+
+# Import everything at once
+from std.async import Thread, Atomic, ThreadLocal, Mutex, RWLock, Sendable
+from std.async import Task, Future, Channel, TaskGroup
+from std.async import Semaphore, WaitGroup, Barrier, Once, Timer, Ticker
+```
 
 ---
 
-## Channel
+## Sendable — Thread-Safety Marker
 
-**When**: You need to pass values between producer and consumer threads safely.
-**Why**: Bounded MPMC ring buffer with blocking send/recv; `try_send`/`try_recv` for non-blocking paths; timeout variants for deadline-aware code.
+**When**: You need to declare a user class is safe to cross thread boundaries.
+**Why**: The compiler checks all `spawn`, `Thread.spawn`, `pool.spawn`, and `await_all` call sites — if an argument's type is not `Sendable`, it is a `[T-1]` compile error.
 
-```tauraro
-from std.async.channel import Channel
+```python
+from std.async.send import Sendable
 ```
 
-### Construction
+### Usage
 
-```tauraro
-mut ch = Channel.new(cap)   # cap — max buffered values (>= 1)
+```python
+from std.async.send   import Sendable
+from std.async.thread import Atomic
+
+class SafeCounter implements Sendable:
+    pub value: Atomic[int]
+
+extend SafeCounter:
+    pub def init() -> SafeCounter:
+        mut c = SafeCounter()
+        c.value = Atomic.new(0)
+        return c
+```
+
+**Built-in Sendable types** (always pass compiler check):
+- Primitives: `int`, `float`, `bool`, `str`, `char`
+- `Atomic[T]`, `Mutex[T]`, `RwLock[T]`, `Chan[T]`
+- `Thread`, `ThreadPool`, `ThreadLocal[T]`
+
+**Not Sendable** (compiler rejects at spawn sites):
+- `List[T]`, `Vec[T]`, `Dict`, `Map` — no internal synchronization
+- Any user class that does not declare `implements Sendable`
+
+---
+
+## Thread
+
+**When**: You need a joinable OS thread with explicit lifecycle control.
+**Why**: Unlike `spawn` (fire-and-forget), `Thread.spawn` returns a handle you can `join()` or `detach()`.
+
+```python
+from std.async.thread import Thread
 ```
 
 ### Methods
 
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `Channel.new` | `(cap: int) -> Channel` | `Channel` | Create a channel with given buffer capacity. |
-| `send` | `(val: int)` | `void` | Send a value; **blocks** if the buffer is full. |
-| `recv` | `() -> int` | `int` | Receive a value; **blocks** if the buffer is empty. |
-| `try_send` | `(val: int) -> bool` | `bool` | Non-blocking send. `true` on success. |
-| `try_recv` | `() -> int` | `int` | Non-blocking receive. Returns `0` if empty. |
-| `send_timeout` | `(val: int, ms: int) -> bool` | `bool` | Send with a millisecond deadline. `true` on success. |
-| `recv_timeout` | `(ms: int) -> int` | `int` | Receive with a deadline. Returns `0` on timeout. |
-| `close` | `()` | `void` | Mark the channel closed; wakes blocked receivers. |
-| `is_closed` | `() -> bool` | `bool` | |
-| `len` | `() -> int` | `int` | Number of values currently buffered. |
-| `cap` | `() -> int` | `int` | Maximum buffer capacity. |
-| `is_empty` | `() -> bool` | `bool` | |
-| `is_full` | `() -> bool` | `bool` | |
-| `free` | `()` | `void` | Release OS resources. |
+| Method | Description |
+|--------|-------------|
+| `Thread.spawn(fn, arg)` | Start thread running `fn(arg)`, return joinable handle |
+| `t.join()` | Block until the thread finishes |
+| `t.detach()` | Detach — thread runs independently, no join needed |
+| `t.free()` | Free the thread handle |
+| `Thread.sleep(ms)` | Sleep the calling thread for `ms` milliseconds |
+| `Thread.id()` | Return the calling thread's OS ID |
 
 ### Example
 
-```tauraro
-from std.async.channel import Channel
+```python
+from std.async.thread import Thread
 
-async def producer_consumer():
-    mut ch = Channel.new(8)
-    ch.send(1)
-    ch.send(2)
-    mut a = ch.recv()   # 1
-    mut b = ch.recv()   # 2
-    ch.close()
-    ch.free()
+def work(ms: int) -> void:
+    Thread.sleep(ms)
+    print(f"  done after {ms}ms")
+
+def main():
+    mut t1: Thread = Thread.spawn(work, 100)
+    mut t2: Thread = Thread.spawn(work, 200)
+    t1.join()
+    t2.join()
+    print(f"main thread id: {Thread.id()}")
 ```
 
 ---
 
-## Task / Future
+## Atomic[T] — Lock-Free Integer
 
-**When**: You need to represent the eventual result of an async operation and synchronise on it.
-**Why**: `Task` has a name for logging; `Future` is a lightweight anonymous promise. Both support `.await_()`, timeouts, and error propagation.
+**When**: You need a shared counter or flag updated by multiple threads without locking.
+**Why**: Backed by C11 `_Atomic long long` — sequentially consistent, zero OS overhead.
 
-```tauraro
-from std.async.task import Task, Future
-```
-
-### Task methods
-
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `Task.new` | `(name: str) -> Task` | `Task` | Create a task in the pending state. |
-| `complete` | `(result: int)` | `void` | Mark done with a result value. |
-| `fail` | `(msg: str)` | `void` | Mark done with an error message. |
-| `cancel` | `()` | `void` | Cancel the task; wakes blocked `await_()`. |
-| `await_` | `() -> int` | `int` | Block until done. Returns `result` (or `0` on cancel/error). |
-| `await_timeout` | `(ms: int) -> bool` | `bool` | `true` if done within the deadline. |
-| `is_done` | `() -> bool` | `bool` | |
-| `is_cancelled` | `() -> bool` | `bool` | |
-| `has_error` | `() -> bool` | `bool` | |
-| `get_error` | `() -> str` | `str` | Error message, or `""` if none. |
-| `free` | `()` | `void` | |
-
-### Future methods
-
-A `Future` is a single-value promise with no name.
-
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `Future.new` | `() -> Future` | `Future` | Create a future in the pending state. |
-| `resolve` | `(value: int)` | `void` | Fulfill the future with a value. |
-| `reject` | `(msg: str)` | `void` | Fail the future with an error message. |
-| `await_` | `() -> int` | `int` | Block until resolved. Returns the value. |
-| `await_timeout` | `(ms: int) -> bool` | `bool` | `true` if resolved within the deadline. |
-| `is_ready` | `() -> bool` | `bool` | |
-| `has_error` | `() -> bool` | `bool` | |
-| `get_error` | `() -> str` | `str` | |
-| `free` | `()` | `void` | |
-
-### Example
-
-```tauraro
-from std.async.task import Task, Future
-
-async def run_job():
-    mut t = Task.new("my-job")
-    t.complete(42)
-    mut result = t.await_()    # 42
-    t.free()
-
-    mut f = Future.new()
-    f.resolve(7)
-    mut val = f.await_()       # 7
-    f.free()
-```
-
----
-
-## TaskGroup
-
-**When**: You need to track and wait for a set of concurrent tasks together.
-**Why**: One `wait_all()` call blocks until every task finishes, regardless of completion order.
-
-```tauraro
-from std.async.group import TaskGroup
+```python
+from std.async.thread import Atomic
 ```
 
 ### Methods
 
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `TaskGroup.new` | `() -> TaskGroup` | `TaskGroup` | Create an empty group. |
-| `add` | `(name: str) -> Task` | `Task` | Create a task, add it to the group, and return it. |
-| `wait_all` | `()` | `void` | Block until every task is done. |
-| `wait_all_timeout` | `(ms: int) -> bool` | `bool` | `true` if all tasks finished within the deadline. |
-| `cancel_all` | `()` | `void` | Cancel all pending tasks. |
-| `all_done` | `() -> bool` | `bool` | `true` when every task is in a terminal state. |
-| `pending_count` | `() -> int` | `int` | Tasks not yet done. |
-| `len` | `() -> int` | `int` | Total tasks in the group. |
-| `free` | `()` | `void` | |
+| Method | Description |
+|--------|-------------|
+| `Atomic.new(v)` | Create atomic initialized to `v` |
+| `a.load()` | Read current value |
+| `a.store(v)` | Write value |
+| `a.add(v)` | Add `v`, returns new value |
+| `a.sub(v)` | Subtract `v`, returns new value |
+| `a.swap(v)` | Exchange — stores `v`, returns old value |
+| `a.cas(expected, desired)` | Compare-and-swap — returns `true` if swap happened |
+| `a.increment()` | Shorthand for `a.add(1)` |
+| `a.decrement()` | Shorthand for `a.sub(1)` |
+| `a.free()` | Free the atomic |
 
 ### Example
 
-```tauraro
-from std.async.group import TaskGroup
+```python
+from std.async.thread import Thread, Atomic
 
-async def parallel_work():
-    mut tg = TaskGroup.new()
-    mut t1 = tg.add("step-a")
-    mut t2 = tg.add("step-b")
-    t1.complete(0)
-    t2.complete(0)
-    tg.wait_all()
-    tg.free()
+def inc(counter: Atomic[int]) -> void:
+    mut i = 0
+    while i < 10000:
+        counter.add(1)
+        i += 1
+
+def main():
+    mut c: Atomic[int] = Atomic.new(0)
+    mut t1: Thread = Thread.spawn(inc, c)
+    mut t2: Thread = Thread.spawn(inc, c)
+    t1.join()
+    t2.join()
+    print(f"total: {c.load()}")    # 20000
+    c.free()
 ```
 
 ---
 
-## Mutex / RWLock
+## ThreadLocal[T] — Per-Thread Storage
 
-**When**: Multiple threads access shared mutable state.
-**Why**: `Mutex` guarantees exclusive access; `RWLock` allows many concurrent readers when no writer is active.
+**When**: Each thread needs its own independent copy of a value.
+**Why**: Changes in one thread are invisible to all others — no synchronization needed.
 
-```tauraro
-from std.async.mutex import Mutex, RWLock
+```python
+from std.async.thread import ThreadLocal
 ```
 
-### Mutex methods
+### Methods
 
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `Mutex.new` | `() -> Mutex` | `Mutex` | |
-| `lock` | `()` | `void` | Acquire; blocks until available. |
-| `unlock` | `()` | `void` | Release. |
-| `try_lock` | `() -> bool` | `bool` | Acquire without blocking. `true` on success. |
-| `free` | `()` | `void` | |
-
-### RWLock methods
-
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `RWLock.new` | `() -> RWLock` | `RWLock` | |
-| `read_lock` | `()` | `void` | Acquire shared read access. |
-| `read_unlock` | `()` | `void` | Release read access. |
-| `write_lock` | `()` | `void` | Acquire exclusive write access. |
-| `write_unlock` | `()` | `void` | Release write access. |
-| `free` | `()` | `void` | |
+| Method | Description |
+|--------|-------------|
+| `ThreadLocal.new(v)` | Create thread-local, new threads start with `v` |
+| `tl.get()` | Read the calling thread's value |
+| `tl.set(v)` | Write the calling thread's value |
+| `tl.free()` | Free the storage slot |
 
 ### Example
 
-```tauraro
+```python
+from std.async.thread import Thread, ThreadLocal
+
+def worker(tl: ThreadLocal[int]) -> void:
+    tl.set(999)
+    print(f"  worker sees: {tl.get()}")    # 999
+
+def main():
+    mut tl: ThreadLocal[int] = ThreadLocal.new(0)
+    tl.set(42)
+    mut t: Thread = Thread.spawn(worker, tl)
+    t.join()
+    print(f"main still sees: {tl.get()}")    # 42
+    tl.free()
+```
+
+---
+
+## Mutex[T] — Thread-Safe Guarded Value
+
+**When**: Multiple threads need exclusive access to a shared mutable value.
+**Why**: The value is always guarded — you cannot read or write without holding the lock.
+
+```python
+from std.async.mutex import Mutex
+```
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `Mutex.init(v)` | Create mutex wrapping initial value `v` |
+| `m.get()` | Acquire lock and return current value |
+| `m.set(v)` | Store new value and release lock |
+| `m.unlock()` | Release lock without storing (after `get()` if no update) |
+
+**RAII auto-unlock:** Calling `m.unlock()` is optional. The compiler emits a cleanup guard that releases the lock when the binding from `m.get()` goes out of scope.
+
+**Rule:** Every `get()` must be followed by exactly one `set()` or `unlock()`.
+
+### Example
+
+```python
 from std.async.mutex import Mutex
 
-mut mu = Mutex.new()
-mu.lock()
-# critical section
-mu.unlock()
-mu.free()
+def increment(m: Mutex[int]) -> void:
+    mut v = m.get()
+    m.set(v + 1)    # releases lock
+
+def main():
+    mut counter: Mutex[int] = Mutex.init(0)
+    task_group:
+        spawn increment(counter)
+        spawn increment(counter)
+        spawn increment(counter)
+    mut final = counter.get()
+    counter.unlock()
+    print(f"final: {final}")    # 3
 ```
 
 ---
 
-## Semaphore
+## RWLock[T] — Reader-Writer Lock
 
-**When**: You need to limit concurrent access to a resource pool (e.g. max 3 DB connections).
-**Why**: Counting semaphore; `acquire` blocks when the count hits zero; `release` wakes one waiter.
+**When**: Multiple threads read frequently but write rarely.
+**Why**: Multiple concurrent readers are safe; a writer gets exclusive access.
 
-```tauraro
-from std.async.semaphore import Semaphore
+```python
+from std.async.mutex import RWLock
 ```
 
 ### Methods
 
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `Semaphore.new` | `(init: int, max: int) -> Semaphore` | `Semaphore` | Create with `init` permits and a ceiling of `max`. |
-| `acquire` | `()` | `void` | Decrement; **blocks** if count is 0. |
-| `try_acquire` | `() -> bool` | `bool` | Non-blocking acquire. `true` on success. |
-| `acquire_timeout` | `(ms: int) -> bool` | `bool` | Acquire within a deadline. `true` on success. |
-| `release` | `()` | `void` | Increment, waking one blocked `acquire`. |
-| `free` | `()` | `void` | |
+| Method | Description |
+|--------|-------------|
+| `RwLock.init(v)` | Create rwlock wrapping initial value `v` |
+| `rw.read()` | Acquire read lock, return current value |
+| `rw.read_unlock()` | Release read lock |
+| `rw.write()` | Acquire write lock, return current value |
+| `rw.write_set(v)` | Store new value and release write lock |
+
+**RAII:** `read()` and `write()` bindings are auto-released when they go out of scope (same as Mutex).
 
 ### Example
 
-```tauraro
-from std.async.semaphore import Semaphore
+```python
+from std.async.mutex import RWLock
 
-mut sem = Semaphore.new(3, 3)   # 3 slots
+def reader(rw: RwLock[int]) -> void:
+    mut v = rw.read()
+    rw.read_unlock()
+    print(f"  read: {v}")
+
+def main():
+    mut rw: RwLock[int] = RwLock.init(100)
+    task_group:
+        spawn reader(rw)
+        spawn reader(rw)    # concurrent reads OK
+    mut old = rw.write()
+    rw.write_set(200)
+    print(f"  updated {old} -> 200")
+```
+
+---
+
+## Channel / Task / Future / TaskGroup
+
+These higher-level primitives provide named tasks, futures, and group coordination on top of the OS threading layer.
+
+```python
+from std.async.task      import Task, Future
+from std.async.channel   import Channel
+from std.async.group     import TaskGroup
+from std.async.semaphore import Semaphore
+from std.async.waitgroup import WaitGroup
+from std.async.barrier   import Barrier
+from std.async.once      import Once
+from std.async.timer     import Timer, Ticker
+```
+
+### Task
+
+| Method | Description |
+|--------|-------------|
+| `Task.new(name)` | Create a task in pending state |
+| `t.complete(result)` | Mark done with an integer result |
+| `t.fail(msg)` | Mark done with an error message |
+| `t.cancel()` | Cancel; wakes blocked `await_()` |
+| `t.await_()` | Block until done, return result |
+| `t.await_timeout(ms)` | `true` if done within deadline |
+| `t.is_done()` | |
+| `t.has_error()` | |
+| `t.get_error()` | Error message or `""` |
+| `t.free()` | |
+
+### Future
+
+| Method | Description |
+|--------|-------------|
+| `Future.new()` | Create a future in pending state |
+| `f.resolve(value)` | Fulfill with a value |
+| `f.reject(msg)` | Fail with an error message |
+| `f.await_()` | Block until resolved |
+| `f.await_timeout(ms)` | `true` if resolved within deadline |
+| `f.free()` | |
+
+### Channel
+
+Bounded MPMC ring buffer channel (distinct from the built-in `Chan[T]`).
+
+| Method | Description |
+|--------|-------------|
+| `Channel.new(cap)` | Buffered channel with capacity `cap` |
+| `ch.send(val)` | Send; blocks if full |
+| `ch.recv()` | Receive; blocks if empty |
+| `ch.try_send(val)` | Non-blocking send, returns `bool` |
+| `ch.try_recv()` | Non-blocking receive, returns `0` if empty |
+| `ch.send_timeout(val, ms)` | Send with deadline |
+| `ch.recv_timeout(ms)` | Receive with deadline |
+| `ch.close()` | Mark closed; wakes blocked receivers |
+| `ch.len()` | Current buffered count |
+| `ch.free()` | |
+
+### TaskGroup
+
+| Method | Description |
+|--------|-------------|
+| `TaskGroup.new()` | Empty group |
+| `tg.add(name)` | Create and register a task |
+| `tg.wait_all()` | Block until all tasks done |
+| `tg.wait_all_timeout(ms)` | `true` if all done within deadline |
+| `tg.cancel_all()` | Cancel all pending tasks |
+| `tg.pending_count()` | Tasks not yet done |
+| `tg.free()` | |
+
+### Semaphore
+
+```python
+mut sem = Semaphore.new(3, 3)    # 3 slots
 sem.acquire()
-# use resource
+# critical section
 sem.release()
 sem.free()
 ```
 
----
+### WaitGroup
 
-## WaitGroup
-
-**When**: A coordinator thread needs to wait for N worker threads to finish.
-**Why**: Modelled after Go's `sync.WaitGroup`; simpler than tracking N futures manually.
-
-```tauraro
-from std.async.waitgroup import WaitGroup
+```python
+mut wg = WaitGroup.new()
+wg.add(2)
+# spawn 2 workers that each call wg.done()
+wg.wait()
+wg.free()
 ```
 
-### Methods
+### Barrier
 
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `WaitGroup.new` | `() -> WaitGroup` | `WaitGroup` | Create with count 0. |
-| `add` | `(n: int)` | `void` | Increment the counter by `n`. Call before spawning workers. |
-| `done` | `()` | `void` | Decrement by 1. Each worker calls this when finished. |
-| `wait` | `()` | `void` | Block until the counter reaches 0. |
-| `wait_timeout` | `(ms: int) -> bool` | `bool` | `true` if counter reaches 0 within the deadline. |
-| `free` | `()` | `void` | |
-
-### Example
-
-```tauraro
-from std.async.waitgroup import WaitGroup
-
-async def fan_out():
-    mut wg = WaitGroup.new()
-    wg.add(2)
-    # ... spawn workers that each call wg.done() ...
-    wg.wait()
-    wg.free()
-```
-
----
-
-## Barrier
-
-**When**: N threads must all reach a checkpoint before any of them proceeds.
-**Why**: Cyclic — once all threads arrive, the barrier resets automatically for the next round.
-
-```tauraro
-from std.async.barrier import Barrier
-```
-
-### Methods
-
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `Barrier.new` | `(n: int) -> Barrier` | `Barrier` | Create for `n` participants. |
-| `wait` | `()` | `void` | Block until all `n` participants have arrived. |
-| `free` | `()` | `void` | |
-
-### Example
-
-```tauraro
-from std.async.barrier import Barrier
-
-mut bar = Barrier.new(3)   # release when 3 threads arrive
-bar.wait()                 # each thread calls this
+```python
+mut bar = Barrier.new(3)    # release when 3 threads arrive
+bar.wait()                  # each thread calls this
 bar.free()
 ```
 
----
+### Once
 
-## Once
-
-**When**: You need lazy one-time initialisation shared across threads (e.g. singleton setup).
-**Why**: Thread-safe; `do_once` returns `true` exactly once regardless of how many threads call it.
-
-```tauraro
-from std.async.once import Once
-```
-
-### Methods
-
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `Once.new` | `() -> Once` | `Once` | |
-| `do_once` | `() -> bool` | `bool` | `true` the first call; `false` on all subsequent calls. |
-| `free` | `()` | `void` | |
-
-### Example
-
-```tauraro
-from std.async.once import Once
-
-mut once  = Once.new()
+```python
+mut once = Once.new()
 mut first = once.do_once()    # true
 mut again = once.do_once()    # false
 once.free()
 ```
 
----
+### Timer / Ticker
 
-## Timer / Ticker
-
-**When**: You need to fire an event after a delay (Timer) or at regular intervals (Ticker).
-**Why**: Delivers ticks through a `Channel` — integrates cleanly with select-style `recv` loops.
-
-```tauraro
-from std.async.timer import Timer, Ticker
-```
-
-### Timer — fires once after a delay
-
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `Timer.new` | `(ms: int, ch: Channel) -> Timer` | `Timer` | Send one value on `ch` after `ms` milliseconds. |
-| `stop` | `()` | `void` | Cancel the timer (no-op if already fired). |
-
-### Ticker — fires periodically
-
-| Method | Signature | Returns | Description |
-|---|---|---|---|
-| `Ticker.new` | `(ms: int, ch: Channel) -> Ticker` | `Ticker` | Send a value on `ch` every `ms` milliseconds. |
-| `stop` | `()` | `void` | Stop periodic ticking. |
-
-### Example
-
-```tauraro
+```python
 from std.async.timer   import Timer
 from std.async.channel import Channel
 
-async def timeout_example():
-    mut sig = Channel.new(1)
-    mut t = Timer.new(500, sig)   # fire after 500 ms
-    mut _ = sig.recv()            # wait for the tick
-    t.stop()
-    sig.free()
+mut sig = Channel.new(1)
+mut t = Timer.new(500, sig)    # fire after 500ms
+mut _ = sig.recv()             # block until tick
+t.stop()
+sig.free()
 ```

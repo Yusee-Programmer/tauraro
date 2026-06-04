@@ -37,49 +37,125 @@
 #if defined(TAURARO_NO_OS) || (defined(TAURARO_WASM) && !defined(__wasi__))
 #  define TAURARO_BARE 1
 #endif
+/* KERNEL = Linux kernel module / bare-metal with user-supplied allocator.
+ * Implies BARE (no OS threads/sockets), disables setjmp exceptions. */
+#if defined(TAURARO_KERNEL)
+#  if !defined(TAURARO_BARE)
+#    define TAURARO_BARE 1
+#  endif
+#  define TAURARO_NO_EXCEPTIONS 1
+#endif
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <string.h>
-#include <stdarg.h>
-#include <time.h>
-#include <math.h>
-#include <stdatomic.h>
-#include <setjmp.h>
-#include <ctype.h>
+#ifndef TAURARO_KERNEL
+#  include <stdio.h>
+#  include <stdlib.h>
+#  include <stdbool.h>
+#  include <stdint.h>
+#  include <string.h>
+#  include <stdarg.h>
+#  include <time.h>
+#  include <math.h>
+#  include <stdatomic.h>
+#  include <setjmp.h>
+#  include <ctype.h>
+#else
+/* Kernel / freestanding: caller supplies context headers.
+ * At minimum: stddef.h, stdbool.h, stdint.h, stdatomic.h must exist. */
+#  include <stddef.h>
+#  include <stdbool.h>
+#  include <stdint.h>
+#  include <stdatomic.h>
+#  ifdef __KERNEL__
+#    include <linux/kernel.h>
+#    include <linux/slab.h>
+#    include <linux/string.h>
+#  endif
+#endif
+
+/* ── Pluggable allocator macros ──────────────────────────────────────────── *
+ * Override before including this header to redirect all runtime allocations: *
+ *   #define TAURARO_ALLOC(sz)      kmalloc(sz, GFP_KERNEL)                   *
+ *   #define TAURARO_FREE(p)        kfree(p)                                   *
+ *   #define TAURARO_REALLOC(p,sz)  krealloc(p, sz, GFP_KERNEL)               *
+ *   #define TAURARO_CALLOC(n,sz)   kzalloc((n)*(sz), GFP_KERNEL)             *
+ * TAURARO_KERNEL mode requires all four to be defined externally.             */
+#if defined(TAURARO_KERNEL)
+#  if !defined(TAURARO_ALLOC) || !defined(TAURARO_FREE) || \
+      !defined(TAURARO_REALLOC) || !defined(TAURARO_CALLOC)
+#    error "TAURARO_KERNEL requires TAURARO_ALLOC/FREE/REALLOC/CALLOC to be defined"
+#  endif
+#else
+#  ifndef TAURARO_ALLOC
+#    define TAURARO_ALLOC(sz)      malloc(sz)
+#  endif
+#  ifndef TAURARO_FREE
+#    define TAURARO_FREE(p)        free(p)
+#  endif
+#  ifndef TAURARO_REALLOC
+#    define TAURARO_REALLOC(p,sz)  realloc(p,sz)
+#  endif
+#  ifndef TAURARO_CALLOC
+#    define TAURARO_CALLOC(n,sz)   calloc(n,sz)
+#  endif
+#endif
+
+/* ── Thread stack size ───────────────────────────────────────────────────── *
+ * Override before including this header: -DTAURARO_THREAD_STACK_SIZE=N       *
+ * 0 = use OS default (POSIX: skips setstacksize; Win32: passes 0 to          *
+ * CreateThread which uses the executable's PE default, typically 1 MiB).     *
+ * Platform defaults are applied below inside their respective #ifdef blocks.  */
+#ifndef TAURARO_THREAD_STACK_SIZE
+#  ifdef _WIN32
+     /* Windows default: 2 MiB — matches legacy behaviour */
+#    define TAURARO_THREAD_STACK_SIZE (2 * 1024 * 1024)
+#  else
+     /* POSIX default: 0 — let pthread use the OS default (typically 8 MiB) */
+#    define TAURARO_THREAD_STACK_SIZE 0
+#  endif
+#endif
+
+/* ── Panic / OOM hooks ───────────────────────────────────────────────────── */
+#if defined(TAURARO_KERNEL) && defined(__KERNEL__)
+#  define _TR_OOM_ABORT()    do { pr_err("tauraro: out of memory\n"); BUG(); } while(0)
+#  define _TR_PANIC(msg)     do { pr_err("tauraro panic: %s\n", (msg)); BUG(); } while(0)
+#elif defined(TAURARO_KERNEL)
+#  define _TR_OOM_ABORT()    do { while(1); } while(0)
+#  define _TR_PANIC(msg)     do { (void)(msg); while(1); } while(0)
+#else
+#  define _TR_OOM_ABORT()    do { fprintf(stderr, "tauraro: out of memory\n"); abort(); } while(0)
+#  define _TR_PANIC(msg)     do { fprintf(stderr, "tauraro panic: %s\n", (msg)); abort(); } while(0)
+#endif
 
 // Wrappers for core library to avoid signature conflicts
 static inline void* _tr_c_malloc(size_t size) {
-    void* p = malloc(size);
-    return p;
+    return TAURARO_ALLOC(size);
 }
 static inline void* _tr_c_calloc(size_t count, size_t size) {
-    void* p = calloc(count, size);
-    if (!p && count * size > 0) { fprintf(stderr, "tauraro: calloc out of memory\n"); abort(); }
+    void* p = TAURARO_CALLOC(count, size);
+    if (!p && count * size > 0) { _TR_OOM_ABORT(); }
     return p;
 }
-
 static inline void _tr_free(void* p) {
-    if (p) {
-        free(p);
-    }
+    if (p) TAURARO_FREE(p);
 }
 static inline void _tr_c_free(void* ptr) { _tr_free(ptr); }
 
+#ifndef TAURARO_KERNEL
 static inline void _tr_print(char* s) { printf("%s\n", s); }
 static inline void _tr_print_raw(char* s) { printf("%s", s); fflush(stdout); }
 static inline void _tr_eprint(char* s) { fprintf(stderr, "%s\n", s); fflush(stderr); }
+#else
+static inline void _tr_print(char* s) { (void)s; }
+static inline void _tr_print_raw(char* s) { (void)s; }
+static inline void _tr_eprint(char* s) { (void)s; }
+#endif
 
 static inline void* _tr_c_realloc(void* ptr, size_t size) {
-    void* p = realloc(ptr, size);
-    return p;
+    return TAURARO_REALLOC(ptr, size);
 }
-
 static inline void* _tr_checked_alloc(size_t sz) {
-    void* p = calloc(1, sz);
-    if (!p && sz > 0) { fprintf(stderr, "tauraro: out of memory\n"); abort(); }
+    void* p = TAURARO_CALLOC(1, sz);
+    if (!p && sz > 0) { _TR_OOM_ABORT(); }
     return p;
 }
 /* ── Shared ownership: reference-counted box (replaces Rc/Arc/Mutex in one keyword) ── */
@@ -104,6 +180,26 @@ static inline void _tr_shared_drop(_TrSharedBox* b) {
         _tr_free(b->data);
         _tr_free(b);
     }
+}
+/* ── Weak[T] — non-owning reference to a Shared[T] box ── */
+typedef struct _TrWeakBox {
+    _TrSharedBox* box;
+} _TrWeakBox;
+static inline _TrWeakBox* _tr_weak_new(_TrSharedBox* b) {
+    _TrWeakBox* w = (_TrWeakBox*)_tr_checked_alloc(sizeof(_TrWeakBox));
+    w->box = b;
+    return w;
+}
+static inline bool _tr_weak_is_alive(_TrWeakBox* w) {
+    if (!w || !w->box) return false;
+    return atomic_load(&w->box->refcount) > 0;
+}
+static inline _TrSharedBox* _tr_weak_upgrade(_TrWeakBox* w) {
+    if (!w || !w->box) return NULL;
+    int old = atomic_load(&w->box->refcount);
+    if (old <= 0) return NULL;
+    atomic_fetch_add(&w->box->refcount, 1);
+    return w->box;
 }
 
 static inline void* _tr_c_memcpy(void* dst, void* src, size_t n) { return memcpy(dst, src, n); }
@@ -137,11 +233,11 @@ static inline char* _tr_popen_read(const char* cmd) {
     FILE* fp = popen(cmd, "r");
 #  endif
     if (!fp) return "";
-    size_t cap = 4096, total = 0; char* buf = (char*)malloc(cap); char tmp[512];
+    size_t cap = 4096, total = 0; char* buf = (char*)TAURARO_ALLOC(cap); char tmp[512];
     if (!buf) { fclose(fp); return ""; }
     while (fgets(tmp, sizeof(tmp), fp)) {
         size_t n = strlen(tmp);
-        if (total + n + 1 > cap) { cap = cap * 2 + n + 1; buf = (char*)realloc(buf, cap); if (!buf) break; }
+        if (total + n + 1 > cap) { cap = cap * 2 + n + 1; buf = (char*)TAURARO_REALLOC(buf, cap); if (!buf) break; }
         memcpy(buf + total, tmp, n); total += n;
     }
     if (buf) buf[total] = '\0';
@@ -278,6 +374,30 @@ static inline Result Option_ok_or(Option self, void* err) {
 
 /* ── Threading (cross-platform) ──────────────────────────────────────── */
 
+/* Thread panic state — forward-declared before platform blocks so trampolines
+ * can reference them.  Actual storage definitions live in the _TR_GLOBAL section. */
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+static int     _tr_thread_has_panic_buf   = 0;
+static jmp_buf _tr_thread_panic_jmpbuf;
+static char*   _tr_thread_panic_message   = NULL;
+#elif defined(__GNUC__) || defined(__clang__)
+/* MinGW also defines _WIN32 but is GCC-based — must use __thread, not __declspec(thread) */
+extern __thread int     _tr_thread_has_panic_buf;
+extern __thread jmp_buf _tr_thread_panic_jmpbuf;
+extern __thread char*   _tr_thread_panic_message;
+#elif defined(_MSC_VER)
+extern __declspec(thread) int     _tr_thread_has_panic_buf;
+extern __declspec(thread) jmp_buf _tr_thread_panic_jmpbuf;
+extern __declspec(thread) char*   _tr_thread_panic_message;
+#else
+extern _Thread_local int     _tr_thread_has_panic_buf;
+extern _Thread_local jmp_buf _tr_thread_panic_jmpbuf;
+extern _Thread_local char*   _tr_thread_panic_message;
+#endif
+
+/* Panic result: written by thread, read by joiner via _TrThreadObj */
+typedef struct { int panicked; char* panic_msg; } _TrSpawnResult;
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -285,18 +405,33 @@ static inline Result Option_ok_or(Option self, void* err) {
 #include <windows.h>
 
 typedef HANDLE _TrThread;
-/* Trampoline: routes void*(*)(void*) through DWORD WINAPI to avoid
- * __cdecl/__stdcall calling-convention mismatch on 32-bit Windows. */
-typedef struct { void*(*fn)(void*); void* arg; } _TrWin32StartArg;
+/* Trampoline: routes void*(*)(void*) through DWORD WINAPI, installs
+ * per-thread panic handler (setjmp), and enforces stack size.        */
+typedef struct { void*(*fn)(void*); void* arg; _TrSpawnResult* result; } _TrWin32StartArg;
 static DWORD WINAPI _tr_thread_start_trampoline(LPVOID raw) {
     _TrWin32StartArg* s = (_TrWin32StartArg*)raw;
-    void*(*fn)(void*) = s->fn; void* arg = s->arg; free(s);
-    fn(arg); return 0;
+    void*(*fn)(void*) = s->fn; void* arg = s->arg;
+    _TrSpawnResult* result = s->result;
+    free(s);
+    /* Install per-thread panic handler */
+    _tr_thread_has_panic_buf = 1;
+    _tr_thread_panic_message = NULL;
+    if (setjmp(_tr_thread_panic_jmpbuf) == 0) {
+        fn(arg);
+        if (result) { result->panicked = 0; result->panic_msg = NULL; }
+    } else {
+        if (result) { result->panicked = 1; result->panic_msg = _tr_thread_panic_message; }
+        else { fprintf(stderr, "thread panic (detached): %s\n",
+               _tr_thread_panic_message ? _tr_thread_panic_message : "?"); }
+    }
+    _tr_thread_has_panic_buf = 0;
+    return 0;
 }
 static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
     _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg));
-    s->fn = fn; s->arg = arg;
-    return CreateThread(NULL, 0, _tr_thread_start_trampoline, s, 0, NULL);
+    s->fn = fn; s->arg = arg; s->result = NULL;
+    SIZE_T ss = (SIZE_T)TAURARO_THREAD_STACK_SIZE;
+    return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
 }
 static void _tr_thread_detach(_TrThread t) { CloseHandle(t); }
 static void _tr_thread_join_wait(_TrThread t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
@@ -351,8 +486,35 @@ static void _tr_sleep_ms(long ms) { (void)ms; }
 #include <time.h>
 
 typedef pthread_t _TrThread;
+/* POSIX panic trampoline — installs per-thread setjmp handler */
+typedef struct { void*(*fn)(void*); void* arg; _TrSpawnResult* result; } _TrPosixStartArg;
+static void* _tr_posix_thread_trampoline(void* raw) {
+    _TrPosixStartArg* s = (_TrPosixStartArg*)raw;
+    void*(*fn)(void*) = s->fn; void* arg = s->arg;
+    _TrSpawnResult* result = s->result;
+    free(s);
+    _tr_thread_has_panic_buf = 1;
+    _tr_thread_panic_message = NULL;
+    if (setjmp(_tr_thread_panic_jmpbuf) == 0) {
+        fn(arg);
+        if (result) { result->panicked = 0; result->panic_msg = NULL; }
+    } else {
+        if (result) { result->panicked = 1; result->panic_msg = _tr_thread_panic_message; }
+        else { fprintf(stderr, "thread panic (detached): %s\n",
+               _tr_thread_panic_message ? _tr_thread_panic_message : "?"); }
+    }
+    _tr_thread_has_panic_buf = 0;
+    return NULL;
+}
 static _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
-    pthread_t t; pthread_create(&t, NULL, fn, arg); return t;
+    _TrPosixStartArg* s = (_TrPosixStartArg*)malloc(sizeof(_TrPosixStartArg));
+    s->fn = fn; s->arg = arg; s->result = NULL;
+    pthread_attr_t attr; pthread_attr_init(&attr);
+    if (TAURARO_THREAD_STACK_SIZE > 0)
+        pthread_attr_setstacksize(&attr, (size_t)TAURARO_THREAD_STACK_SIZE);
+    pthread_attr_setguardsize(&attr, 4096);  /* one-page guard against overflow */
+    pthread_t t; pthread_create(&t, &attr, _tr_posix_thread_trampoline, s);
+    pthread_attr_destroy(&attr); return t;
 }
 static void _tr_thread_detach(_TrThread t) { pthread_detach(t); }
 static void _tr_thread_join_wait(_TrThread t) { pthread_join(t, NULL); }
@@ -570,11 +732,18 @@ static void _tr_barrier_wait(_TrBarrier* b) {
 }
 static void _tr_barrier_free(_TrBarrier* b) { if(!b)return; DeleteCriticalSection(&b->mu); free(b); }
 
-/* ── Run-once guard ──────────────────────────────────────────────────── */
-typedef struct { volatile int done; CRITICAL_SECTION mu; } _TrOnce;
-static _TrOnce* _tr_once_new(void)   { _TrOnce* o=(_TrOnce*)calloc(1,sizeof(_TrOnce)); InitializeCriticalSection(&o->mu); return o; }
-static bool _tr_once_do(_TrOnce* o)  { if(o->done)return false; EnterCriticalSection(&o->mu); bool f=!o->done; if(f)o->done=1; LeaveCriticalSection(&o->mu); return f; }
-static void _tr_once_free(_TrOnce* o){ if(!o)return; DeleteCriticalSection(&o->mu); free(o); }
+/* ── Run-once guard: lockless atomic CAS — zero kernel object, zero heap mutex */
+typedef struct { _Atomic int done; } _TrOnce;
+static _TrOnce* _tr_once_new(void) {
+    _TrOnce* o = (_TrOnce*)calloc(1, sizeof(_TrOnce));
+    atomic_init(&o->done, 0); return o;
+}
+static bool _tr_once_do(_TrOnce* o) {
+    int z = 0;
+    return atomic_compare_exchange_strong_explicit(&o->done, &z, 1,
+        memory_order_acq_rel, memory_order_relaxed);
+}
+static void _tr_once_free(_TrOnce* o) { if (o) free(o); }
 
 /* ── Timer / Ticker ──────────────────────────────────────────────────── */
 typedef struct { _TrChan* ch; long long ms; int periodic; volatile int stopped; CRITICAL_SECTION stop_mu; } _TrTimerState;
@@ -630,8 +799,8 @@ typedef struct {
 } _TrChan;
 static _TrChan* _tr_chan_new(long long cap) {
     if (cap < 1) cap = 1;
-    _TrChan* c = (_TrChan*)calloc(1, sizeof(_TrChan));
-    c->buf = (long long*)calloc((size_t)cap, sizeof(long long)); c->cap = cap;
+    _TrChan* c = (_TrChan*)TAURARO_CALLOC(1, sizeof(_TrChan));
+    c->buf = (long long*)TAURARO_CALLOC((size_t)cap, sizeof(long long)); c->cap = cap;
     return c;
 }
 static void _tr_chan_send(_TrChan* c, long long val) {
@@ -657,7 +826,7 @@ static void  _tr_chan_close(_TrChan* c)          { if (c) c->closed = 1; }
 static bool  _tr_chan_is_closed(_TrChan* c)      { return c && c->closed; }
 static long long _tr_chan_len(_TrChan* c)         { return c ? c->count : 0LL; }
 static long long _tr_chan_cap(_TrChan* c)         { return c ? c->cap : 0LL; }
-static void  _tr_chan_free(_TrChan* c)            { if (!c) return; free(c->buf); free(c); }
+static void  _tr_chan_free(_TrChan* c)            { if (!c) return; TAURARO_FREE(c->buf); TAURARO_FREE(c); }
 static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
     if (c && c->count > 0) {
         long long v = c->buf[c->head]; c->head = (c->head+1)%c->cap; c->count--;
@@ -668,7 +837,7 @@ static long long _tr_chan_recv_ok(_TrChan* c, int* ok) {
 
 typedef struct { volatile long long result; char* error; volatile int done, cancelled; } _TrTaskState;
 static _TrTaskState* _tr_task_new(void) {
-    _TrTaskState* t = (_TrTaskState*)calloc(1, sizeof(_TrTaskState)); t->error = ""; return t;
+    _TrTaskState* t = (_TrTaskState*)TAURARO_CALLOC(1, sizeof(_TrTaskState)); t->error = ""; return t;
 }
 static void   _tr_task_complete(_TrTaskState* t, long long r)           { if (t&&!t->done){t->result=r;t->done=1;} }
 static void   _tr_task_complete_err(_TrTaskState* t, const char* msg)   { if (t&&!t->done){t->error=msg?(char*)msg:"error";t->done=1;} }
@@ -681,67 +850,76 @@ static bool   _tr_task_is_done(_TrTaskState* t)      { return t && t->done; }
 static bool   _tr_task_is_cancelled(_TrTaskState* t) { return t && t->cancelled; }
 static bool   _tr_task_has_error(_TrTaskState* t)    { return t && t->error && t->error[0]; }
 static char*  _tr_task_get_error(_TrTaskState* t)    { return t && t->error ? t->error : ""; }
-static void   _tr_task_free(_TrTaskState* t)          { if (t) free(t); }
+static void   _tr_task_free(_TrTaskState* t)          { if (t) TAURARO_FREE(t); }
 
 typedef struct { int dummy; } _TrMutexH;
-static _TrMutexH* _tr_mutex_new(void)             { return (_TrMutexH*)calloc(1, sizeof(_TrMutexH)); }
+static _TrMutexH* _tr_mutex_new(void)             { return (_TrMutexH*)TAURARO_CALLOC(1, sizeof(_TrMutexH)); }
 static void _tr_mutex_hlock(_TrMutexH* m)         { (void)m; }
 static void _tr_mutex_hunlock(_TrMutexH* m)       { (void)m; }
 static bool _tr_mutex_htrylock(_TrMutexH* m)      { (void)m; return true; }
-static void _tr_mutex_hfree(_TrMutexH* m)         { if (m) free(m); }
+static void _tr_mutex_hfree(_TrMutexH* m)         { if (m) TAURARO_FREE(m); }
 
 typedef struct { int dummy; } _TrRWL;
-static _TrRWL* _tr_rwl_new(void)                  { return (_TrRWL*)calloc(1, sizeof(_TrRWL)); }
+static _TrRWL* _tr_rwl_new(void)                  { return (_TrRWL*)TAURARO_CALLOC(1, sizeof(_TrRWL)); }
 static void _tr_rwl_read_lock(_TrRWL* r)          { (void)r; }
 static void _tr_rwl_read_unlock(_TrRWL* r)        { (void)r; }
 static void _tr_rwl_write_lock(_TrRWL* r)         { (void)r; }
 static void _tr_rwl_write_unlock(_TrRWL* r)       { (void)r; }
-static void _tr_rwl_free(_TrRWL* r)               { if (r) free(r); }
+static void _tr_rwl_free(_TrRWL* r)               { if (r) TAURARO_FREE(r); }
 
 typedef struct { volatile long long count, maxv; } _TrSema;
 static _TrSema* _tr_sema_new(long long init, long long maxv) {
-    _TrSema* s = (_TrSema*)calloc(1, sizeof(_TrSema));
+    _TrSema* s = (_TrSema*)TAURARO_CALLOC(1, sizeof(_TrSema));
     s->count = init; s->maxv = maxv > 0 ? maxv : (long long)0x7fffffffffffffffLL; return s;
 }
 static void _tr_sema_acquire(_TrSema* s)           { if (s && s->count > 0) s->count--; }
 static bool _tr_sema_try_acquire(_TrSema* s)       { if (s && s->count > 0) { s->count--; return true; } return false; }
 static bool _tr_sema_acquire_timeout(_TrSema* s, long long ms) { (void)ms; return _tr_sema_try_acquire(s); }
 static void _tr_sema_release(_TrSema* s)           { if (s && s->count < s->maxv) s->count++; }
-static void _tr_sema_free(_TrSema* s)              { if (s) free(s); }
+static void _tr_sema_free(_TrSema* s)              { if (s) TAURARO_FREE(s); }
 
 typedef struct { volatile long long count; } _TrWG;
-static _TrWG* _tr_wg_new(void) { return (_TrWG*)calloc(1, sizeof(_TrWG)); }
+static _TrWG* _tr_wg_new(void) { return (_TrWG*)TAURARO_CALLOC(1, sizeof(_TrWG)); }
 static void _tr_wg_add(_TrWG* w, long long n)      { if (w) w->count += n; }
 static void _tr_wg_done(_TrWG* w)                  { if (w && w->count > 0) w->count--; }
 static void _tr_wg_wait(_TrWG* w)                  { (void)w; /* no blocking */ }
 static bool _tr_wg_wait_timeout(_TrWG* w, long long ms) { (void)ms; return w ? w->count == 0 : true; }
-static void _tr_wg_free(_TrWG* w)                  { if (w) free(w); }
+static void _tr_wg_free(_TrWG* w)                  { if (w) TAURARO_FREE(w); }
 
 typedef struct { long long total, count, gen; } _TrBarrier;
 static _TrBarrier* _tr_barrier_new(long long n) {
-    _TrBarrier* b = (_TrBarrier*)calloc(1, sizeof(_TrBarrier)); b->total = b->count = n; return b;
+    _TrBarrier* b = (_TrBarrier*)TAURARO_CALLOC(1, sizeof(_TrBarrier)); b->total = b->count = n; return b;
 }
 static void _tr_barrier_wait(_TrBarrier* b) {
     if (!b) return;
     if (--b->count == 0) { b->gen++; b->count = b->total; }
 }
-static void _tr_barrier_free(_TrBarrier* b) { if (b) free(b); }
+static void _tr_barrier_free(_TrBarrier* b) { if (b) TAURARO_FREE(b); }
 
-typedef struct { volatile int done; } _TrOnce;
-static _TrOnce* _tr_once_new(void)   { return (_TrOnce*)calloc(1, sizeof(_TrOnce)); }
-static bool _tr_once_do(_TrOnce* o)  { if (!o || o->done) return false; o->done = 1; return true; }
-static void _tr_once_free(_TrOnce* o){ if (o) free(o); }
+/* _TrOnce: zero-cost run-once guard via atomic CAS — no mutex, no OS object */
+typedef struct { _Atomic int done; } _TrOnce;
+static _TrOnce* _tr_once_new(void) {
+    _TrOnce* o = (_TrOnce*)TAURARO_CALLOC(1, sizeof(_TrOnce));
+    atomic_init(&o->done, 0); return o;
+}
+static bool _tr_once_do(_TrOnce* o) {
+    if (!o) return false;
+    int z = 0;
+    return atomic_compare_exchange_strong_explicit(&o->done, &z, 1,
+        memory_order_acq_rel, memory_order_relaxed);
+}
+static void _tr_once_free(_TrOnce* o) { if (o) TAURARO_FREE(o); }
 
 typedef struct { _TrChan* ch; long long ms; int periodic; volatile int stopped; } _TrTimerState;
 static void* _tr_timer_thread_fn(void* arg) { (void)arg; return NULL; }
 static _TrTimerState* _tr_timer_new(long long ms, _TrChan* ch) {
-    _TrTimerState* s = (_TrTimerState*)calloc(1, sizeof(_TrTimerState));
+    _TrTimerState* s = (_TrTimerState*)TAURARO_CALLOC(1, sizeof(_TrTimerState));
     s->ch = ch; s->ms = ms;
     _tr_chan_try_send(ch, 1LL); /* fire immediately — no background thread */
     return s;
 }
 static _TrTimerState* _tr_ticker_new(long long ms, _TrChan* ch) {
-    _TrTimerState* s = (_TrTimerState*)calloc(1, sizeof(_TrTimerState));
+    _TrTimerState* s = (_TrTimerState*)TAURARO_CALLOC(1, sizeof(_TrTimerState));
     s->ch = ch; s->ms = ms; s->periodic = 1;
     _tr_chan_try_send(ch, 1LL); return s;
 }
@@ -753,20 +931,20 @@ static void _tr_timer_stop(_TrTimerState* s) {
 /* ── Thread-local storage (bare: single thread, single value) ────────── */
 typedef struct { long long val; } _TrTLS;
 static inline _TrTLS* _tr_tls_new(long long init) {
-    _TrTLS* t = (_TrTLS*)malloc(sizeof(_TrTLS)); t->val = init; return t;
+    _TrTLS* t = (_TrTLS*)TAURARO_ALLOC(sizeof(_TrTLS)); t->val = init; return t;
 }
 static inline long long _tr_tls_get(_TrTLS* t) { return t ? t->val : 0LL; }
 static inline void _tr_tls_set(_TrTLS* t, long long v) { if (t) t->val = v; }
-static inline void _tr_tls_free(_TrTLS* t) { if (t) free(t); }
+static inline void _tr_tls_free(_TrTLS* t) { if (t) TAURARO_FREE(t); }
 
 /* ── BARE ThreadPool: runs jobs synchronously (no OS threads) ─────────── */
 typedef struct { int _dummy; } _TrThreadPool;
 static inline long long _tr_threadpool_auto_n(void)  { return 1LL; }
-static inline _TrThreadPool* _tr_threadpool_new(long long n)  { (void)n; return (_TrThreadPool*)calloc(1,sizeof(_TrThreadPool)); }
+static inline _TrThreadPool* _tr_threadpool_new(long long n)  { (void)n; return (_TrThreadPool*)TAURARO_CALLOC(1,sizeof(_TrThreadPool)); }
 static inline _TrThreadPool* _tr_threadpool_auto(void)        { return _tr_threadpool_new(1LL); }
 static inline void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) { (void)p; fn(arg); }
 static inline void _tr_threadpool_wait(_TrThreadPool* p)      { (void)p; }
-static inline void _tr_threadpool_free(_TrThreadPool* p)      { if(p)free(p); }
+static inline void _tr_threadpool_free(_TrThreadPool* p)      { if(p)TAURARO_FREE(p); }
 
 #else /* POSIX ─────────────────────────────────────────────────────────── */
 
@@ -937,10 +1115,18 @@ static void _tr_barrier_wait(_TrBarrier* b) {
 }
 static void _tr_barrier_free(_TrBarrier* b) { if(!b)return; pthread_mutex_destroy(&b->mu); pthread_cond_destroy(&b->cv); free(b); }
 
-typedef struct { volatile int done; pthread_mutex_t mu; } _TrOnce;
-static _TrOnce* _tr_once_new(void)   { _TrOnce* o=(_TrOnce*)calloc(1,sizeof(_TrOnce)); pthread_mutex_init(&o->mu,NULL); return o; }
-static bool _tr_once_do(_TrOnce* o)  { if(o->done)return false; pthread_mutex_lock(&o->mu); bool f=!o->done; if(f)o->done=1; pthread_mutex_unlock(&o->mu); return f; }
-static void _tr_once_free(_TrOnce* o){ if(!o)return; pthread_mutex_destroy(&o->mu); free(o); }
+/* _TrOnce: lockless atomic CAS — no pthread_mutex, no heap lock object */
+typedef struct { _Atomic int done; } _TrOnce;
+static _TrOnce* _tr_once_new(void) {
+    _TrOnce* o = (_TrOnce*)calloc(1, sizeof(_TrOnce));
+    atomic_init(&o->done, 0); return o;
+}
+static bool _tr_once_do(_TrOnce* o) {
+    int z = 0;
+    return atomic_compare_exchange_strong_explicit(&o->done, &z, 1,
+        memory_order_acq_rel, memory_order_relaxed);
+}
+static void _tr_once_free(_TrOnce* o) { if (o) free(o); }
 
 typedef struct { _TrChan* ch; long long ms; int periodic; volatile int stopped; pthread_mutex_t stop_mu; } _TrTimerState;
 static void* _tr_timer_thread_fn(void* arg) {
@@ -995,7 +1181,7 @@ static inline void _tr_tls_free(_TrTLS* t) {
  * additional synchronization — it is always accessed under the mutex. */
 typedef struct { _TrMutexH* mu; long long data; _Atomic int rc; volatile int _locked; } _TrMutexBox;
 static inline _TrMutexBox* _tr_mutexbox_new(long long init) {
-    _TrMutexBox* b = (_TrMutexBox*)malloc(sizeof(_TrMutexBox));
+    _TrMutexBox* b = (_TrMutexBox*)TAURARO_ALLOC(sizeof(_TrMutexBox));
     b->mu = _tr_mutex_new(); b->data = init; b->_locked = 0;
     atomic_store(&b->rc, 1); return b;
 }
@@ -1007,7 +1193,7 @@ static inline void _tr_mutexbox_set_unlock(_TrMutexBox* b, long long v) {
 }
 static inline void _tr_mutexbox_unlock(_TrMutexBox* b) { b->_locked = 0; _tr_mutex_hunlock(b->mu); }
 static inline void _tr_mutexbox_free(_TrMutexBox* b) {
-    if (!b) return; _tr_mutex_hfree(b->mu); free(b);
+    if (!b) return; _tr_mutex_hfree(b->mu); TAURARO_FREE(b);
 }
 static inline _TrMutexBox* _tr_mutexbox_clone(_TrMutexBox* b) {
     if (b) atomic_fetch_add(&b->rc, 1); return b;
@@ -1025,7 +1211,7 @@ static inline void _tr_mutexbox_cleanup(_TrMutexBox** bp) {
 /* _locked: 0=none, 1=write locked, 2=read locked. */
 typedef struct { _TrRWL* rw; long long data; _Atomic int rc; volatile int _locked; } _TrRWLBox;
 static inline _TrRWLBox* _tr_rwlbox_new(long long init) {
-    _TrRWLBox* b = (_TrRWLBox*)malloc(sizeof(_TrRWLBox));
+    _TrRWLBox* b = (_TrRWLBox*)TAURARO_ALLOC(sizeof(_TrRWLBox));
     b->rw = _tr_rwl_new(); b->data = init; b->_locked = 0;
     atomic_store(&b->rc, 1); return b;
 }
@@ -1040,7 +1226,7 @@ static inline void _tr_rwlbox_write_set_unlock(_TrRWLBox* b, long long v) {
     b->data = v; b->_locked = 0; _tr_rwl_write_unlock(b->rw);
 }
 static inline void _tr_rwlbox_free(_TrRWLBox* b) {
-    if (!b) return; _tr_rwl_free(b->rw); free(b);
+    if (!b) return; _tr_rwl_free(b->rw); TAURARO_FREE(b);
 }
 static inline _TrRWLBox* _tr_rwlbox_clone(_TrRWLBox* b) {
     if (b) atomic_fetch_add(&b->rc, 1); return b;
@@ -1073,7 +1259,7 @@ static void* _tr_pool_worker(void* arg) {
         /* uintptr_t cast is safe on both 32-bit and 64-bit platforms */
         _TrPoolItem* item = (_TrPoolItem*)(uintptr_t)(unsigned long long)item_val;
         item->fn(item->arg);
-        free(item);
+        TAURARO_FREE(item);
         _tr_wg_done(pool->wg);
     }
     return NULL;
@@ -1093,9 +1279,9 @@ static inline long long _tr_threadpool_auto_n(void) {
 }
 static inline _TrThreadPool* _tr_threadpool_new(long long n) {
     if (n < 1) n = 1;
-    _TrThreadPool* p = (_TrThreadPool*)calloc(1, sizeof(_TrThreadPool));
+    _TrThreadPool* p = (_TrThreadPool*)TAURARO_CALLOC(1, sizeof(_TrThreadPool));
     p->n_workers = (int)n;
-    p->workers = (_TrThread*)malloc((size_t)n * sizeof(_TrThread));
+    p->workers = (_TrThread*)TAURARO_ALLOC((size_t)n * sizeof(_TrThread));
     p->queue = _tr_chan_new(n * 4 + 16);
     p->wg = _tr_wg_new();
     for (int i = 0; i < (int)n; i++)
@@ -1106,7 +1292,7 @@ static inline _TrThreadPool* _tr_threadpool_auto(void) {
     return _tr_threadpool_new(_tr_threadpool_auto_n());
 }
 static inline void _tr_threadpool_spawn(_TrThreadPool* p, void*(*fn)(void*), void* arg) {
-    _TrPoolItem* item = (_TrPoolItem*)malloc(sizeof(_TrPoolItem));
+    _TrPoolItem* item = (_TrPoolItem*)TAURARO_ALLOC(sizeof(_TrPoolItem));
     item->fn = fn; item->arg = arg;
     _tr_wg_add(p->wg, 1);
     /* uintptr_t cast: safe on 32-bit and 64-bit; avoids sign-extension of intptr_t */
@@ -1118,7 +1304,7 @@ static inline void _tr_threadpool_free(_TrThreadPool* p) {
     _tr_chan_close(p->queue);
     for (int i = 0; i < p->n_workers; i++) _tr_thread_join_wait(p->workers[i]);
     _tr_chan_free(p->queue); _tr_wg_free(p->wg);
-    free(p->workers); free(p);
+    TAURARO_FREE(p->workers); TAURARO_FREE(p);
 }
 #endif /* !TAURARO_BARE */
 
@@ -1131,51 +1317,89 @@ static inline void _tr_async_pool_submit(_TrThreadPool* p, void*(*fn)(void*), vo
 /* ── Atomic[T]: lock-free atomic integer (C11 _Atomic) ───────────────── */
 typedef struct { _Atomic long long val; } _TrAtomic;
 static inline _TrAtomic* _tr_atomic_new(long long init) {
-    _TrAtomic* a = (_TrAtomic*)malloc(sizeof(_TrAtomic));
-    atomic_store(&a->val, init); return a;
+    _TrAtomic* a = (_TrAtomic*)TAURARO_ALLOC(sizeof(_TrAtomic));
+    atomic_init(&a->val, init); return a;
 }
-static inline long long _tr_atomic_load(_TrAtomic* a)               { return a ? atomic_load(&a->val) : 0LL; }
-static inline void      _tr_atomic_store(_TrAtomic* a, long long v)  { if (a) atomic_store(&a->val, v); }
-static inline long long _tr_atomic_add(_TrAtomic* a, long long v)    { return a ? atomic_fetch_add(&a->val, v) : 0LL; }
-static inline long long _tr_atomic_sub(_TrAtomic* a, long long v)    { return a ? atomic_fetch_sub(&a->val, v) : 0LL; }
-static inline long long _tr_atomic_swap(_TrAtomic* a, long long v)   { return a ? atomic_exchange(&a->val, v) : 0LL; }
+/* Hot-path ops: null-check removed — codegen never emits NULL _TrAtomic* */
+static inline long long _tr_atomic_load(_TrAtomic* a)               { return atomic_load(&a->val); }
+static inline void      _tr_atomic_store(_TrAtomic* a, long long v)  { atomic_store(&a->val, v); }
+static inline long long _tr_atomic_add(_TrAtomic* a, long long v)    { return atomic_fetch_add(&a->val, v); }
+static inline long long _tr_atomic_sub(_TrAtomic* a, long long v)    { return atomic_fetch_sub(&a->val, v); }
+static inline long long _tr_atomic_swap(_TrAtomic* a, long long v)   { return atomic_exchange(&a->val, v); }
 static inline bool _tr_atomic_cas(_TrAtomic* a, long long expected, long long desired) {
-    if (!a) return false;
     return atomic_compare_exchange_strong(&a->val, &expected, desired);
 }
-static inline void _tr_atomic_free(_TrAtomic* a) { if (a) free(a); }
+static inline void _tr_atomic_free(_TrAtomic* a) { if (a) TAURARO_FREE(a); }
 
 /* Atomic[T]: explicit memory-order variants (C11 stdatomic) */
-static inline long long _tr_atomic_load_relaxed(_TrAtomic* a)                     { return a ? atomic_load_explicit(&a->val, memory_order_relaxed) : 0LL; }
-static inline long long _tr_atomic_load_acquire(_TrAtomic* a)                     { return a ? atomic_load_explicit(&a->val, memory_order_acquire) : 0LL; }
-static inline long long _tr_atomic_load_seqcst(_TrAtomic* a)                      { return a ? atomic_load_explicit(&a->val, memory_order_seq_cst) : 0LL; }
-static inline void      _tr_atomic_store_relaxed(_TrAtomic* a, long long v)       { if (a) atomic_store_explicit(&a->val, v, memory_order_relaxed); }
-static inline void      _tr_atomic_store_release(_TrAtomic* a, long long v)       { if (a) atomic_store_explicit(&a->val, v, memory_order_release); }
-static inline void      _tr_atomic_store_seqcst(_TrAtomic* a, long long v)        { if (a) atomic_store_explicit(&a->val, v, memory_order_seq_cst); }
-static inline long long _tr_atomic_add_relaxed(_TrAtomic* a, long long v)         { return a ? atomic_fetch_add_explicit(&a->val, v, memory_order_relaxed) : 0LL; }
-static inline long long _tr_atomic_add_release(_TrAtomic* a, long long v)         { return a ? atomic_fetch_add_explicit(&a->val, v, memory_order_release) : 0LL; }
-static inline long long _tr_atomic_add_acqrel(_TrAtomic* a, long long v)          { return a ? atomic_fetch_add_explicit(&a->val, v, memory_order_acq_rel) : 0LL; }
-static inline long long _tr_atomic_sub_relaxed(_TrAtomic* a, long long v)         { return a ? atomic_fetch_sub_explicit(&a->val, v, memory_order_relaxed) : 0LL; }
-static inline long long _tr_atomic_sub_release(_TrAtomic* a, long long v)         { return a ? atomic_fetch_sub_explicit(&a->val, v, memory_order_release) : 0LL; }
-static inline bool      _tr_atomic_cas_weak(_TrAtomic* a, long long exp, long long des)    { return a ? atomic_compare_exchange_weak(&a->val, &exp, des) : false; }
-static inline bool      _tr_atomic_cas_acqrel(_TrAtomic* a, long long exp, long long des) {
-    if (!a) return false;
+static inline long long _tr_atomic_load_relaxed(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_relaxed); }
+static inline long long _tr_atomic_load_acquire(_TrAtomic* a) { return atomic_load_explicit(&a->val, memory_order_acquire); }
+static inline long long _tr_atomic_load_seqcst(_TrAtomic* a)  { return atomic_load_explicit(&a->val, memory_order_seq_cst); }
+static inline void _tr_atomic_store_relaxed(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_relaxed); }
+static inline void _tr_atomic_store_release(_TrAtomic* a, long long v) { atomic_store_explicit(&a->val, v, memory_order_release); }
+static inline void _tr_atomic_store_seqcst(_TrAtomic* a, long long v)  { atomic_store_explicit(&a->val, v, memory_order_seq_cst); }
+static inline long long _tr_atomic_add_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_relaxed); }
+static inline long long _tr_atomic_add_release(_TrAtomic* a, long long v) { return atomic_fetch_add_explicit(&a->val, v, memory_order_release); }
+static inline long long _tr_atomic_add_acqrel(_TrAtomic* a, long long v)  { return atomic_fetch_add_explicit(&a->val, v, memory_order_acq_rel); }
+static inline long long _tr_atomic_sub_relaxed(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_relaxed); }
+static inline long long _tr_atomic_sub_release(_TrAtomic* a, long long v) { return atomic_fetch_sub_explicit(&a->val, v, memory_order_release); }
+static inline bool _tr_atomic_cas_weak(_TrAtomic* a, long long exp, long long des)   { return atomic_compare_exchange_weak(&a->val, &exp, des); }
+static inline bool _tr_atomic_cas_acqrel(_TrAtomic* a, long long exp, long long des) {
     return atomic_compare_exchange_strong_explicit(&a->val, &exp, des, memory_order_acq_rel, memory_order_relaxed);
 }
 
-/* ── Thread object: joinable OS-thread handle ────────────────────────── */
-typedef struct { _TrThread handle; volatile int done; } _TrThreadObj;
+/* ── Thread object: joinable OS-thread handle with panic recovery ──── */
+typedef struct {
+    _TrThread     handle;
+    volatile int  done;
+    _TrSpawnResult result; /* filled by trampoline on thread exit */
+} _TrThreadObj;
+
+/* Internal: thread_start variant that wires result into the trampoline. */
+#ifdef _WIN32
+static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _TrSpawnResult* res) {
+    _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg));
+    s->fn = fn; s->arg = arg; s->result = res;
+    SIZE_T ss = (SIZE_T)TAURARO_THREAD_STACK_SIZE;
+    return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
+}
+#elif !defined(TAURARO_BARE)
+static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _TrSpawnResult* res) {
+    _TrPosixStartArg* s = (_TrPosixStartArg*)malloc(sizeof(_TrPosixStartArg));
+    s->fn = fn; s->arg = arg; s->result = res;
+    pthread_attr_t attr; pthread_attr_init(&attr);
+    if (TAURARO_THREAD_STACK_SIZE > 0)
+        pthread_attr_setstacksize(&attr, (size_t)TAURARO_THREAD_STACK_SIZE);
+    pthread_attr_setguardsize(&attr, 4096);
+    pthread_t t; pthread_create(&t, &attr, _tr_posix_thread_trampoline, s);
+    pthread_attr_destroy(&attr); return t;
+}
+#else
+static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _TrSpawnResult* res) {
+    (void)res; return _tr_thread_start(fn, arg);
+}
+#endif
+
 static inline _TrThreadObj* _tr_threadobj_spawn(void*(*fn)(void*), void* arg) {
-    _TrThreadObj* t = (_TrThreadObj*)calloc(1, sizeof(_TrThreadObj));
-    t->handle = _tr_thread_start(fn, arg); return t;
+    _TrThreadObj* t = (_TrThreadObj*)TAURARO_CALLOC(1, sizeof(_TrThreadObj));
+    t->result.panicked = 0; t->result.panic_msg = NULL;
+    t->handle = _tr_thread_start_result(fn, arg, &t->result);
+    return t;
 }
 static inline void _tr_threadobj_join(_TrThreadObj* t) {
     if (!t || t->done) return; t->done = 1; _tr_thread_join_wait(t->handle);
 }
+/* Re-raise the thread's panic in the calling thread after join */
+static inline bool _tr_threadobj_panicked(_TrThreadObj* t) {
+    return t && t->result.panicked;
+}
+static inline char* _tr_threadobj_panic_msg(_TrThreadObj* t) {
+    return (t && t->result.panic_msg) ? t->result.panic_msg : "";
+}
 static inline void _tr_threadobj_detach(_TrThreadObj* t) {
     if (!t || t->done) return; t->done = 1; _tr_thread_detach(t->handle);
 }
-static inline void _tr_threadobj_free(_TrThreadObj* t) { if (t) free(t); }
+static inline void _tr_threadobj_free(_TrThreadObj* t) { if (t) TAURARO_FREE(t); }
 
 /* ── Thread utilities: current-thread ID and sleep ───────────────────── */
 #ifdef _WIN32
@@ -1280,10 +1504,13 @@ static inline char* _tr_ticker_new_h(long long ms, char* ch)                   {
 static inline void  _tr_timer_stop_h(char* s)                                  { _tr_timer_stop((_TrTimerState*)s); }
 
 /* Thread object (joinable handle) */
-static inline char* _tr_threadobj_spawn_h(void*(*fn)(void*), void* arg)        { return (char*)_tr_threadobj_spawn(fn, arg); }
+typedef void*(*_TrThreadFn)(void*);
+static inline char* _tr_threadobj_spawn_h(char* fn, char* arg)                 { return (char*)_tr_threadobj_spawn((_TrThreadFn)(uintptr_t)fn, (void*)arg); }
 static inline void  _tr_threadobj_join_h(char* t)                              { _tr_threadobj_join((_TrThreadObj*)t); }
 static inline void  _tr_threadobj_detach_h(char* t)                            { _tr_threadobj_detach((_TrThreadObj*)t); }
 static inline void  _tr_threadobj_free_h(char* t)                              { _tr_threadobj_free((_TrThreadObj*)t); }
+static inline bool  _tr_threadobj_panicked_h(char* t)                          { return _tr_threadobj_panicked((_TrThreadObj*)t); }
+static inline char* _tr_threadobj_panic_msg_h(char* t)                         { return _tr_threadobj_panic_msg((_TrThreadObj*)t); }
 static inline long long _tr_thread_current_id_h(void)                          { return _tr_thread_current_id(); }
 static inline void  _tr_thread_sleep_ms_h(long long ms)                        { _tr_thread_sleep_ms(ms); }
 
@@ -1401,6 +1628,286 @@ static inline void _tr_enable_vt100(void) {
     }
 #endif
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * _TrIOPoll — Async I/O readiness abstraction
+ *
+ * Unified API over platform-specific event demultiplexers:
+ *   Linux:       epoll (default) + io_uring (opt-in: -DTAURARO_IO_URING)
+ *   Windows:     IOCP (I/O Completion Ports)
+ *   macOS/BSD:   kqueue
+ *   BARE/kernel: polling stub (returns immediately, no OS call)
+ *
+ * Use:
+ *   _TrIOPoll* p = _tr_iopoll_create();
+ *   _tr_iopoll_add(p, fd, TAURARO_POLLIN, userdata);
+ *   int n = _tr_iopoll_wait(p, events, 64, timeout_ms);
+ *   for (int i = 0; i < n; i++) { ... events[i].userdata ... }
+ *   _tr_iopoll_destroy(p);
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+#define TAURARO_POLLIN   0x01u
+#define TAURARO_POLLOUT  0x02u
+#define TAURARO_POLLERR  0x04u
+#define TAURARO_POLLHUP  0x08u
+
+typedef struct {
+    int      fd;
+    uint32_t events;
+    void*    userdata;
+} _TrIOEvent;
+
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+/* ── BARE/Kernel: polling stub (no OS event loop) ────────────────────── */
+typedef struct { int _dummy; } _TrIOPoll;
+static inline _TrIOPoll* _tr_iopoll_create(void) {
+    return (_TrIOPoll*)TAURARO_CALLOC(1, sizeof(_TrIOPoll));
+}
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if (p) TAURARO_FREE(p); }
+static inline int  _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+    { (void)p;(void)fd;(void)ev;(void)ud; return 0; }
+static inline int  _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+    { (void)p;(void)fd;(void)ev;(void)ud; return 0; }
+static inline int  _tr_iopoll_del(_TrIOPoll* p, int fd)
+    { (void)p;(void)fd; return 0; }
+static inline int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int timeout_ms)
+    { (void)p;(void)ev;(void)maxev;(void)timeout_ms; return 0; }
+
+#elif defined(_WIN32)
+/* ── Windows: IOCP-backed _TrIOPoll ──────────────────────────────────── */
+#ifndef _TR_NET_INCLUDED
+#define _TR_NET_INCLUDED
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#endif
+typedef struct {
+    HANDLE   iocp;
+    void**   ud_map;
+    int*     fd_map;
+    int      map_cap;
+    int      map_cnt;
+} _TrIOPoll;
+static inline _TrIOPoll* _tr_iopoll_create(void) {
+    _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
+    p->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+    p->map_cap = 64;
+    p->ud_map  = (void**)calloc((size_t)p->map_cap, sizeof(void*));
+    p->fd_map  = (int*)calloc((size_t)p->map_cap, sizeof(int));
+    return p;
+}
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+    if (!p) return;
+    if (p->iocp) CloseHandle(p->iocp);
+    free(p->ud_map); free(p->fd_map); free(p);
+}
+static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+    if (!p) return -1;
+    /* Associate socket with IOCP; completion key = index into ud_map */
+    if (p->map_cnt >= p->map_cap) {
+        p->map_cap *= 2;
+        p->ud_map = (void**)realloc(p->ud_map, (size_t)p->map_cap * sizeof(void*));
+        p->fd_map = (int*)realloc(p->fd_map, (size_t)p->map_cap * sizeof(int));
+    }
+    int idx = p->map_cnt++;
+    p->ud_map[idx] = ud; p->fd_map[idx] = fd; (void)ev;
+    CreateIoCompletionPort((HANDLE)(uintptr_t)fd, p->iocp, (ULONG_PTR)idx, 0);
+    return 0;
+}
+static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+    { return _tr_iopoll_add(p, fd, ev, ud); }
+static inline int _tr_iopoll_del(_TrIOPoll* p, int fd)
+    { (void)p;(void)fd; return 0; }
+static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+    if (!p || !out || maxev <= 0) return 0;
+    OVERLAPPED_ENTRY entries[64];
+    ULONG n = 0;
+    DWORD ms = timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms;
+    if (!GetQueuedCompletionStatusEx(p->iocp, entries,
+            (ULONG)(maxev < 64 ? maxev : 64), &n, ms, FALSE)) return 0;
+    for (ULONG i = 0; i < n; i++) {
+        int idx = (int)entries[i].lpCompletionKey;
+        out[i].fd       = (idx >= 0 && idx < p->map_cnt) ? p->fd_map[idx] : -1;
+        out[i].userdata = (idx >= 0 && idx < p->map_cnt) ? p->ud_map[idx] : NULL;
+        out[i].events   = TAURARO_POLLIN | TAURARO_POLLOUT;
+    }
+    return (int)n;
+}
+
+#elif defined(__linux__)
+/* ── Linux: epoll-backed _TrIOPoll ───────────────────────────────────── */
+#include <sys/epoll.h>
+#include <unistd.h>
+typedef struct { int epfd; } _TrIOPoll;
+static inline _TrIOPoll* _tr_iopoll_create(void) {
+    _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
+    p->epfd = epoll_create1(EPOLL_CLOEXEC);
+    return p;
+}
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+    if (!p) return; if (p->epfd >= 0) close(p->epfd); free(p);
+}
+static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+    if (!p) return -1;
+    struct epoll_event e = {0};
+    if (ev & TAURARO_POLLIN)  e.events |= EPOLLIN;
+    if (ev & TAURARO_POLLOUT) e.events |= EPOLLOUT;
+    e.data.ptr = ud;
+    return epoll_ctl(p->epfd, EPOLL_CTL_ADD, fd, &e);
+}
+static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+    if (!p) return -1;
+    struct epoll_event e = {0};
+    if (ev & TAURARO_POLLIN)  e.events |= EPOLLIN;
+    if (ev & TAURARO_POLLOUT) e.events |= EPOLLOUT;
+    e.data.ptr = ud;
+    return epoll_ctl(p->epfd, EPOLL_CTL_MOD, fd, &e);
+}
+static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+    if (!p) return -1;
+    return epoll_ctl(p->epfd, EPOLL_CTL_DEL, fd, NULL);
+}
+static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+    if (!p || !out || maxev <= 0) return 0;
+    struct epoll_event evs[64];
+    int n = epoll_wait(p->epfd, evs, maxev < 64 ? maxev : 64, timeout_ms);
+    if (n <= 0) return 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t e = 0;
+        if (evs[i].events & EPOLLIN)  e |= TAURARO_POLLIN;
+        if (evs[i].events & EPOLLOUT) e |= TAURARO_POLLOUT;
+        if (evs[i].events & EPOLLERR) e |= TAURARO_POLLERR;
+        if (evs[i].events & EPOLLHUP) e |= TAURARO_POLLHUP;
+        out[i].fd       = -1; /* epoll doesn't return fd in event */
+        out[i].events   = e;
+        out[i].userdata = evs[i].data.ptr;
+    }
+    return n;
+}
+
+#if defined(TAURARO_IO_URING)
+/* ── io_uring support (Linux ≥5.1, opt-in with -DTAURARO_IO_URING) ─── *
+ * Provides zero-syscall-per-op submission/completion ring interface.   *
+ * WARNING: incorrect ring usage can crash/oops the kernel. Only use   *
+ * after thorough testing. The epoll backend is the safe default.       */
+#include <liburing.h>
+typedef struct { struct io_uring ring; } _TrIOUring;
+static inline _TrIOUring* _tr_iouring_create(unsigned entries) {
+    _TrIOUring* u = (_TrIOUring*)calloc(1, sizeof(_TrIOUring));
+    if (io_uring_queue_init(entries ? entries : 256u, &u->ring, 0) < 0) {
+        free(u); return NULL;
+    }
+    return u;
+}
+static inline void _tr_iouring_destroy(_TrIOUring* u) {
+    if (!u) return; io_uring_queue_exit(&u->ring); free(u);
+}
+static inline struct io_uring_sqe* _tr_iouring_get_sqe(_TrIOUring* u) {
+    return u ? io_uring_get_sqe(&u->ring) : NULL;
+}
+static inline int _tr_iouring_submit(_TrIOUring* u) {
+    return u ? io_uring_submit(&u->ring) : -1;
+}
+static inline int _tr_iouring_wait_cqe(_TrIOUring* u, struct io_uring_cqe** cqe) {
+    return u ? io_uring_wait_cqe(&u->ring, cqe) : -1;
+}
+static inline void _tr_iouring_cqe_seen(_TrIOUring* u, struct io_uring_cqe* cqe) {
+    if (u) io_uring_cqe_seen(&u->ring, cqe);
+}
+#endif /* TAURARO_IO_URING */
+
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+/* ── macOS/BSD: kqueue-backed _TrIOPoll ──────────────────────────────── */
+#include <sys/event.h>
+#include <unistd.h>
+typedef struct { int kqfd; } _TrIOPoll;
+static inline _TrIOPoll* _tr_iopoll_create(void) {
+    _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
+    p->kqfd = kqueue(); return p;
+}
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+    if (!p) return; if (p->kqfd >= 0) close(p->kqfd); free(p);
+}
+static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
+    if (!p) return -1;
+    struct kevent changes[2]; int n = 0;
+    if (ev & TAURARO_POLLIN)
+        EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_READ,  EV_ADD|EV_ENABLE, 0, 0, ud);
+    if (ev & TAURARO_POLLOUT)
+        EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD|EV_ENABLE, 0, 0, ud);
+    return kevent(p->kqfd, changes, n, NULL, 0, NULL);
+}
+static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
+    { return _tr_iopoll_add(p, fd, ev, ud); }
+static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+    if (!p) return -1;
+    struct kevent changes[2];
+    EV_SET(&changes[0], (uintptr_t)fd, EVFILT_READ,  EV_DELETE, 0, 0, NULL);
+    EV_SET(&changes[1], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    return kevent(p->kqfd, changes, 2, NULL, 0, NULL);
+}
+static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
+    if (!p || !out || maxev <= 0) return 0;
+    struct kevent evs[64];
+    struct timespec ts = { timeout_ms / 1000, (timeout_ms % 1000) * 1000000L };
+    struct timespec* tsp = timeout_ms < 0 ? NULL : &ts;
+    int n = kevent(p->kqfd, NULL, 0, evs, maxev < 64 ? maxev : 64, tsp);
+    if (n <= 0) return 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t e = 0;
+        if (evs[i].filter == EVFILT_READ)  e |= TAURARO_POLLIN;
+        if (evs[i].filter == EVFILT_WRITE) e |= TAURARO_POLLOUT;
+        if (evs[i].flags & EV_ERROR)       e |= TAURARO_POLLERR;
+        if (evs[i].flags & EV_EOF)         e |= TAURARO_POLLHUP;
+        out[i].fd       = (int)evs[i].ident;
+        out[i].events   = e;
+        out[i].userdata = evs[i].udata;
+    }
+    return n;
+}
+#else
+/* ── Fallback: no async I/O on unknown platform ───────────────────────── */
+typedef struct { int _dummy; } _TrIOPoll;
+static inline _TrIOPoll* _tr_iopoll_create(void) { return (_TrIOPoll*)calloc(1,sizeof(_TrIOPoll)); }
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if(p) free(p); }
+static inline int  _tr_iopoll_add(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
+static inline int  _tr_iopoll_mod(_TrIOPoll* p,int fd,uint32_t ev,void* ud){(void)p;(void)fd;(void)ev;(void)ud;return -1;}
+static inline int  _tr_iopoll_del(_TrIOPoll* p,int fd){(void)p;(void)fd;return -1;}
+static inline int  _tr_iopoll_wait(_TrIOPoll* p,_TrIOEvent* ev,int m,int t){(void)p;(void)ev;(void)m;(void)t;return 0;}
+#endif /* _TrIOPoll platform backends */
+
+/* _tr_iopoll_wait_raw: Tauraro-callable version.
+ * out_buf is a caller-allocated byte array; each slot is sizeof(_TrIOEvent).
+ * Returns number of events written.  Tauraro code reads fd/events/userdata
+ * at offsets 0/4/8 within each 16-byte slot. */
+static inline int _tr_iopoll_wait_raw(char* p_raw, char* out_buf, int maxev, int timeout_ms) {
+    _TrIOPoll* p = (_TrIOPoll*)p_raw;
+    _TrIOEvent tmp[64];
+    if (maxev > 64) maxev = 64;
+    int n = _tr_iopoll_wait(p, tmp, maxev, timeout_ms);
+    for (int i = 0; i < n; i++) {
+        char* slot = out_buf + i * 16;
+        int   fd   = tmp[i].fd;
+        int   ev   = (int)tmp[i].events;
+        int   ud   = (int)(long long)tmp[i].userdata;
+        memcpy(slot + 0, &fd, 4);
+        memcpy(slot + 4, &ev, 4);
+        memcpy(slot + 8, &ud, 4);
+    }
+    return n;
+}
+
+/* IOPoll char*-typed _h wrappers for Tauraro Pointer[char] interop */
+static inline char* _tr_iopoll_create_h(void)
+    { return (char*)_tr_iopoll_create(); }
+static inline void  _tr_iopoll_destroy_h(char* p)
+    { _tr_iopoll_destroy((_TrIOPoll*)p); }
+static inline int   _tr_iopoll_add_h(char* p, long long fd, long long ev, long long ud)
+    { return _tr_iopoll_add((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
+static inline int   _tr_iopoll_mod_h(char* p, long long fd, long long ev, long long ud)
+    { return _tr_iopoll_mod((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
+static inline int   _tr_iopoll_del_h(char* p, long long fd)
+    { return _tr_iopoll_del((_TrIOPoll*)p,(int)fd); }
 
 /* ── TCP socket helpers ─────────────────────────────────────────────── */
 #if defined(TAURARO_BARE) || defined(TAURARO_WASM)
@@ -1570,7 +2077,7 @@ static inline long long _tr_file_size(const char* path) {
 /* _tr_c_memset defined above */
 
 static inline void _tr_bounds_check(long long i, size_t len) {
-    if (i < 0 || (size_t)i >= len) {
+    if (__builtin_expect(i < 0 || (size_t)i >= len, 0)) {
         fprintf(stderr, "Index %lld out of bounds (length %zu)\n", i, len);
         abort();
     }
@@ -1580,6 +2087,17 @@ static inline void _tr_bounds_check(long long i, size_t len) {
   #define _TR_GLOBAL
 #else
   #define _TR_GLOBAL extern
+#endif
+
+/* Thread-local storage qualifier for per-thread exception stacks */
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+#  define _TR_THREAD_LOCAL
+#elif defined(_MSC_VER)
+#  define _TR_THREAD_LOCAL __declspec(thread)
+#elif defined(__GNUC__) || defined(__clang__)
+#  define _TR_THREAD_LOCAL __thread
+#else
+#  define _TR_THREAD_LOCAL _Thread_local
 #endif
 
 /* argc/argv made available to std.sys.env at runtime. */
@@ -1595,27 +2113,34 @@ _TR_GLOBAL _TrTaskGroup _tr_tg;
 _TR_GLOBAL _TrThreadPool* _tr_global_async_pool;
 static inline void _tr_tg_begin(void) {
     _tr_tg.cap = 16; _tr_tg.count = 0;
-    _tr_tg.ths = (_TrThread*)malloc((size_t)_tr_tg.cap * sizeof(_TrThread));
+    _tr_tg.ths = (_TrThread*)TAURARO_ALLOC((size_t)_tr_tg.cap * sizeof(_TrThread));
 }
 static inline void _tr_tg_push(_TrThread t) {
     if (_tr_tg.count >= _tr_tg.cap) {
         _tr_tg.cap *= 2;
-        _tr_tg.ths = (_TrThread*)realloc(_tr_tg.ths, (size_t)_tr_tg.cap * sizeof(_TrThread));
+        _tr_tg.ths = (_TrThread*)TAURARO_REALLOC(_tr_tg.ths, (size_t)_tr_tg.cap * sizeof(_TrThread));
     }
     _tr_tg.ths[_tr_tg.count++] = t;
 }
 static inline void _tr_taskgroup_wait(void) {
     for (int i = 0; i < _tr_tg.count; i++) _tr_thread_join_wait(_tr_tg.ths[i]);
-    if (_tr_tg.ths) { free(_tr_tg.ths); _tr_tg.ths = NULL; }
+    if (_tr_tg.ths) { TAURARO_FREE(_tr_tg.ths); _tr_tg.ths = NULL; }
     _tr_tg.count = 0; _tr_tg.cap = 0;
 }
 
-/* ── Exception stack (setjmp/longjmp based) ─────────────────────────── */
+/* ── Per-thread panic state (storage definitions for _TR_MAIN TU) ─── */
+#if !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL)
+_TR_GLOBAL _TR_THREAD_LOCAL int     _tr_thread_has_panic_buf;
+_TR_GLOBAL _TR_THREAD_LOCAL jmp_buf _tr_thread_panic_jmpbuf;
+_TR_GLOBAL _TR_THREAD_LOCAL char*   _tr_thread_panic_message;
+#endif
+
+/* ── Exception stack (setjmp/longjmp based, per-thread) ─────────────── */
 
 #define _TR_MAX_EXC 64
-_TR_GLOBAL jmp_buf*  _tr_exc_bufs[_TR_MAX_EXC];
-_TR_GLOBAL char**    _tr_exc_msgs[_TR_MAX_EXC];
-_TR_GLOBAL int       _tr_exc_sp;
+_TR_GLOBAL _TR_THREAD_LOCAL jmp_buf*  _tr_exc_bufs[_TR_MAX_EXC];
+_TR_GLOBAL _TR_THREAD_LOCAL char**    _tr_exc_msgs[_TR_MAX_EXC];
+_TR_GLOBAL _TR_THREAD_LOCAL int       _tr_exc_sp;
 
 static void _tr_exc_push(jmp_buf* b, char** m) {
     if (_tr_exc_sp < _TR_MAX_EXC) {
@@ -1631,6 +2156,11 @@ static void _tr_exc_raise(char* msg) {
         *_tr_exc_msgs[_tr_exc_sp] = msg;
         longjmp(*_tr_exc_bufs[_tr_exc_sp], 1);
     }
+    /* No user try-handler: escalate to thread panic handler if in a spawned thread */
+    if (_tr_thread_has_panic_buf) {
+        _tr_thread_panic_message = msg;
+        longjmp(_tr_thread_panic_jmpbuf, 1);
+    }
     fprintf(stderr, "Unhandled exception: %s\n", msg ? msg : "(null)");
     abort();
 }
@@ -1640,19 +2170,19 @@ static void _tr_exc_raise(char* msg) {
 static char* _tr_str_concat(const char* a, const char* b) {
     if (!a) a=""; if (!b) b="";
     size_t la=strlen(a), lb=strlen(b);
-    char* r=(char*)malloc(la+lb+1);
+    char* r=(char*)TAURARO_ALLOC(la+lb+1);
     memcpy(r,a,la); memcpy(r+la,b,lb+1);
     return r;
 }
 static char* _tr_str_upper(const char* s) {
     if (!s) return "";
-    char* r=(char*)malloc(strlen(s)+1);
+    char* r=(char*)TAURARO_ALLOC(strlen(s)+1);
     for (int i=0; (r[i]=(char)toupper((unsigned char)s[i])) || s[i]; i++);
     return r;
 }
 static char* _tr_str_lower(const char* s) {
     if (!s) return "";
-    char* r=(char*)malloc(strlen(s)+1);
+    char* r=(char*)TAURARO_ALLOC(strlen(s)+1);
     for (int i=0; (r[i]=(char)tolower((unsigned char)s[i])) || s[i]; i++);
     return r;
 }
@@ -1670,18 +2200,18 @@ static bool _tr_str_ends_with(const char* s, const char* suf) {
 static char* _tr_str_strip(const char* s) {
     if (!s) return "";
     while (isspace((unsigned char)*s)) s++;
-    if (!*s) { char* e=(char*)malloc(1); *e='\0'; return e; }
+    if (!*s) { char* e=(char*)TAURARO_ALLOC(1); *e='\0'; return e; }
     const char* end = s+strlen(s)-1;
     while (end>s && isspace((unsigned char)*end)) end--;
     size_t len=(size_t)(end-s+1);
-    char* r=(char*)malloc(len+1); memcpy(r,s,len); r[len]='\0'; return r;
+    char* r=(char*)TAURARO_ALLOC(len+1); memcpy(r,s,len); r[len]='\0'; return r;
 }
 static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
     if (!s||!old||!nw) return (char*)s;
     size_t sl=strlen(s), ol=strlen(old), nl=strlen(nw);
     int cnt=0; const char* p=s;
     while ((p=strstr(p,old))) { cnt++; p+=ol; }
-    char* r=(char*)malloc(sl+(size_t)cnt*(nl>ol?nl-ol:0)+1);
+    char* r=(char*)TAURARO_ALLOC(sl+(size_t)cnt*(nl>ol?nl-ol:0)+1);
     char* dst=r; p=s;
     while (*p) {
         if (strncmp(p,old,ol)==0) { memcpy(dst,nw,nl); dst+=nl; p+=ol; }
@@ -1689,10 +2219,10 @@ static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
     }
     *dst='\0'; return r;
 }
-static char*     _tr_int_to_str(long long n)   { char* b=(char*)malloc(32); snprintf(b,32,"%lld",n); return b; }
-static char*     _tr_float_to_str(double n)    { char* b=(char*)malloc(32); snprintf(b,32,"%g",n);   return b; }
-static char*     _tr_float_to_c_lit(double n)  { char* b=(char*)malloc(32); snprintf(b,32,"%.17g",n); return b; }
-static char*     _tr_bool_to_str(bool b)       { return b ? "true" : "false"; }
+static char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
+static char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
+static char* _tr_float_to_c_lit(double n)  { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%.17g",n); return b; }
+static char* _tr_bool_to_str(bool b)       { return b ? "true" : "false"; }
 
 /* _TR_AUTO_STR — convert any scalar to char* for f-string / print with unknown type.
  * Uses _Generic so __auto_type variables work without an explicit type annotation.
@@ -1766,6 +2296,11 @@ static inline int _tr_system(const char* cmd) { return system(cmd); }
 
 /* ── Panic / error ───────────────────────────────────────────────────── */
 static inline void _tr_panic(const char* msg) {
+    if (_tr_thread_has_panic_buf) {
+        /* In a spawned thread: unwind to thread boundary, not abort() */
+        _tr_thread_panic_message = (char*)msg;
+        longjmp(_tr_thread_panic_jmpbuf, 1);
+    }
     fprintf(stderr, "panic: %s\n", msg ? msg : "(null)");
     abort();
 }
@@ -1870,7 +2405,7 @@ typedef struct { long long data[8]; } TrTuple;
 
 /* ── List types (bootstrap phase) ─────────────────────────────────── */
 
-typedef struct { long long* data; size_t len; size_t capacity; } List_i64;
+typedef struct { long long* __restrict__ data; size_t len; size_t capacity; } List_i64;
 static inline List_i64* List_i64_new(void) { List_i64* l=(List_i64*)malloc(sizeof(List_i64)); l->data=(long long*)malloc(sizeof(long long)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_i64_append(List_i64* l, long long val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(long long*)realloc(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; }
 static inline bool List_i64_contains(List_i64* l, long long val) { for (size_t i = 0; i < l->len; i++) { if (l->data[i] == val) return true; } return false; }
@@ -1879,7 +2414,7 @@ static inline void List_i64_set(List_i64* l, long long i, long long v) { if(l&&(
 static inline long long List_i64_get(List_i64* l, long long i) { if(l&&(size_t)i<l->len) return l->data[i]; return 0LL; }
 static inline void List_i64_free(List_i64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
-typedef struct { double* data; size_t len; size_t capacity; } List_f64;
+typedef struct { double* __restrict__ data; size_t len; size_t capacity; } List_f64;
 static inline List_f64* List_f64_new(void) { List_f64* l=(List_f64*)malloc(sizeof(List_f64)); l->data=(double*)malloc(sizeof(double)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_f64_append(List_f64* l, double val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(double*)realloc(l->data,sizeof(double)*l->capacity); } l->data[l->len++]=val; }
 static inline double List_f64_pop(List_f64* l) { if(!l||l->len==0) return 0.0; l->len--; return l->data[l->len]; }
@@ -2323,7 +2858,7 @@ static inline void StringBuilder_append(StringBuilder* sb, char* s) {
     if (slen <= 0) return;
     if (sb->buf->len + slen >= sb->buf->capacity) {
         sb->buf->capacity = (sb->buf->len + slen) * 2 + 8;
-        sb->buf->data = (char*)realloc(sb->buf->data, (size_t)sb->buf->capacity);
+        sb->buf->data = (char*)TAURARO_REALLOC(sb->buf->data, (size_t)sb->buf->capacity);
     }
     memcpy(sb->buf->data + sb->buf->len, s, (size_t)slen);
     sb->buf->len += slen;
@@ -2332,7 +2867,7 @@ static inline void StringBuilder_append(StringBuilder* sb, char* s) {
 static inline void StringBuilder_append_char(StringBuilder* sb, long long c) {
     if (sb->buf->len + 1 >= sb->buf->capacity) {
         sb->buf->capacity = sb->buf->capacity * 2 + 8;
-        sb->buf->data = (char*)realloc(sb->buf->data, (size_t)sb->buf->capacity);
+        sb->buf->data = (char*)TAURARO_REALLOC(sb->buf->data, (size_t)sb->buf->capacity);
     }
     sb->buf->data[sb->buf->len++] = (char)c;
     sb->buf->data[sb->buf->len] = '\0';
@@ -2357,7 +2892,7 @@ static inline void StringBuilder_append_float(StringBuilder* sb, double f) {
 }
 static inline long long StringBuilder_length(StringBuilder* sb) { return sb->buf->len; }
 static inline void StringBuilder_free(StringBuilder* sb) {
-    free(sb->buf->data); free(sb->buf); free(sb);
+    TAURARO_FREE(sb->buf->data); TAURARO_FREE(sb->buf); TAURARO_FREE(sb);
 }
 #endif /* TAURARO_RT_NO_STRINGBUILDER */
 
@@ -2401,6 +2936,7 @@ static inline bool file_exists(char* path) {
 static inline char* _tr_c_strdup(char* s) {
     return s ? strdup(s) : (char*)0;
 }
+#define _tr_strdup _tr_c_strdup
 
 
 static inline double _tr_get_inf(void) { return (double)INFINITY; }
@@ -2645,6 +3181,108 @@ static inline void _tr_console_reset(void)     { printf("\033[0m"); fflush(stdou
 static inline void _tr_console_clear(void)     { printf("\033[2J\033[H"); fflush(stdout); }
 #endif
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * Non-blocking socket API
+ *
+ * Return values:
+ *   >= 0  : success / bytes transferred
+ *   -1    : hard error
+ *   TAURARO_WOULD_BLOCK (-2) : operation would block (EAGAIN/EWOULDBLOCK/WSAEWOULDBLOCK)
+ *
+ * Typical pattern with _TrIOPoll:
+ *   int fd = _tr_tcp_connect_nb(host, port);   // initiates connect, may return fd immediately
+ *   _tr_iopoll_add(poll, fd, TAURARO_POLLOUT, ctx); // wait for writable = connect done
+ *   int n = _tr_tcp_recv_nb(fd, buf, cap);      // -2 means try again later
+ * ══════════════════════════════════════════════════════════════════════════ */
+#define TAURARO_WOULD_BLOCK (-2)
+
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+static inline int  _tr_tcp_set_nonblocking(int fd)                    { (void)fd; return -1; }
+static inline int  _tr_tcp_recv_nb(int fd, char* b, int c)            { (void)fd;(void)b;(void)c; return -1; }
+static inline int  _tr_tcp_send_nb(int fd, const char* d, int l)      { (void)fd;(void)d;(void)l; return -1; }
+static inline int  _tr_tcp_accept_nb(int fd)                          { (void)fd; return TAURARO_WOULD_BLOCK; }
+static inline int  _tr_tcp_connect_nb(const char* h, int p)           { (void)h;(void)p; return -1; }
+
+#elif defined(_WIN32)
+#ifndef _TR_NET_INCLUDED
+#define _TR_NET_INCLUDED
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#endif
+static inline int _tr_tcp_set_nonblocking(int fd) {
+    u_long mode = 1;
+    return ioctlsocket((SOCKET)fd, FIONBIO, &mode) == 0 ? 0 : -1;
+}
+static inline int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
+    int n = recv((SOCKET)fd, buf, cap, 0);
+    if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) return TAURARO_WOULD_BLOCK;
+    return n;
+}
+static inline int _tr_tcp_send_nb(int fd, const char* data, int len) {
+    int n = send((SOCKET)fd, data, len, 0);
+    if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) return TAURARO_WOULD_BLOCK;
+    return n;
+}
+static inline int _tr_tcp_accept_nb(int server_fd) {
+    SOCKET s = accept((SOCKET)server_fd, NULL, NULL);
+    if (s == INVALID_SOCKET) {
+        return (WSAGetLastError() == WSAEWOULDBLOCK) ? TAURARO_WOULD_BLOCK : -1;
+    }
+    return (int)s;
+}
+static inline int _tr_tcp_connect_nb(const char* host, int port) {
+    _tr_net_init();
+    struct addrinfo hints = {0}, *res = NULL;
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
+    char pbuf[16]; sprintf(pbuf, "%d", port);
+    if (getaddrinfo(host, pbuf, &hints, &res) != 0) return -1;
+    SOCKET fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd == INVALID_SOCKET) { freeaddrinfo(res); return -1; }
+    u_long mode = 1; ioctlsocket(fd, FIONBIO, &mode);
+    connect(fd, res->ai_addr, (int)res->ai_addrlen); /* WSAEWOULDBLOCK is expected */
+    freeaddrinfo(res);
+    return (int)fd;
+}
+
+#else /* POSIX */
+#include <fcntl.h>
+#include <errno.h>
+static inline int _tr_tcp_set_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return -1;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 ? 0 : -1;
+}
+static inline int _tr_tcp_recv_nb(int fd, char* buf, int cap) {
+    int n = (int)recv(fd, buf, (size_t)cap, 0);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return TAURARO_WOULD_BLOCK;
+    return n;
+}
+static inline int _tr_tcp_send_nb(int fd, const char* data, int len) {
+    int n = (int)send(fd, data, (size_t)len, 0);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return TAURARO_WOULD_BLOCK;
+    return n;
+}
+static inline int _tr_tcp_accept_nb(int server_fd) {
+    int fd = accept(server_fd, NULL, NULL);
+    if (fd < 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? TAURARO_WOULD_BLOCK : -1;
+    return fd;
+}
+static inline int _tr_tcp_connect_nb(const char* host, int port) {
+    struct addrinfo hints = {0}, *res = NULL;
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
+    char pbuf[16]; snprintf(pbuf, sizeof(pbuf), "%d", port);
+    if (getaddrinfo(host, pbuf, &hints, &res) != 0) return -1;
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); return -1; }
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    connect(fd, res->ai_addr, res->ai_addrlen); /* EINPROGRESS expected */
+    freeaddrinfo(res);
+    return fd;
+}
+#endif /* non-blocking socket API */
+
 /* -- Random (LCG-64) ------------------------------------------------------- */
 typedef struct { unsigned long long s; } _TrRng;
 static inline _TrRng* _tr_rng_new(long long seed) {
@@ -2737,6 +3375,469 @@ static inline bool _tr_is_mobile(void) {
 #else
     return false;
 #endif
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Executable directory — returns directory containing the running binary.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#if defined(__APPLE__)
+#  include <mach-o/dyld.h>
+#endif
+static inline char* _tr_exe_dir(void) {
+#if defined(_WIN32)
+    char* buf=(char*)_tr_c_malloc(4096);
+    DWORD n=GetModuleFileNameA(NULL,buf,4096);
+    if(!n){buf[0]='.';buf[1]='\0';return buf;}
+    for(int i=(int)n-1;i>0;i--){if(buf[i]=='\\'||buf[i]=='/'){buf[i]='\0';break;}}
+    return buf;
+#elif defined(__APPLE__)
+    char tmp[4096]; uint32_t sz=sizeof(tmp);
+    if(_NSGetExecutablePath(tmp,&sz)!=0) return (char*)".";
+    char* buf=(char*)_tr_c_malloc(4096);
+    if(!realpath(tmp,buf)){strcpy(buf,".");return buf;}
+    for(int i=(int)strlen(buf)-1;i>0;i--){if(buf[i]=='/'){buf[i]='\0';break;}}
+    return buf;
+#elif defined(__linux__)
+    char* buf=(char*)_tr_c_malloc(4096);
+    ssize_t n=readlink("/proc/self/exe",buf,4095);
+    if(n<=0){buf[0]='.';buf[1]='\0';return buf;}
+    buf[n]='\0';
+    for(int i=(int)n-1;i>0;i--){if(buf[i]=='/'){buf[i]='\0';break;}}
+    return buf;
+#else
+    return (char*)".";
+#endif
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * REGEX — POSIX regex.h on Linux/Mac; stubs on Windows and bare-metal.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#ifndef TAURARO_BARE
+#  if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+#    include <regex.h>
+#    define TAURARO_HAVE_REGEX 1
+#  endif
+#endif
+
+#ifdef TAURARO_HAVE_REGEX
+typedef struct { regex_t re; } _TrRegex;
+static inline char* _tr_regex_compile(char* pattern, int icase) {
+    _TrRegex* r = (_TrRegex*)TAURARO_ALLOC(sizeof(_TrRegex));
+    if (!r) return NULL;
+    int flags = REG_EXTENDED; if (icase) flags |= REG_ICASE;
+    if (regcomp(&r->re, pattern, flags) != 0) { TAURARO_FREE(r); return NULL; }
+    return (char*)r;
+}
+static inline bool _tr_regex_match(char* handle, char* text) {
+    if (!handle || !text) return false;
+    return regexec(&((_TrRegex*)handle)->re, text, 0, NULL, 0) == 0;
+}
+static inline int _tr_regex_find_start(char* handle, char* text, int from) {
+    if (!handle || !text) return -1;
+    regmatch_t m;
+    if (regexec(&((_TrRegex*)handle)->re, text + from, 1, &m, 0) != 0) return -1;
+    return from + (int)m.rm_so;
+}
+static inline int _tr_regex_find_len(char* handle, char* text, int from) {
+    if (!handle || !text) return -1;
+    regmatch_t m;
+    if (regexec(&((_TrRegex*)handle)->re, text + from, 1, &m, 0) != 0) return -1;
+    return (int)(m.rm_eo - m.rm_so);
+}
+static inline char* _tr_regex_replace_first(char* handle, char* text, char* repl) {
+    if (!handle || !text || !repl) return _tr_strdup(text ? text : "");
+    regmatch_t m;
+    if (regexec(&((_TrRegex*)handle)->re, text, 1, &m, 0) != 0) return _tr_strdup(text);
+    size_t pre = (size_t)m.rm_so, rlen = strlen(repl), post = strlen(text) - (size_t)m.rm_eo;
+    char* out = (char*)TAURARO_ALLOC(pre + rlen + post + 1); if (!out) return _tr_strdup(text);
+    memcpy(out, text, pre); memcpy(out+pre, repl, rlen); memcpy(out+pre+rlen, text+m.rm_eo, post);
+    out[pre+rlen+post] = '\0'; return out;
+}
+static inline char* _tr_regex_replace_all(char* handle, char* text, char* repl) {
+    if (!handle || !text || !repl) return _tr_strdup(text ? text : "");
+    _TrRegex* r = (_TrRegex*)handle; regmatch_t m;
+    size_t rlen = strlen(repl), cur = 0, tlen = strlen(text);
+    char* result = _tr_strdup("");
+    while (cur < tlen && regexec(&r->re, text + cur, 1, &m, 0) == 0) {
+        size_t pre = (size_t)m.rm_so, olen = strlen(result);
+        char* tmp = (char*)TAURARO_ALLOC(olen + pre + rlen + 1); if (!tmp) break;
+        memcpy(tmp, result, olen); memcpy(tmp+olen, text+cur, pre);
+        memcpy(tmp+olen+pre, repl, rlen); tmp[olen+pre+rlen] = '\0';
+        TAURARO_FREE(result); result = tmp;
+        size_t adv = (size_t)(m.rm_eo - m.rm_so); if (adv == 0) adv = 1;
+        cur += pre + adv;
+    }
+    size_t rem = tlen - cur, olen2 = strlen(result);
+    char* out = (char*)TAURARO_ALLOC(olen2 + rem + 1);
+    if (out) { memcpy(out, result, olen2); memcpy(out+olen2, text+cur, rem); out[olen2+rem]='\0'; TAURARO_FREE(result); return out; }
+    return result;
+}
+static inline int _tr_regex_count(char* handle, char* text) {
+    if (!handle || !text) return 0;
+    regmatch_t m; int n = 0; size_t cur = 0, tlen = strlen(text);
+    while (cur < tlen && regexec(&((_TrRegex*)handle)->re, text+cur, 1, &m, 0) == 0) {
+        n++; size_t adv=(size_t)(m.rm_eo-m.rm_so); if(adv==0)adv=1; cur+=(size_t)m.rm_so+adv;
+    }
+    return n;
+}
+static inline void _tr_regex_free(char* handle) {
+    if (!handle) return; regfree(&((_TrRegex*)handle)->re); TAURARO_FREE(handle);
+}
+#else
+static inline char* _tr_regex_compile(char* p, int i) { (void)p;(void)i; return NULL; }
+static inline bool  _tr_regex_match(char* h, char* t) { (void)h;(void)t; return false; }
+static inline int   _tr_regex_find_start(char* h, char* t, int f) { (void)h;(void)t;(void)f; return -1; }
+static inline int   _tr_regex_find_len(char* h, char* t, int f) { (void)h;(void)t;(void)f; return -1; }
+static inline char* _tr_regex_replace_first(char* h, char* t, char* r) { (void)h;(void)r; return _tr_strdup(t?t:""); }
+static inline char* _tr_regex_replace_all(char* h, char* t, char* r) { (void)h;(void)r; return _tr_strdup(t?t:""); }
+static inline int   _tr_regex_count(char* h, char* t) { (void)h;(void)t; return 0; }
+static inline void  _tr_regex_free(char* h) { (void)h; }
+#endif
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * SHA-256 — pure C, no external dependencies.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#define _TR_ROTR32(x,n) (((x)>>(n))|((x)<<(32-(n))))
+#define _TR_S0(x) (_TR_ROTR32(x,2)^_TR_ROTR32(x,13)^_TR_ROTR32(x,22))
+#define _TR_S1(x) (_TR_ROTR32(x,6)^_TR_ROTR32(x,11)^_TR_ROTR32(x,25))
+#define _TR_s0(x) (_TR_ROTR32(x,7)^_TR_ROTR32(x,18)^((x)>>3))
+#define _TR_s1(x) (_TR_ROTR32(x,17)^_TR_ROTR32(x,19)^((x)>>10))
+#define _TR_CH(x,y,z) (((x)&(y))^(~(x)&(z)))
+#define _TR_MAJ(x,y,z) (((x)&(y))^((x)&(z))^((y)&(z)))
+
+static const uint32_t _tr_sha256_K[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+};
+
+typedef struct { uint32_t h[8]; uint8_t buf[64]; uint64_t bits; uint32_t buf_len; } _TrSHA256Ctx;
+
+static inline void _tr_sha256_init(_TrSHA256Ctx* c) {
+    c->h[0]=0x6a09e667;c->h[1]=0xbb67ae85;c->h[2]=0x3c6ef372;c->h[3]=0xa54ff53a;
+    c->h[4]=0x510e527f;c->h[5]=0x9b05688c;c->h[6]=0x1f83d9ab;c->h[7]=0x5be0cd19;
+    c->bits=0; c->buf_len=0;
+}
+static inline void _tr_sha256_block(_TrSHA256Ctx* c, const uint8_t* blk) {
+    uint32_t w[64],a,b,cc,d,e,f,g,h,t1,t2; int i;
+    for(i=0;i<16;i++) w[i]=((uint32_t)blk[i*4]<<24)|((uint32_t)blk[i*4+1]<<16)|((uint32_t)blk[i*4+2]<<8)|(uint32_t)blk[i*4+3];
+    for(i=16;i<64;i++) w[i]=_TR_s1(w[i-2])+w[i-7]+_TR_s0(w[i-15])+w[i-16];
+    a=c->h[0];b=c->h[1];cc=c->h[2];d=c->h[3];e=c->h[4];f=c->h[5];g=c->h[6];h=c->h[7];
+    for(i=0;i<64;i++){
+        t1=h+_TR_S1(e)+_TR_CH(e,f,g)+_tr_sha256_K[i]+w[i];
+        t2=_TR_S0(a)+_TR_MAJ(a,b,cc);
+        h=g;g=f;f=e;e=d+t1;d=cc;cc=b;b=a;a=t1+t2;
+    }
+    c->h[0]+=a;c->h[1]+=b;c->h[2]+=cc;c->h[3]+=d;c->h[4]+=e;c->h[5]+=f;c->h[6]+=g;c->h[7]+=h;
+}
+static inline void _tr_sha256_update(_TrSHA256Ctx* c, const uint8_t* data, size_t len) {
+    for(size_t i=0;i<len;i++){
+        c->buf[c->buf_len++]=data[i]; c->bits+=8;
+        if(c->buf_len==64){_tr_sha256_block(c,c->buf);c->buf_len=0;}
+    }
+}
+static inline void _tr_sha256_final(_TrSHA256Ctx* c, uint8_t* dig) {
+    uint64_t bits=c->bits;
+    c->buf[c->buf_len++]=0x80;
+    while(c->buf_len!=56){if(c->buf_len==64){_tr_sha256_block(c,c->buf);c->buf_len=0;}c->buf[c->buf_len++]=0;}
+    for(int i=7;i>=0;i--){c->buf[56+(7-i)]=(uint8_t)(bits>>((uint64_t)i*8));}
+    _tr_sha256_block(c,c->buf);
+    for(int i=0;i<8;i++){dig[i*4]=(uint8_t)(c->h[i]>>24);dig[i*4+1]=(uint8_t)(c->h[i]>>16);dig[i*4+2]=(uint8_t)(c->h[i]>>8);dig[i*4+3]=(uint8_t)c->h[i];}
+}
+static const char _tr_hex_lc[] = "0123456789abcdef";
+static inline char* _tr_sha256_hex(char* input) {
+    _TrSHA256Ctx ctx; uint8_t dig[32];
+    _tr_sha256_init(&ctx);
+    if(input) _tr_sha256_update(&ctx,(const uint8_t*)input,strlen(input));
+    _tr_sha256_final(&ctx,dig);
+    char* out=(char*)TAURARO_ALLOC(65); if(!out) return NULL;
+    for(int i=0;i<32;i++){out[i*2]=_tr_hex_lc[dig[i]>>4];out[i*2+1]=_tr_hex_lc[dig[i]&15];}
+    out[64]='\0'; return out;
+}
+static inline char* _tr_sha256_bytes_of(char* input, int ilen) {
+    _TrSHA256Ctx ctx; uint8_t dig[32];
+    _tr_sha256_init(&ctx);
+    if(input&&ilen>0) _tr_sha256_update(&ctx,(const uint8_t*)input,(size_t)ilen);
+    _tr_sha256_final(&ctx,dig);
+    char* out=(char*)TAURARO_ALLOC(32); if(!out) return NULL;
+    memcpy(out,dig,32); return out;
+}
+
+/* ── HMAC-SHA256 ────────────────────────────────────────────────────────── */
+static inline char* _tr_hmac_sha256(char* key, int klen, char* msg) {
+    uint8_t k[64]={0}; _TrSHA256Ctx ctx;
+    if(klen>64){_tr_sha256_init(&ctx);_tr_sha256_update(&ctx,(const uint8_t*)key,(size_t)klen);uint8_t tmp[32];_tr_sha256_final(&ctx,tmp);memcpy(k,tmp,32);}
+    else memcpy(k,key,(size_t)klen);
+    uint8_t ipad[64],opad[64];
+    for(int i=0;i<64;i++){ipad[i]=k[i]^0x36;opad[i]=k[i]^0x5c;}
+    uint8_t inner[32];
+    _tr_sha256_init(&ctx);_tr_sha256_update(&ctx,ipad,64);
+    if(msg)_tr_sha256_update(&ctx,(const uint8_t*)msg,strlen(msg));
+    _tr_sha256_final(&ctx,inner);
+    _tr_sha256_init(&ctx);_tr_sha256_update(&ctx,opad,64);_tr_sha256_update(&ctx,inner,32);
+    uint8_t dig[32]; _tr_sha256_final(&ctx,dig);
+    char* out=(char*)TAURARO_ALLOC(65); if(!out) return NULL;
+    for(int i=0;i<32;i++){out[i*2]=_tr_hex_lc[dig[i]>>4];out[i*2+1]=_tr_hex_lc[dig[i]&15];}
+    out[64]='\0'; return out;
+}
+
+/* ── UUID v4 ────────────────────────────────────────────────────────────── */
+static inline char* _tr_uuid_v4(void) {
+    uint8_t b[16];
+#if !defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__)
+    FILE* f=fopen("/dev/urandom","rb");
+    if(f){fread(b,1,16,f);fclose(f);}
+    else{for(int i=0;i<16;i++)b[i]=(uint8_t)(rand()&0xff);}
+#else
+    for(int i=0;i<16;i++)b[i]=(uint8_t)(rand()&0xff);
+#endif
+    b[6]=(b[6]&0x0f)|0x40; b[8]=(b[8]&0x3f)|0x80;
+    char* out=(char*)TAURARO_ALLOC(37); if(!out) return NULL;
+    snprintf(out,37,"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15]);
+    return out;
+}
+
+/* ── MD5 (compact, for legacy use) ─────────────────────────────────────── */
+static inline char* _tr_md5_hex(char* s) {
+    /* Minimal MD5; message expanded inline. */
+    static const uint32_t T[64]={
+        0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
+        0x698098d8,0x8b44f7af,0xffff5bb1,0x895cd7be,0x6b901122,0xfd987193,0xa679438e,0x49b40821,
+        0xf61e2562,0xc040b340,0x265e5a51,0xe9b6c7aa,0xd62f105d,0x02441453,0xd8a1e681,0xe7d3fbc8,
+        0x21e1cde6,0xc33707d6,0xf4d50d87,0x455a14ed,0xa9e3e905,0xfcefa3f8,0x676f02d9,0x8d2a4c8a,
+        0xfffa3942,0x8771f681,0x6d9d6122,0xfde5380c,0xa4beea44,0x4bdecfa9,0xf6bb4b60,0xbebfbc70,
+        0x289b7ec6,0xeaa127fa,0xd4ef3085,0x04881d05,0xd9d4d039,0xe6db99e5,0x1fa27cf8,0xc4ac5665,
+        0xf4292244,0x432aff97,0xab9423a7,0xfc93a039,0x655b59c3,0x8f0ccc92,0xffeff47d,0x85845dd1,
+        0x6fa87e4f,0xfe2ce6e0,0xa3014314,0x4e0811a1,0xf7537e82,0xbd3af235,0x2ad7d2bb,0xeb86d391
+    };
+    static const int S[64]={7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,
+                             5, 9,14,20,5, 9,14,20,5, 9,14,20,5, 9,14,20,
+                             4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
+                             6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21};
+    size_t ilen = s ? strlen(s) : 0;
+    size_t padlen = ((ilen+8)/64+1)*64;
+    uint8_t* msg = (uint8_t*)TAURARO_CALLOC(1,padlen);
+    if(!msg) return _tr_strdup("00000000000000000000000000000000");
+    if(s) memcpy(msg,s,ilen);
+    msg[ilen]=0x80;
+    uint64_t bits=(uint64_t)ilen*8;
+    for(int i=0;i<8;i++) msg[padlen-8+i]=(uint8_t)(bits>>(uint64_t)(i*8));
+    uint32_t a=0x67452301,b=0xefcdab89,cc=0x98badcfe,d=0x10325476;
+    for(size_t off=0;off<padlen;off+=64){
+        uint32_t M[16],A=a,B=b,C=cc,D=d;
+        for(int i=0;i<16;i++) M[i]=((uint32_t)msg[off+i*4])|((uint32_t)msg[off+i*4+1]<<8)|((uint32_t)msg[off+i*4+2]<<16)|((uint32_t)msg[off+i*4+3]<<24);
+        for(int i=0;i<64;i++){
+            uint32_t F,g2;
+            if(i<16){F=(_TR_CH(B,C,D));g2=(uint32_t)i;}
+            else if(i<32){F=(D^(B&(C^D)));g2=(uint32_t)(5*i+1)%16;}
+            else if(i<48){F=(B^C^D);g2=(uint32_t)(3*i+5)%16;}
+            else{F=(C^(B|(~D)));g2=(uint32_t)(7*i)%16;}
+            F=F+A+T[i]+M[g2];
+            A=D;D=C;C=B;B=B+((F<<S[i])|(F>>(32-S[i])));
+        }
+        a+=A;b+=B;cc+=C;d+=D;
+    }
+    TAURARO_FREE(msg);
+    char* out=(char*)TAURARO_ALLOC(33); if(!out) return _tr_strdup("00000000000000000000000000000000");
+    uint32_t r[4]={a,b,cc,d};
+    for(int i=0;i<4;i++) for(int j=0;j<4;j++){
+        uint8_t byte=(uint8_t)(r[i]>>(j*8));
+        out[i*8+j*2]=_tr_hex_lc[byte>>4]; out[i*8+j*2+1]=_tr_hex_lc[byte&15];
+    }
+    out[32]='\0'; return out;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * TLS/HTTPS — OpenSSL (opt-in: -DTAURARO_TLS_OPENSSL -lssl -lcrypto).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#ifdef TAURARO_TLS_OPENSSL
+#  include <openssl/ssl.h>
+#  include <openssl/err.h>
+typedef struct { SSL_CTX* ctx; SSL* ssl; int fd; } _TrTLSConn;
+#  ifdef _WIN32
+#    define _TR_SOCK_CLOSE(fd) closesocket(fd)
+#  else
+#    define _TR_SOCK_CLOSE(fd) close(fd)
+#  endif
+static inline char* _tr_tls_connect(char* host, int port) {
+    static _Atomic int _tr_ssl_once = 0;
+    if (atomic_fetch_add(&_tr_ssl_once,1)==0){SSL_library_init();SSL_load_error_strings();OpenSSL_add_all_algorithms();}
+    struct addrinfo hints={0},*res=NULL;
+    hints.ai_family=AF_UNSPEC;hints.ai_socktype=SOCK_STREAM;
+    char pbuf[16]; snprintf(pbuf,sizeof(pbuf),"%d",port);
+    if(getaddrinfo(host,pbuf,&hints,&res)!=0) return NULL;
+    int fd=(int)socket(res->ai_family,res->ai_socktype,res->ai_protocol);
+    if(fd<0){freeaddrinfo(res);return NULL;}
+    if(connect(fd,res->ai_addr,(int)res->ai_addrlen)!=0){freeaddrinfo(res);_TR_SOCK_CLOSE(fd);return NULL;}
+    freeaddrinfo(res);
+    SSL_CTX* ctx=SSL_CTX_new(TLS_client_method());
+    if(!ctx){_TR_SOCK_CLOSE(fd);return NULL;}
+    SSL* ssl=SSL_new(ctx); SSL_set_fd(ssl,fd); SSL_set_tlsext_host_name(ssl,host);
+    if(SSL_connect(ssl)!=1){SSL_free(ssl);SSL_CTX_free(ctx);_TR_SOCK_CLOSE(fd);return NULL;}
+    _TrTLSConn* c=(_TrTLSConn*)TAURARO_ALLOC(sizeof(_TrTLSConn));
+    if(!c){SSL_free(ssl);SSL_CTX_free(ctx);_TR_SOCK_CLOSE(fd);return NULL;}
+    c->ctx=ctx;c->ssl=ssl;c->fd=fd; return (char*)c;
+}
+static inline int   _tr_tls_send(char* h, char* d) { if(!h||!d) return -1; return SSL_write(((_TrTLSConn*)h)->ssl,d,(int)strlen(d)); }
+static inline char* _tr_tls_recv(char* h, int cap) {
+    if(!h||cap<=0) return _tr_strdup("");
+    char* buf=(char*)TAURARO_ALLOC((size_t)cap+1); if(!buf) return _tr_strdup("");
+    int n=SSL_read(((_TrTLSConn*)h)->ssl,buf,cap);
+    if(n<=0){TAURARO_FREE(buf);return _tr_strdup("");}
+    buf[n]='\0'; return buf;
+}
+static inline void _tr_tls_close(char* h) {
+    if(!h) return; _TrTLSConn* c=(_TrTLSConn*)h;
+    SSL_shutdown(c->ssl);SSL_free(c->ssl);SSL_CTX_free(c->ctx);_TR_SOCK_CLOSE(c->fd);TAURARO_FREE(c);
+}
+#else
+static inline char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
+static inline int   _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
+static inline char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
+static inline void  _tr_tls_close(char* h)          { (void)h; }
+#endif
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * COMPRESS — zlib (opt-in: -DTAURARO_COMPRESS_ZLIB -lz).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#ifdef TAURARO_COMPRESS_ZLIB
+#  include <zlib.h>
+static inline char* _tr_zlib_compress(char* input, int ilen, int* out_len) {
+    if(!input||ilen<=0){if(out_len)*out_len=0;return NULL;}
+    uLong bound=compressBound((uLong)ilen);
+    char* out=(char*)TAURARO_ALLOC(bound);if(!out){if(out_len)*out_len=0;return NULL;}
+    uLong dlen=bound;
+    if(compress2((Bytef*)out,&dlen,(const Bytef*)input,(uLong)ilen,Z_BEST_COMPRESSION)!=Z_OK){TAURARO_FREE(out);if(out_len)*out_len=0;return NULL;}
+    if(out_len)*out_len=(int)dlen; return out;
+}
+static inline char* _tr_zlib_decompress(char* input, int ilen, int max_out) {
+    if(!input||ilen<=0) return _tr_strdup("");
+    char* out=(char*)TAURARO_ALLOC((size_t)max_out+1);if(!out) return _tr_strdup("");
+    uLong dlen=(uLong)max_out;
+    if(uncompress((Bytef*)out,&dlen,(const Bytef*)input,(uLong)ilen)!=Z_OK){TAURARO_FREE(out);return _tr_strdup("");}
+    out[dlen]='\0'; return out;
+}
+static inline char* _tr_deflate(char* input, int ilen, int* out_len) {
+    if(!input||ilen<=0){if(out_len)*out_len=0;return NULL;}
+    z_stream s={0}; deflateInit2(&s,Z_BEST_COMPRESSION,Z_DEFLATED,-15,8,Z_DEFAULT_STRATEGY);
+    uLong bound=deflateBound(&s,(uLong)ilen);
+    char* out=(char*)TAURARO_ALLOC(bound);if(!out){deflateEnd(&s);if(out_len)*out_len=0;return NULL;}
+    s.next_in=(Bytef*)input;s.avail_in=(uInt)ilen;s.next_out=(Bytef*)out;s.avail_out=(uInt)bound;
+    deflate(&s,Z_FINISH);if(out_len)*out_len=(int)s.total_out;deflateEnd(&s);return out;
+}
+static inline char* _tr_inflate(char* input, int ilen, int max_out) {
+    if(!input||ilen<=0) return _tr_strdup("");
+    z_stream s={0};inflateInit2(&s,-15);
+    char* out=(char*)TAURARO_ALLOC((size_t)max_out+1);if(!out){inflateEnd(&s);return _tr_strdup("");}
+    s.next_in=(Bytef*)input;s.avail_in=(uInt)ilen;s.next_out=(Bytef*)out;s.avail_out=(uInt)max_out;
+    inflate(&s,Z_FINISH);int n=(int)s.total_out;inflateEnd(&s);out[n]='\0';return out;
+}
+#else
+static inline char* _tr_zlib_compress(char* i, int il, int* n) { (void)i;(void)il;if(n)*n=0;return NULL; }
+static inline char* _tr_zlib_decompress(char* i, int il, int m) { (void)i;(void)il;(void)m;return _tr_strdup(""); }
+static inline char* _tr_deflate(char* i, int il, int* n) { (void)i;(void)il;if(n)*n=0;return NULL; }
+static inline char* _tr_inflate(char* i, int il, int m) { (void)i;(void)il;(void)m;return _tr_strdup(""); }
+#endif
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * UNICODE / UTF-8 — pure C, no external dependencies.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+static inline uint32_t _tr_utf8_next(const char** pp) {
+    const uint8_t* p=(const uint8_t*)*pp; uint32_t cp;
+    if(!*p){return 0;}
+    if(p[0]<0x80){cp=p[0];*pp=(const char*)(p+1);return cp;}
+    if((p[0]&0xe0)==0xc0&&(p[1]&0xc0)==0x80){cp=((p[0]&0x1f)<<6)|(p[1]&0x3f);*pp=(const char*)(p+2);return cp;}
+    if((p[0]&0xf0)==0xe0&&(p[1]&0xc0)==0x80&&(p[2]&0xc0)==0x80){cp=((p[0]&0x0f)<<12)|((p[1]&0x3f)<<6)|(p[2]&0x3f);*pp=(const char*)(p+3);return cp;}
+    if((p[0]&0xf8)==0xf0&&(p[1]&0xc0)==0x80&&(p[2]&0xc0)==0x80&&(p[3]&0xc0)==0x80){cp=((p[0]&0x07)<<18)|((p[1]&0x3f)<<12)|((p[2]&0x3f)<<6)|(p[3]&0x3f);*pp=(const char*)(p+4);return cp;}
+    *pp=(const char*)(p+1);return 0xFFFD;
+}
+static inline int _tr_utf8_encode_cp(uint32_t cp, char* buf) {
+    if(cp<0x80){buf[0]=(char)cp;return 1;}
+    if(cp<0x800){buf[0]=(char)(0xc0|(cp>>6));buf[1]=(char)(0x80|(cp&0x3f));return 2;}
+    if(cp<0x10000){buf[0]=(char)(0xe0|(cp>>12));buf[1]=(char)(0x80|((cp>>6)&0x3f));buf[2]=(char)(0x80|(cp&0x3f));return 3;}
+    buf[0]=(char)(0xf0|(cp>>18));buf[1]=(char)(0x80|((cp>>12)&0x3f));buf[2]=(char)(0x80|((cp>>6)&0x3f));buf[3]=(char)(0x80|(cp&0x3f));return 4;
+}
+static inline int _tr_utf8_len(char* s) {
+    if(!s) return 0; int n=0; const char* p=s; while(*p){_tr_utf8_next(&p);n++;} return n;
+}
+static inline bool _tr_utf8_valid(char* s) {
+    if(!s) return false;
+    const uint8_t* p=(const uint8_t*)s;
+    while(*p){
+        int seq;
+        if(p[0]<0x80){p++;continue;}
+        else if((p[0]&0xe0)==0xc0)seq=2;
+        else if((p[0]&0xf0)==0xe0)seq=3;
+        else if((p[0]&0xf8)==0xf0)seq=4;
+        else return false;
+        for(int i=1;i<seq;i++) if((p[i]&0xc0)!=0x80) return false;
+        p+=seq;
+    }
+    return true;
+}
+static inline int _tr_utf8_char_at(char* s, int idx) {
+    if(!s) return -1; const char* p=s; int n=0;
+    while(*p){uint32_t cp=_tr_utf8_next(&p);if(n==idx)return(int)cp;n++;}
+    return -1;
+}
+static inline char* _tr_utf8_slice(char* s, int start, int end_) {
+    if(!s||start>=end_) return _tr_strdup("");
+    const char* p=s; int n=0;
+    while(*p&&n<start){_tr_utf8_next(&p);n++;}
+    const char* begin=p;
+    while(*p&&n<end_){_tr_utf8_next(&p);n++;}
+    size_t len=(size_t)(p-begin);
+    char* out=(char*)TAURARO_ALLOC(len+1);if(!out) return _tr_strdup("");
+    memcpy(out,begin,len);out[len]='\0';return out;
+}
+static inline bool _tr_unicode_is_letter(int cp) {
+    if((cp>=65&&cp<=90)||(cp>=97&&cp<=122)) return true;
+    if(cp>=0xC0&&cp<=0x2AF) return true;
+    if(cp>=0x4E00&&cp<=0x9FFF) return true;
+    if(cp>=0x0400&&cp<=0x04FF) return true;
+    if(cp>=0x0600&&cp<=0x06FF) return true;
+    if(cp>=0xAC00&&cp<=0xD7AF) return true;
+    return false;
+}
+static inline bool _tr_unicode_is_digit(int cp) {
+    return (cp>=48&&cp<=57)||(cp>=0x0660&&cp<=0x0669)||(cp>=0x06F0&&cp<=0x06F9);
+}
+static inline int _tr_unicode_to_upper(int cp) {
+    if(cp>=97&&cp<=122) return cp-32;
+    if(cp>=0xE0&&cp<=0xFE&&cp!=0xF7) return cp-32;
+    return cp;
+}
+static inline int _tr_unicode_to_lower(int cp) {
+    if(cp>=65&&cp<=90) return cp+32;
+    if(cp>=0xC0&&cp<=0xDE&&cp!=0xD7) return cp+32;
+    return cp;
+}
+static inline char* _tr_utf8_to_upper(char* s) {
+    if(!s) return _tr_strdup("");
+    size_t cap=strlen(s)*4+4; char* out=(char*)TAURARO_ALLOC(cap);if(!out) return _tr_strdup("");
+    const char* p=s; char* q=out; char tmp[5];
+    while(*p){uint32_t cp=_tr_utf8_next(&p);int n=_tr_utf8_encode_cp((uint32_t)_tr_unicode_to_upper((int)cp),tmp);memcpy(q,tmp,(size_t)n);q+=n;}
+    *q='\0'; return out;
+}
+static inline char* _tr_utf8_to_lower(char* s) {
+    if(!s) return _tr_strdup("");
+    size_t cap=strlen(s)*4+4; char* out=(char*)TAURARO_ALLOC(cap);if(!out) return _tr_strdup("");
+    const char* p=s; char* q=out; char tmp[5];
+    while(*p){uint32_t cp=_tr_utf8_next(&p);int n=_tr_utf8_encode_cp((uint32_t)_tr_unicode_to_lower((int)cp),tmp);memcpy(q,tmp,(size_t)n);q+=n;}
+    *q='\0'; return out;
+}
+/* Return the codepoint category string: "L"=letter, "N"=digit, "Z"=space, "C"=other */
+static inline char* _tr_unicode_category(int cp) {
+    if(_tr_unicode_is_letter(cp)) return _tr_strdup("L");
+    if(_tr_unicode_is_digit(cp))  return _tr_strdup("N");
+    if(cp==32||cp==9||cp==10||cp==13) return _tr_strdup("Z");
+    return _tr_strdup("C");
 }
 
 #endif /* TAURARO_RT_H */

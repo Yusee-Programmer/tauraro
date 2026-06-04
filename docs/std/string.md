@@ -93,8 +93,9 @@ All methods are **static** — called as `Str.method(...)` or `Fmt.method(...)`.
 
 | Method | Signature | Returns | Description |
 |---|---|---|---|
-| `Str.split` | `(s: str, sep: str) -> Vec[str]` | `Vec[str]` | Split on every occurrence of `sep`. |
-| `Str.join` | `(parts: Vec[str], sep: str) -> str` | `str` | Join `parts` with `sep` between each adjacent pair. |
+| `Str.split` | `(s: str, sep: str) -> List[str]` | `List[str]` | Split on every occurrence of `sep`. Returns a C-backed `List[str]`. |
+| `Str.split_to_vec` | `(s: str, sep: str) -> Vec[str]` | `Vec[str]` | Same split logic, but returns `Vec[str]` — compatible with `FloatTransform`, `Regex.split`, etc. |
+| `Str.join` | `(parts: List[str], sep: str) -> str` | `str` | Join `parts` with `sep` between each adjacent pair. |
 | `Str.replace` | `(s: str, old: str, new_: str) -> str` | `str` | Replace **all** occurrences of `old` with `new_`. |
 | `Str.replace_first` | `(s: str, old: str, new_: str) -> str` | `str` | Replace only the **first** occurrence. |
 
@@ -103,6 +104,29 @@ All methods are **static** — called as `Str.method(...)` or `Fmt.method(...)`.
 | Method | Signature | Returns | Description |
 |---|---|---|---|
 | `Str.format` | `(template: str, values: Vec[str]) -> str` | `str` | Replace each `{}` placeholder in `template` with successive values. |
+
+### Parsing
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Str.parse_int` | `(s: str) -> int` | `int` | Parse a decimal integer string. Accepts leading `'-'` or `'+'`. Returns `0` on empty or non-numeric input. |
+| `Str.parse_float` | `(s: str) -> float` | `float` | Parse a decimal float string (integer + optional fractional part). |
+| `Str.parse_bool` | `(s: str) -> bool` | `bool` | `true` for `"true"`, `"1"`, or `"yes"`; `false` otherwise. |
+
+### Line and word splitting
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Str.lines` | `(s: str) -> Vec[str]` | `Vec[str]` | Split on `'\n'`. A trailing newline does not produce an empty trailing element. |
+| `Str.words` | `(s: str) -> Vec[str]` | `Vec[str]` | Split on runs of whitespace (space, tab, CR, LF). |
+
+### Prefix and suffix removal
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Str.strip_prefix` | `(s: str, prefix: str) -> str` | `str` | Return `s` with `prefix` stripped, or `s` unchanged if it does not start with `prefix`. |
+| `Str.strip_suffix` | `(s: str, suffix: str) -> str` | `str` | Return `s` with `suffix` stripped, or `s` unchanged if it does not end with `suffix`. |
+| `Str.remove_char` | `(s: str, c: int) -> str` | `str` | Return `s` with every occurrence of character `c` (ASCII code) removed. |
 
 ### Example
 
@@ -137,6 +161,22 @@ vals.push("Alice")
 vals.push("30")
 mut msg = Str.format("Name: {}, Age: {}", vals)  # "Name: Alice, Age: 30"
 print(msg)
+
+# Parsing
+print(str(Str.parse_int("-42")))          # -42
+print(str(Str.parse_float("3.14")))       # 3.14
+print(str(Str.parse_bool("true")))        # true
+
+# Lines / words
+mut ls = Str.lines("one\ntwo\nthree")     # ["one", "two", "three"]
+mut ws = Str.words("  hello   world  ")   # ["hello", "world"]
+print(str(ls.len()))   # 3
+print(str(ws.len()))   # 2
+
+# Prefix / suffix removal
+print(Str.strip_prefix("foobar", "foo"))  # "bar"
+print(Str.strip_suffix("foobar", "bar"))  # "foo"
+print(Str.remove_char("hello", 108))      # "heo"  (108 = 'l')
 ```
 
 ---
