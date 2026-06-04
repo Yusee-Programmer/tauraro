@@ -1,0 +1,41 @@
+# std.gpu — GPU / parallel dispatch utilities.
+#
+# Replaces the deprecated core `gpu:` keyword.
+# Uses extern "C" bridges to OpenMP, CUDA, or OpenCL depending on
+# what the host C compiler supports.
+#
+# Usage:
+#   from std.gpu import Gpu
+#
+#   Gpu.parallel(items, worker_func)   # CPU-parallel via OpenMP
+#   Gpu.kernel("my_kernel", args)      # CUDA / OpenCL kernel launch
+
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_gpu_openmp_parallel_i64(n: int, fn_ptr: Pointer[void])
+    def _tr_gpu_is_openmp() -> bool
+    def _tr_gpu_thread_id() -> int
+    def _tr_gpu_num_threads() -> int
+
+pub class Gpu:
+    _dummy: int
+
+extend Gpu:
+    # True when OpenMP is available at runtime.
+    pub def has_openmp() -> bool:
+        return _tr_gpu_is_openmp()
+
+    # Current OpenMP thread index (0 on non-OpenMP builds).
+    pub def thread_id() -> int:
+        return _tr_gpu_thread_id()
+
+    # Total number of OpenMP threads (1 on non-OpenMP builds).
+    pub def num_threads() -> int:
+        return _tr_gpu_num_threads()
+
+    # Run n iterations in parallel using OpenMP.
+    # fn_ptr must be a function pointer taking a single int (the iteration index).
+    # On non-OpenMP builds, runs sequentially.
+    pub def parallel(n: int, fn_ptr: Pointer[void]):
+        _tr_gpu_openmp_parallel_i64(n, fn_ptr)

@@ -126,6 +126,20 @@
 #  define _TR_PANIC(msg)     do { fprintf(stderr, "tauraro panic: %s\n", (msg)); abort(); } while(0)
 #endif
 
+/* ── Assert macros ───────────────────────────────────────────────────────── */
+#if defined(TAURARO_KERNEL) && defined(__KERNEL__)
+#  define _TR_ASSERT(cond)          do { if (!(cond)) { pr_err("assertion failed: %s  at %s:%d\n", #cond, __FILE__, __LINE__); BUG(); } } while(0)
+#  define _TR_ASSERT_MSG(cond, msg) do { if (!(cond)) { pr_err("assertion failed: %s  message: %s  at %s:%d\n", #cond, (msg), __FILE__, __LINE__); BUG(); } } while(0)
+#elif defined(TAURARO_KERNEL)
+#  define _TR_ASSERT(cond)          do { if (!(cond)) { while(1); } } while(0)
+#  define _TR_ASSERT_MSG(cond, msg) do { if (!(cond)) { (void)(msg); while(1); } } while(0)
+#else
+#  define _TR_ASSERT(cond) \
+    do { if (!(cond)) { fprintf(stderr, "assertion failed: %s\n  at %s:%d\n", #cond, __FILE__, __LINE__); abort(); } } while(0)
+#  define _TR_ASSERT_MSG(cond, msg) \
+    do { if (!(cond)) { fprintf(stderr, "assertion failed: %s\n  message: %s\n  at %s:%d\n", #cond, (msg), __FILE__, __LINE__); abort(); } } while(0)
+#endif
+
 // Wrappers for core library to avoid signature conflicts
 static inline void* _tr_c_malloc(size_t size) {
     return TAURARO_ALLOC(size);
@@ -2278,6 +2292,136 @@ static inline char* _tr_str_slice(const char* s, long long start, long long end)
     return out;
 }
 
+/* ── Additional string helpers ───────────────────────────────────────── */
+static inline char* _tr_str_trim_left(const char* s) {
+    if (!s) return (char*)"";
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    size_t n = strlen(s); char* r = (char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1); return r;
+}
+static inline char* _tr_str_trim_right(const char* s) {
+    if (!s) return (char*)"";
+    size_t n = strlen(s); const char* e = s+n-1;
+    while (n > 0 && (*e==' '||*e=='\t'||*e=='\n'||*e=='\r')) { e--; n--; }
+    char* r = (char*)_tr_checked_alloc(n+1); memcpy(r,s,n); r[n]='\0'; return r;
+}
+static inline char* _tr_str_capitalize(const char* s) {
+    if (!s||!*s) return (char*)"";
+    size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1);
+    r[0]=(char)toupper((unsigned char)r[0]); for(size_t i=1;i<n;i++) r[i]=(char)tolower((unsigned char)r[i]);
+    return r;
+}
+static inline char* _tr_str_title(const char* s) {
+    if (!s) return (char*)"";
+    size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1);
+    bool ws=true;
+    for(size_t i=0;i<n;i++){
+        if(r[i]==' '||r[i]=='\t'||r[i]=='\n'){ws=true;}
+        else if(ws){r[i]=(char)toupper((unsigned char)r[i]);ws=false;}
+        else{r[i]=(char)tolower((unsigned char)r[i]);}
+    }
+    return r;
+}
+static inline char* _tr_str_reverse(const char* s) {
+    if (!s) return (char*)"";
+    size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1);
+    for(size_t i=0;i<n;i++) r[i]=s[n-1-i]; r[n]='\0'; return r;
+}
+static inline char* _tr_str_repeat(const char* s, long long times) {
+    if (!s||times<=0) { char* e=(char*)_tr_checked_alloc(1); e[0]='\0'; return e; }
+    size_t slen=strlen(s); size_t total=(size_t)times*slen;
+    char* r=(char*)_tr_checked_alloc(total+1); r[0]='\0';
+    for(long long i=0;i<times;i++) memcpy(r+i*slen, s, slen);
+    r[total]='\0'; return r;
+}
+static inline char* _tr_str_replace_first(const char* s, const char* old_s, const char* new_s) {
+    if (!s||!old_s||!new_s) return s ? (char*)s : (char*)"";
+    const char* p=strstr(s,old_s); if(!p) { size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1); return r; }
+    size_t ol=strlen(old_s), nl=strlen(new_s), pre=(size_t)(p-s), sl=strlen(s);
+    char* r=(char*)_tr_checked_alloc(sl-ol+nl+1);
+    memcpy(r,s,pre); memcpy(r+pre,new_s,nl); memcpy(r+pre+nl,p+ol,sl-pre-ol+1); return r;
+}
+static inline char* _tr_str_strip_prefix(const char* s, const char* pre) {
+    if (!s||!pre) return s?(char*)s:(char*)"";
+    size_t pl=strlen(pre);
+    if (strncmp(s,pre,pl)==0) { size_t n=strlen(s)-pl; char* r=(char*)_tr_checked_alloc(n+1); memcpy(r,s+pl,n+1); return r; }
+    size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1); memcpy(r,s,n+1); return r;
+}
+static inline char* _tr_str_strip_suffix(const char* s, const char* suf) {
+    if (!s||!suf) return s?(char*)s:(char*)"";
+    size_t sl=strlen(s), sufl=strlen(suf);
+    if (sl>=sufl && strcmp(s+sl-sufl,suf)==0) { char* r=(char*)_tr_checked_alloc(sl-sufl+1); memcpy(r,s,sl-sufl); r[sl-sufl]='\0'; return r; }
+    char* r=(char*)_tr_checked_alloc(sl+1); memcpy(r,s,sl+1); return r;
+}
+static inline char* _tr_str_remove_char(const char* s, const char* ch) {
+    if (!s||!ch||!*ch) return s?(char*)s:(char*)"";
+    char c=ch[0]; size_t n=strlen(s); char* r=(char*)_tr_checked_alloc(n+1); size_t j=0;
+    for(size_t i=0;i<n;i++) if(s[i]!=c) r[j++]=s[i]; r[j]='\0'; return r;
+}
+static inline long long _tr_str_index_of(const char* s, const char* sub) {
+    if (!s||!sub) return -1LL;
+    const char* p=strstr(s,sub); return p ? (long long)(p-s) : -1LL;
+}
+static inline long long _tr_str_last_index_of(const char* s, const char* sub) {
+    if (!s||!sub||!*sub) return -1LL;
+    size_t sl=strlen(s), subl=strlen(sub); long long last=-1LL;
+    for(size_t i=0;i+subl<=sl;i++) if(strncmp(s+i,sub,subl)==0) last=(long long)i;
+    return last;
+}
+static inline long long _tr_str_count_occ(const char* s, const char* sub) {
+    if (!s||!sub||!*sub) return 0LL;
+    size_t subl=strlen(sub); long long c=0; const char* p=s;
+    while((p=strstr(p,sub))!=NULL){c++;p+=subl;} return c;
+}
+static inline long long _tr_str_char_at_code(const char* s, long long i) {
+    if (!s) return -1LL; long long n=(long long)strlen(s);
+    if (i<0||i>=n) return -1LL; return (long long)(unsigned char)s[i];
+}
+static inline bool _tr_str_contains_char(const char* s, long long c) {
+    if (!s) return false; return strchr(s,(char)c)!=NULL;
+}
+static inline bool _tr_str_parse_bool(const char* s) {
+    if (!s) return false;
+    return strcmp(s,"true")==0||strcmp(s,"1")==0||strcmp(s,"yes")==0;
+}
+static inline bool _tr_str_is_digit(const char* s) {
+    if (!s||!*s) return false; for(const char* p=s;*p;p++) if(!isdigit((unsigned char)*p)) return false; return true;
+}
+static inline bool _tr_str_is_alpha(const char* s) {
+    if (!s||!*s) return false; for(const char* p=s;*p;p++) if(!isalpha((unsigned char)*p)) return false; return true;
+}
+static inline bool _tr_str_is_alnum(const char* s) {
+    if (!s||!*s) return false; for(const char* p=s;*p;p++) if(!isalnum((unsigned char)*p)) return false; return true;
+}
+static inline bool _tr_str_is_space(const char* s) {
+    if (!s||!*s) return false; for(const char* p=s;*p;p++) if(!isspace((unsigned char)*p)) return false; return true;
+}
+static inline bool _tr_str_is_upper(const char* s) {
+    if (!s||!*s) return false; for(const char* p=s;*p;p++) if(isalpha((unsigned char)*p)&&!isupper((unsigned char)*p)) return false; return true;
+}
+static inline bool _tr_str_is_lower(const char* s) {
+    if (!s||!*s) return false; for(const char* p=s;*p;p++) if(isalpha((unsigned char)*p)&&!islower((unsigned char)*p)) return false; return true;
+}
+/* _tr_str_lines and _tr_str_words defined after _tr_str_split below */
+static inline char* _tr_str_lpad(const char* s, long long width, const char* pad) {
+    if (!s) s=""; if (!pad||!*pad) pad=" ";
+    long long slen=(long long)strlen(s); if(slen>=width){size_t n=strlen(s);char*r=(char*)_tr_checked_alloc(n+1);memcpy(r,s,n+1);return r;}
+    long long plen=width-slen; char* r=(char*)_tr_checked_alloc((size_t)(plen+slen+1));
+    for(long long i=0;i<plen;i++) r[i]=pad[0]; memcpy(r+plen,s,(size_t)slen); r[plen+slen]='\0'; return r;
+}
+static inline char* _tr_str_rpad(const char* s, long long width, const char* pad) {
+    if (!s) s=""; if (!pad||!*pad) pad=" ";
+    long long slen=(long long)strlen(s); if(slen>=width){size_t n=strlen(s);char*r=(char*)_tr_checked_alloc(n+1);memcpy(r,s,n+1);return r;}
+    long long plen=width-slen; char* r=(char*)_tr_checked_alloc((size_t)(plen+slen+1));
+    memcpy(r,s,(size_t)slen); for(long long i=0;i<plen;i++) r[slen+i]=pad[0]; r[slen+plen]='\0'; return r;
+}
+static inline char* _tr_str_center(const char* s, long long width) {
+    if (!s) s="";
+    long long slen=(long long)strlen(s); if(slen>=width){size_t n=strlen(s);char*r=(char*)_tr_checked_alloc(n+1);memcpy(r,s,n+1);return r;}
+    long long total=width-slen, left=total/2, right=total-left;
+    char* r=(char*)_tr_checked_alloc((size_t)(width+1));
+    for(long long i=0;i<left;i++) r[i]=' '; memcpy(r+left,s,(size_t)slen); for(long long i=0;i<right;i++) r[left+slen+i]=' '; r[width]='\0'; return r;
+}
+
 /* ── Char code → 1-char string ───────────────────────────────────────── */
 static inline char* _tr_char_to_str(long long code) {
     char* s = (char*)_tr_checked_alloc(2);
@@ -2789,6 +2933,8 @@ static inline List_str* _tr_str_split(const char* s, const char* sep) {
     while(tok){ List_str_append(l,strdup(tok)); tok=strtok(NULL,(char*)sep); }
     _tr_free(cp); return l;
 }
+static inline List_str* _tr_str_lines(const char* s) { return _tr_str_split(s, "\n"); }
+static inline List_str* _tr_str_words(const char* s) { return _tr_str_split(s, " "); }
 
 /* ── Test runner helpers ─────────────────────────────────────────────── */
 
@@ -3838,6 +3984,42 @@ static inline char* _tr_unicode_category(int cp) {
     if(_tr_unicode_is_digit(cp))  return _tr_strdup("N");
     if(cp==32||cp==9||cp==10||cp==13) return _tr_strdup("Z");
     return _tr_strdup("C");
+}
+
+/* ── std.gpu helpers ─────────────────────────────────────────────────────── */
+static inline bool _tr_gpu_is_openmp(void) {
+#ifdef _OPENMP
+    return true;
+#else
+    return false;
+#endif
+}
+
+static inline int64_t _tr_gpu_thread_id(void) {
+#ifdef _OPENMP
+    return (int64_t)omp_get_thread_num();
+#else
+    return 0;
+#endif
+}
+
+static inline int64_t _tr_gpu_num_threads(void) {
+#ifdef _OPENMP
+    return (int64_t)omp_get_num_threads();
+#else
+    return 1;
+#endif
+}
+
+static inline void _tr_gpu_openmp_parallel_i64(int64_t n, void* fn_ptr) {
+    typedef void (*_tr_gpu_fn)(int64_t);
+    _tr_gpu_fn fn = (_tr_gpu_fn)fn_ptr;
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+    for (int64_t _i = 0; _i < n; _i++) { fn(_i); }
+#else
+    for (int64_t _i = 0; _i < n; _i++) { fn(_i); }
+#endif
 }
 
 #endif /* TAURARO_RT_H */

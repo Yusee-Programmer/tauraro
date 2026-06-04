@@ -115,6 +115,53 @@ Fix: Use `\n`: `mut s = "line one\nline two"`
 
 ---
 
+## Triple-Quoted Strings
+
+### When to use
+
+Use triple-quoted strings (`"""..."""`) for multi-line content: SQL queries, multi-line messages, embedded text blocks, and any string that would require many `\n` escapes in a regular literal.
+
+### How it works
+
+Delimit the string with `"""` on both ends. Newlines and any other characters inside are included literally:
+
+```python
+mut sql = """
+SELECT id, name, email
+FROM users
+WHERE active = 1
+  AND created_at > '2024-01-01'
+ORDER BY name
+"""
+
+mut banner = """
++-------------------------------+
+|  Welcome to Tauraro v2        |
++-------------------------------+
+"""
+```
+
+The string includes all characters between the opening and closing `"""`, including newlines. There is no automatic trimming or indentation stripping — what you type is what you get.
+
+### Common Mistakes
+
+**Using triple-quoted strings for single-line values:** Regular `"..."` is cleaner for single-line content.
+
+**Forgetting that the first newline is included:**
+```python
+mut s = """
+line1
+"""
+print(s)    # prints an empty line, then "line1", then a newline
+```
+If you want to skip the leading newline, start the content immediately after `"""`:
+```python
+mut s = """line1
+line2"""
+```
+
+---
+
 ## Raw Strings
 
 ### When to use
@@ -304,7 +351,7 @@ f"score = {fmt_float(score, 2)}"
 
 ### When to use
 
-Import `std.string.str` to access the full suite of string methods. Use built-in operations (`len`, indexing) without any import.
+String methods are built into the `str` type — no import needed. Use built-in operations (`len`, indexing, method calls) without any import.
 
 ### How it works
 
@@ -312,16 +359,15 @@ Import `std.string.str` to access the full suite of string methods. Use built-in
 
 ```python
 mut s = "Hello, Tauraro"
-mut n = len(s)    # 14
+mut n = len(s)     # 14 — built-in function
+mut m = s.len()    # 14 — method form
 ```
 
 `len(s)` is O(n) — it scans the null-terminated string. Cache the result if you need it multiple times.
 
-**String methods** (require `import std.string`):
+**String methods (no import required):**
 
 ```python
-import std.string
-
 mut s = "  Hello, World!  "
 
 mut upper     = s.upper()                      # "  HELLO, WORLD!  "
@@ -339,25 +385,29 @@ mut ends      = s.ends_with("  ")              # true
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `.upper()` | `str` | Convert all characters to uppercase |
-| `.lower()` | `str` | Convert all characters to lowercase |
-| `.strip()` | `str` | Remove leading and trailing ASCII whitespace |
+| `.upper()` or `.to_upper()` | `str` | Convert all characters to uppercase |
+| `.lower()` or `.to_lower()` | `str` | Convert all characters to lowercase |
+| `.strip()` or `.trim()` | `str` | Remove leading and trailing ASCII whitespace |
 | `.find(sub)` | `int` | Index of first occurrence of `sub`, or −1 |
 | `.replace(old, new)` | `str` | Replace all occurrences of `old` with `new` |
 | `.split(sep)` | `List[str]` | Split on separator `sep`, return list of parts |
 | `.contains(sub)` | `bool` | True if `sub` appears anywhere in the string |
 | `.starts_with(prefix)` | `bool` | True if string starts with `prefix` |
 | `.ends_with(suffix)` | `bool` | True if string ends with `suffix` |
-| `.trim()` | `str` | Alias for `.strip()` |
+| `.len()` | `int` | String length in bytes |
+| `.index_of(sub)` | `int` | Same as `.find(sub)` |
+| `.reverse()` | `str` | Return reversed string |
+| `.repeat(n)` | `str` | Return string repeated `n` times |
+| `.capitalize()` | `str` | First char upper, rest lower |
+
+**Joining a list of strings:**
+
+```python
+mut parts = "a,b,c".split(",")        # ["a", "b", "c"]
+mut joined = Str.join(parts, "-")     # "a-b-c"
+```
 
 ### Common Mistakes
-
-**Calling string methods without importing `std.string`:**
-```python
-mut s = "hello"
-mut u = s.upper()    # ERROR: method 'upper' not found on str — import std.string
-```
-Fix: Add `import std.string` at the top of the file.
 
 **Assuming `.find()` returns a boolean:**
 ```python

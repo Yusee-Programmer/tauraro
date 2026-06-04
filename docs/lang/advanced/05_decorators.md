@@ -163,57 +163,47 @@ print(c.diameter)   # no ()
 
 ## Custom Decorators
 
-Custom decorators are functions that take a function and return a (possibly transformed) function. They are declared with the `decorator` keyword:
+Custom decorators are compile-time macros that inject C attributes into the generated code. They are declared with `decorator def` and must return a `str` naming a C compiler attribute:
 
 ```python
-decorator logged(fn):
-    def wrapper(args...):
-        print(f"calling {fn.name}")
-        mut result = fn(args...)
-        print(f"{fn.name} returned")
-        return result
-    return wrapper
+decorator def hot_fn() -> str:
+    return "hot"
 
-@logged
-def add(a: int, b: int) -> int:
-    return a + b
-
-mut r = add(2, 3)
-# prints: calling add
-# prints: add returned
-# r == 5
+@hot_fn
+def compute_sum(n: int) -> int:
+    mut s = 0
+    mut i = 0
+    while i < n:
+        s = s + i
+        i = i + 1
+    return s
 ```
 
-### Custom decorator with arguments
+The compiler reads the return value (`"hot"`) and emits `__attribute__((hot))` on the generated C function. This is equivalent to writing `@hot` directly, but lets you define reusable decorator names in Tauraro code.
 
-A decorator that accepts arguments is a function that returns a decorator:
+### How it works
+
+1. `decorator def name() -> str:` declares a decorator.
+2. The body must be a single `return "attribute_string"` statement.
+3. `@name` applied to a `def` inserts `__attribute__((attribute_string))` on the generated C function.
+
+### Custom decorator with a C attribute string
 
 ```python
-decorator retry(times: int):
-    def make_wrapper(fn):
-        def wrapper(args...):
-            mut i = 0
-            while i < times:
-                try:
-                    return fn(args...)
-                except e:
-                    i = i + 1
-                    if i >= times: raise(e)
-            return fn(args...)    # unreachable but satisfies F-3
-        return wrapper
-    return make_wrapper
+decorator def fast() -> str:
+    return "optimize(\"O3\",\"unroll-loops\")"
 
-@retry(3)
-def fetch_data(url: str) throws str -> str:
-    # might fail on transient errors
-    return http_get(url)?
+@fast
+def inner_loop(data: Pointer[int], n: int) -> void:
+    mut i = 0
+    while i < n:
+        # ...
+        i = i + 1
 ```
 
-### Custom decorator scope
+### Limitation
 
-Custom decorators are resolved at compile time. The `decorator` keyword declares a compile-time transformation function. The decorator body must be a pure, deterministic transformation of the function signature and body.
-
-**Limitation:** Custom decorators cannot access runtime values — they operate on the function's compile-time representation.
+Custom decorators in Tauraro are C attribute injectors — they do not wrap function bodies or intercept calls at runtime. For runtime wrapping behavior (logging, retry, timing), write a higher-order function and call it explicitly rather than using a decorator.
 
 ---
 

@@ -91,6 +91,7 @@ pub class Sema:
     pub in_unsafe: bool                 # Gap 6: inside an unsafe: block
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
     pub strict_mode: bool               # --strict: alloc outside unsafe → hard [U-1] error
+    pub decorator_names: Map[str, bool]  # decorator def registry (name → true)
 
 extend Sema:
     pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
@@ -138,6 +139,7 @@ extend Sema:
         s.in_unsafe              = false
         s.current_func_ret_from  = ""
         s.strict_mode            = false
+        s.decorator_names        = Map[str, bool].init(16)
 
         # ── Built-in functions ─────────────────────────────────────────────────
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -578,6 +580,10 @@ extend Sema:
                         hef.is_extern = true
                         hp.extern_funcs.push(hef)
                         ei = ei + 1
+                case Decl.DDecoratorDef(f):
+                    mut hdf = self.lower_func(f)
+                    hdf.is_decorator = true
+                    hp.decorator_defs.push(hdf)
                 case _: pass
             i = i + 1
         return hp
@@ -618,6 +624,9 @@ extend Sema:
                     if f.ret_ty as usize != 0 as usize: _e_ret = f.ret_ty
                     self.declare(f.name, SymbolKind.SFunction, _e_ret, false)
                     ei = ei + 1
+            case Decl.DDecoratorDef(f):
+                self.decorator_names.insert(f.name, true)
+                self.declare(f.name, SymbolKind.SFunction, box_asttype(AstType.init("void")), false)
             case _: pass
 
     pub def lower_func(self, f: FunctionDef) -> HirFunction:
@@ -714,6 +723,7 @@ extend Sema:
             _si = _si + 1
         hf.is_static = self.current_class_name != "" and not _has_self
         hf.is_variadic = f.is_variadic
+        hf.is_decorator = false
 
         # Rule F-3: Definite return check for non-void, non-extern functions
         # Skip for interface method signatures (empty body = no stmts)
@@ -1442,6 +1452,48 @@ extend Sema:
                     i = i + 1
             case _: pass
 
+    pub def str_method_ret_ty(self, method: str) -> AstType:
+        if method == "split": return AstType.init("List")
+        if method == "split_to_vec": return AstType.init("Vec")
+        if method == "strip": return AstType.init("str")
+        if method == "trim": return AstType.init("str")
+        if method == "trim_left": return AstType.init("str")
+        if method == "trim_right": return AstType.init("str")
+        if method == "to_upper": return AstType.init("str")
+        if method == "to_lower": return AstType.init("str")
+        if method == "capitalize": return AstType.init("str")
+        if method == "title": return AstType.init("str")
+        if method == "reverse": return AstType.init("str")
+        if method == "repeat": return AstType.init("str")
+        if method == "replace": return AstType.init("str")
+        if method == "replace_first": return AstType.init("str")
+        if method == "slice": return AstType.init("str")
+        if method == "strip_prefix": return AstType.init("str")
+        if method == "strip_suffix": return AstType.init("str")
+        if method == "remove_char": return AstType.init("str")
+        if method == "join": return AstType.init("str")
+        if method == "len": return AstType.init("int")
+        if method == "index_of": return AstType.init("int")
+        if method == "last_index_of": return AstType.init("int")
+        if method == "count": return AstType.init("int")
+        if method == "char_at": return AstType.init("int")
+        if method == "parse_int": return AstType.init("int")
+        if method == "starts_with": return AstType.init("bool")
+        if method == "ends_with": return AstType.init("bool")
+        if method == "contains_char": return AstType.init("bool")
+        if method == "eq": return AstType.init("bool")
+        if method == "is_digit": return AstType.init("bool")
+        if method == "is_alpha": return AstType.init("bool")
+        if method == "is_alnum": return AstType.init("bool")
+        if method == "is_space": return AstType.init("bool")
+        if method == "is_upper": return AstType.init("bool")
+        if method == "is_lower": return AstType.init("bool")
+        if method == "parse_bool": return AstType.init("bool")
+        if method == "parse_float": return AstType.init("float")
+        if method == "lines": return AstType.init("Vec")
+        if method == "words": return AstType.init("Vec")
+        return AstType.init("void")
+
     pub def lower_expr(self, e_ptr: Pointer[Expr]) -> Pointer[HirExpr]:
         if e_ptr as usize == 0 as usize: return Pointer[HirExpr](0)
         e = e_ptr.read()
@@ -1692,6 +1744,9 @@ extend Sema:
                             _gmi = _gmi + 1
                 elif method == "alloc": ret_ty = hobj_ty
                 elif method == "contains": ret_ty = AstType.init("bool")
+                # str primitive method dispatch — str.split/strip/join/etc.
+                elif hobj_ty.name == "str":
+                    ret_ty = self.str_method_ret_ty(method)
                 # Thread built-in method return types
                 elif method == "spawn" and (hobj_ty.name == "Thread" or hobj_ty.name == "void"):
                     ret_ty = AstType.init("Thread")

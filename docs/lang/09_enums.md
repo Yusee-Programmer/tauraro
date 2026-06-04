@@ -602,15 +602,4 @@ def main():
 
 ---
 
-## Hausa Keyword Alternatives
-
-| Tauraro keyword | Hausa equivalent |
-|-----------------|-----------------|
-| `enum` | `nau'i` (kind/type) |
-| `match` | `duba` (check/examine) |
-| `case` | `idan` (if/when) |
-| `class _:` wildcard | `sauran` (the rest) |
-
----
-
 Next: [Interfaces →](10_interfaces.md)

@@ -631,15 +631,4 @@ See `examples/19_generic_interfaces.tr` for a runnable generic interface demonst
 
 ---
 
-## Hausa Keyword Alternatives
-
-| Tauraro keyword | Hausa equivalent |
-|-----------------|-----------------|
-| `interface` | `yarjejeniya` (contract/agreement) |
-| `implements` | `cika` (fulfil/implement) |
-| `def` (in interface) | `alkawari` (promise/declaration) |
-| `self` | `kaina` (myself) |
-
----
-
 Next: [Generics →](11_generics.md)

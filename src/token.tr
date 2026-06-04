@@ -7,6 +7,7 @@ pub enum Token:
     IntLit(val: int)
     FloatLit(val: float)
     StrLit(val: str)
+    TripleStrLit(val: str)   # """...""" multi-line string
     ByteStrLit(val: str)
     RawStrLit(val: str)
     CharLit(val: int)     # char stored as codepoint
@@ -267,6 +268,7 @@ extend Token:
             case Token.IntLit(val): return f"IntLit({val})"
             case Token.FloatLit(val): return f"FloatLit({val})"
             case Token.StrLit(val): return f"StrLit({val})"
+            case Token.TripleStrLit(val): return f"TripleStrLit({val})"
             case Token.ByteStrLit(val): return f"ByteStrLit({val})"
             case Token.RawStrLit(val): return f"RawStrLit({val})"
             case Token.CharLit(val): return f"CharLit({val})"
