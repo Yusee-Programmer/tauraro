@@ -211,7 +211,7 @@ static inline size_t _tr_c_fread(void* ptr, size_t size, size_t nmemb, void* fp)
 static inline size_t _tr_c_fwrite(const void* ptr, size_t size, size_t nmemb, void* fp) { return fwrite(ptr, size, nmemb, (FILE*)fp); }
 static inline int _tr_c_fseek(void* fp, long offset, int whence) { return fseek((FILE*)fp, offset, whence); }
 static inline long _tr_c_ftell(void* fp) { return ftell((FILE*)fp); }
-static inline char* _tr_getenv(const char* name) { return getenv(name); }
+static inline char* _tr_getenv(const char* name) { char* v = getenv(name); return v ? v : ""; }
 #ifdef _WIN32
 static inline int _tr_setenv(const char* name, const char* value) { return _putenv_s(name, value) == 0 ? 0 : -1; }
 static inline int _tr_unsetenv(const char* name) { return _putenv_s(name, "") == 0 ? 0 : -1; }
