@@ -3037,6 +3037,9 @@ static inline void StringBuilder_append_float(StringBuilder* sb, double f) {
     StringBuilder_append(sb, tmp);
 }
 static inline long long StringBuilder_length(StringBuilder* sb) { return sb->buf->len; }
+static inline void StringBuilder_clear(StringBuilder* sb) {
+    if (sb && sb->buf) { sb->buf->len = 0; if (sb->buf->data) sb->buf->data[0] = '\0'; }
+}
 static inline void StringBuilder_free(StringBuilder* sb) {
     TAURARO_FREE(sb->buf->data); TAURARO_FREE(sb->buf); TAURARO_FREE(sb);
 }

@@ -1453,8 +1453,10 @@ extend Sema:
             case _: pass
 
     pub def str_method_ret_ty(self, method: str) -> AstType:
-        if method == "split": return AstType.init("List")
-        if method == "split_to_vec": return AstType.init("Vec")
+        if method == "split" or method == "split_to_vec":
+            mut _str_ty = alloc[AstType](1)
+            _str_ty.write(AstType.init("str"))
+            return AstType.init_generic("Vec", _str_ty)
         if method == "strip": return AstType.init("str")
         if method == "trim": return AstType.init("str")
         if method == "trim_left": return AstType.init("str")
@@ -1709,7 +1711,23 @@ extend Sema:
                     if pc_obj_nm != "" and self.container_borrows.contains(pc_obj_nm):
                         mut pc_borrow_var = self.container_borrows.get(pc_obj_nm)
                         self.error("[M-4] Cannot mutate '" + pc_obj_nm + "' while '" + pc_borrow_var + "' holds a reference into it.\n      FIX: Finish using '" + pc_borrow_var + "' before modifying '" + pc_obj_nm + "', or copy it first: 'mut copy = " + pc_borrow_var + "'.")
+                # Get receiver identifier name for built-in module dispatch
+                mut _bm_obj_nm = ""
+                match obj.read():
+                    case Expr.EIdent(_bm_n): _bm_obj_nm = _bm_n
+                    case _: pass
                 mut ret_ty = AstType.init("void")
+                # Built-in module static type inference: OS, Process, Env, Hash, File
+                if _bm_obj_nm == "OS" or hobj_ty.name == "OS":
+                    if method == "cwd" or method == "platform": ret_ty = AstType.init("str")
+                    elif method == "is_windows" or method == "is_linux" or method == "is_darwin" or method == "is_macos": ret_ty = AstType.init("bool")
+                elif _bm_obj_nm == "Process" or hobj_ty.name == "Process":
+                    if method == "system" or method == "exit": ret_ty = AstType.init("int")
+                    elif method == "shell_output": ret_ty = AstType.init("str")
+                elif _bm_obj_nm == "Env" or hobj_ty.name == "Env":
+                    if method == "get_var" or method == "cwd": ret_ty = AstType.init("str")
+                elif _bm_obj_nm == "Hash" or hobj_ty.name == "Hash":
+                    if method == "sha256" or method == "md5": ret_ty = AstType.init("str")
                 if method == "init" or method == "new":
                     # Preserve generic args so Vec[T].init(n) keeps the T info
                     if hobj_ty.name == "void" or hobj_ty.name == "":

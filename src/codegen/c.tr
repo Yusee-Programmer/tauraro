@@ -813,6 +813,8 @@ pub class CGenerator:
                 bfi = bfi + 1
 
     pub def gen_class_struct(self, c: HirClass):
+        self.ws("#ifndef " + c.name + "_STRUCT_DEFINED\n")
+        self.ws("#define " + c.name + "_STRUCT_DEFINED\n")
         self.ws("typedef struct " + c.name + " {\n")
         # Emit inherited fields first (single-level inheritance via field copying)
         mut bi: int = 0
@@ -827,7 +829,8 @@ pub class CGenerator:
             i = i + 1
         if c.fields.len == 0 and c.base_classes.len == 0:
             self.ws("    char _pad;\n")
-        self.ws("} " + c.name + ";\n\n")
+        self.ws("} " + c.name + ";\n")
+        self.ws("#endif\n\n")
 
     pub def gen_enum_struct(self, e: HirEnum):
         # Emit tag constants
@@ -961,6 +964,7 @@ pub class CGenerator:
             case HirExpr.ELitNone(_): return "NULL"
             case HirExpr.EIdent(n, _, _):
                 if _is_c_keyword(n) and self.decl_vars.contains(n): return "_tr_v_" + n
+                if n == "argv" and self.cur_func == "main": return "_tr_main_argv"
                 return n
             case HirExpr.EBinOp(op, l, r, _): return self.gen_binop(op, l, r)
             case HirExpr.EUnaryOp(op, expr, _): return self.gen_unary(op, expr)
@@ -1178,6 +1182,8 @@ pub class CGenerator:
         if t_n == "Pointer": return "(*" + obj_s + ")." + p
         if _is_str_type(t_n) and (p == "len" or p == "length"):
             return "((long long)_tr_strlen(" + obj_s + "))"
+        if t_n == "StringBuilder" and (p == "len" or p == "length"):
+            return "(" + obj_s + "->buf->len)"
         if t_n == "Result":
             if p == "is_err": return "(" + obj_s + ".tag == Result_Err)"
             if p == "is_ok": return "(" + obj_s + ".tag == Result_Ok)"
@@ -1827,8 +1833,8 @@ pub class CGenerator:
             if args.len > 0: str_arg0 = self.gen_expr(args.get(0))
             mut str_arg1 = ""
             if args.len > 1: str_arg1 = self.gen_expr(args.get(1))
-            if method == "split":         return "(void*)_tr_str_split(" + obj_s + ", " + str_arg0 + ")"
-            if method == "split_to_vec":  return "(void*)_tr_str_split(" + obj_s + ", " + str_arg0 + ")"
+            if method == "split":         return "_tr_str_split(" + obj_s + ", " + str_arg0 + ")"
+            if method == "split_to_vec":  return "_tr_str_split(" + obj_s + ", " + str_arg0 + ")"
             if method == "trim" or method == "strip": return "_tr_str_strip(" + obj_s + ")"
             if method == "trim_left":     return "_tr_str_trim_left(" + obj_s + ")"
             if method == "trim_right":    return "_tr_str_trim_right(" + obj_s + ")"
@@ -2154,19 +2160,101 @@ pub class CGenerator:
 
         # String method dispatch — must be before the generic TrStr_ fallback
         if _is_str_type(t_n):
-            if method == "upper": return "_tr_str_upper(" + obj_s + ")"
-            if method == "lower": return "_tr_str_lower(" + obj_s + ")"
-            if method == "strip": return "_tr_str_strip(" + obj_s + ")"
+            if method == "upper" or method == "to_upper": return "_tr_str_upper(" + obj_s + ")"
+            if method == "lower" or method == "to_lower": return "_tr_str_lower(" + obj_s + ")"
+            if method == "strip" or method == "trim": return "_tr_str_strip(" + obj_s + ")"
+            if method == "trim_left": return "_tr_str_trim_left(" + obj_s + ")"
+            if method == "trim_right": return "_tr_str_trim_right(" + obj_s + ")"
             if method == "replace" and args.len == 2:
                 return "_tr_str_replace(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
             if method == "split" and args.len > 0:
-                return "(void*)_tr_str_split(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_str_split(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             if method == "find" and args.len > 0:
                 mut tmp_find: str = self.next_temp()
                 return "({ char* " + tmp_find + " = strstr(" + obj_s + ", " + self.gen_expr(args.get(0)) + "); " + tmp_find + " ? (long long)(" + tmp_find + " - (" + obj_s + ")) : -1LL; })"
+            if method == "slice" and args.len == 2:
+                return "_tr_str_slice(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
+            if method == "index_of" and args.len > 0:
+                return "_tr_str_index_of(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "last_index_of" and args.len > 0:
+                return "_tr_str_last_index_of(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "len" or method == "length":
+                return "_tr_strlen(" + obj_s + ")"
+            if method == "starts_with" and args.len > 0:
+                return "_tr_str_starts_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "ends_with" and args.len > 0:
+                return "_tr_str_ends_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "contains" and args.len > 0:
+                return "_tr_str_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "strip_prefix" and args.len > 0:
+                return "_tr_str_strip_prefix(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "strip_suffix" and args.len > 0:
+                return "_tr_str_strip_suffix(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "repeat" and args.len > 0:
+                return "_tr_str_repeat(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "reverse": return "_tr_str_reverse(" + obj_s + ")"
+            if method == "parse_int": return "_tr_str_to_int(" + obj_s + ")"
+            if method == "parse_float": return "_tr_str_to_float(" + obj_s + ")"
+            if method == "parse_bool": return "_tr_str_parse_bool(" + obj_s + ")"
+            if method == "char_at" and args.len > 0:
+                return "_tr_str_char_at_code(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+
+        # When sema returns void/empty type, still dispatch known string methods on the object.
+        # This handles chained calls like Process.shell_output(cmd).trim() where the intermediate
+        # return type is unknown to sema.
+        if t_n == "void" or t_n == "":
+            if method == "strip" or method == "trim": return "_tr_str_strip(" + obj_s + ")"
+            if method == "upper" or method == "to_upper": return "_tr_str_upper(" + obj_s + ")"
+            if method == "lower" or method == "to_lower": return "_tr_str_lower(" + obj_s + ")"
+            if method == "trim_left": return "_tr_str_trim_left(" + obj_s + ")"
+            if method == "trim_right": return "_tr_str_trim_right(" + obj_s + ")"
+            if method == "slice" and args.len == 2:
+                return "_tr_str_slice(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
+            if method == "index_of" and args.len > 0:
+                return "_tr_str_index_of(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "starts_with" and args.len > 0:
+                return "_tr_str_starts_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "ends_with" and args.len > 0:
+                return "_tr_str_ends_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "contains" and args.len > 0:
+                return "_tr_str_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "split" and args.len > 0:
+                return "_tr_str_split(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "replace" and args.len == 2:
+                return "_tr_str_replace(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
+            if method == "len" or method == "length": return "_tr_strlen(" + obj_s + ")"
+            if method == "char_at" and args.len > 0:
+                return "_tr_str_char_at_code(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
 
         mut class_name: str = t_n
         if _is_str_type(class_name): class_name = "TrStr"
+
+        # Built-in module static dispatch: OS, Process, Env, Hash, File
+        if obj_s == "OS" or class_name == "OS":
+            if method == "cwd":        return "_tr_cwd()"
+            if method == "is_windows": return "_tr_is_windows()"
+            if method == "is_linux":   return "(!_tr_is_windows())"
+            if method == "platform":   return "(_tr_is_windows() ? \"windows\" : \"linux\")"
+        if obj_s == "Process" or class_name == "Process":
+            if method == "system" and args.len > 0:
+                return "_tr_system(" + self.gen_expr(args.get(0)) + ")"
+            if method == "shell_output" and args.len > 0:
+                return "_tr_popen_read(" + self.gen_expr(args.get(0)) + ")"
+            if method == "exit" and args.len > 0:
+                return "_tr_exit(" + self.gen_expr(args.get(0)) + ")"
+        if obj_s == "Env" or class_name == "Env":
+            if method == "get_var" and args.len > 0:
+                return "_tr_getenv(" + self.gen_expr(args.get(0)) + ")"
+            if method == "set_var" and args.len > 1:
+                return "_tr_setenv(" + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
+        if obj_s == "Hash" or class_name == "Hash":
+            if method == "sha256" and args.len > 0:
+                return "_tr_sha256_hex(" + self.gen_expr(args.get(0)) + ")"
+            if method == "md5" and args.len > 0:
+                return "_tr_md5_hex(" + self.gen_expr(args.get(0)) + ")"
+        if obj_s == "File" or class_name == "File":
+            if method == "dir_exists" and args.len > 0:
+                return "_tr_dir_exists(" + self.gen_expr(args.get(0)) + ")"
 
         # Static call: Task.init(...) — obj is a type-name ident, hir_expr_type returns void/empty.
         # Recover class_name from obj_s when it matches a known user class.
@@ -4381,6 +4469,8 @@ pub class CGenerator:
                 main_args_name = mf.params.get(0).name
             mi2 = mi2 + 1
         if main_has_args:
+            # Rename to avoid shadowing C's char** argv parameter
+            if main_args_name == "argv": main_args_name = "_tr_main_argv"
             self.w("    List_str* " + main_args_name + " = List_str_new();\n")
             self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_str_append(" + main_args_name + ", argv[_ai]); }\n")
 
@@ -4467,13 +4557,19 @@ pub class CGenerator:
             mut c2 = prog.classes.get(i)
             if not _is_invalid_ptr(c2 as usize):
                 if c2.generics.len == 0:
-                    out.append("typedef struct " + c2.name + " " + c2.name + ";\n")
+                    mut fwd_key = "fwd_" + c2.name
+                    if not self.emitted_fns.contains(fwd_key):
+                        self.emitted_fns.insert(fwd_key, true)
+                        out.append("typedef struct " + c2.name + " " + c2.name + ";\n")
             i = i + 1
         i = 0
         while i < prog.enums.len:
             mut e2 = prog.enums.get(i)
             if not _is_invalid_ptr(e2 as usize):
-                out.append("typedef struct " + e2.name + " " + e2.name + ";\n")
+                mut fwd_key2 = "fwd_" + e2.name
+                if not self.emitted_fns.contains(fwd_key2):
+                    self.emitted_fns.insert(fwd_key2, true)
+                    out.append("typedef struct " + e2.name + " " + e2.name + ";\n")
             i = i + 1
         i = 0
         while i < prog.interfaces.len:
@@ -4578,7 +4674,10 @@ pub class CGenerator:
                         while mi < c4.methods.len:
                             mut m = c4.methods.get(mi)
                             if not _is_invalid_ptr(m as usize):
-                                out.append(self.get_proto_attrs(m) + self.gen_func_sig(m, c4.name) + ";\n")
+                                mut ep_key3 = "p_" + c4.name + "_" + m.name
+                                if not self.emitted_fns.contains(ep_key3):
+                                    self.emitted_fns.insert(ep_key3, true)
+                                    out.append(self.get_proto_attrs(m) + self.gen_func_sig(m, c4.name) + ";\n")
                             mi = mi + 1
             i = i + 1
         i = 0
@@ -4974,6 +5073,8 @@ pub class CGenerator:
                         main_args_name = mf.params.get(0).name
                 mi2 = mi2 + 1
         if main_has_args:
+            # Rename to avoid shadowing C's char** argv parameter
+            if main_args_name == "argv": main_args_name = "_tr_main_argv"
             self.w("    List_str* " + main_args_name + " = List_str_new();\n")
             self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_str_append(" + main_args_name + ", argv[_ai]); }\n")
 

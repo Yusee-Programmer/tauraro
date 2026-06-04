@@ -170,44 +170,45 @@ pub class Lexer:
         # Hexadecimal: 0x / 0X
         if self.peek() == 48 and (self.peek_at(1) == 120 or self.peek_at(1) == 88):
             self.advance(); self.advance()
-            mut val = 0
+            mut val: u64 = 0 as u64
             while char_is_hex(self.peek()) or self.peek() == 95:
                 mut c = self.advance()
                 if c != 95:
-                    mut digit = 0
+                    mut digit: u64 = 0 as u64
                     if c >= 48 and c <= 57:
-                        digit = c - 48
+                        digit = (c - 48) as u64
                     elif c >= 65 and c <= 70:
-                        digit = c - 65 + 10
+                        digit = (c - 65 + 10) as u64
                     else:
-                        digit = c - 97 + 10
-                    val = val * 16 + digit
-            return Token.IntLit(val)
+                        digit = (c - 97 + 10) as u64
+                    val = val * (16 as u64) + digit
+            return Token.IntLit(val as int)
         # Binary: 0b / 0B
         elif self.peek() == 48 and (self.peek_at(1) == 98 or self.peek_at(1) == 66):
             self.advance(); self.advance()
-            mut val = 0
+            mut val: u64 = 0 as u64
             while self.peek() == 48 or self.peek() == 49 or self.peek() == 95:
                 mut c = self.advance()
                 if c != 95:
-                    val = val * 2 + (c - 48)
-            return Token.IntLit(val)
+                    val = val * (2 as u64) + ((c - 48) as u64)
+            return Token.IntLit(val as int)
         # Octal: 0o / 0O
         elif self.peek() == 48 and (self.peek_at(1) == 111 or self.peek_at(1) == 79):
             self.advance(); self.advance()
-            mut val = 0
+            mut val: u64 = 0 as u64
             while (self.peek() >= 48 and self.peek() <= 55) or self.peek() == 95:
                 mut c = self.advance()
                 if c != 95:
-                    val = val * 8 + (c - 48)
-            return Token.IntLit(val)
+                    val = val * (8 as u64) + ((c - 48) as u64)
+            return Token.IntLit(val as int)
         else:
             # Decimal integer (with optional _ separators)
-            mut val = 0
+            # Use u64 accumulator to safely handle large literals like FNV-1a constants.
+            mut val: u64 = 0 as u64
             while char_is_digit(self.peek()) or self.peek() == 95:
                 mut c = self.advance()
                 if c != 95:
-                    val = val * 10 + (c - 48)
+                    val = val * (10 as u64) + ((c - 48) as u64)
             # Float with decimal point
             if self.peek() == 46 and char_is_digit(self.peek_at(1)):
                 self.advance()
@@ -219,7 +220,7 @@ pub class Lexer:
                         frac = frac + (c - 48).to_float() / divisor
                         divisor = divisor * 10.0
                 # Scientific notation after decimal: 1.5e3
-                mut result = val.to_float() + frac
+                mut result = (val as int).to_float() + frac
                 if self.peek() == 101 or self.peek() == 69:
                     self.advance()
                     mut exp_neg = False
@@ -253,7 +254,7 @@ pub class Lexer:
                 mut exp = 0
                 while char_is_digit(self.peek()):
                     exp = exp * 10 + (self.advance() - 48)
-                mut result = val.to_float()
+                mut result = (val as int).to_float()
                 mut ei = 0
                 if exp_neg:
                     while ei < exp:
@@ -264,7 +265,7 @@ pub class Lexer:
                         result = result * 10.0
                         ei = ei + 1
                 return Token.FloatLit(result)
-            return Token.IntLit(val)
+            return Token.IntLit(val as int)
 
     pub def read_triple_string(self, quote: int) -> Token:
         # Called after consuming the first three quote characters.

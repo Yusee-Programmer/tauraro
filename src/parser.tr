@@ -421,6 +421,13 @@ extend Parser:
                 return self.parse_try_stmt()
             case Token.KwAssert:
                 return self.parse_assert_stmt()
+            case Token.KwFrom:
+                # Local `from X import Y` inside function body — already resolved at module level.
+                self.parse_from_import()
+                return box_stmt(Stmt.SPass)
+            case Token.KwImport:
+                self.parse_import()
+                return box_stmt(Stmt.SPass)
             case _:
                 pass
         match self.peek():

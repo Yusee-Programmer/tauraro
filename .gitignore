@@ -1,6 +1,7 @@
 # Compiled binaries and debug info
 *.exe
 *.pdb
+*.txt
 
 # Generated build directories (tauraroc output, cargo, etc.)
 build/
