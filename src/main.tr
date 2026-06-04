@@ -194,10 +194,15 @@ pub def strip_trailing_sep_inline(s: str) -> str:
 pub def read_runtime_header(bin_path: str, input_path: str) -> str:
     # 1. Canonical repo location relative to CWD.
     if file_exists("tauraro/runtime/tauraro_rt.h"): return read_file("tauraro/runtime/tauraro_rt.h")
-    # 2. Next to the compiler binary (e.g. distributed package).
+    # 2. Next to the compiler binary (flat install: binary beside tauraro_rt.h).
     mut bin_dir = dir_of_path(bin_path)
     mut src1 = bin_dir + "tauraro_rt.h"
     if file_exists(src1): return read_file(src1)
+    # 2b. runtime/ subfolder beside the binary (structured install: binary in
+    #     tauraroc-{platform}/, runtime header in tauraroc-{platform}/runtime/).
+    #     This is the layout used by taupkg install-tauraro and CI release zips.
+    mut src1b = bin_dir + "runtime/tauraro_rt.h"
+    if file_exists(src1b): return read_file(src1b)
     # 3. Relative to the input source file — works even when the binary is moved.
     #    Walk up: src_dir → parent → grandparent, checking for runtime/tauraro_rt.h at each level.
     if input_path != "":
