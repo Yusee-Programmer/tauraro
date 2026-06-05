@@ -17,7 +17,6 @@ extern "C":
     def _tr_is_windows() -> bool
     def _tr_file_delete(path: str) -> int
     def _tr_getenv(name: str) -> str
-    def _tr_cwd() -> str
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -661,17 +660,9 @@ pub def main(args: Vec[str]):
     c_gen.register_program(hir)
     c_gen.scan_mono_prog(hir)
 
-    # Build directory is always ./build/ relative to the current working directory,
-    # not relative to the source file. This lets you invoke the compiler from anywhere:
-    #   tauraroc src/main.tr   → binary at ./build/main[.exe]
-    #   tauraroc -o foo src/main.tr → binary at ./foo[.exe]
-    mut cwd_raw   = _tr_cwd()
-    mut cwd_last  = cwd_raw.len() - 1
-    mut cwd_lc    = cwd_raw.char_at(cwd_last)
-    mut cwd_dir   = cwd_raw
-    if cwd_lc != 47 and cwd_lc != 92:
-        cwd_dir = cwd_raw + "/"
-    mut build_dir = cwd_dir + "build/"
+    # build_dir is always relative to the process CWD — "build/" resolves to ./build/
+    # regardless of where the source file lives. No runtime CWD call needed.
+    mut build_dir = "build/"
     make_dir(build_dir)
 
     # Write runtime headers to build/ and sync to runtime/.
@@ -750,7 +741,7 @@ pub def main(args: Vec[str]):
     all_c_files.push(StringObj.init(main_c_path).as_str())
 
     if emit_mode == "c":
-        print("Modular C output written to: " + build_dir + "  (from " + cwd_dir + ")")
+        print("Modular C output written to: " + build_dir)
         print("  tauraro_types.h  — shared type definitions + all function prototypes")
         print("  tauraro_rt.h     — runtime header")
         print("  main.c           — program entry")
@@ -782,24 +773,12 @@ pub def main(args: Vec[str]):
     mut exe_ext = ".exe"
     if not _tr_is_windows():
         exe_ext = ""
-    # If the caller gave an explicit path with separators (absolute or relative dir),
-    # use it directly instead of placing the exe inside build_dir.
-    mut has_sep = false
-    mut sep_p = exe_name as Pointer[char]
-    mut sep_i = 0
-    while sep_p.offset(sep_i).read() as int != 0:
-        mut sep_c = sep_p.offset(sep_i).read() as int
-        if sep_c == 47 or sep_c == 92:
-            has_sep = true
-            break
-        sep_i = sep_i + 1
     mut exe_path = ""
-    if has_sep:
-        # -o path/to/name  or  -o /abs/path : use the given path directly.
+    if output_path != "":
+        # -o given: use exe_name as-is.
+        # With a separator (path/name or /abs/name) it becomes that exact path.
+        # Without a separator (bare name) it lands in CWD as ./name[.exe].
         exe_path = exe_name + exe_ext
-    elif output_path != "":
-        # -o name  (no separator): place next to CWD, not inside build/.
-        exe_path = cwd_dir + exe_name + exe_ext
     else:
         # Default (no -o): place in ./build/<srcname>[.exe].
         exe_path = build_dir + exe_name + exe_ext
