@@ -8,9 +8,16 @@ if (-not (Test-Path $BOOTSTRAP) -and -not (Get-Command $BOOTSTRAP -ErrorAction S
     exit 1
 }
 
-# -o tauraroc.exe (no path separator) now places the binary in CWD directly: .\tauraroc.exe
 Write-Host "==> Compiling src/main.tr -> .\tauraroc.exe"
 & $BOOTSTRAP src/main.tr -o tauraroc.exe --static
+
+# New bootstrap (v0.0.4+): binary lands in CWD as .\tauraroc.exe
+# Old bootstrap (<=v0.0.3): binary lands in src\build\tauraroc.exe
+# Normalise: move from old location to CWD if needed.
+if (-not (Test-Path ".\tauraroc.exe") -and (Test-Path ".\src\build\tauraroc.exe")) {
+    Write-Host "==> Moving src\build\tauraroc.exe -> .\tauraroc.exe (old bootstrap compat)"
+    Move-Item ".\src\build\tauraroc.exe" ".\tauraroc.exe"
+}
 
 if (-not (Test-Path ".\tauraroc.exe")) {
     Write-Error "ERROR: tauraroc.exe not produced — compilation failed"

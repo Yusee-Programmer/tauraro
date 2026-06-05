@@ -22,9 +22,16 @@ if [ "$(uname -m)" = "aarch64" ] && [ "$(uname -s)" = "Linux" ]; then
     STATIC_FLAG="--static"
 fi
 
-# -o tauraroc (no path separator) now places the binary in CWD directly: ./tauraroc
 echo "==> Compiling src/main.tr → ./tauraroc"
 "$BOOTSTRAP" src/main.tr -o tauraroc $STATIC_FLAG
+
+# New bootstrap (v0.0.4+): binary lands in CWD as ./tauraroc
+# Old bootstrap (≤v0.0.3): binary lands in src/build/tauraroc
+# Normalise: move from old location to CWD if needed.
+if [ ! -f "./tauraroc" ] && [ -f "./src/build/tauraroc" ]; then
+    echo "==> Moving src/build/tauraroc → ./tauraroc (old bootstrap compat)"
+    mv "./src/build/tauraroc" "./tauraroc"
+fi
 
 if [ ! -f "./tauraroc" ]; then
     echo "ERROR: tauraroc not produced — compilation failed"
