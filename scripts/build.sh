@@ -22,12 +22,13 @@ if [ "$(uname -m)" = "aarch64" ] && [ "$(uname -s)" = "Linux" ]; then
     STATIC_FLAG="--static"
 fi
 
-echo "==> Compiling src/main.tr → src/build/tauraroc"
+# -o tauraroc (no path separator) now places the binary in CWD directly: ./tauraroc
+echo "==> Compiling src/main.tr → ./tauraroc"
 "$BOOTSTRAP" src/main.tr -o tauraroc $STATIC_FLAG
 
-if [ ! -f "./src/build/tauraroc" ]; then
+if [ ! -f "./tauraroc" ]; then
     echo "ERROR: tauraroc not produced — compilation failed"
     exit 1
 fi
 
-echo "==> Done: src/build/tauraroc"
+echo "==> Done: ./tauraroc"

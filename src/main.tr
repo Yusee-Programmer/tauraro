@@ -17,6 +17,7 @@ extern "C":
     def _tr_is_windows() -> bool
     def _tr_file_delete(path: str) -> int
     def _tr_getenv(name: str) -> str
+    def _tr_cwd() -> str
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -473,6 +474,30 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 
+# ─── Build cleanup ────────────────────────────────────────────────────────────
+# Called when -o is given: removes all intermediate files from build_dir,
+# leaving the directory empty so rmdir can remove it.
+# Deletes: *.c files, tauraro_types.h, tauraro_rt.h, include/ tree, then build/ itself.
+
+pub def cleanup_build(build_dir: str, all_c_files: Vec[str]):
+    mut di = 0
+    while di < all_c_files.len:
+        if _tr_is_windows():
+            _tr_system("del /Q \"" + path_to_native(all_c_files.get(di)) + "\" 2>nul >nul")
+        else:
+            _tr_system("rm -f \"" + all_c_files.get(di) + "\"")
+        di = di + 1
+    if _tr_is_windows():
+        _tr_system("del /Q \""   + path_to_native(build_dir + "tauraro_types.h") + "\" 2>nul >nul")
+        _tr_system("del /Q \""   + path_to_native(build_dir + "tauraro_rt.h")    + "\" 2>nul >nul")
+        _tr_system("rmdir /S /Q \"" + path_to_native(build_dir + "include")       + "\" 2>nul >nul")
+        _tr_system("rmdir \""    + path_to_native(build_dir)                      + "\" 2>nul >nul")
+    else:
+        _tr_system("rm -f \""   + build_dir + "tauraro_types.h\"")
+        _tr_system("rm -f \""   + build_dir + "tauraro_rt.h\"")
+        _tr_system("rm -rf \""  + build_dir + "include\"")
+        _tr_system("rmdir \""   + build_dir + "\" 2>/dev/null")
+
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
 pub def main(args: Vec[str]):
@@ -636,9 +661,17 @@ pub def main(args: Vec[str]):
     c_gen.register_program(hir)
     c_gen.scan_mono_prog(hir)
 
-    # Build directory lives next to the input file.
-    mut base_dir  = dir_of_path(input_path)
-    mut build_dir = base_dir + "build/"
+    # Build directory is always ./build/ relative to the current working directory,
+    # not relative to the source file. This lets you invoke the compiler from anywhere:
+    #   tauraroc src/main.tr   → binary at ./build/main[.exe]
+    #   tauraroc -o foo src/main.tr → binary at ./foo[.exe]
+    mut cwd_raw   = _tr_cwd()
+    mut cwd_last  = cwd_raw.len() - 1
+    mut cwd_lc    = cwd_raw.char_at(cwd_last)
+    mut cwd_dir   = cwd_raw
+    if cwd_lc != 47 and cwd_lc != 92:
+        cwd_dir = cwd_raw + "/"
+    mut build_dir = cwd_dir + "build/"
     make_dir(build_dir)
 
     # Write runtime headers to build/ and sync to runtime/.
@@ -717,7 +750,7 @@ pub def main(args: Vec[str]):
     all_c_files.push(StringObj.init(main_c_path).as_str())
 
     if emit_mode == "c":
-        print("Modular C output written to: " + build_dir)
+        print("Modular C output written to: " + build_dir + "  (from " + cwd_dir + ")")
         print("  tauraro_types.h  — shared type definitions + all function prototypes")
         print("  tauraro_rt.h     — runtime header")
         print("  main.c           — program entry")
@@ -762,8 +795,13 @@ pub def main(args: Vec[str]):
         sep_i = sep_i + 1
     mut exe_path = ""
     if has_sep:
+        # -o path/to/name  or  -o /abs/path : use the given path directly.
         exe_path = exe_name + exe_ext
+    elif output_path != "":
+        # -o name  (no separator): place next to CWD, not inside build/.
+        exe_path = cwd_dir + exe_name + exe_ext
     else:
+        # Default (no -o): place in ./build/<srcname>[.exe].
         exe_path = build_dir + exe_name + exe_ext
 
     if verbose: print("[5/5] Linking " + str(all_c_files.len) + " modules → " + exe_path)
@@ -772,15 +810,9 @@ pub def main(args: Vec[str]):
         print("error: compilation failed (exit code " + str(rc) + ")")
         _tr_exit(rc)
 
-    # When -o is given: delete all temporary .c files, leaving only the exe.
+    # When -o is given: clean all intermediate files from build/, leaving only the exe.
     if output_path != "":
-        mut di = 0
-        while di < all_c_files.len:
-            if _tr_is_windows():
-                _tr_system("del /Q \"" + path_to_native(all_c_files.get(di)) + "\" 2>nul >nul")
-            else:
-                _tr_system("rm -f \"" + all_c_files.get(di) + "\"")
-            di = di + 1
+        cleanup_build(build_dir, all_c_files)
 
     if verbose: print("Done: " + exe_path)
 

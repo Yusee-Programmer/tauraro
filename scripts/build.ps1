@@ -8,12 +8,13 @@ if (-not (Test-Path $BOOTSTRAP) -and -not (Get-Command $BOOTSTRAP -ErrorAction S
     exit 1
 }
 
-Write-Host "==> Compiling src/main.tr -> src\build\tauraroc.exe"
+# -o tauraroc.exe (no path separator) now places the binary in CWD directly: .\tauraroc.exe
+Write-Host "==> Compiling src/main.tr -> .\tauraroc.exe"
 & $BOOTSTRAP src/main.tr -o tauraroc.exe --static
 
-if (-not (Test-Path ".\src\build\tauraroc.exe")) {
+if (-not (Test-Path ".\tauraroc.exe")) {
     Write-Error "ERROR: tauraroc.exe not produced — compilation failed"
     exit 1
 }
 
-Write-Host "==> Done: src\build\tauraroc.exe"
+Write-Host "==> Done: .\tauraroc.exe"

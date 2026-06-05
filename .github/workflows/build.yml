@@ -133,7 +133,11 @@ jobs:
           echo "BOOTSTRAP_BIN=$BOOTSTRAP" >> "$GITHUB_ENV"
 
       # -------------------------------------------------------
-      # Single compilation pass — output lands in src/build/
+      # Single compilation pass.
+      # With the updated -o flag behaviour, a bare name like
+      #   tauraroc src/main.tr -o tauraroc
+      # places the binary in CWD (the repo root), not src/build/.
+      # The build scripts reflect this; no post-move step needed.
       # -------------------------------------------------------
       - name: Build (Linux / macOS)
         if: runner.os != 'Windows'
@@ -146,13 +150,18 @@ jobs:
         run: ./scripts/build.ps1
 
       # -------------------------------------------------------
-      # Move compiled binary to repo root, then wipe all
-      # temporary and seed directories before bundling so the
-      # artifact is clean: source + tauraroc[.exe] at root only.
+      # Verify the binary landed at the repo root, then wipe
+      # temporary directories before bundling the artifact.
       # -------------------------------------------------------
-      - name: Place binary at repo root
+      - name: Verify binary at repo root
         shell: bash
-        run: mv "src/build/tauraroc${{ matrix.ext }}" "./tauraroc${{ matrix.ext }}"
+        run: |
+          if [ ! -f "tauraroc${{ matrix.ext }}" ]; then
+            echo "ERROR: tauraroc${{ matrix.ext }} not found at repo root"
+            ls -la
+            exit 1
+          fi
+          echo "==> Binary present: $(ls -lh tauraroc${{ matrix.ext }})"
 
       - name: Clean up temporary and seed directories
         shell: bash
