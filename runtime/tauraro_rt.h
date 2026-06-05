@@ -1582,6 +1582,69 @@ static char* _tr_read_line(const char* prompt) {
 }
 static void yield_val(void* v) { (void)v; }
 
+/* ── LSP / stdio primitives ──────────────────────────────────────────────
+ * Low-level stdin/stdout helpers for programs that speak JSON-RPC or
+ * any line-framed protocol over stdio.  Declared here so pure-Tauraro
+ * code can use them via  extern "C": def _tr_read_stdin_line() -> str
+ * without needing a hand-written C shim file.
+ * ──────────────────────────────────────────────────────────────────────── */
+#ifdef _WIN32
+#  ifndef _INC_IO
+#    include <io.h>     /* _isatty, _fileno on Windows */
+#  endif
+#else
+#  ifndef _UNISTD_H
+#    include <unistd.h> /* isatty, STDIN_FILENO on Unix */
+#  endif
+#endif
+
+/* Read one line from stdin.  Returns the raw line INCLUDING any trailing
+ * \r\n so callers can distinguish a blank separator ("\r\n") from true
+ * EOF ("").  Never strips — the Tauraro caller calls .trim() itself.   */
+static char* _tr_read_stdin_line(void) {
+    char* buf = (char*)malloc(8192);
+    if (!buf) return (char*)"";
+    if (!fgets(buf, 8192, stdin)) { free(buf); return (char*)""; }
+    return buf;
+}
+
+/* Read exactly n raw bytes from stdin.  Returns a null-terminated heap
+ * string.  Returns "" on EOF or error.                                  */
+static char* _tr_read_stdin_bytes(int64_t n) {
+    if (n <= 0) return (char*)"";
+    char* buf = (char*)malloc((size_t)(n + 1));
+    if (!buf) return (char*)"";
+    size_t total = 0;
+    while ((int64_t)total < n) {
+        size_t got = fread(buf + total, 1, (size_t)(n - (int64_t)total), stdin);
+        if (got == 0) break;
+        total += got;
+    }
+    buf[total] = '\0';
+    return buf;
+}
+
+/* Write s to stdout without an extra newline.  Used by JSON-RPC writers
+ * that build the full frame (Content-Length: …\r\n\r\n{…}) themselves. */
+static void _tr_write_stdout(const char* s) {
+    if (s) fputs(s, stdout);
+}
+
+/* Flush stdout so the peer receives the message without waiting for
+ * the kernel buffer to fill up.                                         */
+static void _tr_flush_stdout(void) { fflush(stdout); }
+
+/* 1 if stdin is an interactive terminal (not a pipe); 0 otherwise.
+ * Used by LSP servers to print a helpful message when started manually. */
+static int64_t _tr_stdin_isatty(void) {
+#ifdef _WIN32
+    return _isatty(_fileno(stdin)) ? 1 : 0;
+#else
+    return isatty(STDIN_FILENO) ? 1 : 0;
+#endif
+}
+
+
 static inline char* _tr_str_substring(const char* s, int start, int end) {
     if (!s) return NULL;
     int len = (int)strlen(s);

@@ -905,6 +905,11 @@ pub class CGenerator:
                 self.ws("return _r; }\n")
             i = i + 1
         self.ws("\n")
+        # Pre-generate List_EnumName so Vec[EnumType] works in prototypes
+        # that appear after this struct definition. Without this, the prototype
+        # uses List_EnumName before it is defined.
+        if not self.list_type_done.contains(e.name):
+            self.ensure_list_type(e.name)
 
     pub def gen_interface_vtable(self, iface: HirInterface):
         if iface.generics.len > 0: return  # monomorphized versions generated in ensure_mono
@@ -4665,6 +4670,32 @@ pub class CGenerator:
                 i = i + 1
             if prog.extern_funcs.len > 0: out.append("\n")
 
+        # ── Struct / enum / interface definitions (BEFORE prototypes) ────────────
+        # Must come before function prototypes so that Vec[UserType] list structs
+        # (e.g. List_JsonVal) are defined before any prototype uses them.
+        i = 0
+        while i < prog.enums.len:
+            mut e3 = prog.enums.get(i)
+            if not _is_invalid_ptr(e3 as usize):
+                self.gen_enum_struct(e3)
+            i = i + 1
+        i = 0
+        while i < prog.classes.len:
+            mut c3 = prog.classes.get(i)
+            if not _is_invalid_ptr(c3 as usize):
+                if c3.generics.len == 0:
+                    self.gen_class_struct(c3)
+            i = i + 1
+        i = 0
+        while i < prog.interfaces.len:
+            mut iface3 = prog.interfaces.get(i)
+            if not _is_invalid_ptr(iface3 as usize):
+                self.gen_interface_vtable(iface3)
+            i = i + 1
+        out.append(self.struct_buf.to_string().as_str())
+        out.append(self.list_types_buf.to_string().as_str())
+        out.append("\n")
+
         # ── Freestanding Function Prototypes (so generic monomorphization can call them) ──
         i = 0
         while i < prog.functions.len:
@@ -4689,30 +4720,6 @@ pub class CGenerator:
                             self.emitted_fns.insert("p_" + f4.name, true)
                             out.append(self.get_proto_attrs(f4) + self.gen_func_sig(f4, f4.class_name) + ";\n")
             i = i + 1
-        out.append("\n")
-
-        # ── Struct / enum / interface definitions ─────────────────────────────
-        i = 0
-        while i < prog.enums.len:
-            mut e3 = prog.enums.get(i)
-            if not _is_invalid_ptr(e3 as usize):
-                self.gen_enum_struct(e3)
-            i = i + 1
-        i = 0
-        while i < prog.classes.len:
-            mut c3 = prog.classes.get(i)
-            if not _is_invalid_ptr(c3 as usize):
-                if c3.generics.len == 0:
-                    self.gen_class_struct(c3)
-            i = i + 1
-        i = 0
-        while i < prog.interfaces.len:
-            mut iface3 = prog.interfaces.get(i)
-            if not _is_invalid_ptr(iface3 as usize):
-                self.gen_interface_vtable(iface3)
-            i = i + 1
-        out.append(self.struct_buf.to_string().as_str())
-        out.append(self.list_types_buf.to_string().as_str())
         out.append("\n")
 
         # ── ALL function prototypes (cross-module visibility) ─────────────────
