@@ -157,7 +157,8 @@ pub class CGenerator:
     pub value_types:     Map[str, bool]  # classes with is_class=false — no * in C type
     pub closure_cap_set: Map[str, bool]  # captured var names for the current closure being generated
     pub closure_env_var: str             # env var name inside a closure body (empty = not in closure body)
-    pub decorator_defs: Map[str, HirFunction]  # user-defined decorator registry
+    pub decorator_defs:   Map[str, HirFunction]  # user-defined decorator registry
+    pub overloaded_sigs:  Map[str, bool]          # "ClassName_method" keys where multiple overloads exist
 
     pub def init() -> CGenerator:
         mut g = CGenerator()
@@ -192,6 +193,7 @@ pub class CGenerator:
         g.closure_cap_set = Map[str, bool].init(0)
         g.closure_env_var = ""
         g.decorator_defs  = Map[str, HirFunction].init(16)
+        g.overloaded_sigs = Map[str, bool].init(32)
         return g
 
     pub def next_temp(self) -> str:
@@ -773,7 +775,17 @@ pub class CGenerator:
         # Escape C reserved keywords used as function names
         if _is_c_keyword(fname): fname = "_tr_fn_" + fname
         if class_name != "":
-            fname = class_name + "_" + fname
+            mut base_sig_key = class_name + "_" + fname
+            if self.overloaded_sigs.contains(base_sig_key):
+                # Mangle overloaded method: append _Narg suffix by non-self param count.
+                mut param_count = 0
+                mut opi = 0
+                while opi < f.params.len:
+                    if f.params.get(opi).name != "self": param_count = param_count + 1
+                    opi = opi + 1
+                fname = base_sig_key + "_" + param_count.to_str() + "arg"
+            else:
+                fname = base_sig_key
         mut sig = ret_ty_str + " " + fname + "("
         mut first = true
 
@@ -2363,7 +2375,11 @@ pub class CGenerator:
                     if args.len > 0:
                         s_base = s_base + ", " + self.gen_args(args)
                     return s_base + ")"
-            mut s = class_name + "_" + method_c + "(" + obj_s
+            # Check for method overloading: if multiple overloads exist, mangle by arg count.
+            mut dispatch_name = class_name + "_" + method_c
+            if self.overloaded_sigs.contains(dispatch_name):
+                dispatch_name = dispatch_name + "_" + args.len.to_str() + "arg"
+            mut s = dispatch_name + "(" + obj_s
             if args.len > 0: s = s + ", " + self.gen_args(args)
             return s + ")"
 
@@ -2379,7 +2395,10 @@ pub class CGenerator:
                     return class_name + "_ctor_" + method + "(" + self.gen_args(args) + ")"
                 else:
                     return class_name + "_make_" + method + "()"
-            mut s = class_name + "_" + method + "(" + obj_s
+            mut enum_dispatch_name = class_name + "_" + method
+            if self.overloaded_sigs.contains(enum_dispatch_name):
+                enum_dispatch_name = enum_dispatch_name + "_" + args.len.to_str() + "arg"
+            mut s = enum_dispatch_name + "(" + obj_s
             if args.len > 0: s = s + ", " + self.gen_args(args)
             return s + ")"
 
@@ -4107,6 +4126,39 @@ pub class CGenerator:
             self.decorator_defs.insert(_dd.name, _dd)
             i = i + 1
 
+        # ── Detect overloaded methods (same name, different param count) ─────
+        # Scan each class/enum for duplicate method names; mark them in overloaded_sigs
+        # so gen_func_sig and gen_method_call can emit mangled C names.
+        i = 0
+        while i < prog.classes.len:
+            mut ov_cls = prog.classes.get(i)
+            if ov_cls.generics.len == 0:
+                mut mi = 0
+                while mi < ov_cls.methods.len:
+                    mut m1 = ov_cls.methods.get(mi)
+                    mut mj = mi + 1
+                    while mj < ov_cls.methods.len:
+                        if ov_cls.methods.get(mj).name == m1.name:
+                            self.overloaded_sigs.insert(ov_cls.name + "_" + m1.name, true)
+                            break
+                        mj = mj + 1
+                    mi = mi + 1
+            i = i + 1
+        i = 0
+        while i < prog.enums.len:
+            mut ov_enm = prog.enums.get(i)
+            mut mi = 0
+            while mi < ov_enm.methods.len:
+                mut m1 = ov_enm.methods.get(mi)
+                mut mj = mi + 1
+                while mj < ov_enm.methods.len:
+                    if ov_enm.methods.get(mj).name == m1.name:
+                        self.overloaded_sigs.insert(ov_enm.name + "_" + m1.name, true)
+                        break
+                    mj = mj + 1
+                mi = mi + 1
+            i = i + 1
+
     # ── Generic type pre-scan (collect all instantiations before codegen) ────
 
     pub def scan_mono_ty(self, ty: AstType):
@@ -4870,6 +4922,26 @@ pub class CGenerator:
             d = d + 1
 
         self.w("#include \"" + inc_prefix + "tauraro_types.h\"\n\n")
+
+        # ── Forward declarations for private (non-pub) functions in this module ─
+        # Public functions are already declared in tauraro_types.h.
+        # Private helpers defined after their call sites need a prototype here
+        # so GCC doesn't fail with "implicit declaration of function".
+        mut fwd_i = 0
+        while fwd_i < prog.functions.len:
+            mut fwd_f = prog.functions.get(fwd_i)
+            if fwd_f.name != "main" and not fwd_f.is_extern and not fwd_f.is_public:
+                mut in_this_mod = false
+                if fwd_f.class_name == "" and fn_set.contains(fwd_f.name):
+                    in_this_mod = true
+                elif fwd_f.class_name != "" and class_set.contains(fwd_f.class_name):
+                    if self.classes.contains(fwd_f.class_name):
+                        if self.classes.get(fwd_f.class_name).generics.len == 0:
+                            in_this_mod = true
+                if in_this_mod:
+                    self.w(self.gen_func_sig(fwd_f, fwd_f.class_name) + ";\n")
+            fwd_i = fwd_i + 1
+        self.w("\n")
 
         # ── Class / enum method implementations ──────────────────────────────
         mut i = 0

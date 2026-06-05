@@ -171,9 +171,13 @@ extend ModuleResolver:
                 case Decl.DFromImport(mod_path, items):
                     self.resolve_module_path(mod_path)
                 case _:
-                    if is_root or decl_is_pub(decl_ptr.read()):
-                        self.all_decls.push(decl_ptr)
-                        self.all_decl_modules.push(self.current_mod)
+                    # Always collect ALL declarations from a module — including private
+                    # helpers (def without pub). Private functions are only called within
+                    # their own module's generated .c file, so they MUST be in all_decls
+                    # for generate_module_c to emit their bodies. Filtering them out here
+                    # causes "implicit declaration" / missing-body GCC errors.
+                    self.all_decls.push(decl_ptr)
+                    self.all_decl_modules.push(self.current_mod)
             i = i + 1
 
     # Compatibility shim — resolve_recursive kept so existing callers compile.

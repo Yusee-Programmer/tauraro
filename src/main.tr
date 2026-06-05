@@ -194,10 +194,15 @@ pub def strip_trailing_sep_inline(s: str) -> str:
 pub def read_runtime_header(bin_path: str, input_path: str) -> str:
     # 1. Canonical repo location relative to CWD.
     if file_exists("tauraro/runtime/tauraro_rt.h"): return read_file("tauraro/runtime/tauraro_rt.h")
-    # 2. Next to the compiler binary (e.g. distributed package).
+    # 2. Next to the compiler binary (flat install: binary beside tauraro_rt.h).
     mut bin_dir = dir_of_path(bin_path)
     mut src1 = bin_dir + "tauraro_rt.h"
     if file_exists(src1): return read_file(src1)
+    # 2b. runtime/ subfolder beside the binary (structured install: binary in
+    #     tauraroc-{platform}/, runtime header in tauraroc-{platform}/runtime/).
+    #     This is the layout used by taupkg install-tauraro and CI release zips.
+    mut src1b = bin_dir + "runtime/tauraro_rt.h"
+    if file_exists(src1b): return read_file(src1b)
     # 3. Relative to the input source file — works even when the binary is moved.
     #    Walk up: src_dir → parent → grandparent, checking for runtime/tauraro_rt.h at each level.
     if input_path != "":
@@ -468,6 +473,30 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 
+# ─── Build cleanup ────────────────────────────────────────────────────────────
+# Called when -o is given: removes all intermediate files from build_dir,
+# leaving the directory empty so rmdir can remove it.
+# Deletes: *.c files, tauraro_types.h, tauraro_rt.h, include/ tree, then build/ itself.
+
+pub def cleanup_build(build_dir: str, all_c_files: Vec[str]):
+    mut di = 0
+    while di < all_c_files.len:
+        if _tr_is_windows():
+            _tr_system("del /Q \"" + path_to_native(all_c_files.get(di)) + "\" 2>nul >nul")
+        else:
+            _tr_system("rm -f \"" + all_c_files.get(di) + "\"")
+        di = di + 1
+    if _tr_is_windows():
+        _tr_system("del /Q \""   + path_to_native(build_dir + "tauraro_types.h") + "\" 2>nul >nul")
+        _tr_system("del /Q \""   + path_to_native(build_dir + "tauraro_rt.h")    + "\" 2>nul >nul")
+        _tr_system("rmdir /S /Q \"" + path_to_native(build_dir + "include")       + "\" 2>nul >nul")
+        _tr_system("rmdir \""    + path_to_native(build_dir)                      + "\" 2>nul >nul")
+    else:
+        _tr_system("rm -f \""   + build_dir + "tauraro_types.h\"")
+        _tr_system("rm -f \""   + build_dir + "tauraro_rt.h\"")
+        _tr_system("rm -rf \""  + build_dir + "include\"")
+        _tr_system("rmdir \""   + build_dir + "\" 2>/dev/null")
+
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
 pub def main(args: Vec[str]):
@@ -631,9 +660,9 @@ pub def main(args: Vec[str]):
     c_gen.register_program(hir)
     c_gen.scan_mono_prog(hir)
 
-    # Build directory lives next to the input file.
-    mut base_dir  = dir_of_path(input_path)
-    mut build_dir = base_dir + "build/"
+    # build_dir is always relative to the process CWD — "build/" resolves to ./build/
+    # regardless of where the source file lives. No runtime CWD call needed.
+    mut build_dir = "build/"
     make_dir(build_dir)
 
     # Write runtime headers to build/ and sync to runtime/.
@@ -744,21 +773,14 @@ pub def main(args: Vec[str]):
     mut exe_ext = ".exe"
     if not _tr_is_windows():
         exe_ext = ""
-    # If the caller gave an explicit path with separators (absolute or relative dir),
-    # use it directly instead of placing the exe inside build_dir.
-    mut has_sep = false
-    mut sep_p = exe_name as Pointer[char]
-    mut sep_i = 0
-    while sep_p.offset(sep_i).read() as int != 0:
-        mut sep_c = sep_p.offset(sep_i).read() as int
-        if sep_c == 47 or sep_c == 92:
-            has_sep = true
-            break
-        sep_i = sep_i + 1
     mut exe_path = ""
-    if has_sep:
+    if output_path != "":
+        # -o given: use exe_name as-is.
+        # With a separator (path/name or /abs/name) it becomes that exact path.
+        # Without a separator (bare name) it lands in CWD as ./name[.exe].
         exe_path = exe_name + exe_ext
     else:
+        # Default (no -o): place in ./build/<srcname>[.exe].
         exe_path = build_dir + exe_name + exe_ext
 
     if verbose: print("[5/5] Linking " + str(all_c_files.len) + " modules → " + exe_path)
@@ -767,15 +789,9 @@ pub def main(args: Vec[str]):
         print("error: compilation failed (exit code " + str(rc) + ")")
         _tr_exit(rc)
 
-    # When -o is given: delete all temporary .c files, leaving only the exe.
+    # When -o is given: clean all intermediate files from build/, leaving only the exe.
     if output_path != "":
-        mut di = 0
-        while di < all_c_files.len:
-            if _tr_is_windows():
-                _tr_system("del /Q \"" + path_to_native(all_c_files.get(di)) + "\" 2>nul >nul")
-            else:
-                _tr_system("rm -f \"" + all_c_files.get(di) + "\"")
-            di = di + 1
+        cleanup_build(build_dir, all_c_files)
 
     if verbose: print("Done: " + exe_path)
 
