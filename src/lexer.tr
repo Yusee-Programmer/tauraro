@@ -405,20 +405,28 @@ pub class Lexer:
                     at_line_start = True
                     continue
 
-                # 3. Handle Indent/Dedent tokens (suppressed inside brackets)
+                # 3. Handle Indent/Dedent tokens (suppressed inside brackets).
+                # Dot-continuation: if an indented line starts with '.' we treat it
+                # as a method-chain continuation of the previous expression — no
+                # INDENT/DEDENT is emitted, matching the behaviour inside parens.
+                # This enables builder patterns across multiple lines:
+                #   mut x = Foo.init()
+                #       .set("k", v)
+                #       .build()
                 if nesting == 0:
-                    mut cur_indent = self.indent_stack.get(self.indent_stack.len - 1)
-                    if indent > cur_indent:
-                        self.indent_stack.push(indent)
-                        tokens.push(Token.Indent)
-                        self.token_lines.push(self.line)
-                    elif indent < cur_indent:
-                        while self.indent_stack.len > 1:
-                            mut top = self.indent_stack.get(self.indent_stack.len - 1)
-                            if top <= indent: break
-                            self.indent_stack.len = self.indent_stack.len - 1
-                            tokens.push(Token.Dedent)
+                    if next_c != 46:  # '.' → NOT a continuation line
+                        mut cur_indent = self.indent_stack.get(self.indent_stack.len - 1)
+                        if indent > cur_indent:
+                            self.indent_stack.push(indent)
+                            tokens.push(Token.Indent)
                             self.token_lines.push(self.line)
+                        elif indent < cur_indent:
+                            while self.indent_stack.len > 1:
+                                mut top = self.indent_stack.get(self.indent_stack.len - 1)
+                                if top <= indent: break
+                                self.indent_stack.len = self.indent_stack.len - 1
+                                tokens.push(Token.Dedent)
+                                self.token_lines.push(self.line)
 
             mut c = self.peek()
             if char_is_space(c): 
@@ -428,16 +436,20 @@ pub class Lexer:
                 self.advance()
                 if c == 13 and self.peek() == 10: self.advance()
                 if nesting == 0:
-                    tokens.push(Token.Newline)
-                    self.token_lines.push(self.line)
+                    # Suppress the Newline if the next non-blank line starts with '.'
+                    # (dot-continuation: method chains across lines).
+                    if not _peek_next_line_dot(self.src, self.pos, self.len):
+                        tokens.push(Token.Newline)
+                        self.token_lines.push(self.line)
                     at_line_start = True
                 continue
             if c == 35:
                 self.advance()
                 self.skip_comment()
                 if nesting == 0:
-                    tokens.push(Token.Newline)
-                    self.token_lines.push(self.line)
+                    if not _peek_next_line_dot(self.src, self.pos, self.len):
+                        tokens.push(Token.Newline)
+                        self.token_lines.push(self.line)
                     at_line_start = True
                 continue
 
@@ -637,4 +649,28 @@ pub class Lexer:
         tokens.push(Token.Eof)
         self.token_lines.push(self.line)
         return tokens
+
+
+# ── Dot-continuation lookahead ────────────────────────────────────────────────
+# Returns true if the next non-blank, non-comment line (starting at `pos` in
+# `src`) begins with '.' (optionally preceded by horizontal whitespace).
+# Used by the tokenizer to suppress Newline/Indent/Dedent before chained calls.
+pub def _peek_next_line_dot(src: Pointer[char], pos: int, src_len: int) -> bool:
+    mut i = pos
+    while i < src_len:
+        mut c = src.offset(i).read() as int
+        if c == 32 or c == 9:        # horizontal whitespace
+            i = i + 1
+        elif c == 35:                 # '#' comment — skip to end of line
+            while i < src_len and src.offset(i).read() as int != 10:
+                i = i + 1
+        elif c == 10:                 # '\n'
+            i = i + 1
+        elif c == 13:                 # '\r'
+            i = i + 1
+            if i < src_len and src.offset(i).read() as int == 10:
+                i = i + 1
+        else:
+            return c == 46            # '.' → chain continuation
+    return false
 
