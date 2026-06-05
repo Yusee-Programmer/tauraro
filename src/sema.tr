@@ -612,7 +612,18 @@ extend Sema:
                     mut f = methods.get(hi)
                     mut _m_ret = box_asttype(AstType.init("void"))
                     if f.ret_ty as usize != 0 as usize: _m_ret = f.ret_ty
-                    self.declare(target + "_" + f.name, SymbolKind.SFunction, _m_ret, false)
+                    # For overloaded methods, register with a param-count suffix so each
+                    # overload gets a distinct symbol in the global scope.
+                    mut _decl_key = target + "_" + f.name
+                    if self.globals.contains(_decl_key):
+                        # Count non-self params to build unique overload key.
+                        mut _pc = 0
+                        mut _pci = 0
+                        while _pci < f.params.len:
+                            if f.params.get(_pci).name != "self": _pc = _pc + 1
+                            _pci = _pci + 1
+                        _decl_key = _decl_key + "_" + _pc.to_str() + "arg"
+                    self.declare(_decl_key, SymbolKind.SFunction, _m_ret, false)
                     if self.classes.contains(target):
                         self.classes.get(target).methods.push(f)
                     hi = hi + 1
@@ -1863,7 +1874,17 @@ extend Sema:
                         mut _mdef = _cls.methods.get(_mi)
                         if _mdef.name == method:
                             if _mdef.ret_ty as usize != 0 as usize:
-                                ret_ty = _mdef.ret_ty.read()
+                                # For overloaded methods, prefer the overload whose param
+                                # count (excluding self) matches the call's arg count.
+                                mut _mpc = 0
+                                mut _mpi = 0
+                                while _mpi < _mdef.params.len:
+                                    if _mdef.params.get(_mpi).name != "self": _mpc = _mpc + 1
+                                    _mpi = _mpi + 1
+                                if _mpc == hl.len:
+                                    ret_ty = _mdef.ret_ty.read()
+                                elif ret_ty.name == "void":
+                                    ret_ty = _mdef.ret_ty.read()  # fallback: first match
                         _mi = _mi + 1
                     # Substitute generic type params: T→concrete when object has type args
                     if _cls.generics.len > 0 and hobj_ty.args.len > 0:
@@ -2202,7 +2223,18 @@ extend Sema:
     # ── Rule F-3: Definite return check ───────────────────────────────────────
     pub def block_returns(self, b: Block) -> bool:
         if b.stmts.len == 0: return false
-        mut last_s = b.stmts.get(b.stmts.len - 1)
+        # Skip trailing SLine markers (line-number annotations inserted by the parser)
+        # so that `return x\n` followed by a line marker is still recognised as returning.
+        mut last_idx = b.stmts.len - 1
+        while last_idx > 0:
+            mut s = b.stmts.get(last_idx)
+            if s as usize == 0 as usize:
+                last_idx = last_idx - 1
+                continue
+            match s.read():
+                case Stmt.SLine(_): last_idx = last_idx - 1
+                case _: break
+        mut last_s = b.stmts.get(last_idx)
         if last_s as usize == 0 as usize: return false
         match last_s.read():
             case Stmt.SReturn(_): return true
