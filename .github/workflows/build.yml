@@ -148,22 +148,29 @@ jobs:
           fi
           echo "==> Binary present: $(ls -lh tauraroc${{ matrix.ext }})"
 
-      - name: Clean up temporary directories
+      - name: Clean up generated build output
         shell: bash
         run: |
+          # src/ is shipped in the artifact, so drop the generated C tree.
           rm -rf src/build
-          # Drop only the temporary stage0 build artifacts; keep the
-          # committed portable seed bootstrap/c/ so it ships in the artifact.
-          rm -rf bootstrap/tauraroc-* bootstrap/unzipped bootstrap/*.zip
 
       # -------------------------------------------------------
-      # Artifact = full source tree + tauraroc[.exe] at root.
+      # Artifact = the compiler binary plus the source/library/sample
+      # trees that make a usable SDK bundle. (Not the whole workspace:
+      # no .git, docs, bootstrap scratch, or build output.)
       # -------------------------------------------------------
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tauraroc-${{ matrix.platform }}
-          path: .
+          if-no-files-found: error
+          path: |
+            tauraroc${{ matrix.ext }}
+            src/
+            std/
+            runtime/
+            examples/
+            benchmarks/
 
   # -----------------------------------------------------------------
   # Release: runs only on v* tag pushes after all builds pass.
