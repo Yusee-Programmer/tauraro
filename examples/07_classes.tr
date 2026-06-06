@@ -151,6 +151,31 @@ extend NetworkHeader:
     pub def describe(self) -> void:
         print(f"Header: ver={self.version as int} len={self.length as int} seq={self.seq as int}")
 
+# ── 5b. @copy — opt a class into shareable (value) semantics ──────────────────
+# By default a class with a non-primitive field (here: List[int]) is move-tracked:
+# `mut b = a` MOVES a, and using a afterwards is a compile error [M-1].
+# Mark the class @copy to tell the compiler the instance is freely shareable —
+# assignment then aliases instead of moving, so both handles stay usable.
+# Use @copy for immutable / arena-allocated reference types that are safe to
+# share. (Classes whose fields are ALL primitive, like Point, are already copy.)
+@copy
+class Label:
+    pub text: str
+    pub ids:  List[int]
+
+extend Label:
+    pub def init(text: str) -> Label:
+        mut l = Label()
+        l.text = text
+        l.ids  = []
+        return l
+
+    pub def add_id(self, n: int) -> void:
+        self.ids.append(n)
+
+    pub def describe(self) -> void:
+        print(f"Label '{self.text}' with {self.ids.len} ids")
+
 # ── 6. Inheritance via 'extends' ──────────────────────────────────────────────
 # 'extends' embeds all parent fields into the child struct and enables
 # inherited method dispatch. Use super(ClassName).method() to call the parent.
@@ -238,6 +263,17 @@ def main():
     print("=== NetworkHeader (@packed) ===")
     mut hdr = NetworkHeader.init(1 as u8, 256 as u16, 42 as u32)
     hdr.describe()
+
+    # ── @copy shareable class ─────────────────────────────────────────────────
+    print("=== Label (@copy) ===")
+    mut a = Label.init("alpha")
+    a.add_id(1)
+    a.add_id(2)
+    mut b = a              # @copy: aliases a (no move) — both stay usable
+    a.describe()           # OK: without @copy this line would be [M-1] (a moved)
+    b.describe()           # b shares the same instance
+    b.add_id(3)
+    a.describe()           # shows 3 ids — a and b refer to the same Label
 
     # ── Immutability rule ─────────────────────────────────────────────────────
     print("=== Mutability ===")

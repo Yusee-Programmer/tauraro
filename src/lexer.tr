@@ -1,11 +1,11 @@
-# compiler/src/lexer.tr — Tauraro lexer written in Tauraro.
+# compiler/src/lexer.tr - Tauraro lexer written in Tauraro.
 # Tokenizes a source string into a Vec[Token].
 
 from token import Token
 from core.vec import Vec
 from core.string import StringBuilder
 
-# ─── Keyword table helper ───────────────────────────────────────────────────────
+# --- Keyword table helper -------------------------------------------------------
 
 pub def keyword_to_token(s: str) -> Token:
     if s == "def" or s == "aiki":       return Token.KwDef
@@ -31,6 +31,7 @@ pub def keyword_to_token(s: str) -> Token:
     if s == "raise" or s == "jefa":    return Token.KwRaise
     if s == "assert" or s == "tabbatar": return Token.KwAssert
     if s == "with" or s == "tare":     return Token.KwWith
+    if s == "defer":                   return Token.KwDefer
     if s == "asm":                     return Token.KwAsm
     if s == "taskgroup" or s == "task_group": return Token.KwTaskGroup
     if s == "gpu":                     return Token.KwGpu
@@ -78,7 +79,7 @@ pub def keyword_to_token(s: str) -> Token:
     
     return Token.Ident(s)
 
-# ─── Character helpers ──────────────────────────────────────────────────────────
+# --- Character helpers ----------------------------------------------------------
 
 pub def char_is_digit(c: int) -> bool:
     return c >= 48 and c <= 57   # '0' .. '9'
@@ -98,7 +99,7 @@ pub def char_is_newline(c: int) -> bool:
 pub def char_is_hex(c: int) -> bool:
     return char_is_digit(c) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
 
-# ─── Lexer class ────────────────────────────────────────────────────────────────
+# --- Lexer class ----------------------------------------------------------------
 
 pub class Lexer:
     pub src:    Pointer[char]   # raw source bytes
@@ -127,7 +128,7 @@ pub class Lexer:
         lx.token_lines = Vec[int].init(1024)
         return lx
 
-    # ── Token access helpers ──
+    # -- Token access helpers --
 
     pub def peek(self) -> int:
         if self.pos >= self.len:
@@ -152,7 +153,7 @@ pub class Lexer:
     pub def at_end(self) -> bool:
         return self.pos >= self.len
 
-    # ── Skip whitespace and comments (not newlines) ──
+    # -- Skip whitespace and comments (not newlines) --
 
     pub def skip_spaces(self):
         while not self.at_end():
@@ -407,14 +408,14 @@ pub class Lexer:
 
                 # 3. Handle Indent/Dedent tokens (suppressed inside brackets).
                 # Dot-continuation: if an indented line starts with '.' we treat it
-                # as a method-chain continuation of the previous expression — no
+                # as a method-chain continuation of the previous expression - no
                 # INDENT/DEDENT is emitted, matching the behaviour inside parens.
                 # This enables builder patterns across multiple lines:
                 #   mut x = Foo.init()
                 #       .set("k", v)
                 #       .build()
                 if nesting == 0:
-                    if next_c != 46:  # '.' → NOT a continuation line
+                    if next_c != 46:  # '.' -> NOT a continuation line
                         mut cur_indent = self.indent_stack.get(self.indent_stack.len - 1)
                         if indent > cur_indent:
                             self.indent_stack.push(indent)
@@ -651,7 +652,7 @@ pub class Lexer:
         return tokens
 
 
-# ── Dot-continuation lookahead ────────────────────────────────────────────────
+# -- Dot-continuation lookahead ------------------------------------------------
 # Returns true if the next non-blank, non-comment line (starting at `pos` in
 # `src`) begins with '.' (optionally preceded by horizontal whitespace).
 # Used by the tokenizer to suppress Newline/Indent/Dedent before chained calls.
@@ -661,7 +662,7 @@ pub def _peek_next_line_dot(src: Pointer[char], pos: int, src_len: int) -> bool:
         mut c = src.offset(i).read() as int
         if c == 32 or c == 9:        # horizontal whitespace
             i = i + 1
-        elif c == 35:                 # '#' comment — skip to end of line
+        elif c == 35:                 # '#' comment - skip to end of line
             while i < src_len and src.offset(i).read() as int != 10:
                 i = i + 1
         elif c == 10:                 # '\n'
@@ -671,6 +672,6 @@ pub def _peek_next_line_dot(src: Pointer[char], pos: int, src_len: int) -> bool:
             if i < src_len and src.offset(i).read() as int == 10:
                 i = i + 1
         else:
-            return c == 46            # '.' → chain continuation
+            return c == 46            # '.' -> chain continuation
     return false
 

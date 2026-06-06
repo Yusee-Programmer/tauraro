@@ -1,65 +1,69 @@
 # 05 — Strings and F-Strings
-# Covers: string literals, escape sequences, concatenation, f-strings,
-# string operations (len/index/methods), type↔string conversion.
+# Covers: string literals (single/double/triple-quoted), escape sequences,
+# concatenation, f-strings, format spec, str.method() dispatch
+# (trim/upper/lower/replace/split/split_once/join/starts_with/ends_with/contains/
+#  index_of/len/repeat/reverse/slice/to_int/to_float),
+# multi-line chaining, type↔string conversion.
 
 def main():
 
     # ── 1. String literals ────────────────────────────────────────────────────
-    # str = C char* — null-terminated UTF-8 byte sequence.
     print("=== String Literals ===")
     plain   = "Hello, world!"
     empty   = ""
     escaped = "tab:\there\nnewline"
     path    = "C:\\Users\\Tauraro"
     quoted  = "She said \"hello\""
-    single  = 'also valid'        # single quotes work too
+    single  = 'also valid'
 
     print(plain)
     print(escaped)
     print(path)
     print(quoted)
 
-    # All escape sequences:
-    # \n  newline      \r  carriage return    \t  horizontal tab
-    # \\  backslash    \"  double quote       \'  single quote
-    # \0  null byte
+    # ── 2. Triple-quoted strings ──────────────────────────────────────────────
+    # Span multiple lines without escape sequences.
+    print("=== Triple-Quoted Strings ===")
+    mut sql = """
+SELECT *
+FROM users
+WHERE active = 1
+"""
+    assert sql.len() > 0
+    print("triple-quoted string ok")
 
-    # ── 2. String length and indexing ─────────────────────────────────────────
+    mut json_template = """
+{
+  "name": "tauraro",
+  "version": 2
+}
+"""
+    assert json_template.contains("tauraro")
+    print("json template ok")
+
+    # ── 3. String length and character access ─────────────────────────────────
     print("=== Length & Indexing ===")
     s: str = "Hello"
     print(f"len: {len(s)}")      # 5
 
-    first_char: char = s[0]     # 'H' — returns char
-    last_char:  char = s[4]     # 'o'
+    first_char: char = s[0]
+    last_char:  char = s[4]
     print(f"ASCII of H = {ord(first_char)}")   # 72
     print(f"ASCII of o = {ord(last_char)}")    # 111
 
-    # No bounds checking — always validate when index is not statically known:
-    idx: int = 2
-    if idx < len(s):
-        mut ch_at: char = s[idx + 0]
-        print(f"s[{idx}] ASCII = {ord(ch_at)}")   # 108 = 'l'
+    # str.len() method (same as len() builtin)
+    assert "hello".len() == 5
+    assert "".len() == 0
 
-    # ── 3. String concatenation ───────────────────────────────────────────────
-    # '+' allocates a new heap string.
+    # ── 4. String concatenation ───────────────────────────────────────────────
     print("=== Concatenation ===")
-    first  = "Hello"
-    second = "world"
-    combined = first + ", " + second + "!"
-    print(combined)    # Hello, world!
+    mut combined = "Hello" + ", " + "world" + "!"
+    print(combined)
 
-    # Must convert non-strings to str before concatenating:
     count: int = 42
-    mut result = "count: " + str(count)
-    print(result)    # count: 42
+    print("count: " + str(count))
 
-    score: float = 9.5
-    mut line  = "score: " + str(score)
-    print(line)      # score: 9.5
-
-    # ── 4. F-strings ──────────────────────────────────────────────────────────
-    # f"..." evaluates {expressions} at runtime. Type-safe — correct format
-    # specifier is chosen per type (%lld for int, %g for float, etc.)
+    # ── 5. F-strings ──────────────────────────────────────────────────────────
     print("=== F-Strings ===")
     name:    str   = "Tauraro"
     version: int   = 2
@@ -68,121 +72,181 @@ def main():
     print(f"Hello from {name} v{version}!")
     print(f"pi = {pi}")
     print(f"1 + 1 = {1 + 1}")
-    print("len(name) = " + str(len(name)))
 
-    # Arithmetic inside {}:
     a: int = 10
     b: int = 3
     print(f"{a} + {b} = {a + b}")
-    print(f"{a} / {b} = {a / b}")             # integer division
+    print(f"{a} / {b} = {a / b}")
     print(f"{a} / {b} (float) = {a as float / b}")
 
-    # Boolean in f-string:
     flag: bool = true
-    print(f"flag = {flag}")    # "flag = true"
+    print(f"flag = {flag}")
 
-    # Method call in {}:
-    word: str = "hello"
-    print(f"upper: {word.upper()}")
+    # ── 6. F-string format spec ────────────────────────────────────────────────
+    # Use '{value:spec}' for formatted output (printf-compatible specs).
+    print("=== F-String Format Spec ===")
+    mut price = 3.14159
+    print(f"price: {price:.2f}")       # 3.14
+    print(f"price: {price:.4f}")       # 3.1416
 
-    # Assign f-string to a variable (heap-allocated):
-    mut msg = f"name={name}, version={version}"
-    print(msg)
+    mut big = 1234567
+    print(f"big:   {big:,d}")          # 1,234,567  (where supported)
 
-    # ── 5. String methods ─────────────────────────────────────────────────────
-    print("=== String Methods ===")
-    text: str = "  Hello, World!  "
+    mut byte_val = 255
+    print(f"hex:   {byte_val:x}")      # ff
+    print(f"HEX:   {byte_val:X}")      # FF
+    print(f"oct:   {byte_val:o}")      # 377
 
-    print(text.upper())             # "  HELLO, WORLD!  "
-    print(text.lower())             # "  hello, world!  "
-    print(text.strip())             # "Hello, World!"
-    mut find_world: int = text.find("World")
-    print(str(find_world))          # 9  (index, or -1 if not found)
-    mut find_xyz: int = text.find("xyz")
-    print(str(find_xyz))            # -1
+    mut padded = 7
+    print(f"zero:  {padded:04d}")      # 0007
+    print(f"right: {padded:>6d}")      # "     7"
 
-    replaced: str = text.replace("World", "Tauraro")
-    print(replaced)                 # "  Hello, Tauraro!  "
+    # ── 7. str.method() dispatch ──────────────────────────────────────────────
+    print("=== str.method() ===")
 
+    # trim / strip variants
+    mut raw = "  Hello, World!  "
+    assert raw.trim() == "Hello, World!"
+    assert raw.trim_left()  == "Hello, World!  "
+    assert raw.trim_right() == "  Hello, World!"
+
+    # case conversion
+    assert "hello".to_upper() == "HELLO"
+    assert "HELLO".to_lower() == "hello"
+
+    # contains / starts_with / ends_with
+    assert "tauraro".contains("aura")
+    assert "tauraro".starts_with("tau")
+    assert "tauraro".ends_with("raro")
+    assert not "tauraro".contains("rust")
+
+    # index_of  (returns -1 if not found)
+    assert "hello".index_of("ll") == 2
+    assert "hello".index_of("xy") == -1
+
+    # replace
+    assert "hello world".replace("world", "tauraro") == "hello tauraro"
+    assert "aababab".replace("ab", "X") == "aXXX"
+
+    # repeat / reverse
+    assert "ab".repeat(3) == "ababab"
+    assert "hello".reverse() == "olleh"
+
+    # slice(start, end)
+    assert "hello world".slice(6, 11) == "world"
+    assert "abcdef".slice(2, 5)       == "cde"
+
+    # to_int / to_float
+    assert "42".to_int()    == 42
+    assert "3.14".to_float() == 3.14
+
+    print("str.method() ok")
+
+    # ── 8. split / join ───────────────────────────────────────────────────────
+    print("=== split / join ===")
     csv: str = "one,two,three,four"
     mut parts: List[str] = csv.split(",")
-    mut pi2: int = 0
-    while pi2 < len(parts):
-        mut p: str = parts[pi2 + 0]
-        print(f"  part: {p}")       # one / two / three / four
-        pi2 += 1
+    assert parts.len == 4
+    assert parts.get(0) == "one"
+    assert parts.get(3) == "four"
 
-    # ── 6. Type-to-string and string-to-type ──────────────────────────────────
+    mut joined = Str.join(parts, " | ")
+    assert joined == "one | two | three | four"
+    print(f"split and join: {joined}")
+
+    # ── 9. split_once — first-occurrence split into exactly 2 parts ───────────
+    # Returns a List[str] with exactly 2 elements:
+    #   [0] = everything before the first separator
+    #   [1] = everything after the first separator
+    print("=== split_once ===")
+
+    # Split a URL-like path on the first '/'
+    mut path2 = "users/profile/settings"
+    mut pair = path2.split_once("/")
+    assert pair.get(0) == "users"
+    assert pair.get(1) == "profile/settings"
+    print(f"head: {pair.get(0)}  tail: {pair.get(1)}")
+
+    # Split a key=value configuration line
+    mut kv = "host=localhost:8080"
+    mut kv_pair = kv.split_once("=")
+    assert kv_pair.get(0) == "host"
+    assert kv_pair.get(1) == "localhost:8080"
+    print(f"key={kv_pair.get(0)}  value={kv_pair.get(1)}")
+
+    # When separator is NOT present, head = full string, tail = ""
+    mut no_sep = "noseparator"
+    mut ns_pair = no_sep.split_once("/")
+    assert ns_pair.get(0) == "noseparator"
+    assert ns_pair.get(1) == ""
+    print("no-separator case ok")
+
+    # Parsing "first rest" commands (shell-style)
+    mut cmd = "STORE mykey myvalue"
+    mut cmd_pair = cmd.split_once(" ")
+    assert cmd_pair.get(0) == "STORE"
+    assert cmd_pair.get(1) == "mykey myvalue"
+    print(f"command: {cmd_pair.get(0)}  args: {cmd_pair.get(1)}")
+
+    # ── 10. Multi-line method chaining ────────────────────────────────────────
+    # A line ending inside a method chain continues on the next line
+    # when the next line starts with '.'.
+    print("=== Multi-Line Chaining ===")
+    mut result = "  Hello, World!  "
+        .trim()
+        .to_lower()
+        .replace("world", "tauraro")
+    assert result == "hello, tauraro!"
+    print(f"chained: {result}")
+
+    mut words_str = "alpha:beta:gamma:delta"
+    mut word_list = words_str
+        .split(":")
+    assert word_list.len == 4
+    assert word_list.get(2) == "gamma"
+    print("chaining ok")
+
+    # ── 11. Type-to-string and string-to-type ─────────────────────────────────
     print("=== Conversions ===")
-    # str() converts any value to its string representation:
-    s_int   = str(42)        # "42"
-    s_float = str(3.14)      # "3.14"
-    s_bool  = str(true)      # "true"
-    s_neg   = str(-100)      # "-100"
+    s_int   = str(42)
+    s_float = str(3.14)
+    s_bool  = str(true)
     print(s_int)
     print(s_float)
     print(s_bool)
 
-    # Parsing strings to numbers:
-    mut n_int   = int("123")    # 123
-    mut n_float = float("9.81") # 9.81
+    mut n_int   = int("123")
+    mut n_float = float("9.81")
     print(f"int:   {n_int}")
     print(f"float: {n_float}")
 
-    # ── 7. String comparison ──────────────────────────────────────────────────
-    # == and != compare CONTENT (via strcmp), not pointer identity.
+    # ── 12. String comparison ──────────────────────────────────────────────────
     print("=== Comparison ===")
     p1 = "hello"
     p2 = "hello"
     p3 = "world"
 
-    print("hello == hello: " + str(p1 == p2))   # true
-    print("hello != world: " + str(p1 != p3))   # true
-    print("hello <  world: " + str(p1 < p3))    # true (lexicographic)
+    print("hello == hello: " + str(p1 == p2))
+    print("hello != world: " + str(p1 != p3))
+    print("hello <  world: " + str(p1 < p3))
 
-    # ── 8. Accessing raw bytes ────────────────────────────────────────────────
-    # s[i] returns a char. Use ord() to get the byte value.
+    # ── 13. Raw character access ───────────────────────────────────────────────
     print("=== Raw Bytes ===")
     bytes_str: str = "ABC"
     mut bi = 0
     while bi < len(bytes_str):
         mut bch: char = bytes_str[bi + 0]
-        print(f"  bytes_str[{bi}] ASCII = {ord(bch)}")   # 65 66 67
+        print(f"  bytes_str[{bi}] ASCII = {ord(bch)}")
         bi += 1
 
-    # Count occurrences of a character:
-    sentence: str = "banana"
-    target: char  = 'a'
-    mut cnt  = 0
-    mut si   = 0
-    while si < len(sentence):
-        mut sch: char = sentence[si + 0]
-        if sch == target:
-            cnt += 1
-        si += 1
-    print(f"a appears {cnt} times in: {sentence}")   # 3
-
-    # ── 9. Building strings efficiently ───────────────────────────────────────
-    # Repeated '+' in a loop is O(n²). Collect parts then join.
+    # ── 14. Building strings efficiently ──────────────────────────────────────
     print("=== String Building ===")
     mut data: List[int] = [1, 2, 3, 4, 5]
     mut parts2: List[str] = []
-    mut di: int = 0
-    while di < len(data):
-        mut num: int = data[di + 0]
+    for num in data:
         parts2.append(str(num))
-        di += 1
-
-    mut joined = ""
-    mut ji = 0
-    while ji < len(parts2):
-        if ji > 0: joined = joined + ", "
-        joined = joined + parts2[ji + 0]
-        ji += 1
-    print(f"joined: {joined}")   # 1, 2, 3, 4, 5
-
-    # f-strings inside a loop — each iteration prints directly:
-    for i in range(1, 4):
-        print(f"item {i}")
+    mut built = Str.join(parts2, ", ")
+    assert built == "1, 2, 3, 4, 5"
+    print(f"built: {built}")
 
     print("=== done ===")

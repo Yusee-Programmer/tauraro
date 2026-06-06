@@ -1,4 +1,4 @@
-# std.core.io — File and console I/O for the self-hosted Tauraro compiler.
+# std.core.io - File and console I/O for the self-hosted Tauraro compiler.
 # Drop-in replacement for root core/io.tr.
 
 extern "C":

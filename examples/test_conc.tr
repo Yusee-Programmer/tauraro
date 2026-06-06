@@ -1,8 +1,0 @@
-def main():
-    mut ch: Chan[int] = Chan.init(4)
-    ch.send(10)
-    ch.send(20)
-    mut a = ch.recv()
-    mut b = ch.recv()
-    print(f"recv: {a} {b}")
-    ch.close()

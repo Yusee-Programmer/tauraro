@@ -11,7 +11,7 @@ This directory covers advanced Tauraro topics. Core Tauraro development — writ
 | [01 — Lifetimes](01_lifetimes.md) | The `from` keyword lifetime annotation | Returning pointers into caller-owned data |
 | [02 — Advanced Ownership](02_advanced_ownership.md) | Move, borrow, Shared deep dive | Understanding M-2 errors; shared mutable state |
 | [03 — Channel Select](03_channel_select.md) | `select:` for multiplexed channels | Fan-in, timeouts, non-blocking channel ops |
-| [04 — Generators](04_generators.md) | Lazy generator expressions and list comprehensions | Memory-efficient iteration over large sequences |
+| [04 — Generators](04_generators.md) | Not currently supported — use list comprehensions / manual loops | — |
 | [05 — Decorators](05_decorators.md) | `@inline`, `@hot`, `@property`, custom decorators | Compile-time code annotation and transformation |
 | [06 — Sendable](06_sendable.md) | Thread-safety enforcement via the `Sendable` interface | Passing types across threads without data races |
 
@@ -45,7 +45,7 @@ Concurrency (ch 16)
 
 Language features (ch 21)
     │
-    ├── Generators (04)          ← lazy iteration complement to list comprehensions
+    ├── Generators (04)          ← not currently supported (see note)
     │
     └── Decorators (05)          ← compile-time annotation system
 ```

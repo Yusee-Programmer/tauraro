@@ -1,4 +1,4 @@
-# std.core.string — StringObj and StringBuilder for self-hosted Tauraro.
+# std.core.string - StringObj and StringBuilder for self-hosted Tauraro.
 #
 # StringObj: heap-owned string view (data: Pointer[char], len, capacity).
 # StringBuilder: growable string builder backed by a StringObj buffer.

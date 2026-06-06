@@ -1,4 +1,4 @@
-# std.core — Low-level building blocks for the self-hosted Tauraro stdlib.
+# std.core - Low-level building blocks for the self-hosted Tauraro stdlib.
 #
 # These are pure Tauraro implementations backed by extern "C" bindings.
 # Nothing here imports from the bootstrap compiler's core.* modules.

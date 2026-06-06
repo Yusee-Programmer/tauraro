@@ -336,10 +336,83 @@ def main():
     print(f"17 div 5: quotient={q} remainder={r}")    # quotient=3 remainder=2
 
     # ── 18. Ownership — lists returned from functions ─────────────────────────
-    # Returning a list transfers ownership to the caller.
     print("=== Ownership ===")
-    mut my_range = make_range(5)    # my_range owns the returned list
+    mut my_range = make_range(5)
     print(f"make_range(5): {len(my_range)} elements")
     print(f"first: {my_range[0]}, last: {my_range[4]}")
 
+    # ── 19. List.sort / sort_desc ─────────────────────────────────────────────
+    print("=== List.sort ===")
+    mut ns: List[int] = [5, 2, 8, 1, 9, 3]
+    ns.sort()                            # ascending in-place
+    print(f"sorted asc: first={ns.get(0)} last={ns.get(5)}")   # 1 9
+
+    mut ds: List[int] = [5, 2, 8, 1, 9, 3]
+    ds.sort_desc()                       # descending in-place
+    print(f"sorted desc: first={ds.get(0)} last={ds.get(5)}")  # 9 1
+
+    mut words_sort: List[str] = ["banana", "apple", "cherry", "date"]
+    words_sort.sort()
+    print(f"words[0]={words_sort.get(0)}  words[3]={words_sort.get(3)}")  # apple date
+
+    # ── 20. List.sum / min_val / max_val ─────────────────────────────────────
+    print("=== List aggregates ===")
+    mut agg_vals: List[int] = [3, 1, 4, 1, 5, 9, 2, 6]
+    print(f"sum:     {agg_vals.sum()}")      # 31
+    print(f"min:     {agg_vals.min_val()}")  # 1
+    print(f"max:     {agg_vals.max_val()}")  # 9
+
+    mut fvals: List[float] = [1.5, 2.5, 0.5, 3.0]
+    print(f"float sum: {fvals.sum()}")   # 7.5
+
+    # ── 21. Set[T] — unique unordered values ──────────────────────────────────
+    print("=== Set[T] ===")
+
+    # String Set
+    mut fruit_set: Set[str] = Set[str].init()
+    fruit_set.add("apple")
+    fruit_set.add("banana")
+    fruit_set.add("cherry")
+    fruit_set.add("apple")   # duplicate — ignored
+    print(f"fruits len: {fruit_set.len()}")   # 3
+    print(f"has apple:  {fruit_set.contains('apple')}")    # true
+    print(f"has grape:  {fruit_set.contains('grape')}")    # false
+
+    fruit_set.remove("banana")
+    print(f"after remove: {fruit_set.len()}")  # 2
+
+    # Integer Set — useful for deduplication
+    mut nums_set: Set[int] = Set[int].init()
+    mut raw_data: List[int] = [1, 2, 3, 2, 1, 4, 3, 5]
+    for v in raw_data:
+        nums_set.add(v)
+    print(f"unique nums: {nums_set.len()}")   # 5  (1 2 3 4 5)
+
+    # Convert set to list for sorting / iteration
+    mut unique_list = nums_set.to_list()
+    unique_list.sort()
+    print(f"sorted unique: first={unique_list.get(0)} last={unique_list.get(4)}")  # 1 5
+
+    # Set operations: is_empty / is_subset
+    mut empty_set: Set[int] = Set[int].init()
+    print(f"empty: {empty_set.is_empty()}")   # true
+
+    # ── 22. defer — LIFO cleanup ──────────────────────────────────────────────
+    # defer runs at FUNCTION return; effects are visible to the caller afterward.
+    print("=== defer ===")
+    mut dlog: List[str] = []
+    collect_with_defers(dlog)        # helper below registers the defers
+    assert dlog.get(0) == "start"
+    assert dlog.get(1) == "middle"
+    assert dlog.get(2) == "deferred 2"   # LIFO: last defer runs first
+    assert dlog.get(3) == "deferred 1"
+    print("defer ok")
+
     print("=== done ===")
+
+# Helper for the defer demo — appends run when this function returns (LIFO).
+def collect_with_defers(log: List[str]) -> void:
+    log.append("start")
+    defer log.append("deferred 1")
+    defer log.append("deferred 2")
+    log.append("middle")

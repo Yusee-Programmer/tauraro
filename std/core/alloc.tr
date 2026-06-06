@@ -1,4 +1,4 @@
-# std.core.alloc — Low-level memory management via extern "C" bindings.
+# std.core.alloc - Low-level memory management via extern "C" bindings.
 #
 # Exports both the raw_* helpers (used by other std.core modules) and the
 # generic alloc[T]/dealloc[T]/resize[T]/copy[T] interface (used by src/*.tr).
@@ -13,7 +13,7 @@ extern "C":
     def _tr_c_memmove(dst: Pointer[char], src: Pointer[char], n: int)
     def _tr_checked_alloc(size: int) -> Pointer[char]
 
-# ── Raw helpers (used internally by std.core.*) ───────────────────────────
+# -- Raw helpers (used internally by std.core.*) ---------------------------
 
 pub def raw_alloc(size: int) -> Pointer[char]:
     return _tr_checked_alloc(size)
@@ -33,7 +33,7 @@ pub def raw_zero(ptr: Pointer[char], n: int):
 pub def raw_move(dst: Pointer[char], src: Pointer[char], n: int):
     _tr_c_memmove(dst, src, n)
 
-# ── Generic allocators (used by src/*.tr: alloc[T], dealloc[T], etc.) ────
+# -- Generic allocators (used by src/*.tr: alloc[T], dealloc[T], etc.) ----
 
 pub def alloc[T](n_elems: int) -> Pointer[T]:
     unsafe:

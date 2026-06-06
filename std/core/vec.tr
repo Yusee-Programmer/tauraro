@@ -1,10 +1,10 @@
-# std.core.vec — Generic dynamic array Vec[T].
+# std.core.vec - Generic dynamic array Vec[T].
 #
 # Implemented entirely in pure Tauraro using extern "C" memory primitives.
 # No dependency on the bootstrap compiler's core.vec module.
 #
 # Internal storage is a raw byte buffer (Pointer[char]).  Typed access uses
-# Pointer[T] casts in unsafe blocks — the codegen emits correct C pointer
+# Pointer[T] casts in unsafe blocks - the codegen emits correct C pointer
 # arithmetic which already accounts for sizeof(T).
 
 extern "C":
@@ -87,6 +87,137 @@ extend Vec[T]:
 
     pub def clear(self):
         self.len = 0
+
+    # append is an alias for push (matches the builtin List API).
+    pub def append(self, val: T):
+        self.push(val)
+
+    # First / last element. Caller must ensure the vec is non-empty.
+    pub def first(self) -> T:
+        return self.get(0)
+
+    pub def last(self) -> T:
+        return self.get(self.len - 1)
+
+    # First index of val, or -1 if absent (linear search via ==).
+    pub def index_of(self, val: T) -> int:
+        mut i = 0
+        while i < self.len:
+            if self.get(i) == val: return i
+            i = i + 1
+        return -1
+
+    # Last index of val, or -1 if absent.
+    pub def last_index_of(self, val: T) -> int:
+        mut i = self.len - 1
+        while i >= 0:
+            if self.get(i) == val: return i
+            i = i - 1
+        return -1
+
+    # Number of elements equal to val.
+    pub def count(self, val: T) -> int:
+        mut n = 0
+        mut i = 0
+        while i < self.len:
+            if self.get(i) == val: n = n + 1
+            i = i + 1
+        return n
+
+    # Reverse the elements in place.
+    pub def reverse(self):
+        mut lo = 0
+        mut hi = self.len - 1
+        while lo < hi:
+            self.swap(lo, hi)
+            lo = lo + 1
+            hi = hi - 1
+
+    # Return a new Vec with the elements in reverse order (original unchanged).
+    pub def reversed(self) -> Vec[T]:
+        mut r = Vec[T].init(self.len)
+        mut i = self.len - 1
+        while i >= 0:
+            r.push(self.get(i))
+            i = i - 1
+        return r
+
+    # Shallow copy with its own backing buffer.
+    pub def clone(self) -> Vec[T]:
+        mut c = Vec[T].init(self.capacity)
+        mut i = 0
+        while i < self.len:
+            c.push(self.get(i))
+            i = i + 1
+        return c
+
+    pub def copy(self) -> Vec[T]:
+        return self.clone()
+
+    # Grow capacity to at least min_cap (never shrinks).
+    pub def reserve(self, min_cap: int):
+        if min_cap <= self.capacity: return
+        mut nc = self.capacity
+        while nc < min_cap:
+            nc = nc * 2
+        self.data = _tr_c_realloc(self.data, nc * sizeof(T))
+        self.capacity = nc
+
+    # Shorten to n elements (no-op if n >= len).
+    pub def truncate(self, n: int):
+        if n < self.len:
+            self.len = n
+
+    # -- Numeric / ordering helpers --------------------------------------------
+    # These require the element type T to support the relevant operator
+    # (+ for sum, < for min/max/sort). They are meaningful for List[int] /
+    # List[float] and the like, mirroring the builtin List aggregate methods.
+
+    # Sum of all elements (T must support +). Caller ensures the vec is non-empty.
+    pub def sum(self) -> T:
+        mut total = self.get(0)
+        mut i = 1
+        while i < self.len:
+            total = total + self.get(i)
+            i = i + 1
+        return total
+
+    # Smallest element (T must support <). Caller ensures the vec is non-empty.
+    pub def min_val(self) -> T:
+        mut best = self.get(0)
+        mut i = 1
+        while i < self.len:
+            mut cur = self.get(i)
+            if cur < best: best = cur
+            i = i + 1
+        return best
+
+    # Largest element (T must support <). Caller ensures the vec is non-empty.
+    pub def max_val(self) -> T:
+        mut best = self.get(0)
+        mut i = 1
+        while i < self.len:
+            mut cur = self.get(i)
+            if best < cur: best = cur
+            i = i + 1
+        return best
+
+    # In-place ascending insertion sort (T must support <).
+    pub def sort(self):
+        mut i = 1
+        while i < self.len:
+            mut key = self.get(i)
+            mut j = i - 1
+            while j >= 0 and key < self.get(j):
+                self.set(j + 1, self.get(j))
+                j = j - 1
+            self.set(j + 1, key)
+            i = i + 1
+
+    # In-place descending sort.
+    pub def sort_desc(self):
+        self.sort()
+        self.reverse()
 
     pub def free(self):
         _tr_c_free(self.data)

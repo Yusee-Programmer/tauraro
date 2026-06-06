@@ -1,17 +1,20 @@
-# std.core.map — String-keyed hash map Map[V].
+# std.core.map - Generic hash map Map[K, V].
 #
-# Open-addressing linear-probe hash table.  Keys are always str.
-# No bootstrap compiler dependency.
+# Open-addressing linear-probe hash table, matching the builtin Dict[K, V] API.
+# Keys are compared with == and hashed by their byte representation, which works
+# for the supported key types (str and int).
+# No dependency on the bootstrap compiler's core.map module.
+
+from core.vec import Vec
 
 extern "C":
     def _tr_checked_alloc(size: int) -> Pointer[char]
     def _tr_c_free(ptr: Pointer[char])
     def _tr_c_memset(ptr: Pointer[char], val: int, n: int)
-    def _tr_str_eq(a: str, b: str) -> bool
-    def _tr_strlen(s: str) -> int
 
-# FNV-1a hash for str keys (fast, good distribution).
-pub def _map_hash(key: str, cap: int) -> int:
+# FNV-1a hash over the key's bytes (fast, good distribution). Works for str and
+# int keys - the key types the builtin Dict supports.
+pub def _map_hash[K](key: K, cap: int) -> int:
     mut h: u64 = 14695981039346656037 as u64
     mut p = key as Pointer[char]
     mut i = 0
@@ -22,38 +25,38 @@ pub def _map_hash(key: str, cap: int) -> int:
         i = i + 1
     return (h as int) % cap
 
-pub class MapEntry[V]:
-    pub key:  str
+pub class MapEntry[K, V]:
+    pub key:  K
     pub val:  V
     pub used: bool
 
-pub class Map[V]:
-    pub buckets:  Pointer[char]   # raw storage for MapEntry[V] array
+pub class Map[K, V]:
+    pub buckets:  Pointer[char]   # raw storage for MapEntry[K, V] array
     pub count:    int
     pub capacity: int
 
-extend Map[V]:
-    pub def init(cap: int) -> Map[V]:
+extend Map[K, V]:
+    pub def init(cap: int) -> Map[K, V]:
         mut cap2 = cap
         if cap2 < 8: cap2 = 8
-        # Round up to next power of two for fast mod
+        # Round up to the next power of two for fast modulo.
         mut p = 1
         while p < cap2: p = p * 2
         cap2 = p
-        mut m = Map[V]()
-        mut sz = cap2 * sizeof(MapEntry[V])
+        mut m = Map[K, V]()
+        mut sz = cap2 * sizeof(MapEntry[K, V])
         m.buckets  = _tr_checked_alloc(sz)
         _tr_c_memset(m.buckets, 0, sz)
         m.count    = 0
         m.capacity = cap2
         return m
 
-    pub def _bucket(self, i: int) -> Pointer[MapEntry[V]]:
+    pub def _bucket(self, i: int) -> Pointer[MapEntry[K, V]]:
         unsafe:
-            return (self.buckets as Pointer[MapEntry[V]]).offset(i)
+            return (self.buckets as Pointer[MapEntry[K, V]]).offset(i)
 
-    pub def insert(self, key: str, val: V):
-        # Rehash at 75% load
+    pub def insert(self, key: K, val: V):
+        # Rehash at 75% load.
         if self.count * 4 >= self.capacity * 3:
             self._rehash()
         mut h = _map_hash(key, self.capacity)
@@ -61,51 +64,51 @@ extend Map[V]:
         while True:
             mut entry = self._bucket(i)
             if not entry.read().used:
-                mut e = MapEntry[V]()
+                mut e = MapEntry[K, V]()
                 e.key  = key
                 e.val  = val
                 e.used = true
                 entry.write(e)
                 self.count = self.count + 1
                 return
-            if _tr_str_eq(entry.read().key, key):
+            if entry.read().key == key:
                 mut e = entry.read()
                 e.val = val
                 entry.write(e)
                 return
             i = (i + 1) % self.capacity
 
-    pub def get(self, key: str) -> V:
+    pub def get(self, key: K) -> V:
         mut h = _map_hash(key, self.capacity)
         mut i = h
         while True:
             mut entry = self._bucket(i)
             if not entry.read().used:
-                mut dummy = MapEntry[V]()
+                mut dummy = MapEntry[K, V]()
                 return dummy.val
-            if _tr_str_eq(entry.read().key, key):
+            if entry.read().key == key:
                 return entry.read().val
             i = (i + 1) % self.capacity
-        mut dummy = MapEntry[V]()
+        mut dummy = MapEntry[K, V]()
         return dummy.val
 
-    pub def contains(self, key: str) -> bool:
+    pub def contains(self, key: K) -> bool:
         mut h = _map_hash(key, self.capacity)
         mut i = h
         while True:
             mut entry = self._bucket(i)
             if not entry.read().used: return false
-            if _tr_str_eq(entry.read().key, key): return true
+            if entry.read().key == key: return true
             i = (i + 1) % self.capacity
         return false
 
-    pub def remove(self, key: str):
+    pub def remove(self, key: K):
         mut h = _map_hash(key, self.capacity)
         mut i = h
         while True:
             mut entry = self._bucket(i)
             if not entry.read().used: return
-            if _tr_str_eq(entry.read().key, key):
+            if entry.read().key == key:
                 mut e = entry.read()
                 e.used = false
                 entry.write(e)
@@ -119,9 +122,60 @@ extend Map[V]:
     pub def is_empty(self) -> bool:
         return self.count == 0
 
+    # set is an alias for insert; has is an alias for contains
+    # (matches the builtin Dict API).
+    pub def set(self, key: K, val: V):
+        self.insert(key, val)
+
+    pub def has(self, key: K) -> bool:
+        return self.contains(key)
+
+    # Return the value for key, or default if the key is absent.
+    pub def get_or(self, key: K, default: V) -> V:
+        if self.contains(key):
+            return self.get(key)
+        return default
+
+    # Remove all entries (keeps the allocated bucket array).
+    pub def clear(self):
+        mut sz = self.capacity * sizeof(MapEntry[K, V])
+        _tr_c_memset(self.buckets, 0, sz)
+        self.count = 0
+
+    # Collect all live keys into a Vec[K].
+    pub def keys(self) -> Vec[K]:
+        mut ks = Vec[K].init(self.count + 1)
+        mut i = 0
+        while i < self.capacity:
+            mut entry = self._bucket(i)
+            if entry.read().used:
+                ks.push(entry.read().key)
+            i = i + 1
+        return ks
+
+    # Collect all live values into a Vec[V].
+    pub def values(self) -> Vec[V]:
+        mut vs = Vec[V].init(self.count + 1)
+        mut i = 0
+        while i < self.capacity:
+            mut entry = self._bucket(i)
+            if entry.read().used:
+                vs.push(entry.read().val)
+            i = i + 1
+        return vs
+
+    # Copy every entry from other into self (other's values win on collision).
+    pub def update(self, other: Map[K, V]):
+        mut i = 0
+        while i < other.capacity:
+            mut entry = other._bucket(i)
+            if entry.read().used:
+                self.insert(entry.read().key, entry.read().val)
+            i = i + 1
+
     pub def _rehash(self):
         mut new_cap = self.capacity * 2
-        mut new_sz = new_cap * sizeof(MapEntry[V])
+        mut new_sz = new_cap * sizeof(MapEntry[K, V])
         mut new_bkt = _tr_checked_alloc(new_sz)
         _tr_c_memset(new_bkt, 0, new_sz)
         mut old_bkt = self.buckets
@@ -132,7 +186,7 @@ extend Map[V]:
         mut i = 0
         while i < old_cap:
             unsafe:
-                mut entry = (old_bkt as Pointer[MapEntry[V]]).offset(i)
+                mut entry = (old_bkt as Pointer[MapEntry[K, V]]).offset(i)
                 if entry.read().used:
                     self.insert(entry.read().key, entry.read().val)
             i = i + 1
