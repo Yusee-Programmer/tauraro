@@ -21,7 +21,7 @@ extern "C":
 # --- Helpers ------------------------------------------------------------------
 
 pub def print_version():
-    print("tauraroc v0.0.4")
+    print("tauraroc v0.0.5")
 
 pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
