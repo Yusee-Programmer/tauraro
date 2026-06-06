@@ -2589,6 +2589,20 @@ static void*     Dict_get(Dict* d, char* key) {
 }
 static bool      Dict_has(Dict* d, char* key) { return Dict_get(d,key)!=NULL; }
 static long long Dict_len(Dict* d)  { return d?(long long)d->len:0LL; }
+static void      Dict_remove(Dict* d, char* key) {
+    if (!d||!key) return;
+    size_t i=_dict_hash(key,d->cap);
+    _DictNode* n=d->buckets[i]; _DictNode* prev=NULL;
+    while (n) {
+        if (strcmp(n->key,key)==0) {
+            if (prev) prev->next=n->next; else d->buckets[i]=n->next;
+            if (n->key) _tr_free(n->key); _tr_free(n);
+            if (d->len>0) d->len--;
+            return;
+        }
+        prev=n; n=n->next;
+    }
+}
 static void      Dict_free(Dict* d) {
     if (!d) return;
     for (size_t i=0; i<d->cap; i++) {
@@ -2605,7 +2619,8 @@ static inline void   _tr_dict_set_impl(TrMap* d, char* k, void* v) { if(d) Dict_
 #define _tr_dict_set(d, k, v) _tr_dict_set_impl((d), (k), (void*)(uintptr_t)(v))
 static inline void*  _tr_dict_get(TrMap* d, char* k) { return d?Dict_get(d,k):NULL; }
 static inline bool   _tr_dict_contains(TrMap* d, char* k) { return d&&Dict_has(d,k); }
-#define _tr_dict_remove(d, k) _tr_dict_set_impl((d), (k), NULL)
+static inline void _tr_dict_remove_fn(TrMap* d, char* k) { if (d) Dict_remove(d, k); }
+#define _tr_dict_remove(d, k) _tr_dict_remove_fn((d), (k))
 static inline long long _tr_dict_len(TrMap* d) { return Dict_len(d); }
 
 /* Map.update / Map.clear / Set[T] defined after List_str below */
@@ -2637,7 +2652,20 @@ static inline void* _tr_idict_get(TrIDict* d, long long k) {
     return NULL;
 }
 static inline bool   _tr_idict_contains(TrIDict* d, long long k) { return _tr_idict_get(d,k) != NULL; }
-static inline void   _tr_idict_remove(TrIDict* d, long long k) { _tr_idict_set_impl(d, k, NULL); }
+static inline void   _tr_idict_remove(TrIDict* d, long long k) {
+    if (!d) return;
+    size_t idx = (size_t)((unsigned long long)k % d->cap);
+    _TrIDictNode* n = d->buckets[idx]; _TrIDictNode* prev = NULL;
+    while (n) {
+        if (n->key == k) {
+            if (prev) prev->next = n->next; else d->buckets[idx] = n->next;
+            free(n);
+            if (d->len > 0) d->len--;
+            return;
+        }
+        prev = n; n = n->next;
+    }
+}
 static inline long long _tr_idict_len(TrIDict* d) { return d ? (long long)d->len : 0LL; }
 
 /* ── Built-in Tuple (up to 8 elements, all stored as long long) ────────── */
@@ -4197,6 +4225,40 @@ static int64_t _tr_set_is_subset(_TrSet* a, _TrSet* b) {
     List_str* ka=_tr_dict_keys(a);
     if(!ka) return 1LL;
     for(int64_t i=0;i<(int64_t)ka->len;i++) if(!_tr_set_contains(b,ka->data[i])) return 0LL;
+    return 1LL;
+}
+
+/* ── Int-keyed Set: Set[int] backed by TrIDict ─────────────────────────────── */
+typedef TrIDict _TrISet;
+static _TrISet* _tr_iset_new(int64_t cap) { return _tr_idict_new(cap > 0 ? cap : 16); }
+static void     _tr_iset_add(_TrISet* s, int64_t e)      { _tr_idict_set(s, e, (void*)1); }
+static int64_t  _tr_iset_contains(_TrISet* s, int64_t e) { return (int64_t)_tr_idict_contains(s, e); }
+static void     _tr_iset_remove(_TrISet* s, int64_t e)   { _tr_idict_remove(s, e); }
+static int64_t  _tr_iset_len(_TrISet* s)                 { return _tr_idict_len(s); }
+static void     _tr_iset_clear(_TrISet* s)               { if(s){ for(size_t i=0;i<s->cap;i++){ _TrIDictNode* n=s->buckets[i]; while(n){ _TrIDictNode* nx=n->next; free(n); n=nx; } s->buckets[i]=NULL; } s->len=0; } }
+static List_i64* _tr_iset_to_list(_TrISet* s)            { return _tr_idict_keys(s); }
+static _TrISet* _tr_iset_union(_TrISet* a, _TrISet* b) {
+    _TrISet* r=_tr_iset_new(16);
+    List_i64* ka=_tr_idict_keys(a); if(ka) for(int64_t i=0;i<(int64_t)ka->len;i++) _tr_iset_add(r,ka->data[i]);
+    List_i64* kb=_tr_idict_keys(b); if(kb) for(int64_t i=0;i<(int64_t)kb->len;i++) _tr_iset_add(r,kb->data[i]);
+    return r;
+}
+static _TrISet* _tr_iset_intersection(_TrISet* a, _TrISet* b) {
+    _TrISet* r=_tr_iset_new(16);
+    List_i64* ka=_tr_idict_keys(a);
+    if(ka) for(int64_t i=0;i<(int64_t)ka->len;i++) if(_tr_iset_contains(b,ka->data[i])) _tr_iset_add(r,ka->data[i]);
+    return r;
+}
+static _TrISet* _tr_iset_difference(_TrISet* a, _TrISet* b) {
+    _TrISet* r=_tr_iset_new(16);
+    List_i64* ka=_tr_idict_keys(a);
+    if(ka) for(int64_t i=0;i<(int64_t)ka->len;i++) if(!_tr_iset_contains(b,ka->data[i])) _tr_iset_add(r,ka->data[i]);
+    return r;
+}
+static int64_t _tr_iset_is_subset(_TrISet* a, _TrISet* b) {
+    List_i64* ka=_tr_idict_keys(a);
+    if(!ka) return 1LL;
+    for(int64_t i=0;i<(int64_t)ka->len;i++) if(!_tr_iset_contains(b,ka->data[i])) return 0LL;
     return 1LL;
 }
 

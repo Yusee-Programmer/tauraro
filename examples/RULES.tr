@@ -76,6 +76,13 @@ def safe_div(a: int, b: int) throws str -> int:
         raise("division by zero")
     return a / b
 
+# Helper for RULE 20 (defer) — deferred appends run when this function returns.
+def rule20_defer_helper(log: List[str]) -> void:
+    log.append("start")
+    defer log.append("cleanup 1")     # registered first  → runs last  (LIFO)
+    defer log.append("cleanup 2")     # registered second → runs first (LIFO)
+    log.append("work")
+
 # ═════════════════════════════════════════════════════════════════════════════
 def main():
 # ═════════════════════════════════════════════════════════════════════════════
@@ -367,6 +374,17 @@ def main():
     # RULE 9 — COLLECTIONS (List & Dict)
     # ─────────────────────────────────────────────────────────────────────────
     print("=== RULE 9: Collections ===")
+
+    # RULE 9.0  Builtin collection names: List and Dict ONLY.
+    #           Vec  is NOT a builtin — import from std/core if you need it.
+    #           Map  is NOT a builtin — use Dict, or import from std/core.
+    #
+    # WRONG:   mut items: Vec[int] = []      # Vec is not a builtin name
+    # WRONG:   mut m: Map[str,int] = {}      # Map is not a builtin name
+    # CORRECT: use List[T] and Dict (or Dict[K,V]) which are always available.
+    #
+    # The reason: Vec and Map live in std/core/* so users can import or
+    # override them without name collision with the builtin types.
 
     # RULE 9.1  Always give the type parameter when declaring a list.
     #
@@ -786,6 +804,18 @@ def main():
     mut is_valid: bool = true       # OK — not shadowing a builtin
     print("is_valid=" + str(is_valid))
 
+    # RULE N-2  Builtin collection names: List and Dict ONLY.
+    #           Vec is not builtin — use List[T].  Map is not builtin — use Dict.
+    #           Importing Vec or Map from std/core gives them their own namespace.
+    #
+    # WRONG:   mut items: Vec[int] = []    # Vec is not a builtin name
+    # WRONG:   mut m: Map[str,int] = {}    # Map is not a builtin name
+    # CORRECT:
+    mut builtin_list: List[int] = [1, 2, 3]
+    mut builtin_dict: Dict[str, int] = {}
+    builtin_dict.set("x", 99)
+    print("builtin collections ok")
+
     # ── Category U: unsafe: Quarantine ───────────────────────────────────────
 
     # RULE U-1  Raw pointer operations are only permitted inside 'unsafe:' blocks:
@@ -796,5 +826,274 @@ def main():
 
     # RULE U-2  Ownership rules still apply inside unsafe: — you cannot use a
     #           moved variable or double-free even in an unsafe: block.
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 17 — STR.METHOD() DISPATCH
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 17: str.method() ===")
+
+    # RULE 17.1  String methods are called with dot notation — no import needed.
+    mut raw2: str = "  Hello, Tauraro!  "
+    print(raw2.trim())               # "Hello, Tauraro!"
+    print(raw2.trim().to_upper())    # "HELLO, TAURARO!"
+    print(raw2.trim().to_lower())    # "hello, tauraro!"
+    print(raw2.trim().replace("Tauraro", "World"))  # "Hello, World!"
+
+    # RULE 17.2  Predicates
+    assert "hello".starts_with("hel")
+    assert "hello".ends_with("llo")
+    assert "hello".contains("ell")
+    assert not "hello".contains("xyz")
+
+    # RULE 17.3  split() returns a List[str].
+    mut csv2: List[str] = "a,b,c,d".split(",")
+    assert csv2.len == 4
+    assert csv2.get(0) == "a"
+
+    # RULE 17.4  split_once() returns a List[str] with exactly 2 elements:
+    #            [0] = everything before the FIRST occurrence of the separator
+    #            [1] = everything after  the FIRST occurrence of the separator
+    #
+    # Use case: parsing "key=value", splitting a path on its first "/"
+    mut pair2 = "user/profile/settings".split_once("/")
+    assert pair2.get(0) == "user"
+    assert pair2.get(1) == "profile/settings"
+    print("17.4 split_once: " + pair2.get(0) + " / " + pair2.get(1))
+
+    # RULE 17.5  Str.join(parts, sep) joins a List[str] with a separator.
+    mut words2: List[str] = ["alpha", "beta", "gamma"]
+    mut joined2 = Str.join(words2, " | ")
+    print(joined2)  # alpha | beta | gamma
+
+    # RULE 17.6  index_of(sub) returns the first index or -1.
+    assert "hello world".index_of("world") == 6
+    assert "hello world".index_of("xyz")   == -1
+
+    # RULE 17.7  slice(start, end) extracts a substring.
+    assert "hello world".slice(6, 11) == "world"
+
+    # RULE 17.8  reverse() / repeat(n)
+    assert "abc".reverse() == "cba"
+    assert "ab".repeat(3)  == "ababab"
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 18 — FLOAT MATH & INT FORMAT METHODS
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 18: Float Math & Int Format ===")
+
+    # RULE 18.1  Float math methods — all return float.
+    mut x2: float = 2.5
+    print(f"floor: {x2.floor()}")   # 2
+    print(f"ceil:  {x2.ceil()}")    # 3
+    print(f"round: {x2.round()}")   # 3
+
+    mut y2: float = 9.0
+    print(f"sqrt: {y2.sqrt()}")     # 3
+
+    mut neg2: float = -4.5
+    print(f"fabs: {neg2.fabs()}")   # 4.5
+
+    # is_nan / is_inf predicates
+    mut normal2: float = 1.0
+    assert not normal2.is_nan()
+    assert not normal2.is_inf()
+
+    # RULE 18.2  Int format methods — all return str.
+    mut n2: int = 255
+    print(f"hex:    {n2.to_hex()}")     # ff
+    print(f"HEX:    {n2.to_HEX()}")     # FF
+    print(f"octal:  {n2.to_octal()}")   # 377
+    print(f"binary: {n2.to_binary()}")  # 11111111
+
+    # RULE 18.3  gcd / lcm are methods on int.
+    mut p3: int = 12
+    mut q3: int = 8
+    print(f"gcd({p3},{q3}) = {p3.gcd(q3)}")   # 4
+    print(f"lcm({p3},{q3}) = {p3.lcm(q3)}")   # 24
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 19 — F-STRING FORMAT SPEC
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 19: F-String Format Spec ===")
+
+    # RULE 19.1  '{expr:spec}' uses printf-compatible format specifiers.
+    mut fpi: float = 3.14159
+    print(f"pi 2dp: {fpi:.2f}")      # 3.14
+    print(f"pi 4dp: {fpi:.4f}")      # 3.1416
+
+    mut fn_byte: int = 255
+    print(f"hex: {fn_byte:x}")       # ff
+    print(f"oct: {fn_byte:o}")       # 377
+
+    mut fn_n: int = 7
+    print(f"pad4: {fn_n:04d}")       # 0007
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 20 — DEFER
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 20: defer ===")
+
+    # RULE 20.1  'defer stmt' schedules stmt to run when the current function
+    #            RETURNS, in LIFO order (last-registered defer runs first).
+    #
+    # Use for: cleanup, unlocking, closing files, logging on exit.
+    #
+    # IMPORTANT: deferred effects happen at function return — you cannot observe
+    #            them earlier in the same function.  To verify ordering, have a
+    #            helper register the defers and inspect the result in the caller.
+    mut defer_log: List[str] = []
+    rule20_defer_helper(defer_log)          # appends run when helper returns
+    assert defer_log.get(0) == "start"
+    assert defer_log.get(1) == "work"
+    assert defer_log.get(2) == "cleanup 2"  # LIFO: registered last → runs first
+    assert defer_log.get(3) == "cleanup 1"
+    print("defer LIFO order verified")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 21 — SET[T]
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 21: Set[T] ===")
+
+    # RULE 21.1  Set[T] stores unique values.  Duplicates are silently ignored.
+    mut s_set: Set[str] = Set[str].init()
+    s_set.add("a")
+    s_set.add("b")
+    s_set.add("a")     # duplicate — no-op
+    assert s_set.len() == 2
+    assert s_set.contains("a")
+    assert not s_set.contains("z")
+    s_set.remove("b")
+    assert s_set.len() == 1
+
+    # RULE 21.2  to_list() converts to a sortable List[T].
+    mut ns_set: Set[int] = Set[int].init()
+    for nv in [3, 1, 4, 1, 5, 9, 2, 6]:
+        ns_set.add(nv)
+    mut ns_list = ns_set.to_list()
+    ns_list.sort()
+    assert ns_list.get(0) == 1
+    assert ns_list.len == 7     # 1,2,3,4,5,6,9 (no duplicates)
+    print("Set[T] ok")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 22 — LIST AGGREGATES
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 22: List Aggregates ===")
+
+    # RULE 22.1  sort() / sort_desc() sort in-place.
+    mut agg: List[int] = [5, 2, 8, 1, 9]
+    agg.sort()
+    assert agg.get(0) == 1 and agg.get(4) == 9
+
+    # RULE 22.2  sum() / min_val() / max_val() return the element type.
+    mut nums2: List[int] = [1, 2, 3, 4, 5]
+    assert nums2.sum()     == 15
+    assert nums2.min_val() == 1
+    assert nums2.max_val() == 5
+    print(f"sum={nums2.sum()} min={nums2.min_val()} max={nums2.max_val()}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 23 — MATCH GUARDS
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 23: Match Guards ===")
+
+    # RULE 23.1  'case pattern if condition:' narrows an arm with a guard.
+    #            If the guard is false the next arm is tried.
+    mut val2: int = 7
+    match val2:
+        case x if x < 0:  print("negative: " + str(x))
+        case x if x == 0: print("zero")
+        case x if x < 10: print("small positive: " + str(x))   # prints this
+        case _:           print("large")
+
+    # Guards also work on enum patterns:
+    mut opt2: Option[int] = Option.Some(42)
+    match opt2:
+        case Option.Some(v) if v > 100: print("big some")
+        case Option.Some(v):            print("some: " + str(v))   # prints this
+        case Option.None:               print("none")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 24 — METHOD OVERLOADING
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 24: Method Overloading ===")
+
+    # RULE 24.1  Multiple methods with the SAME name but DIFFERENT param counts
+    #            are allowed in a class.  The compiler dispatches by arity.
+    #
+    # WRONG in other languages:   only one method with each name
+    # CORRECT in Tauraro: define multiple signatures — each must have distinct
+    #            parameter counts (not just distinct types).
+
+    # (See 07_classes.tr and 25_new_features.tr for full overloading examples.)
+    print("see 07_classes.tr for overloading examples")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 25 — MULTI-LINE METHOD CHAINING
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 25: Multi-Line Chaining ===")
+
+    # RULE 25.1  When the NEXT line starts with '.', it is a continuation of
+    #            the current expression — no backslash or trailing operator needed.
+    #
+    # WRONG:   mut r = "  hello  "\
+    #              .trim().to_upper()    # explicit continuation (ugly)
+    # CORRECT:
+    mut chained2 = "  hello, world!  "
+        .trim()
+        .to_upper()
+        .replace("WORLD", "TAURARO")
+    assert chained2 == "HELLO, TAURARO!"
+    print(f"chained: {chained2}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 26 — ASSERT FAMILY
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 26: assert family ===")
+
+    # RULE 26.1  assert expr — panics with a message if expr is false.
+    assert 2 + 2 == 4
+    assert 2 + 2 == 4, "basic arithmetic"
+
+    # RULE 26.2  assert_eq / assert_ne / assert_lt / assert_le / assert_gt / assert_ge
+    assert_eq(10, 10,  "10 == 10")
+    assert_ne(10, 20,  "10 != 20")
+    assert_lt(5,  10,  "5 < 10")
+    assert_le(5,  5,   "5 <= 5")
+    assert_gt(10, 5,   "10 > 5")
+    assert_ge(10, 10,  "10 >= 10")
+    print("assert family ok")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # RULE 27 — LIFETIME ANNOTATIONS ('from' keyword)
+    # ─────────────────────────────────────────────────────────────────────────
+    print("=== RULE 27: Lifetimes ===")
+
+    # RULE 27.1  'from param_name' appears AFTER the return type when a function
+    #            returns a Pointer[T], ref T, or mut_ref T that comes from a param.
+    #
+    #   def fn(items: List[int], other: int) -> Pointer[int] from items:
+    #       ...
+    #
+    # RULE 27.2  Single non-primitive parameter → lifetime is AUTO-INFERRED.
+    #            No annotation needed.
+    #
+    #   def get_first(data: List[int]) -> int:
+    #       return data.get(0)    # single param — compiler infers 'from data'
+    #
+    # RULE 27.3  ref T / mut_ref T parameter types communicate borrow intent.
+    #            They are transparent in the generated C (just pointer passing).
+    #
+    #   def add_one(x: ref int) -> int: return x + 1
+    #   def double_it(x: mut_ref int) -> int: return x * 2
+    #
+    # RULE 27.4  Returning a LOCAL Pointer without 'from' is caught as [L-1].
+    #            Fix: annotate 'from param', or return by value instead.
+    #
+    # RULE 27.5  If you need to conditionally return from EITHER of two params,
+    #            return the VALUE (a copy) instead — no lifetime needed.
+    #
+    # (See 26_safety_model.tr for full lifetime examples.)
+    print("lifetime rules — see 26_safety_model.tr")
 
     print("=== done ===")

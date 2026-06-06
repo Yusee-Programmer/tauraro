@@ -13,13 +13,13 @@ interface Container[T]:
 
 # ── 2. Generic class implementing the generic interface ───────────────────────
 class Stack[T] implements Container[T]:
-    pub items: Vec[T]
+    pub items: List[T]
     pub count: int
 
 extend Stack:
     pub def init() -> Stack[T]:
         mut s = Stack[T]()
-        s.items = Vec[T].init(8)
+        s.items = List[T].init(8)
         s.count = 0
         return s
 
@@ -42,14 +42,14 @@ extend Stack:
 
 # A second implementation of Container[T]
 class BoundedStack[T] implements Container[T]:
-    pub items: Vec[T]
+    pub items: List[T]
     pub count: int
     pub cap: int
 
 extend BoundedStack:
     pub def init(capacity: int) -> BoundedStack[T]:
         mut s = BoundedStack[T]()
-        s.items = Vec[T].init(capacity)
+        s.items = List[T].init(capacity)
         s.count = 0
         s.cap   = capacity
         return s
@@ -93,13 +93,13 @@ interface Describable:
     def describe(self) -> void
 
 class IntStack implements Describable:
-    pub items: Vec[int]
+    pub items: List[int]
     pub count: int
 
 extend IntStack:
     pub def init() -> IntStack:
         mut s = IntStack()
-        s.items = Vec[int].init(4)
+        s.items = List[int].init(4)
         s.count = 0
         return s
 

@@ -197,7 +197,7 @@ extend Sema:
         s.globals.insert("Pointer",      Symbol.init("Pointer",      SymbolKind.SClass, box_asttype(AstType.init("Pointer"))))
         s.globals.insert("StringBuilder",Symbol.init("StringBuilder",SymbolKind.SClass, box_asttype(AstType.init("StringBuilder"))))
         s.globals.insert("StringObj",    Symbol.init("StringObj",    SymbolKind.SClass, box_asttype(AstType.init("StringObj"))))
-        s.globals.insert("Map",          Symbol.init("Map",          SymbolKind.SClass, box_asttype(AstType.init("Map"))))
+        # Map is not a builtin — import from std/core. Dict is the builtin associative type.
         s.globals.insert("Dict",         Symbol.init("Dict",         SymbolKind.SClass, box_asttype(AstType.init("Dict"))))
         s.globals.insert("Set",          Symbol.init("Set",          SymbolKind.SClass, box_asttype(AstType.init("Set"))))
         s.globals.insert("Box",          Symbol.init("Box",          SymbolKind.SClass, box_asttype(AstType.init("Box"))))
@@ -1543,6 +1543,8 @@ extend Sema:
         if method == "count": return AstType.init("int")
         if method == "char_at": return AstType.init("int")
         if method == "parse_int": return AstType.init("int")
+        if method == "to_int" or method == "to_i64": return AstType.init("int")
+        if method == "to_float" or method == "to_f64": return AstType.init("float")
         if method == "starts_with": return AstType.init("bool")
         if method == "ends_with": return AstType.init("bool")
         if method == "contains_char": return AstType.init("bool")
@@ -1884,7 +1886,14 @@ extend Sema:
                     if method == "contains" or method == "has" or method == "is_empty" or method == "is_subset": ret_ty = AstType.init("bool")
                     elif method == "len" or method == "length": ret_ty = AstType.init("int")
                     elif method == "add" or method == "remove" or method == "clear": ret_ty = AstType.init("void")
-                    elif method == "to_list": ret_ty = AstType.init_generic("List", alloc[AstType](1))
+                    elif method == "to_list":
+                        # to_list() returns List[T] where T is the Set's element type
+                        mut _set_elem = alloc[AstType](1)
+                        if hobj_ty.args.len > 0:
+                            _set_elem.write(hobj_ty.args.get(0).read())
+                        else:
+                            _set_elem.write(AstType.init("str"))
+                        ret_ty = AstType.init_generic("List", _set_elem)
                     elif method == "union" or method == "intersection" or method == "difference": ret_ty = hobj_ty
                 # Option[T] built-in method return types
                 elif hobj_ty.name == "Option":
@@ -2093,14 +2102,19 @@ extend Sema:
                             generic_arg_n = nested_ty.read().name
                     case _: pass
                 if is_generic:
-                    # For Vec[T] or List[T] — return the base expr but annotate its type with the generic arg
-                    if (obj_ty_n == "Vec" or obj_ty_n == "List" or obj_ty_n == "Map" or obj_ty_n == "Pointer") and generic_arg_n != "":
-                        mut container_ty = AstType.init(obj_ty_n)
+                    # For Vec[T] or List[T] — return base expr annotated with the generic arg.
+                    # When obj_ty_n is "void" (e.g. Vec not in globals but used as generic syntax),
+                    # fall back to obj_name from the AST so Vec[int].init() still works.
+                    mut eff_ty_n = obj_ty_n
+                    if (eff_ty_n == "void" or eff_ty_n == "") and (obj_name == "Vec" or obj_name == "List" or obj_name == "Map" or obj_name == "Dict" or obj_name == "Set" or obj_name == "Pointer"):
+                        eff_ty_n = obj_name
+                    if (eff_ty_n == "Vec" or eff_ty_n == "List" or eff_ty_n == "Map" or eff_ty_n == "Dict" or eff_ty_n == "Set" or eff_ty_n == "Pointer") and generic_arg_n != "":
+                        mut container_ty = AstType.init(eff_ty_n)
                         container_ty.args = Vec[Pointer[AstType]].init(1)
                         container_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
                         if obj_name == "alloc" or obj_name == "dealloc" or obj_name == "resize" or obj_name == "copy":
                              return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(idx_inner), container_ty))
-                        return box_hirexpr(HirExpr.EIdent(obj_ty_n, container_ty, false))
+                        return box_hirexpr(HirExpr.EIdent(eff_ty_n, container_ty, false))
                     # User-defined generic class or enum: preserve the concrete type arg
                     if (self.classes.contains(obj_name) or self.enums.contains(obj_name)) and generic_arg_n != "":
                         mut cls_ty = AstType.init(obj_name)
