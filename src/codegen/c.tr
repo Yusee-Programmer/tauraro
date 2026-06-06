@@ -4596,7 +4596,15 @@ pub class CGenerator:
             i = i + 1
         i = 0
         while i < prog.functions.len:
-            self.functions.insert(prog.functions.get(i).name, prog.functions.get(i))
+            mut pf = prog.functions.get(i)
+            # The bare-name function map is for free functions. A class/enum
+            # method (class_name != "") must not clobber a free function of the
+            # same name (e.g. Vec.copy vs the generic free copy[T]) -- that would
+            # strip the free function's .generics and leak bare T into the C.
+            # Free functions always win; a method only registers when the name
+            # is otherwise free.
+            if pf.class_name == "" or not self.functions.contains(pf.name):
+                self.functions.insert(pf.name, pf)
             i = i + 1
         i = 0
         while i < prog.decorator_defs.len:
