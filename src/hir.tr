@@ -1,11 +1,11 @@
-# compiler/src/hir.tr — High-level Intermediate Representation
+# compiler/src/hir.tr - High-level Intermediate Representation
 
 from core.vec import Vec
 from core.alloc import alloc, dealloc
 from core.string import StringObj
 from ast import AstType, Decorator, Pattern, Ownership
 
-# ─── Expressions ──────────────────────────────────────────────────────────────
+# --- Expressions --------------------------------------------------------------
 
 pub enum HirExpr:
     ELitInt(val: int, ty: AstType)
@@ -71,7 +71,7 @@ extend HirFStringPart:
         p.fmt_spec = ""
         return p
 
-# ─── Match arms ─────────────────────────────────────────────────────────────
+# --- Match arms -------------------------------------------------------------
 
 pub class HirMatchArm:
     pub pat:   Pattern
@@ -86,7 +86,7 @@ extend HirMatchArm:
         a.guard = Pointer[HirExpr](0)
         return a
 
-# ─── Chan-select arms ─────────────────────────────────────────────────────────
+# --- Chan-select arms ---------------------------------------------------------
 
 pub class HirChanSelectArm:
     pub kind: int                       # 0=recv, 1=send, 2=timeout, 3=default
@@ -96,7 +96,7 @@ pub class HirChanSelectArm:
     pub timeout_ms: Pointer[HirExpr]
     pub body: HirBlock
 
-# ─── Statements ───────────────────────────────────────────────────────────────
+# --- Statements ---------------------------------------------------------------
 
 pub enum HirStmt:
     SExpr(expr: Pointer[HirExpr])
@@ -123,7 +123,7 @@ pub enum HirStmt:
     SFree(name: str)
     SMultiLet(names: Vec[str], is_mut: bool, val: Pointer[HirExpr])
     SChanSelect(cases: Vec[Pointer[HirChanSelectArm]])
-    SDefer(stmt: Pointer[HirStmt])   # defer — deferred execution at function exit
+    SDefer(stmt: Pointer[HirStmt])   # defer - deferred execution at function exit
 
 pub class HirBlock:
     pub stmts: Vec[Pointer[HirStmt]]
@@ -137,7 +137,7 @@ extend HirBlock:
     pub def push(self, s: Pointer[HirStmt]):
         self.stmts.push(s)
 
-# ─── Declarations ─────────────────────────────────────────────────────────────
+# --- Declarations -------------------------------------------------------------
 
 pub class HirParam:
     pub name: str
@@ -203,7 +203,7 @@ pub class HirProgram:
     pub extern_funcs:    Vec[HirFunction]   # extern "C" declarations
     pub decorator_defs:  Vec[HirFunction]   # decorator def ... functions
     pub type_alias_names:  Vec[str]              # type Name = Target
-    pub type_alias_types:  Vec[Pointer[AstType]] # parallel array — must be Pointer since AstType is a class
+    pub type_alias_types:  Vec[Pointer[AstType]] # parallel array - must be Pointer since AstType is a class
 
 extend HirProgram:
     pub def init() -> HirProgram:
@@ -219,7 +219,7 @@ extend HirProgram:
         p.type_alias_types  = Vec[Pointer[AstType]].init(4)
         return p
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# --- Helpers ------------------------------------------------------------------
 
 pub def box_hirexpr(e: HirExpr) -> Pointer[HirExpr]:
     mut p = alloc[HirExpr](1)

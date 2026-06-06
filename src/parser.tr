@@ -1,4 +1,4 @@
-# compiler/src/parser.tr — Recursive descent parser for the Tauraro self-hosted compiler.
+# compiler/src/parser.tr - Recursive descent parser for the Tauraro self-hosted compiler.
 
 from core.vec import Vec
 from core.alloc import alloc, dealloc
@@ -6,7 +6,7 @@ from token import Token
 from lexer import Lexer
 from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart, Ownership, ChanSelectArm, CatchClause
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# --- Helpers ------------------------------------------------------------------
 
 pub def box_expr(e: Expr) -> Pointer[Expr]:
     mut p = alloc[Expr](1)
@@ -28,7 +28,7 @@ pub def box_asttype(t: AstType) -> Pointer[AstType]:
     p.write(t)
     return p
 
-# ─── Parser class ──────────────────────────────────────────────────────────────
+# --- Parser class --------------------------------------------------------------
 
 pub class Parser:
     pub tokens: Vec[Token]
@@ -168,7 +168,7 @@ extend Parser:
                 return self.consume_ident()
         return ""
 
-    # ── Type parsing ──────────────────────────────────────────────────────────
+    # -- Type parsing ----------------------------------------------------------
 
     pub def parse_type(self) -> AstType:
         mut name = ""
@@ -177,7 +177,7 @@ extend Parser:
                 self.pos = self.pos + 1
                 return AstType.init("void")
             case Token.LParen:
-                # Tuple type: (T1, T2, ...) → AstType{ name="Tuple", args=[T1,T2,...] }
+                # Tuple type: (T1, T2, ...) -> AstType{ name="Tuple", args=[T1,T2,...] }
                 self.pos = self.pos + 1
                 mut tup_t = AstType.init("Tuple")
                 while self.peek() != Token.RParen and self.peek() != Token.Eof:
@@ -187,7 +187,7 @@ extend Parser:
                 if self.peek() == Token.RParen: self.pos = self.pos + 1
                 return tup_t
             case Token.KwMut:
-                # "mut ref T" — mutable reference/borrow type (optional, advanced)
+                # "mut ref T" - mutable reference/borrow type (optional, advanced)
                 self.pos = self.pos + 1
                 mut mr_name = self.consume_ident()
                 if mr_name == "ref":
@@ -195,7 +195,7 @@ extend Parser:
                     mut mr_t = AstType.init("mut_ref")
                     mr_t.args.push(box_asttype(mr_inner))
                     return mr_t
-                # Malformed — just return void
+                # Malformed - just return void
                 return AstType.init("void")
             case _:
                 name = self.consume_ident()
@@ -203,7 +203,7 @@ extend Parser:
         if name == "":
             return AstType.init("void")
 
-        # "ref T" — immutable borrow type (optional lifetime syntax, Proposal 3)
+        # "ref T" - immutable borrow type (optional lifetime syntax, Proposal 3)
         if name == "ref":
             mut ref_inner = self.parse_type()
             mut ref_t = AstType.init("ref")
@@ -239,7 +239,7 @@ extend Parser:
                 pass
         return AstType.init(name)
 
-    # ── Param list parsing ────────────────────────────────────────────────────
+    # -- Param list parsing ----------------------------------------------------
 
     pub def parse_param_list(self) -> Vec[Param]:
         mut pl = Vec[Param].init(4)
@@ -279,7 +279,7 @@ extend Parser:
                     going = False
         return pl
 
-    # ── Block parsing ─────────────────────────────────────────────────────────
+    # -- Block parsing ---------------------------------------------------------
 
     pub def parse_block(self) -> Block:
         mut b = Block.init()
@@ -301,7 +301,7 @@ extend Parser:
                 semi_going = False
                 match self.peek():
                     case Token.Semicolon:
-                        # Explicit semicolon still present — consume and parse next stmt.
+                        # Explicit semicolon still present - consume and parse next stmt.
                         self.pos = self.pos + 1
                         match self.peek():
                             case Token.Newline | Token.Eof | Token.Dedent:
@@ -353,7 +353,7 @@ extend Parser:
                 pass
         return b
 
-    # ── Statement parsing ─────────────────────────────────────────────────────
+    # -- Statement parsing -----------------------------------------------------
 
     pub def parse_stmt(self) -> Pointer[Stmt]:
         match self.peek():
@@ -416,7 +416,7 @@ extend Parser:
                 body = self.parse_block()
                 return box_stmt(Stmt.SUnsafe(body))
             case Token.KwDefer:
-                # defer stmt — deferred execution at function exit (LIFO)
+                # defer stmt - deferred execution at function exit (LIFO)
                 self.pos = self.pos + 1
                 mut deferred = self.parse_stmt()
                 return box_stmt(Stmt.SDefer(deferred))
@@ -427,7 +427,7 @@ extend Parser:
             case Token.KwAssert:
                 return self.parse_assert_stmt()
             case Token.KwFrom:
-                # Local `from X import Y` inside function body — already resolved at module level.
+                # Local `from X import Y` inside function body - already resolved at module level.
                 self.parse_from_import()
                 return box_stmt(Stmt.SPass)
             case Token.KwImport:
@@ -439,7 +439,7 @@ extend Parser:
             case Token.Ident(cs_nm):
                 if cs_nm == "type":
                     # Local type alias: `type Name = ExistingType` inside a function.
-                    # Consume and emit as SPass — the alias is registered in the outer parse_decl path.
+                    # Consume and emit as SPass - the alias is registered in the outer parse_decl path.
                     # For local scopes we just need to parse and discard cleanly.
                     self.pos = self.pos + 1
                     mut _ta_name = self.consume_ident()
@@ -641,13 +641,13 @@ extend Parser:
                                 if self.peek() == Token.Colon: self.pos = self.pos + 1
                                 arm_kind = 2
                             else:
-                                # Could be: v = ch.recv() → recv arm
-                                # Or: ch.send(val)        → send arm
+                                # Could be: v = ch.recv() -> recv arm
+                                # Or: ch.send(val)        -> send arm
                                 mut saved = self.pos
                                 self.pos = self.pos + 1  # consume ident
                                 match self.peek():
                                     case Token.Eq:
-                                        # v = expr → recv arm: v = ch.recv()
+                                        # v = expr -> recv arm: v = ch.recv()
                                         self.pos = self.pos + 1
                                         chan_e = self.parse_expr()
                                         if self.peek() == Token.Colon: self.pos = self.pos + 1
@@ -832,7 +832,7 @@ extend Parser:
     pub def parse_for_stmt(self) -> Pointer[Stmt]:
         self.pos = self.pos + 1
         var = self.consume_ident()
-        # Multi-target: for a, b in ... → SForUnpack
+        # Multi-target: for a, b in ... -> SForUnpack
         if self.peek() == Token.Comma:
             mut unpack_vars = Vec[str].init(4)
             unpack_vars.push(var)
@@ -1717,7 +1717,7 @@ extend Parser:
             case Token.KwImport:
                 return self.parse_import()
             case Token.Ident(type_kw):
-                # `type Name = ExistingType` — type alias declaration
+                # `type Name = ExistingType` - type alias declaration
                 if type_kw == "type":
                     self.pos = self.pos + 1
                     mut alias_name = self.consume_ident()
@@ -1799,9 +1799,9 @@ extend Parser:
     # Parse:
     #   from module import Name
     #   from module import Name as Alias
-    #   from module import (A, B as C, D)          ← parenthesised, single-line
-    #   from module import [A, B as C, D]           ← bracket list, single-line
-    #   from module import [                        ← bracket list, multi-line
+    #   from module import (A, B as C, D)          <- parenthesised, single-line
+    #   from module import [A, B as C, D]           <- bracket list, single-line
+    #   from module import [                        <- bracket list, multi-line
     #       A,
     #       B as C,
     #       D,
@@ -2223,7 +2223,7 @@ extend Parser:
         return box_decl(Decl.DExtern(abi, fl))
 
 
-# ── f-string format spec helper ───────────────────────────────────────────────
+# -- f-string format spec helper -----------------------------------------------
 # Find the colon that separates {expr:spec}, skipping colons inside nested
 # brackets/parens (e.g. {dict["k"]:>10} should split at the outer colon).
 pub def _find_fmt_colon(s: str) -> int:

@@ -1,11 +1,11 @@
-# compiler/src/resolver.tr — Module Resolver for the Tauraro self-hosted compiler.
+# compiler/src/resolver.tr - Module Resolver for the Tauraro self-hosted compiler.
 #
 # Unity Build model: every imported file is parsed and its declarations are
 # merged into a single flat list consumed by the sema + codegen.
 #
 # Module lookup order for `from a.b.c import X`:
-#   1. <search_path>/a/b/c/mod.tr   ← package directory with index file
-#   2. <search_path>/a/b/c.tr       ← single-file module (fallback)
+#   1. <search_path>/a/b/c/mod.tr   <- package directory with index file
+#   2. <search_path>/a/b/c.tr       <- single-file module (fallback)
 #
 # Visibility: declarations without `pub` are treated as private to their
 # source file.  When collecting decls from an imported (non-root) file only
@@ -20,7 +20,7 @@ from lexer import Lexer
 from parser import Parser
 from ast import Program, Decl, FunctionDef, ClassDef, EnumDef, InterfaceDef, ImportItem
 
-# ─── Visibility helper ────────────────────────────────────────────────────────
+# --- Visibility helper --------------------------------------------------------
 
 pub def decl_is_pub(d: Decl) -> bool:
     match d:
@@ -43,7 +43,7 @@ pub def decl_is_pub(d: Decl) -> bool:
         case _:
             return false  # DImport/DFromImport/DTopLevelStmt filtered elsewhere
 
-# ─── ModuleResolver ───────────────────────────────────────────────────────────
+# --- ModuleResolver -----------------------------------------------------------
 
 pub class ModuleResolver:
     pub visited:          Map[str, bool]
@@ -133,8 +133,8 @@ extend ModuleResolver:
         return p
 
     # Resolve a file from disk.
-    # is_root = true  → include all declarations (the user's entry file)
-    # is_root = false → include only pub declarations (imported dependency)
+    # is_root = true  -> include all declarations (the user's entry file)
+    # is_root = false -> include only pub declarations (imported dependency)
     pub def resolve_file(self, path: str, is_root: bool):
         if self.visited.contains(path): return
         self.visited.insert(path, true)
@@ -171,7 +171,7 @@ extend ModuleResolver:
                 case Decl.DFromImport(mod_path, items):
                     self.resolve_module_path(mod_path)
                 case _:
-                    # Always collect ALL declarations from a module — including private
+                    # Always collect ALL declarations from a module - including private
                     # helpers (def without pub). Private functions are only called within
                     # their own module's generated .c file, so they MUST be in all_decls
                     # for generate_module_c to emit their bodies. Filtering them out here
@@ -180,7 +180,7 @@ extend ModuleResolver:
                     self.all_decl_modules.push(self.current_mod)
             i = i + 1
 
-    # Compatibility shim — resolve_recursive kept so existing callers compile.
+    # Compatibility shim - resolve_recursive kept so existing callers compile.
     pub def resolve_recursive(self, path: str):
         self.resolve_file(path, false)
 
@@ -188,10 +188,10 @@ extend ModuleResolver:
     # path and search for the file in self.search_paths.
     #
     # Lookup order per search path:
-    #   1. <base>/<dir>/mod.tr   ← package with index file
-    #   2. <base>/<dir>.tr       ← single-file module
+    #   1. <base>/<dir>/mod.tr   <- package with index file
+    #   2. <base>/<dir>.tr       <- single-file module
     pub def resolve_module_path(self, mod_path: str):
-        # Build directory path: dots → slashes (no extension yet)
+        # Build directory path: dots -> slashes (no extension yet)
         mut n = 0
         mut p = mod_path as Pointer[char]
         while p.offset(n).read() as int != 0: n = n + 1
@@ -199,7 +199,7 @@ extend ModuleResolver:
         mut bp = dir_path as Pointer[char]
         mut j = 0
         while j < n:
-            if bp.offset(j).read() as int == 46: bp.offset(j).write(47 as char)  # '.' → '/'
+            if bp.offset(j).read() as int == 46: bp.offset(j).write(47 as char)  # '.' -> '/'
             j = j + 1
 
         # Save/restore current_mod so recursive resolution doesn't corrupt parent tracking.
@@ -236,5 +236,5 @@ extend ModuleResolver:
             sidx = sidx + 1
 
         self.current_mod = saved_mod
-        # Module not found on any search path — silently skip.
+        # Module not found on any search path - silently skip.
         # (The sema will emit an "unknown symbol" error if the import is used.)

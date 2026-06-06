@@ -1,20 +1,20 @@
-# compiler/src/ast.tr — AST node types for the Tauraro self-hosted compiler.
+# compiler/src/ast.tr - AST node types for the Tauraro self-hosted compiler.
 
 from core.vec import Vec
 from core.alloc import alloc, dealloc
 
-# ─── Type annotations ─────────────────────────────────────────────────────────
+# --- Type annotations ---------------------------------------------------------
 
 # @copy: AstType nodes are arena-allocated and immutable after construction.
 # They are freely aliased throughout the compiler (assigned to fields, reused after
 # assignment) and never individually freed, so sharing them is safe. The @copy
 # opt-in tells the move-checker to treat assignment as a shared copy, not a
-# destructive move — so the compiler's own code obeys the same rules it enforces.
+# destructive move - so the compiler's own code obeys the same rules it enforces.
 @copy
 pub class AstType:
     pub name: str
     pub args: Vec[Pointer[AstType]]
-    pub from_param: str  # 'from X' lifetime annotation — empty means none
+    pub from_param: str  # 'from X' lifetime annotation - empty means none
 
 extend AstType:
     pub def init(name: str) -> AstType:
@@ -43,7 +43,7 @@ extend GenericConstraint:
         g.bounds = Vec[Pointer[AstType]].init(1)
         return g
 
-# ─── Decorators ───────────────────────────────────────────────────────────────
+# --- Decorators ---------------------------------------------------------------
 
 pub class Decorator:
     pub name: str
@@ -56,7 +56,7 @@ extend Decorator:
         d.args = Vec[Pointer[Expr]].init(0)
         return d
 
-# ─── Patterns ─────────────────────────────────────────────────────────────────
+# --- Patterns -----------------------------------------------------------------
 
 pub enum Pattern:
     PWild
@@ -101,7 +101,7 @@ extend CatchClause:
         c.err_type = Pointer[AstType](0)
         c.body = body
         return c
-# ─── Match arms ───────────────────────────────────────────────────────────────
+# --- Match arms ---------------------------------------------------------------
 
 pub class MatchArm:
     pub pat: Pattern
@@ -116,13 +116,13 @@ extend MatchArm:
         a.body = body
         return a
 
-# ─── F-string parts ───────────────────────────────────────────────────────────
+# --- F-string parts -----------------------------------------------------------
 
 pub class FStringPart:
     pub is_expr:  bool
     pub text:     str
     pub expr:     Pointer[Expr]
-    pub fmt_spec: str    # e.g. ".2f", ">10", "05d" — empty means default
+    pub fmt_spec: str    # e.g. ".2f", ">10", "05d" - empty means default
 
 extend FStringPart:
     pub def init_text(s: str) -> FStringPart:
@@ -149,7 +149,7 @@ extend FStringPart:
         p.fmt_spec = spec
         return p
 
-# ─── Expressions ──────────────────────────────────────────────────────────────
+# --- Expressions --------------------------------------------------------------
 
 pub enum Expr:
     ELitInt(val: int)
@@ -187,7 +187,7 @@ pub enum Expr:
     ESizeOf(ty: Pointer[AstType])
     EIfElse(cond: Pointer[Expr], then_expr: Pointer[Expr], else_expr: Pointer[Expr])
 
-# ─── Chan-select arms ─────────────────────────────────────────────────────────
+# --- Chan-select arms ---------------------------------------------------------
 
 pub class ChanSelectArm:
     pub kind: int                   # 0=recv, 1=send, 2=timeout, 3=default
@@ -219,7 +219,7 @@ extend ChanSelectArm:
         a.var_name = ""; a.timeout_ms = Pointer[Expr](0); a.body = body
         return a
 
-# ─── Statements ───────────────────────────────────────────────────────────────
+# --- Statements ---------------------------------------------------------------
 
 pub enum Stmt:
     SExpr(expr: Pointer[Expr])
@@ -245,7 +245,7 @@ pub enum Stmt:
     STaskGroup(body: Block)
     SGpuBlock(body: Block)
     SChanSelect(cases: Vec[Pointer[ChanSelectArm]])
-    SDefer(stmt: Pointer[Stmt])   # defer stmt — run at function exit, LIFO order
+    SDefer(stmt: Pointer[Stmt])   # defer stmt - run at function exit, LIFO order
     SLine(n: int)
 
 pub class Block:
@@ -277,13 +277,13 @@ extend ElifClause:
         c.body = body
         return c
 
-# ─── Function parameters ──────────────────────────────────────────────────────
+# --- Function parameters ------------------------------------------------------
 
 pub class Param:
     pub name: str
     pub ty: Pointer[AstType]
-    pub is_ref: bool      # 'ref T' parameter — immutable borrow, not a copy
-    pub is_mut_ref: bool  # 'mut ref T' parameter — mutable borrow
+    pub is_ref: bool      # 'ref T' parameter - immutable borrow, not a copy
+    pub is_mut_ref: bool  # 'mut ref T' parameter - mutable borrow
 
 extend Param:
     pub def init(name: str, ty: Pointer[AstType]) -> Param:
@@ -294,7 +294,7 @@ extend Param:
         p.is_mut_ref = false
         return p
 
-# ─── Top-level declarations ───────────────────────────────────────────────────
+# --- Top-level declarations ---------------------------------------------------
 
 pub class FunctionDef:
     pub name: str

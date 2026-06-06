@@ -1,4 +1,4 @@
-# compiler/src/codegen/mod.tr — Codegen backend registry.
+# compiler/src/codegen/mod.tr - Codegen backend registry.
 #
 # Re-exports all available backends so callers can do:
 #   from codegen import CGenerator, LlvmGenerator

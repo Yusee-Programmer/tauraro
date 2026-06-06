@@ -1,4 +1,4 @@
-# compiler/src/main.tr — CLI driver, module resolver, and linker invocation.
+# compiler/src/main.tr - CLI driver, module resolver, and linker invocation.
 # Implements the full Tauraro compiler command-line interface.
 
 from core.io import read_file, write_file, file_exists
@@ -18,7 +18,7 @@ extern "C":
     def _tr_file_delete(path: str) -> int
     def _tr_getenv(name: str) -> str
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# --- Helpers ------------------------------------------------------------------
 
 pub def print_version():
     print("tauraroc v0.0.4")
@@ -104,7 +104,7 @@ pub def is_clang_compiler(cc: str) -> bool:
     mut null_dev = "/dev/null"
     if _tr_is_windows(): null_dev = "nul"
     if _tr_str_contains(cc, "clang"): return true
-    # 'cc' on macOS is Apple Clang — check its --version output
+    # 'cc' on macOS is Apple Clang - check its --version output
     if _tr_str_eq(cc, "cc"):
         return _tr_system(cc + " --version 2>&1 | grep -qi clang") == 0
     return false
@@ -203,8 +203,8 @@ pub def read_runtime_header(bin_path: str, input_path: str) -> str:
     #     This is the layout used by taupkg install-tauraro and CI release zips.
     mut src1b = bin_dir + "runtime/tauraro_rt.h"
     if file_exists(src1b): return read_file(src1b)
-    # 3. Relative to the input source file — works even when the binary is moved.
-    #    Walk up: src_dir → parent → grandparent, checking for runtime/tauraro_rt.h at each level.
+    # 3. Relative to the input source file - works even when the binary is moved.
+    #    Walk up: src_dir -> parent -> grandparent, checking for runtime/tauraro_rt.h at each level.
     if input_path != "":
         mut src_dir = dir_of_path(input_path)
         if file_exists(src_dir + "tauraro_rt.h"): return read_file(src_dir + "tauraro_rt.h")
@@ -226,7 +226,7 @@ pub def ensure_runtime_header(out_dir: str, bin_path: str, input_path: str):
         write_file(dest, content)
 
 pub def sync_headers_to_runtime(rt_content: str, types_content: str):
-    # tauraro/runtime/tauraro_rt.h is the canonical hand-written runtime — keep it in sync.
+    # tauraro/runtime/tauraro_rt.h is the canonical hand-written runtime - keep it in sync.
     # tauraro_types.h is program-specific and generated fresh each compilation; don't sync it.
     write_file("tauraro/runtime/tauraro_rt.h", rt_content)
 
@@ -302,11 +302,11 @@ pub def dot_to_safe(s: str) -> str:
     mut bp = buf as Pointer[char]
     mut j = 0
     while j < n:
-        if bp.offset(j).read() as int == 46: bp.offset(j).write(95 as char)  # '.' → '_'
+        if bp.offset(j).read() as int == 46: bp.offset(j).write(95 as char)  # '.' -> '_'
         j = j + 1
     return buf
 
-# Last segment of a dotted path: "a.b.c" → "c"
+# Last segment of a dotted path: "a.b.c" -> "c"
 pub def dot_last_seg(s: str) -> str:
     mut n = 0
     mut p = s as Pointer[char]
@@ -319,7 +319,7 @@ pub def dot_last_seg(s: str) -> str:
     if last_dot < 0: return s
     return _tr_str_slice(s, last_dot + 1, n)
 
-# Filename without directory: "dir/foo.tr" → "foo.tr"
+# Filename without directory: "dir/foo.tr" -> "foo.tr"
 pub def get_filename(path: str) -> str:
     mut n = 0
     mut p = path as Pointer[char]
@@ -401,8 +401,8 @@ pub def make_dir(path: str):
         _tr_system("mkdir -p \"" + path + "\" 2>/dev/null")
 
 # Compile a list of C files into a single exe.
-# link_paths: path-based files (.c/.o/.a/.dll/.lib) — quoted in the command.
-# lib_flags:  -l<name> library flags — appended verbatim after all file args.
+# link_paths: path-based files (.c/.o/.a/.dll/.lib) - quoted in the command.
+# lib_flags:  -l<name> library flags - appended verbatim after all file args.
 pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
                       link_paths: Vec[str], lib_flags: Vec[str],
                       opt_level: str, verbose: bool, static_link: bool,
@@ -473,8 +473,8 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     if verbose: print("  [CC] " + cmd)
     return _tr_system(cmd)
 
-# ─── Build cleanup ────────────────────────────────────────────────────────────
-# ── Error/warning formatting ──────────────────────────────────────────────────
+# --- Build cleanup ------------------------------------------------------------
+# -- Error/warning formatting --------------------------------------------------
 # Print a compiler diagnostic in a clean, human-readable format:
 #   file.tr:42: error [M-1]: Use after move ...
 #              ^^^ FIX: Copy the value before moving ...
@@ -521,7 +521,7 @@ pub def cleanup_build(build_dir: str, all_c_files: Vec[str]):
         _tr_system("rm -rf \""  + build_dir + "include\"")
         _tr_system("rmdir \""   + build_dir + "\" 2>/dev/null")
 
-# ─── Main entry point ─────────────────────────────────────────────────────────
+# --- Main entry point ---------------------------------------------------------
 
 pub def main(args: Vec[str]):
     if args.len < 2:
@@ -546,7 +546,7 @@ pub def main(args: Vec[str]):
     mut target      = ""                 # --target <name> : cross-compilation target
     mut sysroot     = ""                 # --sysroot <path>: explicit sysroot
     mut debug_mode  = false              # --debug         : ASAN + assertions
-    mut strict_mode = false              # --strict        : alloc outside unsafe → hard error
+    mut strict_mode = false              # --strict        : alloc outside unsafe -> hard error
 
     mut i = 1
     while i < args.len:
@@ -614,17 +614,17 @@ pub def main(args: Vec[str]):
     # own directory so the distribution works regardless of CWD.
     mut bin_dir = strip_trailing_sep_inline(dir_of_path(args.get(0)))
     # Paths relative to the compiler binary (distribution layout):
-    #   <bin>/std/          — standard library
-    #   <bin>/packages/     — installed third-party packages (root)
-    #   <bin>/packages/sites/ — site-specific installs (mirrors pip's site-packages)
+    #   <bin>/std/          - standard library
+    #   <bin>/packages/     - installed third-party packages (root)
+    #   <bin>/packages/sites/ - site-specific installs (mirrors pip's site-packages)
     resolver.add_search_path(bin_dir)
     resolver.add_search_path(bin_dir + "/std")
     resolver.add_search_path(bin_dir + "/packages")
     resolver.add_search_path(bin_dir + "/packages/sites")
-    # CWD-relative fallbacks — allow project-local package trees that travel with the source.
+    # CWD-relative fallbacks - allow project-local package trees that travel with the source.
     resolver.add_search_path("packages")
     resolver.add_search_path("packages/sites")
-    # TAURARO_PATH — user-specified extra search paths, split on ':' (POSIX) or ';' (Windows).
+    # TAURARO_PATH - user-specified extra search paths, split on ':' (POSIX) or ';' (Windows).
     # Works like Python's PYTHONPATH: set it in the shell before running tauraroc.
     mut tauraro_path_env = _tr_getenv("TAURARO_PATH")
     if tauraro_path_env != "":
@@ -678,14 +678,14 @@ pub def main(args: Vec[str]):
         if verbose: print("[4/5] LLVM IR written to " + output_path)
         return
 
-    # ── C backend — modular output into build/ ────────────────────────────────
+    # -- C backend - modular output into build/ --------------------------------
     mut c_gen  = CGenerator.init()
     mut rt_h   = read_runtime_header(args.get(0), input_path)
 
     c_gen.register_program(hir)
     c_gen.scan_mono_prog(hir)
 
-    # build_dir is always relative to the process CWD — "build/" resolves to ./build/
+    # build_dir is always relative to the process CWD - "build/" resolves to ./build/
     # regardless of where the source file lives. No runtime CWD call needed.
     mut build_dir = "build/"
     make_dir(build_dir)
@@ -699,7 +699,7 @@ pub def main(args: Vec[str]):
     if rt_h != "":
         sync_headers_to_runtime(rt_h, types_h)
 
-    # ── Per-module C files ────────────────────────────────────────────────────
+    # -- Per-module C files ----------------------------------------------------
     mut all_c_files = Vec[str].init(32)
 
     mut mi = 0
@@ -740,7 +740,7 @@ pub def main(args: Vec[str]):
         all_c_files.push(StringObj.init(c_path).as_str())
         mi = mi + 1
 
-    # ── Main module C file (main.c) ───────────────────────────────────────────
+    # -- Main module C file (main.c) -------------------------------------------
     mut main_class_set = Map[str, bool].init(32)
     mut main_fn_set    = Map[str, bool].init(64)
     mut k2 = 0
@@ -767,16 +767,16 @@ pub def main(args: Vec[str]):
 
     if emit_mode == "c":
         print("Modular C output written to: " + build_dir)
-        print("  tauraro_types.h  — shared type definitions + all function prototypes")
-        print("  tauraro_rt.h     — runtime header")
-        print("  main.c           — program entry")
+        print("  tauraro_types.h  - shared type definitions + all function prototypes")
+        print("  tauraro_rt.h     - runtime header")
+        print("  main.c           - program entry")
         mut pi = 0
         while pi < all_c_files.len - 1:
             print("  " + get_filename(all_c_files.get(pi)))
             pi = pi + 1
         return
 
-    # ── Compile all C files into the output executable ────────────────────────
+    # -- Compile all C files into the output executable ------------------------
     mut exe_name = ""
     if output_path != "":
         exe_name = output_path
@@ -808,7 +808,7 @@ pub def main(args: Vec[str]):
         # Default (no -o): place in ./build/<srcname>[.exe].
         exe_path = build_dir + exe_name + exe_ext
 
-    if verbose: print("[5/5] Linking " + str(all_c_files.len) + " modules → " + exe_path)
+    if verbose: print("[5/5] Linking " + str(all_c_files.len) + " modules -> " + exe_path)
     mut rc = compile_all_c(all_c_files, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode)
     if rc != 0:
         print("error: compilation failed (exit code " + str(rc) + ")")

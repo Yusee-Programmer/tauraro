@@ -1,4 +1,4 @@
-# compiler/sema.tr — Semantic analyzer for the Tauraro self-hosted compiler.
+# compiler/sema.tr - Semantic analyzer for the Tauraro self-hosted compiler.
 
 from core.vec import Vec
 from core.map import Map
@@ -71,8 +71,8 @@ pub class Sema:
     pub classes:            Map[str, ClassDef]
     pub enums:              Map[str, EnumDef]
     pub interfaces:         Map[str, InterfaceDef]
-    pub type_aliases:        Map[str, str]   # alias_name → resolved base name
-    pub type_alias_elem:     Map[str, str]   # alias_name → first generic arg name (for List/Map)
+    pub type_aliases:        Map[str, str]   # alias_name -> resolved base name
+    pub type_alias_elem:     Map[str, str]   # alias_name -> first generic arg name (for List/Map)
     pub current_file:        str             # path of source file currently being analysed
     pub current_func_name:  str
     pub current_class_name: str
@@ -85,16 +85,16 @@ pub class Sema:
     pub closure_caps:     Vec[HirParam] # captures accumulated for the current innermost closure
     pub closure_cap_set:  Map[str, bool] # dedup set for capture names
     pub in_assign_target: bool          # Phase D: suppress is_init check on assignment LHS
-    pub container_borrows: Map[str, str] # Phase C: container_var → borrowing_var
-    pub capturing_moves: bool           # Fix 1: branch snapshot — are we tracking move deltas?
+    pub container_borrows: Map[str, str] # Phase C: container_var -> borrowing_var
+    pub capturing_moves: bool           # Fix 1: branch snapshot - are we tracking move deltas?
     pub branch_moved_buf: Vec[str]      # Fix 1: names moved in current branch
     pub capturing_inits: bool           # Fix 4: branch snapshot for init deltas
     pub branch_init_buf: Vec[str]       # Fix 4: names init'd in current branch
     pub copy_classes: Map[str, bool]    # Fix 3: auto-inferred Copy classes (all-primitive fields)
     pub in_unsafe: bool                 # Gap 6: inside an unsafe: block
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
-    pub strict_mode: bool               # --strict: alloc outside unsafe → hard [U-1] error
-    pub decorator_names: Map[str, bool]  # decorator def registry (name → true)
+    pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
+    pub decorator_names: Map[str, bool]  # decorator def registry (name -> true)
 
 extend Sema:
     pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
@@ -147,7 +147,7 @@ extend Sema:
         s.strict_mode            = false
         s.decorator_names        = Map[str, bool].init(16)
 
-        # ── Built-in functions ─────────────────────────────────────────────────
+        # -- Built-in functions -------------------------------------------------
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
         s.globals.insert("input",    Symbol.init("input",    SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("len",      Symbol.init("len",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
@@ -190,23 +190,23 @@ extend Sema:
         s.globals.insert("file_exists",Symbol.init("file_exists",SymbolKind.SFunction, box_asttype(AstType.init("bool"))))
         s.globals.insert("_tr_system", Symbol.init("_tr_system", SymbolKind.SFunction, box_asttype(AstType.init("int"))))
 
-        # ── Built-in container classes ──────────────────────────────────────────
-        # Vec is NOT a built-in — it is the OOP class imported from core.vec.
+        # -- Built-in container classes ------------------------------------------
+        # Vec is NOT a built-in - it is the OOP class imported from core.vec.
         # List is the only built-in C-backed array type.
         s.globals.insert("List",         Symbol.init("List",         SymbolKind.SClass, box_asttype(AstType.init("List"))))
         s.globals.insert("Pointer",      Symbol.init("Pointer",      SymbolKind.SClass, box_asttype(AstType.init("Pointer"))))
         s.globals.insert("StringBuilder",Symbol.init("StringBuilder",SymbolKind.SClass, box_asttype(AstType.init("StringBuilder"))))
         s.globals.insert("StringObj",    Symbol.init("StringObj",    SymbolKind.SClass, box_asttype(AstType.init("StringObj"))))
-        # Map is not a builtin — import from std/core. Dict is the builtin associative type.
+        # Map is not a builtin - import from std/core. Dict is the builtin associative type.
         s.globals.insert("Dict",         Symbol.init("Dict",         SymbolKind.SClass, box_asttype(AstType.init("Dict"))))
         s.globals.insert("Set",          Symbol.init("Set",          SymbolKind.SClass, box_asttype(AstType.init("Set"))))
         s.globals.insert("Box",          Symbol.init("Box",          SymbolKind.SClass, box_asttype(AstType.init("Box"))))
 
-        # ── Result / Option enums ───────────────────────────────────────────────
+        # -- Result / Option enums -----------------------------------------------
         s.globals.insert("Option", Symbol.init("Option", SymbolKind.SEnum, box_asttype(AstType.init("Option"))))
         s.globals.insert("Result", Symbol.init("Result", SymbolKind.SEnum, box_asttype(AstType.init("Result"))))
 
-        # ── Exception hierarchy ─────────────────────────────────────────────────
+        # -- Exception hierarchy -------------------------------------------------
         s.globals.insert("Exception",  Symbol.init("Exception",  SymbolKind.SClass, box_asttype(AstType.init("Exception"))))
         s.globals.insert("Error",      Symbol.init("Error",      SymbolKind.SClass, box_asttype(AstType.init("Error"))))
         s.globals.insert("ValueError", Symbol.init("ValueError", SymbolKind.SClass, box_asttype(AstType.init("ValueError"))))
@@ -215,7 +215,7 @@ extend Sema:
         s.globals.insert("IOError",    Symbol.init("IOError",    SymbolKind.SClass, box_asttype(AstType.init("IOError"))))
         s.globals.insert("KeyError",   Symbol.init("KeyError",   SymbolKind.SClass, box_asttype(AstType.init("KeyError"))))
 
-        # ── Concurrency / async types ───────────────────────────────────────────
+        # -- Concurrency / async types -------------------------------------------
         s.globals.insert("Task",      Symbol.init("Task",      SymbolKind.SClass, box_asttype(AstType.init("Task"))))
         s.globals.insert("Future",    Symbol.init("Future",    SymbolKind.SClass, box_asttype(AstType.init("Future"))))
         s.globals.insert("Channel",   Symbol.init("Channel",   SymbolKind.SClass, box_asttype(AstType.init("Channel"))))
@@ -231,7 +231,7 @@ extend Sema:
         s.globals.insert("Rc",        Symbol.init("Rc",        SymbolKind.SClass, box_asttype(AstType.init("Rc"))))
         s.globals.insert("WaitGroup", Symbol.init("WaitGroup", SymbolKind.SClass, box_asttype(AstType.init("WaitGroup"))))
 
-        # ── Ownership / shared types (Phase 4) ─────────────────────────────────
+        # -- Ownership / shared types (Phase 4) ---------------------------------
         s.globals.insert("Shared", Symbol.init("Shared", SymbolKind.SClass, box_asttype(AstType.init("Shared"))))
         s.globals.insert("Weak",   Symbol.init("Weak",   SymbolKind.SClass, box_asttype(AstType.init("Weak"))))
 
@@ -246,7 +246,7 @@ extend Sema:
         else:
             self.errors.push(msg)
 
-    # ── Thread-safety / Sendable checks ──────────────────────────────────────
+    # -- Thread-safety / Sendable checks --------------------------------------
 
     pub def is_sendable_type(self, ty_name: str) -> bool:
         if ty_name == "int" or ty_name == "float" or ty_name == "bool" or ty_name == "char" or ty_name == "str": return true
@@ -265,9 +265,9 @@ extend Sema:
                 while ii < cls.iface_names.len:
                     if cls.iface_names.get(ii) == "Sendable": return true
                     ii = ii + 1
-            # User class without Sendable — hard error (strict mode)
+            # User class without Sendable - hard error (strict mode)
             return false
-        # Unknown type — conservative: assume not sendable
+        # Unknown type - conservative: assume not sendable
         return false
 
     pub def check_spawn_sendable(self, e: Pointer[HirExpr]):
@@ -309,7 +309,7 @@ extend Sema:
                     self.warnings.push("[T-3] Sendable class '" + c.name + "' has primitive field '" + fd.name + ": " + fty.name + "' that may cause data races if mutated from multiple threads.\n      FIX: Use 'Atomic[" + fty.name + "]' for safe concurrent mutation, or ensure this field is written only before the object is shared across threads.")
             cfi = cfi + 1
 
-    # ── Phase 1-3: Ownership / borrow tracking ───────────────────────────────
+    # -- Phase 1-3: Ownership / borrow tracking -------------------------------
 
     pub def mark_moved(self, name: str):
         mut i = self.scopes.len - 1
@@ -400,7 +400,7 @@ extend Sema:
             if self.scopes.get(mi_i).variables.contains(name):
                 mut mi_sym = self.scopes.get(mi_i).variables.get(name)
                 if not mi_sym.is_init:
-                    # Track the transition uninit→init so we can roll it back per-branch
+                    # Track the transition uninit->init so we can roll it back per-branch
                     mi_sym.is_init = true
                     mi_sym.is_maybe_init = false
                     self.scopes.get(mi_i).variables.insert(name, mi_sym)
@@ -422,7 +422,7 @@ extend Sema:
         if self.container_borrows.contains(var_name):
             self.container_borrows.remove(var_name)
 
-    # Fix 1: reverse of mark_moved — used to roll back per-branch move state
+    # Fix 1: reverse of mark_moved - used to roll back per-branch move state
     pub def unmark_moved(self, name: str):
         mut i = self.scopes.len - 1
         while i >= 0:
@@ -437,7 +437,7 @@ extend Sema:
             sym.is_moved = false
             self.globals.insert(name, sym)
 
-    # Fix 1: mark as maybe-moved (moved in some branches, not all) — sticky warning flag
+    # Fix 1: mark as maybe-moved (moved in some branches, not all) - sticky warning flag
     pub def mark_maybe_moved(self, name: str):
         mut i = self.scopes.len - 1
         while i >= 0:
@@ -452,7 +452,7 @@ extend Sema:
             sym.is_maybe_moved = true
             self.globals.insert(name, sym)
 
-    # Fix 4: reverse of mark_init — used to roll back per-branch init state
+    # Fix 4: reverse of mark_init - used to roll back per-branch init state
     pub def unmark_init(self, name: str):
         mut mi_i = self.scopes.len - 1
         while mi_i >= 0:
@@ -490,7 +490,7 @@ extend Sema:
             vi = vi + 1
         return false
 
-    # Fix 3: lazy recursive check — classes with only primitive/copy fields are Copy
+    # Fix 3: lazy recursive check - classes with only primitive/copy fields are Copy
     # Inserts false as a sentinel to break self-referential cycles before recursing
     # True if a decorator list contains @copy (the explicit copy/share opt-in).
     pub def has_copy_decorator(self, decs: Vec[Decorator]) -> bool:
@@ -507,7 +507,7 @@ extend Sema:
         # Insert false sentinel to break cycles (self-referential structs are not Copy)
         self.copy_classes.insert(name, false)
         mut cls = self.classes.get(name)
-        if cls.fields.len == 0: return false   # empty/opaque class — not Copy
+        if cls.fields.len == 0: return false   # empty/opaque class - not Copy
         mut all_copy = true
         mut fi = 0
         while fi < cls.fields.len:
@@ -536,8 +536,8 @@ extend Sema:
             if cat != "":
                 self.error("[N-1] '" + name + "' is a " + cat + " and cannot be used as a name. Choose a different name (e.g. 'my_" + name + "').")
             else:
-                # Class members (fields and methods) are exempt — names are scoped to the class.
-                # Local variables (SVariable) are also exempt — local shadowing is intentional.
+                # Class members (fields and methods) are exempt - names are scoped to the class.
+                # Local variables (SVariable) are also exempt - local shadowing is intentional.
                 # Only top-level function/type declarations are checked.
                 mut is_toplevel_decl = self.current_class_name == "" and kind != SymbolKind.SVariable
                 if is_toplevel_decl:
@@ -697,7 +697,7 @@ extend Sema:
         self.current_line = f.line
         # Rule N-1: Function name check
         # Top-level functions cannot shadow reserved built-ins.
-        # Methods (current_class_name != "") are exempt — len/abs/etc. are valid method names.
+        # Methods (current_class_name != "") are exempt - len/abs/etc. are valid method names.
         if f.name != "main" and f.name != "" and _tr_strlen(f.name) > 1:
             mut fn_cat = self.is_reserved_error(f.name)
             if fn_cat != "":
@@ -712,7 +712,7 @@ extend Sema:
         self.current_func_name = f.name
         mut saved_func_generics = self.current_func_generics
         self.current_func_generics = f.generics
-        # Phase C: clear container-borrow state — it must not leak between functions
+        # Phase C: clear container-borrow state - it must not leak between functions
         self.container_borrows = Map[str, str].init(16)
         # Gap 1: capture 'from' lifetime param for escape-analysis check in SReturn
         mut saved_ret_from = self.current_func_ret_from
@@ -821,7 +821,7 @@ extend Sema:
             hfields.push(hf)
             i = i + 1
 
-        # Phase F: detect self-referential Shared[ClassName] fields (creates ref cycle → leak)
+        # Phase F: detect self-referential Shared[ClassName] fields (creates ref cycle -> leak)
         mut pf_i = 0
         while pf_i < c.fields.len:
             mut pf_f = c.fields.get(pf_i)
@@ -830,7 +830,7 @@ extend Sema:
                 if pf_ty.name == "Shared" and pf_ty.args.len > 0:
                     mut pf_inner = pf_ty.args.get(0).read()
                     if pf_inner.name == c.name:
-                        self.error("[S-1] '" + c.name + "' has a 'Shared[" + c.name + "]' field '" + pf_f.name + "' — this creates a reference cycle that leaks memory.\n      FIX: Use 'Weak[" + c.name + "]' for back-references to break the cycle.")
+                        self.error("[S-1] '" + c.name + "' has a 'Shared[" + c.name + "]' field '" + pf_f.name + "' - this creates a reference cycle that leaks memory.\n      FIX: Use 'Weak[" + c.name + "]' for back-references to break the cycle.")
             pf_i = pf_i + 1
 
         mut hmethods = Vec[HirFunction].init(4)
@@ -840,7 +840,7 @@ extend Sema:
             hmethods.push(hm)
             i = i + 1
             
-        # ── Interface completeness + signature checks ─────────────────────────
+        # -- Interface completeness + signature checks -------------------------
         mut _ifc_i = 0
         while _ifc_i < c.iface_names.len:
             mut _ifc_nm = c.iface_names.get(_ifc_i)
@@ -1006,7 +1006,7 @@ extend Sema:
                         case _: pass
                 return h_s_expr
             case Stmt.SReturn(e):
-                # Gap 1: [L-1] escape check — returning a LOCAL-region Pointer without 'from' annotation
+                # Gap 1: [L-1] escape check - returning a LOCAL-region Pointer without 'from' annotation
                 if e as usize != 0 as usize and not self.in_unsafe and self.current_func_ret_from == "":
                     match e.read():
                         case Expr.EIdent(ret_name):
@@ -1062,7 +1062,7 @@ extend Sema:
                                 mut alloc_sym = alloc_scope.variables.get(name)
                                 alloc_sym.ptr_region = 1  # HEAP (function call result)
                                 alloc_scope.variables.insert(name, alloc_sym)
-                # Phase D: variable declared without a value — mark as uninitialised
+                # Phase D: variable declared without a value - mark as uninitialised
                 if val_ptr as usize == 0 as usize:
                     if self.scopes.len > 0:
                         mut pd_scope = self.scopes.get(self.scopes.len - 1)
@@ -1096,7 +1096,7 @@ extend Sema:
                 # Phase 1 SAssign: plain-variable RHS of non-primitive non-Copy type = ownership move
                 # Lower first (EIdent checks current is_moved), then mark moved for subsequent uses.
                 # SAssign is guarded by branch snapshots (Fix 1) so sibling else-branches correctly
-                # roll back and re-check — no false positives across if/else chains.
+                # roll back and re-check - no false positives across if/else chains.
                 # Skip for generic type parameters (unknown type = possibly Copy; conservative).
                 if val as usize != 0 as usize:
                     match val.read():
@@ -1129,12 +1129,12 @@ extend Sema:
                             if t5_ty == "int" or t5_ty == "i64" or t5_ty == "i32" or t5_ty == "float" or t5_ty == "f64":
                                 self.error("[T-5] '" + t5_name + "' is a number (" + t5_ty + ") and cannot be used as an 'if' condition. FIX: Write 'if " + t5_name + " != 0:' to explicitly check for non-zero.")
                         case _: pass
-                # Fix 1+4: branch-scoped snapshot — save parent capturing state
+                # Fix 1+4: branch-scoped snapshot - save parent capturing state
                 mut si_outer_cap_m = self.capturing_moves
                 mut si_outer_buf_m = self.branch_moved_buf
                 mut si_outer_cap_i = self.capturing_inits
                 mut si_outer_buf_i = self.branch_init_buf
-                # ── Then branch (with fresh capture buffers) ──
+                # -- Then branch (with fresh capture buffers) --
                 self.capturing_moves = true
                 self.capturing_inits = true
                 self.branch_moved_buf = Vec[str].init(4)
@@ -1152,7 +1152,7 @@ extend Sema:
                 while si_uii < si_then_inited.len:
                     self.unmark_init(si_then_inited.get(si_uii))
                     si_uii = si_uii + 1
-                # ── Else/elif branch (fresh capture buffers, same capturing=true) ──
+                # -- Else/elif branch (fresh capture buffers, same capturing=true) --
                 self.branch_moved_buf = Vec[str].init(4)
                 self.branch_init_buf = Vec[str].init(4)
                 mut helse = HirBlock.init()
@@ -1187,7 +1187,7 @@ extend Sema:
                 self.branch_moved_buf = si_outer_buf_m
                 self.capturing_inits = si_outer_cap_i
                 self.branch_init_buf = si_outer_buf_i
-                # ── Merge move state: both→definitive, one-only→maybe ──
+                # -- Merge move state: both->definitive, one-only->maybe --
                 mut si_mi = 0
                 while si_mi < si_then_moved.len:
                     mut si_mn = si_then_moved.get(si_mi)
@@ -1202,7 +1202,7 @@ extend Sema:
                     if not self.vec_str_contains(si_then_moved, si_en):
                         self.mark_maybe_moved(si_en)
                     si_ei = si_ei + 1
-                # ── Merge init state: both→definitive, one-only→maybe ──
+                # -- Merge init state: both->definitive, one-only->maybe --
                 mut si_ini = 0
                 while si_ini < si_then_inited.len:
                     mut si_inn = si_then_inited.get(si_ini)
@@ -1214,7 +1214,7 @@ extend Sema:
                 return box_hirstmt(HirStmt.SIf(hcond, hthen, helse))
             case Stmt.SWhile(cond, body, decorators):
                 mut sw_cond = self.lower_expr(cond)
-                # Fix 1+4: loop body might not run → all moves/inits are "maybe"
+                # Fix 1+4: loop body might not run -> all moves/inits are "maybe"
                 mut sw_outer_cap_m = self.capturing_moves
                 mut sw_outer_buf_m = self.branch_moved_buf
                 mut sw_outer_cap_i = self.capturing_inits
@@ -1254,7 +1254,7 @@ extend Sema:
                 elif iter_hn == "str":
                     var_ty_for = AstType.init("char")
                 self.declare(var, SymbolKind.SVariable, box_asttype(var_ty_for), false)
-                # Fix 1+4: for-loop body might not run → moves/inits are "maybe"
+                # Fix 1+4: for-loop body might not run -> moves/inits are "maybe"
                 mut sf_outer_cap_m = self.capturing_moves
                 mut sf_outer_buf_m = self.branch_moved_buf
                 mut sf_outer_cap_i = self.capturing_inits
@@ -1356,7 +1356,7 @@ extend Sema:
                     h_arms.push(h_arm)
                     self.exit_scope()
                     k = k + 1
-                # [E-1] Exhaustiveness check — only for known enum types
+                # [E-1] Exhaustiveness check - only for known enum types
                 if not ex_has_wild and self.enums.contains(ex_ty_name):
                     mut ex_edef = self.enums.get(ex_ty_name)
                     mut ex_missing = Vec[str].init(4)
@@ -1595,13 +1595,13 @@ extend Sema:
                 # Phase 1: use-after-definite-move (hard error)
                 elif sym.is_moved and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
                     self.error("[M-1] '" + name + "' was moved and cannot be used again.\n      FIX: Use the variable that now owns it, or call .clone() to copy before moving.")
-                # Fix 1: use-after-maybe-move — hard error (moved in some branch = definitely unsafe to use)
+                # Fix 1: use-after-maybe-move - hard error (moved in some branch = definitely unsafe to use)
                 elif sym.is_maybe_moved and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
                     self.error("[M-5] '" + name + "' may have been moved on some code paths, making this use unsafe.\n      FIX: Ensure '" + name + "' is not moved before this point on any branch, or restructure so the use is inside the branch where it's still valid.")
                 # Phase D: use-before-definite-init (hard error)
                 if not sym.is_init and not sym.is_maybe_init and sym.name != "" and sym.kind == SymbolKind.SVariable and not self.in_assign_target:
                     self.error("[I-1] Variable '" + name + "' is used before being assigned a value.\n      FIX: Assign a value before use, e.g. 'mut " + name + " = <default>'.")
-                # Fix 4: use-before-maybe-init — hard error (uninitialized on some path = unsafe)
+                # Fix 4: use-before-maybe-init - hard error (uninitialized on some path = unsafe)
                 elif sym.is_maybe_init and not sym.is_init and sym.name != "" and sym.kind == SymbolKind.SVariable and not self.in_assign_target:
                     self.error("[I-2] '" + name + "' is not initialized on all code paths before this use.\n      FIX: Initialize '" + name + "' before the if/loop, or ensure every branch assigns a value.")
                 mut is_move = false
@@ -1619,7 +1619,7 @@ extend Sema:
                 mut hexpr_inner = self.lower_expr(expr)
                 return box_hirexpr(HirExpr.EUnaryOp(op, hexpr_inner, hir_expr_type(hexpr_inner)))
             case Expr.ECall(callee, args):
-                # Special built-in: await_timeout(async_expr, ms) → EAwaitTimeout
+                # Special built-in: await_timeout(async_expr, ms) -> EAwaitTimeout
                 if callee as usize != 0 as usize:
                     match callee.read():
                         case Expr.EIdent(ato_n):
@@ -1634,7 +1634,7 @@ extend Sema:
                                 mut ato_ty = hir_expr_type(ato_inner)
                                 return box_hirexpr(HirExpr.EAwaitTimeout(ato_inner, ato_ms, ato_ty))
                         case _: pass
-                # Phase 2+3: iterate AST args — mark borrows (P2) and detect aliasing (P3)
+                # Phase 2+3: iterate AST args - mark borrows (P2) and detect aliasing (P3)
                 mut p23_borrow_names = Vec[str].init(4)
                 mut p23_seen = Map[str, bool].init(4)
                 mut p23_k = 0
@@ -1708,7 +1708,7 @@ extend Sema:
                                 elif self.enums.contains(gn):
                                     ret_ty = AstType.init(gn)
                                 else:
-                                    # Generic function call: fname[T](args) — mangle callee name
+                                    # Generic function call: fname[T](args) - mangle callee name
                                     match idx.read():
                                         case Expr.EIdent(farg_c):
                                             mut fret = AstType.init(farg_c)
@@ -1721,7 +1721,7 @@ extend Sema:
                             case Expr.EIdent(type_name):
                                 if self.enums.contains(type_name):
                                     ret_ty = AstType.init(type_name)
-                                # Built-in concurrency statics: Thread.spawn → Thread, ThreadPool.new → ThreadPool
+                                # Built-in concurrency statics: Thread.spawn -> Thread, ThreadPool.new -> ThreadPool
                                 elif (type_name == "Thread" or type_name == "ThreadPool" or type_name == "Atomic" or type_name == "ThreadLocal") and (variant == "spawn" or variant == "new" or variant == "init"):
                                     ret_ty = AstType.init(type_name)
                                 elif variant == "init" or variant == "new":
@@ -1748,7 +1748,7 @@ extend Sema:
                                         case _: pass
                             case _: pass
                     case _: pass
-                # await_all: all sub-calls run concurrently — each sub-call's args must be Sendable
+                # await_all: all sub-calls run concurrently - each sub-call's args must be Sendable
                 if callee as usize != 0 as usize:
                     match callee.read():
                         case Expr.EIdent(aa_nm):
@@ -1783,7 +1783,7 @@ extend Sema:
                     k = k + 1
                 mut hobj = self.lower_expr(obj)
                 mut hobj_ty = hir_expr_type(hobj)
-                # Resolve type aliases: `type IntList = List[int]` → hobj_ty becomes List[int].
+                # Resolve type aliases: `type IntList = List[int]` -> hobj_ty becomes List[int].
                 if self.type_aliases.contains(hobj_ty.name):
                     mut _alias_base = self.type_aliases.get(hobj_ty.name)
                     mut _alias_ty = AstType.init(_alias_base)
@@ -1826,7 +1826,7 @@ extend Sema:
                         # resolve to void; recover type from the receiver identifier name.
                         match hobj.read():
                             case HirExpr.EIdent(recv_nm, _, _): ret_ty = AstType.init(recv_nm)
-                            # Vec[T].init(n) / List[T].init(n) — EIndex object, recover with generic arg
+                            # Vec[T].init(n) / List[T].init(n) - EIndex object, recover with generic arg
                             case HirExpr.EIndex(idx_base, idx_arg, _):
                                 match idx_base.read():
                                     case HirExpr.EIdent(gn, _, _):
@@ -1839,7 +1839,7 @@ extend Sema:
                     else:
                         ret_ty = hobj_ty
                 elif method == "offset": ret_ty = hobj_ty
-                # List/Vec aggregate methods — return element type or int
+                # List/Vec aggregate methods - return element type or int
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "sum" or method == "min" or method == "max" or method == "min_val" or method == "max_val"):
                     if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                     else: ret_ty = AstType.init("int")
@@ -1850,6 +1850,7 @@ extend Sema:
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "reversed" or method == "reversed_copy"): ret_ty = hobj_ty
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "clone" or method == "copy"): ret_ty = hobj_ty
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "reverse": ret_ty = AstType.init("void")
+                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "index_of" or method == "last_index_of" or method == "count"): ret_ty = AstType.init("int")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "join": ret_ty = AstType.init("str")
                 elif method == "read":
                     if hobj_ty.name == "Pointer" and hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
@@ -1857,27 +1858,27 @@ extend Sema:
                 elif method == "as_str" or method == "to_str": ret_ty = AstType.init("str")
                 elif method == "len" or method == "__len__": ret_ty = AstType.init("int")
                 elif method == "checked_add" or method == "checked_sub" or method == "checked_mul":
-                    # Returns Option[int] — integer checked arithmetic
+                    # Returns Option[int] - integer checked arithmetic
                     mut _opt_int = alloc[AstType](1)
                     _opt_int.write(AstType.init("int"))
                     ret_ty = AstType.init_generic("Option", _opt_int)
                 elif method == "abs" or method == "min" or method == "max" or method == "pow" or method == "sign" or method == "clamp" or method == "gcd" or method == "lcm":
                     ret_ty = hobj_ty  # same numeric type
-                # Float math methods — return float
+                # Float math methods - return float
                 elif hobj_ty.name == "float" or hobj_ty.name == "f64" or hobj_ty.name == "f32":
                     if method == "floor" or method == "ceil" or method == "round" or method == "sqrt" or method == "fabs" or method == "log" or method == "log2" or method == "log10" or method == "exp" or method == "sin" or method == "cos" or method == "tan" or method == "asin" or method == "acos" or method == "atan" or method == "atan2" or method == "pow":
                         ret_ty = AstType.init("float")
                     elif method == "is_nan" or method == "is_inf": ret_ty = AstType.init("bool")
-                # str primitive method dispatch — str.split/strip/join/etc.
+                # str primitive method dispatch - str.split/strip/join/etc.
                 elif hobj_ty.name == "str":
                     ret_ty = self.str_method_ret_ty(method)
-                # Int format methods — return str (int/char/iN/uN types ONLY, not Thread/Atomic/etc.)
+                # Int format methods - return str (int/char/iN/uN types ONLY, not Thread/Atomic/etc.)
                 elif hobj_ty.name == "int" or hobj_ty.name == "i64" or hobj_ty.name == "i32" or hobj_ty.name == "i16" or hobj_ty.name == "i8" or hobj_ty.name == "u64" or hobj_ty.name == "u32" or hobj_ty.name == "u16" or hobj_ty.name == "u8" or hobj_ty.name == "usize" or hobj_ty.name == "char":
                     if method == "to_hex" or method == "to_HEX" or method == "to_hex_upper" or method == "to_octal" or method == "to_oct" or method == "to_binary" or method == "to_bin":
                         ret_ty = AstType.init("str")
                 elif method == "to_float" or method == "to_f64": ret_ty = AstType.init("float")
                 elif method == "to_int" or method == "to_i64": ret_ty = AstType.init("int")
-                # StringBuilder.to_string() returns a StringObj, not a raw str — let it
+                # StringBuilder.to_string() returns a StringObj, not a raw str - let it
                 # fall through to the StringBuilder branch below so .as_str() dispatches
                 # to StringObj_as_str() instead of an invalid (char*) struct cast.
                 elif (method == "to_str" or method == "to_string") and hobj_ty.name != "StringBuilder": ret_ty = AstType.init("str")
@@ -2013,7 +2014,7 @@ extend Sema:
                             if _imdef.ret_ty as usize != 0 as usize:
                                 ret_ty = _imdef.ret_ty.read()
                         _imi = _imi + 1
-                    # Substitute generic type params: T→concrete when interface has type args
+                    # Substitute generic type params: T->concrete when interface has type args
                     if _iface_def.generics.len > 0 and hobj_ty.args.len > 0:
                         mut _gi5 = 0
                         while _gi5 < _iface_def.generics.len:
@@ -2042,7 +2043,7 @@ extend Sema:
                                 elif ret_ty.name == "void":
                                     ret_ty = _mdef.ret_ty.read()  # fallback: first match
                         _mi = _mi + 1
-                    # Substitute generic type params: T→concrete when object has type args
+                    # Substitute generic type params: T->concrete when object has type args
                     if _cls.generics.len > 0 and hobj_ty.args.len > 0:
                         mut _gi4 = 0
                         while _gi4 < _cls.generics.len:
@@ -2120,7 +2121,7 @@ extend Sema:
                             generic_arg_n = nested_ty.read().name
                     case _: pass
                 if is_generic:
-                    # For Vec[T] or List[T] — return base expr annotated with the generic arg.
+                    # For Vec[T] or List[T] - return base expr annotated with the generic arg.
                     # When obj_ty_n is "void" (e.g. Vec not in globals but used as generic syntax),
                     # fall back to obj_name from the AST so Vec[int].init() still works.
                     mut eff_ty_n = obj_ty_n
@@ -2356,7 +2357,7 @@ extend Sema:
                 return box_hirexpr(HirExpr.ESuperPropAccess(resolved_base2, prop, super_field_ty))
             case _: return box_hirexpr(HirExpr.ELitNone(AstType.init("None")))
 
-    # ── Rule N-1: Reserved name helpers ───────────────────────────────────────
+    # -- Rule N-1: Reserved name helpers ---------------------------------------
     pub def is_reserved_error(self, name: str) -> str:
         if name == "true" or name == "True" or name == "gaskiya": return "built-in boolean constant 'true'"
         if name == "false" or name == "False" or name == "karya": return "built-in boolean constant 'false'"
@@ -2367,7 +2368,7 @@ extend Sema:
         return ""
 
     # Reserved built-in names that cannot be shadowed at the top level.
-    # Methods are EXEMPT — a method named 'len' or 'abs' is namespaced to its
+    # Methods are EXEMPT - a method named 'len' or 'abs' is namespaced to its
     # class and does not shadow the global built-in.  Vec is intentionally absent:
     # it is the OOP class imported from core.vec, not a built-in.
     pub def is_reserved_keyword(self, name: str) -> str:
@@ -2382,7 +2383,7 @@ extend Sema:
         if name == "Exception" or name == "Error": return "built-in exception type"
         return ""
 
-    # ── Rule F-3: Definite return check ───────────────────────────────────────
+    # -- Rule F-3: Definite return check ---------------------------------------
     pub def block_returns(self, b: Block) -> bool:
         if b.stmts.len == 0: return false
         # Skip trailing SLine markers so that `return x` followed by a
@@ -2436,7 +2437,7 @@ extend Sema:
         if name == "i64" or name == "i32" or name == "i16" or name == "i8": return true
         if name == "u64" or name == "u32" or name == "u16" or name == "u8" or name == "usize": return true
         if name == "f64" or name == "f32" or name == "lambda": return true
-        # Built-in reference-counted / shared types — exempt from ownership-move tracking.
+        # Built-in reference-counted / shared types - exempt from ownership-move tracking.
         # These types carry their own reference counting or atomic synchronisation;
         # passing them to multiple functions or spawned threads is always safe.
         if name == "str" or name == "Str" or name == "StringObj" or name == "Bytes": return true

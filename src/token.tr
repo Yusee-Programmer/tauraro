@@ -1,6 +1,6 @@
-# compiler/token.tr — Token types for the Tauraro self-hosted compiler.
+# compiler/token.tr - Token types for the Tauraro self-hosted compiler.
 
-# ─── Token Enum ────────────────────────────────────────────────────────────────
+# --- Token Enum ----------------------------------------------------------------
 
 pub enum Token:
     # Literals
@@ -17,7 +17,7 @@ pub enum Token:
     # Identifier / name
     Ident(name: str)
 
-    # Keywords — control flow
+    # Keywords - control flow
     KwDef
     KwClass
     KwEnum
@@ -47,7 +47,7 @@ pub enum Token:
     KwRaise
     KwPass
 
-    # Keywords — declarations / modifiers
+    # Keywords - declarations / modifiers
     KwImplements
     KwImport
     KwFrom
@@ -77,18 +77,18 @@ pub enum Token:
     KwLambda
     KwDecorator
 
-    # Keywords — literals
+    # Keywords - literals
     KwTrue
     KwFalse
     KwNone
 
-    # Keywords — type-related
+    # Keywords - type-related
     KwAnd
     KwOr
     KwNot
     KwIs
 
-    # Keywords — primitive types
+    # Keywords - primitive types
     KwInt
     KwFloat
     KwBool
@@ -112,7 +112,7 @@ pub enum Token:
     KwString
     KwVoid
 
-    # Operators — arithmetic
+    # Operators - arithmetic
     Plus       # +
     Minus      # -
     Star       # *
@@ -123,7 +123,7 @@ pub enum Token:
     FloorDivEq # //=
     StarStarEq # **=
 
-    # Operators — comparison
+    # Operators - comparison
     EqEq       # ==
     NotEq      # !=
     Lt         # <
@@ -131,7 +131,7 @@ pub enum Token:
     LtEq       # <=
     GtEq       # >=
 
-    # Operators — bitwise
+    # Operators - bitwise
     Amp        # &
     Pipe       # |
     Caret      # ^
@@ -139,7 +139,7 @@ pub enum Token:
     LtLt       # <<
     GtGt       # >>
 
-    # Operators — assignment
+    # Operators - assignment
     Eq         # =
     PlusEq     # +=
     MinusEq    # -=
@@ -152,7 +152,7 @@ pub enum Token:
     LtLtEq     # <<=
     GtGtEq     # >>=
 
-    # Operators — other
+    # Operators - other
     Arrow      # ->
     FatArrow   # =>
     Question   # ?
@@ -183,7 +183,7 @@ pub enum Token:
     Eof
     Error(msg: str)
 
-# ─── Token helpers ─────────────────────────────────────────────────────────────
+# --- Token helpers -------------------------------------------------------------
 
 extend Token:
     pub def is_eof(self) -> bool:

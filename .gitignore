@@ -11,5 +11,13 @@ target/
 **/tauraro_rt.h
 **/tauraro_types.h
 
-# Bootstrap download directory
-bootstrap/
+# Bootstrap: ignore only the temporary stage0 / download dirs.
+# The committed portable C seed bootstrap/c/ MUST be tracked.
+bootstrap/tauraroc-*/
+bootstrap/unzipped/
+bootstrap/*.zip
+
+# Re-include the portable C bootstrap tree (overrides build/ and the
+# **/tauraro_*.h rules above so the seed's headers are tracked too).
+!bootstrap/c/
+!bootstrap/c/**
