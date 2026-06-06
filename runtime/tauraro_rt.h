@@ -4292,6 +4292,16 @@ static List_ptr* _tr_list_reversed_ptr(List_ptr* l) {
 static List_f64* _tr_list_reversed_f64(List_f64* l) {
     List_f64* r=List_f64_new(); if(l) for(int64_t i=(int64_t)l->len-1;i>=0;i--) List_f64_append(r,l->data[i]); return r;
 }
+/* In-place reverse */
+static void _tr_list_reverse_i64(List_i64* l){ if(!l)return; for(int64_t i=0,j=(int64_t)l->len-1;i<j;i++,j--){int64_t t=l->data[i];l->data[i]=l->data[j];l->data[j]=t;} }
+static void _tr_list_reverse_f64(List_f64* l){ if(!l)return; for(int64_t i=0,j=(int64_t)l->len-1;i<j;i++,j--){double t=l->data[i];l->data[i]=l->data[j];l->data[j]=t;} }
+static void _tr_list_reverse_ptr(List_ptr* l){ if(!l)return; for(int64_t i=0,j=(int64_t)l->len-1;i<j;i++,j--){void* t=l->data[i];l->data[i]=l->data[j];l->data[j]=t;} }
+static void _tr_list_reverse_str(List_str* l){ if(!l)return; for(int64_t i=0,j=(int64_t)l->len-1;i<j;i++,j--){char* t=l->data[i];l->data[i]=l->data[j];l->data[j]=t;} }
+/* Shallow clone (new backing buffer, same elements) */
+static List_i64* _tr_list_clone_i64(List_i64* l){ List_i64* r=List_i64_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_i64_append(r,l->data[i]); return r; }
+static List_f64* _tr_list_clone_f64(List_f64* l){ List_f64* r=List_f64_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_f64_append(r,l->data[i]); return r; }
+static List_ptr* _tr_list_clone_ptr(List_ptr* l){ List_ptr* r=List_ptr_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_ptr_append(r,l->data[i]); return r; }
+static List_str* _tr_list_clone_str(List_str* l){ List_str* r=List_str_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_str_append(r,l->data[i]); return r; }
 typedef int64_t (*_tr_pred_fn)(void*);
 static int64_t _tr_list_any_ptr(List_ptr* l, _tr_pred_fn p) { if(!l) return 0LL; for(int64_t i=0;i<(int64_t)l->len;i++) if(p(l->data[i])) return 1LL; return 0LL; }
 static int64_t _tr_list_all_ptr(List_ptr* l, _tr_pred_fn p) { if(!l) return 1LL; for(int64_t i=0;i<(int64_t)l->len;i++) if(!p(l->data[i])) return 0LL; return 1LL; }

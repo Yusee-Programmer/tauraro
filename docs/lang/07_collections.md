@@ -17,11 +17,10 @@ Tauraro provides four built-in collection types. All heap-allocated collections 
 2. [Dict — Hash Map](#dict--hash-map)
 3. [Set\[T\] — Unique Collection](#sett--unique-collection)
 4. [Tuples](#tuples)
-5. [List Comprehensions and Generator Expressions](#list-comprehensions-and-generator-expressions)
+5. [List Comprehensions](#list-comprehensions)
 6. [Built-in Iteration Helpers](#built-in-iteration-helpers)
-7. [Slicing](#slicing)
-8. [Ownership and Collections](#ownership-and-collections)
-9. [Common Collection Errors](#common-collection-errors)
+7. [Ownership and Collections](#ownership-and-collections)
+8. [Common Collection Errors](#common-collection-errors)
 
 ---
 
@@ -79,20 +78,34 @@ mut n = len(items)
 # Remove and return last element (O(1)):
 mut popped = items.pop()
 
-# Insert at index (O(n)):
-items.insert(1, 42)
-
 # Remove at index (O(n)):
 items.remove(0)
 
 # Check membership (O(n)):
 mut found = items.contains(20)
 
-# Sort in place:
+# Sort in place (ascending), or descending:
 items.sort()
+items.sort_desc()
 
 # Reverse in place:
 items.reverse()
+
+# Shallow copy with its own backing buffer:
+mut copy = items.clone()
+
+# A new reversed list (original unchanged):
+mut rev = items.reversed()
+
+# Aggregates (List[int] / List[float]):
+mut total = items.sum()
+mut lo    = items.min_val()
+mut hi    = items.max_val()
+
+# First / last element, and linear search:
+mut head = items.first()
+mut tail = items.last()
+mut at   = items.index_of(20)   # index, or -1 if not present
 ```
 
 **Iterating:**
@@ -184,9 +197,11 @@ Fix: Convert explicitly: `for x in floats: ints.append(x as int)`
 **Out-of-bounds access:**
 ```python
 mut items = [10, 20]
-mut x     = items[5]    # undefined behavior — no automatic bounds check
+mut x     = items[5]    # runtime panic: "Index 5 out of bounds (length 2)"
 ```
-Fix: `if i < len(items): x = items[i]`
+List indexing and `.get(i)` are bounds-checked at runtime — an out-of-range
+access aborts with a clear message rather than reading invalid memory. Validate
+the index first when it comes from user input: `if i < len(items): x = items[i]`
 
 **Using negative indices:**
 ```python
@@ -358,36 +373,39 @@ Use `Set[T]` when you need to track whether elements have been seen, remove dupl
 
 ### How it works
 
-```python
-# Create a set from a literal:
-mut seen: Set[int] = {1, 2, 3, 4, 5}
+A `Set[T]` is created with `Set[T].init()` (there is no `{...}` set literal —
+`{}` is always a Dict literal). Supported element types are `str` and `int`.
 
-# Empty set:
-mut visited: Set[str] = {}
+```python
+# Create a set:
+mut seen: Set[int] = Set[int].init()
 
 # Add an element (no-op if already present):
-seen.add(6)
-seen.add(3)    # already in set — no change
+seen.add(1)
+seen.add(2)
+seen.add(2)    # already in set — no change
 
 # Check membership (O(1) average):
-if seen.contains(4):
-    print("4 is in the set")
+if seen.contains(2):
+    print("2 is in the set")
 
 # Remove an element:
-seen.remove(2)
+seen.remove(1)
 
-# Size:
-mut n = len(seen)
+# Size and emptiness:
+mut n = seen.len()
+mut empty = seen.is_empty()
 
-# Iterate (order is unspecified):
-for x in seen:
+# To iterate, convert to a List first (Sets are not directly iterable):
+mut as_list = seen.to_list()
+for x in as_list:
     print(x)
 ```
 
 **Removing duplicates from a list:**
 ```python
 def deduplicate(items: List[int]) -> List[int]:
-    mut seen: Set[int] = {}
+    mut seen: Set[int] = Set[int].init()
     mut result: List[int] = []
     for x in items:
         if not seen.contains(x):
@@ -398,27 +416,27 @@ def deduplicate(items: List[int]) -> List[int]:
 
 **Membership testing (faster than `.contains()` on `List`):**
 ```python
-mut valid_codes: Set[int] = {200, 201, 204, 301, 302, 304, 400, 401, 403, 404, 500}
-
-def is_valid_status(code: int) -> bool:
-    return valid_codes.contains(code)
+def build_valid_codes() -> Set[int]:
+    mut codes: Set[int] = Set[int].init()
+    for c in [200, 201, 204, 301, 400, 404, 500]:
+        codes.add(c)
+    return codes
 ```
 
-Supported element types: `int`, `str`, `i32`, `i64`, `usize`.
+**Set operations:** `union`, `intersection`, `difference`, and `is_subset`
+return/test against another set; `to_list()` materializes the elements.
 
 ### Common Mistakes
 
 **Expecting sorted or insertion-order iteration:**
 ```python
-mut s: Set[int] = {3, 1, 4, 1, 5}
-for x in s:
-    print(x)    # order is unspecified — do not rely on any particular order
+mut as_list = s.to_list()   # order is unspecified
 ```
-Fix: If you need ordered output, collect into a `List[int]` and sort it.
+Fix: If you need ordered output, sort the list: `as_list.sort()`.
 
 **Using `Set` when you also need to track counts:**
 ```python
-mut seen: Set[str] = {}
+mut seen: Set[str] = Set[str].init()
 for word in words:
     seen.add(word)    # counts not available — just presence/absence
 ```
@@ -516,11 +534,11 @@ Fix: Unpack: `mut lo, hi = min_max(items)`
 
 ---
 
-## List Comprehensions and Generator Expressions
+## List Comprehensions
 
 ### When to use
 
-Use list comprehensions to build a new list by transforming or filtering an existing collection in a single concise expression. Use generator expressions for lazy evaluation when you only need to iterate once without building a new list.
+Use list comprehensions to build a new list by transforming or filtering an existing collection in a single concise expression.
 
 ### How it works
 
@@ -543,32 +561,17 @@ mut evens: List[int] = [x for x in numbers if x % 2 == 0]
 
 ```python
 mut names  = ["Alice", "Bob", "Charlie"]
-mut upper_names: List[str] = [n.upper() for n in names]
+mut upper_names: List[str] = [n.to_upper() for n in names]
 # upper_names = ["ALICE", "BOB", "CHARLIE"]
 ```
 
-**Nested computation in comprehension:**
-
-```python
-mut data: List[int] = [1, -3, 5, -2, 4]
-mut abs_vals: List[int] = [x if x >= 0 else -x for x in data]
-# abs_vals = [1, 3, 5, 2, 4]
-```
-
-**Generator expression — lazy, no intermediate list:**
-
-```python
-# Compute the sum without building an intermediate list:
-mut total = sum(x * x for x in numbers)
-
-# Filter and consume once:
-for x in (x for x in numbers if x > 2):
-    print(x)    # 3, 4, 5
-```
-
-Generator expressions use `()` instead of `[]`. They produce values on demand and do not allocate a new list.
-
 **How comprehensions compile:** The compiler translates list comprehensions directly to a tight C `for` loop that builds the result list. No intermediate allocations, no boxing.
+
+> A comprehension body is a single transform expression with an optional
+> trailing `if` filter: `[expr for x in seq]` or `[expr for x in seq if cond]`.
+> Conditional (`a if cond else b`) expressions inside the body and generator
+> expressions (`(... for ...)`) are not currently supported — use a regular
+> `for` loop for those cases.
 
 ### Common Mistakes
 
@@ -587,7 +590,6 @@ Fix: Use a regular `for` loop with intermediate variables when the body is compl
 ### Best Practices
 
 - Use comprehensions for simple, one-level transforms and filters. Switch to a `for` loop when the body needs more than one operation.
-- Use generator expressions when you only need to iterate once — they avoid the allocation of a new list.
 - Keep comprehension conditions simple (`if x > 0`). For complex filtering logic, extract a helper function.
 
 ---
@@ -668,66 +670,6 @@ for i, x in enumerate(items):
 - Always prefer `enumerate(items)` over a manual `mut i = 0` counter — it is cleaner and less error-prone.
 - Use `zip` when processing two parallel arrays together. If the lengths may differ, document whether truncation is intentional.
 - `range(n)` is the standard way to iterate a fixed number of times when you need the index value.
-
----
-
-## Slicing
-
-### When to use
-
-Use slices to work with a sub-sequence of a list without copying elements. Slices are useful for windowing, splitting data into segments, or passing a partial list to a function.
-
-### How it works
-
-```python
-mut items = [10, 20, 30, 40, 50]
-
-mut first_three = items[0:3]    # [10, 20, 30]  — indices 0, 1, 2
-mut last_two    = items[3:5]    # [40, 50]       — indices 3, 4
-mut middle      = items[1:4]    # [20, 30, 40]   — indices 1, 2, 3
-mut step_two    = items[0:5:2]  # [10, 30, 50]   — every second element
-```
-
-Slice syntax: `list[start:stop:step]`
-- `start` — inclusive start index (default: 0)
-- `stop`  — exclusive end index (default: `len(list)`)
-- `step`  — increment (default: 1)
-
-Omitting parameters uses the default:
-
-```python
-mut copy  = items[:]      # full copy — [10, 20, 30, 40, 50]
-mut tail  = items[2:]     # from index 2 to end — [30, 40, 50]
-mut head  = items[:3]     # from start to index 2 — [10, 20, 30]
-```
-
-**Note:** Negative indexing is not supported. Use `len(items) - n` for end-relative indices:
-
-```python
-mut last_two = items[len(items) - 2:]    # [40, 50]
-```
-
-### Common Mistakes
-
-**Expecting slices to be views (they are copies):**
-```python
-mut sub = items[1:3]
-sub[0] = 99    # modifies sub, NOT items
-```
-Slices produce a new `List[T]`. Modifying a slice does not affect the original.
-
-**Using negative indices in slices:**
-```python
-mut last = items[-2:]    # ERROR or undefined behavior — negative indices not supported
-```
-Fix: `mut last = items[len(items) - 2:]`
-
-### Best Practices
-
-- Use slices to pass sub-ranges to functions rather than copying manually.
-- Remember that slices are copies — if you need a reference to a sub-range, pass the list and explicit index bounds to the function.
-
----
 
 ## Ownership and Collections
 
@@ -843,9 +785,9 @@ Fix: `if cfg.has("host"): val = cfg.get("host")`
 
 ```python
 mut items = [1, 2, 3]
-mut x = items[10]    # undefined behavior — no automatic bounds check
+mut x = items[10]    # runtime panic: "Index 10 out of bounds (length 3)"
 ```
-Fix: `if i < len(items): x = items[i]`
+Indexing is bounds-checked at runtime. Fix: `if i < len(items): x = items[i]`
 
 ### Modifying a list while iterating it
 

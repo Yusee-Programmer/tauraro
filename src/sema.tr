@@ -492,6 +492,14 @@ extend Sema:
 
     # Fix 3: lazy recursive check — classes with only primitive/copy fields are Copy
     # Inserts false as a sentinel to break self-referential cycles before recursing
+    # True if a decorator list contains @copy (the explicit copy/share opt-in).
+    pub def has_copy_decorator(self, decs: Vec[Decorator]) -> bool:
+        mut i = 0
+        while i < decs.len:
+            if decs.get(i).name == "copy": return true
+            i = i + 1
+        return false
+
     pub def is_copy_class(self, name: str) -> bool:
         if self.is_primitive_name(name): return true
         if self.copy_classes.contains(name): return self.copy_classes.get(name)
@@ -621,15 +629,20 @@ extend Sema:
             case Decl.DClass(c):
                 self.declare(c.name, SymbolKind.SClass, box_asttype(AstType.init(c.name)), false)
                 self.classes.insert(c.name, c)
+                # @copy opt-in: treat as a freely-shareable value (exempt from move tracking)
+                if self.has_copy_decorator(c.decorators): self.copy_classes.insert(c.name, true)
             case Decl.DActor(c):
                 self.declare(c.name, SymbolKind.SClass, box_asttype(AstType.init(c.name)), false)
                 self.classes.insert(c.name, c)
+                if self.has_copy_decorator(c.decorators): self.copy_classes.insert(c.name, true)
             case Decl.DEnum(e):
                 self.declare(e.name, SymbolKind.SEnum, box_asttype(AstType.init(e.name)), false)
                 self.enums.insert(e.name, e)
+                if self.has_copy_decorator(e.decorators): self.copy_classes.insert(e.name, true)
             case Decl.DInterface(i):
                 self.declare(i.name, SymbolKind.SInterface, box_asttype(AstType.init(i.name)), false)
                 self.interfaces.insert(i.name, i)
+                if self.has_copy_decorator(i.decorators): self.copy_classes.insert(i.name, true)
             case Decl.DExtend(target, methods):
                 mut hi = 0
                 while hi < methods.len:
@@ -1835,6 +1848,8 @@ extend Sema:
                     if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                     else: ret_ty = AstType.init("void")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "reversed" or method == "reversed_copy"): ret_ty = hobj_ty
+                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "clone" or method == "copy"): ret_ty = hobj_ty
+                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "reverse": ret_ty = AstType.init("void")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "join": ret_ty = AstType.init("str")
                 elif method == "read":
                     if hobj_ty.name == "Pointer" and hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
@@ -1862,7 +1877,10 @@ extend Sema:
                         ret_ty = AstType.init("str")
                 elif method == "to_float" or method == "to_f64": ret_ty = AstType.init("float")
                 elif method == "to_int" or method == "to_i64": ret_ty = AstType.init("int")
-                elif method == "to_str" or method == "to_string": ret_ty = AstType.init("str")
+                # StringBuilder.to_string() returns a StringObj, not a raw str — let it
+                # fall through to the StringBuilder branch below so .as_str() dispatches
+                # to StringObj_as_str() instead of an invalid (char*) struct cast.
+                elif (method == "to_str" or method == "to_string") and hobj_ty.name != "StringBuilder": ret_ty = AstType.init("str")
                 elif method == "get" or method == "pop":
                     if (hobj_ty.name == "List" or hobj_ty.name == "Vec") and hobj_ty.args.len > 0:
                         ret_ty = hobj_ty.args.get(0).read()

@@ -568,7 +568,85 @@ See [21 — Operator Overloading](21_operator_overloading.md) for the complete r
 
 ---
 
-## 10. C Code Generation Reference
+## 10. Class Decorators — `@copy` and `@packed`
+
+A decorator written on the line above `class`, `enum`, or `interface` changes how
+the compiler treats that type. Two are built in.
+
+### `@copy` — opt into shareable (value) semantics
+
+By default, a class with at least one non-primitive field (a `List`, `str`-bearing
+struct, another class, etc.) is **move-tracked**: assigning it transfers ownership.
+
+```python
+class Label:
+    pub text: str
+    pub ids:  List[int]
+
+mut a = make_label()
+mut b = a            # MOVE — a is now consumed
+print(a.text)        # ERROR [M-1]: 'a' was moved and cannot be used again
+```
+
+Mark the class `@copy` to tell the compiler the instance is **freely shareable** —
+assignment then aliases the instance instead of moving it, so every handle stays
+usable:
+
+```python
+@copy
+class Label:
+    pub text: str
+    pub ids:  List[int]
+
+mut a = make_label()
+mut b = a            # @copy — aliases a (no move)
+print(a.text)        # OK
+b.ids.append(3)      # a and b refer to the same Label
+```
+
+**What it means / when to use it.** `@copy` is your assertion that the type is safe
+to share — typically because it is **immutable after construction**, or
+**arena/long-lived and never individually freed**. The compiler then exempts it
+from move-tracking. This is the same opt-in mechanism the Tauraro compiler uses on
+its own AST node types (`AstType`), which are built once and aliased throughout
+compilation. Use it deliberately; do not slap it on types with unique ownership of
+a resource that must be freed exactly once.
+
+> Classes whose fields are **all** primitive (`int`, `float`, `bool`, `char`, and
+> the like) are already treated as copy automatically — you do not need `@copy`
+> for those.
+
+`@copy` is also accepted on `enum` and `interface` declarations, with the same
+"exempt from move-tracking" meaning.
+
+```python
+@copy
+enum Direction:
+    North
+    South
+
+@copy
+interface Shape:
+    def area(self) -> int
+```
+
+### `@packed` — exact byte layout
+
+`@packed` removes field padding so the struct matches a precise on-the-wire or
+hardware layout (see §2 and the `NetworkHeader` example). Use it only for
+interop structs; packed access can be slower on some architectures.
+
+```python
+@packed
+class NetworkHeader:
+    pub version: u8
+    pub length:  u16
+    pub seq:     u32
+```
+
+---
+
+## 11. C Code Generation Reference
 
 Understanding what Tauraro emits helps you reason about performance and debug C-level issues.
 

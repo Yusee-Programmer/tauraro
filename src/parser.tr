@@ -1660,8 +1660,10 @@ extend Parser:
                 mut fmt_spec  = ""
                 mut colon_pos = _find_fmt_colon(expr_str)
                 if colon_pos >= 0:
-                    fmt_spec = expr_str.slice(colon_pos + 1, expr_str.len()).trim()
-                    expr_str = expr_str.slice(0, colon_pos).trim()
+                    mut _fs = expr_str.slice(colon_pos + 1, expr_str.len())
+                    fmt_spec = _fs.trim()
+                    mut _es = expr_str.slice(0, colon_pos)
+                    expr_str = _es.trim()
                 mut lexer = Lexer.init(expr_str)
                 mut _fstr_tokens = lexer.tokenize()
                 if _fstr_tokens.len > 0:
@@ -1763,6 +1765,7 @@ extend Parser:
                     case Decl.DInterface(i):
                         i.line = _iline
                         i.is_public = is_public
+                        i.decorators = decorators
                         i_ptr.write(Decl.DInterface(i))
                     case _:
                         pass

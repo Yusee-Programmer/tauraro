@@ -489,8 +489,10 @@ pub def _print_diag(level: str, msg: str):
     mut main_part = msg
     mut fix_idx = msg.index_of("FIX:")
     if fix_idx >= 0:
-        main_part = msg.slice(0, fix_idx).trim()
-        fix_part  = msg.slice(fix_idx, msg.len()).trim()
+        mut _mp = msg.slice(0, fix_idx)
+        main_part = _mp.trim()
+        mut _fp = msg.slice(fix_idx, msg.len())
+        fix_part  = _fp.trim()
     print(level + ": " + main_part)
     if fix_part.len() > 0:
         print("       " + fix_part)

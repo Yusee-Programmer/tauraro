@@ -2609,8 +2609,11 @@ pub class CGenerator:
                     elem_sfx = self.list_elem_suffix(ity.args.get(0).read().name)
                 elif self.type_alias_map.contains(ity.name):
                     # Type alias e.g. NodeList → "List_str*" — extract elem suffix from C name.
-                    mut _alias_c = self.type_alias_map.get(ity.name).trim()
-                    if _alias_c.ends_with("*"): _alias_c = _alias_c.slice(0, _alias_c.len() - 1).trim()
+                    mut _alias_raw = self.type_alias_map.get(ity.name)
+                    mut _alias_c = _alias_raw.trim()
+                    if _alias_c.ends_with("*"):
+                        mut _alias_sl = _alias_c.slice(0, _alias_c.len() - 1)
+                        _alias_c = _alias_sl.trim()
                     if _alias_c.starts_with("List_"): elem_sfx = _alias_c.slice(5, _alias_c.len())
             case HirExpr.EMethodCall(_, _, _, mty):
                 if mty.args.len > 0: elem_sfx = self.list_elem_suffix(mty.args.get(0).read().name)
@@ -2703,6 +2706,12 @@ pub class CGenerator:
             # reversed_copy() — return a new reversed list
             if method == "reversed" or method == "reversed_copy":
                 return "_tr_list_reversed_" + elem_sfx + "(" + obj_s + ")"
+            # reverse in place
+            if method == "reverse":
+                return "_tr_list_reverse_" + elem_sfx + "(" + obj_s + ")"
+            # clone: shallow copy with a fresh backing buffer
+            if method == "clone" or method == "copy":
+                return "_tr_list_clone_" + elem_sfx + "(" + obj_s + ")"
 
         # Set[T] method dispatch — backed by _TrSet (hash set via TrMap with bool values)
         if class_name == "Set":
