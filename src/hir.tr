@@ -57,29 +57,33 @@ pub class HirCatchClause:
     pub body: HirBlock
 
 pub class HirFStringPart:
-    pub is_expr: bool
-    pub text: str
-    pub expr: Pointer[HirExpr]
+    pub is_expr:  bool
+    pub text:     str
+    pub expr:     Pointer[HirExpr]
+    pub fmt_spec: str    # e.g. ".2f", ">10", "05d"
 
 extend HirFStringPart:
     pub def init() -> HirFStringPart:
         mut p = HirFStringPart()
-        p.is_expr = false
-        p.text = ""
-        p.expr = Pointer[HirExpr](0)
+        p.is_expr  = false
+        p.text     = ""
+        p.expr     = Pointer[HirExpr](0)
+        p.fmt_spec = ""
         return p
 
 # ─── Match arms ─────────────────────────────────────────────────────────────
 
 pub class HirMatchArm:
-    pub pat: Pattern
-    pub body: HirBlock
+    pub pat:   Pattern
+    pub body:  HirBlock
+    pub guard: Pointer[HirExpr]   # null = no guard; non-null = `case P if guard:`
 
 extend HirMatchArm:
     pub def init(pat: Pattern, body: HirBlock) -> HirMatchArm:
         mut a = HirMatchArm()
-        a.pat = pat
-        a.body = body
+        a.pat   = pat
+        a.body  = body
+        a.guard = Pointer[HirExpr](0)
         return a
 
 # ─── Chan-select arms ─────────────────────────────────────────────────────────
@@ -119,6 +123,7 @@ pub enum HirStmt:
     SFree(name: str)
     SMultiLet(names: Vec[str], is_mut: bool, val: Pointer[HirExpr])
     SChanSelect(cases: Vec[Pointer[HirChanSelectArm]])
+    SDefer(stmt: Pointer[HirStmt])   # defer — deferred execution at function exit
 
 pub class HirBlock:
     pub stmts: Vec[Pointer[HirStmt]]
@@ -197,17 +202,21 @@ pub class HirProgram:
     pub top_level_stmts: Vec[Pointer[HirStmt]]
     pub extern_funcs:    Vec[HirFunction]   # extern "C" declarations
     pub decorator_defs:  Vec[HirFunction]   # decorator def ... functions
+    pub type_alias_names:  Vec[str]              # type Name = Target
+    pub type_alias_types:  Vec[Pointer[AstType]] # parallel array — must be Pointer since AstType is a class
 
 extend HirProgram:
     pub def init() -> HirProgram:
         mut p = HirProgram()
-        p.functions = Vec[HirFunction].init(16)
-        p.classes = Vec[HirClass].init(16)
-        p.enums = Vec[HirEnum].init(4)
-        p.interfaces = Vec[HirInterface].init(4)
-        p.top_level_stmts = Vec[Pointer[HirStmt]].init(16)
-        p.extern_funcs = Vec[HirFunction].init(4)
-        p.decorator_defs = Vec[HirFunction].init(4)
+        p.functions         = Vec[HirFunction].init(16)
+        p.classes           = Vec[HirClass].init(16)
+        p.enums             = Vec[HirEnum].init(4)
+        p.interfaces        = Vec[HirInterface].init(4)
+        p.top_level_stmts   = Vec[Pointer[HirStmt]].init(16)
+        p.extern_funcs      = Vec[HirFunction].init(4)
+        p.decorator_defs    = Vec[HirFunction].init(4)
+        p.type_alias_names  = Vec[str].init(4)
+        p.type_alias_types  = Vec[Pointer[AstType]].init(4)
         return p
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

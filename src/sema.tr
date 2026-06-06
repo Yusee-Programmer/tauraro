@@ -71,6 +71,9 @@ pub class Sema:
     pub classes:            Map[str, ClassDef]
     pub enums:              Map[str, EnumDef]
     pub interfaces:         Map[str, InterfaceDef]
+    pub type_aliases:        Map[str, str]   # alias_name → resolved base name
+    pub type_alias_elem:     Map[str, str]   # alias_name → first generic arg name (for List/Map)
+    pub current_file:        str             # path of source file currently being analysed
     pub current_func_name:  str
     pub current_class_name: str
     pub current_scope_depth: int
@@ -119,6 +122,9 @@ extend Sema:
         s.classes            = Map[str, ClassDef].init(128)
         s.enums              = Map[str, EnumDef].init(64)
         s.interfaces         = Map[str, InterfaceDef].init(32)
+        s.type_aliases    = Map[str, str].init(32)
+        s.type_alias_elem = Map[str, str].init(32)
+        s.current_file    = ""
         s.current_func_name  = ""
         s.current_class_name = ""
         s.current_scope_depth = 0
@@ -167,7 +173,13 @@ extend Sema:
         s.globals.insert("filter",   Symbol.init("filter",   SymbolKind.SFunction, box_asttype(AstType.init("List"))))
         s.globals.insert("all",      Symbol.init("all",      SymbolKind.SFunction, box_asttype(AstType.init("bool"))))
         s.globals.insert("any",      Symbol.init("any",      SymbolKind.SFunction, box_asttype(AstType.init("bool"))))
-        s.globals.insert("assert",   Symbol.init("assert",   SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("assert",    Symbol.init("assert",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("assert_eq", Symbol.init("assert_eq", SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("assert_ne", Symbol.init("assert_ne", SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("assert_lt", Symbol.init("assert_lt", SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("assert_le", Symbol.init("assert_le", SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("assert_gt", Symbol.init("assert_gt", SymbolKind.SFunction, box_asttype(AstType.init("void"))))
+        s.globals.insert("assert_ge", Symbol.init("assert_ge", SymbolKind.SFunction, box_asttype(AstType.init("void"))))
         s.globals.insert("Some",     Symbol.init("Some",     SymbolKind.SFunction, box_asttype(AstType.init("Option"))))
         s.globals.insert("Ok",       Symbol.init("Ok",       SymbolKind.SFunction, box_asttype(AstType.init("Result"))))
         s.globals.insert("Err",      Symbol.init("Err",      SymbolKind.SFunction, box_asttype(AstType.init("Result"))))
@@ -211,6 +223,9 @@ extend Sema:
         s.globals.insert("Mutex",     Symbol.init("Mutex",     SymbolKind.SClass, box_asttype(AstType.init("Mutex"))))
         s.globals.insert("RwLock",    Symbol.init("RwLock",    SymbolKind.SClass, box_asttype(AstType.init("RwLock"))))
         s.globals.insert("ThreadPool", Symbol.init("ThreadPool", SymbolKind.SClass, box_asttype(AstType.init("ThreadPool"))))
+        s.globals.insert("Thread",     Symbol.init("Thread",     SymbolKind.SClass, box_asttype(AstType.init("Thread"))))
+        s.globals.insert("Atomic",     Symbol.init("Atomic",     SymbolKind.SClass, box_asttype(AstType.init("Atomic"))))
+        s.globals.insert("ThreadLocal", Symbol.init("ThreadLocal", SymbolKind.SClass, box_asttype(AstType.init("ThreadLocal"))))
         s.globals.insert("await_all", Symbol.init("await_all", SymbolKind.SFunction, box_asttype(AstType.init("void"))))
         s.globals.insert("Arc",       Symbol.init("Arc",       SymbolKind.SClass, box_asttype(AstType.init("Arc"))))
         s.globals.insert("Rc",        Symbol.init("Rc",        SymbolKind.SClass, box_asttype(AstType.init("Rc"))))
@@ -223,8 +238,11 @@ extend Sema:
         return s
 
     pub def error(self, msg: str):
+        mut loc = ""
+        if self.current_file.len() > 0:
+            loc = self.current_file + ":"
         if self.current_line > 0:
-            self.errors.push("line " + str(self.current_line) + ": " + msg)
+            self.errors.push(loc + str(self.current_line) + ": " + msg)
         else:
             self.errors.push(msg)
 
@@ -584,6 +602,12 @@ extend Sema:
                     mut hdf = self.lower_func(f)
                     hdf.is_decorator = true
                     hp.decorator_defs.push(hdf)
+                case Decl.DTypeAlias(alias_name, target_ty):
+                    # Emit type alias info into HirProgram so codegen can emit a typedef.
+                    hp.type_alias_names.push(alias_name)
+                    mut ta_ty_ptr = box_asttype(AstType.init("void"))
+                    if target_ty as usize != 0 as usize: ta_ty_ptr = target_ty
+                    hp.type_alias_types.push(ta_ty_ptr)
                 case _: pass
             i = i + 1
         return hp
@@ -638,6 +662,22 @@ extend Sema:
             case Decl.DDecoratorDef(f):
                 self.decorator_names.insert(f.name, true)
                 self.declare(f.name, SymbolKind.SFunction, box_asttype(AstType.init("void")), false)
+            case Decl.DTypeAlias(alias_name, target_ty):
+                # Register type alias: `type Name = ExistingType`
+                # The alias name becomes a valid type name resolving to the target.
+                mut alias_ty = box_asttype(AstType.init("void"))
+                if target_ty as usize != 0 as usize: alias_ty = target_ty
+                self.declare(alias_name, SymbolKind.SClass, alias_ty, false)
+                # Also register as a type alias mapping so type_to_c can resolve it.
+                mut resolved_name = ""
+                if target_ty as usize != 0 as usize: resolved_name = target_ty.read().name
+                if resolved_name.len() > 0:
+                    self.type_aliases.insert(alias_name, resolved_name)
+                    # Store first generic arg (element type) for List/Map aliases.
+                    if target_ty as usize != 0 as usize:
+                        mut ta_t = target_ty.read()
+                        if ta_t.args.len > 0:
+                            self.type_alias_elem.insert(alias_name, ta_t.args.get(0).read().name)
             case _: pass
 
     pub def lower_func(self, f: FunctionDef) -> HirFunction:
@@ -1293,8 +1333,14 @@ extend Sema:
                         case Pattern.PVariantBindMany(_, ex_vn3, _): ex_covered.push(ex_vn3)
                         case _: pass
                     self.enter_scope()
-                    self.declare_pattern_binds(arm.pat)
-                    h_arms.push(HirMatchArm.init(arm.pat, self.lower_block(arm.body.read())))
+                    # Use the subject's type for PBind so `case x if x.method():` works.
+                    mut _subj_ty = hir_expr_type(hsubj)
+                    self.declare_pattern_binds_typed(arm.pat, _subj_ty)
+                    mut h_arm = HirMatchArm.init(arm.pat, self.lower_block(arm.body.read()))
+                    # Lower guard expression if present
+                    if arm.guard as usize != 0 as usize:
+                        h_arm.guard = self.lower_expr(arm.guard)
+                    h_arms.push(h_arm)
                     self.exit_scope()
                     k = k + 1
                 # [E-1] Exhaustiveness check — only for known enum types
@@ -1336,6 +1382,8 @@ extend Sema:
                 return box_hirstmt(HirStmt.STry(self.lower_block(try_body), h_catches, self.lower_block(finally_b)))
             case Stmt.SRaise(e): return box_hirstmt(HirStmt.SRaise(self.lower_expr(e)))
             case Stmt.SAssert(cond, msg): return box_hirstmt(HirStmt.SAssert(self.lower_expr(cond), self.lower_expr(msg)))
+            case Stmt.SDefer(inner):
+                return box_hirstmt(HirStmt.SDefer(self.lower_stmt(inner)))
             case Stmt.SWith(items, aliases, body):
                 self.enter_scope()
                 mut h_items = Vec[Pointer[HirExpr]].init(items.len)
@@ -1438,8 +1486,12 @@ extend Sema:
         return AstType.init("void")
 
     pub def declare_pattern_binds(self, pat: Pattern):
+        self.declare_pattern_binds_typed(pat, AstType.init("int"))
+
+    # Like declare_pattern_binds but uses subj_ty for PBind so `case x if x.method():` works.
+    pub def declare_pattern_binds_typed(self, pat: Pattern, subj_ty: AstType):
         match pat:
-            case Pattern.PBind(name): self.declare(name, SymbolKind.SVariable, box_asttype(AstType.init("int")), false)
+            case Pattern.PBind(name): self.declare(name, SymbolKind.SVariable, box_asttype(subj_ty), false)
             case Pattern.PVariantBind(type_name, variant_name, field):
                 mut fty = self.variant_field_ty(type_name, variant_name, 0)
                 if fty.name == "void": fty = AstType.init("int")
@@ -1459,12 +1511,12 @@ extend Sema:
             case Pattern.POr(pats):
                 mut i = 0
                 while i < pats.len:
-                    self.declare_pattern_binds(pats.get(i))
+                    self.declare_pattern_binds_typed(pats.get(i), subj_ty)
                     i = i + 1
             case _: pass
 
     pub def str_method_ret_ty(self, method: str) -> AstType:
-        if method == "split" or method == "split_to_vec":
+        if method == "split" or method == "split_to_vec" or method == "split_once":
             mut _str_ty = alloc[AstType](1)
             _str_ty.write(AstType.init("str"))
             return AstType.init_generic("Vec", _str_ty)
@@ -1654,6 +1706,9 @@ extend Sema:
                             case Expr.EIdent(type_name):
                                 if self.enums.contains(type_name):
                                     ret_ty = AstType.init(type_name)
+                                # Built-in concurrency statics: Thread.spawn → Thread, ThreadPool.new → ThreadPool
+                                elif (type_name == "Thread" or type_name == "ThreadPool" or type_name == "Atomic" or type_name == "ThreadLocal") and (variant == "spawn" or variant == "new" or variant == "init"):
+                                    ret_ty = AstType.init(type_name)
                                 elif variant == "init" or variant == "new":
                                     if type_name == "Pointer" or type_name == "List" or type_name == "Vec" or type_name == "Map" or type_name == "Dict":
                                         ret_ty = AstType.init(type_name)
@@ -1713,6 +1768,16 @@ extend Sema:
                     k = k + 1
                 mut hobj = self.lower_expr(obj)
                 mut hobj_ty = hir_expr_type(hobj)
+                # Resolve type aliases: `type IntList = List[int]` → hobj_ty becomes List[int].
+                if self.type_aliases.contains(hobj_ty.name):
+                    mut _alias_base = self.type_aliases.get(hobj_ty.name)
+                    mut _alias_ty = AstType.init(_alias_base)
+                    if self.type_alias_elem.contains(hobj_ty.name):
+                        mut _elem_name = self.type_alias_elem.get(hobj_ty.name)
+                        mut _elem_ptr = alloc[AstType](1)
+                        _elem_ptr.write(AstType.init(_elem_name))
+                        _alias_ty = AstType.init_generic(_alias_base, _elem_ptr)
+                    hobj_ty = _alias_ty
                 # Phase C: error if mutating a container that has an active borrow
                 if method == "push" or method == "pop" or method == "insert" or method == "remove":
                     mut pc_obj_nm = ""
@@ -1746,15 +1811,56 @@ extend Sema:
                         # resolve to void; recover type from the receiver identifier name.
                         match hobj.read():
                             case HirExpr.EIdent(recv_nm, _, _): ret_ty = AstType.init(recv_nm)
+                            # Vec[T].init(n) / List[T].init(n) — EIndex object, recover with generic arg
+                            case HirExpr.EIndex(idx_base, idx_arg, _):
+                                match idx_base.read():
+                                    case HirExpr.EIdent(gn, _, _):
+                                        ret_ty = AstType.init(gn)
+                                        match idx_arg.read():
+                                            case HirExpr.EIdent(tn, _, _): ret_ty.args.push(box_asttype(AstType.init(tn)))
+                                            case _: pass
+                                    case _: ret_ty = hobj_ty
                             case _: ret_ty = hobj_ty
                     else:
                         ret_ty = hobj_ty
                 elif method == "offset": ret_ty = hobj_ty
+                # List/Vec aggregate methods — return element type or int
+                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "sum" or method == "min" or method == "max" or method == "min_val" or method == "max_val"):
+                    if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                    else: ret_ty = AstType.init("int")
+                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "any" or method == "all" or method == "is_empty"): ret_ty = AstType.init("bool")
+                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "first" or method == "last"):
+                    if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                    else: ret_ty = AstType.init("void")
+                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "reversed" or method == "reversed_copy"): ret_ty = hobj_ty
+                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "join": ret_ty = AstType.init("str")
                 elif method == "read":
                     if hobj_ty.name == "Pointer" and hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                     else: ret_ty = AstType.init("int")
                 elif method == "as_str" or method == "to_str": ret_ty = AstType.init("str")
                 elif method == "len" or method == "__len__": ret_ty = AstType.init("int")
+                elif method == "checked_add" or method == "checked_sub" or method == "checked_mul":
+                    # Returns Option[int] — integer checked arithmetic
+                    mut _opt_int = alloc[AstType](1)
+                    _opt_int.write(AstType.init("int"))
+                    ret_ty = AstType.init_generic("Option", _opt_int)
+                elif method == "abs" or method == "min" or method == "max" or method == "pow" or method == "sign" or method == "clamp" or method == "gcd" or method == "lcm":
+                    ret_ty = hobj_ty  # same numeric type
+                # Float math methods — return float
+                elif hobj_ty.name == "float" or hobj_ty.name == "f64" or hobj_ty.name == "f32":
+                    if method == "floor" or method == "ceil" or method == "round" or method == "sqrt" or method == "fabs" or method == "log" or method == "log2" or method == "log10" or method == "exp" or method == "sin" or method == "cos" or method == "tan" or method == "asin" or method == "acos" or method == "atan" or method == "atan2" or method == "pow":
+                        ret_ty = AstType.init("float")
+                    elif method == "is_nan" or method == "is_inf": ret_ty = AstType.init("bool")
+                # str primitive method dispatch — str.split/strip/join/etc.
+                elif hobj_ty.name == "str":
+                    ret_ty = self.str_method_ret_ty(method)
+                # Int format methods — return str (int/char/iN/uN types ONLY, not Thread/Atomic/etc.)
+                elif hobj_ty.name == "int" or hobj_ty.name == "i64" or hobj_ty.name == "i32" or hobj_ty.name == "i16" or hobj_ty.name == "i8" or hobj_ty.name == "u64" or hobj_ty.name == "u32" or hobj_ty.name == "u16" or hobj_ty.name == "u8" or hobj_ty.name == "usize" or hobj_ty.name == "char":
+                    if method == "to_hex" or method == "to_HEX" or method == "to_hex_upper" or method == "to_octal" or method == "to_oct" or method == "to_binary" or method == "to_bin":
+                        ret_ty = AstType.init("str")
+                elif method == "to_float" or method == "to_f64": ret_ty = AstType.init("float")
+                elif method == "to_int" or method == "to_i64": ret_ty = AstType.init("int")
+                elif method == "to_str" or method == "to_string": ret_ty = AstType.init("str")
                 elif method == "get" or method == "pop":
                     if (hobj_ty.name == "List" or hobj_ty.name == "Vec") and hobj_ty.args.len > 0:
                         ret_ty = hobj_ty.args.get(0).read()
@@ -1773,9 +1879,32 @@ extend Sema:
                             _gmi = _gmi + 1
                 elif method == "alloc": ret_ty = hobj_ty
                 elif method == "contains": ret_ty = AstType.init("bool")
-                # str primitive method dispatch — str.split/strip/join/etc.
-                elif hobj_ty.name == "str":
-                    ret_ty = self.str_method_ret_ty(method)
+                # Set[T] built-in method return types
+                elif hobj_ty.name == "Set":
+                    if method == "contains" or method == "has" or method == "is_empty" or method == "is_subset": ret_ty = AstType.init("bool")
+                    elif method == "len" or method == "length": ret_ty = AstType.init("int")
+                    elif method == "add" or method == "remove" or method == "clear": ret_ty = AstType.init("void")
+                    elif method == "to_list": ret_ty = AstType.init_generic("List", alloc[AstType](1))
+                    elif method == "union" or method == "intersection" or method == "difference": ret_ty = hobj_ty
+                # Option[T] built-in method return types
+                elif hobj_ty.name == "Option":
+                    if method == "is_some" or method == "is_none": ret_ty = AstType.init("bool")
+                    elif method == "unwrap" or method == "expect":
+                        if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                        else: ret_ty = AstType.init("int")
+                    elif method == "unwrap_or":
+                        if hl.len > 0: ret_ty = hir_expr_type(hl.get(0))
+                        elif hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                        else: ret_ty = AstType.init("int")
+                # Result[T,E] built-in method return types
+                elif hobj_ty.name == "Result":
+                    if method == "is_ok" or method == "is_err": ret_ty = AstType.init("bool")
+                    elif method == "unwrap" or method == "ok":
+                        if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
+                        else: ret_ty = AstType.init("int")
+                    elif method == "unwrap_err" or method == "err":
+                        if hobj_ty.args.len > 1: ret_ty = hobj_ty.args.get(1).read()
+                        else: ret_ty = AstType.init("str")
                 # Thread built-in method return types
                 elif method == "spawn" and (hobj_ty.name == "Thread" or hobj_ty.name == "void"):
                     ret_ty = AstType.init("Thread")
@@ -2005,9 +2134,10 @@ extend Sema:
                 while m < parts.len:
                     mut p_ast = parts.get(m)
                     mut hp = HirFStringPart.init()
-                    hp.is_expr = p_ast.is_expr
-                    hp.text = p_ast.text
-                    hp.expr = self.lower_expr(p_ast.expr)
+                    hp.is_expr  = p_ast.is_expr
+                    hp.text     = p_ast.text
+                    hp.fmt_spec = p_ast.fmt_spec
+                    hp.expr     = self.lower_expr(p_ast.expr)
                     hparts.push(hp)
                     m = m + 1
                 return box_hirexpr(HirExpr.EFString(hparts, AstType.init("str")))
@@ -2223,17 +2353,24 @@ extend Sema:
     # ── Rule F-3: Definite return check ───────────────────────────────────────
     pub def block_returns(self, b: Block) -> bool:
         if b.stmts.len == 0: return false
-        # Skip trailing SLine markers (line-number annotations inserted by the parser)
-        # so that `return x\n` followed by a line marker is still recognised as returning.
+        # Skip trailing SLine markers so that `return x` followed by a
+        # line-number marker is still recognised as a definite return.
         mut last_idx = b.stmts.len - 1
+        mut sl_going = true
         while last_idx > 0:
-            mut s = b.stmts.get(last_idx)
-            if s as usize == 0 as usize:
+            if not sl_going: break
+            mut sl_s = b.stmts.get(last_idx)
+            if sl_s as usize == 0 as usize:
                 last_idx = last_idx - 1
-                continue
-            match s.read():
-                case Stmt.SLine(_): last_idx = last_idx - 1
-                case _: break
+            else:
+                mut is_sline = false
+                match sl_s.read():
+                    case Stmt.SLine(_): is_sline = true
+                    case _: pass
+                if is_sline:
+                    last_idx = last_idx - 1
+                else:
+                    sl_going = false
         mut last_s = b.stmts.get(last_idx)
         if last_s as usize == 0 as usize: return false
         match last_s.read():

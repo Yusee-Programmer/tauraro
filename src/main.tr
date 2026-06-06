@@ -474,6 +474,28 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     return _tr_system(cmd)
 
 # ─── Build cleanup ────────────────────────────────────────────────────────────
+# ── Error/warning formatting ──────────────────────────────────────────────────
+# Print a compiler diagnostic in a clean, human-readable format:
+#   file.tr:42: error [M-1]: Use after move ...
+#              ^^^ FIX: Copy the value before moving ...
+#
+# Input `msg` has the form the sema produces:
+#   "file:line: [CODE] main message. FIX: hint."   (with file)
+#   "line: [CODE] main message. FIX: hint."         (no file)
+#   "[CODE] main message. FIX: hint."               (no line)
+pub def _print_diag(level: str, msg: str):
+    # Split on "FIX:" to separate message from hint
+    mut fix_part  = ""
+    mut main_part = msg
+    mut fix_idx = msg.index_of("FIX:")
+    if fix_idx >= 0:
+        main_part = msg.slice(0, fix_idx).trim()
+        fix_part  = msg.slice(fix_idx, msg.len()).trim()
+    print(level + ": " + main_part)
+    if fix_part.len() > 0:
+        print("       " + fix_part)
+
+
 # Called when -o is given: removes all intermediate files from build_dir,
 # leaving the directory empty so rmdir can remove it.
 # Deletes: *.c files, tauraro_types.h, tauraro_rt.h, include/ tree, then build/ itself.
@@ -619,18 +641,19 @@ pub def main(args: Vec[str]):
 
     mut sema = Sema.init()
     sema.strict_mode = strict_mode
+    sema.current_file = input_path   # track source file for error messages
     mut hir = sema.analyze(prog)
 
     if sema.warnings.len > 0:
         mut wk = 0
         while wk < sema.warnings.len:
-            print("warning: " + sema.warnings.get(wk))
+            _print_diag("warning", sema.warnings.get(wk))
             wk = wk + 1
 
     if sema.errors.len > 0:
         mut k = 0
         while k < sema.errors.len:
-            print("error: " + sema.errors.get(k))
+            _print_diag("error", sema.errors.get(k))
             k = k + 1
         _tr_exit(1)
 

@@ -37,6 +37,7 @@ pub enum Token:
     KwTry
     KwAssert
     KwWith
+    KwDefer
     KwAsm
     KwTaskGroup
     KwGpu

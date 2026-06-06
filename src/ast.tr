@@ -113,23 +113,34 @@ extend MatchArm:
 # ─── F-string parts ───────────────────────────────────────────────────────────
 
 pub class FStringPart:
-    pub is_expr: bool
-    pub text: str               
-    pub expr: Pointer[Expr]     
+    pub is_expr:  bool
+    pub text:     str
+    pub expr:     Pointer[Expr]
+    pub fmt_spec: str    # e.g. ".2f", ">10", "05d" — empty means default
 
 extend FStringPart:
     pub def init_text(s: str) -> FStringPart:
         mut p = FStringPart()
-        p.is_expr = false
-        p.text = s
-        p.expr = Pointer[Expr](0)
+        p.is_expr  = false
+        p.text     = s
+        p.expr     = Pointer[Expr](0)
+        p.fmt_spec = ""
         return p
 
     pub def init_expr(e: Pointer[Expr]) -> FStringPart:
         mut p = FStringPart()
-        p.is_expr = true
-        p.text = ""
-        p.expr = e
+        p.is_expr  = true
+        p.text     = ""
+        p.expr     = e
+        p.fmt_spec = ""
+        return p
+
+    pub def init_expr_fmt(e: Pointer[Expr], spec: str) -> FStringPart:
+        mut p = FStringPart()
+        p.is_expr  = true
+        p.text     = ""
+        p.expr     = e
+        p.fmt_spec = spec
         return p
 
 # ─── Expressions ──────────────────────────────────────────────────────────────
@@ -228,6 +239,7 @@ pub enum Stmt:
     STaskGroup(body: Block)
     SGpuBlock(body: Block)
     SChanSelect(cases: Vec[Pointer[ChanSelectArm]])
+    SDefer(stmt: Pointer[Stmt])   # defer stmt — run at function exit, LIFO order
     SLine(n: int)
 
 pub class Block:
@@ -421,12 +433,13 @@ pub enum Decl:
     DEnum(enm: EnumDef)
     DInterface(iface: InterfaceDef)
     DExtend(target: str, methods: Vec[FunctionDef])
-    DImport(path: str, alias: str)             
+    DImport(path: str, alias: str)
     DFromImport(path: str, items: Vec[ImportItem])
     DExtern(abi: str, functions: Vec[FunctionDef])
     DTopLevelStmt(stmt: Pointer[Stmt])
     DActor(cls: ClassDef)
     DDecoratorDef(func: FunctionDef)
+    DTypeAlias(name: str, target: Pointer[AstType])   # type Name = ExistingType
 
 pub class Program:
     pub decls: Vec[Pointer[Decl]]

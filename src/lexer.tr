@@ -31,6 +31,7 @@ pub def keyword_to_token(s: str) -> Token:
     if s == "raise" or s == "jefa":    return Token.KwRaise
     if s == "assert" or s == "tabbatar": return Token.KwAssert
     if s == "with" or s == "tare":     return Token.KwWith
+    if s == "defer":                   return Token.KwDefer
     if s == "asm":                     return Token.KwAsm
     if s == "taskgroup" or s == "task_group": return Token.KwTaskGroup
     if s == "gpu":                     return Token.KwGpu

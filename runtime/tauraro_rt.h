@@ -1598,6 +1598,37 @@ static void yield_val(void* v) { (void)v; }
 #  endif
 #endif
 
+/* ── New built-in methods added in v0.0.5 ────────────────────────────────── */
+
+/* int.to_binary(n) — base-2 string */
+static char* _tr_int_to_binary(int64_t n) {
+    if (n == 0) return (char*)"0";
+    char buf[70]; int pos = 68; buf[69] = '\0';
+    uint64_t v = (uint64_t)n;
+    while (v > 0) { buf[pos--] = '0' + (int)(v & 1); v >>= 1; }
+    char* r = (char*)_tr_checked_alloc(70 - pos);
+    memcpy(r, buf + pos + 1, 69 - pos);
+    return r;
+}
+
+/* float utility predicates */
+static int64_t _tr_float_is_nan(double x) { return (int64_t)(x != x); }
+static int64_t _tr_float_is_inf(double x) { return (int64_t)(x == 1.0/0.0 || x == -1.0/0.0); }
+
+/* int.gcd / int.lcm */
+static int64_t _tr_int_gcd(int64_t a, int64_t b) {
+    a = a < 0 ? -a : a; b = b < 0 ? -b : b;
+    while (b) { int64_t t = b; b = a % b; a = t; } return a;
+}
+static int64_t _tr_int_lcm(int64_t a, int64_t b) {
+    int64_t g = _tr_int_gcd(a, b); return g ? (a / g * b) : 0LL;
+}
+
+/* List sort/aggregate helpers are defined later in this header,
+ * after all List_T typedefs.  See the v0.0.5 section near the end. */
+
+/* Map update/clear defined after TrMap typedef below */
+
 /* Read one line from stdin.  Returns the raw line INCLUDING any trailing
  * \r\n so callers can distinguish a blank separator ("\r\n") from true
  * EOF ("").  Never strips — the Tauraro caller calls .trim() itself.   */
@@ -2577,6 +2608,8 @@ static inline bool   _tr_dict_contains(TrMap* d, char* k) { return d&&Dict_has(d
 #define _tr_dict_remove(d, k) _tr_dict_set_impl((d), (k), NULL)
 static inline long long _tr_dict_len(TrMap* d) { return Dict_len(d); }
 
+/* Map.update / Map.clear / Set[T] defined after List_str below */
+
 /* ── Int-keyed Dict (Dict[int, V]) ────────────────────────────────────── */
 typedef struct _TrIDictNode { long long key; void* value; struct _TrIDictNode* next; } _TrIDictNode;
 typedef struct { _TrIDictNode** buckets; size_t cap; size_t len; } TrIDict;
@@ -2627,11 +2660,40 @@ static inline void List_f64_append(List_f64* l, double val) { if(l->len==l->capa
 static inline double List_f64_pop(List_f64* l) { if(!l||l->len==0) return 0.0; l->len--; return l->data[l->len]; }
 static inline void List_f64_free(List_f64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
+/* Undefine the forward-declaration macros before the real typedef */
+#undef List_str
+#undef List_i64
+#undef List_f64
+#undef List_ptr
 typedef struct { char** data; size_t len; size_t capacity; } List_str;
 static inline List_str* List_str_new(void) { List_str* l=(List_str*)malloc(sizeof(List_str)); l->data=(char**)malloc(sizeof(char*)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_str_append(List_str* l, char* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(char**)realloc(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; }
 static inline char* List_str_pop(List_str* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
 static inline void List_str_free(List_str* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
+/* ── List_str helpers (requires List_str typedef above) ─────────────────── */
+static List_str* _tr_str_tuple2(char* a, char* b) {
+    List_str* l = List_str_new(); List_str_append(l, a); List_str_append(l, b); return l;
+}
+static List_str* _tr_list_reversed_str(List_str* l) {
+    List_str* r = List_str_new();
+    if (l) for (int64_t i = l->len - 1; i >= 0; i--) List_str_append(r, l->data[i]);
+    return r;
+}
+static int64_t _tr_list_sum_str(List_str* l) { return 0LL; }
+static int64_t _tr_list_min_str(List_str* l) { return 0LL; }
+static int64_t _tr_list_max_str(List_str* l) { return 0LL; }
+typedef int64_t (*_tr_pred_str_fn)(char*);
+static int64_t _tr_list_any_str(List_str* l, _tr_pred_str_fn p) {
+    if (!l) return 0LL;
+    for (int64_t i=0; i<(int64_t)l->len; i++) if (p(l->data[i])) return 1LL;
+    return 0LL;
+}
+static int64_t _tr_list_all_str(List_str* l, _tr_pred_str_fn p) {
+    if (!l) return 1LL;
+    for (int64_t i=0; i<(int64_t)l->len; i++) if (!p(l->data[i])) return 0LL;
+    return 1LL;
+}
 
 typedef struct { void** data; size_t len; size_t capacity; } List_ptr;
 static inline List_ptr* List_ptr_new(void) { List_ptr* l=(List_ptr*)malloc(sizeof(List_ptr)); l->data=(void**)malloc(sizeof(void*)*8); l->len=0; l->capacity=8; return l; }
@@ -4087,5 +4149,93 @@ static inline void _tr_gpu_openmp_parallel_i64(int64_t n, void* fn_ptr) {
     for (int64_t _i = 0; _i < n; _i++) { fn(_i); }
 #endif
 }
+
+/* ── v0.0.5: Map.update / Set[T] / List helpers ──────────────────────────────
+ * All placed here so TrMap, List_str, List_i64 etc. are defined above.   */
+
+/* Map.update / Map.clear */
+static void _tr_dict_update(TrMap* dst, TrMap* src) {
+    if (!dst || !src) return;
+    List_str* ks = _tr_dict_keys(src);
+    if (!ks) return;
+    for (int64_t i = 0; i < (int64_t)ks->len; i++) {
+        char* k = ks->data[i]; _tr_dict_set(dst, k, _tr_dict_get(src, k));
+    }
+}
+static void _tr_idict_update(TrMap* dst, TrMap* src) { _tr_dict_update(dst, src); }
+static void _tr_dict_clear(TrMap* m) { if (m) { Dict_free(m); m->buckets=NULL; m->len=0; m->cap=0; } }
+static void _tr_idict_clear(TrMap* m) { _tr_dict_clear(m); }
+
+/* Set[T] — hash set backed by TrMap */
+typedef TrMap _TrSet;
+static _TrSet* _tr_set_new(int64_t cap) { return _tr_dict_new(cap > 0 ? cap : 16); }
+static void    _tr_set_add(_TrSet* s, char* e)      { _tr_dict_set(s, e, (void*)1); }
+static int64_t _tr_set_contains(_TrSet* s, char* e) { return (int64_t)_tr_dict_contains(s, e); }
+static void    _tr_set_remove(_TrSet* s, char* e)   { _tr_dict_remove(s, e); }
+static int64_t _tr_set_len(_TrSet* s)               { return _tr_dict_len(s); }
+static void    _tr_set_clear(_TrSet* s)             { _tr_dict_clear(s); }
+static List_str* _tr_set_to_list(_TrSet* s)         { return _tr_dict_keys(s); }
+static _TrSet* _tr_set_union(_TrSet* a, _TrSet* b) {
+    _TrSet* r=_tr_set_new(16);
+    List_str* ka=_tr_dict_keys(a); if(ka) for(int64_t i=0;i<(int64_t)ka->len;i++) _tr_set_add(r,ka->data[i]);
+    List_str* kb=_tr_dict_keys(b); if(kb) for(int64_t i=0;i<(int64_t)kb->len;i++) _tr_set_add(r,kb->data[i]);
+    return r;
+}
+static _TrSet* _tr_set_intersection(_TrSet* a, _TrSet* b) {
+    _TrSet* r=_tr_set_new(16);
+    List_str* ka=_tr_dict_keys(a);
+    if(ka) for(int64_t i=0;i<(int64_t)ka->len;i++) if(_tr_set_contains(b,ka->data[i])) _tr_set_add(r,ka->data[i]);
+    return r;
+}
+static _TrSet* _tr_set_difference(_TrSet* a, _TrSet* b) {
+    _TrSet* r=_tr_set_new(16);
+    List_str* ka=_tr_dict_keys(a);
+    if(ka) for(int64_t i=0;i<(int64_t)ka->len;i++) if(!_tr_set_contains(b,ka->data[i])) _tr_set_add(r,ka->data[i]);
+    return r;
+}
+static int64_t _tr_set_is_subset(_TrSet* a, _TrSet* b) {
+    List_str* ka=_tr_dict_keys(a);
+    if(!ka) return 1LL;
+    for(int64_t i=0;i<(int64_t)ka->len;i++) if(!_tr_set_contains(b,ka->data[i])) return 0LL;
+    return 1LL;
+}
+
+/* ── v0.0.5: List sort / aggregate / functional helpers ──────────────────────
+ * All List_T typedefs are defined above.                                  */
+static int _tr_cmp_str_asc (const void* a, const void* b) { return strcmp(*(char**)a, *(char**)b); }
+static int _tr_cmp_str_desc(const void* a, const void* b) { return strcmp(*(char**)b, *(char**)a); }
+static int _tr_cmp_i64_asc (const void* a, const void* b) { int64_t x=*(int64_t*)a,y=*(int64_t*)b; return (x>y)-(x<y); }
+static int _tr_cmp_i64_desc(const void* a, const void* b) { int64_t x=*(int64_t*)a,y=*(int64_t*)b; return (x<y)-(x>y); }
+static int _tr_cmp_f64_asc (const void* a, const void* b) { double x=*(double*)a,y=*(double*)b; return (x>y)-(x<y); }
+static int _tr_cmp_f64_desc(const void* a, const void* b) { double x=*(double*)a,y=*(double*)b; return (x<y)-(x>y); }
+static void _tr_list_sort_str(List_str* l, int dir) { if(l&&l->len>1) qsort(l->data,(size_t)l->len,sizeof(char*),dir>0?_tr_cmp_str_asc:_tr_cmp_str_desc); }
+static void _tr_list_sort_i64(List_i64* l, int dir) { if(l&&l->len>1) qsort(l->data,(size_t)l->len,sizeof(int64_t),dir>0?_tr_cmp_i64_asc:_tr_cmp_i64_desc); }
+static void _tr_list_sort_f64(List_f64* l, int dir) { if(l&&l->len>1) qsort(l->data,(size_t)l->len,sizeof(double),dir>0?_tr_cmp_f64_asc:_tr_cmp_f64_desc); }
+static void _tr_list_sort_ptr(List_ptr* l, int dir) { (void)l; (void)dir; }
+static int64_t _tr_list_sum_i64(List_i64* l) { int64_t s=0; if(l) for(int64_t i=0;i<(int64_t)l->len;i++) s+=l->data[i]; return s; }
+static double  _tr_list_sum_f64(List_f64* l) { double  s=0; if(l) for(int64_t i=0;i<(int64_t)l->len;i++) s+=l->data[i]; return s; }
+static int64_t _tr_list_min_i64(List_i64* l) { if(!l||l->len==0) return 0LL; int64_t m=l->data[0]; for(int64_t i=1;i<(int64_t)l->len;i++) if(l->data[i]<m) m=l->data[i]; return m; }
+static int64_t _tr_list_max_i64(List_i64* l) { if(!l||l->len==0) return 0LL; int64_t m=l->data[0]; for(int64_t i=1;i<(int64_t)l->len;i++) if(l->data[i]>m) m=l->data[i]; return m; }
+static double  _tr_list_min_f64(List_f64* l) { if(!l||l->len==0) return 0.0;  double  m=l->data[0]; for(int64_t i=1;i<(int64_t)l->len;i++) if(l->data[i]<m) m=l->data[i]; return m; }
+static double  _tr_list_max_f64(List_f64* l) { if(!l||l->len==0) return 0.0;  double  m=l->data[0]; for(int64_t i=1;i<(int64_t)l->len;i++) if(l->data[i]>m) m=l->data[i]; return m; }
+static int64_t _tr_list_sum_ptr(List_ptr* l) { return 0LL; }
+static int64_t _tr_list_min_ptr(List_ptr* l) { return 0LL; }
+static int64_t _tr_list_max_ptr(List_ptr* l) { return 0LL; }
+static List_i64* _tr_list_reversed_i64(List_i64* l) {
+    List_i64* r=List_i64_new(); if(l) for(int64_t i=(int64_t)l->len-1;i>=0;i--) List_i64_append(r,l->data[i]); return r;
+}
+static List_ptr* _tr_list_reversed_ptr(List_ptr* l) {
+    List_ptr* r=List_ptr_new(); if(l) for(int64_t i=(int64_t)l->len-1;i>=0;i--) List_ptr_append(r,l->data[i]); return r;
+}
+static List_f64* _tr_list_reversed_f64(List_f64* l) {
+    List_f64* r=List_f64_new(); if(l) for(int64_t i=(int64_t)l->len-1;i>=0;i--) List_f64_append(r,l->data[i]); return r;
+}
+typedef int64_t (*_tr_pred_fn)(void*);
+static int64_t _tr_list_any_ptr(List_ptr* l, _tr_pred_fn p) { if(!l) return 0LL; for(int64_t i=0;i<(int64_t)l->len;i++) if(p(l->data[i])) return 1LL; return 0LL; }
+static int64_t _tr_list_all_ptr(List_ptr* l, _tr_pred_fn p) { if(!l) return 1LL; for(int64_t i=0;i<(int64_t)l->len;i++) if(!p(l->data[i])) return 0LL; return 1LL; }
+static int64_t _tr_list_any_i64(List_i64* l, _tr_pred_fn p) { return _tr_list_any_ptr((List_ptr*)l, p); }
+static int64_t _tr_list_all_i64(List_i64* l, _tr_pred_fn p) { return _tr_list_all_ptr((List_ptr*)l, p); }
+static int64_t _tr_list_any_f64(List_f64* l, _tr_pred_fn p) { return _tr_list_any_ptr((List_ptr*)l, p); }
+static int64_t _tr_list_all_f64(List_f64* l, _tr_pred_fn p) { return _tr_list_all_ptr((List_ptr*)l, p); }
 
 #endif /* TAURARO_RT_H */
