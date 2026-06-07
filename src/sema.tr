@@ -79,6 +79,7 @@ pub class Sema:
     pub current_scope_depth: int
     pub in_async_fn:        bool
     pub assign_froms:       Map[str, int] # block-local last use tracking
+    pub fn_sigs:            Map[str, AstType] # top-level fn name -> def(...)->R type, for first-class function references
     pub current_line:       int
     pub current_func_generics: Vec[str]
     pub closure_boundary: int           # scope depth just before entering a closure (-1 = not in closure)
@@ -130,6 +131,7 @@ extend Sema:
         s.current_scope_depth = 0
         s.in_async_fn        = false
         s.assign_froms       = Map[str, int].init(32)
+        s.fn_sigs            = Map[str, AstType].init(64)
         s.current_line       = 0
         s.current_func_generics = Vec[str].init(0)
         s.closure_boundary  = -1
@@ -626,6 +628,16 @@ extend Sema:
                 mut _f_ret = box_asttype(AstType.init("void"))
                 if f.ret_ty as usize != 0 as usize: _f_ret = f.ret_ty
                 self.declare(f.name, SymbolKind.SFunction, _f_ret, false)
+                # Record the full signature so the function can be used as a
+                # first-class value (def(...)->R): EIdent yields this type, and
+                # calling such a value recovers the return type (last arg).
+                mut _fnty = AstType.init("def")
+                mut _pi = 0
+                while _pi < f.params.len:
+                    _fnty.args.push(f.params.get(_pi).ty)
+                    _pi = _pi + 1
+                _fnty.args.push(_f_ret)
+                self.fn_sigs.insert(f.name, _fnty)
             case Decl.DClass(c):
                 self.declare(c.name, SymbolKind.SClass, box_asttype(AstType.init(c.name)), false)
                 self.classes.insert(c.name, c)
@@ -1589,6 +1601,10 @@ extend Sema:
             case Expr.EIdent(name):
                 mut sym = self.resolve(name)
                 mut ty = sym.ty.read()
+                # First-class function reference: a top-level function used as a
+                # value carries its def(...)->R signature (not its return type).
+                if self.fn_sigs.contains(name) and sym.kind == SymbolKind.SFunction:
+                    return box_hirexpr(HirExpr.EIdent(name, self.fn_sigs.get(name), false))
                 # [M-6] use-after-free: dealloc() was called on this pointer
                 if sym.is_freed and sym.name != "":
                     self.error("[M-6] '" + name + "' was freed by 'dealloc()' and can no longer be used.\n      FIX: Remove all uses of '" + name + "' after 'dealloc()', or restructure so the pointer is freed only when no longer needed.")
@@ -1681,6 +1697,10 @@ extend Sema:
                         else:
                             mut _fsym = self.resolve(n)
                             ret_ty = _fsym.ty.read()
+                            # Calling through a function-pointer value (def(...)->R):
+                            # the call result is the signature's return type (last arg).
+                            if ret_ty.name == "def" and ret_ty.args.len > 0:
+                                ret_ty = ret_ty.args.get(ret_ty.args.len - 1).read()
                     case Expr.EIndex(base, idx):
                         match base.read():
                             case Expr.EIdent(gn):
@@ -1793,6 +1813,24 @@ extend Sema:
                         _elem_ptr.write(AstType.init(_elem_name))
                         _alias_ty = AstType.init_generic(_alias_base, _elem_ptr)
                     hobj_ty = _alias_ty
+                # Callable-field call: obj.f(args) where f is a def(...)-typed
+                # FIELD (not a method) -> lower to field access + indirect call.
+                if self.classes.contains(hobj_ty.name):
+                    mut _cf_cls = self.classes.get(hobj_ty.name)
+                    mut _cf_i = 0
+                    mut _cf_ty = AstType.init("void")
+                    mut _cf_found = false
+                    while _cf_i < _cf_cls.fields.len:
+                        mut _cf_fld = _cf_cls.fields.get(_cf_i)
+                        if _cf_fld.name == method and _cf_fld.ty as usize != 0 as usize:
+                            _cf_ty = _cf_fld.ty.read()
+                            _cf_found = true
+                        _cf_i = _cf_i + 1
+                    if _cf_found and _cf_ty.name == "def":
+                        mut _cf_ret = AstType.init("void")
+                        if _cf_ty.args.len > 0: _cf_ret = _cf_ty.args.get(_cf_ty.args.len - 1).read()
+                        mut _cf_prop = box_hirexpr(HirExpr.EPropAccess(hobj, method, _cf_ty))
+                        return box_hirexpr(HirExpr.ECall(_cf_prop, hl, _cf_ret))
                 # Phase C: error if mutating a container that has an active borrow
                 if method == "push" or method == "pop" or method == "insert" or method == "remove":
                     mut pc_obj_nm = ""

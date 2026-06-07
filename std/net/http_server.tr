@@ -31,6 +31,7 @@
 
 from std.core.string import StringBuilder
 from std.net.tcp import TcpStream, TcpListener
+from std.net.url import Url
 from std.string.str import Str
 from std.string.fmt import Fmt
 from std.core.map import Map
@@ -43,8 +44,8 @@ pub class HttpRequest:
     pub path:     str       # "/users/42"
     pub query:    str       # raw query string without '?'
     pub body:     str       # request body
-    pub headers:  Map[str]  # request headers
-    pub params:   Map[str]  # path parameters extracted by router (:id → "42")
+    pub headers:  Map[str, str]  # request headers
+    pub params:   Map[str, str]  # path parameters extracted by router (:id → "42")
     pub route_id: int       # matched route identifier (-1 if unmatched)
     pub version:  str       # "HTTP/1.1" or "HTTP/1.0"
 
@@ -55,15 +56,17 @@ extend HttpRequest:
         r.path       = "/"
         r.query      = ""
         r.body       = ""
-        r.headers    = Map[str].init(16)
-        r.params     = Map[str].init(4)
+        r.headers    = Map[str, str].init(16)
+        r.params     = Map[str, str].init(4)
         r.route_id   = -1
         r.version    = "HTTP/1.1"
         return r
 
-    # Return a header value by name, or "" when absent.
+    # Return a header value by name (case-insensitive), or "" when absent.
+    # HTTP header names are case-insensitive; the parser stores them lowercased.
     pub def header(self, name: str) -> str:
-        if self.headers.contains(name): return self.headers.get(name)
+        mut key = Str.to_lower(name)
+        if self.headers.contains(key): return self.headers.get(key)
         return ""
 
     # Return a path parameter by name (set by router), or "" when absent.
@@ -71,23 +74,34 @@ extend HttpRequest:
         if self.params.contains(name): return self.params.get(name)
         return ""
 
-    # Return the first value of a query parameter (simple key=value parsing).
-    pub def query_param(self, key: str) -> str:
-        mut ql  = Str.len(self.query)
-        if ql == 0: return ""
-        mut pos = 0
-        while pos < ql:
-            mut amp  = Str.index_of(Str.slice(self.query, pos, ql), "&")
-            mut end_ = ql
-            if amp >= 0: end_ = pos + amp
-            mut pair = Str.slice(self.query, pos, end_)
+    # Parse an application/x-www-form-urlencoded blob (key=val&key=val), returning
+    # the percent-decoded value for `key` ('+' decodes to space), or "" if absent.
+    def _kv_lookup(data: str, key: str) -> str:
+        if Str.len(data) == 0: return ""
+        mut pairs = Str.split_to_vec(data, "&")
+        mut i = 0
+        while i < pairs.len:
+            mut pair = pairs.get(i)
             mut eq   = Str.index_of(pair, "=")
             if eq >= 0:
                 mut k = Str.slice(pair, 0, eq)
                 if Str.eq(k, key):
-                    return Str.slice(pair, eq + 1, Str.len(pair))
-            pos = end_ + 1
+                    mut v = Str.slice(pair, eq + 1, Str.len(pair))
+                    return Url.decode_component(Str.replace(v, "+", " "))
+            i = i + 1
         return ""
+
+    # First value of a query-string parameter, percent-decoded.
+    pub def query_param(self, key: str) -> str:
+        return HttpRequest._kv_lookup(self.query, key)
+
+    # First value of an application/x-www-form-urlencoded body field, decoded.
+    pub def form_param(self, key: str) -> str:
+        return HttpRequest._kv_lookup(self.body, key)
+
+    # True when the body is a URL-encoded form.
+    pub def is_form(self) -> bool:
+        return Str.contains(HttpRequest.header(self, "content-type"), "application/x-www-form-urlencoded")
 
     # Content-Type header value, or "" when absent.
     pub def content_type(self) -> str:
@@ -114,17 +128,21 @@ extend HttpRequest:
 pub class HttpResponse:
     pub status:  int
     pub body:    str
-    pub headers: Map[str]
+    pub headers: Map[str, str]   # name -> value (last write wins)
+    pub _order:  Vec[str]        # header names in insertion order (for deterministic wire output)
 
 extend HttpResponse:
     pub def init(status: int, body: str) -> HttpResponse:
         mut r    = HttpResponse()
         r.status = status
         r.body   = body
-        r.headers = Map[str].init(8)
+        r.headers = Map[str, str].init(8)
+        r._order  = Vec[str].init(8)
         return r
 
     pub def set_header(self, name: str, value: str):
+        if not self.headers.contains(name):
+            self._order.push(name)
         self.headers.insert(name, value)
 
     pub def is_ok(self) -> bool:
@@ -159,10 +177,21 @@ extend HttpResponse:
         elif self.status == 502:    sb.append("Bad Gateway")
         elif self.status == 503:    sb.append("Service Unavailable")
         else:                       sb.append("Unknown")
-        sb.append("\r\nContent-Length: ")
+        sb.append("\r\n")
+        # Emit all user-set headers (Content-Type, Location, Set-Cookie, ...).
+        # Skip Content-Length here; it is always computed below from the body.
+        mut hi = 0
+        while hi < self._order.len:
+            mut hk = self._order.get(hi)
+            if not Str.eq(Str.to_lower(hk), "content-length"):
+                sb.append(hk)
+                sb.append(": ")
+                sb.append(self.headers.get(hk))
+                sb.append("\r\n")
+            hi = hi + 1
+        sb.append("Content-Length: ")
         sb.append(Fmt.int_to_str(Str.len(self.body)))
-        sb.append("\r\n")
-        sb.append("\r\n")
+        sb.append("\r\n\r\n")
         sb.append(self.body)
         return sb.to_owned()
 
@@ -172,6 +201,8 @@ pub class HttpConn:
     pub request: HttpRequest
     pub _stream: TcpStream
     pub _closed: bool
+    pub _headers: Map[str, str]   # response headers to merge into every send (cookies, etc.)
+    pub _horder:  Vec[str]        # names in insertion order (avoids generic Map.keys())
 
 extend HttpConn:
     pub def init(req: HttpRequest, stream: TcpStream) -> HttpConn:
@@ -179,11 +210,24 @@ extend HttpConn:
         c.request  = req
         c._stream  = stream
         c._closed  = false
+        c._headers = Map[str, str].init(8)
+        c._horder  = Vec[str].init(8)
         return c
 
-    # Send a pre-built HttpResponse.
+    # Queue a response header applied to the next send (chainable-friendly).
+    pub def set_resp_header(self, name: str, value: str):
+        if not self._headers.contains(name):
+            self._horder.push(name)
+        self._headers.insert(name, value)
+
+    # Send a pre-built HttpResponse, merging any conn-level response headers.
     pub def send_response(self, resp: HttpResponse):
         if not self._closed:
+            mut i = 0
+            while i < self._horder.len:
+                mut k = self._horder.get(i)
+                resp.set_header(k, self._headers.get(k))
+                i = i + 1
             self._stream.send(resp.to_wire())
 
     # Convenience: plain-text response.
@@ -225,7 +269,7 @@ extend HttpConn:
         sb.append("; Path=")
         sb.append(path)
         if http_only: sb.append("; HttpOnly")
-        self.request.headers.insert("Set-Cookie", sb.to_owned())
+        HttpConn.set_resp_header(self, "Set-Cookie", sb.to_owned())
 
     # Close the underlying TCP connection.
     pub def close(self):
@@ -367,10 +411,23 @@ extend HttpParser:
                 hdr_pos = hdr_len
             mut colon = Str.index_of(line, ": ")
             if colon >= 0:
-                mut hname  = Str.slice(line, 0, colon)
+                # Header names are case-insensitive: store lowercased so lookups
+                # via HttpRequest.header() (which also lowercases) always match.
+                mut hname  = Str.to_lower(Str.slice(line, 0, colon))
                 mut hvalue = Str.slice(line, colon + 2, Str.len(line))
                 req.headers.insert(hname, hvalue)
         return req
+
+    # Content-Length value from a raw header section, or 0 when absent.
+    pub def content_length(hdr: str) -> int:
+        mut low = Str.to_lower(hdr)
+        mut idx = Str.index_of(low, "content-length:")
+        if idx < 0: return 0
+        mut after = Str.slice(hdr, idx + 15, Str.len(hdr))
+        mut nl    = Str.index_of(after, "\r\n")
+        mut val   = after
+        if nl >= 0: val = Str.slice(after, 0, nl)
+        return Str.parse_int(Str.trim(val))
 
 # ── HttpMiddleware interface ───────────────────────────────────────────────────
 
@@ -421,11 +478,36 @@ extend HttpServer:
     pub def is_running(self) -> bool:
         return self._running
 
-    # Block until the next client connects, parse the request, run the router,
-    # and return an HttpConn ready for the handler to write a response.
+    # Read a complete HTTP request from a stream: loop recv() until the header
+    # terminator (\r\n\r\n) arrives, then keep reading until the full
+    # Content-Length body has been received. Robust against requests that span
+    # multiple TCP segments (a single recv() is not guaranteed to be complete).
+    # Note: text-protocol oriented (JSON/forms/HTML); a body containing NUL
+    # bytes is truncated by the string representation.
+    def _read_full(self, stream: TcpStream) -> str:
+        mut sb         = StringBuilder.init(self._recv_buf)
+        mut header_end = -1
+        while header_end < 0:
+            mut chunk = stream.recv(self._recv_buf)
+            if Str.len(chunk) == 0: break
+            sb.append(chunk)
+            header_end = Str.index_of(sb.to_owned(), "\r\n\r\n")
+        mut raw = sb.to_owned()
+        if header_end < 0: return raw
+        mut clen = HttpParser.content_length(Str.slice(raw, 0, header_end))
+        mut have = Str.len(raw) - (header_end + 4)
+        while have < clen:
+            mut more = stream.recv(self._recv_buf)
+            if Str.len(more) == 0: break
+            sb.append(more)
+            have = have + Str.len(more)
+        return sb.to_owned()
+
+    # Block until the next client connects, read the full request, run the
+    # router, and return an HttpConn ready for the handler to write a response.
     pub def accept(self) -> HttpConn:
         mut stream = self._listener.accept()
-        mut raw    = stream.recv(self._recv_buf)
+        mut raw    = HttpServer._read_full(self, stream)
         mut req    = HttpParser.parse(raw)
         self._router.dispatch(req)
         return HttpConn.init(req, stream)

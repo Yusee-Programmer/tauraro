@@ -10,7 +10,7 @@
 #   if r.is_ok(): print(r.body)
 
 from std.core.string import StringBuilder
-from std.net.http import HttpResponse
+from std.net.http import HttpClientResponse
 from std.string.str import Str
 from std.string.fmt import Fmt
 from std.core.map import Map
@@ -61,13 +61,13 @@ extend HttpsClient:
         if d1 < 0 or d1 > 9 or d2 < 0 or d2 > 9 or d3 < 0 or d3 > 9: return 0
         return d1 * 100 + d2 * 10 + d3
 
-    def _parse_response(raw: str) -> HttpResponse:
+    def _parse_response(raw: str) -> HttpClientResponse:
         mut code = HttpsClient._parse_status(raw)
         if code == 0: code = 200
         mut sep  = Str.index_of(raw, "\r\n\r\n")
         mut body = raw
         if sep >= 0: body = Str.slice(raw, sep + 4, Str.len(raw))
-        mut resp = HttpResponse.init(code, body)
+        mut resp = HttpClientResponse.init(code, body)
         if sep < 0: return resp
         mut hdr_sec  = Str.slice(raw, 0, sep)
         mut first_nl = Str.index_of(hdr_sec, "\r\n")
@@ -90,16 +90,16 @@ extend HttpsClient:
                 resp.headers.insert(hname, hvalue)
         return resp
 
-    def _do_request(self, req: str) -> HttpResponse:
+    def _do_request(self, req: str) -> HttpClientResponse:
         mut conn = _tr_tls_connect(self.host, self.port)
         if conn as int == 0:
-            return HttpResponse.init(0, "tls connect failed")
+            return HttpClientResponse.init(0, "tls connect failed")
         _tr_tls_send(conn, req)
         mut raw = _tr_tls_recv(conn, 131072)
         _tr_tls_close(conn)
         return HttpsClient._parse_response(raw)
 
-    pub def get(self, path: str) -> HttpResponse:
+    pub def get(self, path: str) -> HttpClientResponse:
         mut sb = StringBuilder.init(512)
         sb.append("GET ")
         sb.append(path)
@@ -108,7 +108,7 @@ extend HttpsClient:
         sb.append("\r\n")
         return self._do_request(sb.to_owned())
 
-    pub def post(self, path: str, data: str) -> HttpResponse:
+    pub def post(self, path: str, data: str) -> HttpClientResponse:
         mut clen = Str.len(data)
         mut sb   = StringBuilder.init(512)
         sb.append("POST ")
@@ -122,7 +122,7 @@ extend HttpsClient:
         sb.append(data)
         return self._do_request(sb.to_owned())
 
-    pub def post_json(self, path: str, data: str) -> HttpResponse:
+    pub def post_json(self, path: str, data: str) -> HttpClientResponse:
         mut clen = Str.len(data)
         mut sb   = StringBuilder.init(512)
         sb.append("POST ")
@@ -136,7 +136,7 @@ extend HttpsClient:
         sb.append(data)
         return self._do_request(sb.to_owned())
 
-    pub def put(self, path: str, data: str) -> HttpResponse:
+    pub def put(self, path: str, data: str) -> HttpClientResponse:
         mut clen = Str.len(data)
         mut sb   = StringBuilder.init(512)
         sb.append("PUT ")
@@ -150,7 +150,7 @@ extend HttpsClient:
         sb.append(data)
         return self._do_request(sb.to_owned())
 
-    pub def patch(self, path: str, data: str) -> HttpResponse:
+    pub def patch(self, path: str, data: str) -> HttpClientResponse:
         mut clen = Str.len(data)
         mut sb   = StringBuilder.init(512)
         sb.append("PATCH ")
@@ -164,7 +164,7 @@ extend HttpsClient:
         sb.append(data)
         return self._do_request(sb.to_owned())
 
-    pub def delete(self, path: str) -> HttpResponse:
+    pub def delete(self, path: str) -> HttpClientResponse:
         mut sb = StringBuilder.init(256)
         sb.append("DELETE ")
         sb.append(path)
@@ -173,7 +173,7 @@ extend HttpsClient:
         sb.append("\r\n")
         return self._do_request(sb.to_owned())
 
-    pub def head(self, path: str) -> HttpResponse:
+    pub def head(self, path: str) -> HttpClientResponse:
         mut sb = StringBuilder.init(256)
         sb.append("HEAD ")
         sb.append(path)
