@@ -292,6 +292,10 @@ pub class CGenerator:
         if (n == "ref" or n == "mut_ref") and ty.args.len > 0:
             return self.type_to_c(ty.args.get(0).read())
 
+        # Function-pointer type (def(...)->R): stored as a void* function pointer.
+        # Zero-cost: the call site casts back to the exact signature before calling.
+        if n == "def": return "void*"
+
         # Check active type substitution first (used during monomorphization)
         if self.type_subst.contains(n): return self.type_subst.get(n)
 
@@ -1021,6 +1025,9 @@ pub class CGenerator:
             case HirExpr.EIdent(n, _, _):
                 if _is_c_keyword(n) and self.decl_vars.contains(n): return "_tr_v_" + n
                 if n == "argv" and self.cur_func == "main": return "_tr_main_argv"
+                # A top-level function used as a value (not a call target) is a
+                # zero-cost function pointer: emit its address as void*.
+                if self.functions.contains(n) and not self.decl_vars.contains(n): return "(void*)" + n
                 return n
             case HirExpr.EBinOp(op, l, r, _): return self.gen_binop(op, l, r)
             case HirExpr.EUnaryOp(op, expr, _): return self.gen_unary(op, expr)
@@ -1333,6 +1340,13 @@ pub class CGenerator:
 
         # Mangle C reserved keywords used as call targets
         if _is_c_keyword(base_callee): base_callee = "_tr_fn_" + base_callee
+
+        # Direct call to a known top-level function: use the plain name, not the
+        # "(void*)name" value form that gen_expr emits for function references.
+        match callee.read():
+            case HirExpr.EIdent(_dc_n, _, _):
+                if self.functions.contains(_dc_n): callee_s = base_callee
+            case _: pass
 
         # print builtin
         if base_callee == "print":
@@ -1797,7 +1811,15 @@ pub class CGenerator:
 
         # Lambda / void* function pointer: cast to typed function pointer before calling
         mut callee_ty_n: str = hir_expr_type(callee).name
-        if callee_ty_n == "lambda" or callee_ty_n == "void*":
+        # Indirect call through a function-pointer VALUE (a variable/element of
+        # type def(...)->R, or a lambda). A direct call to a named top-level
+        # function is excluded - it emits a plain call below.
+        mut _callee_direct_fn = false
+        match callee.read():
+            case HirExpr.EIdent(_lc_n, _, _):
+                if self.functions.contains(_lc_n): _callee_direct_fn = true
+            case _: pass
+        if (callee_ty_n == "lambda" or callee_ty_n == "void*" or callee_ty_n == "def") and not _callee_direct_fn:
             mut ret_cty = self.type_to_c(call_ty)
             if ret_cty == "void" or ret_cty == "void*": ret_cty = "long long"
             mut arg_types = ""

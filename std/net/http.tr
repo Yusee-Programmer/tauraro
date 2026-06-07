@@ -17,14 +17,14 @@ extend HttpHeader:
         h.value = value
         return h
 
-pub class HttpResponse:
+pub class HttpClientResponse:
     pub status:  int
     pub body:    str
     pub headers: Map[str]
 
-extend HttpResponse:
-    pub def init(status: int, body: str) -> HttpResponse:
-        mut r = HttpResponse()
+extend HttpClientResponse:
+    pub def init(status: int, body: str) -> HttpClientResponse:
+        mut r = HttpClientResponse()
         r.status  = status
         r.body    = body
         r.headers = Map[str].init(16)
@@ -109,14 +109,14 @@ extend HttpClient:
         if d1 < 0 or d1 > 9 or d2 < 0 or d2 > 9 or d3 < 0 or d3 > 9: return 0
         return d1 * 100 + d2 * 10 + d3
 
-    # Parse a raw HTTP response into an HttpResponse (status + headers + body).
-    def _parse_response(self, raw: str) -> HttpResponse:
+    # Parse a raw HTTP response into an HttpClientResponse (status + headers + body).
+    def _parse_response(self, raw: str) -> HttpClientResponse:
         mut code = self._parse_status(raw)
         if code == 0: code = 200
         mut sep  = Str.index_of(raw, "\r\n\r\n")
         mut body = raw
         if sep >= 0: body = Str.slice(raw, sep + 4, Str.len(raw))
-        mut resp = HttpResponse.init(code, body)
+        mut resp = HttpClientResponse.init(code, body)
         if sep < 0: return resp
         mut hdr_sec   = Str.slice(raw, 0, sep)
         mut first_nl  = Str.index_of(hdr_sec, "\r\n")
@@ -140,10 +140,10 @@ extend HttpClient:
         return resp
 
     # Send a GET request and return the response.
-    pub def get(self, path: str) -> HttpResponse:
+    pub def get(self, path: str) -> HttpClientResponse:
         mut stream = TcpStream.connect(self.host, self.port)
         if not stream.is_connected():
-            return HttpResponse.init(0, "connection failed")
+            return HttpClientResponse.init(0, "connection failed")
         mut sb = StringBuilder.init(512)
         sb.append("GET ")
         sb.append(path)
@@ -156,10 +156,10 @@ extend HttpClient:
         return self._parse_response(raw)
 
     # Send a POST request with an application/x-www-form-urlencoded body.
-    pub def post(self, path: str, data: str) -> HttpResponse:
+    pub def post(self, path: str, data: str) -> HttpClientResponse:
         mut stream = TcpStream.connect(self.host, self.port)
         if not stream.is_connected():
-            return HttpResponse.init(0, "connection failed")
+            return HttpClientResponse.init(0, "connection failed")
         mut clen = Str.len(data)
         mut sb   = StringBuilder.init(512)
         sb.append("POST ")
@@ -177,10 +177,10 @@ extend HttpClient:
         return self._parse_response(raw)
 
     # Send a POST request with an application/json body.
-    pub def post_json(self, path: str, data: str) -> HttpResponse:
+    pub def post_json(self, path: str, data: str) -> HttpClientResponse:
         mut stream = TcpStream.connect(self.host, self.port)
         if not stream.is_connected():
-            return HttpResponse.init(0, "connection failed")
+            return HttpClientResponse.init(0, "connection failed")
         mut clen = Str.len(data)
         mut sb   = StringBuilder.init(512)
         sb.append("POST ")
@@ -198,10 +198,10 @@ extend HttpClient:
         return self._parse_response(raw)
 
     # Send a PUT request.
-    pub def put(self, path: str, data: str) -> HttpResponse:
+    pub def put(self, path: str, data: str) -> HttpClientResponse:
         mut stream = TcpStream.connect(self.host, self.port)
         if not stream.is_connected():
-            return HttpResponse.init(0, "connection failed")
+            return HttpClientResponse.init(0, "connection failed")
         mut clen = Str.len(data)
         mut sb   = StringBuilder.init(512)
         sb.append("PUT ")
@@ -219,10 +219,10 @@ extend HttpClient:
         return self._parse_response(raw)
 
     # Send a PATCH request.
-    pub def patch(self, path: str, data: str) -> HttpResponse:
+    pub def patch(self, path: str, data: str) -> HttpClientResponse:
         mut stream = TcpStream.connect(self.host, self.port)
         if not stream.is_connected():
-            return HttpResponse.init(0, "connection failed")
+            return HttpClientResponse.init(0, "connection failed")
         mut clen = Str.len(data)
         mut sb   = StringBuilder.init(512)
         sb.append("PATCH ")
@@ -240,10 +240,10 @@ extend HttpClient:
         return self._parse_response(raw)
 
     # Send a DELETE request.
-    pub def delete(self, path: str) -> HttpResponse:
+    pub def delete(self, path: str) -> HttpClientResponse:
         mut stream = TcpStream.connect(self.host, self.port)
         if not stream.is_connected():
-            return HttpResponse.init(0, "connection failed")
+            return HttpClientResponse.init(0, "connection failed")
         mut sb = StringBuilder.init(256)
         sb.append("DELETE ")
         sb.append(path)
@@ -256,10 +256,10 @@ extend HttpClient:
         return self._parse_response(raw)
 
     # Send a HEAD request (response body will be empty per HTTP spec).
-    pub def head(self, path: str) -> HttpResponse:
+    pub def head(self, path: str) -> HttpClientResponse:
         mut stream = TcpStream.connect(self.host, self.port)
         if not stream.is_connected():
-            return HttpResponse.init(0, "connection failed")
+            return HttpClientResponse.init(0, "connection failed")
         mut sb = StringBuilder.init(256)
         sb.append("HEAD ")
         sb.append(path)

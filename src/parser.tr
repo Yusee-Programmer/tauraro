@@ -186,6 +186,25 @@ extend Parser:
                     if self.peek() == Token.Comma: self.pos = self.pos + 1
                 if self.peek() == Token.RParen: self.pos = self.pos + 1
                 return tup_t
+            case Token.KwDef:
+                # Function-pointer type: def(T1, T2) -> R  (zero-cost callable
+                # value: a pointer to a top-level function). Encoded internally
+                # as AstType{name="def", args=[T1, ..., R]} (last arg = return).
+                self.pos = self.pos + 1
+                mut dfn_t = AstType.init("def")
+                if self.peek() == Token.LParen:
+                    self.pos = self.pos + 1
+                    while self.peek() != Token.RParen and self.peek() != Token.Eof:
+                        mut dpt = self.parse_type()
+                        dfn_t.args.push(box_asttype(dpt))
+                        if self.peek() == Token.Comma: self.pos = self.pos + 1
+                    if self.peek() == Token.RParen: self.pos = self.pos + 1
+                mut dret = AstType.init("void")
+                if self.peek() == Token.Arrow:
+                    self.pos = self.pos + 1
+                    dret = self.parse_type()
+                dfn_t.args.push(box_asttype(dret))
+                return dfn_t
             case Token.KwMut:
                 # "mut ref T" - mutable reference/borrow type (optional, advanced)
                 self.pos = self.pos + 1
@@ -209,6 +228,7 @@ extend Parser:
             mut ref_t = AstType.init("ref")
             ref_t.args.push(box_asttype(ref_inner))
             return ref_t
+
 
         match self.peek():
             case Token.LBracket:

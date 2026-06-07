@@ -725,6 +725,69 @@ Fix: Add `pub` to `def helper()` in utils.tr.
 
 ---
 
+## First-Class Functions (Callables)
+
+A top-level function can be used as a **value** — passed to other functions, stored
+in a variable, reassigned, and stored in a class field. A function value is a
+**zero-cost function pointer** (a pointer to the top-level function; no heap, no
+captured environment).
+
+### The `def(...) -> R` type
+
+A callable's type is written with `def`, mirroring how functions are declared:
+
+```python
+def add1(x: int) -> int:
+    return x + 1
+
+def main():
+    mut h: def(int) -> int = add1   # a variable holding a function
+    print(h(41))                    # 42 — call through the value
+    h = mul2                        # reassign to another function
+```
+
+The type is `def(ParamTypes...) -> ReturnType`. Use `def() -> R` for no parameters,
+and omit `-> R` for a function returning nothing.
+
+### Passing functions as arguments
+
+```python
+def apply(f: def(int) -> int, v: int) -> int:
+    return f(v)
+
+apply(add1, 10)   # 11 — pass the function by name, call it inside
+```
+
+This is the idiomatic way to take a callback or handler.
+
+### Storing callables in a struct (e.g. a router)
+
+Put the callable in a **field**, then keep a normal collection of those structs:
+
+```python
+pub class Route:
+    pub pattern: str
+    pub handler: def(HttpConn) -> void
+
+extend Route:
+    pub def init(p: str, h: def(HttpConn) -> void) -> Route:
+        mut r = Route(); r.pattern = p; r.handler = h; return r
+
+def main():
+    mut routes = Vec[Route].init(4)
+    routes.push(Route.init("/", home))
+    routes.push(Route.init("/about", about))
+    mut rt = routes.get(0)
+    rt.handler(conn)        # call the stored handler directly
+```
+
+> **Note:** a callable *element type* in a generic literal —
+> `Vec[def(int) -> int].init()` — is not yet supported (in expression position
+> the brackets parse as an index). Wrap the callable in a small struct field (as
+> above) and use `Vec[YourStruct]`.
+
+---
+
 ## Function Rules Quick Reference
 
 | Rule | Description | Error |

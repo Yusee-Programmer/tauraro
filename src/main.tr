@@ -17,6 +17,7 @@ extern "C":
     def _tr_is_windows() -> bool
     def _tr_file_delete(path: str) -> int
     def _tr_getenv(name: str) -> str
+    def _tr_exe_dir() -> str   # absolute dir of the running compiler exe (OS-level; reliable even when invoked by bare name via PATH)
 
 # --- Helpers ------------------------------------------------------------------
 
@@ -195,7 +196,9 @@ pub def read_runtime_header(bin_path: str, input_path: str) -> str:
     # 1. Canonical repo location relative to CWD.
     if file_exists("tauraro/runtime/tauraro_rt.h"): return read_file("tauraro/runtime/tauraro_rt.h")
     # 2. Next to the compiler binary (flat install: binary beside tauraro_rt.h).
-    mut bin_dir = dir_of_path(bin_path)
+    #    Use the OS-reported exe dir, not argv[0]: when the compiler is invoked
+    #    by bare name via PATH (e.g. by taupkg), argv[0] has no directory.
+    mut bin_dir = _tr_exe_dir() + "/"
     mut src1 = bin_dir + "tauraro_rt.h"
     if file_exists(src1): return read_file(src1)
     # 2b. runtime/ subfolder beside the binary (structured install: binary in
@@ -612,7 +615,7 @@ pub def main(args: Vec[str]):
     # Binary-relative search paths: core/ (bootstrap stdlib), std/ (OOP stdlib),
     # packages/ (future third-party packages). All resolved relative to the binary's
     # own directory so the distribution works regardless of CWD.
-    mut bin_dir = strip_trailing_sep_inline(dir_of_path(args.get(0)))
+    mut bin_dir = strip_trailing_sep_inline(_tr_exe_dir())
     # Paths relative to the compiler binary (distribution layout):
     #   <bin>/std/          - standard library
     #   <bin>/packages/     - installed third-party packages (root)
