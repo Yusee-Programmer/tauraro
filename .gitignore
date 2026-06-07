@@ -21,3 +21,4 @@ bootstrap/*.zip
 # **/tauraro_*.h rules above so the seed's headers are tracked too).
 !bootstrap/c/
 !bootstrap/c/**
+
