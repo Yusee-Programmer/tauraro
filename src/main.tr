@@ -637,6 +637,10 @@ pub def main(args: Vec[str]):
             resolver.add_search_path(get_path_env_entry(tauraro_path_env, epi))
             epi = epi + 1
     mut prog = resolver.resolve_main(input_path)
+    # Parser errors are fatal: a malformed parse cannot be safely compiled.
+    if resolver.parse_errors > 0:
+        print("error: " + resolver.parse_errors.to_str() + " parse error(s); aborting compilation.")
+        _tr_exit(1)
 
     if emit_mode == "ast":
         print("[AST] Declarations found: " + str(prog.decls.len))
@@ -762,6 +766,28 @@ pub def main(args: Vec[str]):
                     main_class_set.insert(target, true)
                 case _: pass
         k2 = k2 + 1
+
+    # Java-style nested class/def/enum/interface declarations inside main() are
+    # hoisted into hir.classes/functions/enums/interfaces by sema, but they have
+    # no entry in resolver.all_decls (they were never top-level), so the loop
+    # above never adds them to main_class_set/main_fn_set. Add them explicitly
+    # so generate_main_c emits their bodies.
+    mut nci = 0
+    while nci < sema.nested_classes.len:
+        main_class_set.insert(sema.nested_classes.get(nci).name, true)
+        nci = nci + 1
+    mut nfi = 0
+    while nfi < sema.nested_functions.len:
+        main_fn_set.insert(sema.nested_functions.get(nfi).name, true)
+        nfi = nfi + 1
+    mut nei = 0
+    while nei < sema.nested_enums.len:
+        main_class_set.insert(sema.nested_enums.get(nei).name, true)
+        nei = nei + 1
+    mut nii = 0
+    while nii < sema.nested_interfaces.len:
+        main_class_set.insert(sema.nested_interfaces.get(nii).name, true)
+        nii = nii + 1
 
     mut main_c      = c_gen.generate_main_c(hir, main_class_set, main_fn_set)
     mut main_c_path = build_dir + "main.c"

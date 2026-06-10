@@ -138,6 +138,7 @@ pub class CGenerator:
     pub enums:          Map[str, HirEnum]
     pub interfaces:     Map[str, HirInterface]
     pub functions:      Map[str, HirFunction]
+    pub method_owners:  Map[str, bool]  # "ClassOrEnumName#method" -> true (extend methods, incl. enums)
     pub decl_vars:      Map[str, bool]
     pub type_subst:     Map[str, str]   # T -> "long long" during mono gen
     pub mono_done:      Map[str, bool]  # "Vec_i64" -> true (prevents duplicate gen)
@@ -155,6 +156,7 @@ pub class CGenerator:
     pub in_task_group:   int              # depth counter for task_group nesting
     pub in_gpu_block:    int              # depth counter for gpu: block nesting
     pub value_types:     Map[str, bool]  # classes with is_class=false - no * in C type
+    pub global_vars:     Map[str, bool]  # top-level var names hoisted to C file scope (visible in all functions)
     pub closure_cap_set: Map[str, bool]  # captured var names for the current closure being generated
     pub closure_env_var: str             # env var name inside a closure body (empty = not in closure body)
     pub decorator_defs:   Map[str, HirFunction]  # user-defined decorator registry
@@ -175,6 +177,7 @@ pub class CGenerator:
         g.enums         = Map[str, HirEnum].init(64)
         g.interfaces    = Map[str, HirInterface].init(32)
         g.functions     = Map[str, HirFunction].init(256)
+        g.method_owners = Map[str, bool].init(64)
         g.decl_vars     = Map[str, bool].init(64)
         g.type_subst    = Map[str, str].init(8)
         g.mono_done     = Map[str, bool].init(32)
@@ -192,6 +195,7 @@ pub class CGenerator:
         g.in_task_group  = 0
         g.in_gpu_block   = 0
         g.value_types    = Map[str, bool].init(32)
+        g.global_vars    = Map[str, bool].init(32)
         g.closure_cap_set = Map[str, bool].init(0)
         g.closure_env_var = ""
         g.decorator_defs  = Map[str, HirFunction].init(16)
@@ -378,7 +382,7 @@ pub class CGenerator:
             if ty.args.len > 0:
                 mut inner = ty.args.get(0).read()
                 mut it = self.type_to_c(inner)
-                if it == "void" or it == "void*": return "void*"
+                if it == "void": return "void*"
                 return it + "*"
             return "void*"
 
@@ -1043,6 +1047,11 @@ pub class CGenerator:
                         sizeof_cty = _tr_str_slice(sizeof_cty, 0, sizeof_len - 1)
                 return "((long long)sizeof(" + sizeof_cty + "))"
             case HirExpr.ECast(expr, target_ty):
+                # List/Vec -> Pointer[T]: decay to the underlying data array (C interop)
+                if target_ty.name == "Pointer":
+                    mut cast_src_ty: str = hir_expr_type(expr).name
+                    if cast_src_ty == "List" or cast_src_ty == "Vec":
+                        return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "->data))"
                 return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
             case HirExpr.EFString(parts, _): return self.gen_fstring(parts)
             case HirExpr.ETryExpr(expr, ok_ty):
@@ -1109,6 +1118,8 @@ pub class CGenerator:
                 if cls.methods.get(i).name == method: return true
                 i = i + 1
             return false
+        # Enum (and any other non-class) extend methods, e.g. `extend Color: __str__`
+        if self.method_owners.contains(cls_name + "#" + method): return true
         mut cp = cls_name as Pointer[char]
         mut ui = 0
         while cp.offset(ui).read() as int != 0:
@@ -1155,6 +1166,31 @@ pub class CGenerator:
             return cls_name + "_" + safe_m + "(" + obj_s + ")"
         return cls_name + "_" + safe_m + "(" + obj_s + ", " + extra_args + ")"
 
+    # Resolve the C class-name prefix to use for dunder dispatch (print, ==, etc.),
+    # accounting for monomorphized generic classes (Box[int] -> Box_i64).
+    # Resolve a generic type-parameter name (e.g. "T") to a concrete primitive
+    # kind name ("int"/"float"/"bool"/"char"/"str") using the active type_subst
+    # map (generic param -> concrete C type), inside a monomorphized method body.
+    pub def resolve_generic_prim(self, n: str) -> str:
+        if self.type_subst.contains(n):
+            mut c = self.type_subst.get(n)
+            if c == "long long" or c == "int" or c == "long" or c == "short" or c == "size_t" or c == "uint64_t" or c == "int64_t" or c == "int32_t" or c == "uint32_t" or c == "int16_t" or c == "uint16_t" or c == "int8_t" or c == "uint8_t": return "int"
+            if c == "double" or c == "float": return "float"
+            if c == "_Bool" or c == "bool": return "bool"
+            if c == "char": return "char"
+            if c == "char*": return "str"
+        return n
+
+    pub def mono_cls_name_for(self, ty: AstType) -> str:
+        mut cn: str = ty.name
+        if self.classes.contains(cn) and cn != "Vec" and cn != "Map" and cn != "Dict" and cn != "List":
+            mut ucls = self.classes.get(cn)
+            if ucls.generics.len > 0 and ty.args.len > 0:
+                mut sfx = self.type_args_suffix(ty.args)
+                self.ensure_mono(ucls, ty.args)
+                return cn + "_" + sfx
+        return cn
+
     pub def gen_cond_expr(self, cond: Pointer[HirExpr]) -> str:
         mut cond_s = self.gen_expr(cond)
         mut ty_n: str = hir_expr_type(cond).name
@@ -1169,6 +1205,11 @@ pub class CGenerator:
         mut rt_n: str = hir_expr_type(r).name
         if op == "+" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
             return "_tr_str_concat(" + ls + ", " + rs + ")"
+        # String repetition: "ab" * 3  (or  3 * "ab"), Python-style.
+        if op == "*" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
+            if _is_str_type(lt_n):
+                return "_tr_str_repeat(" + ls + ", (long long)(" + rs + "))"
+            return "_tr_str_repeat(" + rs + ", (long long)(" + ls + "))"
         if op == "and":
             mut lsa = ls
             mut rsa = rs
@@ -1206,8 +1247,10 @@ pub class CGenerator:
         elif op == "<=": dunder = "__le__"
         elif op == ">": dunder = "__gt__"
         elif op == ">=": dunder = "__ge__"
-        if dunder != "" and self.has_method(lt_n, dunder):
-            return self.cls_method_c_call(lt_n, dunder, ls, rs)
+        if dunder != "":
+            mut mono_l = self.mono_cls_name_for(hir_expr_type(l))
+            if self.has_method(mono_l, dunder):
+                return self.cls_method_c_call(mono_l, dunder, ls, rs)
         if op == "**": return "((long long)pow((double)(" + ls + "), (double)(" + rs + ")))"
         if op == "//": return "((long long)(" + ls + ") / (long long)(" + rs + "))"
         if (_is_str_type(lt_n) or _is_str_type(rt_n)) and (op == "==" or op == "!="):
@@ -1461,7 +1504,7 @@ pub class CGenerator:
         if base_callee == "str":
             if args.len > 0:
                 mut str_arg = args.get(0)
-                mut str_t_n: str = hir_expr_type(str_arg).name
+                mut str_t_n: str = self.resolve_generic_prim(hir_expr_type(str_arg).name)
                 if _is_int_type(str_t_n): return "_tr_int_to_str((long long)(" + self.gen_expr(str_arg) + "))"
                 if _is_float_type(str_t_n): return "_tr_float_to_str((double)(" + self.gen_expr(str_arg) + "))"
                 if str_t_n == "bool": return "((" + self.gen_expr(str_arg) + ") ? \"true\" : \"false\")"
@@ -1597,8 +1640,10 @@ pub class CGenerator:
                         if ident_ty.args.len > 0:
                             alloc_ty = self.type_to_c(ident_ty.args.get(0).read())
                     case _: pass
-            if alloc_ty == "void" or alloc_ty == "void*":
+            if alloc_ty == "void":
                 return "malloc((size_t)(" + count_s + "))"
+            if alloc_ty == "void*":
+                return "((void**)_tr_c_calloc((size_t)(" + count_s + "), sizeof(void*)))"
             return "((" + alloc_ty + "*)_tr_c_calloc((size_t)(" + count_s + "), sizeof(" + alloc_ty + ")))"
 
         # Intercept dealloc
@@ -1847,16 +1892,18 @@ pub class CGenerator:
     pub def gen_print_call(self, args: Vec[Pointer[HirExpr]]) -> str:
         if args.len == 0: return "printf(\"\\n\")"
         mut arg0 = args.get(0)
-        mut ty0_n: str = hir_expr_type(arg0).name
+        mut ty0_n: str = self.resolve_generic_prim(hir_expr_type(arg0).name)
         mut s0 = self.gen_expr(arg0)
         if _is_int_type(ty0_n): return "printf(\"%lld\\n\", (long long)(" + s0 + "))"
         if _is_float_type(ty0_n): return "printf(\"%g\\n\", (double)(" + s0 + "))"
         if ty0_n == "bool": return "printf(\"%s\\n\", (" + s0 + ") ? \"true\" : \"false\")"
         if ty0_n == "char": return "printf(\"%c\\n\", " + s0 + ")"
-        if self.has_method(ty0_n, "__str__"):
-            return "printf(\"%s\\n\", " + self.cls_method_c_call(ty0_n, "__str__", s0, "") + ")"
-        if self.has_method(ty0_n, "__repr__"):
-            return "printf(\"%s\\n\", " + self.cls_method_c_call(ty0_n, "__repr__", s0, "") + ")"
+        if ty0_n == "Pointer": return "printf(\"0x%llx\\n\", (unsigned long long)(uintptr_t)(" + s0 + "))"
+        mut mono0 = self.mono_cls_name_for(hir_expr_type(arg0))
+        if self.has_method(mono0, "__str__"):
+            return "printf(\"%s\\n\", " + self.cls_method_c_call(mono0, "__str__", s0, "") + ")"
+        if self.has_method(mono0, "__repr__"):
+            return "printf(\"%s\\n\", " + self.cls_method_c_call(mono0, "__repr__", s0, "") + ")"
         if ty0_n == "void" or ty0_n == "" or ty0_n == "lambda":
             return "printf(\"%s\\n\", _TR_AUTO_STR(" + s0 + "))"
         return "printf(\"%s\\n\", (char*)(" + s0 + "))"
@@ -3796,7 +3843,10 @@ pub class CGenerator:
             case HirStmt.SAssign(t, v):
                 match t.read():
                     case HirExpr.EIdent(n, _, _):
-                        if not self.decl_vars.contains(n):
+                        # A bare name's first assignment declares a local, EXCEPT
+                        # when it names a file-scope global (then it's a plain
+                        # assignment to that global, handled by the fall-through).
+                        if not self.decl_vars.contains(n) and not self.global_vars.contains(n):
                             self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + self.gen_expr(v) + ";\n")
                             self.decl_vars.insert(n, true)
                             return
@@ -4099,15 +4149,16 @@ pub class CGenerator:
         if iter_ty.name == "List" or iter_ty.name == "Vec":
             if iter_ty.args.len > 0:
                 elem_c = self.type_to_c(iter_ty.args.get(0).read())
-        self.w(pad + "{ long long " + tmp + "_i = 0;\n")
-        self.w(pad + "  __auto_type " + tmp + "_col = " + iter_s + ";\n")
-        self.w(pad + "  while (" + tmp + "_i < " + tmp + "_col->len) {\n")
+        # Use a C for-loop so the index advance lives in the loop clause: a
+        # `continue` in the body then runs the increment (a while-loop with the
+        # increment at the body's end would skip it on continue -> infinite loop).
+        self.w(pad + "{ __auto_type " + tmp + "_col = " + iter_s + ";\n")
+        self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < " + tmp + "_col->len; " + tmp + "_i++) {\n")
         if elem_c == "__auto_type":
             self.w(pad + "    __auto_type " + var + " = " + tmp + "_col->data[" + tmp + "_i];\n")
         else:
             self.w(pad + "    " + elem_c + " " + var + " = (" + elem_c + ")" + tmp + "_col->data[" + tmp + "_i];\n")
         self.gen_block(body, indent + 2)
-        self.w(pad + "    " + tmp + "_i++;\n")
         self.w(pad + "  }\n")
         self.w(pad + "}\n")
 
@@ -4627,6 +4678,8 @@ pub class CGenerator:
             # is otherwise free.
             if pf.class_name == "" or not self.functions.contains(pf.name):
                 self.functions.insert(pf.name, pf)
+            if pf.class_name != "":
+                self.method_owners.insert(pf.class_name + "#" + pf.name, true)
             i = i + 1
         i = 0
         while i < prog.decorator_defs.len:
@@ -4843,6 +4896,9 @@ pub class CGenerator:
         self.w("\n")
 
         # -- Phase 2.5: Extern C function declarations -------------------------
+        # `extern "CPP"`/`extern "C++"` blocks are accepted as synonyms for
+        # `extern "C"`: to call into a C++ library, expose (or write a thin
+        # shim with) `extern "C"` functions and link the .o/.a via --link.
         i = 0
         while i < prog.extern_funcs.len:
             mut ef = prog.extern_funcs.get(i)
@@ -4898,6 +4954,23 @@ pub class CGenerator:
         # -- Phase 3.5: Value-type list definitions (after all enums/structs defined) --
         mut lt_out = self.list_types_buf.to_string().as_str()
         if lt_out != "": self.w(lt_out)
+
+        # -- Phase 3.6: Top-level global variables ------------------------------
+        # Module-level `mut`/`const` vars are declared at C file scope so every
+        # function can see them (not just main). The initializer runs in main
+        # (Phase 7), since it may be a non-constant expression.
+        mut gvi = 0
+        while gvi < prog.top_level_stmts.len:
+            match prog.top_level_stmts.get(gvi).read():
+                case HirStmt.SLet(gvn, _, _, _, _, gvty, gvval):
+                    mut gv_cty = self.type_to_c(gvty)
+                    if gv_cty == "void" or gv_cty == "__auto_type":
+                        if gvval as usize != 0 as usize: gv_cty = self.type_to_c(hir_expr_type(gvval))
+                    if gv_cty == "void" or gv_cty == "__auto_type": gv_cty = "long long"
+                    self.w(gv_cty + " " + gvn + ";\n")
+                    self.global_vars.insert(gvn, true)
+                case _: pass
+            gvi = gvi + 1
 
         # -- Phase 4: Function prototypes --------------------------------------
         i = 0
@@ -5034,10 +5107,19 @@ pub class CGenerator:
             self.w("    List_str* " + main_args_name + " = List_str_new();\n")
             self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_str_append(" + main_args_name + ", argv[_ai]); }\n")
 
-        # Call top-level statements
+        # Call top-level statements. A hoisted global var (declared at file scope
+        # in Phase 3.6) is initialized here with an assignment, not re-declared.
         i = 0
         while i < prog.top_level_stmts.len:
-            self.gen_stmt(prog.top_level_stmts.get(i), 1)
+            mut _tl_global = false
+            match prog.top_level_stmts.get(i).read():
+                case HirStmt.SLet(tln, _, _, _, _, _, tlv):
+                    if self.global_vars.contains(tln) and tlv as usize != 0 as usize:
+                        self.w("    " + tln + " = " + self.gen_expr(tlv) + ";\n")
+                        _tl_global = true
+                case _: pass
+            if not _tl_global:
+                self.gen_stmt(prog.top_level_stmts.get(i), 1)
             i = i + 1
 
         # Call user's main function if it exists
@@ -5149,7 +5231,7 @@ pub class CGenerator:
         mut mono_early = self.mono_buf.to_string().as_str()
         if mono_early != "": out.append(mono_early + "\n")
 
-        # -- Extern C declarations ---------------------------------------------
+        # -- Extern C declarations -----------------------------------------------
         if not _is_invalid_ptr(prog.extern_funcs as usize):
             i = 0
             while i < prog.extern_funcs.len:
@@ -5612,6 +5694,33 @@ pub class CGenerator:
                                     mi = mi + 1
                 i = i + 1
 
+        # Top-level global variables: declare at C file scope so every free
+        # function in this module can reference them (initialized in main()).
+        mut gvi2 = 0
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.top_level_stmts as usize):
+            while gvi2 < prog.top_level_stmts.len:
+                match prog.top_level_stmts.get(gvi2).read():
+                    case HirStmt.SLet(gvn2, _, _, _, _, gvty2, gvval2):
+                        mut gv_cty2 = self.type_to_c(gvty2)
+                        if gv_cty2 == "void" or gv_cty2 == "__auto_type":
+                            if gvval2 as usize != 0 as usize: gv_cty2 = self.type_to_c(hir_expr_type(gvval2))
+                        if gv_cty2 == "void" or gv_cty2 == "__auto_type": gv_cty2 = "long long"
+                        self.w(gv_cty2 + " " + gvn2 + ";\n")
+                        self.global_vars.insert(gvn2, true)
+                    case HirStmt.SAssign(gv_tgt, gv_val):
+                        # Bare top-level `NAME = expr` (no `mut`/`let`) lowers to
+                        # SAssign; hoist it to a file-scope global too so other
+                        # functions in this module can reference NAME.
+                        match gv_tgt.read():
+                            case HirExpr.EIdent(gvn3, _, _):
+                                mut gv_cty3 = self.type_to_c(hir_expr_type(gv_val))
+                                if gv_cty3 == "void" or gv_cty3 == "__auto_type": gv_cty3 = "long long"
+                                self.w(gv_cty3 + " " + gvn3 + ";\n")
+                                self.global_vars.insert(gvn3, true)
+                            case _: pass
+                    case _: pass
+                gvi2 = gvi2 + 1
+
         # Main-module free-standing function implementations
         i = 0
         if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
@@ -5675,7 +5784,15 @@ pub class CGenerator:
         i = 0
         if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.top_level_stmts as usize):
             while i < prog.top_level_stmts.len:
-                self.gen_stmt(prog.top_level_stmts.get(i), 1)
+                mut _tlg = false
+                match prog.top_level_stmts.get(i).read():
+                    case HirStmt.SLet(tln2, _, _, _, _, _, tlv2):
+                        if self.global_vars.contains(tln2) and tlv2 as usize != 0 as usize:
+                            self.w("    " + tln2 + " = " + self.gen_expr(tlv2) + ";\n")
+                            _tlg = true
+                    case _: pass
+                if not _tlg:
+                    self.gen_stmt(prog.top_level_stmts.get(i), 1)
                 i = i + 1
 
         i = 0

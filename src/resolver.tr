@@ -54,6 +54,7 @@ pub class ModuleResolver:
     pub mod_file_paths:   Vec[str]   # "compiler/src/resolver.tr"
     pub all_decl_modules: Vec[str]   # dotted path for each all_decls entry ("" = root)
     pub current_mod:      str        # dotted path of module currently being loaded
+    pub parse_errors:     int        # total parse errors across all modules (0 = clean)
 
 extend ModuleResolver:
     pub def init() -> ModuleResolver:
@@ -65,6 +66,7 @@ extend ModuleResolver:
         r.mod_file_paths   = Vec[str].init(32)
         r.all_decl_modules = Vec[str].init(1024)
         r.current_mod      = ""
+        r.parse_errors     = 0
         r.search_paths.push(".")
         r.search_paths.push("tauraro")
         r.search_paths.push("..")
@@ -159,7 +161,9 @@ extend ModuleResolver:
         mut lexer   = Lexer.init(source)
         mut tokens  = lexer.tokenize()
         mut parser  = Parser.init(tokens, lexer.token_lines)
+        parser.current_file = path
         mut prog    = parser.parse_program()
+        self.parse_errors = self.parse_errors + parser.error_count
 
         # Scan declarations: load imported modules first, then collect decls.
         mut i = 0

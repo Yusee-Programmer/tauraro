@@ -2,6 +2,8 @@
 *.exe
 *.pdb
 *.txt
+*.py
+*.c
 
 # Generated build directories (tauraroc output, cargo, etc.)
 build/

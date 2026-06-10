@@ -34,6 +34,8 @@ pub class Parser:
     pub tokens: Vec[Token]
     pub pos: int
     pub lines: Vec[int]
+    pub error_count: int   # number of parse errors emitted (0 = clean parse)
+    pub current_file: str  # source path, for diagnostic messages ("" if unknown)
 
 extend Parser:
     pub def init(tokens: Vec[Token], lines: Vec[int]) -> Parser:
@@ -41,6 +43,8 @@ extend Parser:
         p.tokens = tokens
         p.lines = lines
         p.pos = 0
+        p.error_count = 0
+        p.current_file = ""
         return p
 
     pub def peek(self) -> Token:
@@ -288,6 +292,11 @@ extend Parser:
                             p.is_ref = true
                         if ty_ptr.read().name == "mut_ref":
                             p.is_mut_ref = true
+                    # Variadic param: `args...` or `args: T...` collects trailing
+                    # call args into a List[T] (T defaults to int if unannotated).
+                    if self.peek() == Token.DotDotDot:
+                        self.pos = self.pos + 1
+                        p.is_variadic = true
                     pl.push(p)
                     match self.peek():
                         case Token.Comma:
@@ -453,6 +462,23 @@ extend Parser:
             case Token.KwImport:
                 self.parse_import()
                 return box_stmt(Stmt.SPass)
+            # Nested declarations - class/def/enum/interface/extend inside a function
+            # body (Java-style local types). Sema restricts these to main() and
+            # hoists them to file scope; codegen emits them as ordinary top-level
+            # definitions.
+            case Token.KwClass:
+                return box_stmt(Stmt.SLocalDecl(self.parse_decl()))
+            case Token.KwEnum:
+                return box_stmt(Stmt.SLocalDecl(self.parse_decl()))
+            case Token.KwInterface:
+                return box_stmt(Stmt.SLocalDecl(self.parse_decl()))
+            case Token.KwExtend:
+                return box_stmt(Stmt.SLocalDecl(self.parse_decl()))
+            case Token.KwDef:
+                mut _ldline = self.cur_line()
+                mut _ldf = self.parse_function_def(False)
+                _ldf.line = _ldline
+                return box_stmt(Stmt.SLocalDecl(box_decl(Decl.DFunction(_ldf))))
             case _:
                 pass
         match self.peek():
@@ -1625,25 +1651,49 @@ extend Parser:
             case _:
                 pass
         if not self.at_end():
-            mut tok_name = "unknown"
+            mut tok_desc = "token"
+            mut hint = "check for a typo, a missing ':' or unbalanced parentheses/brackets near this point."
             match self.peek():
-                case Token.Newline: tok_name = "Newline"
-                case Token.Indent: tok_name = "Indent"
-                case Token.Dedent: tok_name = "Dedent"
-                case Token.Ident(n): tok_name = "Ident:" + n
-                case Token.KwMut: tok_name = "KwMut"
-                case Token.KwConst: tok_name = "KwConst"
-                case Token.KwPub: tok_name = "KwPub"
-                case Token.KwReturn: tok_name = "KwReturn"
-                case Token.KwIf: tok_name = "KwIf"
-                case Token.KwWhile: tok_name = "KwWhile"
-                case Token.Comma: tok_name = "Comma"
-                case Token.Colon: tok_name = "Colon"
-                case Token.RParen: tok_name = "RParen"
-                case Token.RBracket: tok_name = "RBracket"
-                case Token.RBrace: tok_name = "RBrace"
-                case _: tok_name = "other"
-            print("Parser error: unexpected token=" + tok_name + " at pos=" + self.pos.to_str())
+                case Token.Newline:
+                    tok_desc = "end of line"
+                    hint = "an expression was expected before the end of this line - check for a missing value or trailing operator."
+                case Token.Indent:
+                    tok_desc = "indentation"
+                    hint = "check that this line's indentation matches the surrounding block."
+                case Token.Dedent:
+                    tok_desc = "dedent"
+                    hint = "check that this block is properly indented and closed."
+                case Token.Ident(n):
+                    tok_desc = "identifier '" + n + "'"
+                    hint = "an operator, ':' or end of statement was expected before '" + n + "'."
+                case Token.KwMut: tok_desc = "keyword 'mut'"
+                case Token.KwConst: tok_desc = "keyword 'const'"
+                case Token.KwPub: tok_desc = "keyword 'pub'"
+                case Token.KwReturn: tok_desc = "keyword 'return'"
+                case Token.KwIf: tok_desc = "keyword 'if'"
+                case Token.KwWhile: tok_desc = "keyword 'while'"
+                case Token.Comma:
+                    tok_desc = "','"
+                    hint = "remove the extra ',' or add the missing item before it."
+                case Token.Colon:
+                    tok_desc = "':'"
+                    hint = "remove the extra ':' or check the statement before it is complete."
+                case Token.RParen:
+                    tok_desc = "')'"
+                    hint = "check for an extra ')' or a missing matching '('."
+                case Token.RBracket:
+                    tok_desc = "']'"
+                    hint = "check for an extra ']' or a missing matching '['."
+                case Token.RBrace:
+                    tok_desc = "'}'"
+                    hint = "check for an extra '}' or a missing matching '{'."
+                case _: pass
+            mut loc = ""
+            if self.current_file.len() > 0:
+                loc = self.current_file + ":"
+            print(loc + str(self.cur_line()) + ": error: unexpected " + tok_desc + " in expression")
+            print("       FIX: " + hint)
+            self.error_count = self.error_count + 1
             self.pos = self.pos + 1
         return box_expr(Expr.ELitNone)
 
@@ -2235,6 +2285,14 @@ extend Parser:
                 case Token.KwDef:
                     mut m = self.parse_function_def(False)
                     m.is_public = is_p
+                    # Trailing `args...` in an extern block matches C's `...`
+                    # variadic signature (e.g. `extern "C": def printf(fmt: str, args...)`
+                    # -> `int printf(char* fmt, ...)`), not a List[T] collection.
+                    if m.params.len > 0:
+                        mut _ext_last = m.params.get(m.params.len - 1)
+                        if _ext_last.is_variadic:
+                            m.params.pop()
+                            m.is_variadic = true
                     fl.push(m)
                 case _:
                     self.pos = self.pos + 1

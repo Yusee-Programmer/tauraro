@@ -212,4 +212,36 @@ def main():
     mut x, y, z = (10, 20, 30)
     print(f"x={x} y={y} z={z}")    # x=10 y=20 z=30
 
+    # ── Local (nested) declarations — main() only, Java-style ────────────────
+    print("=== Local declarations ===")
+    class Vec2:
+        pub x: int
+        pub y: int
+
+    extend Vec2:
+        pub def init(x: int, y: int) -> Vec2:
+            mut v = Vec2()
+            v.x = x
+            v.y = y
+            return v
+
+        pub def length_sq(self) -> int:
+            return self.x * self.x + self.y * self.y
+
+    enum Color:
+        Red
+        Green
+        Blue
+
+    def describe(c: Color) -> str:
+        match c:
+            case Color.Red: return "red"
+            case Color.Green: return "green"
+            case Color.Blue: return "blue"
+        return ""
+
+    mut v2 = Vec2.init(3, 4)
+    print(f"v2.length_sq() = {v2.length_sq()}")     # 25
+    print(f"describe(Green) = {describe(Color.Green)}")   # green
+
     print("=== done ===")

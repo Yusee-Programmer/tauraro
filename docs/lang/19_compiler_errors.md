@@ -24,6 +24,8 @@ Every error the Tauraro compiler emits includes a rule code `[X-N]`. This page d
 | [F-1] | Function | Wrong number of arguments |
 | [F-2] | Function | Parameter shadowed / undefined call |
 | [F-3] | Function | Missing return on code path |
+| [E-1] | Existence | Method does not exist on receiver's type |
+| [E-2] | Existence | Nested declaration used outside `main()` |
 | [U-1] | Unsafe | `alloc`/`dealloc` outside `unsafe:` (with `--strict`) |
 
 ---
@@ -414,6 +416,58 @@ def sign(n: int) -> int:
 - Constructor functions named `init` or `new`
 - Interface method signatures (no body)
 - `extern "C"` declarations (no body)
+
+---
+
+## Existence Rules (E-series)
+
+### [E-1] No Method Found on Type
+
+**Message:** `No method 'foo' found on type 'Bar'.`
+
+**Cause:** A method call `obj.foo(...)` was made on a value whose class `Bar`
+(nor any of its base classes) declares a method named `foo`, and `foo` is not
+one of the universal dunder/built-in methods (`init`, `to_str`, `__eq__`, etc.)
+or a compiler-dispatched method on a built-in type (`Thread`, `Mutex`, `File`,
+`OS`, ...).
+
+**How it works:**
+```python
+pub class Foo:
+    pub x: int
+
+def main():
+    mut f = Foo()
+    f.nonexistent_method()   # E-1: no such method on 'Foo'
+```
+
+**Fix:** Define `pub def nonexistent_method(self, ...)` in `Foo`, or add it via
+`extend Foo:` for `Foo` or one of its base classes.
+
+---
+
+### [E-2] Nested Declaration Outside `main()`
+
+**Message:** `Nested class/def/enum/interface declarations are only supported inside main().`
+
+**Cause:** A `class`, `def`, `enum`, `interface`, or `extend` statement appears
+inside the body of a function other than `main()`. Local (nested) declarations,
+Java-style, are only allowed in `main()` — see
+[Local (Nested) Declarations in `main()`](05_functions.md#local-nested-declarations-in-main).
+
+**How it works:**
+```python
+def helper():
+    class Foo:    # E-2: not inside main()
+        pub x: int
+
+def main():
+    class Foo:    # OK: declared inside main()
+        pub x: int
+```
+
+**Fix:** Move the declaration to module (top-level) scope, or move the
+surrounding logic into `main()`.
 
 ---
 
