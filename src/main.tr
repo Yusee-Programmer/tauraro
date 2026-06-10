@@ -637,6 +637,10 @@ pub def main(args: Vec[str]):
             resolver.add_search_path(get_path_env_entry(tauraro_path_env, epi))
             epi = epi + 1
     mut prog = resolver.resolve_main(input_path)
+    # Parser errors are fatal: a malformed parse cannot be safely compiled.
+    if resolver.parse_errors > 0:
+        print("error: " + resolver.parse_errors.to_str() + " parse error(s); aborting compilation.")
+        _tr_exit(1)
 
     if emit_mode == "ast":
         print("[AST] Declarations found: " + str(prog.decls.len))

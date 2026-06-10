@@ -272,6 +272,35 @@ extend Sema:
         # Unknown type - conservative: assume not sendable
         return false
 
+    # Recursively checks cls_name and its base classes for a method named `method`.
+    pub def class_method_exists(self, cls_name: str, method: str) -> bool:
+        if not self.classes.contains(cls_name): return false
+        mut cls = self.classes.get(cls_name)
+        mut mi = 0
+        while mi < cls.methods.len:
+            if cls.methods.get(mi).name == method: return true
+            mi = mi + 1
+        mut bi = 0
+        while bi < cls.base_classes.len:
+            if self.class_method_exists(cls.base_classes.get(bi), method): return true
+            bi = bi + 1
+        return false
+
+    # Universal methods dispatched generically by codegen for any type
+    # (conversions, dunders, container protocol) - never reported as missing.
+    pub def is_universal_method(self, method: str) -> bool:
+        if method == "init" or method == "new" or method == "free": return true
+        if method == "to_str" or method == "to_string" or method == "as_str": return true
+        if method == "len" or method == "length" or method == "__len__": return true
+        if method == "clone" or method == "copy": return true
+        if method == "__getitem__" or method == "get_index" or method == "__setitem__": return true
+        if method == "__eq__" or method == "__ne__": return true
+        if method == "__lt__" or method == "__gt__" or method == "__le__" or method == "__ge__": return true
+        if method == "__add__" or method == "__sub__" or method == "__mul__" or method == "__div__" or method == "__mod__": return true
+        if method == "__hash__" or method == "__iter__" or method == "__next__" or method == "__contains__": return true
+        if method == "__str__" or method == "__repr__" or method == "__enter__" or method == "__exit__": return true
+        return false
+
     pub def check_spawn_sendable(self, e: Pointer[HirExpr]):
         if _is_invalid_ptr(e as usize): return
         match e.read():
@@ -1105,6 +1134,15 @@ extend Sema:
                 mut htgt = self.lower_expr(target)
                 self.in_assign_target = false
                 mut hv = self.lower_expr(val)
+                # First assignment to an undeclared name (bare `name = expr`, no
+                # `mut`): implicitly declare it with the inferred type so its
+                # methods/fields resolve (e.g. `obj = Foo(); obj.bar()`).
+                if target as usize != 0 as usize:
+                    match target.read():
+                        case Expr.EIdent(sa_decl_name):
+                            if self.resolve(sa_decl_name).name == "":
+                                self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), true)
+                        case _: pass
                 # Phase 1 SAssign: plain-variable RHS of non-primitive non-Copy type = ownership move
                 # Lower first (EIdent checks current is_moved), then mark moved for subsequent uses.
                 # SAssign is guarded by branch snapshots (Fix 1) so sibling else-branches correctly
@@ -2064,6 +2102,10 @@ extend Sema:
                     ret_ty = AstType.init(hobj_ty.name)
                 elif self.classes.contains(hobj_ty.name):
                     mut _cls = self.classes.get(hobj_ty.name)
+                    mut _hty_n = hobj_ty.name
+                    mut _is_builtin_dispatch = _hty_n == "Thread" or _hty_n == "Atomic" or _hty_n == "ThreadLocal" or _hty_n == "ThreadPool" or _hty_n == "Mutex" or _hty_n == "RwLock" or _hty_n == "Chan" or _hty_n == "Channel" or _hty_n == "Shared" or _hty_n == "Weak" or _hty_n == "StringBuilder"
+                    if not _is_builtin_dispatch and not self.class_method_exists(hobj_ty.name, method) and not self.is_universal_method(method):
+                        self.error("[E-1] No method '" + method + "' found on type '" + hobj_ty.name + "'.\n      FIX: Define 'pub def " + method + "(self, ...)' in '" + hobj_ty.name + "' or its base class via 'extend " + hobj_ty.name + ":'.")
                     mut _mi = 0
                     while _mi < _cls.methods.len:
                         mut _mdef = _cls.methods.get(_mi)
@@ -2158,7 +2200,14 @@ extend Sema:
                         if nested_ty as usize != 0 as usize:
                             generic_arg_n = nested_ty.read().name
                     case _: pass
-                if is_generic:
+                # The generic interpretation (obj[T] is a type application like
+                # List[int]) only applies when `obj` is a TYPE NAME - a builtin
+                # container, generic allocator, class, or enum. When `obj` is a
+                # value variable (e.g. `foo[i]` on a List), it is an index, even
+                # if the index name is a single letter (which is otherwise read
+                # as a generic type parameter).
+                mut obj_is_type = obj_name == "Vec" or obj_name == "List" or obj_name == "Map" or obj_name == "Dict" or obj_name == "Set" or obj_name == "Pointer" or obj_name == "alloc" or obj_name == "dealloc" or obj_name == "resize" or obj_name == "copy" or self.classes.contains(obj_name) or self.enums.contains(obj_name)
+                if is_generic and obj_is_type:
                     # For Vec[T] or List[T] - return base expr annotated with the generic arg.
                     # When obj_ty_n is "void" (e.g. Vec not in globals but used as generic syntax),
                     # fall back to obj_name from the AST so Vec[int].init() still works.
