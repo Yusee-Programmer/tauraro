@@ -199,6 +199,8 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, char
     /* pass */
     Parser* parser = Parser_init(tokens, lexer->token_lines);
     /* pass */
+    parser->current_file = path;
+    /* pass */
     Program* prog = Parser_parse_program(parser);
     /* pass */
     self->parse_errors = (self->parse_errors + parser->error_count);

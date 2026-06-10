@@ -247,6 +247,7 @@ pub enum Stmt:
     SChanSelect(cases: Vec[Pointer[ChanSelectArm]])
     SDefer(stmt: Pointer[Stmt])   # defer stmt - run at function exit, LIFO order
     SLine(n: int)
+    SLocalDecl(decl: Pointer[Decl])   # nested class/def/enum/interface/extend - main() only
 
 pub class Block:
     pub stmts: Vec[Pointer[Stmt]]

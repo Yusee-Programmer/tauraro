@@ -13,6 +13,8 @@ __attribute__((malloc,returns_nonnull,hot)) Parser* Parser_init(List_Token* toke
     /* pass */
     p->error_count = 0LL;
     /* pass */
+    p->current_file = "";
+    /* pass */
     return p;
 }
 
@@ -3097,46 +3099,84 @@ __auto_type finally_b = _t93.data.STry.finally_b;
     /* pass */
     if ((!Parser_at_end(self))) {
         /* pass */
-        char* tok_name = "unknown";
+        char* tok_desc = "token";
+        /* pass */
+        char* hint = "check for a typo, a missing ':' or unbalanced parentheses/brackets near this point.";
         /* pass */
         __auto_type _t97 = Parser_peek(self);
         if (_t97.tag == Token_Newline) {
-            tok_name = "Newline";
+            /* pass */
+            tok_desc = "end of line";
+            /* pass */
+            hint = "an expression was expected before the end of this line - check for a missing value or trailing operator.";
         } else if (_t97.tag == Token_Indent) {
-            tok_name = "Indent";
+            /* pass */
+            tok_desc = "indentation";
+            /* pass */
+            hint = "check that this line's indentation matches the surrounding block.";
         } else if (_t97.tag == Token_Dedent) {
-            tok_name = "Dedent";
+            /* pass */
+            tok_desc = "dedent";
+            /* pass */
+            hint = "check that this block is properly indented and closed.";
         } else if (_t97.tag == Token_Ident) {
             __auto_type n = _t97.data.Ident.name;
-            tok_name = _tr_str_concat("Ident:", n);
+            /* pass */
+            tok_desc = _tr_str_concat(_tr_str_concat("identifier '", n), "'");
+            /* pass */
+            hint = _tr_str_concat(_tr_str_concat("an operator, ':' or end of statement was expected before '", n), "'.");
         } else if (_t97.tag == Token_KwMut) {
-            tok_name = "KwMut";
+            tok_desc = "keyword 'mut'";
         } else if (_t97.tag == Token_KwConst) {
-            tok_name = "KwConst";
+            tok_desc = "keyword 'const'";
         } else if (_t97.tag == Token_KwPub) {
-            tok_name = "KwPub";
+            tok_desc = "keyword 'pub'";
         } else if (_t97.tag == Token_KwReturn) {
-            tok_name = "KwReturn";
+            tok_desc = "keyword 'return'";
         } else if (_t97.tag == Token_KwIf) {
-            tok_name = "KwIf";
+            tok_desc = "keyword 'if'";
         } else if (_t97.tag == Token_KwWhile) {
-            tok_name = "KwWhile";
+            tok_desc = "keyword 'while'";
         } else if (_t97.tag == Token_Comma) {
-            tok_name = "Comma";
+            /* pass */
+            tok_desc = "','";
+            /* pass */
+            hint = "remove the extra ',' or add the missing item before it.";
         } else if (_t97.tag == Token_Colon) {
-            tok_name = "Colon";
+            /* pass */
+            tok_desc = "':'";
+            /* pass */
+            hint = "remove the extra ':' or check the statement before it is complete.";
         } else if (_t97.tag == Token_RParen) {
-            tok_name = "RParen";
+            /* pass */
+            tok_desc = "')'";
+            /* pass */
+            hint = "check for an extra ')' or a missing matching '('.";
         } else if (_t97.tag == Token_RBracket) {
-            tok_name = "RBracket";
+            /* pass */
+            tok_desc = "']'";
+            /* pass */
+            hint = "check for an extra ']' or a missing matching '['.";
         } else if (_t97.tag == Token_RBrace) {
-            tok_name = "RBrace";
+            /* pass */
+            tok_desc = "'}'";
+            /* pass */
+            hint = "check for an extra '}' or a missing matching '{'.";
         } else if (1) {
             __auto_type _ = _t97;
-            tok_name = "other";
+            /* pass */
         }
         /* pass */
-        printf("%s\n", (char*)(_tr_str_concat(_tr_str_concat(_tr_str_concat("Parser error: unexpected token=", tok_name), " at pos="), _tr_int_to_str((long long)(self->pos)))));
+        char* loc = "";
+        /* pass */
+        if ((_tr_strlen((char*)self->current_file) > 0LL)) {
+            /* pass */
+            loc = _tr_str_concat(self->current_file, ":");
+        }
+        /* pass */
+        printf("%s\n", (char*)(_tr_str_concat(_tr_str_concat(_tr_str_concat(_tr_str_concat(loc, _tr_int_to_str((long long)(Parser_cur_line(self)))), ": error: unexpected "), tok_desc), " in expression")));
+        /* pass */
+        printf("%s\n", (char*)(_tr_str_concat("       FIX: ", hint)));
         /* pass */
         self->error_count = (self->error_count + 1LL);
         /* pass */

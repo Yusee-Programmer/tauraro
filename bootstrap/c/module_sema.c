@@ -385,6 +385,97 @@ __attribute__((hot)) bool Sema_is_sendable_type(Sema* self, char* ty_name) {
     return false;
 }
 
+__attribute__((hot)) bool Sema_class_method_exists(Sema* self, char* cls_name, char* method) {
+    /* pass */
+    if ((!_tr_dict_contains(self->classes, cls_name))) {
+        /* pass */
+        return false;
+    }
+    /* pass */
+    ClassDef* cls = ((ClassDef*)(uintptr_t)_tr_dict_get(self->classes, cls_name));
+    /* pass */
+    long long mi = 0LL;
+    /* pass */
+    while ((mi < cls->methods->len)) {
+        /* pass */
+        if ((strcmp((char*)((FunctionDef*)List_ptr_get(cls->methods, mi))->name, (char*)method) == 0)) {
+            /* pass */
+            return true;
+        }
+        /* pass */
+        mi = (mi + 1LL);
+    }
+    /* pass */
+    long long bi = 0LL;
+    /* pass */
+    while ((bi < cls->base_classes->len)) {
+        /* pass */
+        if (Sema_class_method_exists(self, List_str_get(cls->base_classes, bi), method)) {
+            /* pass */
+            return true;
+        }
+        /* pass */
+        bi = (bi + 1LL);
+    }
+    /* pass */
+    return false;
+}
+
+__attribute__((hot)) bool Sema_is_universal_method(Sema* self, char* method) {
+    /* pass */
+    if ((((strcmp((char*)method, (char*)"init") == 0) || (strcmp((char*)method, (char*)"new") == 0)) || (strcmp((char*)method, (char*)"free") == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((strcmp((char*)method, (char*)"to_str") == 0) || (strcmp((char*)method, (char*)"to_string") == 0)) || (strcmp((char*)method, (char*)"as_str") == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((strcmp((char*)method, (char*)"len") == 0) || (strcmp((char*)method, (char*)"length") == 0)) || (strcmp((char*)method, (char*)"__len__") == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if (((strcmp((char*)method, (char*)"clone") == 0) || (strcmp((char*)method, (char*)"copy") == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((strcmp((char*)method, (char*)"__getitem__") == 0) || (strcmp((char*)method, (char*)"get_index") == 0)) || (strcmp((char*)method, (char*)"__setitem__") == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if (((strcmp((char*)method, (char*)"__eq__") == 0) || (strcmp((char*)method, (char*)"__ne__") == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if (((((strcmp((char*)method, (char*)"__lt__") == 0) || (strcmp((char*)method, (char*)"__gt__") == 0)) || (strcmp((char*)method, (char*)"__le__") == 0)) || (strcmp((char*)method, (char*)"__ge__") == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if ((((((strcmp((char*)method, (char*)"__add__") == 0) || (strcmp((char*)method, (char*)"__sub__") == 0)) || (strcmp((char*)method, (char*)"__mul__") == 0)) || (strcmp((char*)method, (char*)"__div__") == 0)) || (strcmp((char*)method, (char*)"__mod__") == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if (((((strcmp((char*)method, (char*)"__hash__") == 0) || (strcmp((char*)method, (char*)"__iter__") == 0)) || (strcmp((char*)method, (char*)"__next__") == 0)) || (strcmp((char*)method, (char*)"__contains__") == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    if (((((strcmp((char*)method, (char*)"__str__") == 0) || (strcmp((char*)method, (char*)"__repr__") == 0)) || (strcmp((char*)method, (char*)"__enter__") == 0)) || (strcmp((char*)method, (char*)"__exit__") == 0))) {
+        /* pass */
+        return true;
+    }
+    /* pass */
+    return false;
+}
+
 __attribute__((hot)) void Sema_check_spawn_sendable(Sema* self, HirExpr* e) {
     /* pass */
     if (_is_invalid_ptr(((unsigned long long)(e)))) {
@@ -4323,6 +4414,15 @@ __auto_type idx_arg = _t170.data.EIndex.index;
         } else if (_tr_dict_contains(self->classes, hobj_ty->name)) {
             /* pass */
             ClassDef* _cls = ((ClassDef*)(uintptr_t)_tr_dict_get(self->classes, hobj_ty->name));
+            /* pass */
+            char* _hty_n = hobj_ty->name;
+            /* pass */
+            bool _is_builtin_dispatch = ((((((((((((((((strcmp((char*)_hty_n, (char*)"Thread") == 0) || (strcmp((char*)_hty_n, (char*)"Atomic") == 0)) || (strcmp((char*)_hty_n, (char*)"ThreadLocal") == 0)) || (strcmp((char*)_hty_n, (char*)"ThreadPool") == 0)) || (strcmp((char*)_hty_n, (char*)"Mutex") == 0)) || (strcmp((char*)_hty_n, (char*)"RwLock") == 0)) || (strcmp((char*)_hty_n, (char*)"Chan") == 0)) || (strcmp((char*)_hty_n, (char*)"Channel") == 0)) || (strcmp((char*)_hty_n, (char*)"Shared") == 0)) || (strcmp((char*)_hty_n, (char*)"Weak") == 0)) || (strcmp((char*)_hty_n, (char*)"StringBuilder") == 0)) || (strcmp((char*)_hty_n, (char*)"OS") == 0)) || (strcmp((char*)_hty_n, (char*)"Process") == 0)) || (strcmp((char*)_hty_n, (char*)"Env") == 0)) || (strcmp((char*)_hty_n, (char*)"Hash") == 0)) || (strcmp((char*)_hty_n, (char*)"File") == 0));
+            /* pass */
+            if ((((!_is_builtin_dispatch) && (!Sema_class_method_exists(self, hobj_ty->name, method))) && (!Sema_is_universal_method(self, method)))) {
+                /* pass */
+                Sema_error(self, _tr_str_concat(_tr_str_concat(_tr_str_concat(_tr_str_concat(_tr_str_concat(_tr_str_concat(_tr_str_concat(_tr_str_concat(_tr_str_concat(_tr_str_concat("[E-1] No method '", method), "' found on type '"), hobj_ty->name), "'.\n      FIX: Define 'pub def "), method), "(self, ...)' in '"), hobj_ty->name), "' or its base class via 'extend "), hobj_ty->name), ":'."));
+            }
             /* pass */
             long long _mi = 0LL;
             /* pass */

@@ -1554,6 +1554,7 @@ typedef struct Parser {
     long long pos;
     List_i64* lines;
     long long error_count;
+    char* current_file;
 } Parser;
 #endif
 
@@ -2060,6 +2061,8 @@ __attribute__((hot)) AstType** Sema_build_ast_type(Sema* self, Expr* e);
 __attribute__((malloc,returns_nonnull,hot)) Sema* Sema_init();
 __attribute__((hot)) void Sema_error(Sema* self, char* msg);
 __attribute__((hot)) bool Sema_is_sendable_type(Sema* self, char* ty_name);
+__attribute__((hot)) bool Sema_class_method_exists(Sema* self, char* cls_name, char* method);
+__attribute__((hot)) bool Sema_is_universal_method(Sema* self, char* method);
 __attribute__((hot)) void Sema_check_spawn_sendable(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_class_sendable_fields(Sema* self, ClassDef* c);
 __attribute__((hot)) void Sema_mark_moved(Sema* self, char* name);

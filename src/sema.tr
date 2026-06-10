@@ -2103,7 +2103,7 @@ extend Sema:
                 elif self.classes.contains(hobj_ty.name):
                     mut _cls = self.classes.get(hobj_ty.name)
                     mut _hty_n = hobj_ty.name
-                    mut _is_builtin_dispatch = _hty_n == "Thread" or _hty_n == "Atomic" or _hty_n == "ThreadLocal" or _hty_n == "ThreadPool" or _hty_n == "Mutex" or _hty_n == "RwLock" or _hty_n == "Chan" or _hty_n == "Channel" or _hty_n == "Shared" or _hty_n == "Weak" or _hty_n == "StringBuilder"
+                    mut _is_builtin_dispatch = _hty_n == "Thread" or _hty_n == "Atomic" or _hty_n == "ThreadLocal" or _hty_n == "ThreadPool" or _hty_n == "Mutex" or _hty_n == "RwLock" or _hty_n == "Chan" or _hty_n == "Channel" or _hty_n == "Shared" or _hty_n == "Weak" or _hty_n == "StringBuilder" or _hty_n == "OS" or _hty_n == "Process" or _hty_n == "Env" or _hty_n == "Hash" or _hty_n == "File"
                     if not _is_builtin_dispatch and not self.class_method_exists(hobj_ty.name, method) and not self.is_universal_method(method):
                         self.error("[E-1] No method '" + method + "' found on type '" + hobj_ty.name + "'.\n      FIX: Define 'pub def " + method + "(self, ...)' in '" + hobj_ty.name + "' or its base class via 'extend " + hobj_ty.name + ":'.")
                     mut _mi = 0
