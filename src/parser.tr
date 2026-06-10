@@ -292,6 +292,11 @@ extend Parser:
                             p.is_ref = true
                         if ty_ptr.read().name == "mut_ref":
                             p.is_mut_ref = true
+                    # Variadic param: `args...` or `args: T...` collects trailing
+                    # call args into a List[T] (T defaults to int if unannotated).
+                    if self.peek() == Token.DotDotDot:
+                        self.pos = self.pos + 1
+                        p.is_variadic = true
                     pl.push(p)
                     match self.peek():
                         case Token.Comma:
@@ -2280,6 +2285,14 @@ extend Parser:
                 case Token.KwDef:
                     mut m = self.parse_function_def(False)
                     m.is_public = is_p
+                    # Trailing `args...` in an extern block matches C's `...`
+                    # variadic signature (e.g. `extern "C": def printf(fmt: str, args...)`
+                    # -> `int printf(char* fmt, ...)`), not a List[T] collection.
+                    if m.params.len > 0:
+                        mut _ext_last = m.params.get(m.params.len - 1)
+                        if _ext_last.is_variadic:
+                            m.params.pop()
+                            m.is_variadic = true
                     fl.push(m)
                 case _:
                     self.pos = self.pos + 1

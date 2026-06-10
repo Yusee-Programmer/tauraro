@@ -101,6 +101,9 @@ pub class Sema:
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
     pub strict_mode: bool               # --strict: alloc outside unsafe -> hard [U-1] error
     pub decorator_names: Map[str, bool]  # decorator def registry (name -> true)
+    pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
+    pub variadic_elem_ty: Map[str, Pointer[AstType]] # fn name -> element type of the variadic List[T] param
+    pub fn_defs:         Map[str, FunctionDef]  # top-level fn name -> full definition, for inspect(T)
 
 extend Sema:
     pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
@@ -157,6 +160,9 @@ extend Sema:
         s.current_func_ret_from  = ""
         s.strict_mode            = false
         s.decorator_names        = Map[str, bool].init(16)
+        s.variadic_fns           = Map[str, str].init(8)
+        s.variadic_elem_ty       = Map[str, Pointer[AstType]].init(8)
+        s.fn_defs                = Map[str, FunctionDef].init(32)
 
         # -- Built-in functions -------------------------------------------------
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -247,6 +253,158 @@ extend Sema:
         s.globals.insert("Weak",   Symbol.init("Weak",   SymbolKind.SClass, box_asttype(AstType.init("Weak"))))
 
         return s
+
+    # -- #9: inspect(T) reflection helper -----------------------------------
+
+    pub def io_ty_str(self, ty: AstType) -> str:
+        mut s = ty.name
+        if s == "": s = "void"
+        if ty.args.len > 0:
+            s = s + "["
+            mut i = 0
+            while i < ty.args.len:
+                if i > 0: s = s + ", "
+                s = s + self.io_ty_str(ty.args.get(i).read())
+                i = i + 1
+            s = s + "]"
+        return s
+
+    # First non-SLine statement of a body that is a bare string literal is its docstring.
+    pub def io_doc_of(self, body: Block) -> str:
+        mut i = 0
+        while i < body.stmts.len:
+            match body.stmts.get(i).read():
+                case Stmt.SLine(_): pass
+                case Stmt.SExpr(e):
+                    if e as usize != 0 as usize:
+                        match e.read():
+                            case Expr.ELitStr(s): return s
+                            case _: pass
+                    return ""
+                case _: return ""
+            i = i + 1
+        return ""
+
+    pub def io_func_sig(self, f: FunctionDef) -> str:
+        mut s = "def " + f.name + "("
+        mut i = 0
+        while i < f.params.len:
+            if i > 0: s = s + ", "
+            mut p = f.params.get(i)
+            s = s + p.name
+            if p.ty as usize != 0 as usize:
+                s = s + ": " + self.io_ty_str(p.ty.read())
+            if p.is_variadic: s = s + "..."
+            i = i + 1
+        s = s + ")"
+        if f.ret_ty as usize != 0 as usize:
+            mut rt = f.ret_ty.read()
+            if rt.name != "" and rt.name != "void" and rt.name != "None":
+                s = s + " -> " + self.io_ty_str(rt)
+        if f.throws_ty as usize != 0 as usize:
+            if f.throws_ty.read().name != "":
+                s = s + " throws " + self.io_ty_str(f.throws_ty.read())
+        mut doc = self.io_doc_of(f.body)
+        if doc != "":
+            s = s + "\n        \"\"\"" + doc + "\"\"\""
+        return s
+
+    # Builds a Python help()-style description for a class/enum/interface/
+    # function name, or a short note for builtin types. Used by inspect(T).
+    pub def build_inspect_str(self, name: str) -> str:
+        if self.classes.contains(name):
+            mut c = self.classes.get(name)
+            mut s = "class " + c.name
+            if c.base_classes.len > 0:
+                s = s + "(extends "
+                mut bi = 0
+                while bi < c.base_classes.len:
+                    if bi > 0: s = s + ", "
+                    s = s + c.base_classes.get(bi)
+                    bi = bi + 1
+                s = s + ")"
+            s = s + ":\n"
+            if c.fields.len > 0:
+                s = s + "  fields:\n"
+                mut fi = 0
+                while fi < c.fields.len:
+                    mut fld = c.fields.get(fi)
+                    s = s + "    " + fld.name
+                    if fld.ty as usize != 0 as usize:
+                        s = s + ": " + self.io_ty_str(fld.ty.read())
+                    s = s + "\n"
+                    fi = fi + 1
+            if c.methods.len > 0:
+                s = s + "  methods:\n"
+                mut mi = 0
+                while mi < c.methods.len:
+                    s = s + "    " + self.io_func_sig(c.methods.get(mi)) + "\n"
+                    mi = mi + 1
+            return s
+        elif self.enums.contains(name):
+            mut e = self.enums.get(name)
+            mut s = "enum " + e.name + ":\n"
+            if e.variants.len > 0:
+                s = s + "  variants:\n"
+                mut vi = 0
+                while vi < e.variants.len:
+                    mut v = e.variants.get(vi)
+                    s = s + "    " + v.name
+                    if v.fields.len > 0:
+                        s = s + "("
+                        mut vfi = 0
+                        while vfi < v.fields.len:
+                            if vfi > 0: s = s + ", "
+                            mut vf = v.fields.get(vfi)
+                            if vf.ty as usize != 0 as usize:
+                                s = s + self.io_ty_str(vf.ty.read())
+                            vfi = vfi + 1
+                        s = s + ")"
+                    s = s + "\n"
+                    vi = vi + 1
+            if e.methods.len > 0:
+                s = s + "  methods:\n"
+                mut mi = 0
+                while mi < e.methods.len:
+                    s = s + "    " + self.io_func_sig(e.methods.get(mi)) + "\n"
+                    mi = mi + 1
+            return s
+        elif self.interfaces.contains(name):
+            mut iface = self.interfaces.get(name)
+            mut s = "interface " + iface.name + ":\n"
+            if iface.methods.len > 0:
+                s = s + "  methods:\n"
+                mut mi = 0
+                while mi < iface.methods.len:
+                    s = s + "    " + self.io_func_sig(iface.methods.get(mi)) + "\n"
+                    mi = mi + 1
+            return s
+        elif self.fn_defs.contains(name):
+            return self.io_func_sig(self.fn_defs.get(name))
+        elif name == "int":
+            return "int: 64-bit signed integer (C long long)."
+        elif name == "float":
+            return "float: 64-bit floating point number (C double)."
+        elif name == "bool":
+            return "bool: true/false (C _Bool)."
+        elif name == "str":
+            return "str: immutable byte string (C char*)."
+        elif name == "char":
+            return "char: single byte character (C char)."
+        elif name == "List":
+            return "List[T]: growable, ordered, indexable sequence of T."
+        elif name == "Dict":
+            return "Dict[K, V]: hash map from K to V."
+        elif name == "Set":
+            return "Set[T]: unordered collection of unique T values."
+        elif name == "Option":
+            return "Option[T]: either Some(T) or None."
+        elif name == "Result":
+            return "Result[T, E]: either Ok(T) or Err(E)."
+        elif name == "Pointer":
+            return "Pointer[T]: raw pointer to a T (C T*); use unsafe: for arithmetic."
+        else:
+            return "No info available for '" + name + "'."
 
     pub def error(self, msg: str):
         mut loc = ""
@@ -638,7 +796,7 @@ extend Sema:
                     self.current_class_name = ""
                 case Decl.DTopLevelStmt(s):
                     hp.top_level_stmts.push(self.lower_stmt(s))
-                case Decl.DExtern(abi, functions):
+                case Decl.DExtern(_, functions):
                     mut ei = 0
                     while ei < functions.len:
                         mut ef = functions.get(ei)
@@ -684,7 +842,17 @@ extend Sema:
             case Decl.DFunction(f):
                 mut _f_ret = box_asttype(AstType.init("void"))
                 if f.ret_ty as usize != 0 as usize: _f_ret = f.ret_ty
-                self.declare(f.name, SymbolKind.SFunction, _f_ret, false)
+                # A 'throws' function's call-site type is Result[V, Err], so that
+                # `mut r = throwing_fn(...)` infers `r: Result[V, Err]` and
+                # r.is_ok / r.unwrap() / r.unwrap_err() dispatch correctly.
+                mut _decl_ret = _f_ret
+                if f.throws_ty as usize != 0 as usize:
+                    if f.throws_ty.read().name != "":
+                        mut _result_ty = AstType.init("Result")
+                        _result_ty.args.push(_f_ret)
+                        _result_ty.args.push(f.throws_ty)
+                        _decl_ret = box_asttype(_result_ty)
+                self.declare(f.name, SymbolKind.SFunction, _decl_ret, false)
                 # Record the full signature so the function can be used as a
                 # first-class value (def(...)->R): EIdent yields this type, and
                 # calling such a value recovers the return type (last arg).
@@ -695,6 +863,16 @@ extend Sema:
                     _pi = _pi + 1
                 _fnty.args.push(_f_ret)
                 self.fn_sigs.insert(f.name, _fnty)
+                self.fn_defs.insert(f.name, f)
+                # #14: trailing variadic param `def f(args...)` / `def f(args: T...)`
+                # collects trailing call args into a List[T] literal at call sites.
+                if f.params.len > 0:
+                    mut _vp = f.params.get(f.params.len - 1)
+                    if _vp.is_variadic:
+                        mut _velem_ty = AstType.init("int")
+                        if _vp.ty as usize != 0 as usize: _velem_ty = _vp.ty.read()
+                        self.variadic_fns.insert(f.name, (f.params.len - 1).to_str())
+                        self.variadic_elem_ty.insert(f.name, box_asttype(_velem_ty))
             case Decl.DClass(c):
                 self.declare(c.name, SymbolKind.SClass, box_asttype(AstType.init(c.name)), false)
                 self.classes.insert(c.name, c)
@@ -814,11 +992,17 @@ extend Sema:
         while j < f.params.len:
             mut p = f.params.get(j)
             mut p_ty = AstType.init("int")
-            if p.ty as usize != 0 as usize: 
+            if p.ty as usize != 0 as usize:
                 p_ty = p.ty.read()
             elif p.name == "self" and self.current_class_name != "":
                 p_ty = AstType.init(self.current_class_name)
-            
+            if p.is_variadic:
+                # `args...` / `args: T...` -> the parameter itself is a List[T]
+                # built from the trailing call args.
+                mut _vp_ty = AstType.init("List")
+                _vp_ty.args.push(box_asttype(p_ty))
+                p_ty = _vp_ty
+
             self.declare(p.name, SymbolKind.SVariable, box_asttype(p_ty), false)
             # Phase B: mark as parameter so return-of-local-pointer check is skipped
             if self.scopes.len > 0:
@@ -1092,7 +1276,7 @@ extend Sema:
                     match val_ptr.read():
                         case Expr.ELitNone:
                             mut m7_ty_name = ty_ptr.read().name
-                            if m7_ty_name != "Option" and m7_ty_name != "None" and m7_ty_name != "void" and m7_ty_name != "":
+                            if m7_ty_name != "Option" and m7_ty_name != "None" and m7_ty_name != "void" and m7_ty_name != "" and m7_ty_name != "Pointer":
                                 self.error("[M-7] Cannot assign 'none' to '" + name + "' which has type '" + m7_ty_name + "'. Only Option[T] can hold 'none'. FIX: Use 'Option[" + m7_ty_name + "]' as the type, or give '" + name + "' a real initial value.")
                         case _: pass
                 mut ty = AstType.init("void")
@@ -1744,10 +1928,21 @@ extend Sema:
                 if bin_ty.name == "void": bin_ty = hir_expr_type(hright)
                 if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "&&" or op == "||":
                     bin_ty = AstType.init("bool")
+                elif op == "*" and (hir_expr_type(hleft).name == "str" or hir_expr_type(hleft).name == "String" or hir_expr_type(hright).name == "str" or hir_expr_type(hright).name == "String"):
+                    bin_ty = AstType.init("str")
                 return box_hirexpr(HirExpr.EBinOp(op, hleft, hright, bin_ty))
             case Expr.EUnaryOp(op, expr):
                 mut hexpr_inner = self.lower_expr(expr)
-                return box_hirexpr(HirExpr.EUnaryOp(op, hexpr_inner, hir_expr_type(hexpr_inner)))
+                mut inner_ty = hir_expr_type(hexpr_inner)
+                mut un_ty = inner_ty
+                if op == "&":
+                    mut addr_ty = AstType.init("Pointer")
+                    addr_ty.args.push(box_asttype(inner_ty))
+                    un_ty = addr_ty
+                elif op == "*":
+                    if inner_ty.name == "Pointer" and inner_ty.args.len > 0:
+                        un_ty = inner_ty.args.get(0).read()
+                return box_hirexpr(HirExpr.EUnaryOp(op, hexpr_inner, un_ty))
             case Expr.ECall(callee, args):
                 # Special built-in: await_timeout(async_expr, ms) -> EAwaitTimeout
                 if callee as usize != 0 as usize:
@@ -1763,6 +1958,43 @@ extend Sema:
                                 mut ato_ms = self.lower_expr(args.get(1))
                                 mut ato_ty = hir_expr_type(ato_inner)
                                 return box_hirexpr(HirExpr.EAwaitTimeout(ato_inner, ato_ms, ato_ty))
+                            # #10: instanceOf(obj, T) - compile-time type check.
+                            # Compares obj's static type name against T (a class/
+                            # enum/primitive type name), evaluating to a bool literal.
+                            if ato_n == "instanceOf":
+                                if args.len < 2:
+                                    self.error("instanceOf requires 2 arguments: instanceOf(obj, T)")
+                                    return box_hirexpr(HirExpr.ELitBool(false, AstType.init("bool")))
+                                mut io_obj = self.lower_expr(args.get(0))
+                                mut io_obj_ty_n: str = hir_expr_type(io_obj).name
+                                mut io_target_n = ""
+                                match args.get(1).read():
+                                    case Expr.EIdent(io_tn): io_target_n = io_tn
+                                    case Expr.EIndex(io_base, _):
+                                        match io_base.read():
+                                            case Expr.EIdent(io_tn2): io_target_n = io_tn2
+                                            case _: pass
+                                    case _: pass
+                                return box_hirexpr(HirExpr.ELitBool(io_obj_ty_n == io_target_n, AstType.init("bool")))
+                            # #9: inspect(T) - returns a help()-style description
+                            # of a class/enum/interface/function/builtin type as
+                            # a string literal, computed entirely at compile time.
+                            if ato_n == "inspect":
+                                if args.len < 1:
+                                    self.error("inspect requires 1 argument: inspect(T)")
+                                    return box_hirexpr(HirExpr.ELitStr("", AstType.init("str")))
+                                mut isp_target_n = ""
+                                match args.get(0).read():
+                                    case Expr.EIdent(isp_tn): isp_target_n = isp_tn
+                                    case Expr.EIndex(isp_base, _):
+                                        match isp_base.read():
+                                            case Expr.EIdent(isp_tn2): isp_target_n = isp_tn2
+                                            case _: pass
+                                    case _: pass
+                                if isp_target_n == "":
+                                    mut isp_obj = self.lower_expr(args.get(0))
+                                    isp_target_n = hir_expr_type(isp_obj).name
+                                return box_hirexpr(HirExpr.ELitStr(self.build_inspect_str(isp_target_n), AstType.init("str")))
                         case _: pass
                 # Phase 2+3: iterate AST args - mark borrows (P2) and detect aliasing (P3)
                 mut p23_borrow_names = Vec[str].init(4)
@@ -1794,6 +2026,32 @@ extend Sema:
                 while p23_ui < p23_borrow_names.len:
                     self.unmark_borrow(p23_borrow_names.get(p23_ui))
                     p23_ui = p23_ui + 1
+                # #14: trailing variadic param - collect trailing call args into
+                # a single List[T] literal matching the callee's variadic param.
+                if callee as usize != 0 as usize:
+                    match callee.read():
+                        case Expr.EIdent(vfn_n):
+                            if self.variadic_fns.contains(vfn_n):
+                                mut vfixed = self.variadic_fns.get(vfn_n).to_int()
+                                mut velem_ty = AstType.init("int")
+                                if self.variadic_elem_ty.contains(vfn_n):
+                                    velem_ty = self.variadic_elem_ty.get(vfn_n).read()
+                                if hl.len >= vfixed:
+                                    mut vargs = Vec[Pointer[HirExpr]].init(4)
+                                    mut vi = vfixed
+                                    while vi < hl.len:
+                                        vargs.push(hl.get(vi))
+                                        vi = vi + 1
+                                    mut vlist_ty = AstType.init("List")
+                                    vlist_ty.args.push(box_asttype(velem_ty))
+                                    mut vnew_hl = Vec[Pointer[HirExpr]].init(vfixed + 1)
+                                    mut vk = 0
+                                    while vk < vfixed:
+                                        vnew_hl.push(hl.get(vk))
+                                        vk = vk + 1
+                                    vnew_hl.push(box_hirexpr(HirExpr.EList(vargs, vlist_ty)))
+                                    hl = vnew_hl
+                        case _: pass
                 mut hcallee = self.lower_expr(callee)
                 mut ret_ty = AstType.init("void")
                 if callee as usize == 0 as usize: return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
@@ -2238,6 +2496,9 @@ extend Sema:
                         if _fld.name == prop:
                             if _fld.ty as usize != 0 as usize: ret_ty = _fld.ty.read()
                         _fi = _fi + 1
+                elif self.enums.contains(hobj_ty_n):
+                    # `EnumType.Variant` (no call) - the value's type is the enum itself.
+                    ret_ty = AstType.init(hobj_ty_n)
                 if ret_ty.name == "void" and (prop == "len" or prop == "length" or prop == "capacity"):
                     ret_ty = AstType.init("int")
                 return box_hirexpr(HirExpr.EPropAccess(hobj, prop, ret_ty))

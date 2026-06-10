@@ -285,6 +285,7 @@ pub class Param:
     pub ty: Pointer[AstType]
     pub is_ref: bool      # 'ref T' parameter - immutable borrow, not a copy
     pub is_mut_ref: bool  # 'mut ref T' parameter - mutable borrow
+    pub is_variadic: bool # 'name...' or 'name: T...' - collects trailing call args into List[T]
 
 extend Param:
     pub def init(name: str, ty: Pointer[AstType]) -> Param:
@@ -293,6 +294,7 @@ extend Param:
         p.ty = ty
         p.is_ref = false
         p.is_mut_ref = false
+        p.is_variadic = false
         return p
 
 # --- Top-level declarations ---------------------------------------------------
