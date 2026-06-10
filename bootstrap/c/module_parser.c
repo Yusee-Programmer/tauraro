@@ -756,6 +756,27 @@ __attribute__((hot)) Stmt* Parser_parse_stmt(Parser* self) {
         Parser_parse_import(self);
         /* pass */
         return box_stmt(Stmt_make_SPass());
+    } else if (_t27.tag == Token_KwClass) {
+        /* pass */
+        return box_stmt(Stmt_ctor_SLocalDecl(Parser_parse_decl(self)));
+    } else if (_t27.tag == Token_KwEnum) {
+        /* pass */
+        return box_stmt(Stmt_ctor_SLocalDecl(Parser_parse_decl(self)));
+    } else if (_t27.tag == Token_KwInterface) {
+        /* pass */
+        return box_stmt(Stmt_ctor_SLocalDecl(Parser_parse_decl(self)));
+    } else if (_t27.tag == Token_KwExtend) {
+        /* pass */
+        return box_stmt(Stmt_ctor_SLocalDecl(Parser_parse_decl(self)));
+    } else if (_t27.tag == Token_KwDef) {
+        /* pass */
+        long long _ldline = Parser_cur_line(self);
+        /* pass */
+        FunctionDef* _ldf = Parser_parse_function_def(self, false);
+        /* pass */
+        _ldf->line = _ldline;
+        /* pass */
+        return box_stmt(Stmt_ctor_SLocalDecl(box_decl(Decl_ctor_DFunction(_ldf))));
     } else if (1) {
         __auto_type _ = _t27;
         /* pass */

@@ -457,6 +457,23 @@ extend Parser:
             case Token.KwImport:
                 self.parse_import()
                 return box_stmt(Stmt.SPass)
+            # Nested declarations - class/def/enum/interface/extend inside a function
+            # body (Java-style local types). Sema restricts these to main() and
+            # hoists them to file scope; codegen emits them as ordinary top-level
+            # definitions.
+            case Token.KwClass:
+                return box_stmt(Stmt.SLocalDecl(self.parse_decl()))
+            case Token.KwEnum:
+                return box_stmt(Stmt.SLocalDecl(self.parse_decl()))
+            case Token.KwInterface:
+                return box_stmt(Stmt.SLocalDecl(self.parse_decl()))
+            case Token.KwExtend:
+                return box_stmt(Stmt.SLocalDecl(self.parse_decl()))
+            case Token.KwDef:
+                mut _ldline = self.cur_line()
+                mut _ldf = self.parse_function_def(False)
+                _ldf.line = _ldline
+                return box_stmt(Stmt.SLocalDecl(box_decl(Decl.DFunction(_ldf))))
             case _:
                 pass
         match self.peek():

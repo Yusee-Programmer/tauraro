@@ -705,7 +705,8 @@ typedef enum {
     Stmt_SGpuBlock,
     Stmt_SChanSelect,
     Stmt_SDefer,
-    Stmt_SLine
+    Stmt_SLine,
+    Stmt_SLocalDecl
 } Stmt_tag;
 
 typedef struct Stmt {
@@ -805,6 +806,9 @@ typedef struct Stmt {
         struct {
             long long n;
         } SLine;
+        struct {
+            Decl* decl;
+        } SLocalDecl;
     } data;
 } Stmt;
 
@@ -833,6 +837,7 @@ static inline __attribute__((always_inline)) Stmt Stmt_ctor_SGpuBlock(Block* bod
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SChanSelect(List_ptr* cases) { Stmt _r = {.tag=Stmt_SChanSelect}; _r.data.SChanSelect.cases = cases; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SDefer(Stmt* stmt) { Stmt _r = {.tag=Stmt_SDefer}; _r.data.SDefer.stmt = stmt; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SLine(long long n) { Stmt _r = {.tag=Stmt_SLine}; _r.data.SLine.n = n; return _r; }
+static inline __attribute__((always_inline)) Stmt Stmt_ctor_SLocalDecl(Decl* decl) { Stmt _r = {.tag=Stmt_SLocalDecl}; _r.data.SLocalDecl.decl = decl; return _r; }
 
 typedef enum {
     Decl_DFunction,
@@ -1775,6 +1780,10 @@ typedef struct Sema {
     bool in_async_fn;
     TrMap* assign_froms;
     TrMap* fn_sigs;
+    List_ptr* nested_classes;
+    List_ptr* nested_functions;
+    List_ptr* nested_enums;
+    List_ptr* nested_interfaces;
     long long current_line;
     List_str* current_func_generics;
     long long closure_boundary;

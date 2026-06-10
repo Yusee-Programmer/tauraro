@@ -80,6 +80,11 @@ pub class Sema:
     pub in_async_fn:        bool
     pub assign_froms:       Map[str, int] # block-local last use tracking
     pub fn_sigs:            Map[str, AstType] # top-level fn name -> def(...)->R type, for first-class function references
+    # Nested declarations (class/def/enum/interface inside main()) hoisted to file scope.
+    pub nested_classes:     Vec[HirClass]
+    pub nested_functions:   Vec[HirFunction]
+    pub nested_enums:       Vec[HirEnum]
+    pub nested_interfaces:  Vec[HirInterface]
     pub current_line:       int
     pub current_func_generics: Vec[str]
     pub closure_boundary: int           # scope depth just before entering a closure (-1 = not in closure)
@@ -132,6 +137,10 @@ extend Sema:
         s.in_async_fn        = false
         s.assign_froms       = Map[str, int].init(32)
         s.fn_sigs            = Map[str, AstType].init(64)
+        s.nested_classes     = Vec[HirClass].init(4)
+        s.nested_functions   = Vec[HirFunction].init(4)
+        s.nested_enums       = Vec[HirEnum].init(4)
+        s.nested_interfaces  = Vec[HirInterface].init(4)
         s.current_line       = 0
         s.current_func_generics = Vec[str].init(0)
         s.closure_boundary  = -1
@@ -649,6 +658,25 @@ extend Sema:
                     hp.type_alias_types.push(ta_ty_ptr)
                 case _: pass
             i = i + 1
+
+        # Hoist nested declarations (class/def/enum/interface inside main()) to
+        # file scope so codegen emits them as ordinary top-level definitions.
+        mut nci = 0
+        while nci < self.nested_classes.len:
+            hp.classes.push(self.nested_classes.get(nci))
+            nci = nci + 1
+        mut nfi = 0
+        while nfi < self.nested_functions.len:
+            hp.functions.push(self.nested_functions.get(nfi))
+            nfi = nfi + 1
+        mut nei = 0
+        while nei < self.nested_enums.len:
+            hp.enums.push(self.nested_enums.get(nei))
+            nei = nei + 1
+        mut nii = 0
+        while nii < self.nested_interfaces.len:
+            hp.interfaces.push(self.nested_interfaces.get(nii))
+            nii = nii + 1
         return hp
 
     pub def register_decl(self, d: Pointer[Decl]):
@@ -1515,6 +1543,54 @@ extend Sema:
             case Stmt.SBreak: return box_hirstmt(HirStmt.SBreak)
             case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
             case Stmt.SPass: return box_hirstmt(HirStmt.SPass)
+            case Stmt.SLocalDecl(ldecl):
+                if self.current_func_name != "main":
+                    self.error("[E-2] Nested class/def/enum/interface declarations are only supported inside main().\n      FIX: Move this declaration to module (top-level) scope, or declare it inside main().")
+                    return box_hirstmt(HirStmt.SPass)
+                self.register_decl(ldecl)
+                # lower_func/lower_class reset current_func_name/current_class_name
+                # to "" on exit; save+restore so main's own context survives the
+                # nested-decl lowering that happens mid-way through main's body.
+                mut saved_ld_func_name = self.current_func_name
+                mut saved_ld_class_name = self.current_class_name
+                match ldecl.read():
+                    case Decl.DFunction(ld_f):
+                        self.nested_functions.push(self.lower_func(ld_f))
+                    case Decl.DClass(ld_c):
+                        self.nested_classes.push(self.lower_class(ld_c))
+                    case Decl.DActor(ld_c):
+                        self.nested_classes.push(self.lower_class(ld_c))
+                    case Decl.DEnum(ld_e):
+                        self.nested_enums.push(self.lower_enum(ld_e))
+                    case Decl.DInterface(ld_i):
+                        self.nested_interfaces.push(self.lower_interface(ld_i))
+                    case Decl.DExtend(ld_target, ld_methods):
+                        # Methods added via 'extend' on a nested class must land in
+                        # that class's HirClass.methods (codegen emits method bodies
+                        # from there, not from hp.functions) - find the already-lowered
+                        # nested HirClass and append to it in place.
+                        self.current_class_name = ld_target
+                        mut ld_ci = 0
+                        mut ld_found = false
+                        while ld_ci < self.nested_classes.len:
+                            mut ld_nc = self.nested_classes.get(ld_ci)
+                            if ld_nc.name == ld_target:
+                                mut ld_hi = 0
+                                while ld_hi < ld_methods.len:
+                                    ld_nc.methods.push(self.lower_func(ld_methods.get(ld_hi)))
+                                    ld_hi = ld_hi + 1
+                                self.nested_classes.set(ld_ci, ld_nc)
+                                ld_found = true
+                            ld_ci = ld_ci + 1
+                        if not ld_found:
+                            mut ld_hi2 = 0
+                            while ld_hi2 < ld_methods.len:
+                                self.nested_functions.push(self.lower_func(ld_methods.get(ld_hi2)))
+                                ld_hi2 = ld_hi2 + 1
+                    case _: pass
+                self.current_func_name = saved_ld_func_name
+                self.current_class_name = saved_ld_class_name
+                return box_hirstmt(HirStmt.SPass)
             case Stmt.SUnsafe(body):
                 # Gap 6: track unsafe boundary
                 mut saved_unsafe = self.in_unsafe

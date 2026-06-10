@@ -7,6 +7,7 @@ Functions are the fundamental unit of reusable logic in Tauraro. They are static
 ## Table of Contents
 
 1. [Defining Functions](#defining-functions)
+1a. [Local (Nested) Declarations in `main()`](#local-nested-declarations-in-main)
 2. [Parameters and Return Types](#parameters-and-return-types)
 3. [Decorators](#decorators)
 4. [Closures and Lambdas](#closures-and-lambdas)
@@ -71,6 +72,75 @@ Fix: Use overloaded static methods in a class, or require the caller to pass the
 - Annotate return types explicitly — even `-> void` — to make the contract readable and searchable.
 - One function, one responsibility. If you are adding a third `elif` inside a function, consider splitting it.
 - Return values rather than mutating through side effects. The ownership system manages returned values automatically.
+
+---
+
+## Local (Nested) Declarations in `main()`
+
+### When to use
+
+When a `class`, `enum`, `interface`, `extend`, or helper `def` is only meaningful
+for a small script's `main()` function, you can declare it directly inside
+`main()` instead of cluttering module scope — similar to local classes in Java.
+
+### How it works
+
+`class`, `enum`, `interface`, `extend`, and `def` statements are allowed inside
+the body of `main()`:
+
+```python
+def main():
+    class Vec2:
+        pub x: int
+        pub y: int
+
+    extend Vec2:
+        pub def init(x: int, y: int) -> Vec2:
+            mut v = Vec2()
+            v.x = x
+            v.y = y
+            return v
+
+        pub def length_sq(self) -> int:
+            return self.x * self.x + self.y * self.y
+
+    enum Color:
+        Red
+        Green
+        Blue
+
+    def describe(c: Color) -> str:
+        match c:
+            case Color.Red: return "red"
+            case Color.Green: return "green"
+            case Color.Blue: return "blue"
+        return ""
+
+    mut v = Vec2.init(3, 4)
+    print(v.length_sq())          # 25
+    print(describe(Color.Green))  # green
+```
+
+The compiler hoists these declarations to module scope behind the scenes and
+generates ordinary top-level C definitions for them — there is no extra runtime
+cost. The names just remain scoped to `main()` for readability.
+
+### Common Mistakes
+
+**Declaring a nested type/function outside `main()`:**
+```python
+def helper():
+    class Foo:    # ERROR [E-2]: nested declarations are main()-only
+        pub x: int
+```
+Fix: move `Foo` to module (top-level) scope, or move the whole helper's logic
+into `main()`.
+
+### Best Practices
+
+- Reserve nested declarations for small scripts, examples, and one-off tools
+  where the type genuinely has no meaning outside `main()`.
+- For anything reused across functions or modules, declare it at module scope.
 
 ---
 
@@ -796,6 +866,8 @@ def main():
 | F-2 | Parameters may not be shadowed by local variables | `[F-2] Parameter name shadowed` |
 | F-3 | Non-void function must return on all code paths | `[F-3] Missing return on code path` |
 | T-4 | Result from a `throws` call must be handled | `[T-4] Unhandled Result from throws call` |
+| E-1 | Method must exist on the receiver's type (or a base class) | `[E-1] No method 'x' found on type 'Y'` |
+| E-2 | Nested class/def/enum/interface/extend declarations are `main()`-only | `[E-2] Nested declarations are only supported inside main()` |
 
 ---
 
