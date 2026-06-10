@@ -10,6 +10,7 @@ extern "C":
     def _tr_c_fseek(fp: Pointer[char], offset: int, whence: int) -> int
     def _tr_c_ftell(fp: Pointer[char]) -> int
     def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_dir_exists(path: str) -> bool
 
 pub class File:
     pub path:    str
@@ -153,6 +154,9 @@ extend File:
             _tr_c_fclose(fp)
             return true
         return false
+
+    pub def dir_exists(path: str) -> bool:
+        return _tr_dir_exists(path)
 
     # Return file size without opening an instance.
     pub def file_size(path: str) -> int:
