@@ -467,6 +467,13 @@ __attribute__((hot)) List_ptr* Parser_parse_param_list(Parser* self) {
                     }
                 }
                 /* pass */
+                if ((Parser_peek(self).tag == Token_make_DotDotDot().tag)) {
+                    /* pass */
+                    self->pos = (self->pos + 1LL);
+                    /* pass */
+                    p->is_variadic = true;
+                }
+                /* pass */
                 List_ptr_append(pl, p);
                 /* pass */
                 __auto_type _t18 = Parser_peek(self);
@@ -4390,6 +4397,18 @@ __attribute__((hot)) Decl* Parser_parse_extern_decl(Parser* self) {
             FunctionDef* m = Parser_parse_function_def(self, false);
             /* pass */
             m->is_public = is_p;
+            /* pass */
+            if ((m->params->len > 0LL)) {
+                /* pass */
+                Param* _ext_last = ((Param*)List_ptr_get(m->params, (m->params->len - 1LL)));
+                /* pass */
+                if (_ext_last->is_variadic) {
+                    /* pass */
+                    ((Param*)List_ptr_pop(m->params));
+                    /* pass */
+                    m->is_variadic = true;
+                }
+            }
             /* pass */
             List_ptr_append(fl, m);
         } else if (1) {

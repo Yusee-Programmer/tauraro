@@ -222,10 +222,10 @@ __attribute__((hot)) char* LlvmGenerator_gen_expr(LlvmGenerator* self, HirExpr* 
     /* pass */
     __auto_type e = (*e_ptr);
     /* pass */
-    __auto_type _t264 = e;
-    if (_t264.tag == HirExpr_ELitInt) {
-        __auto_type v = _t264.data.ELitInt.val;
-__auto_type ty = _t264.data.ELitInt.ty;
+    __auto_type _t272 = e;
+    if (_t272.tag == HirExpr_ELitInt) {
+        __auto_type v = _t272.data.ELitInt.val;
+__auto_type ty = _t272.data.ELitInt.ty;
         /* pass */
         char* reg = LlvmGenerator_next_reg(self);
         /* pass */
@@ -246,8 +246,8 @@ __auto_type ty = _t264.data.ELitInt.ty;
         LlvmGenerator_w(self, "\n");
         /* pass */
         return reg;
-    } else if (_t264.tag == HirExpr_ELitBool) {
-        __auto_type v = _t264.data.ELitBool.val;
+    } else if (_t272.tag == HirExpr_ELitBool) {
+        __auto_type v = _t272.data.ELitBool.val;
         /* pass */
         char* reg = LlvmGenerator_next_reg(self);
         /* pass */
@@ -269,9 +269,9 @@ __auto_type ty = _t264.data.ELitInt.ty;
         LlvmGenerator_w(self, "\n");
         /* pass */
         return reg;
-    } else if (_t264.tag == HirExpr_ELitFloat) {
-        __auto_type v = _t264.data.ELitFloat.val;
-__auto_type ty = _t264.data.ELitFloat.ty;
+    } else if (_t272.tag == HirExpr_ELitFloat) {
+        __auto_type v = _t272.data.ELitFloat.val;
+__auto_type ty = _t272.data.ELitFloat.ty;
         /* pass */
         char* reg = LlvmGenerator_next_reg(self);
         /* pass */
@@ -286,8 +286,8 @@ __auto_type ty = _t264.data.ELitFloat.ty;
         LlvmGenerator_w(self, "\n");
         /* pass */
         return reg;
-    } else if (_t264.tag == HirExpr_ELitStr) {
-        __auto_type v = _t264.data.ELitStr.val;
+    } else if (_t272.tag == HirExpr_ELitStr) {
+        __auto_type v = _t272.data.ELitStr.val;
         /* pass */
         char* reg = LlvmGenerator_next_reg(self);
         /* pass */
@@ -310,13 +310,13 @@ __auto_type ty = _t264.data.ELitFloat.ty;
         LlvmGenerator_w(self, ", i32 0, i32 0\n");
         /* pass */
         return reg;
-    } else if (_t264.tag == HirExpr_ELitNone) {
-        __auto_type _ = _t264.data.ELitNone.ty;
+    } else if (_t272.tag == HirExpr_ELitNone) {
+        __auto_type _ = _t272.data.ELitNone.ty;
         /* pass */
         return "null";
-    } else if (_t264.tag == HirExpr_EIdent) {
-        __auto_type name = _t264.data.EIdent.name;
-__auto_type is_move = _t264.data.EIdent.is_move;
+    } else if (_t272.tag == HirExpr_EIdent) {
+        __auto_type name = _t272.data.EIdent.name;
+__auto_type is_move = _t272.data.EIdent.is_move;
         /* pass */
         char* reg = LlvmGenerator_next_reg(self);
         /* pass */
@@ -331,20 +331,20 @@ __auto_type is_move = _t264.data.EIdent.is_move;
         LlvmGenerator_w(self, "\n");
         /* pass */
         return reg;
-    } else if (_t264.tag == HirExpr_EBinOp) {
-        __auto_type op = _t264.data.EBinOp.op;
-__auto_type left = _t264.data.EBinOp.left;
-__auto_type right = _t264.data.EBinOp.right;
-__auto_type ty = _t264.data.EBinOp.ty;
+    } else if (_t272.tag == HirExpr_EBinOp) {
+        __auto_type op = _t272.data.EBinOp.op;
+__auto_type left = _t272.data.EBinOp.left;
+__auto_type right = _t272.data.EBinOp.right;
+__auto_type ty = _t272.data.EBinOp.ty;
         /* pass */
         return LlvmGenerator_gen_binop_llvm(self, op, left, right, ty);
-    } else if (_t264.tag == HirExpr_ECall) {
-        __auto_type callee = _t264.data.ECall.callee;
-__auto_type args = _t264.data.ECall.args;
+    } else if (_t272.tag == HirExpr_ECall) {
+        __auto_type callee = _t272.data.ECall.callee;
+__auto_type args = _t272.data.ECall.args;
         /* pass */
         return LlvmGenerator_gen_call_llvm(self, callee, args);
     } else if (1) {
-        __auto_type _ = _t264;
+        __auto_type _ = _t272;
         /* pass */
         return "undef";
     }
@@ -473,13 +473,13 @@ __attribute__((hot)) char* LlvmGenerator_gen_call_llvm(LlvmGenerator* self, HirE
     /* pass */
     char* callee_name = "";
     /* pass */
-    __auto_type _t265 = (*callee);
-    if (_t265.tag == HirExpr_EIdent) {
-        __auto_type n = _t265.data.EIdent.name;
-__auto_type is_move = _t265.data.EIdent.is_move;
+    __auto_type _t273 = (*callee);
+    if (_t273.tag == HirExpr_EIdent) {
+        __auto_type n = _t273.data.EIdent.name;
+__auto_type is_move = _t273.data.EIdent.is_move;
         callee_name = n;
     } else if (1) {
-        __auto_type _ = _t265;
+        __auto_type _ = _t273;
         /* pass */
         /* pass */
     }
@@ -535,13 +535,13 @@ __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s
     /* pass */
     __auto_type s = (*s_ptr);
     /* pass */
-    __auto_type _t266 = s;
-    if (_t266.tag == HirStmt_SExpr) {
-        __auto_type e = _t266.data.SExpr.expr;
+    __auto_type _t274 = s;
+    if (_t274.tag == HirStmt_SExpr) {
+        __auto_type e = _t274.data.SExpr.expr;
         /* pass */
         LlvmGenerator_gen_expr(self, e);
-    } else if (_t266.tag == HirStmt_SReturn) {
-        __auto_type e = _t266.data.SReturn.val;
+    } else if (_t274.tag == HirStmt_SReturn) {
+        __auto_type e = _t274.data.SReturn.val;
         /* pass */
         if ((((unsigned long long)(e)) == ((unsigned long long)(0LL)))) {
             /* pass */
@@ -562,14 +562,14 @@ __attribute__((hot)) void LlvmGenerator_gen_stmt(LlvmGenerator* self, HirStmt* s
             /* pass */
             LlvmGenerator_w(self, "\n");
         }
-    } else if (_t266.tag == HirStmt_SLet) {
-        __auto_type name = _t266.data.SLet.name;
-__auto_type ownership = _t266.data.SLet.ownership;
-__auto_type is_mut = _t266.data.SLet.is_mut;
-__auto_type is_const = _t266.data.SLet.is_const;
-__auto_type is_shared = _t266.data.SLet.is_shared;
-__auto_type ty = _t266.data.SLet.ty;
-__auto_type val = _t266.data.SLet.val;
+    } else if (_t274.tag == HirStmt_SLet) {
+        __auto_type name = _t274.data.SLet.name;
+__auto_type ownership = _t274.data.SLet.ownership;
+__auto_type is_mut = _t274.data.SLet.is_mut;
+__auto_type is_const = _t274.data.SLet.is_const;
+__auto_type is_shared = _t274.data.SLet.is_shared;
+__auto_type ty = _t274.data.SLet.ty;
+__auto_type val = _t274.data.SLet.val;
         /* pass */
         LlvmGenerator_w(self, "    %");
         /* pass */
@@ -599,10 +599,10 @@ __auto_type val = _t266.data.SLet.val;
             /* pass */
             LlvmGenerator_w(self, "\n");
         }
-    } else if (_t266.tag == HirStmt_SIf) {
-        __auto_type cond = _t266.data.SIf.cond;
-__auto_type then_b = _t266.data.SIf.then_b;
-__auto_type else_b = _t266.data.SIf.else_b;
+    } else if (_t274.tag == HirStmt_SIf) {
+        __auto_type cond = _t274.data.SIf.cond;
+__auto_type then_b = _t274.data.SIf.then_b;
+__auto_type else_b = _t274.data.SIf.else_b;
         /* pass */
         char* cond_v = LlvmGenerator_gen_expr(self, cond);
         /* pass */
@@ -653,9 +653,9 @@ __auto_type else_b = _t266.data.SIf.else_b;
         LlvmGenerator_w(self, end_lbl);
         /* pass */
         LlvmGenerator_w(self, ":\n");
-    } else if (_t266.tag == HirStmt_SWhile) {
-        __auto_type cond = _t266.data.SWhile.cond;
-__auto_type body = _t266.data.SWhile.body;
+    } else if (_t274.tag == HirStmt_SWhile) {
+        __auto_type cond = _t274.data.SWhile.cond;
+__auto_type body = _t274.data.SWhile.body;
         /* pass */
         char* cond_lbl = _tr_str_concat("while_cond_", LlvmGenerator_next_reg(self));
         /* pass */
@@ -704,17 +704,17 @@ __auto_type body = _t266.data.SWhile.body;
         LlvmGenerator_w(self, end_lbl);
         /* pass */
         LlvmGenerator_w(self, ":\n");
-    } else if (_t266.tag == HirStmt_SBreak) {
+    } else if (_t274.tag == HirStmt_SBreak) {
         /* pass */
         LlvmGenerator_w(self, "    ; break (unresolved in stub)\n");
-    } else if (_t266.tag == HirStmt_SContinue) {
+    } else if (_t274.tag == HirStmt_SContinue) {
         /* pass */
         LlvmGenerator_w(self, "    ; continue (unresolved in stub)\n");
-    } else if (_t266.tag == HirStmt_SPass) {
+    } else if (_t274.tag == HirStmt_SPass) {
         /* pass */
         /* pass */
     } else if (1) {
-        __auto_type _ = _t266;
+        __auto_type _ = _t274;
         /* pass */
         LlvmGenerator_w(self, "    ; TODO stmt\n");
     }

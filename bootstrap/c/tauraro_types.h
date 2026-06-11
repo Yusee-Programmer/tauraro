@@ -1455,6 +1455,7 @@ typedef struct Param {
     AstType** ty;
     bool is_ref;
     bool is_mut_ref;
+    bool is_variadic;
 } Param;
 #endif
 
@@ -1800,6 +1801,9 @@ typedef struct Sema {
     char* current_func_ret_from;
     bool strict_mode;
     TrMap* decorator_names;
+    TrMap* variadic_fns;
+    TrMap* variadic_elem_ty;
+    TrMap* fn_defs;
 } Sema;
 #endif
 
@@ -1817,6 +1821,7 @@ typedef struct CGenerator {
     TrMap* enums;
     TrMap* interfaces;
     TrMap* functions;
+    TrMap* method_owners;
     TrMap* decl_vars;
     TrMap* type_subst;
     TrMap* mono_done;
@@ -1948,10 +1953,10 @@ __attribute__((hot)) void raw_free(char* ptr);
 __attribute__((hot)) void raw_copy(char* dst, char* src, long long n);
 __attribute__((hot)) void raw_zero(char* ptr, long long n);
 __attribute__((hot)) void raw_move(char* dst, char* src, long long n);
-__attribute__((hot)) void* alloc(long long n_elems);
-__attribute__((hot)) void dealloc(void* ptr);
-__attribute__((hot)) void* resize(void* ptr, long long new_count);
-__attribute__((hot)) void copy(void* dst, void* src, long long n_elems);
+__attribute__((hot)) void** alloc(long long n_elems);
+__attribute__((hot)) void dealloc(void** ptr);
+__attribute__((hot)) void** resize(void** ptr, long long new_count);
+__attribute__((hot)) void copy(void** dst, void** src, long long n_elems);
 __attribute__((malloc,returns_nonnull,hot)) AstType* AstType_init(char* name);
 __attribute__((hot)) AstType* AstType_init_generic(char* name, AstType** arg);
 __attribute__((malloc,returns_nonnull,hot)) GenericConstraint* GenericConstraint_init(char* target);
@@ -2068,6 +2073,10 @@ __attribute__((malloc,returns_nonnull,hot)) Symbol* Symbol_init(char* name, Symb
 __attribute__((malloc,returns_nonnull,hot)) Scope* Scope_init();
 __attribute__((hot)) AstType** Sema_build_ast_type(Sema* self, Expr* e);
 __attribute__((malloc,returns_nonnull,hot)) Sema* Sema_init();
+__attribute__((hot)) char* Sema_io_ty_str(Sema* self, AstType* ty);
+__attribute__((hot)) char* Sema_io_doc_of(Sema* self, Block* body);
+__attribute__((hot)) char* Sema_io_func_sig(Sema* self, FunctionDef* f);
+__attribute__((hot)) char* Sema_build_inspect_str(Sema* self, char* name);
 __attribute__((hot)) void Sema_error(Sema* self, char* msg);
 __attribute__((hot)) bool Sema_is_sendable_type(Sema* self, char* ty_name);
 __attribute__((hot)) bool Sema_class_method_exists(Sema* self, char* cls_name, char* method);
@@ -2217,6 +2226,8 @@ __attribute__((hot)) char* CGenerator_gen_expr(CGenerator* self, HirExpr* e_ptr)
 __attribute__((hot)) bool CGenerator_has_method(CGenerator* self, char* cls_name, char* method);
 __attribute__((hot)) AstType* CGenerator_cls_method_ret_ty(CGenerator* self, char* cls_name, char* method);
 __attribute__((hot)) char* CGenerator_cls_method_c_call(CGenerator* self, char* cls_name, char* method, char* obj_s, char* extra_args);
+__attribute__((hot)) char* CGenerator_resolve_generic_prim(CGenerator* self, char* n);
+__attribute__((hot)) char* CGenerator_mono_cls_name_for(CGenerator* self, AstType* ty);
 __attribute__((hot)) char* CGenerator_gen_cond_expr(CGenerator* self, HirExpr* cond);
 __attribute__((hot)) char* CGenerator_gen_binop(CGenerator* self, char* op, HirExpr* l, HirExpr* r);
 __attribute__((hot)) char* CGenerator_gen_unary(CGenerator* self, char* op, HirExpr* expr);

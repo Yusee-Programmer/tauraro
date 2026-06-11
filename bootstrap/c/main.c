@@ -1482,30 +1482,30 @@ __attribute__((hot)) int main(int argc, char** argv) {
             /* pass */
             if ((strcmp((char*)List_str_get(resolver->all_decl_modules, k), (char*)dot_path) == 0)) {
                 /* pass */
-                __auto_type _t267 = (*((Decl*)List_ptr_get(resolver->all_decls, k)));
-                if (_t267.tag == Decl_DClass) {
-                    __auto_type c = _t267.data.DClass.cls;
+                __auto_type _t275 = (*((Decl*)List_ptr_get(resolver->all_decls, k)));
+                if (_t275.tag == Decl_DClass) {
+                    __auto_type c = _t275.data.DClass.cls;
                     /* pass */
                     _tr_dict_set(class_set, c->name, true);
-                } else if (_t267.tag == Decl_DFunction) {
-                    __auto_type f = _t267.data.DFunction.func;
+                } else if (_t275.tag == Decl_DFunction) {
+                    __auto_type f = _t275.data.DFunction.func;
                     /* pass */
                     _tr_dict_set(fn_set, f->name, true);
-                } else if (_t267.tag == Decl_DEnum) {
-                    __auto_type e = _t267.data.DEnum.enm;
+                } else if (_t275.tag == Decl_DEnum) {
+                    __auto_type e = _t275.data.DEnum.enm;
                     /* pass */
                     _tr_dict_set(class_set, e->name, true);
-                } else if (_t267.tag == Decl_DInterface) {
-                    __auto_type iface = _t267.data.DInterface.iface;
+                } else if (_t275.tag == Decl_DInterface) {
+                    __auto_type iface = _t275.data.DInterface.iface;
                     /* pass */
                     _tr_dict_set(class_set, iface->name, true);
-                } else if (_t267.tag == Decl_DExtend) {
-                    __auto_type target = _t267.data.DExtend.target;
-__auto_type methods = _t267.data.DExtend.methods;
+                } else if (_t275.tag == Decl_DExtend) {
+                    __auto_type target = _t275.data.DExtend.target;
+__auto_type methods = _t275.data.DExtend.methods;
                     /* pass */
                     _tr_dict_set(class_set, target, true);
                 } else if (1) {
-                    __auto_type _ = _t267;
+                    __auto_type _ = _t275;
                     /* pass */
                 }
             }
@@ -1548,30 +1548,30 @@ __auto_type methods = _t267.data.DExtend.methods;
         /* pass */
         if ((strcmp((char*)List_str_get(resolver->all_decl_modules, k2), (char*)"") == 0)) {
             /* pass */
-            __auto_type _t268 = (*((Decl*)List_ptr_get(resolver->all_decls, k2)));
-            if (_t268.tag == Decl_DClass) {
-                __auto_type c = _t268.data.DClass.cls;
+            __auto_type _t276 = (*((Decl*)List_ptr_get(resolver->all_decls, k2)));
+            if (_t276.tag == Decl_DClass) {
+                __auto_type c = _t276.data.DClass.cls;
                 /* pass */
                 _tr_dict_set(main_class_set, c->name, true);
-            } else if (_t268.tag == Decl_DFunction) {
-                __auto_type f = _t268.data.DFunction.func;
+            } else if (_t276.tag == Decl_DFunction) {
+                __auto_type f = _t276.data.DFunction.func;
                 /* pass */
                 _tr_dict_set(main_fn_set, f->name, true);
-            } else if (_t268.tag == Decl_DEnum) {
-                __auto_type e = _t268.data.DEnum.enm;
+            } else if (_t276.tag == Decl_DEnum) {
+                __auto_type e = _t276.data.DEnum.enm;
                 /* pass */
                 _tr_dict_set(main_class_set, e->name, true);
-            } else if (_t268.tag == Decl_DInterface) {
-                __auto_type iface = _t268.data.DInterface.iface;
+            } else if (_t276.tag == Decl_DInterface) {
+                __auto_type iface = _t276.data.DInterface.iface;
                 /* pass */
                 _tr_dict_set(main_class_set, iface->name, true);
-            } else if (_t268.tag == Decl_DExtend) {
-                __auto_type target = _t268.data.DExtend.target;
-__auto_type methods = _t268.data.DExtend.methods;
+            } else if (_t276.tag == Decl_DExtend) {
+                __auto_type target = _t276.data.DExtend.target;
+__auto_type methods = _t276.data.DExtend.methods;
                 /* pass */
                 _tr_dict_set(main_class_set, target, true);
             } else if (1) {
-                __auto_type _ = _t268;
+                __auto_type _ = _t276;
                 /* pass */
             }
         }

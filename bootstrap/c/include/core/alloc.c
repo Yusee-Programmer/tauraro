@@ -31,32 +31,32 @@ __attribute__((hot)) void raw_move(char* dst, char* src, long long n) {
     _tr_c_memmove(dst, src, n);
 }
 
-__attribute__((hot)) void* alloc(long long n_elems) {
+__attribute__((hot)) void** alloc(long long n_elems) {
     /* pass */
     /* unsafe block */
     /* pass */
     __auto_type sz = ((long long)sizeof(void));
     /* pass */
-    void* ptr = ((void*)(_tr_c_calloc(n_elems, sz)));
+    void** ptr = ((void**)(_tr_c_calloc(n_elems, sz)));
     /* pass */
     return ptr;
 }
 
-__attribute__((hot)) void dealloc(void* ptr) {
+__attribute__((hot)) void dealloc(void** ptr) {
     /* pass */
     _tr_c_free(((char*)(ptr)));
 }
 
-__attribute__((hot)) void* resize(void* ptr, long long new_count) {
+__attribute__((hot)) void** resize(void** ptr, long long new_count) {
     /* pass */
     /* unsafe block */
     /* pass */
     __auto_type sz = ((long long)sizeof(void));
     /* pass */
-    return ((void*)(_tr_c_realloc(((char*)(ptr)), (new_count * sz))));
+    return ((void**)(_tr_c_realloc(((char*)(ptr)), (new_count * sz))));
 }
 
-__attribute__((hot)) void copy(void* dst, void* src, long long n_elems) {
+__attribute__((hot)) void copy(void** dst, void** src, long long n_elems) {
     /* pass */
     /* unsafe block */
     /* pass */

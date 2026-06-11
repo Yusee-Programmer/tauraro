@@ -260,6 +260,8 @@ __attribute__((malloc,returns_nonnull,hot)) Param* Param_init(char* name, AstTyp
     /* pass */
     p->is_mut_ref = false;
     /* pass */
+    p->is_variadic = false;
+    /* pass */
     return p;
 }
 
