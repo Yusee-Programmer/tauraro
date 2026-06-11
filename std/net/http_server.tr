@@ -40,7 +40,6 @@ from std.core.vec import Vec
 extern "C":
     def _tr_time_ms() -> int
     def _tr_c_free(ptr: Pointer[char])
-    def _tr_eprint(s: str)
 
 # ── HttpRequest ───────────────────────────────────────────────────────────────
 
@@ -210,7 +209,9 @@ extend HttpResponse:
         sb.append(Fmt.int_to_str(Str.len(self.body)))
         sb.append("\r\n\r\n")
         sb.append(self.body)
-        return sb.to_owned()
+        mut wire = sb.to_owned()
+        sb.free()
+        return wire
 
 # ── HttpConn ──────────────────────────────────────────────────────────────────
 
@@ -255,6 +256,7 @@ extend HttpConn:
             self.last_status = resp.status
             mut wire = resp.to_wire()
             mut sent = self._stream.send(wire)
+            unsafe: _tr_c_free(wire as Pointer[char])
             resp.headers.free()
             resp._order.free()
 
@@ -389,6 +391,7 @@ extend HttpRouter:
         mut pp   = Str.split_to_vec(pattern, "/")
         mut rp   = Str.split_to_vec(req.path, "/")
         mut result = true
+        mut break_i = -1
         if pp.len != rp.len:
             result = false
         else:
@@ -396,16 +399,38 @@ extend HttpRouter:
             while i < pp.len:
                 mut ps = pp.get(i)
                 mut rs = rp.get(i)
-                if Str.len(ps) > 0 and Str.char_at(ps, 0) == 58:
+                mut is_param = Str.len(ps) > 0 and Str.char_at(ps, 0) == 58
+                mut eq = false
+                if not is_param: eq = Str.eq(ps, rs)
+                if is_param:
                     mut pname = Str.slice(ps, 1, Str.len(ps))
                     req.params.insert(pname, rs)
-                elif not Str.eq(ps, rs):
-                    result = false
-                    break
+                    # insert() strdup's pname as the key and stores rs as-is
+                    # (rs is now owned by req.params - do not free it here).
+                    unsafe:
+                        _tr_c_free(pname as Pointer[char])
+                        _tr_c_free(ps as Pointer[char])
+                else:
+                    unsafe:
+                        _tr_c_free(ps as Pointer[char])
+                        _tr_c_free(rs as Pointer[char])
+                    if not eq:
+                        result = false
+                        break_i = i
+                        break
                 i = i + 1
-        # Free the backing pointer-arrays only - element strings are either
-        # owned by req.params now (path params) or intentionally leaked
-        # small per-segment slices (same tradeoff as the rest of this parser).
+        # Free any segments past the mismatch point (or all of them, if the
+        # segment counts differed) that the loop above never got to.
+        if not result:
+            mut start = break_i + 1
+            mut fi = start
+            while fi < pp.len:
+                unsafe: _tr_c_free(pp.get(fi) as Pointer[char])
+                fi = fi + 1
+            fi = start
+            while fi < rp.len:
+                unsafe: _tr_c_free(rp.get(fi) as Pointer[char])
+                fi = fi + 1
         pp.free()
         rp.free()
         return result
@@ -483,6 +508,9 @@ extend HttpParser:
                 unsafe: _tr_c_free(hname_raw as Pointer[char])
                 mut hvalue = Str.slice(line, colon + 2, Str.len(line))
                 req.headers.insert(hname, hvalue)
+                # Dict_set() strdup()s the key, so the lowercased copy we just
+                # allocated is no longer needed once it's been copied in.
+                unsafe: _tr_c_free(hname as Pointer[char])
             if not line_is_tail:
                 unsafe: _tr_c_free(line as Pointer[char])
             unsafe: _tr_c_free(tail as Pointer[char])
@@ -567,16 +595,14 @@ extend HttpServer:
     # Note: text-protocol oriented (JSON/forms/HTML); a body containing NUL
     # bytes is truncated by the string representation.
     def _read_full(self, stream: TcpStream) -> str:
-        _tr_eprint("DBG _read_full: enter")
         mut sb         = StringBuilder.init(self._recv_buf)
         mut header_end = -1
         while header_end < 0:
             mut chunk = stream.recv(self._recv_buf)
-            _tr_eprint("DBG _read_full: recv len=" + str(Str.len(chunk)))
             if Str.len(chunk) == 0: break
             sb.append(chunk)
+            unsafe: _tr_c_free(chunk as Pointer[char])
             header_end = Str.index_of(sb.as_str(), "\r\n\r\n")
-            _tr_eprint("DBG _read_full: header_end=" + str(header_end))
         if header_end < 0:
             mut raw0 = sb.to_owned()
             sb.free()
@@ -586,11 +612,11 @@ extend HttpServer:
         mut clen = HttpParser.content_length(hdr_for_clen)
         unsafe: _tr_c_free(hdr_for_clen as Pointer[char])
         mut have = Str.len(raw) - (header_end + 4)
-        _tr_eprint("DBG _read_full: clen=" + str(clen) + " have=" + str(have))
         while have < clen:
             mut more = stream.recv(self._recv_buf)
             if Str.len(more) == 0: break
             sb.append(more)
+            unsafe: _tr_c_free(more as Pointer[char])
             have = have + Str.len(more)
         mut result = sb.to_owned()
         sb.free()
@@ -602,14 +628,12 @@ extend HttpServer:
     # treat that as "no more requests on this connection".
     pub def read_next(self, stream: TcpStream) -> HttpRequest:
         mut raw = HttpServer._read_full(self, stream)
-        _tr_eprint("DBG read_next: raw_len=" + str(Str.len(raw)))
         if Str.len(raw) == 0 or Str.index_of(raw, "\r\n\r\n") < 0:
             unsafe: _tr_c_free(raw as Pointer[char])
             mut empty = HttpRequest.init()
             empty.method = ""
             return empty
         mut req = HttpParser.parse(raw)
-        _tr_eprint("DBG read_next: method=" + req.method + " path=" + req.path + " version=" + req.version)
         unsafe: _tr_c_free(raw as Pointer[char])
         self._router.dispatch(req)
         return req

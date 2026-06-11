@@ -122,5 +122,12 @@ extend StringBuilder:
         self.buf.len = 0
         unsafe: self.buf.data.offset(0).write('\0')
 
+    # Releases the StringObj's data buffer plus the heap-allocated StringObj
+    # struct itself (self.buf is a pointer) and the StringBuilder struct
+    # (self) - StringBuilder.init()/StringObj.init() each heap-allocate their
+    # struct, so a plain self.buf.destroy() leaked both small structs.
     pub def free(self):
         self.buf.destroy()
+        unsafe:
+            _tr_c_free(self.buf as Pointer[char])
+            _tr_c_free(self as Pointer[char])
