@@ -1352,8 +1352,13 @@ extend Sema:
                 if target as usize != 0 as usize:
                     match target.read():
                         case Expr.EIdent(sa_decl_name):
-                            if self.resolve(sa_decl_name).name == "":
-                                self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), true)
+                            mut sa_existing = self.resolve(sa_decl_name)
+                            if sa_existing.name == "":
+                                # Bare `name = expr` with no prior declaration and no `mut`:
+                                # declares an IMMUTABLE binding (Rust-like default).
+                                self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), false)
+                            elif sa_existing.kind == SymbolKind.SVariable and not sa_existing.is_mut:
+                                self.error("[M-8] Cannot assign to '" + sa_decl_name + "' a second time because it is immutable.\n      FIX: Declare it as 'mut " + sa_decl_name + " = ...' if it needs to change.")
                         case _: pass
                 # Phase 1 SAssign: plain-variable RHS of non-primitive non-Copy type = ownership move
                 # Lower first (EIdent checks current is_moved), then mark moved for subsequent uses.
@@ -1645,14 +1650,15 @@ extend Sema:
                 mut k = 0
                 while k < catches.len:
                     mut cc = catches.get(k).read()
-                    mut hcc = alloc[HirCatchClause](1)
                     mut hcc_val = HirCatchClause()
                     hcc_val.err_name = cc.err_name
                     hcc_val.err_type = AstType.init("str")
                     if cc.err_type as usize != 0 as usize: hcc_val.err_type = cc.err_type.read()
                     hcc_val.body = self.lower_block(cc.body.read())
-                    hcc.write(hcc_val)
-                    h_catches.push(hcc)
+                    unsafe:
+                        mut hcc = alloc[HirCatchClause](1)
+                        hcc.write(hcc_val)
+                        h_catches.push(hcc)
                     k = k + 1
                 return box_hirstmt(HirStmt.STry(self.lower_block(try_body), h_catches, self.lower_block(finally_b)))
             case Stmt.SRaise(e): return box_hirstmt(HirStmt.SRaise(self.lower_expr(e)))
@@ -1691,7 +1697,8 @@ extend Sema:
                 mut csi2 = 0
                 while csi2 < cs_cases.len:
                     mut arm = cs_cases.get(csi2).read()
-                    mut harm = alloc[HirChanSelectArm](1)
+                    mut harm = Pointer[HirChanSelectArm](0)
+                    unsafe: harm = alloc[HirChanSelectArm](1)
                     mut harm_v = HirChanSelectArm()
                     harm_v.kind = arm.kind
                     harm_v.var_name = arm.var_name
@@ -1719,7 +1726,7 @@ extend Sema:
                         self.declare(arm.var_name, SymbolKind.SVariable, box_asttype(recv_ty), true)
                     harm_v.body = self.lower_block(arm.body)
                     self.exit_scope()
-                    harm.write(harm_v)
+                    unsafe: harm.write(harm_v)
                     hcs_cases.push(harm)
                     csi2 = csi2 + 1
                 return box_hirstmt(HirStmt.SChanSelect(hcs_cases))
@@ -1840,9 +1847,7 @@ extend Sema:
 
     pub def str_method_ret_ty(self, method: str) -> AstType:
         if method == "split" or method == "split_to_vec" or method == "split_once":
-            mut _str_ty = alloc[AstType](1)
-            _str_ty.write(AstType.init("str"))
-            return AstType.init_generic("Vec", _str_ty)
+            return AstType.init_generic("Vec", box_asttype(AstType.init("str")))
         if method == "strip": return AstType.init("str")
         if method == "trim": return AstType.init("str")
         if method == "trim_left": return AstType.init("str")
@@ -2066,6 +2071,8 @@ extend Sema:
                             ret_ty = AstType.init(n)
                         elif n == "alloc" or n == "dealloc":
                             ret_ty = AstType.init("Pointer")
+                            if not self.in_unsafe:
+                                self.error("[U-1] '" + n + "' used outside an 'unsafe:' block.\n      FIX: Wrap raw memory operations in 'unsafe:' to signal manual memory management, e.g.\n          unsafe:\n              p = " + n + "[T](n)")
                         else:
                             mut _fsym = self.resolve(n)
                             ret_ty = _fsym.ty.read()
@@ -2083,8 +2090,8 @@ extend Sema:
                                             ret_ty.args.push(box_asttype(AstType.init(tn)))
                                         case _:
                                             ret_ty = AstType.init("Pointer")
-                                    if self.strict_mode and not self.in_unsafe:
-                                        self.error("[U-1] 'alloc'/'dealloc' used outside an 'unsafe:' block.\n      FIX: Wrap raw memory operations in 'unsafe:' to signal manual memory management.\n      Or remove --strict to allow this pattern.")
+                                    if not self.in_unsafe:
+                                        self.error("[U-1] 'alloc'/'dealloc' used outside an 'unsafe:' block.\n      FIX: Wrap raw memory operations in 'unsafe:' to signal manual memory management, e.g.\n          unsafe:\n              p = " + gn + "[T](n)")
                                 elif gn == "Pointer" or gn == "List" or gn == "Vec" or gn == "Map" or gn == "Dict":
                                     match idx.read():
                                         case Expr.EIdent(tn):
@@ -2181,9 +2188,7 @@ extend Sema:
                     mut _alias_ty = AstType.init(_alias_base)
                     if self.type_alias_elem.contains(hobj_ty.name):
                         mut _elem_name = self.type_alias_elem.get(hobj_ty.name)
-                        mut _elem_ptr = alloc[AstType](1)
-                        _elem_ptr.write(AstType.init(_elem_name))
-                        _alias_ty = AstType.init_generic(_alias_base, _elem_ptr)
+                        _alias_ty = AstType.init_generic(_alias_base, box_asttype(AstType.init(_elem_name)))
                     hobj_ty = _alias_ty
                 # Callable-field call: obj.f(args) where f is a def(...)-typed
                 # FIELD (not a method) -> lower to field access + indirect call.
@@ -2229,6 +2234,13 @@ extend Sema:
                     if method == "get_var" or method == "cwd": ret_ty = AstType.init("str")
                 elif _bm_obj_nm == "Hash" or hobj_ty.name == "Hash":
                     if method == "sha256" or method == "md5": ret_ty = AstType.init("str")
+                # [P-1] writing through a raw pointer can corrupt memory and must be
+                # confined to an 'unsafe:' block. Constructing a Pointer[T], taking
+                # an address with '&', '.offset()' (address arithmetic), and
+                # '.read()' (dereferencing to get a value) remain safe everywhere -
+                # they cannot by themselves corrupt memory.
+                if hobj_ty.name == "Pointer" and method == "write" and not self.in_unsafe:
+                    self.error("[P-1] '.write()' on a Pointer mutates raw memory and must be inside an 'unsafe:' block.\n      FIX: Wrap this call in 'unsafe:', e.g.\n          unsafe:\n              ... .write(...) ...")
                 if method == "init" or method == "new":
                     # Preserve generic args so Vec[T].init(n) keeps the T info
                     if hobj_ty.name == "void" or hobj_ty.name == "":
@@ -2269,9 +2281,7 @@ extend Sema:
                 elif method == "len" or method == "__len__": ret_ty = AstType.init("int")
                 elif method == "checked_add" or method == "checked_sub" or method == "checked_mul":
                     # Returns Option[int] - integer checked arithmetic
-                    mut _opt_int = alloc[AstType](1)
-                    _opt_int.write(AstType.init("int"))
-                    ret_ty = AstType.init_generic("Option", _opt_int)
+                    ret_ty = AstType.init_generic("Option", box_asttype(AstType.init("int")))
                 elif method == "abs" or method == "min" or method == "max" or method == "pow" or method == "sign" or method == "clamp" or method == "gcd" or method == "lcm":
                     ret_ty = hobj_ty  # same numeric type
                 # Float math methods - return float
@@ -2317,12 +2327,10 @@ extend Sema:
                     elif method == "add" or method == "remove" or method == "clear": ret_ty = AstType.init("void")
                     elif method == "to_list":
                         # to_list() returns List[T] where T is the Set's element type
-                        mut _set_elem = alloc[AstType](1)
+                        mut _set_elem_ty = AstType.init("str")
                         if hobj_ty.args.len > 0:
-                            _set_elem.write(hobj_ty.args.get(0).read())
-                        else:
-                            _set_elem.write(AstType.init("str"))
-                        ret_ty = AstType.init_generic("List", _set_elem)
+                            _set_elem_ty = hobj_ty.args.get(0).read()
+                        ret_ty = AstType.init_generic("List", box_asttype(_set_elem_ty))
                     elif method == "union" or method == "intersection" or method == "difference": ret_ty = hobj_ty
                 # Option[T] built-in method return types
                 elif hobj_ty.name == "Option":
@@ -2673,7 +2681,8 @@ extend Sema:
                 mut gc: int = 0
                 while gc < generators.len:
                     mut gen_ast: Comprehension = generators.get(gc).read()
-                    mut hgen_ptr = alloc[HirComprehension](1)
+                    mut hgen_ptr = Pointer[HirComprehension](0)
+                    unsafe: hgen_ptr = alloc[HirComprehension](1)
                     mut hgen_val = HirComprehension()
                     hgen_val.target = gen_ast.target
                     mut h_iter_lc = self.lower_expr(gen_ast.iter)
@@ -2693,7 +2702,7 @@ extend Sema:
                         lc_fi = lc_fi + 1
                     hgen_val.ifs = hifs
                     hgen_val.is_async = gen_ast.is_async
-                    hgen_ptr.write(hgen_val)
+                    unsafe: hgen_ptr.write(hgen_val)
                     hgens.push(hgen_ptr)
                     gc = gc + 1
                 mut h_lc_elem = self.lower_expr(element)
@@ -2709,7 +2718,8 @@ extend Sema:
                 mut gc2: int = 0
                 while gc2 < generators.len:
                     mut gen_ast2: Comprehension = generators.get(gc2).read()
-                    mut hgen_ptr2 = alloc[HirComprehension](1)
+                    mut hgen_ptr2 = Pointer[HirComprehension](0)
+                    unsafe: hgen_ptr2 = alloc[HirComprehension](1)
                     mut hgen_val2 = HirComprehension()
                     hgen_val2.target = gen_ast2.target
                     mut h_iter_ge = self.lower_expr(gen_ast2.iter)
@@ -2729,7 +2739,7 @@ extend Sema:
                         ge_fi = ge_fi + 1
                     hgen_val2.ifs = hifs2
                     hgen_val2.is_async = gen_ast2.is_async
-                    hgen_ptr2.write(hgen_val2)
+                    unsafe: hgen_ptr2.write(hgen_val2)
                     hgens2.push(hgen_ptr2)
                     gc2 = gc2 + 1
                 mut h_ge_elem = self.lower_expr(element)
@@ -2874,11 +2884,13 @@ extend Sema:
         return false
 
 pub def box_asttype(t: AstType) -> Pointer[AstType]:
-    mut p = alloc[AstType](1)
-    p.write(t)
-    return p
+    unsafe:
+        mut p = alloc[AstType](1)
+        p.write(t)
+        return p
 
 pub def box_symbol(s: Symbol) -> Pointer[Symbol]:
-    mut p = alloc[Symbol](1)
-    p.write(s)
-    return p
+    unsafe:
+        mut p = alloc[Symbol](1)
+        p.write(s)
+        return p

@@ -9,24 +9,28 @@ from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, 
 # --- Helpers ------------------------------------------------------------------
 
 pub def box_expr(e: Expr) -> Pointer[Expr]:
-    mut p = alloc[Expr](1)
-    p.write(e)
-    return p
+    unsafe:
+        mut p = alloc[Expr](1)
+        p.write(e)
+        return p
 
 pub def box_stmt(s: Stmt) -> Pointer[Stmt]:
-    mut p = alloc[Stmt](1)
-    p.write(s)
-    return p
+    unsafe:
+        mut p = alloc[Stmt](1)
+        p.write(s)
+        return p
 
 pub def box_decl(d: Decl) -> Pointer[Decl]:
-    mut p = alloc[Decl](1)
-    p.write(d)
-    return p
+    unsafe:
+        mut p = alloc[Decl](1)
+        p.write(d)
+        return p
 
 pub def box_asttype(t: AstType) -> Pointer[AstType]:
-    mut p = alloc[AstType](1)
-    p.write(t)
-    return p
+    unsafe:
+        mut p = alloc[AstType](1)
+        p.write(t)
+        return p
 
 # --- Parser class --------------------------------------------------------------
 
@@ -537,13 +541,16 @@ extend Parser:
                 case _:
                     pass
             mut body = self.parse_block()
-            mut body_ptr = alloc[Block](1)
-            body_ptr.write(body)
-            mut c = CatchClause.init(err_name, body_ptr)
+            mut c = CatchClause.init(err_name, Pointer[Block](0))
+            unsafe:
+                mut body_ptr = alloc[Block](1)
+                body_ptr.write(body)
+                c.body = body_ptr
             c.err_type = err_type
-            mut c_ptr = alloc[CatchClause](1)
-            c_ptr.write(c)
-            catches.push(c_ptr)
+            unsafe:
+                mut c_ptr = alloc[CatchClause](1)
+                c_ptr.write(c)
+                catches.push(c_ptr)
         
         mut finally_b = Block.init()
         if self.peek() == Token.KwFinally:
@@ -711,16 +718,17 @@ extend Parser:
                             if self.peek() == Token.Colon: self.pos = self.pos + 1
                             arm_kind = 1
                     mut arm_body = self.parse_block()
-                    mut arm_p = alloc[ChanSelectArm](1)
-                    if arm_kind == 0:
-                        arm_p.write(ChanSelectArm.init_recv(chan_e, var_nm, arm_body))
-                    elif arm_kind == 1:
-                        arm_p.write(ChanSelectArm.init_send(chan_e, Pointer[Expr](0), arm_body))
-                    elif arm_kind == 2:
-                        arm_p.write(ChanSelectArm.init_timeout(timeout_e, arm_body))
-                    else:
-                        arm_p.write(ChanSelectArm.init_default(arm_body))
-                    cases.push(arm_p)
+                    unsafe:
+                        mut arm_p = alloc[ChanSelectArm](1)
+                        if arm_kind == 0:
+                            arm_p.write(ChanSelectArm.init_recv(chan_e, var_nm, arm_body))
+                        elif arm_kind == 1:
+                            arm_p.write(ChanSelectArm.init_send(chan_e, Pointer[Expr](0), arm_body))
+                        elif arm_kind == 2:
+                            arm_p.write(ChanSelectArm.init_timeout(timeout_e, arm_body))
+                        else:
+                            arm_p.write(ChanSelectArm.init_default(arm_body))
+                        cases.push(arm_p)
                 case Token.Dedent | Token.Eof:
                     going = false
                 case Token.Newline:
@@ -846,9 +854,10 @@ extend Parser:
                         case _:
                             pass
                     eb = self.parse_block()
-                    mut eb_ptr = alloc[Block](1)
-                    eb_ptr.write(eb)
-                    elifs.push(ElifClause.init(ec, eb_ptr))
+                    unsafe:
+                        mut eb_ptr = alloc[Block](1)
+                        eb_ptr.write(eb)
+                        elifs.push(ElifClause.init(ec, eb_ptr))
                     going = True
                 case Token.KwElse:
                     self.pos = self.pos + 1
@@ -959,8 +968,10 @@ extend Parser:
                         pass
                 if not is_block_arm:
                     arm_block.push(self.parse_stmt())
-                mut ab_ptr = alloc[Block](1)
-                ab_ptr.write(arm_block)
+                mut ab_ptr = Pointer[Block](0)
+                unsafe:
+                    ab_ptr = alloc[Block](1)
+                    ab_ptr.write(arm_block)
                 mut new_arm = MatchArm.init(pat, ab_ptr)
                 new_arm.guard = guard_expr
                 arms.push(new_arm)
@@ -1514,9 +1525,10 @@ extend Parser:
                             ifs.push(self.parse_or_expr())
                         mut c = Comprehension.init(target, iter)
                         c.ifs = ifs
-                        mut c_ptr = alloc[Comprehension](1)
-                        c_ptr.write(c)
-                        generators.push(c_ptr)
+                        unsafe:
+                            mut c_ptr = alloc[Comprehension](1)
+                            c_ptr.write(c)
+                            generators.push(c_ptr)
                     match self.peek():
                         case Token.RBracket:
                             self.pos = self.pos + 1
@@ -1812,7 +1824,7 @@ extend Parser:
                         c.is_public = is_public
                         c.is_class = true
                         c.decorators = decorators
-                        c_ptr.write(Decl.DClass(c))
+                        unsafe: c_ptr.write(Decl.DClass(c))
                     case _:
                         pass
                 return c_ptr
@@ -1824,7 +1836,7 @@ extend Parser:
                         e.line = _eline
                         e.is_public = is_public
                         e.decorators = decorators
-                        e_ptr.write(Decl.DEnum(e))
+                        unsafe: e_ptr.write(Decl.DEnum(e))
                     case _:
                         pass
                 return e_ptr
@@ -1836,7 +1848,7 @@ extend Parser:
                         i.line = _iline
                         i.is_public = is_public
                         i.decorators = decorators
-                        i_ptr.write(Decl.DInterface(i))
+                        unsafe: i_ptr.write(Decl.DInterface(i))
                     case _:
                         pass
                 return i_ptr

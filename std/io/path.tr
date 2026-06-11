@@ -19,7 +19,8 @@ extend Path:
         mut bp = buf as Pointer[char]
         mut i = 0
         while i < n:
-            if bp.offset(i).read() as int == 92: bp.offset(i).write(47 as char)
+            if bp.offset(i).read() as int == 92:
+                unsafe: bp.offset(i).write(47 as char)
             i = i + 1
         return buf
 

@@ -56,7 +56,7 @@ extend JsonValue:
         v.s_val = ""
         v.items = Vec[Pointer[JsonValue]].init(4)
         v.keys  = Vec[str].init(4)
-        raw.write(v)
+        unsafe: raw.write(v)
         return raw
 
     pub def init_bool(b: bool) -> Pointer[JsonValue]:
@@ -69,7 +69,7 @@ extend JsonValue:
         v.s_val = ""
         v.items = Vec[Pointer[JsonValue]].init(4)
         v.keys  = Vec[str].init(4)
-        raw.write(v)
+        unsafe: raw.write(v)
         return raw
 
     pub def init_int(n: int) -> Pointer[JsonValue]:
@@ -82,7 +82,7 @@ extend JsonValue:
         v.s_val = ""
         v.items = Vec[Pointer[JsonValue]].init(4)
         v.keys  = Vec[str].init(4)
-        raw.write(v)
+        unsafe: raw.write(v)
         return raw
 
     pub def init_float(f: float) -> Pointer[JsonValue]:
@@ -95,7 +95,7 @@ extend JsonValue:
         v.s_val = ""
         v.items = Vec[Pointer[JsonValue]].init(4)
         v.keys  = Vec[str].init(4)
-        raw.write(v)
+        unsafe: raw.write(v)
         return raw
 
     pub def init_str(s: str) -> Pointer[JsonValue]:
@@ -108,7 +108,7 @@ extend JsonValue:
         v.s_val = s
         v.items = Vec[Pointer[JsonValue]].init(4)
         v.keys  = Vec[str].init(4)
-        raw.write(v)
+        unsafe: raw.write(v)
         return raw
 
     pub def init_array() -> Pointer[JsonValue]:
@@ -121,7 +121,7 @@ extend JsonValue:
         v.s_val = ""
         v.items = Vec[Pointer[JsonValue]].init(8)
         v.keys  = Vec[str].init(4)
-        raw.write(v)
+        unsafe: raw.write(v)
         return raw
 
     pub def init_object() -> Pointer[JsonValue]:
@@ -134,7 +134,7 @@ extend JsonValue:
         v.s_val = ""
         v.items = Vec[Pointer[JsonValue]].init(8)
         v.keys  = Vec[str].init(8)
-        raw.write(v)
+        unsafe: raw.write(v)
         return raw
 
     # ── Type checks ───────────────────────────────────────────────────────────

@@ -284,6 +284,14 @@ pub def get_path_env_entry(s: str, idx: int) -> str:
         i = i + 1
     return ""
 
+# Make a path runnable via system(): bare filenames (no directory component)
+# are not found by cmd.exe's command search on Windows, so prefix them with
+# "./" (converted to ".\\" by path_to_native) when no separator is present.
+pub def to_runnable_path(s: str) -> str:
+    if s.contains("/") or s.contains("\\"):
+        return s
+    return "./" + s
+
 pub def path_to_native(s: str) -> str:
     mut n = 0
     mut p = s as Pointer[char]
@@ -292,7 +300,8 @@ pub def path_to_native(s: str) -> str:
     mut bp = buf as Pointer[char]
     mut j = 0
     while j < n:
-        if bp.offset(j).read() as int == 47: bp.offset(j).write(92 as char)
+        if bp.offset(j).read() as int == 47:
+            unsafe: bp.offset(j).write(92 as char)
         j = j + 1
     return buf
 
@@ -305,7 +314,8 @@ pub def dot_to_safe(s: str) -> str:
     mut bp = buf as Pointer[char]
     mut j = 0
     while j < n:
-        if bp.offset(j).read() as int == 46: bp.offset(j).write(95 as char)  # '.' -> '_'
+        if bp.offset(j).read() as int == 46:
+            unsafe: bp.offset(j).write(95 as char)  # '.' -> '_'
         j = j + 1
     return buf
 
@@ -850,7 +860,7 @@ pub def main(args: Vec[str]):
     if verbose: print("Done: " + exe_path)
 
     if run_after:
-        mut run_path = exe_path
-        if _tr_is_windows(): run_path = path_to_native(exe_path)
+        mut run_path = to_runnable_path(exe_path)
+        if _tr_is_windows(): run_path = path_to_native(run_path)
         mut run_rc = _tr_system("\"" + run_path + "\"")
         _tr_exit(run_rc)
