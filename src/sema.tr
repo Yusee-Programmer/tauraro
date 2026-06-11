@@ -2519,9 +2519,14 @@ extend Sema:
                     case _: pass
                 mut is_generic = false
                 mut generic_arg_n: str = ""
+                mut generic_arg_ty: Pointer[AstType] = 0 as Pointer[AstType]
                 if idx_inner as usize == 0 as usize:
                     return hexpr_obj
                 match idx_inner.read():
+                    case Expr.ETypeArg(targ_ty):
+                        is_generic = true
+                        generic_arg_ty = targ_ty
+                        generic_arg_n = targ_ty.read().name
                     case Expr.EIdent(iname):
                         mut is_param = false
                         if self.current_class_name != "":
@@ -2562,7 +2567,10 @@ extend Sema:
                     if (eff_ty_n == "Vec" or eff_ty_n == "List" or eff_ty_n == "Map" or eff_ty_n == "Dict" or eff_ty_n == "Set" or eff_ty_n == "Pointer") and generic_arg_n != "":
                         mut container_ty = AstType.init(eff_ty_n)
                         container_ty.args = Vec[Pointer[AstType]].init(1)
-                        container_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
+                        if generic_arg_ty as usize != 0 as usize:
+                            container_ty.args.push(generic_arg_ty)
+                        else:
+                            container_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
                         if obj_name == "alloc" or obj_name == "dealloc" or obj_name == "resize" or obj_name == "copy":
                              return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(idx_inner), container_ty))
                         return box_hirexpr(HirExpr.EIdent(eff_ty_n, container_ty, false))

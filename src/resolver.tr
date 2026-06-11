@@ -20,6 +20,12 @@ from lexer import Lexer
 from parser import Parser
 from ast import Program, Decl, FunctionDef, ClassDef, EnumDef, InterfaceDef, ImportItem
 
+extern "C":
+    def _tr_dir_exists(path: str) -> bool
+    def _tr_opendir(path: str) -> Pointer[void]
+    def _tr_readdir(handle: Pointer[void]) -> str
+    def _tr_closedir(handle: Pointer[void])
+
 # --- Visibility helper --------------------------------------------------------
 
 pub def decl_is_pub(d: Decl) -> bool:
@@ -126,6 +132,23 @@ extend ModuleResolver:
                     unsafe:
                         gp_dir = _tr_str_slice(parent_dir, 0, gp_end)
                     self.search_paths.push(gp_dir)
+
+                # Auto-discover vendored taupkg dependencies: when a project is
+                # built via `taupkg build`, deps are copied into
+                # <build_dir>/<pkgname>/src/. Add each such <pkgname>/src as a
+                # search path so the dependency's own sibling-relative imports
+                # (e.g. `from app import App` inside watax.tr) resolve, and so
+                # `from <pkgname> import X` finds <build_dir>/<pkgname>/src/<pkgname>.tr.
+                mut vh = _tr_opendir(parent_dir)
+                if vh as usize != 0 as usize:
+                    mut vname = _tr_readdir(vh)
+                    while vname != "":
+                        if vname != "." and vname != "..":
+                            mut vpkg_src = parent_dir + "/" + vname + "/src"
+                            if _tr_dir_exists(vpkg_src):
+                                self.search_paths.push(vpkg_src)
+                        vname = _tr_readdir(vh)
+                    _tr_closedir(vh)
         self.resolve_file(main_path, true)
         mut p = Program.init()
         mut i = 0

@@ -2617,6 +2617,18 @@ static void      Dict_free(Dict* d) {
     }
     _tr_free(d->buckets); _tr_free(d);
 }
+/* Free all entries (and their key strings) but keep the Dict struct itself
+   alive and reusable - used by clear(), unlike Dict_free() which also frees
+   the struct (would otherwise leave m a dangling pointer after clear()). */
+static void      Dict_clear_entries(Dict* d) {
+    if (!d) return;
+    for (size_t i=0; i<d->cap; i++) {
+        _DictNode* n=d->buckets[i];
+        while (n) { _DictNode* nx=n->next; if(n->key) _tr_free(n->key); _tr_free(n); n=nx; }
+        d->buckets[i]=NULL;
+    }
+    d->len=0;
+}
 
 typedef Dict TrMap;
 static inline TrMap* _tr_dict_new(long long cap) { (void)cap; return Dict_new(); }
@@ -4197,8 +4209,27 @@ static void _tr_dict_update(TrMap* dst, TrMap* src) {
     }
 }
 static void _tr_idict_update(TrMap* dst, TrMap* src) { _tr_dict_update(dst, src); }
-static void _tr_dict_clear(TrMap* m) { if (m) { Dict_free(m); m->buckets=NULL; m->len=0; m->cap=0; } }
-static void _tr_idict_clear(TrMap* m) { _tr_dict_clear(m); }
+static void _tr_dict_clear(TrMap* m) { Dict_clear_entries(m); }
+static void _tr_idict_clear(TrIDict* m) {
+    if (!m) return;
+    for (size_t i=0;i<m->cap;i++) {
+        _TrIDictNode* n=m->buckets[i];
+        while(n){ _TrIDictNode* nx=n->next; _tr_free(n); n=nx; }
+        m->buckets[i]=NULL;
+    }
+    m->len=0;
+}
+/* Free a Map[int,V]/Dict[int,V] (TrIDict) entirely - nodes, buckets array and
+   the struct itself. Mirrors Dict_free() but for the int-keyed node layout
+   (whose key is a long long, not a heap string). */
+static void _tr_idict_free(TrIDict* d) {
+    if (!d) return;
+    for (size_t i=0;i<d->cap;i++) {
+        _TrIDictNode* n=d->buckets[i];
+        while(n){ _TrIDictNode* nx=n->next; _tr_free(n); n=nx; }
+    }
+    _tr_free(d->buckets); _tr_free(d);
+}
 
 /* Set[T] — hash set backed by TrMap */
 typedef TrMap _TrSet;

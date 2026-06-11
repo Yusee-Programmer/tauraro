@@ -2220,7 +2220,11 @@ pub class CGenerator:
                 if args.len > 0: mx_init_v = "(long long)(" + self.gen_expr(args.get(0)) + ")"
                 return "_tr_mutexbox_new(" + mx_init_v + ")"
             if method == "lock" or method == "get":
-                return "_tr_mutexbox_lock_get(" + obj_s + ")"
+                mut mx_get = "_tr_mutexbox_lock_get(" + obj_s + ")"
+                mut mx_obj_ty = hir_expr_type(obj)
+                if mx_obj_ty.args.len > 0:
+                    return self.unwrap_voidp_as(mx_get, mx_obj_ty.args.get(0).read())
+                return mx_get
             if method == "set":
                 mut mx_sv = "0LL"
                 if args.len > 0: mx_sv = "(long long)(" + self.gen_expr(args.get(0)) + ")"
@@ -2663,7 +2667,7 @@ pub class CGenerator:
             if method == "append_char": return "StringBuilder_append_char(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             if method == "to_string": return "StringBuilder_to_string(" + obj_s + ")"
             if method == "len" or method == "length": return obj_s + "->buf->len"
-            if method == "free": return "StringBuilder_free(" + obj_s + ")"
+            if method == "free": return "StringBuilder__tr_fn_free(" + obj_s + ")"
 
         # len/length - only shortcut for non-user-class types
         if (method == "len" or method == "__len__" or method == "length") and not (self.classes.contains(t_n) and t_n != "Vec" and t_n != "Map" and t_n != "Dict" and t_n != "List") and not self.enums.contains(t_n):
@@ -2838,7 +2842,7 @@ pub class CGenerator:
                 if elem_sfx == "ptr" and call_ty.name == "Pointer" and call_ty.args.len > 0:
                     mut inner_ct = self.type_to_c(call_ty.args.get(0).read())
                     return "((" + inner_ct + "*)" + get_r + ")"
-                if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer" and call_ty.name != "List" and call_ty.name != "Vec" and call_ty.name != "Map" and call_ty.name != "Dict" and call_ty.name != "str":
+                if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer" and call_ty.name != "List" and call_ty.name != "Vec" and call_ty.name != "Map" and call_ty.name != "Dict" and call_ty.name != "str" and call_ty.name != "def":
                     if _tr_strlen(call_ty.name) > 1:
                         return "((" + call_ty.name + "*)" + get_r + ")"
                 return get_r
@@ -2926,6 +2930,8 @@ pub class CGenerator:
                 return sfn + "difference(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             if method == "is_subset" and args.len > 0:
                 return sfn + "is_subset(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "free":
+                return sfn + "free(" + obj_s + ")"
 
         # Map/Dict method dispatch
         mut is_map_dict: bool = class_name == "Map" or class_name == "Dict" or class_name == "TrMap"
@@ -3000,6 +3006,11 @@ pub class CGenerator:
                 if is_idict:
                     return "(_tr_idict_contains(" + obj_s + ", " + _k + ") ? _tr_idict_get(" + obj_s + ", " + _k + ") : (void*)(uintptr_t)(" + _d + "))"
                 return "(_tr_dict_contains(" + obj_s + ", " + _k + ") ? _tr_dict_get(" + obj_s + ", " + _k + ") : (void*)(uintptr_t)(" + _d + "))"
+            # free() - release the underlying TrMap/TrIDict (buckets, nodes,
+            # key strings for str-keyed maps, and the struct itself).
+            if method == "free":
+                if is_idict: return "_tr_idict_free(" + obj_s + ")"
+                return "Dict_free(" + obj_s + ")"
 
         mut extra_args = ""
         if args.len > 0:
@@ -5516,6 +5527,23 @@ pub class CGenerator:
                                 out.append("\n")
                         wii = wii + 1
             wi = wi + 1
+
+        # -- Module-level `mut`/`let` globals: extern declarations -------------
+        # Definitions (with initializers, run in main()) are emitted by
+        # generate_module_c's "Phase 3.6" only into the entry module's C file.
+        # Every other module's C file needs an `extern` declaration to
+        # reference these globals, so declare them here in the shared header.
+        mut hgi = 0
+        while hgi < prog.top_level_stmts.len:
+            match prog.top_level_stmts.get(hgi).read():
+                case HirStmt.SLet(hgn, _, _, _, _, hgty, hgval):
+                    mut hg_cty = self.type_to_c(hgty)
+                    if hg_cty == "void" or hg_cty == "__auto_type":
+                        if hgval as usize != 0 as usize: hg_cty = self.type_to_c(hir_expr_type(hgval))
+                    if hg_cty == "void" or hg_cty == "__auto_type": hg_cty = "long long"
+                    out.append("extern " + hg_cty + " " + hgn + ";\n")
+                case _: pass
+            hgi = hgi + 1
 
         # Restore all temporary buffers
         self.buf           = old_buf
