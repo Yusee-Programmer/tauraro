@@ -222,14 +222,16 @@ extend HirProgram:
 # --- Helpers ------------------------------------------------------------------
 
 pub def box_hirexpr(e: HirExpr) -> Pointer[HirExpr]:
-    mut p = alloc[HirExpr](1)
-    p.write(e)
-    return p
+    unsafe:
+        mut p = alloc[HirExpr](1)
+        p.write(e)
+        return p
 
 pub def box_hirstmt(s: HirStmt) -> Pointer[HirStmt]:
-    mut p = alloc[HirStmt](1)
-    p.write(s)
-    return p
+    unsafe:
+        mut p = alloc[HirStmt](1)
+        p.write(s)
+        return p
 
 pub def hir_expr_type(e: Pointer[HirExpr]) -> AstType:
     if e as usize == 0 as usize: return AstType.init("void")

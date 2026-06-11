@@ -30,16 +30,16 @@ extend LinkedList:
 
     pub def prepend(self, value: int):
         mut node = _tr_checked_alloc(sizeof(ListNode)) as Pointer[ListNode]
-        node.write(ListNode.init(value))
+        unsafe: node.write(ListNode.init(value))
         mut n = node.read()
         n.next = self.head
-        node.write(n)
+        unsafe: node.write(n)
         self.head = node
         self.len  = self.len + 1
 
     pub def append(self, value: int):
         mut node = _tr_checked_alloc(sizeof(ListNode)) as Pointer[ListNode]
-        node.write(ListNode.init(value))
+        unsafe: node.write(ListNode.init(value))
         if self.head as int == 0:
             self.head = node
         else:
@@ -48,7 +48,7 @@ extend LinkedList:
                 cur = cur.read().next
             mut tail = cur.read()
             tail.next = node
-            cur.write(tail)
+            unsafe: cur.write(tail)
         self.len = self.len + 1
 
     pub def pop_front(self) -> int:
@@ -75,7 +75,7 @@ extend LinkedList:
             if nxt.read().value == v:
                 mut upd  = cur.read()
                 upd.next = nxt.read().next
-                cur.write(upd)
+                unsafe: cur.write(upd)
                 _tr_c_free(nxt as Pointer[char])
                 self.len = self.len - 1
                 return
@@ -95,10 +95,10 @@ extend LinkedList:
         mut node = _tr_checked_alloc(sizeof(ListNode)) as Pointer[ListNode]
         mut n    = ListNode.init(value)
         n.next = cur.read().next
-        node.write(n)
+        unsafe: node.write(n)
         mut upd  = cur.read()
         upd.next = node
-        cur.write(upd)
+        unsafe: cur.write(upd)
         self.len = self.len + 1
 
     pub def is_empty(self) -> bool:
@@ -137,7 +137,7 @@ extend LinkedList:
             mut node = cur.read()
             mut nxt  = node.next
             node.next = prev
-            cur.write(node)
+            unsafe: cur.write(node)
             prev = cur
             cur  = nxt
         self.head = prev

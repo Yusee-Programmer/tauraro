@@ -78,6 +78,74 @@ extern "C":
 
 ---
 
+## `extern "CPP":` Declarations (C++ Interop)
+
+### When to use
+
+Use `extern "CPP":` (or `extern "C++":`) when the symbols you're calling come
+from a C++ library. Tauraro accepts both `"CPP"`/`"C++"` and `"C"` as the ABI
+string in an `extern` block — they generate identical C declarations.
+
+### How it works
+
+```python
+extern "CPP":
+    def cpp_create_widget(name: str) -> Pointer[void]
+    def cpp_destroy_widget(w: Pointer[void]) -> void
+```
+
+This is purely a documentation/intent marker for the block — the generated C
+prototype is the same as `extern "C"`. **The actual C++ interop work happens
+on the C++ side**: C++ name-mangles every symbol unless it is declared inside
+an `extern "C" { ... }` block in the C++ source/header. So to call into a C++
+library:
+
+1. If the library already ships a C API (most do — e.g. `extern "C"` headers
+   for SQLite's C++ wrappers, LLVM-C, etc.), declare those functions directly
+   with `extern "C":`.
+2. If it only exposes raw C++ classes/templates, write a small C++ shim file
+   with `extern "C"` wrapper functions that forward to the C++ API, compile
+   it to a `.o`/`.a` with `g++`, and link it in with `--link <path>`:
+
+```cpp
+// shim.cpp — compiled separately with g++ -c shim.cpp -o shim.o
+extern "C" void* cpp_create_widget(const char* name) {
+    return new Widget(name);
+}
+extern "C" void cpp_destroy_widget(void* w) {
+    delete static_cast<Widget*>(w);
+}
+```
+
+```python
+extern "CPP":
+    def cpp_create_widget(name: str) -> Pointer[void]
+    def cpp_destroy_widget(w: Pointer[void]) -> void
+```
+
+```
+tauraroc src/main.tr --link shim.o -lstdc++ -o app
+```
+
+### Common Mistakes
+
+**Expecting `extern "CPP":` to call mangled C++ symbols directly.** It
+doesn't — there is no `extern "C++"` linkage spec in C, and a hand-written
+declaration can never match a compiler's name-mangling scheme. Always go
+through an `extern "C"` boundary, either from the library itself or via a
+shim (see above).
+
+### Best Practices
+
+1. Use `extern "CPP":` purely to signal "these declarations come from a C++
+   library" — group them separately from plain C declarations.
+2. Always cross an `extern "C"` boundary on the C++ side (library-provided or
+   a thin shim).
+3. Link C++ shims with `-lstdc++` (Linux/macOS) or the appropriate MSVC C++
+   runtime on Windows.
+
+---
+
 ## Exporting Tauraro Functions to C
 
 ### When to use
@@ -121,15 +189,17 @@ Use variadic declarations when calling C functions like `printf`, `fprintf`, `sp
 
 ### How it works
 
-Use `...` as the last parameter:
+Use a trailing `args...` as the last parameter — it emits C's literal `...`
+variadic signature (see [Functions — Variadic Functions](05_functions.md#variadic-functions)
+for the full picture, including Tauraro-side `args...` -> `List[T]`):
 
 ```python
 extern "C":
-    def printf(fmt: str, ...) -> int
-    def fprintf(stream: Pointer[void], fmt: str, ...) -> int
-    def sprintf(buf: str, fmt: str, ...) -> int
-    def snprintf(buf: str, n: usize, fmt: str, ...) -> int
-    def sscanf(s: str, fmt: str, ...) -> int
+    def printf(fmt: str, args...) -> int
+    def fprintf(stream: Pointer[void], fmt: str, args...) -> int
+    def sprintf(buf: str, fmt: str, args...) -> int
+    def snprintf(buf: str, n: usize, fmt: str, args...) -> int
+    def sscanf(s: str, fmt: str, args...) -> int
 ```
 
 ```python

@@ -14,7 +14,7 @@ Functions are the fundamental unit of reusable logic in Tauraro. They are static
 5. [Generic Functions](#generic-functions)
 6. [Error Propagation with `throws`](#error-propagation-with-throws)
 7. [Async Functions](#async-functions)
-8. [Variadic Functions (FFI Only)](#variadic-functions-ffi-only)
+8. [Variadic Functions](#variadic-functions)
 9. [Visibility: `pub` and `export`](#visibility-pub-and-export)
 10. [Function Rules Quick Reference](#function-rules-quick-reference)
 
@@ -701,22 +701,65 @@ async def square(x: int) -> int:    # unnecessary — no I/O or suspension
 
 ---
 
-## Variadic Functions (FFI Only)
+## Variadic Functions
 
-### When to use
+Tauraro supports two flavors of trailing variadic parameters, both spelled
+`name...` (a trailing param name followed by `...`):
 
-Use variadic declarations when calling C library functions that accept a variable number of arguments (`printf`, `sprintf`, `ioctl`, etc.). You cannot define variadic functions in Tauraro itself.
+1. **Regular functions** — `args...` collects the trailing call arguments
+   into a `List[T]`.
+2. **`extern "C"` declarations** — a trailing `args...` param maps to C's
+   literal `...` variadic signature, for calling functions like `printf`.
 
-### How it works
+### Regular Tauraro functions: `args...` -> `List[T]`
+
+#### When to use
+
+Use this when a function should accept any number of trailing arguments of
+the same type — logging helpers, math reducers, constructors that take a
+variable number of items, etc.
+
+#### How it works
+
+```python
+def total(label: str, args: int...) -> int:
+    mut sum = 0
+    for v in args:
+        sum = sum + v
+    print(label + ": " + sum.to_str())
+    return sum
+
+def main():
+    total("a", 1, 2, 3)       # args = [1, 2, 3]
+    total("b", 10)            # args = [10]
+    total("c")                # args = []
+```
+
+The element type comes from the annotation before `...` (`int` above; it
+defaults to `int` if omitted). At each call site, the compiler collects all
+arguments past the fixed parameters into a single `List[T]` literal — the
+caller passes plain values, not a list.
+
+### `extern "C"` declarations: `args...` -> C's `...`
+
+#### When to use
+
+Use a trailing `args...` in an `extern "C"` block when calling C library
+functions that accept a variable number of arguments (`printf`, `sprintf`,
+`ioctl`, etc.). You cannot define a function with literal C `...` in
+Tauraro itself — only declare one via `extern "C"`.
+
+#### How it works
 
 ```python
 extern "C":
-    def printf(fmt: str, ...) -> int
-    def snprintf(buf: str, n: int, fmt: str, ...) -> int
-    def fprintf(stream: ptr, fmt: str, ...) -> int
+    def printf(fmt: str, args...) -> int
+    def snprintf(buf: str, n: int, fmt: str, args...) -> int
 ```
 
-`...` in an `extern "C"` declaration marks the function as variadic. The Tauraro compiler emits the correct C variadic call:
+A trailing `args...` in an `extern "C"` declaration emits C's `...`
+variadic signature (`int printf(const char* fmt, ...)`). Call sites pass
+arguments through unchanged:
 
 ```python
 printf("value = %d\n", 42)
@@ -726,17 +769,22 @@ snprintf(buf, 256, "result: %f", result)
 
 ### Common Mistakes
 
-**Trying to define a variadic Tauraro function:**
+**Forgetting the trailing param name:**
 ```python
-def log(msg: str, ...) -> void:    # ERROR: variadic user functions not supported
+def log(msg: str, ...) -> void:    # ERROR: bare `...` is not valid syntax
     ...
 ```
-Fix: Use `List[str]` or overloaded methods instead of variadic parameters.
+Fix: name the trailing param, e.g. `def log(msg: str, args: str...) -> void:`.
 
 ### Best Practices
 
-- Prefer Tauraro's `f"..."` and `print()` for formatted output — they are safer and type-checked. Use `printf` only when you need direct C interop.
-- Always include the `-> int` return type on variadic C functions that return a value — the compiler uses it for correct call-site code generation.
+- Prefer `args...` -> `List[T]` for Tauraro-side variadic APIs — it is
+  type-checked and iterable like any other `List[T]`.
+- Prefer Tauraro's `f"..."` and `print()` for formatted output over
+  `printf` — they are safer and type-checked. Use `extern "C"` variadics
+  only when you need direct C interop.
+- Always include the `-> int` return type on variadic C functions that
+  return a value — the compiler uses it for correct call-site codegen.
 
 ---
 

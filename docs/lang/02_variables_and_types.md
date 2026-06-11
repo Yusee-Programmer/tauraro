@@ -558,6 +558,91 @@ mut x: int = none   # ERROR [M-7]: cannot assign 'none' to 'x' which has type 'i
 
 ---
 
+## Compile-Time Reflection: `instanceOf` and `inspect`
+
+### `instanceOf(obj, T)`
+
+#### When to use
+
+Use `instanceOf(obj, T)` to check whether an expression's **static type**
+is `T` — a class, enum, interface, or primitive type name.
+
+#### How it works
+
+```python
+mut p: Point = Point.init(1, 2)
+
+if instanceOf(p, Point):
+    print("p is a Point")
+
+if instanceOf(p, int):
+    print("unreachable")
+```
+
+`instanceOf` is evaluated entirely at **compile time**: it compares `obj`'s
+static type name against `T` and lowers directly to a `bool` literal
+(`true` or `false`). There is no runtime type tag — this checks the type the
+compiler already knows `obj` to have, so it is most useful in generic code
+or macros where the concrete type isn't obvious from the surrounding text.
+
+#### Common Mistakes
+
+**Expecting runtime polymorphic checks through interface references.**
+`instanceOf` compares the *static* type, not a runtime vtable tag — it
+cannot distinguish between concrete types behind a shared interface
+reference at runtime.
+
+---
+
+### `inspect(T)`
+
+#### When to use
+
+Use `inspect(T)` for a Python `help()`-style description of a class, enum,
+interface, function, or builtin type — including fields, methods, enum
+variants, function signatures, and any docstring (a triple-quoted or plain
+string literal as the first statement of a body).
+
+#### How it works
+
+```python
+class Point:
+    x: int
+    y: int
+
+    def dist(self) -> float:
+        """Returns distance from origin."""
+        return 0.0
+
+def main():
+    print(inspect(Point))
+    print(inspect(int))
+```
+
+```
+class Point:
+  fields:
+    x: int
+    y: int
+  methods:
+    def dist(self) -> float
+        """Returns distance from origin."""
+int: 64-bit signed integer (C long long).
+```
+
+`inspect(T)` is evaluated entirely at **compile time** and lowers to a
+string literal — `T` is a name (class, enum, interface, function, or
+builtin type), not a value expression. It works on names imported from
+other modules as well as types/functions defined in the current file.
+
+#### Common Mistakes
+
+**Passing a value instead of a name.** `inspect(p)` (where `p` is a
+variable) inspects `p`'s static type, not `p` itself — there is no runtime
+object introspection.
+
+---
+
 ## The `as` Cast Operator
 
 ### When to use

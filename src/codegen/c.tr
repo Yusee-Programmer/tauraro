@@ -22,7 +22,8 @@ pub def _c_dot_to_safe(s: str) -> str:
     mut bp = buf as Pointer[char]
     mut j = 0
     while j < n:
-        if bp.offset(j).read() as int == 46: bp.offset(j).write(95 as char)
+        if bp.offset(j).read() as int == 46:
+            unsafe: bp.offset(j).write(95 as char)
         j = j + 1
     return buf
 
@@ -144,6 +145,7 @@ pub class CGenerator:
     pub mono_done:      Map[str, bool]  # "Vec_i64" -> true (prevents duplicate gen)
     pub list_type_done: Map[str, bool]  # "Token" -> true (prevents duplicate list gen)
     pub list_fwd_done:  Map[str, bool]  # "Token" -> true (prevents duplicate fwd decl)
+    pub elem_fmt_done:  Map[str, bool]  # "_tr_fmt_obj_X" -> true (prevents duplicate to_str formatter gen)
     pub cur_class:      str
     pub cur_func:       str
     pub closure_count:  int
@@ -183,6 +185,7 @@ pub class CGenerator:
         g.mono_done     = Map[str, bool].init(32)
         g.list_type_done = Map[str, bool].init(16)
         g.list_fwd_done  = Map[str, bool].init(16)
+        g.elem_fmt_done  = Map[str, bool].init(16)
         g.cur_class     = ""
         g.cur_func      = ""
         g.closure_count = 0
@@ -1191,6 +1194,89 @@ pub class CGenerator:
                 return cn + "_" + sfx
         return cn
 
+    # String representation of a class instance: __str__/__repr__ if defined,
+    # else the default "ClassName.obj at 0xADDR" format.
+    pub def obj_to_str_expr(self, mono: str, s: str) -> str:
+        if self.has_method(mono, "__str__"):
+            return self.cls_method_c_call(mono, "__str__", s, "")
+        if self.has_method(mono, "__repr__"):
+            return self.cls_method_c_call(mono, "__repr__", s, "")
+        return "_tr_default_obj_str(\"" + mono + "\", (void*)(" + s + "))"
+
+    # Resolve (and lazily emit, for class element types) a `char* (*)(const void*)`
+    # element formatter used by _tr_collection_to_str / _tr_dict_to_str.
+    pub def ensure_elem_fmt_fn(self, ty: AstType) -> str:
+        mut tn: str = self.resolve_generic_prim(ty.name)
+        if _is_int_type(tn):
+            if tn == "i32": return "_tr_fmt_i32"
+            if tn == "i16": return "_tr_fmt_i16"
+            if tn == "i8": return "_tr_fmt_i8"
+            if tn == "u8": return "_tr_fmt_u8"
+            if tn == "u16": return "_tr_fmt_u16"
+            if tn == "u32": return "_tr_fmt_u32"
+            if tn == "u64" or tn == "usize": return "_tr_fmt_u64"
+            return "_tr_fmt_i64"
+        if _is_float_type(tn): return "_tr_fmt_f64"
+        if tn == "bool": return "_tr_fmt_bool"
+        if tn == "char": return "_tr_fmt_char"
+        if _is_str_type(tn): return "_tr_fmt_str"
+        if tn == "List" or tn == "Vec" or tn == "Set" or tn == "Dict" or tn == "Map":
+            # Nested collection element: emit a formatter that recurses.
+            mut nest_name = "_tr_fmt_nest_" + self.type_args_suffix(ty.args) + "_" + tn
+            if self.elem_fmt_done.contains(nest_name): return nest_name
+            self.elem_fmt_done.insert(nest_name, true)
+            mut nest_empty = "[]"
+            if tn == "Dict" or tn == "Map": nest_empty = "{}"
+            mut nest_body = "static char* " + nest_name + "(const void* p) {\n"
+            nest_body = nest_body + "    void* inner = *(void* const*)p;\n"
+            nest_body = nest_body + "    if (!inner) return \"" + nest_empty + "\";\n"
+            nest_body = nest_body + "    return " + self.gen_collection_to_str("((" + self.type_to_c(ty) + ")inner)", ty) + ";\n"
+            nest_body = nest_body + "}\n"
+            self.wp(nest_body)
+            return nest_name
+        # Class element type (List[ClassName] -> elements stored as pointers).
+        mut mono = self.mono_cls_name_for(ty)
+        mut fn_name = "_tr_fmt_obj_" + mono
+        if self.elem_fmt_done.contains(fn_name): return fn_name
+        self.elem_fmt_done.insert(fn_name, true)
+        mut body = "static char* " + fn_name + "(const void* p) {\n"
+        body = body + "    " + mono + "* o = *(" + mono + "* const*)p;\n"
+        body = body + "    if (!o) return \"None\";\n"
+        body = body + "    return " + self.obj_to_str_expr(mono, "o") + ";\n"
+        body = body + "}\n"
+        self.wp(body)
+        return fn_name
+
+    # Render a List[T]/Vec[T]/Set[T]/Dict[K,V] value as a Python-style string:
+    # "[1, 2, 3]" / "{'a', 'b'}" / "{'a': 1, 'b': 2}".
+    pub def gen_collection_to_str(self, s: str, ty: AstType) -> str:
+        mut cn = ty.name
+        if cn == "List" or cn == "Vec":
+            if ty.args.len == 0:
+                return "_tr_collection_to_str((void*)((_TrListHdr*)(" + s + "))->data, ((_TrListHdr*)(" + s + "))->len, sizeof(void*), _tr_fmt_str_raw, \"[\", \"]\", \", \")"
+            mut elem_ty = ty.args.get(0).read()
+            mut fmt_fn = self.ensure_elem_fmt_fn(elem_ty)
+            mut elem_ct = self.type_to_c(elem_ty)
+            return "_tr_collection_to_str((void*)((_TrListHdr*)(" + s + "))->data, ((_TrListHdr*)(" + s + "))->len, sizeof(" + elem_ct + "), " + fmt_fn + ", \"[\", \"]\", \", \")"
+        if cn == "Set":
+            mut set_elem_ty = AstType.init("str")
+            if ty.args.len > 0: set_elem_ty = ty.args.get(0).read()
+            mut set_tn: str = self.resolve_generic_prim(set_elem_ty.name)
+            if _is_int_type(set_tn):
+                return "({ List_i64* _sl = _tr_iset_to_list(" + s + "); _tr_collection_to_str((void*)_sl->data, _sl->len, sizeof(long long), _tr_fmt_i64, \"{\", \"}\", \", \"); })"
+            mut set_fmt = "_tr_fmt_str_raw"
+            if _is_str_type(set_tn): set_fmt = "_tr_fmt_str"
+            return "({ List_str* _sl = _tr_set_to_list(" + s + "); _tr_collection_to_str((void*)_sl->data, _sl->len, sizeof(char*), " + set_fmt + ", \"{\", \"}\", \", \"); })"
+        if cn == "Dict" or cn == "Map":
+            mut val_ty = AstType.init("str")
+            if ty.args.len > 1: val_ty = ty.args.get(1).read()
+            mut val_tn: str = self.resolve_generic_prim(val_ty.name)
+            mut vfmt = self.ensure_elem_fmt_fn(val_ty)
+            mut vsize = "sizeof(void*)"
+            if _is_float_type(val_tn): vsize = "sizeof(double)"
+            return "({ List_str* _dk = _tr_dict_keys(" + s + "); List_ptr* _dv = _tr_dict_values(" + s + "); _tr_dict_to_str((void*)_dk->data, (void*)_dv->data, _dk->len, " + vsize + ", _tr_fmt_str, " + vfmt + "); })"
+        return "_tr_default_obj_str(\"" + cn + "\", (void*)(" + s + "))"
+
     pub def gen_cond_expr(self, cond: Pointer[HirExpr]) -> str:
         mut cond_s = self.gen_expr(cond)
         mut ty_n: str = hir_expr_type(cond).name
@@ -1312,8 +1398,7 @@ pub class CGenerator:
             if p == "value" or p == "val":
                 mut full_opt_ty = hir_expr_type(o)
                 if full_opt_ty.args.len > 0:
-                    mut opt_ct = self.type_to_c(full_opt_ty.args.get(0).read())
-                    return "((" + opt_ct + ")Option_unwrap(" + obj_s + "))"
+                    return self.unwrap_voidp_as("Option_unwrap(" + obj_s + ")", full_opt_ty.args.get(0).read())
                 return "Option_unwrap(" + obj_s + ")"
             # Handle Option.None / Option.Some as static constructors (p may be empty if None is a keyword)
             if p == "" or p == "None" or p == "none": return "((Option){.tag=Option_None})"
@@ -1791,18 +1876,18 @@ pub class CGenerator:
                     if variant == "ok":
                         mut ok_val = "NULL"
                         if args.len > 0:
-                            ok_val = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                            ok_val = self.wrap_voidp_arg(args.get(0))
                         return "((Result){.tag=Result_Ok, .data.Ok.val=" + ok_val + "})"
                     elif variant == "err":
                         mut err_val = "NULL"
                         if args.len > 0:
-                            err_val = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                            err_val = self.wrap_voidp_arg(args.get(0))
                         return "((Result){.tag=Result_Err, .data.Err.err=" + err_val + "})"
                 elif oi_type_n == "Option":
                     if variant == "some" or variant == "Some":
                         mut sv = "NULL"
                         if args.len > 0:
-                            sv = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                            sv = self.wrap_voidp_arg(args.get(0))
                         return "((Option){.tag=Option_Some, .data.Some.val=" + sv + "})"
                     elif variant == "none" or variant == "None":
                         return "((Option){.tag=Option_None})"
@@ -1899,6 +1984,8 @@ pub class CGenerator:
         if ty0_n == "bool": return "printf(\"%s\\n\", (" + s0 + ") ? \"true\" : \"false\")"
         if ty0_n == "char": return "printf(\"%c\\n\", " + s0 + ")"
         if ty0_n == "Pointer": return "printf(\"0x%llx\\n\", (unsigned long long)(uintptr_t)(" + s0 + "))"
+        if ty0_n == "List" or ty0_n == "Vec" or ty0_n == "Set" or ty0_n == "Dict" or ty0_n == "Map":
+            return "printf(\"%s\\n\", " + self.gen_collection_to_str(s0, hir_expr_type(arg0)) + ")"
         mut mono0 = self.mono_cls_name_for(hir_expr_type(arg0))
         if self.has_method(mono0, "__str__"):
             return "printf(\"%s\\n\", " + self.cls_method_c_call(mono0, "__str__", s0, "") + ")"
@@ -1906,7 +1993,27 @@ pub class CGenerator:
             return "printf(\"%s\\n\", " + self.cls_method_c_call(mono0, "__repr__", s0, "") + ")"
         if ty0_n == "void" or ty0_n == "" or ty0_n == "lambda":
             return "printf(\"%s\\n\", _TR_AUTO_STR(" + s0 + "))"
+        if self.classes.contains(mono0):
+            return "printf(\"%s\\n\", " + self.obj_to_str_expr(mono0, s0) + ")"
         return "printf(\"%s\\n\", (char*)(" + s0 + "))"
+
+    # Wrap an Option[T]/Result[T,E] payload expression for storage in the
+    # generic `void* val` slot. Floats can't be cast to/from void* directly
+    # in C (hard error), so they're bit-reinterpreted via _tr_f64_to_ptr.
+    pub def wrap_voidp_arg(self, arg: Pointer[HirExpr]) -> str:
+        mut a_ty_n: str = self.resolve_generic_prim(hir_expr_type(arg).name)
+        mut s = self.gen_expr(arg)
+        if _is_float_type(a_ty_n):
+            return "_tr_f64_to_ptr((double)(" + s + "))"
+        return "(void*)(" + s + ")"
+
+    # Unwrap a `void*` Option[T]/Result[T,E] payload back to type `ty`.
+    pub def unwrap_voidp_as(self, expr_s: str, ty: AstType) -> str:
+        mut tn: str = self.resolve_generic_prim(ty.name)
+        if _is_float_type(tn):
+            return "_tr_ptr_to_f64(" + expr_s + ")"
+        mut ct = self.type_to_c(ty)
+        return "((" + ct + ")(" + expr_s + "))"
 
     pub def gen_args(self, args: Vec[Pointer[HirExpr]]) -> str:
         mut s = ""
@@ -1992,14 +2099,18 @@ pub class CGenerator:
                 if method == "some" or method == "Some":
                     mut sv2 = "NULL"
                     if args.len > 0:
-                        sv2 = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                        sv2 = self.wrap_voidp_arg(args.get(0))
                     return "((Option){.tag=Option_Some, .data.Some.val=" + sv2 + "})"
                 elif method == "none" or method == "None":
                     return "((Option){.tag=Option_None})"
             # Instance methods
             if method == "is_some": return "(" + obj_s + ".tag == Option_Some)"
             if method == "is_none": return "(" + obj_s + ".tag == Option_None)"
-            if method == "unwrap": return "Option_unwrap(" + obj_s + ")"
+            if method == "unwrap":
+                mut full_opt_ty2 = hir_expr_type(obj)
+                if full_opt_ty2.args.len > 0:
+                    return self.unwrap_voidp_as("Option_unwrap(" + obj_s + ")", full_opt_ty2.args.get(0).read())
+                return "Option_unwrap(" + obj_s + ")"
             mut opt_extra = ""
             if args.len > 0:
                 opt_extra = ", " + self.gen_args(args)
@@ -2978,12 +3089,18 @@ pub class CGenerator:
                 elif ty_n == "void" or ty_n == "":
                     fmt = fmt + "%s"
                     fargs = fargs + ", _TR_AUTO_STR(" + s + ")"
+                elif ty_n == "List" or ty_n == "Vec" or ty_n == "Set" or ty_n == "Dict" or ty_n == "Map":
+                    fmt = fmt + "%s"
+                    fargs = fargs + ", " + self.gen_collection_to_str(s, hir_expr_type(part.expr))
                 else:
                     fmt = fmt + "%s"
-                    if self.has_method(ty_n, "__str__"):
-                        fargs = fargs + ", " + self.cls_method_c_call(ty_n, "__str__", s, "")
-                    elif self.has_method(ty_n, "__repr__"):
-                        fargs = fargs + ", " + self.cls_method_c_call(ty_n, "__repr__", s, "")
+                    mut mono_fs = self.mono_cls_name_for(hir_expr_type(part.expr))
+                    if self.has_method(mono_fs, "__str__"):
+                        fargs = fargs + ", " + self.cls_method_c_call(mono_fs, "__str__", s, "")
+                    elif self.has_method(mono_fs, "__repr__"):
+                        fargs = fargs + ", " + self.cls_method_c_call(mono_fs, "__repr__", s, "")
+                    elif self.classes.contains(mono_fs):
+                        fargs = fargs + ", " + self.obj_to_str_expr(mono_fs, s)
                     else:
                         fargs = fargs + ", (char*)(" + s + ")"
             i = i + 1

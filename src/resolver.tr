@@ -203,7 +203,8 @@ extend ModuleResolver:
         mut bp = dir_path as Pointer[char]
         mut j = 0
         while j < n:
-            if bp.offset(j).read() as int == 46: bp.offset(j).write(47 as char)  # '.' -> '/'
+            if bp.offset(j).read() as int == 46:
+                unsafe: bp.offset(j).write(47 as char)  # '.' -> '/'
             j = j + 1
 
         # Save/restore current_mod so recursive resolution doesn't corrupt parent tracking.

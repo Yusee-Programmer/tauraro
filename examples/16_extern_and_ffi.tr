@@ -23,6 +23,13 @@ extern "C":
     def log(x: float) -> float
     def atan2(y: float, x: float) -> float
 
+# extern "CPP" / extern "C++" are accepted as synonyms for extern "C" — use
+# them to mark declarations that come from a C++ library (the C++ side must
+# expose them through an `extern "C"` boundary, library-provided or a thin
+# shim; see docs/lang/17_extern_and_ffi.md).
+extern "CPP":
+    def cpp_widget_version() -> int
+
 # ── 2. Safe wrappers ──────────────────────────────────────────────────────────
 def c_sqrt(x: float) -> float:
     if x < 0.0: raise(f"sqrt of negative: {x}")

@@ -311,6 +311,12 @@ struct Result {
 };
 #endif
 
+/* Bit-reinterpret a double <-> void* so Option[float]/Result[float] can store
+ * a float/double payload in the generic `void* val` slot. A direct
+ * (void*)(double) or (double)(void*) cast is a hard error in C. */
+static inline void* _tr_f64_to_ptr(double d) { union { double d; void* p; } u; u.p = 0; u.d = d; return u.p; }
+static inline double _tr_ptr_to_f64(void* p) { union { double d; void* p; } u; u.d = 0; u.p = p; return u.d; }
+
 /* ── Option[T] methods ───────────────────────────────────────────────── */
 static inline bool Option_is_some(Option self) { return self.tag == Option_Some; }
 static inline bool Option_is_none(Option self) { return self.tag == Option_None; }
@@ -4260,6 +4266,101 @@ static int64_t _tr_iset_is_subset(_TrISet* a, _TrISet* b) {
     if(!ka) return 1LL;
     for(int64_t i=0;i<(int64_t)ka->len;i++) if(!_tr_iset_contains(b,ka->data[i])) return 0LL;
     return 1LL;
+}
+
+/* ── Generic collection-to-string for print()/f-strings (List/Set/Dict repr) ──
+ * All List_T / Set_T headers share the same {data; size_t len; size_t cap}
+ * layout, so a generic header view + element-size + per-element formatter
+ * is enough to render "[1, 2, 3]" / "{'a': 1}" style output for any T. */
+typedef struct { void* data; size_t len; size_t capacity; } _TrListHdr;
+typedef char* (*_TrElemFmt)(const void* elem);
+
+static char* _tr_sb_init(size_t* cap) { *cap = 64; char* b = (char*)_tr_checked_alloc(*cap); b[0] = '\0'; return b; }
+static char* _tr_sb_append(char* buf, size_t* len, size_t* cap, const char* s) {
+    size_t sl = strlen(s);
+    if (*len + sl + 1 > *cap) {
+        while (*len + sl + 1 > *cap) *cap *= 2;
+        char* nb = (char*)_tr_checked_alloc(*cap);
+        memcpy(nb, buf, *len + 1);
+        buf = nb;
+    }
+    memcpy(buf + *len, s, sl);
+    *len += sl;
+    buf[*len] = '\0';
+    return buf;
+}
+static char* _tr_collection_to_str(const void* data, size_t len, size_t elem_size, _TrElemFmt fmt, const char* open, const char* close, const char* sep) {
+    size_t cap, blen = 0;
+    char* buf = _tr_sb_init(&cap);
+    buf = _tr_sb_append(buf, &blen, &cap, open);
+    for (size_t i = 0; i < len; i++) {
+        if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, sep);
+        const char* ep = (const char*)data + i * elem_size;
+        buf = _tr_sb_append(buf, &blen, &cap, fmt(ep));
+    }
+    buf = _tr_sb_append(buf, &blen, &cap, close);
+    return buf;
+}
+/* Build "{k1: v1, k2: v2}" from parallel key/value List headers. */
+static char* _tr_dict_to_str(const void* kdata, const void* vdata, size_t len, size_t vsize, _TrElemFmt kfmt, _TrElemFmt vfmt) {
+    size_t cap, blen = 0;
+    char* buf = _tr_sb_init(&cap);
+    buf = _tr_sb_append(buf, &blen, &cap, "{");
+    for (size_t i = 0; i < len; i++) {
+        if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, ", ");
+        const char* kp = (const char*)kdata + i * sizeof(char*);
+        const char* vp = (const char*)vdata + i * vsize;
+        buf = _tr_sb_append(buf, &blen, &cap, kfmt(kp));
+        buf = _tr_sb_append(buf, &blen, &cap, ": ");
+        buf = _tr_sb_append(buf, &blen, &cap, vfmt(vp));
+    }
+    buf = _tr_sb_append(buf, &blen, &cap, "}");
+    return buf;
+}
+/* Element formatters for primitive List/Set element types. */
+static char* _tr_fmt_i64(const void* p)  { return _tr_int_to_str(*(const long long*)p); }
+static char* _tr_fmt_i32(const void* p)  { return _tr_int_to_str((long long)*(const int32_t*)p); }
+static char* _tr_fmt_i16(const void* p)  { return _tr_int_to_str((long long)*(const int16_t*)p); }
+static char* _tr_fmt_i8(const void* p)   { return _tr_int_to_str((long long)*(const int8_t*)p); }
+static char* _tr_fmt_u8(const void* p)   { return _tr_int_to_str((long long)*(const uint8_t*)p); }
+static char* _tr_fmt_u16(const void* p)  { return _tr_int_to_str((long long)*(const uint16_t*)p); }
+static char* _tr_fmt_u32(const void* p)  { return _tr_int_to_str((long long)*(const uint32_t*)p); }
+static char* _tr_fmt_u64(const void* p)  { return _tr_int_to_str((long long)*(const uint64_t*)p); }
+static char* _tr_fmt_f64(const void* p)  { return _tr_float_to_str(*(const double*)p); }
+static char* _tr_fmt_bool(const void* p) { return _tr_bool_to_str(*(const _Bool*)p); }
+static char* _tr_fmt_char(const void* p) {
+    char c = *(const char*)p;
+    char* b = (char*)_tr_checked_alloc(4);
+    b[0] = '\''; b[1] = c; b[2] = '\''; b[3] = '\0';
+    return b;
+}
+/* String element/key, quoted Python-repr style: 'text' */
+static char* _tr_fmt_str(const void* p) {
+    const char* s = *(const char* const*)p;
+    if (!s) s = "";
+    size_t n = strlen(s);
+    char* b = (char*)_tr_checked_alloc(n + 3);
+    b[0] = '\'';
+    memcpy(b + 1, s, n);
+    b[n + 1] = '\'';
+    b[n + 2] = '\0';
+    return b;
+}
+/* String element, unquoted (used for stringified Set[non-str] keys). */
+static char* _tr_fmt_str_raw(const void* p) {
+    const char* s = *(const char* const*)p;
+    if (!s) s = "";
+    size_t n = strlen(s);
+    char* b = (char*)_tr_checked_alloc(n + 1);
+    memcpy(b, s, n);
+    b[n] = '\0';
+    return b;
+}
+/* Default repr for objects without __str__/__repr__: "ClassName.obj at 0xADDR" */
+static char* _tr_default_obj_str(const char* cls_name, const void* obj) {
+    char* b = (char*)_tr_checked_alloc(64);
+    snprintf(b, 64, "%s.obj at 0x%llx", cls_name, (unsigned long long)(uintptr_t)obj);
+    return b;
 }
 
 /* ── v0.0.5: List sort / aggregate / functional helpers ──────────────────────
