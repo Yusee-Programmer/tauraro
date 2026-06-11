@@ -5,6 +5,7 @@ from std.core.string import StringBuilder
 extern "C":
     def _tr_str_split(s: str, sep: str) -> List[str]
     def _tr_str_join(parts: List[str], sep: str) -> str
+    def _tr_c_free(ptr: Pointer[char])
 
 pub class Str:
     _dummy: int
@@ -162,7 +163,9 @@ extend Str:
         while i < real_e:
             sb.append_char(p.offset(i).read() as int)
             i = i + 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     pub def repeat(s: str, n: int) -> str:
         if n <= 0: return ""
@@ -171,7 +174,9 @@ extend Str:
         while i < n:
             sb.append(s)
             i = i + 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     pub def reverse(s: str) -> str:
         mut slen = Str.len(s)
@@ -181,7 +186,9 @@ extend Str:
         while i >= 0:
             sb.append_char(p.offset(i).read() as int)
             i = i - 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # ── Case conversion ──────────────────────────────────────────────────────
 
@@ -195,7 +202,9 @@ extend Str:
             if ch >= 97 and ch <= 122: ch = ch - 32
             sb.append_char(ch)
             i = i + 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     pub def to_lower(s: str) -> str:
         mut slen = Str.len(s)
@@ -207,7 +216,9 @@ extend Str:
             if ch >= 65 and ch <= 90: ch = ch + 32
             sb.append_char(ch)
             i = i + 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Capitalize: first letter upper, rest lower.
     pub def capitalize(s: str) -> str:
@@ -236,7 +247,9 @@ extend Str:
                 sb.append_char(ch)
             prev = ch
             i = i + 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # ── Trimming ─────────────────────────────────────────────────────────────
 
@@ -280,7 +293,9 @@ extend Str:
             sb.append_char(pad_char)
             i = i + 1
         sb.append(s)
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Right-pad s to width using pad_char.
     pub def rpad(s: str, width: int, pad_char: int) -> str:
@@ -292,7 +307,9 @@ extend Str:
         while i < width:
             sb.append_char(pad_char)
             i = i + 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Center s within width, padding with spaces.
     pub def center(s: str, width: int) -> str:
@@ -311,7 +328,9 @@ extend Str:
         while i < right:
             sb.append_char(32)
             i = i + 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # ── Search ───────────────────────────────────────────────────────────────
 
@@ -360,10 +379,13 @@ extend Str:
     pub def count(s: str, sub: str) -> int:
         mut subl = Str.len(sub)
         if subl == 0: return 0
+        mut sl = Str.len(s)
         mut n = 0
         mut i = 0
         while True:
-            mut pos = Str.index_of(Str.slice(s, i, Str.len(s)), sub)
+            mut rest = Str.slice(s, i, sl)
+            mut pos = Str.index_of(rest, sub)
+            if i < sl: unsafe: _tr_c_free(rest as Pointer[char])
             if pos < 0: break
             n = n + 1
             i = i + pos + subl
@@ -430,17 +452,28 @@ extend Str:
             else:
                 result.append_char(sp.offset(i).read() as int)
                 i = i + 1
-        return result.to_owned()
+        mut out = result.to_owned()
+        result.free()
+        return out
 
     # Replace only the first occurrence of old.
     pub def replace_first(s: str, old: str, new_: str) -> str:
         mut pos = Str.index_of(s, old)
         if pos < 0: return s
         mut sb = StringBuilder.init(Str.len(s) + Str.len(new_))
-        sb.append(Str.slice(s, 0, pos))
+        mut sl = Str.len(s)
+        mut tail_start = pos + Str.len(old)
+        mut head = Str.slice(s, 0, pos)
+        mut tail = Str.slice(s, tail_start, sl)
+        sb.append(head)
         sb.append(new_)
-        sb.append(Str.slice(s, pos + Str.len(old), Str.len(s)))
-        return sb.to_owned()
+        sb.append(tail)
+        unsafe:
+            if pos > 0: _tr_c_free(head as Pointer[char])
+            if tail_start < sl: _tr_c_free(tail as Pointer[char])
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Simple positional format: replaces each "{}" in template with the next value.
     pub def format(template: str, values: Vec[str]) -> str:

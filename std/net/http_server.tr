@@ -135,9 +135,46 @@ extend HttpRequest:
     # close (unless `Connection: keep-alive` is sent).
     pub def keep_alive(self) -> bool:
         mut conn_hdr = Str.to_lower(HttpRequest.header(self, "Connection"))
-        if Str.contains(conn_hdr, "close"): return false
-        if Str.contains(conn_hdr, "keep-alive"): return true
+        mut has_close = Str.contains(conn_hdr, "close")
+        mut has_keepalive = Str.contains(conn_hdr, "keep-alive")
+        unsafe: _tr_c_free(conn_hdr as Pointer[char])
+        if has_close: return false
+        if has_keepalive: return true
         return Str.eq(self.version, "HTTP/1.1")
+
+    # Free this request's headers/params maps (incl. values - every value is
+    # a heap-allocated Str.slice/Str.to_lower result, parser-owned, never a
+    # string literal), the heap-owned method/path/query/body fields (set by
+    # HttpParser.parse via Str.slice whenever non-empty; empty fields are the
+    # "" literal default from init() and must not be freed), and finally this
+    # HttpRequest struct itself.
+    pub def free_owned(self):
+        mut hv = self.headers.values()
+        mut hi = 0
+        while hi < hv.len:
+            unsafe: _tr_c_free(hv.get(hi) as Pointer[char])
+            hi = hi + 1
+        hv.free()
+        self.headers.free()
+        mut pv = self.params.values()
+        mut pi = 0
+        while pi < pv.len:
+            unsafe: _tr_c_free(pv.get(pi) as Pointer[char])
+            pi = pi + 1
+        pv.free()
+        self.params.free()
+        # method/path/query/version/body are only ever Str.slice'd (heap) by
+        # HttpParser.parse() when it successfully parses a request line (i.e.
+        # method is non-empty); for the placeholder HttpRequest.init() (empty
+        # method, returned by read_next() on EOF/garbage) every field is a
+        # string literal ("" / "/" / "HTTP/1.1") and must not be freed.
+        if Str.len(self.method) > 0:
+            unsafe:
+                _tr_c_free(self.method as Pointer[char])
+                _tr_c_free(self.path as Pointer[char])
+                if Str.len(self.query) > 0: _tr_c_free(self.query as Pointer[char])
+                if Str.len(self.body) > 0: _tr_c_free(self.body as Pointer[char])
+        unsafe: _tr_c_free(self as Pointer[char])
 
 # ── HttpResponse ──────────────────────────────────────────────────────────────
 
@@ -299,15 +336,16 @@ extend HttpConn:
         sb.append("; Path=")
         sb.append(path)
         if http_only: sb.append("; HttpOnly")
-        HttpConn.set_resp_header(self, "Set-Cookie", sb.to_owned())
+        mut cookie = sb.to_owned()
+        sb.free()
+        HttpConn.set_resp_header(self, "Set-Cookie", cookie)
 
     # Close the underlying TCP connection.
     pub def close(self):
         if not self._closed:
             self._stream.close()
             self._closed = true
-            self.request.headers.free()
-            self.request.params.free()
+            self.request.free_owned()
             self._headers.free()
             self._horder.free()
 

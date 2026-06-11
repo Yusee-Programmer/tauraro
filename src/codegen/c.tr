@@ -4188,6 +4188,8 @@ pub class CGenerator:
                 self.gen_multi_let(names, is_mut, val, indent)
             case HirStmt.SChanSelect(cs_arms):
                 self.gen_chan_select(cs_arms, indent)
+            case HirStmt.SAutoDrop(adn, adc):
+                self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
             case _: pass
 
     pub def gen_for_loop(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):

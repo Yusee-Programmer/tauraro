@@ -32,6 +32,7 @@ pub class Symbol:
     pub is_maybe_init: bool   # init in SOME but not ALL branches
     pub ptr_region: int       # 0=LOCAL, 1=HEAP(alloc), 2=PARAM, 3=GLOBAL
     pub is_freed: bool        # [M-6] dealloc() was called on this pointer
+    pub decl_block_depth: int # auto-drop: nested-block depth (if/while bodies) at declaration; only depth==0 is droppable by the enclosing scope
 
 extend Symbol:
     pub def init(name: str, kind: SymbolKind, ty: Pointer[AstType]) -> Symbol:
@@ -52,15 +53,18 @@ extend Symbol:
         s.is_maybe_init = false
         s.ptr_region = 0
         s.is_freed = false
+        s.decl_block_depth = 0
         return s
 
 pub class Scope:
     pub variables: Map[str, Symbol]
+    pub decl_order: Vec[str]
 
 extend Scope:
     pub def init() -> Scope:
         mut s = Scope()
         s.variables = Map[str, Symbol].init(32)
+        s.decl_order = Vec[str].init(8)
         return s
 
 pub class Sema:
@@ -104,6 +108,9 @@ pub class Sema:
     pub variadic_fns:    Map[str, str]   # fn name -> index of trailing variadic param (= fixed-arg count, as string)
     pub variadic_elem_ty: Map[str, Pointer[AstType]] # fn name -> element type of the variadic List[T] param
     pub fn_defs:         Map[str, FunctionDef]  # top-level fn name -> full definition, for inspect(T)
+    pub loop_scope_base: Vec[int]  # auto-drop: scope-stack depth marking the start of each enclosing loop's scopes
+    pub block_depth: int  # auto-drop: nested-C-block depth (if/while bodies sharing a Scope); 0 = directly in the owning scope's top-level block
+    pub block_depth_stack: Vec[int]  # auto-drop: saved block_depth per scope, restored on exit_scope
 
 extend Sema:
     pub def build_ast_type(self, e: Pointer[Expr]) -> Pointer[AstType]:
@@ -163,6 +170,9 @@ extend Sema:
         s.variadic_fns           = Map[str, str].init(8)
         s.variadic_elem_ty       = Map[str, Pointer[AstType]].init(8)
         s.fn_defs                = Map[str, FunctionDef].init(32)
+        s.loop_scope_base        = Vec[int].init(8)
+        s.block_depth            = 0
+        s.block_depth_stack      = Vec[int].init(8)
 
         # -- Built-in functions -------------------------------------------------
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -722,10 +732,101 @@ extend Sema:
         mut s_obj = Scope.init()
         self.scopes.push(s_obj)
         self.current_scope_depth = self.current_scope_depth + 1
+        # auto-drop: each new scope starts its own C block, so reset the
+        # nested-if/while block-depth counter; restored on exit_scope.
+        self.block_depth_stack.push(self.block_depth)
+        self.block_depth = 0
 
     pub def exit_scope(self):
         self.scopes.pop()
         self.current_scope_depth = self.current_scope_depth - 1
+        self.block_depth = self.block_depth_stack.get(self.block_depth_stack.len - 1)
+        self.block_depth_stack.pop()
+
+    # -- Auto-drop: compiler-inserted .free() for owned class-typed locals -----
+
+    # A local is auto-dropped at scope exit if it is a user-defined class with a
+    # 'free' method, was never moved/returned/borrowed-out, was never freed
+    # manually, and was definitely initialized on every path.
+    pub def is_droppable_sym(self, sym: Symbol) -> bool:
+        if sym.kind != SymbolKind.SVariable: return false
+        if sym.is_param: return false
+        if sym.is_shared: return false
+        if sym.ty as usize == 0 as usize: return false
+        mut tn = sym.ty.read().name
+        if not self.classes.contains(tn): return false
+        if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan": return false
+        if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+        if sym.active_borrows > 0: return false
+        if not sym.is_init or sym.is_maybe_init: return false
+        mut cls = self.classes.get(tn)
+        mut mi = 0
+        while mi < cls.methods.len:
+            if cls.methods.get(mi).name == "free": return true
+            mi = mi + 1
+        return false
+
+    # All droppable locals declared directly in scope `scope_idx` whose declaration
+    # block-depth is still "open" at `max_depth` (i.e. not inside an if/while body
+    # that has already closed its C block), as SAutoDrop stmts.
+    pub def compute_scope_drops(self, scope_idx: int, max_depth: int) -> Vec[Pointer[HirStmt]]:
+        mut out = Vec[Pointer[HirStmt]].init(2)
+        if scope_idx < 0 or scope_idx >= self.scopes.len: return out
+        mut scope = self.scopes.get(scope_idx)
+        mut ki = 0
+        while ki < scope.decl_order.len:
+            mut nm = scope.decl_order.get(ki)
+            mut sym = scope.variables.get(nm)
+            if sym.decl_block_depth <= max_depth:
+                if self.is_droppable_sym(sym):
+                    out.push(box_hirstmt(HirStmt.SAutoDrop(nm, sym.ty.read().name)))
+            ki = ki + 1
+        return out
+
+    # Append SAutoDrop stmts to `hb` for every droppable local in scopes
+    # [from_idx .. self.scopes.len-1], innermost scope first.
+    pub def append_drops_from(self, hb: HirBlock, from_idx: int):
+        self.append_drops_from_excl(hb, from_idx, "")
+
+    # Same as append_drops_from, but skips a variable named `exclude` (used for
+    # `return x` where x is itself the droppable local - ownership transfers to
+    # the caller instead of being freed).
+    pub def append_drops_from_excl(self, hb: HirBlock, from_idx: int, exclude: str):
+        mut idx = self.scopes.len - 1
+        while idx >= from_idx:
+            mut max_depth = 0
+            if idx == self.scopes.len - 1: max_depth = self.block_depth
+            mut drops = self.compute_scope_drops(idx, max_depth)
+            mut di = 0
+            while di < drops.len:
+                mut d = drops.get(di)
+                mut skip = false
+                if exclude != "":
+                    match d.read():
+                        case HirStmt.SAutoDrop(dn, _):
+                            if dn == exclude: skip = true
+                        case _: pass
+                if not skip: hb.push(d)
+                di = di + 1
+            idx = idx - 1
+
+    # True if `b`'s last statement already transfers control (return/break/continue),
+    # meaning any needed auto-drops were already injected by lower_block at that point.
+    pub def block_ends_in_jump(self, b: HirBlock) -> bool:
+        if b.stmts.len == 0: return false
+        mut last = b.stmts.get(b.stmts.len - 1)
+        if last as usize == 0 as usize: return false
+        match last.read():
+            case HirStmt.SReturn(_): return true
+            case HirStmt.SBreak: return true
+            case HirStmt.SContinue: return true
+            case _: return false
+
+    # Append end-of-scope drops for the current top scope to `hb`, unless its
+    # last statement already jumped out (and thus already drained this scope).
+    pub def finalize_scope_drops(self, hb: HirBlock):
+        if not self.block_ends_in_jump(hb):
+            self.append_drops_from(hb, self.scopes.len - 1)
 
     pub def declare(self, name: str, kind: SymbolKind, ty: Pointer[AstType], is_mut: bool):
         # Rule N-1: Reserved name protection (skip 'self', internal '_*' names, short generics)
@@ -745,9 +846,12 @@ extend Sema:
         mut sym = Symbol.init(name, kind, ty)
         sym.scope_depth = self.current_scope_depth
         sym.is_mut = is_mut
+        sym.decl_block_depth = self.block_depth
 
         if self.scopes.len > 0:
-            self.scopes.get(self.scopes.len - 1).variables.insert(name, sym)
+            mut decl_scope = self.scopes.get(self.scopes.len - 1)
+            if not decl_scope.variables.contains(name): decl_scope.decl_order.push(name)
+            decl_scope.variables.insert(name, sym)
         else:
             self.globals.insert(name, sym)
 
@@ -1051,6 +1155,7 @@ extend Sema:
                     self.current_line = f.line
                     self.error("[F-3] Function '" + f.name + "' returns '" + ret_nm + "' but is missing a return statement on at least one code path. FIX: Add a return at the end, or ensure all if/elif/else branches return.")
 
+        self.finalize_scope_drops(hf.body)
         self.exit_scope()
         # Restore async context and lifetime context
         self.in_async_fn = saved_async
@@ -1234,7 +1339,29 @@ extend Sema:
         mut hb = HirBlock.init()
         mut i = 0
         while i < b.stmts.len:
-            mut _hs = self.lower_stmt(b.stmts.get(i))
+            mut orig_ptr = b.stmts.get(i)
+            mut _hs = self.lower_stmt(orig_ptr)
+            # Auto-drop: inject SAutoDrop stmts for all currently-open scopes
+            # right before a control-transfer statement, so owned locals are
+            # freed on every exit path (not just normal fall-through).
+            if orig_ptr as usize != 0 as usize:
+                match orig_ptr.read():
+                    case Stmt.SReturn(ret_e):
+                        # `return x` transfers ownership of x to the caller - exclude
+                        # it from this exit point's auto-drops.
+                        mut ret_excl = ""
+                        if ret_e as usize != 0 as usize:
+                            match ret_e.read():
+                                case Expr.EIdent(ret_drop_nm): ret_excl = ret_drop_nm
+                                case _: pass
+                        self.append_drops_from_excl(hb, 0, ret_excl)
+                    case Stmt.SBreak:
+                        if self.loop_scope_base.len > 0:
+                            self.append_drops_from(hb, self.loop_scope_base.get(self.loop_scope_base.len - 1))
+                    case Stmt.SContinue:
+                        if self.loop_scope_base.len > 0:
+                            self.append_drops_from(hb, self.loop_scope_base.get(self.loop_scope_base.len - 1))
+                    case _: pass
             hb.push(_hs)
             i = i + 1
         return hb
@@ -1407,7 +1534,9 @@ extend Sema:
                 self.branch_moved_buf = Vec[str].init(4)
                 self.branch_init_buf = Vec[str].init(4)
                 mut hcond = self.lower_expr(cond)
+                self.block_depth = self.block_depth + 1
                 mut hthen = self.lower_block(then_b)
+                self.block_depth = self.block_depth - 1
                 mut si_then_moved = self.branch_moved_buf
                 mut si_then_inited = self.branch_init_buf
                 # Roll back then-branch moves/inits so else-branch sees clean slate
@@ -1423,6 +1552,7 @@ extend Sema:
                 self.branch_moved_buf = Vec[str].init(4)
                 self.branch_init_buf = Vec[str].init(4)
                 mut helse = HirBlock.init()
+                self.block_depth = self.block_depth + 1
                 if elifs.len > 0:
                     mut base_else = self.lower_block(else_b)
                     mut chain = base_else
@@ -1438,6 +1568,7 @@ extend Sema:
                     helse = chain
                 else:
                     helse = self.lower_block(else_b)
+                self.block_depth = self.block_depth - 1
                 mut si_else_moved = self.branch_moved_buf
                 mut si_else_inited = self.branch_init_buf
                 # Roll back else-branch moves/inits
@@ -1490,7 +1621,14 @@ extend Sema:
                 self.capturing_inits = true
                 self.branch_moved_buf = Vec[str].init(4)
                 self.branch_init_buf = Vec[str].init(4)
+                # SWhile bodies share the enclosing scope (no enter_scope/exit_scope),
+                # so push a base equal to the current depth: break/continue inside
+                # the loop drain nothing extra (no per-iteration scope to drain).
+                self.loop_scope_base.push(self.scopes.len)
+                self.block_depth = self.block_depth + 1
                 mut sw_body = self.lower_block(body)
+                self.block_depth = self.block_depth - 1
+                self.loop_scope_base.pop()
                 mut sw_loop_moved = self.branch_moved_buf
                 mut sw_loop_inited = self.branch_init_buf
                 self.capturing_moves = sw_outer_cap_m
@@ -1530,7 +1668,9 @@ extend Sema:
                 self.capturing_inits = true
                 self.branch_moved_buf = Vec[str].init(4)
                 self.branch_init_buf = Vec[str].init(4)
+                self.loop_scope_base.push(self.scopes.len - 1)
                 mut sf_body = self.lower_block(body)
+                self.loop_scope_base.pop()
                 mut sf_loop_moved = self.branch_moved_buf
                 mut sf_loop_inited = self.branch_init_buf
                 self.capturing_moves = sf_outer_cap_m
@@ -1547,6 +1687,7 @@ extend Sema:
                     self.unmark_init(sf_loop_inited.get(sf_ii))
                     self.mark_maybe_init(sf_loop_inited.get(sf_ii))
                     sf_ii = sf_ii + 1
+                self.finalize_scope_drops(sf_body)
                 mut hstmt = box_hirstmt(HirStmt.SFor(var, h_iter_for, sf_body))
                 self.exit_scope()
                 return hstmt
@@ -1593,6 +1734,7 @@ extend Sema:
                     self.declare(vars.get(vi_fu), SymbolKind.SVariable, box_asttype(fu_tys.get(vi_fu)), false)
                     vi_fu = vi_fu + 1
                 mut hblk_fu = self.lower_block(body)
+                self.finalize_scope_drops(hblk_fu)
                 self.exit_scope()
                 return box_hirstmt(HirStmt.SForUnpack(vars, h_iter_fu, hblk_fu))
             case Stmt.SMatch(subj, arms):
@@ -1620,6 +1762,7 @@ extend Sema:
                     # Lower guard expression if present
                     if arm.guard as usize != 0 as usize:
                         h_arm.guard = self.lower_expr(arm.guard)
+                    self.finalize_scope_drops(h_arm.body)
                     h_arms.push(h_arm)
                     self.exit_scope()
                     k = k + 1
@@ -1646,6 +1789,8 @@ extend Sema:
                         self.error(ex_msg)
                 return box_hirstmt(HirStmt.SMatch(hsubj, h_arms))
             case Stmt.STry(try_body, catches, finally_b):
+                self.block_depth = self.block_depth + 1
+                mut h_try_body = self.lower_block(try_body)
                 mut h_catches = Vec[Pointer[HirCatchClause]].init(catches.len)
                 mut k = 0
                 while k < catches.len:
@@ -1660,7 +1805,9 @@ extend Sema:
                         hcc.write(hcc_val)
                         h_catches.push(hcc)
                     k = k + 1
-                return box_hirstmt(HirStmt.STry(self.lower_block(try_body), h_catches, self.lower_block(finally_b)))
+                mut h_finally_b = self.lower_block(finally_b)
+                self.block_depth = self.block_depth - 1
+                return box_hirstmt(HirStmt.STry(h_try_body, h_catches, h_finally_b))
             case Stmt.SRaise(e): return box_hirstmt(HirStmt.SRaise(self.lower_expr(e)))
             case Stmt.SAssert(cond, msg): return box_hirstmt(HirStmt.SAssert(self.lower_expr(cond), self.lower_expr(msg)))
             case Stmt.SDefer(inner):
@@ -1678,6 +1825,7 @@ extend Sema:
                         self.declare(aliases.get(k), SymbolKind.SVariable, box_asttype(wi_ty), true)
                     k = k + 1
                 mut h_with_body = self.lower_block(body)
+                self.finalize_scope_drops(h_with_body)
                 self.exit_scope()
                 return box_hirstmt(HirStmt.SWith(h_items, aliases, h_with_body))
             case Stmt.SAsm(code, outputs, inputs, clobbers):
@@ -1691,7 +1839,10 @@ extend Sema:
             case Stmt.STaskGroup(body):
                 if not self.in_async_fn:
                     self.error("[C-6] 'taskgroup:' used outside an async function. FIX: Declare '" + self.current_func_name + "' as 'async def " + self.current_func_name + "(...)' to use taskgroup inside it.")
-                return box_hirstmt(HirStmt.STaskGroup(self.lower_block(body)))
+                self.block_depth = self.block_depth + 1
+                mut h_tg_body = self.lower_block(body)
+                self.block_depth = self.block_depth - 1
+                return box_hirstmt(HirStmt.STaskGroup(h_tg_body))
             case Stmt.SChanSelect(cs_cases):
                 mut hcs_cases = Vec[Pointer[HirChanSelectArm]].init(cs_cases.len)
                 mut csi2 = 0
@@ -1725,12 +1876,17 @@ extend Sema:
                                 recv_ty = chan_ty.args.get(0).read()
                         self.declare(arm.var_name, SymbolKind.SVariable, box_asttype(recv_ty), true)
                     harm_v.body = self.lower_block(arm.body)
+                    self.finalize_scope_drops(harm_v.body)
                     self.exit_scope()
                     unsafe: harm.write(harm_v)
                     hcs_cases.push(harm)
                     csi2 = csi2 + 1
                 return box_hirstmt(HirStmt.SChanSelect(hcs_cases))
-            case Stmt.SGpuBlock(body): return box_hirstmt(HirStmt.SGpuBlock(self.lower_block(body)))
+            case Stmt.SGpuBlock(body):
+                self.block_depth = self.block_depth + 1
+                mut h_gpu_body = self.lower_block(body)
+                self.block_depth = self.block_depth - 1
+                return box_hirstmt(HirStmt.SGpuBlock(h_gpu_body))
             case Stmt.SBreak: return box_hirstmt(HirStmt.SBreak)
             case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
             case Stmt.SPass: return box_hirstmt(HirStmt.SPass)
@@ -2181,6 +2337,16 @@ extend Sema:
                     hl.push(self.lower_expr(args.get(k)))
                     k = k + 1
                 mut hobj = self.lower_expr(obj)
+                # Auto-drop: an explicit manual `.free()` call marks the variable as
+                # freed so the compiler doesn't also auto-drop it (would double-free).
+                # Must run AFTER lowering `obj` above, so this call's own move-check
+                # doesn't see the freed state it is about to set.
+                if method == "free":
+                    match obj.read():
+                        case Expr.EIdent(free_nm):
+                            mut free_sym = self.resolve(free_nm)
+                            if free_sym.name != "": self.mark_freed(free_nm)
+                        case _: pass
                 mut hobj_ty = hir_expr_type(hobj)
                 # Resolve type aliases: `type IntList = List[int]` -> hobj_ty becomes List[int].
                 if self.type_aliases.contains(hobj_ty.name):
@@ -2648,7 +2814,9 @@ extend Sema:
                     l = l + 1
                 mut r_ty = AstType.init("void")
                 if ret_ty as usize != 0 as usize: r_ty = ret_ty.read()
-                mut hexpr = HirExpr.EClosure(hparams, r_ty, self.lower_block(body), is_async, Vec[HirParam].init(0))
+                mut clo_body = self.lower_block(body)
+                self.finalize_scope_drops(clo_body)
+                mut hexpr = HirExpr.EClosure(hparams, r_ty, clo_body, is_async, Vec[HirParam].init(0))
                 self.exit_scope()
                 return box_hirexpr(hexpr)
             case Expr.EIfElse(cond, then_e, else_e):
