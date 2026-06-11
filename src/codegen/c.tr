@@ -2531,6 +2531,7 @@ pub class CGenerator:
                 return "((long long)pow((double)(" + obj_s + "),(double)(" + self.gen_expr(args.get(0)) + ")))"
         if method == "as_str":
             if t_n == "StringObj": return "StringObj_as_str(" + obj_s + ")"
+            if t_n == "StringBuilder": return "StringBuilder_as_str(" + obj_s + ")"
             return "(char*)(" + obj_s + ")"
         if method == "starts_with" and args.len > 0 and _is_str_type(t_n):
             return "_tr_str_starts_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"

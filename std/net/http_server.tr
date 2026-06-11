@@ -254,9 +254,7 @@ extend HttpConn:
                     resp.set_header("Connection", "close")
             self.last_status = resp.status
             mut wire = resp.to_wire()
-            _tr_eprint("DBG send_response: about to send len=" + str(Str.len(wire)))
             mut sent = self._stream.send(wire)
-            _tr_eprint("DBG send_response: sent rc=" + str(sent))
             resp.headers.free()
             resp._order.free()
 
@@ -578,6 +576,7 @@ extend HttpServer:
             if Str.len(chunk) == 0: break
             sb.append(chunk)
             header_end = Str.index_of(sb.as_str(), "\r\n\r\n")
+            _tr_eprint("DBG _read_full: header_end=" + str(header_end))
         if header_end < 0:
             mut raw0 = sb.to_owned()
             sb.free()
@@ -587,6 +586,7 @@ extend HttpServer:
         mut clen = HttpParser.content_length(hdr_for_clen)
         unsafe: _tr_c_free(hdr_for_clen as Pointer[char])
         mut have = Str.len(raw) - (header_end + 4)
+        _tr_eprint("DBG _read_full: clen=" + str(clen) + " have=" + str(have))
         while have < clen:
             mut more = stream.recv(self._recv_buf)
             if Str.len(more) == 0: break
