@@ -52,6 +52,7 @@ pub class HttpRequest:
     pub params:   Map[str, str]  # path parameters extracted by router (:id → "42")
     pub route_id: int       # matched route identifier (-1 if unmatched)
     pub version:  str       # "HTTP/1.1" or "HTTP/1.0"
+    pub version_owned: bool # true when `version` is a heap Str.slice (HttpParser.parse set it), not the init() literal
     pub recv_ms:  int       # Clock.now_ms() when this request was parsed (for timing middleware)
 
 extend HttpRequest:
@@ -65,6 +66,7 @@ extend HttpRequest:
         r.params     = Map[str, str].init(4)
         r.route_id   = -1
         r.version    = "HTTP/1.1"
+        r.version_owned = false
         r.recv_ms    = _tr_time_ms()
         return r
 
@@ -174,6 +176,7 @@ extend HttpRequest:
                 _tr_c_free(self.path as Pointer[char])
                 if Str.len(self.query) > 0: _tr_c_free(self.query as Pointer[char])
                 if Str.len(self.body) > 0: _tr_c_free(self.body as Pointer[char])
+                if self.version_owned: _tr_c_free(self.version as Pointer[char])
         unsafe: _tr_c_free(self as Pointer[char])
 
 # ── HttpResponse ──────────────────────────────────────────────────────────────
@@ -244,11 +247,13 @@ extend HttpResponse:
         mut hi = 0
         while hi < self._order.len:
             mut hk = self._order.get(hi)
-            if not Str.eq(Str.to_lower(hk), "content-length"):
+            mut hk_lower = Str.to_lower(hk)
+            if not Str.eq(hk_lower, "content-length"):
                 sb.append(hk)
                 sb.append(": ")
                 sb.append(self.headers.get(hk))
                 sb.append("\r\n")
+            unsafe: _tr_c_free(hk_lower as Pointer[char])
             hi = hi + 1
         sb.append("Content-Length: ")
         sb.append(Fmt.int_to_str(Str.len(self.body)))
@@ -518,6 +523,7 @@ extend HttpParser:
             if sp2 >= 0:
                 full_path     = Str.slice(after, 0, sp2)
                 req.version   = Str.slice(after, sp2 + 1, Str.len(after))
+                req.version_owned = true
                 full_path_is_after = false
             mut q = Str.index_of(full_path, "?")
             if q >= 0:

@@ -3381,7 +3381,14 @@ static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
     if(listen(s,backlog)!=0){closesocket(s);return -1;}
     return (int)s;
 }
-static inline int   _tr_tcp_accept(int srv) { SOCKET c=accept((SOCKET)srv,NULL,NULL); return (c==INVALID_SOCKET)?-1:(int)c; }
+/* Disable Nagle's algorithm: without this, every small HTTP response gets
+ * delayed ~40ms by Nagle + the peer's delayed-ACK timer, capping keep-alive
+ * request latency at ~20-40ms regardless of how fast the handler itself is. */
+static inline void _tr_tcp_set_nodelay(int fd) {
+    int one = 1;
+    setsockopt((SOCKET)fd, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one));
+}
+static inline int   _tr_tcp_accept(int srv) { SOCKET c=accept((SOCKET)srv,NULL,NULL); if(c!=INVALID_SOCKET) _tr_tcp_set_nodelay((int)c); return (c==INVALID_SOCKET)?-1:(int)c; }
 static inline char* _tr_tcp_peer_addr(int fd) {
     struct sockaddr_in a; int al=sizeof(a);
     if(getpeername((SOCKET)fd,(struct sockaddr*)&a,&al)!=0) return (char*)"";
@@ -3488,7 +3495,14 @@ static inline int _tr_tcp_listen(const char* host,int port,int backlog) {
     if(bind(s,(struct sockaddr*)&a,sizeof(a))<0){close(s);return -1;}
     if(listen(s,backlog)<0){close(s);return -1;} return s;
 }
-static inline int   _tr_tcp_accept(int srv) { return accept(srv,NULL,NULL); }
+/* Disable Nagle's algorithm: without this, every small HTTP response gets
+ * delayed ~40ms by Nagle + the peer's delayed-ACK timer, capping keep-alive
+ * request latency at ~20-40ms regardless of how fast the handler itself is. */
+static inline void _tr_tcp_set_nodelay(int fd) {
+    int one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+}
+static inline int   _tr_tcp_accept(int srv) { int c=accept(srv,NULL,NULL); if(c>=0) _tr_tcp_set_nodelay(c); return c; }
 static inline char* _tr_tcp_peer_addr(int fd) {
     struct sockaddr_in a; socklen_t al=sizeof(a);
     if(getpeername(fd,(struct sockaddr*)&a,&al)<0) return (char*)"";
@@ -3580,6 +3594,7 @@ static inline int _tr_tcp_accept_nb(int server_fd) {
     if (s == INVALID_SOCKET) {
         return (WSAGetLastError() == WSAEWOULDBLOCK) ? TAURARO_WOULD_BLOCK : -1;
     }
+    _tr_tcp_set_nodelay((int)s);
     return (int)s;
 }
 static inline int _tr_tcp_connect_nb(const char* host, int port) {
@@ -3599,6 +3614,7 @@ static inline int _tr_tcp_connect_nb(const char* host, int port) {
 #else /* POSIX */
 #include <fcntl.h>
 #include <errno.h>
+#include <netinet/tcp.h>
 static inline int _tr_tcp_set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
@@ -3617,6 +3633,7 @@ static inline int _tr_tcp_send_nb(int fd, const char* data, int len) {
 static inline int _tr_tcp_accept_nb(int server_fd) {
     int fd = accept(server_fd, NULL, NULL);
     if (fd < 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? TAURARO_WOULD_BLOCK : -1;
+    _tr_tcp_set_nodelay(fd);
     return fd;
 }
 static inline int _tr_tcp_connect_nb(const char* host, int port) {
