@@ -193,6 +193,14 @@ extend HttpResponse:
         r._order  = Vec[str].init(8)
         return r
 
+    # Free this response's own heap allocation, once its headers/_order and
+    # body have already been dealt with by the caller. Named `dispose`, not
+    # `free`, so HttpResponse stays out of auto-drop - callers build it with
+    # `mut resp = HttpResponse.init(...)` and pass it into send_response,
+    # which is the sole owner that calls this.
+    pub def dispose(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
     pub def set_header(self, name: str, value: str):
         if not self.headers.contains(name):
             self._order.push(name)
@@ -296,6 +304,7 @@ extend HttpConn:
             unsafe: _tr_c_free(wire as Pointer[char])
             resp.headers.free()
             resp._order.free()
+            resp.dispose()
 
     # Convenience: plain-text response.
     pub def send_text(self, status: int, text: str):

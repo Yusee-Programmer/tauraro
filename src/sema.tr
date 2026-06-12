@@ -637,12 +637,19 @@ extend Sema:
             if self.scopes.get(i).variables.contains(name):
                 mut sym = self.scopes.get(i).variables.get(name)
                 sym.is_moved = false
+                # A branch-local '.free()'/dealloc() also set is_freed; if this
+                # branch's effects are being rolled back (the branch did not
+                # uniformly take effect), is_freed must roll back too, or the
+                # merged maybe-moved state would permanently and incorrectly
+                # report [M-6] on later uses along paths that never freed it.
+                sym.is_freed = false
                 self.scopes.get(i).variables.insert(name, sym)
                 return
             i = i - 1
         if self.globals.contains(name):
             mut sym = self.globals.get(name)
             sym.is_moved = false
+            sym.is_freed = false
             self.globals.insert(name, sym)
 
     # Fix 1: mark as maybe-moved (moved in some branches, not all) - sticky warning flag
@@ -756,6 +763,10 @@ extend Sema:
         mut tn = sym.ty.read().name
         if not self.classes.contains(tn): return false
         if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan": return false
+        # StringBuilder/StringObj methods like as_str()/to_str() can return a
+        # pointer that aliases the instance's own internal buffer; auto-freeing
+        # the instance would dangle that alias. Require an explicit .free().
+        if tn == "StringBuilder" or tn == "StringObj": return false
         if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
         if sym.active_borrows > 0: return false
         if not sym.is_init or sym.is_maybe_init: return false
@@ -1585,30 +1596,58 @@ extend Sema:
                 self.branch_moved_buf = si_outer_buf_m
                 self.capturing_inits = si_outer_cap_i
                 self.branch_init_buf = si_outer_buf_i
-                # -- Merge move state: both->definitive, one-only->maybe --
-                mut si_mi = 0
-                while si_mi < si_then_moved.len:
-                    mut si_mn = si_then_moved.get(si_mi)
-                    if self.vec_str_contains(si_else_moved, si_mn):
-                        self.mark_moved(si_mn)
-                    else:
-                        self.mark_maybe_moved(si_mn)
-                    si_mi = si_mi + 1
-                mut si_ei = 0
-                while si_ei < si_else_moved.len:
-                    mut si_en = si_else_moved.get(si_ei)
-                    if not self.vec_str_contains(si_then_moved, si_en):
-                        self.mark_maybe_moved(si_en)
-                    si_ei = si_ei + 1
-                # -- Merge init state: both->definitive, one-only->maybe --
-                mut si_ini = 0
-                while si_ini < si_then_inited.len:
-                    mut si_inn = si_then_inited.get(si_ini)
-                    if self.vec_str_contains(si_else_inited, si_inn):
-                        self.mark_init(si_inn)
-                    else:
-                        self.mark_maybe_init(si_inn)
-                    si_ini = si_ini + 1
+                # A branch that ends in return/break/continue never reaches the
+                # fall-through code after this 'if', so its moves/inits/frees
+                # must not be merged into the continuation state at all - only
+                # the surviving (non-jumping) branch's effects apply, and they
+                # apply definitively (not "maybe") since it's the only path left.
+                mut si_then_jumps = self.block_ends_in_jump(hthen)
+                mut si_else_jumps = self.block_ends_in_jump(helse)
+                if si_then_jumps and not si_else_jumps:
+                    mut si_ei0 = 0
+                    while si_ei0 < si_else_moved.len:
+                        self.mark_moved(si_else_moved.get(si_ei0))
+                        si_ei0 = si_ei0 + 1
+                    mut si_ini0 = 0
+                    while si_ini0 < si_else_inited.len:
+                        self.mark_init(si_else_inited.get(si_ini0))
+                        si_ini0 = si_ini0 + 1
+                elif si_else_jumps and not si_then_jumps:
+                    mut si_mi0 = 0
+                    while si_mi0 < si_then_moved.len:
+                        self.mark_moved(si_then_moved.get(si_mi0))
+                        si_mi0 = si_mi0 + 1
+                    mut si_ti0 = 0
+                    while si_ti0 < si_then_inited.len:
+                        self.mark_init(si_then_inited.get(si_ti0))
+                        si_ti0 = si_ti0 + 1
+                elif si_then_jumps and si_else_jumps:
+                    pass # no fall-through; nothing to merge
+                else:
+                    # -- Merge move state: both->definitive, one-only->maybe --
+                    mut si_mi = 0
+                    while si_mi < si_then_moved.len:
+                        mut si_mn = si_then_moved.get(si_mi)
+                        if self.vec_str_contains(si_else_moved, si_mn):
+                            self.mark_moved(si_mn)
+                        else:
+                            self.mark_maybe_moved(si_mn)
+                        si_mi = si_mi + 1
+                    mut si_ei = 0
+                    while si_ei < si_else_moved.len:
+                        mut si_en = si_else_moved.get(si_ei)
+                        if not self.vec_str_contains(si_then_moved, si_en):
+                            self.mark_maybe_moved(si_en)
+                        si_ei = si_ei + 1
+                    # -- Merge init state: both->definitive, one-only->maybe --
+                    mut si_ini = 0
+                    while si_ini < si_then_inited.len:
+                        mut si_inn = si_then_inited.get(si_ini)
+                        if self.vec_str_contains(si_else_inited, si_inn):
+                            self.mark_init(si_inn)
+                        else:
+                            self.mark_maybe_init(si_inn)
+                        si_ini = si_ini + 1
                 return box_hirstmt(HirStmt.SIf(hcond, hthen, helse))
             case Stmt.SWhile(cond, body, decorators):
                 mut sw_cond = self.lower_expr(cond)

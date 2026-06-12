@@ -1788,7 +1788,17 @@ static inline int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int 
     { (void)p;(void)ev;(void)maxev;(void)timeout_ms; return 0; }
 
 #elif defined(_WIN32)
-/* ── Windows: IOCP-backed _TrIOPoll ──────────────────────────────────── */
+/* ── Windows: select()-backed _TrIOPoll ──────────────────────────────────
+ * IOCP is completion-based (only signals after an overlapped op is posted),
+ * which doesn't match the epoll/kqueue *readiness* semantics this API
+ * promises (register fd, get notified when it becomes readable/writable
+ * without having posted anything). select() gives true readiness semantics
+ * and works directly with the non-blocking sockets used by recv_nb/send_nb/
+ * accept_nb. FD_SETSIZE is raised before winsock2.h's first include (this
+ * is that first include site) so a few thousand connections can be polled. */
+#ifndef FD_SETSIZE
+#define FD_SETSIZE 4096
+#endif
 #ifndef _TR_NET_INCLUDED
 #define _TR_NET_INCLUDED
 #include <winsock2.h>
@@ -1796,56 +1806,77 @@ static inline int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int 
 #pragma comment(lib, "ws2_32.lib")
 #endif
 typedef struct {
-    HANDLE   iocp;
-    void**   ud_map;
-    int*     fd_map;
-    int      map_cap;
-    int      map_cnt;
+    int      fds[FD_SETSIZE];
+    uint32_t events[FD_SETSIZE];
+    void*    userdata[FD_SETSIZE];
+    int      count;
 } _TrIOPoll;
 static inline _TrIOPoll* _tr_iopoll_create(void) {
-    _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
-    p->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
-    p->map_cap = 64;
-    p->ud_map  = (void**)calloc((size_t)p->map_cap, sizeof(void*));
-    p->fd_map  = (int*)calloc((size_t)p->map_cap, sizeof(int));
-    return p;
+    return (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
-    if (!p) return;
-    if (p->iocp) CloseHandle(p->iocp);
-    free(p->ud_map); free(p->fd_map); free(p);
-}
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if (p) free(p); }
 static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
-    /* Associate socket with IOCP; completion key = index into ud_map */
-    if (p->map_cnt >= p->map_cap) {
-        p->map_cap *= 2;
-        p->ud_map = (void**)realloc(p->ud_map, (size_t)p->map_cap * sizeof(void*));
-        p->fd_map = (int*)realloc(p->fd_map, (size_t)p->map_cap * sizeof(int));
+    for (int i = 0; i < p->count; i++) {
+        if (p->fds[i] == fd) { p->events[i] = ev; p->userdata[i] = ud; return 0; }
     }
-    int idx = p->map_cnt++;
-    p->ud_map[idx] = ud; p->fd_map[idx] = fd; (void)ev;
-    CreateIoCompletionPort((HANDLE)(uintptr_t)fd, p->iocp, (ULONG_PTR)idx, 0);
+    if (p->count >= FD_SETSIZE) return -1;
+    int idx = p->count++;
+    p->fds[idx] = fd; p->events[idx] = ev; p->userdata[idx] = ud;
     return 0;
 }
 static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
     { return _tr_iopoll_add(p, fd, ev, ud); }
-static inline int _tr_iopoll_del(_TrIOPoll* p, int fd)
-    { (void)p;(void)fd; return 0; }
+static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
+    if (!p) return -1;
+    for (int i = 0; i < p->count; i++) {
+        if (p->fds[i] == fd) {
+            p->count--;
+            p->fds[i]      = p->fds[p->count];
+            p->events[i]   = p->events[p->count];
+            p->userdata[i] = p->userdata[p->count];
+            return 0;
+        }
+    }
+    return -1;
+}
 static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int timeout_ms) {
     if (!p || !out || maxev <= 0) return 0;
-    OVERLAPPED_ENTRY entries[64];
-    ULONG n = 0;
-    DWORD ms = timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms;
-    if (!GetQueuedCompletionStatusEx(p->iocp, entries,
-            (ULONG)(maxev < 64 ? maxev : 64), &n, ms, FALSE)) return 0;
-    for (ULONG i = 0; i < n; i++) {
-        int idx = (int)entries[i].lpCompletionKey;
-        out[i].fd       = (idx >= 0 && idx < p->map_cnt) ? p->fd_map[idx] : -1;
-        out[i].userdata = (idx >= 0 && idx < p->map_cnt) ? p->ud_map[idx] : NULL;
-        out[i].events   = TAURARO_POLLIN | TAURARO_POLLOUT;
+    if (p->count == 0) {
+        if (timeout_ms > 0) Sleep((DWORD)timeout_ms);
+        return 0;
     }
-    return (int)n;
+    fd_set rfds, wfds, efds;
+    FD_ZERO(&rfds); FD_ZERO(&wfds); FD_ZERO(&efds);
+    for (int i = 0; i < p->count; i++) {
+        if (p->events[i] & TAURARO_POLLIN)  FD_SET((SOCKET)p->fds[i], &rfds);
+        if (p->events[i] & TAURARO_POLLOUT) FD_SET((SOCKET)p->fds[i], &wfds);
+        FD_SET((SOCKET)p->fds[i], &efds);
+    }
+    struct timeval tv;
+    struct timeval* tvp = NULL;
+    if (timeout_ms >= 0) {
+        tv.tv_sec  = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        tvp = &tv;
+    }
+    int sel = select(0, &rfds, &wfds, &efds, tvp);
+    if (sel <= 0) return 0;
+    int n = 0;
+    for (int i = 0; i < p->count && n < maxev; i++) {
+        uint32_t e = 0;
+        SOCKET s = (SOCKET)p->fds[i];
+        if (FD_ISSET(s, &rfds)) e |= TAURARO_POLLIN;
+        if (FD_ISSET(s, &wfds)) e |= TAURARO_POLLOUT;
+        if (FD_ISSET(s, &efds)) e |= TAURARO_POLLERR;
+        if (e) {
+            out[n].fd       = p->fds[i];
+            out[n].events   = e;
+            out[n].userdata = p->userdata[i];
+            n++;
+        }
+    }
+    return n;
 }
 
 #elif defined(__linux__)

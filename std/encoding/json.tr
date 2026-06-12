@@ -219,13 +219,36 @@ extend JsonValue:
     pub def to_str(self) -> str:
         mut sb = StringBuilder.init(64)
         _json_write_val(self, sb)
-        return sb.to_string().as_str()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Serialize with 2-space pretty-printing.
     pub def to_pretty(self, indent: int) -> str:
         mut sb = StringBuilder.init(256)
         _json_write_val_pretty(self, sb, 0)
-        return sb.to_string().as_str()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Recursively free this JsonValue tree: child nodes (for arrays/objects),
+    # the items/keys lists, and this node's own heap allocation. Does not
+    # free s_val - JsonValue.init_str() is commonly called with string
+    # literals, which must never be passed to free(). Named `dispose`, not
+    # `free`, so JsonValue stays out of auto-drop - sema.tr would otherwise
+    # auto-free the `v` local in every init_*() constructor right after
+    # `*raw = v`, leaving `raw` dangling.
+    pub def dispose(self):
+        if self.tag == 5 or self.tag == 6:
+            mut i = 0
+            while i < self.items.len:
+                mut child = self.items.get(i)
+                child.read().dispose()
+                unsafe: _tr_c_free(child as Pointer[char])
+                i = i + 1
+        self.items.free()
+        self.keys.free()
+        unsafe: _tr_c_free(self as Pointer[char])
 
 # ─── Internal serialization helpers ──────────────────────────────────────────
 
@@ -250,9 +273,13 @@ pub def _json_write_val(node: JsonValue, sb: StringBuilder):
         if node.b_val: sb.append("true")
         else: sb.append("false")
     elif node.tag == 2:
-        sb.append(_tr_int_to_str(node.i_val))
+        mut int_s = _tr_int_to_str(node.i_val)
+        sb.append(int_s)
+        unsafe: _tr_c_free(int_s as Pointer[char])
     elif node.tag == 3:
-        sb.append(_tr_float_to_str(node.f_val))
+        mut float_s = _tr_float_to_str(node.f_val)
+        sb.append(float_s)
+        unsafe: _tr_c_free(float_s as Pointer[char])
     elif node.tag == 4:
         sb.append_char(34)
         _json_escape(node.s_val, sb)
@@ -507,7 +534,9 @@ extend Json:
         if v as int == 0: return "null"
         mut sb = StringBuilder.init(256)
         _json_write_pretty(v, sb, 0)
-        return sb.to_string().as_str()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Convenience constructors
     pub def null_val()       -> Pointer[JsonValue]: return JsonValue.init_null()

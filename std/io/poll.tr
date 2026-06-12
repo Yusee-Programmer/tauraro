@@ -96,10 +96,14 @@ extend IOPoll:
         while i < n:
             mut ev = IOEvent()
             unsafe:
-                mut base = raw_buf.offset(i * ev_size)
+                # Each slot holds three 4-byte C ints (fd/events/userdata)
+                # written via memcpy by _tr_iopoll_wait_raw; reading through
+                # Pointer[char] would only read 1 byte each, truncating any
+                # fd/handle value >= 256 (e.g. Windows SOCKET handles).
+                mut base = (raw_buf.offset(i * ev_size)) as Pointer[i32]
                 ev.fd       = base.offset(0).read() as int
-                ev.events   = base.offset(4).read() as int
-                ev.userdata = base.offset(8).read() as int
+                ev.events   = base.offset(1).read() as int
+                ev.userdata = base.offset(2).read() as int
             result.push(ev)
             i = i + 1
         _tr_free(raw_buf)
