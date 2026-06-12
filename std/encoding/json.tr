@@ -439,7 +439,7 @@ extend JsonParser:
                 break
         mut raw = ""
         unsafe:
-            raw = _tr_str_slice(self.src, start, self.pos)
+            raw = self.src.slice(start, self.pos)
         if is_float:
             return JsonValue.init_float(_tr_str_to_float(raw))
         return JsonValue.init_int(_tr_str_to_int(raw))

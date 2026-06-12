@@ -15,7 +15,7 @@ extend Path:
         mut n = 0
         mut ptr = self.value as Pointer[char]
         while ptr.offset(n).read() as int != 0: n = n + 1
-        mut buf = _tr_str_slice(self.value, 0, n)
+        mut buf = self.value.slice(0, n)
         mut bp = buf as Pointer[char]
         mut i = 0
         while i < n:
@@ -37,7 +37,7 @@ extend Path:
         mut last_a  = ap.offset(an - 1).read() as int
         mut first_b = bp.offset(0).read() as int
         if (last_a == 47 or last_a == 92) and (first_b == 47 or first_b == 92):
-            return self.value + _tr_str_slice(other, 1, bn)
+            return self.value + other.slice(1, bn)
         if last_a == 47 or last_a == 92:
             return self.value + other
         if first_b == 47 or first_b == 92:
@@ -56,7 +56,7 @@ extend Path:
             if c == 47 or c == 92: last_sep = i
             i = i + 1
         if last_sep < 0: return "./"
-        return _tr_str_slice(self.value, 0, last_sep + 1)
+        return self.value.slice(0, last_sep + 1)
 
     # Return the filename portion: "dir/sub/file.txt" → "file.txt".
     pub def basename(self) -> str:
@@ -70,7 +70,7 @@ extend Path:
             if c == 47 or c == 92: last_sep = i
             i = i + 1
         if last_sep < 0: return self.value
-        return _tr_str_slice(self.value, last_sep + 1, n)
+        return self.value.slice(last_sep + 1, n)
 
     # Return the file extension including dot: "file.tar.gz" → ".gz".
     pub def extension(self) -> str:
@@ -84,7 +84,7 @@ extend Path:
             if ptr.offset(i).read() as int == 46: last_dot = i
             i = i + 1
         if last_dot <= 0: return ""
-        return _tr_str_slice(base, last_dot, n)
+        return base.slice(last_dot, n)
 
     # Strip the extension: "a.b.c" → "a.b".
     pub def strip_extension(self) -> str:
@@ -97,7 +97,7 @@ extend Path:
             if ptr.offset(i).read() as int == 46: last_dot = i
             i = i + 1
         if last_dot <= 0: return self.value
-        return _tr_str_slice(self.value, 0, last_dot)
+        return self.value.slice(0, last_dot)
 
     # True when the path is absolute (starts with '/' or a Windows drive letter).
     pub def is_absolute(self) -> bool:

@@ -4678,7 +4678,11 @@ pub class CGenerator:
             while i < catches.len:
                 mut cc = catches.get(i).read()
                 if cc.err_name != "":
-                    self.w(pad + "        char* " + cc.err_name + " = " + em + ";\n")
+                    # sema types the except-binding as `str` (TrStr); the
+                    # exception mechanism itself stores a raw char* message.
+                    # Wrap as a borrowed TrStr (rc=NULL) - the underlying
+                    # message is a literal/owned-elsewhere C string.
+                    self.w(pad + "        TrStr " + cc.err_name + " = _tr_str_lit(" + em + ");\n")
                     self.w(pad + "        (void)" + cc.err_name + ";\n")
                 self.gen_block(cc.body, indent + 2)
                 i = i + 1
