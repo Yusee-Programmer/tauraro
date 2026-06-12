@@ -103,7 +103,7 @@ extend ModuleResolver:
             # Use unsafe slice to copy the directory prefix without a StringBuilder.
             mut dir_str = ""
             unsafe:
-                dir_str = _tr_str_slice(main_path, 0, dir_end)
+                dir_str = main_path.slice(0, dir_end)
             self.search_paths.push(dir_str)
             # Also add parent and grandparent of the source file directory.
             # This allows finding the repo-root std lib (e.g. core/) when the
@@ -118,7 +118,7 @@ extend ModuleResolver:
             if par_end > 0:
                 mut parent_dir = ""
                 unsafe:
-                    parent_dir = _tr_str_slice(dir_str, 0, par_end)
+                    parent_dir = dir_str.slice(0, par_end)
                 self.search_paths.push(parent_dir)
                 mut gp_end = 0
                 mut gj = 0
@@ -130,7 +130,7 @@ extend ModuleResolver:
                 if gp_end > 0:
                     mut gp_dir = ""
                     unsafe:
-                        gp_dir = _tr_str_slice(parent_dir, 0, gp_end)
+                        gp_dir = parent_dir.slice(0, gp_end)
                     self.search_paths.push(gp_dir)
 
                 # Auto-discover vendored taupkg dependencies: when a project is
@@ -222,7 +222,7 @@ extend ModuleResolver:
         mut n = 0
         mut p = mod_path as Pointer[char]
         while p.offset(n).read() as int != 0: n = n + 1
-        mut dir_path = _tr_str_slice(mod_path, 0, n)
+        mut dir_path = mod_path.slice(0, n)
         mut bp = dir_path as Pointer[char]
         mut j = 0
         while j < n:
@@ -246,7 +246,7 @@ extend ModuleResolver:
                 self.resolve_file(pkg_path, false)
                 if not already:
                     self.mod_dot_paths.push(mod_path)
-                    self.mod_file_paths.push(StringObj.init(pkg_path).as_str())
+                    self.mod_file_paths.push(pkg_path)
                 self.current_mod = saved_mod
                 return
  
@@ -257,7 +257,7 @@ extend ModuleResolver:
                 self.resolve_file(flat_path, false)
                 if not already:
                     self.mod_dot_paths.push(mod_path)
-                    self.mod_file_paths.push(StringObj.init(flat_path).as_str())
+                    self.mod_file_paths.push(flat_path)
                 self.current_mod = saved_mod
                 return
 

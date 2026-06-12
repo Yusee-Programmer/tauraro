@@ -221,7 +221,9 @@ extend HttpResponse:
     pub def to_wire(self) -> str:
         mut sb = StringBuilder.init(256)
         sb.append("HTTP/1.1 ")
-        sb.append(Fmt.int_to_str(self.status))
+        mut status_s = Fmt.int_to_str(self.status)
+        sb.append(status_s)
+        unsafe: _tr_c_free(status_s as Pointer[char])
         sb.append(" ")
         if self.status == 200:      sb.append("OK")
         elif self.status == 201:    sb.append("Created")
@@ -256,7 +258,13 @@ extend HttpResponse:
             unsafe: _tr_c_free(hk_lower as Pointer[char])
             hi = hi + 1
         sb.append("Content-Length: ")
-        sb.append(Fmt.int_to_str(Str.len(self.body)))
+        mut body_len = Str.len(self.body)
+        if body_len == 0:
+            sb.append("0")
+        else:
+            mut clen_s = Fmt.int_to_str(body_len)
+            sb.append(clen_s)
+            unsafe: _tr_c_free(clen_s as Pointer[char])
         sb.append("\r\n\r\n")
         sb.append(self.body)
         mut wire = sb.to_owned()
@@ -665,6 +673,7 @@ extend HttpServer:
         mut clen = HttpParser.content_length(hdr_for_clen)
         unsafe: _tr_c_free(hdr_for_clen as Pointer[char])
         mut have = Str.len(raw) - (header_end + 4)
+        unsafe: _tr_c_free(raw as Pointer[char])
         while have < clen:
             mut more = stream.recv(self._recv_buf)
             if Str.len(more) == 0: break

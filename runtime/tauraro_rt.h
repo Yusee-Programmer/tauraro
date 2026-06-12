@@ -172,6 +172,95 @@ static inline void* _tr_checked_alloc(size_t sz) {
     if (!p && sz > 0) { _TR_OOM_ABORT(); }
     return p;
 }
+/* ── Refcounted string (TrStr): fat-pointer str representation ──
+ * `data` points at the NUL-terminated bytes. `rc` points at a heap
+ * refcount, or is NULL for literal/immortal strings — in that case
+ * retain/release are no-ops, so string literals never need freeing. */
+typedef struct {
+    char* data;
+    long* rc;
+} TrStr;
+
+static inline TrStr _tr_str_lit_impl(const char* s) {
+    TrStr t; t.data = (char*)s; t.rc = NULL; return t;
+}
+static inline TrStr _tr_str_lit_passthrough(TrStr s) { return s; }
+/* `_tr_str_lit(x)`: wrap a borrowed `const char*` into a TrStr (rc=NULL).
+ * Some codegen call sites pass an expression that is ALREADY a TrStr
+ * (e.g. `_tr_str_lit(StringObj_as_str(...))` once StringObj_as_str was
+ * migrated to return TrStr) - in that case this is a redundant no-op
+ * wrap, so pass the TrStr through unchanged instead of erroring.
+ * _Generic dispatches on a FUNCTION DESIGNATOR (not a pre-built call
+ * expression) so the unselected branch is never type-checked against `x`. */
+#define _tr_str_lit(x) (_Generic((x), TrStr: _tr_str_lit_passthrough, default: _tr_str_lit_impl)(x))
+
+/* Allocates a new heap string of `len` bytes (plus NUL terminator)
+ * with refcount 1. Caller fills t.data[0..len-1]. */
+static inline TrStr _tr_str_new(size_t len) {
+    char* block = (char*)_tr_checked_alloc(sizeof(long) + len + 1);
+    TrStr t;
+    t.rc = (long*)block;
+    *t.rc = 1;
+    t.data = block + sizeof(long);
+    t.data[len] = '\0';
+    return t;
+}
+
+static inline TrStr _tr_str_retain(TrStr s) {
+    if (s.rc) { (*s.rc)++; }
+    return s;
+}
+
+static inline void _tr_str_release(TrStr s) {
+    if (s.rc) {
+        if (--(*s.rc) == 0) { _tr_free((void*)s.rc); }
+    }
+}
+
+/* Wraps an EXISTING heap `char*` (e.g. the result of any legacy
+ * _tr_str_* function, malloc'd separately from its refcount) into a
+ * TrStr with refcount 1. Two allocations, but lets every existing
+ * char*-returning string helper become TrStr-compatible with no
+ * changes to its own body. */
+static inline TrStr _tr_str_wrap_impl(char* owned_data) {
+    TrStr t;
+    t.data = owned_data;
+    t.rc = (long*)_tr_checked_alloc(sizeof(long));
+    *t.rc = 1;
+    return t;
+}
+static inline TrStr _tr_str_wrap_passthrough(TrStr s) { return s; }
+/* `_tr_str_wrap(x)`: wrap an owned `char*` into a TrStr (rc=1). Some
+ * codegen call sites double-wrap (e.g. `_tr_str_wrap(_tr_str_wrap(buffer))`
+ * from an extern-helper call whose declared return type is `str`) - in
+ * that case this is a redundant no-op wrap, so pass the TrStr through
+ * unchanged instead of erroring. Same _Generic function-designator-dispatch
+ * trick as `_tr_str_lit`. */
+#define _tr_str_wrap(x) (_Generic((x), TrStr: _tr_str_wrap_passthrough, default: _tr_str_wrap_impl)(x))
+
+/* Extracts the raw `char*` for passing to functions that take
+ * `const char*`/`char*`. Does not affect the refcount. */
+static inline char* _tr_strz(TrStr s) {
+    return s.data;
+}
+
+/* Box/unbox a TrStr (16 bytes) into the generic `void* val` slot used by
+ * Option[T]/Result[T,E]. A direct (void*)(TrStr) cast is a hard error in C
+ * since TrStr is a struct, not a pointer-sized scalar. */
+static inline void* _tr_str_box(TrStr s) {
+    TrStr* p = (TrStr*)_tr_checked_alloc(sizeof(TrStr));
+    *p = s;
+    return (void*)p;
+}
+static inline TrStr _tr_str_unbox(void* p) {
+    if (!p) return _tr_str_lit("");
+    /* Non-destructive: callers (e.g. f-string codegen) may evaluate the
+     * source expression more than once (size-then-format snprintf pattern),
+     * so freeing `p` here would cause a double-free/use-after-free on the
+     * second evaluation. The 16-byte box leaks; acceptable until codegen
+     * single-evaluates these expressions via temps. */
+    return *(TrStr*)p;
+}
 /* ── Shared ownership: reference-counted box (replaces Rc/Arc/Mutex in one keyword) ── */
 typedef struct _TrSharedBox {
     _Atomic(int) refcount;
@@ -2319,6 +2408,14 @@ static char* _tr_str_concat(const char* a, const char* b) {
     memcpy(r,a,la); memcpy(r+la,b,lb+1);
     return r;
 }
+/* TrStr-returning variant: same semantics, refcounted result (rc=1). */
+static inline TrStr _tr_strx_concat(const char* a, const char* b) {
+    if (!a) a=""; if (!b) b="";
+    size_t la=strlen(a), lb=strlen(b);
+    TrStr r = _tr_str_new(la+lb);
+    memcpy(r.data, a, la); memcpy(r.data+la, b, lb);
+    return r;
+}
 static char* _tr_str_upper(const char* s) {
     if (!s) return "";
     char* r=(char*)TAURARO_ALLOC(strlen(s)+1);
@@ -2384,6 +2481,7 @@ static inline char* _tr__dbl_s(double x)             { return _tr_float_to_str(x
 static inline char* _tr__flt_s(float x)              { return _tr_float_to_str((double)x); }
 static inline char* _tr__bool_s(bool x)              { return x ? "true" : "false"; }
 static inline char* _tr__ptr_s(void* x)              { return (char*)x; }
+static inline char* _tr__trstr_s(TrStr x)            { return x.data; }
 #define _TR_AUTO_STR(x) _Generic((x), \
     long long:          _tr__ll_s,  \
     unsigned long long: _tr__ull_s, \
@@ -2396,6 +2494,7 @@ static inline char* _tr__ptr_s(void* x)              { return (char*)x; }
     double:             _tr__dbl_s, \
     float:              _tr__flt_s, \
     bool:               _tr__bool_s,\
+    TrStr:              _tr__trstr_s,\
     default:            _tr__ptr_s  \
 )(x)
 static long long _tr_str_to_int(const char* s) { return s ? strtoll(s,NULL,10) : 0LL; }
@@ -2463,6 +2562,14 @@ static inline char* _tr_str_repeat(const char* s, long long times) {
     char* r=(char*)_tr_checked_alloc(total+1); r[0]='\0';
     for(long long i=0;i<times;i++) memcpy(r+i*slen, s, slen);
     r[total]='\0'; return r;
+}
+/* TrStr-returning variant: same semantics, refcounted result (rc=1). */
+static inline TrStr _tr_strx_repeat(const char* s, long long times) {
+    if (!s||times<=0) { return _tr_str_new(0); }
+    size_t slen=strlen(s); size_t total=(size_t)times*slen;
+    TrStr r = _tr_str_new(total);
+    for(long long i=0;i<times;i++) memcpy(r.data+i*slen, s, slen);
+    return r;
 }
 static inline char* _tr_str_replace_first(const char* s, const char* old_s, const char* new_s) {
     if (!s||!old_s||!new_s) return s ? (char*)s : (char*)"";
@@ -2747,6 +2854,15 @@ static inline List_str* List_str_new(void) { List_str* l=(List_str*)malloc(sizeo
 static inline void List_str_append(List_str* l, char* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(char**)realloc(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; }
 static inline char* List_str_pop(List_str* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
 static inline void List_str_free(List_str* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+
+/* ── List_TrStr: refcounted-string element container (Phase 2 target) ──
+ * Parallel to List_str (char**); element is the 16-byte TrStr fat
+ * pointer. append() retains, free() releases every element. */
+typedef struct { TrStr* data; size_t len; size_t capacity; } List_TrStr;
+static inline List_TrStr* List_TrStr_new(void) { List_TrStr* l=(List_TrStr*)malloc(sizeof(List_TrStr)); l->data=(TrStr*)malloc(sizeof(TrStr)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_TrStr_append(List_TrStr* l, TrStr val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrStr*)realloc(l->data,sizeof(TrStr)*l->capacity); } l->data[l->len++]=_tr_str_retain(val); }
+static inline TrStr List_TrStr_pop(List_TrStr* l) { if(!l||l->len==0) return _tr_str_lit(""); l->len--; return l->data[l->len]; }
+static inline void List_TrStr_free(List_TrStr* l) { if(l){ for(size_t i=0;i<l->len;i++) _tr_str_release(l->data[i]); _tr_free(l->data); _tr_free(l); } }
 
 /* ── List_str helpers (requires List_str typedef above) ─────────────────── */
 static List_str* _tr_str_tuple2(char* a, char* b) {
@@ -3125,6 +3241,22 @@ static inline char* _tr_str_join(List_str* parts, const char* sep) {
         if (i + 1 < parts->len && seplen) { memcpy(dst, sep, seplen); dst += seplen; }
     }
     *dst = '\0';
+    return out;
+}
+/* TrStr-returning variant: same semantics, refcounted result (rc=1 even for empty). */
+static inline TrStr _tr_strx_join(List_str* parts, const char* sep) {
+    if (!parts || parts->len == 0) return _tr_str_new(0);
+    size_t total = 0, seplen = sep ? strlen(sep) : 0;
+    for (size_t i = 0; i < parts->len; i++) {
+        if (parts->data[i]) total += strlen(parts->data[i]);
+        if (i + 1 < parts->len) total += seplen;
+    }
+    TrStr out = _tr_str_new(total);
+    char* dst = out.data;
+    for (size_t i = 0; i < parts->len; i++) {
+        if (parts->data[i]) { size_t l = strlen(parts->data[i]); memcpy(dst, parts->data[i], l); dst += l; }
+        if (i + 1 < parts->len && seplen) { memcpy(dst, sep, seplen); dst += seplen; }
+    }
     return out;
 }
 

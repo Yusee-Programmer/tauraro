@@ -607,4 +607,6 @@ extend Str:
             mut ch = p.offset(i).read() as int
             if ch != c: sb.append_char(ch)
             i = i + 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
