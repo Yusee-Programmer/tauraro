@@ -4,7 +4,7 @@ from std.core.string import StringBuilder
 
 extern "C":
     def _tr_str_split(s: str, sep: str) -> List[str]
-    def _tr_str_join(parts: List[str], sep: str) -> str
+    def _tr_strx_join_trstr(parts: List[str], sep: str) -> str
     def _tr_c_free(ptr: Pointer[char])
 
 pub class Str:
@@ -385,7 +385,6 @@ extend Str:
         while True:
             mut rest = Str.slice(s, i, sl)
             mut pos = Str.index_of(rest, sub)
-            if i < sl: unsafe: _tr_c_free(rest as Pointer[char])
             if pos < 0: break
             n = n + 1
             i = i + pos + subl
@@ -427,7 +426,7 @@ extend Str:
         return out
 
     pub def join(parts: List[str], sep: str) -> str:
-        return _tr_str_join(parts, sep)
+        return _tr_strx_join_trstr(parts, sep)
 
     pub def replace(s: str, old: str, new_: str) -> str:
         mut result = StringBuilder.init(Str.len(s) + 1)

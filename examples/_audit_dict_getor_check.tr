@@ -1,0 +1,16 @@
+def main():
+    mut d: Map[int, int] = {}
+    d.insert(1, 100)
+    mut x = d.get_or(1, -1)
+    mut y = d.get_or(2, -1)
+    print("x=" + x.to_str())
+    print("y=" + y.to_str())
+
+    mut sd: Map[int, str] = {}
+    sd.insert(1, "hello")
+    mut a = sd.get_or(1, "default")
+    mut b = sd.get_or(2, "default")
+    print("a=" + a)
+    print("b=" + b)
+
+    print("done")

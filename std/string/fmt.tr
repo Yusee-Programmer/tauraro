@@ -5,7 +5,6 @@ from std.string.str import Str
 
 extern "C":
     def _tr_float_fmt(f: float, decimals: int) -> str
-    def _tr_c_free(ptr: Pointer[char])
 
 pub class Fmt:
     _dummy: int
@@ -38,7 +37,6 @@ extend Fmt:
         mut tmp = sb.to_owned()
         sb.free()
         mut out = Str.reverse(tmp)
-        unsafe: _tr_c_free(tmp as Pointer[char])
         return out
 
     pub def int_to_hex(n: int) -> str:
@@ -53,7 +51,6 @@ extend Fmt:
         mut tmp = sb.to_owned()
         sb.free()
         mut out = Str.reverse(tmp)
-        unsafe: _tr_c_free(tmp as Pointer[char])
         return out
 
     pub def int_to_bin(n: int) -> str:
@@ -68,7 +65,6 @@ extend Fmt:
         mut tmp = sb.to_owned()
         sb.free()
         mut out = Str.reverse(tmp)
-        unsafe: _tr_c_free(tmp as Pointer[char])
         return out
 
     pub def int_to_oct(n: int) -> str:
@@ -82,7 +78,6 @@ extend Fmt:
         mut tmp = sb.to_owned()
         sb.free()
         mut out = Str.reverse(tmp)
-        unsafe: _tr_c_free(tmp as Pointer[char])
         return out
 
     # ── Float → string ────────────────────────────────────────────────────────

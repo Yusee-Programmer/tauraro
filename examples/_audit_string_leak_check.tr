@@ -1,0 +1,23 @@
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.core.string import StringBuilder
+
+def main():
+    mut i = 0
+    while i < 200000:
+        mut s = "Hello, World! " + Fmt.int_to_str(i)
+        mut up = Str.to_upper(s)
+        mut lo = Str.to_lower(up)
+        mut rev = Str.reverse(lo)
+        mut trimmed = Str.trim("  " + rev + "  ")
+        mut parts = Str.split(trimmed, " ")
+        mut joined = Str.join(parts, "-")
+        mut rep = Str.replace(joined, "o", "0")
+        mut sliced = Str.slice(rep, 0, 5)
+        mut padded = Fmt.pad_left(sliced, 10, 42)
+        mut words = Str.words(trimmed)
+        mut wordcount = words.len
+        if i % 50000 == 0:
+            print(padded + " " + wordcount.to_str())
+        i = i + 1
+    print("done")

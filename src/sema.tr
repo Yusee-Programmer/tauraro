@@ -989,6 +989,14 @@ extend Sema:
             case HirExpr.EYield(inner, _): self.collect_idents(inner, out)
             case _: pass
 
+    # True if `name` is a declared local/param variable in any open scope.
+    pub def is_local_var(self, name: str) -> bool:
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name): return true
+            i = i - 1
+        return false
+
     pub def mark_str_escaped(self, name: str):
         mut i = self.scopes.len - 1
         while i >= 0:
@@ -1024,9 +1032,20 @@ extend Sema:
             case HirExpr.EUnaryOp(_, inner, _): self.mark_escaped_str_args(inner)
             case HirExpr.ECall(callee, args, _):
                 self.mark_escaped_str_args(callee)
+                # Only class-constructor calls risk storing a str arg into a
+                # struct field with extended lifetime (no retain). Plain
+                # function/static-method calls (e.g. all of Str.*/Fmt.*) only
+                # read their `str` params (params are never auto-dropped, see
+                # is_droppable_sym's is_param check) - the caller keeps sole
+                # ownership and remains safe to auto-drop at scope exit.
+                mut _call_is_ctor = false
+                match callee.read():
+                    case HirExpr.EIdent(_cnm, _, _):
+                        if self.classes.contains(_cnm): _call_is_ctor = true
+                    case _: pass
                 mut i = 0
                 while i < args.len:
-                    self.mark_str_arg(args.get(i))
+                    if _call_is_ctor: self.mark_str_arg(args.get(i))
                     self.mark_escaped_str_args(args.get(i))
                     i = i + 1
             case HirExpr.EMethodCall(obj, mname, args, _):
@@ -1040,9 +1059,19 @@ extend Sema:
                 # Dict/Map VALUE args (arg 1) still use box/no-retain - keep
                 # marking those as escaped.
                 mut obj_ty = hir_expr_type(obj)
+                # Static-method call on a class name (e.g. `Str.to_upper(s)`,
+                # `Fmt.int_to_str(n)`): `obj` is the class identifier itself,
+                # not an instance, so there is no `self` to stash the arg
+                # into a field - same reasoning as the ECall non-constructor
+                # case above, safe to leave args eligible for auto-drop.
+                mut _is_static_call = false
+                match obj.read():
+                    case HirExpr.EIdent(_ocnm, _, _):
+                        if self.classes.contains(_ocnm) and not self.is_local_var(_ocnm): _is_static_call = true
+                    case _: pass
                 mut i = 0
                 while i < args.len:
-                    mut skip_mark = false
+                    mut skip_mark = _is_static_call
                     if obj_ty.name == "List" or obj_ty.name == "Vec":
                         if mname == "append" or mname == "push" or mname == "extend" or mname == "set" or mname == "insert":
                             skip_mark = true
@@ -1171,10 +1200,22 @@ extend Sema:
                                     if obj_vt == "str" or obj_vt == "String":
                                         self.mark_coll_arg(obj)
                         case _: pass
+                # Static-method call on a class name (e.g. `Str.join(parts, sep)`):
+                # `obj` is the class identifier itself, not an instance, so the
+                # callee has no `self` to stash a List/Vec/Dict/Map/Set argument
+                # into - it can only read from it (e.g. _tr_trstr_join memcpy's
+                # each element's bytes out). Safe to leave such args eligible
+                # for auto-drop, same reasoning as the str_escaped exception
+                # for static calls above.
+                mut _coll_static_call = false
+                match obj.read():
+                    case HirExpr.EIdent(_ocnm2, _, _):
+                        if self.classes.contains(_ocnm2) and not self.is_local_var(_ocnm2): _coll_static_call = true
+                    case _: pass
                 self.mark_escaped_coll_args(obj)
                 mut i = 0
                 while i < args.len:
-                    self.mark_coll_arg(args.get(i))
+                    if not _coll_static_call: self.mark_coll_arg(args.get(i))
                     self.mark_escaped_coll_args(args.get(i))
                     i = i + 1
             case HirExpr.EPropAccess(obj, _, _): self.mark_escaped_coll_args(obj)
@@ -3002,7 +3043,7 @@ extend Sema:
                 # fall through to the StringBuilder branch below so .as_str() dispatches
                 # to StringObj_as_str() instead of an invalid (char*) struct cast.
                 elif (method == "to_str" or method == "to_string") and hobj_ty.name != "StringBuilder": ret_ty = AstType.init("str")
-                elif method == "get" or method == "pop":
+                elif method == "get" or method == "pop" or method == "get_or":
                     if (hobj_ty.name == "List" or hobj_ty.name == "Vec") and hobj_ty.args.len > 0:
                         ret_ty = hobj_ty.args.get(0).read()
                     elif (hobj_ty.name == "Map" or hobj_ty.name == "Dict") and hobj_ty.args.len > 1:

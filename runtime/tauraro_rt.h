@@ -3015,6 +3015,27 @@ static inline List_ptr* _tr_idict_values(TrIDict* d) {
     }
     return out;
 }
+/* values() for Dict[K,str]/Map[K,str]: unbox+retain each boxed TrStr value
+   into a List_TrStr (#54). The map keeps its own boxed reference, so the
+   returned list holds independent retained copies. */
+static inline List_TrStr* _tr_dict_values_strval(TrMap* d) {
+    List_TrStr* out = List_TrStr_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) {
+        _DictNode* n = d->buckets[i];
+        while (n) { if (n->key && n->value) List_TrStr_append(out, _tr_str_unbox(n->value)); n = n->next; }
+    }
+    return out;
+}
+static inline List_TrStr* _tr_idict_values_strval(TrIDict* d) {
+    List_TrStr* out = List_TrStr_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) {
+        _TrIDictNode* n = d->buckets[i];
+        while (n) { if (n->value) List_TrStr_append(out, _tr_str_unbox(n->value)); n = n->next; }
+    }
+    return out;
+}
 
 /* Key-value pair structs for dict.items() */
 typedef struct { char* key; void* val; } TrKVPair;
@@ -3322,6 +3343,23 @@ static inline TrStr _tr_strx_join(List_str* parts, const char* sep) {
     char* dst = out.data;
     for (size_t i = 0; i < parts->len; i++) {
         if (parts->data[i]) { size_t l = strlen(parts->data[i]); memcpy(dst, parts->data[i], l); dst += l; }
+        if (i + 1 < parts->len && seplen) { memcpy(dst, sep, seplen); dst += seplen; }
+    }
+    return out;
+}
+
+/* List_TrStr-backed join, for List[str].join() under the TrStr migration (#54). */
+static inline TrStr _tr_strx_join_trstr(List_TrStr* parts, const char* sep) {
+    if (!parts || parts->len == 0) return _tr_str_new(0);
+    size_t total = 0, seplen = sep ? strlen(sep) : 0;
+    for (size_t i = 0; i < parts->len; i++) {
+        if (parts->data[i].data) total += strlen(parts->data[i].data);
+        if (i + 1 < parts->len) total += seplen;
+    }
+    TrStr out = _tr_str_new(total);
+    char* dst = out.data;
+    for (size_t i = 0; i < parts->len; i++) {
+        if (parts->data[i].data) { size_t l = strlen(parts->data[i].data); memcpy(dst, parts->data[i].data, l); dst += l; }
         if (i + 1 < parts->len && seplen) { memcpy(dst, sep, seplen); dst += seplen; }
     }
     return out;

@@ -1422,12 +1422,14 @@ pub class CGenerator:
         if op == "+" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
             # `_tr_str_wrap(...)` always produces a freshly-owned, unique
             # TrStr (rc=1, not aliased to any other variable) - e.g. from
-            # `.to_str()`, `.to_upper()`, etc. used inline in a concat. If an
-            # operand is exactly such an expression, consume its `.data` and
-            # release it immediately after the concat call so its (up to
-            # two) heap allocations don't leak.
-            mut l_owned = ls.starts_with("_tr_str_wrap(") and ls.ends_with(")")
-            mut r_owned = rs.starts_with("_tr_str_wrap(") and rs.ends_with(")")
+            # `.to_str()`, `.to_upper()`, etc. used inline in a concat. Same
+            # for any ECall/EMethodCall/EBinOp operand (e.g. a nested `a + b`
+            # concat, or `Str.to_upper(x)`): both return a fresh TrStr by
+            # value with its own rc/data allocation. If an operand is one of
+            # these, consume its `.data` and release it immediately after the
+            # concat call so its (up to two) heap allocations don't leak.
+            mut l_owned = (ls.starts_with("_tr_str_wrap(") and ls.ends_with(")")) or self._is_fresh_str_expr(l)
+            mut r_owned = (rs.starts_with("_tr_str_wrap(") and rs.ends_with(")")) or self._is_fresh_str_expr(r)
             if l_owned and r_owned:
                 return "({ TrStr _cl = (" + ls + "); TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })"
             elif l_owned:
@@ -1853,14 +1855,17 @@ pub class CGenerator:
 
         # Option / Result constructors
         if base_callee == "Some":
-            if args.len > 0: return "_tr_option_some((void*)(" + self.gen_expr(args.get(0)) + "))"
-            return "_tr_option_none()"
+            mut some_cv2 = "NULL"
+            if args.len > 0: some_cv2 = self.wrap_voidp_arg(args.get(0))
+            return "((Option){.tag=Option_Some, .data.Some.val=" + some_cv2 + "})"
         if base_callee == "Ok":
-            if args.len > 0: return "_tr_result_ok((void*)(" + self.gen_expr(args.get(0)) + "))"
-            return "_tr_result_ok(NULL)"
+            mut ok_cv2 = "NULL"
+            if args.len > 0: ok_cv2 = self.wrap_voidp_arg(args.get(0))
+            return "((Result){.tag=Result_Ok, .data.Ok.val=" + ok_cv2 + "})"
         if base_callee == "Err":
-            if args.len > 0: return "_tr_result_err((void*)(" + self.gen_expr(args.get(0)) + "))"
-            return "_tr_result_err(NULL)"
+            mut err_cv2 = "NULL"
+            if args.len > 0: err_cv2 = self.wrap_voidp_arg(args.get(0))
+            return "((Result){.tag=Result_Err, .data.Err.err=" + err_cv2 + "})"
 
         # Intercept alloc
         if base_callee == "alloc" or base_callee == "core_alloc_alloc":
@@ -2215,12 +2220,32 @@ pub class CGenerator:
             i = i + 1
         return s
 
+    # True for `str`-typed expressions that produce a FRESH, independently-
+    # owned TrStr (rc=1 new allocation): nested calls and concatenations.
+    # Such a value, if passed directly as a call argument, is never bound to
+    # a local (so SAutoDrop can't release it) and the callee's parameter is
+    # never auto-dropped either - it would leak. EIdent/EPropAccess/literals
+    # are borrowed/immortal and don't need this.
+    pub def _is_fresh_str_expr(self, e: Pointer[HirExpr]) -> bool:
+        match e.read():
+            case HirExpr.ECall(_, _, _): return true
+            case HirExpr.EMethodCall(_, _, _, _): return true
+            case HirExpr.EBinOp(_, _, _, _): return true
+            case _: return false
+
     pub def gen_args(self, args: Vec[Pointer[HirExpr]]) -> str:
         mut s = ""
         mut i = 0
         while i < args.len:
             if i > 0: s = s + ", "
-            s = s + self.gen_expr(args.get(i))
+            mut a = args.get(i)
+            mut a_s = self.gen_expr(a)
+            if _is_str_type(hir_expr_type(a).name) and self._is_fresh_str_expr(a):
+                mut tmp = "_at" + self.next_temp()
+                self.wrap_temp_decls.push("TrStr " + tmp + " = (" + a_s + ")")
+                self.wrap_temp_names.push(tmp)
+                a_s = tmp
+            s = s + a_s
             i = i + 1
         return s
 
@@ -3242,7 +3267,11 @@ pub class CGenerator:
                 if is_idict: return "_tr_idict_keys(" + obj_s + ")"
                 return "_tr_dict_keys(" + obj_s + ")"
             if method == "values":
-                if is_idict: return "_tr_idict_values(" + obj_s + ")"
+                mut _vals_strval = call_ty.name == "List" and call_ty.args.len > 0 and _is_str_type(call_ty.args.get(0).read().name)
+                if is_idict:
+                    if _vals_strval: return "_tr_idict_values_strval(" + obj_s + ")"
+                    return "_tr_idict_values(" + obj_s + ")"
+                if _vals_strval: return "_tr_dict_values_strval(" + obj_s + ")"
                 return "_tr_dict_values(" + obj_s + ")"
             if method == "items":
                 if is_idict: return "_tr_idict_items(" + obj_s + ")"
@@ -3272,6 +3301,9 @@ pub class CGenerator:
                     mut _k = self.dict_key_arg(args.get(0))
                     _res = "(_tr_dict_contains(" + obj_s + ", " + _k + ") ? _tr_dict_get(" + obj_s + ", " + _k + ") : (void*)(uintptr_t)(" + _d + "))"
                 if _is_str_val: return "_tr_str_unbox(" + _res + ")"
+                mut _getor_c_ty = self.type_to_c(call_ty)
+                if _getor_c_ty != "void" and _getor_c_ty != "" and _getor_c_ty != "TrStr":
+                    return "((" + _getor_c_ty + ")(uintptr_t)" + _res + ")"
                 return _res
             # free() - release the underlying TrMap/TrIDict (buckets, nodes,
             # key strings for str-keyed maps, and the struct itself).
