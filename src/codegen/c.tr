@@ -959,7 +959,7 @@ pub class CGenerator:
                     mut j = 0
                     while j < v.fields.len:
                         mut fld = v.fields.get(j)
-                        self.ws("            " + self.type_to_c(fld.ty) + " " + fld.name + ";\n")
+                        self.ws("            " + self.type_to_c(fld.ty) + " " + _safe_c_varname(fld.name) + ";\n")
                         j = j + 1
                     self.ws("        } " + v.name + ";\n")
                 i = i + 1
@@ -977,12 +977,19 @@ pub class CGenerator:
                 mut j = 0
                 while j < v.fields.len:
                     if j > 0: self.ws(", ")
-                    self.ws(self.type_to_c(v.fields.get(j).ty) + " " + v.fields.get(j).name)
+                    self.ws(self.type_to_c(v.fields.get(j).ty) + " " + _safe_c_varname(v.fields.get(j).name))
                     j = j + 1
                 self.ws(") { " + e.name + " _r = {.tag=" + e.name + "_" + v.name + "}; ")
                 j = 0
                 while j < v.fields.len:
-                    self.ws("_r.data." + v.name + "." + v.fields.get(j).name + " = " + v.fields.get(j).name + "; ")
+                    mut _ef = v.fields.get(j)
+                    mut _efn = _safe_c_varname(_ef.name)
+                    # Retain str payload fields: the enum value may outlive the
+                    # caller's argument local, which can auto-drop at scope exit.
+                    if _is_str_type(self.resolve_generic_prim(_ef.ty.name)):
+                        self.ws("_r.data." + v.name + "." + _efn + " = _tr_str_retain(" + _efn + "); ")
+                    else:
+                        self.ws("_r.data." + v.name + "." + _efn + " = " + _efn + "; ")
                     j = j + 1
                 self.ws("return _r; }\n")
             i = i + 1
@@ -3394,7 +3401,10 @@ pub class CGenerator:
             mut tup_e = items.get(i)
             mut tup_es = self.gen_expr(tup_e)
             if _is_str_type(self.resolve_generic_prim(hir_expr_type(tup_e).name)):
-                s = s + "(long long)(uintptr_t)_tr_str_box(" + tup_es + ")"
+                # Retain before boxing: the box's TrStr shares .data/.rc with
+                # tup_es's source; without a retain, the source's auto-drop
+                # would free .data while the box still points at it (UAF).
+                s = s + "(long long)(uintptr_t)_tr_str_box(_tr_str_retain(" + tup_es + "))"
             else:
                 s = s + "(long long)(uintptr_t)(" + tup_es + ")"
             i = i + 1
@@ -3560,7 +3570,10 @@ pub class CGenerator:
             mut elem_ty_n = ""
             if val_ty.args.len > i: elem_ty_n = self.resolve_generic_prim(val_ty.args.get(i).read().name)
             if _is_str_type(elem_ty_n):
-                self.w(pad + "TrStr " + vname + " = _tr_str_unbox((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]);\n")
+                # Retain: _tr_str_unbox is non-destructive and shares the
+                # box's refcount. Without retaining, an auto-drop of `vname`
+                # could free data the (leaked) box's TrStr still points at.
+                self.w(pad + "TrStr " + vname + " = _tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]));\n")
             else:
                 self.w(pad + "long long " + vname + " = " + tmp + ".data[" + i.to_str() + "];\n")
             self.decl_vars.insert(names.get(i), true)
@@ -4578,7 +4591,29 @@ pub class CGenerator:
                         else:
                             self.w(pad + "Dict_free(" + _safe_c_varname(adn) + ");\n")
                 else:
+                    # Item #2: release str-typed fields after the user's free()
+                    # runs. Capture each field's TrStr value BEFORE free() (so
+                    # free() can still read it - e.g. to log it), then release
+                    # the captured copy AFTER free() returns - this drops the
+                    # instance's own reference (severed once free() deallocates
+                    # `self`) without racing free()'s own access to the field.
+                    mut _adn_safe = _safe_c_varname(adn)
+                    mut _ad_tmps = Vec[str].init(0)
+                    if self.classes.contains(adc):
+                        mut _ad_cls = self.classes.get(adc)
+                        mut _ad_fi = 0
+                        while _ad_fi < _ad_cls.fields.len:
+                            mut _ad_fld = _ad_cls.fields.get(_ad_fi)
+                            if _is_str_type(self.resolve_generic_prim(_ad_fld.ty.name)):
+                                mut _ad_tmp = "_ad_f" + self.next_temp()
+                                self.w(pad + "TrStr " + _ad_tmp + " = " + _adn_safe + "->" + _safe_c_varname(_ad_fld.name) + ";\n")
+                                _ad_tmps.push(_ad_tmp)
+                            _ad_fi = _ad_fi + 1
                     self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
+                    mut _ad_ti = 0
+                    while _ad_ti < _ad_tmps.len:
+                        self.w(pad + "_tr_str_release(" + _ad_tmps.get(_ad_ti) + ");\n")
+                        _ad_ti = _ad_ti + 1
             case _: pass
 
     pub def gen_for_loop(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
@@ -5056,7 +5091,7 @@ pub class CGenerator:
                                 if _gv.name == vn and _gv.fields.len > 0: gaf = _gv.fields.get(0).name
                                 _gvi = _gvi + 1
                         self.decl_vars.insert(field, true)
-                        gbindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + gaf + ";\n"
+                        gbindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + _safe_c_varname(gaf) + ";\n"
                     case Pattern.PVariantBindMany(tn, vn, fields):
                         gcond = subj + ".tag == " + tn + "_" + vn
                         mut _gbi = 0
@@ -5072,7 +5107,7 @@ pub class CGenerator:
                                         if _gv2.name == vn and _gbi < _gv2.fields.len: _gact = _gv2.fields.get(_gbi).name
                                         _gvi2 = _gvi2 + 1
                                 self.decl_vars.insert(_gbf, true)
-                                gbindings = gbindings + "__auto_type " + _safe_c_varname(_gbf) + " = " + subj + ".data." + vn + "." + _gact + ";\n"
+                                gbindings = gbindings + "__auto_type " + _safe_c_varname(_gbf) + " = " + subj + ".data." + vn + "." + _safe_c_varname(_gact) + ";\n"
                             _gbi = _gbi + 1
                     case Pattern.PBind(gn):
                         gcond = "1"
@@ -5127,7 +5162,7 @@ pub class CGenerator:
                                 actual_fld = _ev.fields.get(0).name
                             _vi = _vi + 1
                     self.decl_vars.insert(field, true)
-                    bindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + actual_fld + ";\n"
+                    bindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + _safe_c_varname(actual_fld) + ";\n"
                 case Pattern.PVariantBindMany(tn, vn, fields):
                     cond = subj + ".tag == " + tn + "_" + vn
                     mut _bi = 0
@@ -5144,7 +5179,7 @@ pub class CGenerator:
                                         _actual = _ev2.fields.get(_bi).name
                                     _vi2 = _vi2 + 1
                             self.decl_vars.insert(_bf, true)
-                            bindings = bindings + "__auto_type " + _safe_c_varname(_bf) + " = " + subj + ".data." + vn + "." + _actual + ";\n"
+                            bindings = bindings + "__auto_type " + _safe_c_varname(_bf) + " = " + subj + ".data." + vn + "." + _safe_c_varname(_actual) + ";\n"
                         _bi = _bi + 1
                 case Pattern.PBind(n):
                     cond = "1"

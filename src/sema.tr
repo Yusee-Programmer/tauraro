@@ -1739,7 +1739,11 @@ extend Sema:
                 mut p = v.fields.get(j)
                 mut hp = HirParam()
                 hp.name = p.name
-                mut p_ty = AstType.init("int")
+                # Tuple-variant fields written as a bare type (e.g. `Err(str)`)
+                # parse as an unnamed param: `p.name` holds the type name and
+                # `p.ty` is null. Recover the real type from `p.name` instead
+                # of defaulting to "int" (which silently broke str/bool/etc).
+                mut p_ty = AstType.init(p.name)
                 if p.ty as usize != 0 as usize: p_ty = p.ty.read()
                 hp.ty = p_ty
                 hfields.push(hp)
@@ -2474,9 +2478,12 @@ extend Sema:
                 return box_hirstmt(HirStmt.SUnsafe(unsafe_hir))
             case Stmt.SMultiLet(names, is_mut, val_ptr):
                 mut hval = self.lower_expr(val_ptr)
+                mut val_ty = hir_expr_type(hval)
                 mut i = 0
                 while i < names.len:
-                    self.declare(names.get(i), SymbolKind.SVariable, box_asttype(AstType.init("int")), is_mut)
+                    mut nty = AstType.init("int")
+                    if val_ty.args.len > i: nty = val_ty.args.get(i).read()
+                    self.declare(names.get(i), SymbolKind.SVariable, box_asttype(nty), is_mut)
                     i = i + 1
                 return box_hirstmt(HirStmt.SMultiLet(names, is_mut, hval))
             case Stmt.SLine(n):
@@ -3327,7 +3334,15 @@ extend Sema:
                 while n < items.len:
                     hitems.push(self.lower_expr(items.get(n)))
                     n = n + 1
-                return box_hirexpr(HirExpr.ETuple(hitems, AstType.init("Tuple")))
+                # Record each element's type in `args` so SMultiLet destructuring
+                # (gen_multi_let in c.tr) can recover str/non-str element types
+                # instead of defaulting every binding to `long long`.
+                mut tup_ty = AstType.init("Tuple")
+                mut m = 0
+                while m < hitems.len:
+                    tup_ty.args.push(box_asttype(hir_expr_type(hitems.get(m))))
+                    m = m + 1
+                return box_hirexpr(HirExpr.ETuple(hitems, tup_ty))
             case Expr.EList(items):
                 mut hitems = Vec[Pointer[HirExpr]].init(items.len)
                 mut n = 0
