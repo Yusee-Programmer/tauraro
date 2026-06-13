@@ -2863,10 +2863,24 @@ static inline List_TrStr* List_TrStr_new(void) { List_TrStr* l=(List_TrStr*)mall
 static inline void List_TrStr_append(List_TrStr* l, TrStr val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrStr*)realloc(l->data,sizeof(TrStr)*l->capacity); } l->data[l->len++]=_tr_str_retain(val); }
 static inline TrStr List_TrStr_pop(List_TrStr* l) { if(!l||l->len==0) return _tr_str_lit(""); l->len--; return l->data[l->len]; }
 static inline void List_TrStr_free(List_TrStr* l) { if(l){ for(size_t i=0;i<l->len;i++) _tr_str_release(l->data[i]); _tr_free(l->data); _tr_free(l); } }
+/* Append without retaining: transfers ownership of `val`'s existing
+ * reference to the list (used when `val` was just allocated with rc=1
+ * specifically for this insertion, e.g. _tr_str_split tokens). */
+static inline void List_TrStr_append_owned(List_TrStr* l, TrStr val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrStr*)realloc(l->data,sizeof(TrStr)*l->capacity); } l->data[l->len++]=val; }
 
 /* ── List_str helpers (requires List_str typedef above) ─────────────────── */
-static List_str* _tr_str_tuple2(char* a, char* b) {
-    List_str* l = List_str_new(); List_str_append(l, a); List_str_append(l, b); return l;
+/* Appends `v` into `l`, transferring ownership if `v` is a freshly-owned
+ * TrStr (rc!=NULL, no extra retain), or retaining (no-op for borrowed/literal
+ * rc==NULL) otherwise. */
+static inline void _tr_trstr_tuple_append(List_TrStr* l, TrStr v) {
+    if (v.rc) List_TrStr_append_owned(l, v);
+    else List_TrStr_append(l, v);
+}
+static List_TrStr* _tr_str_tuple2(TrStr a, TrStr b) {
+    List_TrStr* l = List_TrStr_new();
+    _tr_trstr_tuple_append(l, a);
+    _tr_trstr_tuple_append(l, b);
+    return l;
 }
 static List_str* _tr_list_reversed_str(List_str* l) {
     List_str* r = List_str_new();
@@ -2883,6 +2897,20 @@ static int64_t _tr_list_any_str(List_str* l, _tr_pred_str_fn p) {
     return 0LL;
 }
 static int64_t _tr_list_all_str(List_str* l, _tr_pred_str_fn p) {
+    if (!l) return 1LL;
+    for (int64_t i=0; i<(int64_t)l->len; i++) if (!p(l->data[i])) return 0LL;
+    return 1LL;
+}
+static int64_t _tr_list_sum_TrStr(List_TrStr* l) { return 0LL; }
+static int64_t _tr_list_min_TrStr(List_TrStr* l) { return 0LL; }
+static int64_t _tr_list_max_TrStr(List_TrStr* l) { return 0LL; }
+typedef int64_t (*_tr_pred_trstr_fn)(TrStr);
+static int64_t _tr_list_any_TrStr(List_TrStr* l, _tr_pred_trstr_fn p) {
+    if (!l) return 0LL;
+    for (int64_t i=0; i<(int64_t)l->len; i++) if (p(l->data[i])) return 1LL;
+    return 0LL;
+}
+static int64_t _tr_list_all_TrStr(List_TrStr* l, _tr_pred_trstr_fn p) {
     if (!l) return 1LL;
     for (int64_t i=0; i<(int64_t)l->len; i++) if (!p(l->data[i])) return 0LL;
     return 1LL;
@@ -2923,12 +2951,16 @@ static inline void List_char_set(List_char* l, long long i, char v) { _tr_bounds
 static inline void List_char_free(List_char* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 /* ── Dict[str,V] key/value iteration (after List types are defined) ─────── */
-static inline List_str* _tr_dict_keys(TrMap* d) {
-    List_str* out = List_str_new();
+/* Returns keys as TrStr's whose `.data` is shallow-aliased to the Dict's
+ * own storage (zero-copy via _tr_str_wrap); releasing these only frees
+ * the 8-byte refcount block, never the aliased `.data`, so the Dict's
+ * key storage remains valid regardless of this list's lifetime. */
+static inline List_TrStr* _tr_dict_keys(TrMap* d) {
+    List_TrStr* out = List_TrStr_new();
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _DictNode* n = d->buckets[i];
-        while (n) { if (n->key && n->value) List_str_append(out, n->key); n = n->next; }
+        while (n) { if (n->key && n->value) List_TrStr_append_owned(out, _tr_str_wrap(n->key)); n = n->next; }
     }
     return out;
 }
@@ -3033,6 +3065,17 @@ static inline bool List_str_is_empty(List_str* l) { return !l||l->len==0; }
 static inline void List_str_extend(List_str* l, List_str* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_str_append(l,o->data[i]); }
 static inline bool List_str_contains(List_str* l, char* v) { if(!l||!v) return false; for(size_t i=0;i<l->len;i++) if(l->data[i]&&strcmp(l->data[i],v)==0) return true; return false; }
 static inline long long List_str_index_of(List_str* l, char* v) { if(!l||!v) return -1LL; for(size_t i=0;i<l->len;i++) if(l->data[i]&&strcmp(l->data[i],v)==0) return (long long)i; return -1LL; }
+/* ── List_TrStr: extended ops (remove/swap/clear/extend/contains/index_of) ── */
+static inline void List_TrStr_remove(List_TrStr* l, long long i) { if(!l||(size_t)i>=l->len) return; _tr_str_release(l->data[i]); for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
+static inline void List_TrStr_swap(List_TrStr* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; TrStr t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
+static inline void List_TrStr_clear(List_TrStr* l) { if(!l) return; for(size_t i=0;i<l->len;i++) _tr_str_release(l->data[i]); l->len=0; }
+static inline bool List_TrStr_is_empty(List_TrStr* l) { return !l||l->len==0; }
+static inline void List_TrStr_extend(List_TrStr* l, List_TrStr* o) { if(!l||!o) return; for(size_t i=0;i<o->len;i++) List_TrStr_append(l,o->data[i]); }
+static inline bool List_TrStr_contains(List_TrStr* l, TrStr v) { if(!l) return false; for(size_t i=0;i<l->len;i++) if(l->data[i].data&&v.data&&strcmp(l->data[i].data,v.data)==0) return true; return false; }
+static inline long long List_TrStr_index_of(List_TrStr* l, TrStr v) { if(!l) return -1LL; for(size_t i=0;i<l->len;i++) if(l->data[i].data&&v.data&&strcmp(l->data[i].data,v.data)==0) return (long long)i; return -1LL; }
+/* get() returns a retained copy (independent reference); set() releases the old element and retains the new one. */
+static inline TrStr List_TrStr_get(List_TrStr* l, long long i) { if (!l) { fprintf(stderr, "Null list access\n"); abort(); } _tr_bounds_check(i, l->len); return _tr_str_retain(l->data[i]); }
+static inline void List_TrStr_set(List_TrStr* l, long long i, TrStr v) { if (!l) { fprintf(stderr, "Null list access\n"); abort(); } _tr_bounds_check(i, l->len); _tr_str_release(l->data[i]); l->data[i]=_tr_str_retain(v); }
 static inline void List_ptr_remove(List_ptr* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
 static inline void List_ptr_swap(List_ptr* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; void* t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
 static inline void List_ptr_clear(List_ptr* l) { if(l) l->len=0; }
@@ -3260,15 +3303,31 @@ static inline TrStr _tr_strx_join(List_str* parts, const char* sep) {
     return out;
 }
 
-static inline List_str* _tr_str_split(const char* s, const char* sep) {
-    List_str* l=List_str_new(); if(!s||!sep||!*sep) return l;
+static inline List_TrStr* _tr_str_split(const char* s, const char* sep) {
+    List_TrStr* l=List_TrStr_new(); if(!s||!sep||!*sep) return l;
     char* cp=(char*)malloc(strlen(s)+1); strcpy(cp,s);
     char* tok=strtok(cp,(char*)sep);
-    while(tok){ List_str_append(l,strdup(tok)); tok=strtok(NULL,(char*)sep); }
+    while(tok){ List_TrStr_append_owned(l,_tr_str_wrap(strdup(tok))); tok=strtok(NULL,(char*)sep); }
     _tr_free(cp); return l;
 }
-static inline List_str* _tr_str_lines(const char* s) { return _tr_str_split(s, "\n"); }
-static inline List_str* _tr_str_words(const char* s) { return _tr_str_split(s, " "); }
+static inline List_TrStr* _tr_str_lines(const char* s) { return _tr_str_split(s, "\n"); }
+static inline List_TrStr* _tr_str_words(const char* s) { return _tr_str_split(s, " "); }
+/* TrStr-elements join: build "sep"-joined string from a List_TrStr*. */
+static inline TrStr _tr_trstr_join(List_TrStr* parts, const char* sep) {
+    if (!parts || parts->len == 0) return _tr_str_new(0);
+    size_t total = 0, seplen = sep ? strlen(sep) : 0;
+    for (size_t i = 0; i < parts->len; i++) {
+        if (parts->data[i].data) total += strlen(parts->data[i].data);
+        if (i + 1 < parts->len) total += seplen;
+    }
+    TrStr out = _tr_str_new(total);
+    char* dst = out.data;
+    for (size_t i = 0; i < parts->len; i++) {
+        if (parts->data[i].data) { size_t l = strlen(parts->data[i].data); memcpy(dst, parts->data[i].data, l); dst += l; }
+        if (i + 1 < parts->len && seplen) { memcpy(dst, sep, seplen); dst += seplen; }
+    }
+    return out;
+}
 
 /* ── Test runner helpers ─────────────────────────────────────────────── */
 
@@ -4382,11 +4441,12 @@ static inline void _tr_gpu_openmp_parallel_i64(int64_t n, void* fn_ptr) {
 /* Map.update / Map.clear */
 static void _tr_dict_update(TrMap* dst, TrMap* src) {
     if (!dst || !src) return;
-    List_str* ks = _tr_dict_keys(src);
+    List_TrStr* ks = _tr_dict_keys(src);
     if (!ks) return;
     for (int64_t i = 0; i < (int64_t)ks->len; i++) {
-        char* k = ks->data[i]; _tr_dict_set(dst, k, _tr_dict_get(src, k));
+        char* k = ks->data[i].data; _tr_dict_set(dst, k, _tr_dict_get(src, k));
     }
+    List_TrStr_free(ks);
 }
 static void _tr_idict_update(TrMap* dst, TrMap* src) { _tr_dict_update(dst, src); }
 static void _tr_dict_clear(TrMap* m) { Dict_clear_entries(m); }
@@ -4419,30 +4479,32 @@ static int64_t _tr_set_contains(_TrSet* s, char* e) { return (int64_t)_tr_dict_c
 static void    _tr_set_remove(_TrSet* s, char* e)   { _tr_dict_remove(s, e); }
 static int64_t _tr_set_len(_TrSet* s)               { return _tr_dict_len(s); }
 static void    _tr_set_clear(_TrSet* s)             { _tr_dict_clear(s); }
-static List_str* _tr_set_to_list(_TrSet* s)         { return _tr_dict_keys(s); }
+static List_TrStr* _tr_set_to_list(_TrSet* s)       { return _tr_dict_keys(s); }
 static _TrSet* _tr_set_union(_TrSet* a, _TrSet* b) {
     _TrSet* r=_tr_set_new(16);
-    List_str* ka=_tr_dict_keys(a); if(ka) for(int64_t i=0;i<(int64_t)ka->len;i++) _tr_set_add(r,ka->data[i]);
-    List_str* kb=_tr_dict_keys(b); if(kb) for(int64_t i=0;i<(int64_t)kb->len;i++) _tr_set_add(r,kb->data[i]);
+    List_TrStr* ka=_tr_dict_keys(a); if(ka){ for(int64_t i=0;i<(int64_t)ka->len;i++) _tr_set_add(r,_tr_strz(ka->data[i])); List_TrStr_free(ka); }
+    List_TrStr* kb=_tr_dict_keys(b); if(kb){ for(int64_t i=0;i<(int64_t)kb->len;i++) _tr_set_add(r,_tr_strz(kb->data[i])); List_TrStr_free(kb); }
     return r;
 }
 static _TrSet* _tr_set_intersection(_TrSet* a, _TrSet* b) {
     _TrSet* r=_tr_set_new(16);
-    List_str* ka=_tr_dict_keys(a);
-    if(ka) for(int64_t i=0;i<(int64_t)ka->len;i++) if(_tr_set_contains(b,ka->data[i])) _tr_set_add(r,ka->data[i]);
+    List_TrStr* ka=_tr_dict_keys(a);
+    if(ka){ for(int64_t i=0;i<(int64_t)ka->len;i++) if(_tr_set_contains(b,_tr_strz(ka->data[i]))) _tr_set_add(r,_tr_strz(ka->data[i])); List_TrStr_free(ka); }
     return r;
 }
 static _TrSet* _tr_set_difference(_TrSet* a, _TrSet* b) {
     _TrSet* r=_tr_set_new(16);
-    List_str* ka=_tr_dict_keys(a);
-    if(ka) for(int64_t i=0;i<(int64_t)ka->len;i++) if(!_tr_set_contains(b,ka->data[i])) _tr_set_add(r,ka->data[i]);
+    List_TrStr* ka=_tr_dict_keys(a);
+    if(ka){ for(int64_t i=0;i<(int64_t)ka->len;i++) if(!_tr_set_contains(b,_tr_strz(ka->data[i]))) _tr_set_add(r,_tr_strz(ka->data[i])); List_TrStr_free(ka); }
     return r;
 }
 static int64_t _tr_set_is_subset(_TrSet* a, _TrSet* b) {
-    List_str* ka=_tr_dict_keys(a);
+    List_TrStr* ka=_tr_dict_keys(a);
     if(!ka) return 1LL;
-    for(int64_t i=0;i<(int64_t)ka->len;i++) if(!_tr_set_contains(b,ka->data[i])) return 0LL;
-    return 1LL;
+    int64_t result = 1LL;
+    for(int64_t i=0;i<(int64_t)ka->len;i++) if(!_tr_set_contains(b,_tr_strz(ka->data[i]))) { result = 0LL; break; }
+    List_TrStr_free(ka);
+    return result;
 }
 
 /* ── Int-keyed Set: Set[int] backed by TrIDict ─────────────────────────────── */
@@ -4519,7 +4581,7 @@ static char* _tr_dict_to_str(const void* kdata, const void* vdata, size_t len, s
     buf = _tr_sb_append(buf, &blen, &cap, "{");
     for (size_t i = 0; i < len; i++) {
         if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, ", ");
-        const char* kp = (const char*)kdata + i * sizeof(char*);
+        const char* kp = (const char*)kdata + i * sizeof(TrStr);
         const char* vp = (const char*)vdata + i * vsize;
         buf = _tr_sb_append(buf, &blen, &cap, kfmt(kp));
         buf = _tr_sb_append(buf, &blen, &cap, ": ");
@@ -4583,6 +4645,9 @@ static int _tr_cmp_i64_desc(const void* a, const void* b) { int64_t x=*(int64_t*
 static int _tr_cmp_f64_asc (const void* a, const void* b) { double x=*(double*)a,y=*(double*)b; return (x>y)-(x<y); }
 static int _tr_cmp_f64_desc(const void* a, const void* b) { double x=*(double*)a,y=*(double*)b; return (x<y)-(x>y); }
 static void _tr_list_sort_str(List_str* l, int dir) { if(l&&l->len>1) qsort(l->data,(size_t)l->len,sizeof(char*),dir>0?_tr_cmp_str_asc:_tr_cmp_str_desc); }
+static int _tr_cmp_trstr_asc (const void* a, const void* b) { return strcmp(((const TrStr*)a)->data, ((const TrStr*)b)->data); }
+static int _tr_cmp_trstr_desc(const void* a, const void* b) { return strcmp(((const TrStr*)b)->data, ((const TrStr*)a)->data); }
+static void _tr_list_sort_TrStr(List_TrStr* l, int dir) { if(l&&l->len>1) qsort(l->data,(size_t)l->len,sizeof(TrStr),dir>0?_tr_cmp_trstr_asc:_tr_cmp_trstr_desc); }
 static void _tr_list_sort_i64(List_i64* l, int dir) { if(l&&l->len>1) qsort(l->data,(size_t)l->len,sizeof(int64_t),dir>0?_tr_cmp_i64_asc:_tr_cmp_i64_desc); }
 static void _tr_list_sort_f64(List_f64* l, int dir) { if(l&&l->len>1) qsort(l->data,(size_t)l->len,sizeof(double),dir>0?_tr_cmp_f64_asc:_tr_cmp_f64_desc); }
 static void _tr_list_sort_ptr(List_ptr* l, int dir) { (void)l; (void)dir; }
@@ -4604,16 +4669,21 @@ static List_ptr* _tr_list_reversed_ptr(List_ptr* l) {
 static List_f64* _tr_list_reversed_f64(List_f64* l) {
     List_f64* r=List_f64_new(); if(l) for(int64_t i=(int64_t)l->len-1;i>=0;i--) List_f64_append(r,l->data[i]); return r;
 }
+static List_TrStr* _tr_list_reversed_TrStr(List_TrStr* l) {
+    List_TrStr* r=List_TrStr_new(); if(l) for(int64_t i=(int64_t)l->len-1;i>=0;i--) List_TrStr_append(r,l->data[i]); return r;
+}
 /* In-place reverse */
 static void _tr_list_reverse_i64(List_i64* l){ if(!l)return; for(int64_t i=0,j=(int64_t)l->len-1;i<j;i++,j--){int64_t t=l->data[i];l->data[i]=l->data[j];l->data[j]=t;} }
 static void _tr_list_reverse_f64(List_f64* l){ if(!l)return; for(int64_t i=0,j=(int64_t)l->len-1;i<j;i++,j--){double t=l->data[i];l->data[i]=l->data[j];l->data[j]=t;} }
 static void _tr_list_reverse_ptr(List_ptr* l){ if(!l)return; for(int64_t i=0,j=(int64_t)l->len-1;i<j;i++,j--){void* t=l->data[i];l->data[i]=l->data[j];l->data[j]=t;} }
 static void _tr_list_reverse_str(List_str* l){ if(!l)return; for(int64_t i=0,j=(int64_t)l->len-1;i<j;i++,j--){char* t=l->data[i];l->data[i]=l->data[j];l->data[j]=t;} }
+static void _tr_list_reverse_TrStr(List_TrStr* l){ if(!l)return; for(int64_t i=0,j=(int64_t)l->len-1;i<j;i++,j--){TrStr t=l->data[i];l->data[i]=l->data[j];l->data[j]=t;} }
 /* Shallow clone (new backing buffer, same elements) */
 static List_i64* _tr_list_clone_i64(List_i64* l){ List_i64* r=List_i64_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_i64_append(r,l->data[i]); return r; }
 static List_f64* _tr_list_clone_f64(List_f64* l){ List_f64* r=List_f64_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_f64_append(r,l->data[i]); return r; }
 static List_ptr* _tr_list_clone_ptr(List_ptr* l){ List_ptr* r=List_ptr_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_ptr_append(r,l->data[i]); return r; }
 static List_str* _tr_list_clone_str(List_str* l){ List_str* r=List_str_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_str_append(r,l->data[i]); return r; }
+static List_TrStr* _tr_list_clone_TrStr(List_TrStr* l){ List_TrStr* r=List_TrStr_new(); if(l) for(int64_t i=0;i<(int64_t)l->len;i++) List_TrStr_append(r,l->data[i]); return r; }
 typedef int64_t (*_tr_pred_fn)(void*);
 static int64_t _tr_list_any_ptr(List_ptr* l, _tr_pred_fn p) { if(!l) return 0LL; for(int64_t i=0;i<(int64_t)l->len;i++) if(p(l->data[i])) return 1LL; return 0LL; }
 static int64_t _tr_list_all_ptr(List_ptr* l, _tr_pred_fn p) { if(!l) return 1LL; for(int64_t i=0;i<(int64_t)l->len;i++) if(!p(l->data[i])) return 0LL; return 1LL; }

@@ -415,7 +415,7 @@ pub class CGenerator:
                 mut elem = ty.args.get(0).read()
                 mut sfx = self.list_elem_suffix(elem.name)
                 if sfx == "ptr": return "List_ptr*"
-                return "List_" + sfx + "*"
+                return "List_" + self.list_sfx(sfx) + "*"
             return "List_ptr*"
 
         if n == "Vec":
@@ -423,7 +423,7 @@ pub class CGenerator:
                 mut elem = ty.args.get(0).read()
                 mut sfx = self.list_elem_suffix(elem.name)
                 if sfx == "ptr": return "List_ptr*"
-                return "List_" + sfx + "*"
+                return "List_" + self.list_sfx(sfx) + "*"
             return "List_ptr*"
 
         if n == "Map" or n == "Dict":
@@ -511,6 +511,15 @@ pub class CGenerator:
             self.ensure_list_type(actual_n)
             return actual_n
         return "ptr"
+
+    # List[T]/Vec[T] use a refcounted-string element representation
+    # (List_TrStr) for str elements, distinct from the char*-based
+    # "str" suffix used by Set/Dict codegen (set_elem/dict_key_arg/
+    # gen_args_strify). Map "str" -> "TrStr" for List/Vec-only codegen
+    # paths; all other suffixes pass through unchanged.
+    pub def list_sfx(self, elem_sfx: str) -> str:
+        if elem_sfx == "str": return "TrStr"
+        return elem_sfx
 
 
 
@@ -1293,7 +1302,7 @@ pub class CGenerator:
                 return "({ List_i64* _sl = _tr_iset_to_list(" + s + "); _tr_collection_to_str((void*)_sl->data, _sl->len, sizeof(long long), _tr_fmt_i64, \"{\", \"}\", \", \"); })"
             mut set_fmt = "_tr_fmt_str_raw"
             if _is_str_type(set_tn): set_fmt = "_tr_fmt_str"
-            return "({ List_str* _sl = _tr_set_to_list(" + s + "); _tr_collection_to_str((void*)_sl->data, _sl->len, sizeof(char*), " + set_fmt + ", \"{\", \"}\", \", \"); })"
+            return "({ List_TrStr* _sl = _tr_set_to_list(" + s + "); char* _r = _tr_collection_to_str((void*)_sl->data, _sl->len, sizeof(TrStr), " + set_fmt + ", \"{\", \"}\", \", \"); List_TrStr_free(_sl); _r; })"
         if cn == "Dict" or cn == "Map":
             mut val_ty = AstType.init("str")
             if ty.args.len > 1: val_ty = ty.args.get(1).read()
@@ -1301,7 +1310,7 @@ pub class CGenerator:
             mut vfmt = self.ensure_elem_fmt_fn(val_ty)
             mut vsize = "sizeof(void*)"
             if _is_float_type(val_tn): vsize = "sizeof(double)"
-            return "({ List_str* _dk = _tr_dict_keys(" + s + "); List_ptr* _dv = _tr_dict_values(" + s + "); _tr_dict_to_str((void*)_dk->data, (void*)_dv->data, _dk->len, " + vsize + ", _tr_fmt_str, " + vfmt + "); })"
+            return "({ List_TrStr* _dk = _tr_dict_keys(" + s + "); List_ptr* _dv = _tr_dict_values(" + s + "); char* _r = _tr_dict_to_str((void*)_dk->data, (void*)_dv->data, _dk->len, " + vsize + ", _tr_fmt_str, " + vfmt + "); List_TrStr_free(_dk); List_ptr_free(_dv); _r; })"
         return "_tr_default_obj_str(\"" + cn + "\", (void*)(" + s + "))"
 
     # Extracts the raw `char*` from a TrStr-typed expression for passing to
@@ -1368,9 +1377,7 @@ pub class CGenerator:
         if op == "in":
             if rt_n == "List" or rt_n == "Vec":
                 mut in_sfx: str = self.list_elem_suffix(lt_n)
-                mut in_ls = ls
-                if in_sfx == "str": in_ls = self.strz(ls)
-                return "List_" + in_sfx + "_contains(" + rs + ", " + in_ls + ")"
+                return "List_" + self.list_sfx(in_sfx) + "_contains(" + rs + ", " + ls + ")"
             if rt_n == "Map" or rt_n == "Dict":
                 return "_tr_dict_contains(" + rs + ", " + self.strz(ls) + ")"
             if self.has_method(rt_n, "__contains__"):
@@ -1506,7 +1513,7 @@ pub class CGenerator:
                                         match idx_expr.read():
                                             case HirExpr.EIdent(elem_n, _, _):
                                                 mut sfx = self.list_elem_suffix(elem_n)
-                                                return "(void*)List_" + sfx + "_new()"
+                                                return "(void*)List_" + self.list_sfx(sfx) + "_new()"
                                             case _: pass
                                 case _: pass
                         case _: pass
@@ -2254,10 +2261,10 @@ pub class CGenerator:
                 opt_extra = ", " + self.gen_args(args)
             return "Option_" + method + "(" + obj_s + opt_extra + ")"
 
-        # Str.join static call: Str.join(parts, sep) -> _tr_str_join((List_str*)parts, sep)
+        # Str.join static call: Str.join(parts, sep) -> _tr_trstr_join((List_TrStr*)parts, sep)
         if obj_s == "Str" and method == "join":
-            if args.len >= 2: return self.wrapstr("_tr_str_join((List_str*)" + self.gen_expr(args.get(0)) + ", " + self.strz(self.gen_expr(args.get(1))) + ")")
-            if args.len == 1: return self.wrapstr("_tr_str_join((List_str*)" + self.gen_expr(args.get(0)) + ", \"\")")
+            if args.len >= 2: return "_tr_trstr_join((List_TrStr*)" + self.gen_expr(args.get(0)) + ", " + self.strz(self.gen_expr(args.get(1))) + ")"
+            if args.len == 1: return "_tr_trstr_join((List_TrStr*)" + self.gen_expr(args.get(0)) + ", \"\")"
 
         # str primitive method dispatch - "hello".trim() -> _tr_str_strip("hello")
         # See note above _is_str_type(t_n) block re: TrStr interim semantics.
@@ -2286,7 +2293,7 @@ pub class CGenerator:
             if method == "strip_prefix":  return self.wrapstr("_tr_str_strip_prefix(" + os + ", " + sa0 + ")")
             if method == "strip_suffix":  return self.wrapstr("_tr_str_strip_suffix(" + os + ", " + sa0 + ")")
             if method == "remove_char":   return self.wrapstr("_tr_str_remove_char(" + os + ", " + sa0 + ")")
-            if method == "join":          return self.wrapstr("_tr_str_join((List_str*)(void*)" + obj_s + ", " + sa0 + ")")
+            if method == "join":          return "_tr_trstr_join((List_TrStr*)(void*)" + obj_s + ", " + sa0 + ")"
             if method == "len":           return "_tr_strlen(" + os + ")"
             if method == "index_of":      return "_tr_str_index_of(" + os + ", " + sa0 + ")"
             if method == "last_index_of": return "_tr_str_last_index_of(" + os + ", " + sa0 + ")"
@@ -2737,7 +2744,7 @@ pub class CGenerator:
                 mut _so_sep = self.strz(self.gen_expr(args.get(0)))
                 mut _so_t = self.next_temp()
                 mut _so_p = self.next_temp()
-                return "({ char* " + _so_p + " = strstr(" + os + ", " + _so_sep + "); " + _so_p + " ? _tr_str_tuple2(_tr_str_slice(" + os + ", 0LL, (long long)(" + _so_p + " - (" + os + "))), _tr_str_slice(" + _so_p + ", _tr_strlen(" + _so_sep + "), _tr_strlen(" + _so_p + "))) : _tr_str_tuple2(" + os + ", \"\"); })"
+                return "({ char* " + _so_p + " = strstr(" + os + ", " + _so_sep + "); " + _so_p + " ? _tr_str_tuple2(_tr_str_wrap(_tr_str_slice(" + os + ", 0LL, (long long)(" + _so_p + " - (" + os + ")))), _tr_str_wrap(_tr_str_slice(" + _so_p + ", _tr_strlen(" + _so_sep + "), _tr_strlen(" + _so_p + ")))) : _tr_str_tuple2(_tr_str_lit(" + os + "), _tr_str_lit(\"\")); })"
 
         # When sema returns void/empty type, still dispatch known string methods on the object.
         # This handles chained calls like Process.shell_output(cmd).trim() where the intermediate
@@ -2972,6 +2979,7 @@ pub class CGenerator:
                 is_list_vec = true
  
         if is_list_vec:
+            mut lsfx: str = self.list_sfx(elem_sfx)
             if method == "append" or method == "push":
                 # If elem_sfx is still "ptr" but the argument is a known primitive, infer the right suffix
                 if elem_sfx == "ptr" and args.len > 0:
@@ -2979,22 +2987,29 @@ pub class CGenerator:
                     if _is_int_type(push_arg_ty) or push_arg_ty == "bool": elem_sfx = "i64"
                     elif _is_float_type(push_arg_ty): elem_sfx = "f64"
                     elif push_arg_ty == "str" or push_arg_ty == "char*": elem_sfx = "str"
-                return "List_" + elem_sfx + "_append(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
-            if method == "free": return "List_" + elem_sfx + "_free(" + obj_s + ")"
+                    lsfx = self.list_sfx(elem_sfx)
+                mut append_args = self.gen_args_strify(args, elem_sfx)
+                if lsfx == "TrStr": append_args = self.gen_args(args)
+                return "List_" + lsfx + "_append(" + obj_s + ", " + append_args + ")"
+            if method == "free": return "List_" + lsfx + "_free(" + obj_s + ")"
             if method == "pop":
-                mut pop_r = "List_" + elem_sfx + "_pop(" + obj_s + ")"
-                if elem_sfx == "str": return "_tr_str_lit(" + pop_r + ")"
+                mut pop_r = "List_" + lsfx + "_pop(" + obj_s + ")"
+                if lsfx == "TrStr": return pop_r
                 if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer":
                     if _tr_strlen(call_ty.name) > 1:
                         return "((" + call_ty.name + "*)" + pop_r + ")"
                 return pop_r
             if method == "set":
-                return "List_" + elem_sfx + "_set(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
+                mut set_args = self.gen_args_strify(args, elem_sfx)
+                if lsfx == "TrStr": set_args = self.gen_args(args)
+                return "List_" + lsfx + "_set(" + obj_s + ", " + set_args + ")"
             if method == "contains":
-                return "List_" + elem_sfx + "_contains(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
+                mut contains_args = self.gen_args_strify(args, elem_sfx)
+                if lsfx == "TrStr": contains_args = self.gen_args(args)
+                return "List_" + lsfx + "_contains(" + obj_s + ", " + contains_args + ")"
             if method == "get":
-                mut get_r = "List_" + elem_sfx + "_get(" + obj_s + ", " + self.gen_args(args) + ")"
-                if elem_sfx == "str": return "_tr_str_lit(" + get_r + ")"
+                mut get_r = "List_" + lsfx + "_get(" + obj_s + ", " + self.gen_args(args) + ")"
+                if lsfx == "TrStr": return get_r
                 if elem_sfx == "ptr" and call_ty.name == "Pointer" and call_ty.args.len > 0:
                     mut inner_ct = self.type_to_c(call_ty.args.get(0).read())
                     return "((" + inner_ct + "*)" + get_r + ")"
@@ -3004,61 +3019,63 @@ pub class CGenerator:
                 return get_r
             if method == "len" or method == "length": return "((long long)" + obj_s + "->len)"
             if method == "new" or method == "init":
-                return "(void*)List_" + elem_sfx + "_new()"
+                return "(void*)List_" + lsfx + "_new()"
             if method == "remove":
-                return "List_" + elem_sfx + "_remove(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "List_" + lsfx + "_remove(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "swap":
-                return "List_" + elem_sfx + "_swap(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "List_" + lsfx + "_swap(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "clear":
-                return "List_" + elem_sfx + "_clear(" + obj_s + ")"
+                return "List_" + lsfx + "_clear(" + obj_s + ")"
             if method == "is_empty":
-                return "List_" + elem_sfx + "_is_empty(" + obj_s + ")"
+                return "List_" + lsfx + "_is_empty(" + obj_s + ")"
             if method == "extend":
-                return "List_" + elem_sfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "List_" + lsfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "index_of":
-                return "List_" + elem_sfx + "_index_of(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
+                mut idx_args = self.gen_args_strify(args, elem_sfx)
+                if lsfx == "TrStr": idx_args = self.gen_args(args)
+                return "List_" + lsfx + "_index_of(" + obj_s + ", " + idx_args + ")"
             # sort() / sort_by(cmp_fn) - in-place sort
             if method == "sort" or method == "sort_asc":
-                return "_tr_list_sort_" + elem_sfx + "(" + obj_s + ", 1)"
+                return "_tr_list_sort_" + lsfx + "(" + obj_s + ", 1)"
             if method == "sort_desc":
-                return "_tr_list_sort_" + elem_sfx + "(" + obj_s + ", -1)"
+                return "_tr_list_sort_" + lsfx + "(" + obj_s + ", -1)"
             if method == "sort_by" and args.len > 0:
-                return "_tr_list_sort_by_" + elem_sfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_list_sort_by_" + lsfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             # first / last - aliases for get(0) / get(len-1)
             if method == "first":
-                mut first_r = "List_" + elem_sfx + "_get(" + obj_s + ", 0LL)"
-                if elem_sfx == "str": return "_tr_str_lit(" + first_r + ")"
+                mut first_r = "List_" + lsfx + "_get(" + obj_s + ", 0LL)"
+                if lsfx == "TrStr": return first_r
                 return first_r
             if method == "last":
-                mut last_r = "List_" + elem_sfx + "_get(" + obj_s + ", (long long)(" + obj_s + "->len - 1LL))"
-                if elem_sfx == "str": return "_tr_str_lit(" + last_r + ")"
+                mut last_r = "List_" + lsfx + "_get(" + obj_s + ", (long long)(" + obj_s + "->len - 1LL))"
+                if lsfx == "TrStr": return last_r
                 return last_r
             # any(pred) / all(pred) - boolean short-circuit over list
             if method == "any" and args.len > 0:
-                return "_tr_list_any_" + elem_sfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_list_any_" + lsfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             if method == "all" and args.len > 0:
-                return "_tr_list_all_" + elem_sfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_list_all_" + lsfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             # sum / min_val / max_val - numeric aggregates
             if method == "sum":
-                return "_tr_list_sum_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_sum_" + lsfx + "(" + obj_s + ")"
             if method == "min_val" or method == "min":
-                return "_tr_list_min_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_min_" + lsfx + "(" + obj_s + ")"
             if method == "max_val" or method == "max":
-                return "_tr_list_max_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_max_" + lsfx + "(" + obj_s + ")"
             # join(sep) - concatenate string elements with separator
             if method == "join":
                 mut sep_s = "\"\""
                 if args.len > 0: sep_s = self.gen_expr(args.get(0))
-                return "_tr_str_join((List_str*)" + obj_s + ", " + sep_s + ")"
+                return "_tr_trstr_join((List_TrStr*)" + obj_s + ", " + self.strz(sep_s) + ")"
             # reversed_copy() - return a new reversed list
             if method == "reversed" or method == "reversed_copy":
-                return "_tr_list_reversed_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_reversed_" + lsfx + "(" + obj_s + ")"
             # reverse in place
             if method == "reverse":
-                return "_tr_list_reverse_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_reverse_" + lsfx + "(" + obj_s + ")"
             # clone: shallow copy with a fresh backing buffer
             if method == "clone" or method == "copy":
-                return "_tr_list_clone_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_clone_" + lsfx + "(" + obj_s + ")"
 
         # Set[T] method dispatch - backed by _TrSet (hash set via TrMap with bool values)
         if class_name == "Set":
@@ -3482,14 +3499,13 @@ pub class CGenerator:
         if ty.args.len > 0: sfx = self.list_elem_suffix(ty.args.get(0).read().name)
         elif items.len > 0:
             sfx = self.list_elem_suffix(hir_expr_type(items.get(0)).name)
+        mut lsfx = self.list_sfx(sfx)
         mut l = "_l_" + self.next_temp()
-        mut s = "({ List_" + sfx + "* " + l + " = List_" + sfx + "_new(); "
+        mut s = "({ List_" + lsfx + "* " + l + " = List_" + lsfx + "_new(); "
         mut i = 0
         while i < items.len:
             mut item_s = self.gen_expr(items.get(i))
-            if sfx == "str" and _is_str_type(hir_expr_type(items.get(i)).name):
-                item_s = self.strz(item_s)
-            s = s + "List_" + sfx + "_append(" + l + ", " + item_s + "); "
+            s = s + "List_" + lsfx + "_append(" + l + ", " + item_s + "); "
             i = i + 1
         return s + l + "; })"
 
@@ -3528,7 +3544,7 @@ pub class CGenerator:
     pub def gen_list_comp(self, element: Pointer[HirExpr], generators: Vec[Pointer[HirComprehension]]) -> str:
         mut tmp = self.next_temp()
         mut elem_ty_n: str = hir_expr_type(element).name
-        mut sfx = self.list_elem_suffix(elem_ty_n)
+        mut sfx = self.list_sfx(self.list_elem_suffix(elem_ty_n))
         mut s = "({ List_" + sfx + "* " + tmp + " = List_" + sfx + "_new(); "
         mut i = 0
         while i < generators.len:
@@ -4043,7 +4059,7 @@ pub class CGenerator:
                                     pass
                         case _: pass
                     if _init_sfx != "ptr":
-                        c_ty = "List_" + _init_sfx + "*"
+                        c_ty = "List_" + self.list_sfx(_init_sfx) + "*"
                 if c_ty == "void" and v as usize != 0 as usize: c_ty = "__auto_type"
                 # ? propagation in let binding
                 if v as usize != 0 as usize:

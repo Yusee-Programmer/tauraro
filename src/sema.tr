@@ -987,11 +987,31 @@ extend Sema:
                     self.mark_str_arg(args.get(i))
                     self.mark_escaped_str_args(args.get(i))
                     i = i + 1
-            case HirExpr.EMethodCall(obj, _, args, _):
+            case HirExpr.EMethodCall(obj, mname, args, _):
                 self.mark_escaped_str_args(obj)
+                # Since #52 (List_TrStr migration), pushing a str into
+                # List[str]/Vec[str] (append/push/extend/set/insert),
+                # Set[str].add(), or using a str as a Dict/Map key
+                # (insert/set arg 0) all retain-on-insert (List_TrStr_append,
+                # _tr_dict_set's strdup), so the str local does NOT alias the
+                # collection's storage - safe to keep eligible for auto-drop.
+                # Dict/Map VALUE args (arg 1) still use box/no-retain - keep
+                # marking those as escaped.
+                mut obj_ty = hir_expr_type(obj)
                 mut i = 0
                 while i < args.len:
-                    self.mark_str_arg(args.get(i))
+                    mut skip_mark = false
+                    if obj_ty.name == "List" or obj_ty.name == "Vec":
+                        if mname == "append" or mname == "push" or mname == "extend" or mname == "set" or mname == "insert":
+                            skip_mark = true
+                    elif obj_ty.name == "Set":
+                        if mname == "add":
+                            skip_mark = true
+                    elif obj_ty.name == "Map" or obj_ty.name == "Dict":
+                        if (mname == "insert" or mname == "set") and i == 0:
+                            skip_mark = true
+                    if not skip_mark:
+                        self.mark_str_arg(args.get(i))
                     self.mark_escaped_str_args(args.get(i))
                     i = i + 1
             case HirExpr.EPropAccess(obj, _, _): self.mark_escaped_str_args(obj)
@@ -2806,6 +2826,20 @@ extend Sema:
                             _set_elem_ty = hobj_ty.args.get(0).read()
                         ret_ty = AstType.init_generic("List", box_asttype(_set_elem_ty))
                     elif method == "union" or method == "intersection" or method == "difference": ret_ty = hobj_ty
+                # Map[K,V]/Dict[K,V] built-in method return types
+                elif hobj_ty.name == "Map" or hobj_ty.name == "Dict":
+                    if method == "keys":
+                        # keys() returns List[K] where K is the Dict's key type
+                        mut _dict_key_ty = AstType.init("str")
+                        if hobj_ty.args.len > 0:
+                            _dict_key_ty = hobj_ty.args.get(0).read()
+                        ret_ty = AstType.init_generic("List", box_asttype(_dict_key_ty))
+                    elif method == "values":
+                        # values() returns List[V] where V is the Dict's value type
+                        mut _dict_val_ty = AstType.init("ptr")
+                        if hobj_ty.args.len > 1:
+                            _dict_val_ty = hobj_ty.args.get(1).read()
+                        ret_ty = AstType.init_generic("List", box_asttype(_dict_val_ty))
                 # Option[T] built-in method return types
                 elif hobj_ty.name == "Option":
                     if method == "is_some" or method == "is_none": ret_ty = AstType.init("bool")
