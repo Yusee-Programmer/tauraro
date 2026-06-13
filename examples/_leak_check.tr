@@ -1,0 +1,30 @@
+def build_padded(n: int, width: int) -> str:
+    mut total = 0
+    mut i = 0
+    while i < n:
+        mut s = "x" * width
+        s = s + "!"
+        total = total + s.len()
+        i = i + 1
+    return "done:" + total.to_str()
+
+def sibling_branches(flag: bool) -> str:
+    if flag:
+        mut a = "branch-A"
+        a = a + "-extra"
+        return a
+    else:
+        mut b = "branch-B"
+        b = b + "-extra2"
+        return b
+
+def concat_chain(a: str, b: str, c: str) -> str:
+    mut r = a + b
+    r = r + c
+    return r
+
+def main():
+    print(build_padded(200000, 7))
+    print(sibling_branches(true))
+    print(sibling_branches(false))
+    print(concat_chain("hello", " ", "world"))

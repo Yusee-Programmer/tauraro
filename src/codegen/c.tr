@@ -141,6 +141,7 @@ pub class CGenerator:
     pub functions:      Map[str, HirFunction]
     pub method_owners:  Map[str, bool]  # "ClassOrEnumName#method" -> true (extend methods, incl. enums)
     pub decl_vars:      Map[str, bool]
+    pub str_local_names: Map[str, bool]  # TrStr-typed locals declared via SLet in current function (retain/release tracked)
     pub type_subst:     Map[str, str]   # T -> "long long" during mono gen
     pub mono_done:      Map[str, bool]  # "Vec_i64" -> true (prevents duplicate gen)
     pub list_type_done: Map[str, bool]  # "Token" -> true (prevents duplicate list gen)
@@ -181,6 +182,7 @@ pub class CGenerator:
         g.functions     = Map[str, HirFunction].init(256)
         g.method_owners = Map[str, bool].init(64)
         g.decl_vars     = Map[str, bool].init(64)
+        g.str_local_names = Map[str, bool].init(16)
         g.type_subst    = Map[str, str].init(8)
         g.mono_done     = Map[str, bool].init(32)
         g.list_type_done = Map[str, bool].init(16)
@@ -634,6 +636,7 @@ pub class CGenerator:
             self.cur_class = mono_name
             self.cur_func  = m.name
             self.decl_vars = Map[str, bool].init(64)
+            self.str_local_names = Map[str, bool].init(16)
             self.seed_params(m)
             mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
             self.w(sig + " {\n")
@@ -747,6 +750,7 @@ pub class CGenerator:
         self.cur_class = ""
         self.cur_func = mono_fname
         self.decl_vars = Map[str, bool].init(64)
+        self.str_local_names = Map[str, bool].init(16)
         self.seed_params(f)
         self.w(sig + " {\n")
         self.gen_func_body(f.body, 1)
@@ -1309,6 +1313,25 @@ pub class CGenerator:
     # refcounted TrStr (rc=1) for use as a `str`-typed expression result.
     pub def wrapstr(self, e: str) -> str:
         return "_tr_str_wrap(" + e + ")"
+
+    # Wrap `s` (the generated C expression for `e`) with `_tr_str_retain(...)`
+    # when `e` is an ALIAS of an existing TrStr (an EIdent referencing a `str`
+    # local/param) - i.e. `s` shares a buffer with something else whose
+    # lifetime is independent. Fresh values (concat results, calls, literals)
+    # and EPropAccess reads (borrowed field access) already own/borrow their
+    # buffer correctly and pass through unchanged. For `is_return=true` with an
+    # EIdent that's a tracked str local, no retain - ownership transfers to the
+    # caller (matches the SAutoDrop exclusion for `return x`).
+    pub def str_retain_wrap(self, e: Pointer[HirExpr], s: str, is_return: bool) -> str:
+        if _is_invalid_ptr(e as usize): return s
+        mut ety = hir_expr_type(e)
+        if ety.name != "str": return s
+        match e.read():
+            case HirExpr.EIdent(nm, _, _):
+                if is_return and self.str_local_names.contains(nm): return s
+                return "_tr_str_retain(" + s + ")"
+            case _:
+                return s
 
     pub def gen_cond_expr(self, cond: Pointer[HirExpr]) -> str:
         mut cond_s = self.gen_expr(cond)
@@ -3997,7 +4020,7 @@ pub class CGenerator:
                         else:
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(" + ret_s + ")});\n")
                     else:
-                        self.w(pad + "return " + self.gen_expr(e) + ";\n")
+                        self.w(pad + "return " + self.str_retain_wrap(e, self.gen_expr(e), true) + ";\n")
             case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
                 mut c_ty = self.type_to_c(ty)
                 # If SLet.ty is Vec/List without generic args, recover c_ty from the init expression
@@ -4156,6 +4179,11 @@ pub class CGenerator:
                                         if slv_oty == "Map" or slv_oty == "Dict":
                                             init_s = "_tr_str_unbox(" + init_s + ")"
                                 case _: pass
+                        if c_ty == "TrStr":
+                            init_s = self.str_retain_wrap(v, init_s, false)
+                            match v.read():
+                                case HirExpr.EPropAccess(_, _, _): pass
+                                case _: self.str_local_names.insert(n, true)
                         self.w(" = " + init_s + ";\n")
                 else:
                     if is_shared:
@@ -4173,7 +4201,15 @@ pub class CGenerator:
                         # when it names a file-scope global (then it's a plain
                         # assignment to that global, handled by the fall-through).
                         if not self.decl_vars.contains(n) and not self.global_vars.contains(n):
-                            self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + self.gen_expr(v) + ";\n")
+                            mut _sa_rhs = self.gen_expr(v)
+                            if hir_expr_type(t).name == "str":
+                                _sa_rhs = self.str_retain_wrap(v, _sa_rhs, false)
+                                self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                match v.read():
+                                    case HirExpr.EPropAccess(_, _, _): pass
+                                    case _: self.str_local_names.insert(n, true)
+                            else:
+                                self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                             self.decl_vars.insert(n, true)
                             return
                     case HirExpr.EIndex(idx_obj, idx_key, _):
@@ -4214,6 +4250,19 @@ pub class CGenerator:
                                 _assign_rhs = self.gen_list_literal(litems, tgt_ty)
                     case _: pass
                 if _assign_rhs == "": _assign_rhs = self.gen_expr(v)
+                if hir_expr_type(t).name == "str":
+                    match t.read():
+                        case HirExpr.EIdent(_an, _, _):
+                            if self.str_local_names.contains(_an):
+                                mut _strtmp = "_strtmp" + self.next_temp()
+                                mut _wrapped_rhs = self.str_retain_wrap(v, _assign_rhs, false)
+                                self.w(pad + "TrStr " + _strtmp + " = " + _wrapped_rhs + ";\n")
+                                self.w(pad + "_tr_str_release(" + _safe_c_varname(_an) + ");\n")
+                                self.w(pad + _safe_c_varname(_an) + " = " + _strtmp + ";\n")
+                                return
+                        case HirExpr.EPropAccess(_, _, _):
+                            _assign_rhs = self.str_retain_wrap(v, _assign_rhs, false)
+                        case _: pass
                 self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
             case HirStmt.SIf(c, t, e):
                 self.w(pad + "if (" + self.gen_cond_expr(c) + ") {\n")
@@ -4399,7 +4448,11 @@ pub class CGenerator:
             case HirStmt.SChanSelect(cs_arms):
                 self.gen_chan_select(cs_arms, indent)
             case HirStmt.SAutoDrop(adn, adc):
-                self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
+                if adc == "str":
+                    if self.str_local_names.contains(adn):
+                        self.w(pad + "_tr_str_release(" + _safe_c_varname(adn) + ");\n")
+                else:
+                    self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
             case _: pass
 
     pub def gen_for_loop(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
@@ -5391,6 +5444,7 @@ pub class CGenerator:
                     self.cur_func  = m.name
                     self.cur_throws_ty = m.throws_ty.name
                     self.decl_vars = Map[str, bool].init(64)
+                    self.str_local_names = Map[str, bool].init(16)
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(m)
                     self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
@@ -5412,6 +5466,7 @@ pub class CGenerator:
                 self.cur_func  = m.name
                 self.cur_throws_ty = m.throws_ty.name
                 self.decl_vars = Map[str, bool].init(64)
+                self.str_local_names = Map[str, bool].init(16)
                 self.shared_vars = Map[str, str].init(8)
                 self.seed_params(m)
                 self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
@@ -5442,6 +5497,7 @@ pub class CGenerator:
                     self.cur_class = f.class_name
                     self.cur_throws_ty = f.throws_ty.name
                     self.decl_vars = Map[str, bool].init(64)
+                    self.str_local_names = Map[str, bool].init(16)
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(f)
                     self.w(self.get_inline_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
@@ -5497,6 +5553,7 @@ pub class CGenerator:
             if f.name == "main":
                 self.cur_func  = "main"
                 self.decl_vars = Map[str, bool].init(64)
+                self.str_local_names = Map[str, bool].init(16)
                 self.gen_func_body(f.body, 1)
                 self.cur_func  = ""
             i = i + 1
@@ -5947,6 +6004,7 @@ pub class CGenerator:
                         self.cur_class = c.name
                         self.cur_func  = m.name
                         self.decl_vars = Map[str, bool].init(64)
+                        self.str_local_names = Map[str, bool].init(16)
                         self.seed_params(m)
                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
                         self.gen_func_body(m.body, 1)
@@ -5967,6 +6025,7 @@ pub class CGenerator:
                         self.cur_class = e.name
                         self.cur_func  = m.name
                         self.decl_vars = Map[str, bool].init(64)
+                        self.str_local_names = Map[str, bool].init(16)
                         self.seed_params(m)
                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
                         self.gen_func_body(m.body, 1)
@@ -5999,6 +6058,7 @@ pub class CGenerator:
                         self.cur_func  = f.name
                         self.cur_class = f.class_name
                         self.decl_vars = Map[str, bool].init(64)
+                        self.str_local_names = Map[str, bool].init(16)
                         self.seed_params(f)
                         self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
                         self.gen_func_body(f.body, 1)
@@ -6041,6 +6101,7 @@ pub class CGenerator:
                                         self.cur_func  = m.name
                                         self.cur_throws_ty = m.throws_ty.name
                                         self.decl_vars = Map[str, bool].init(64)
+                                        self.str_local_names = Map[str, bool].init(16)
                                         self.shared_vars = Map[str, str].init(8)
                                         self.seed_params(m)
                                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
@@ -6068,6 +6129,7 @@ pub class CGenerator:
                                         self.cur_func  = m.name
                                         self.cur_throws_ty = m.throws_ty.name
                                         self.decl_vars = Map[str, bool].init(64)
+                                        self.str_local_names = Map[str, bool].init(16)
                                         self.shared_vars = Map[str, str].init(8)
                                         self.seed_params(m)
                                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
@@ -6132,6 +6194,7 @@ pub class CGenerator:
                                 self.cur_class = f.class_name
                                 self.cur_throws_ty = f.throws_ty.name
                                 self.decl_vars = Map[str, bool].init(64)
+                                self.str_local_names = Map[str, bool].init(16)
                                 self.shared_vars = Map[str, str].init(8)
                                 self.seed_params(f)
                                 self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
@@ -6188,6 +6251,7 @@ pub class CGenerator:
                     if f.name == "main":
                         self.cur_func  = "main"
                         self.decl_vars = Map[str, bool].init(64)
+                        self.str_local_names = Map[str, bool].init(16)
                         self.gen_func_body(f.body, 1)
                         self.cur_func  = ""
                 i = i + 1
