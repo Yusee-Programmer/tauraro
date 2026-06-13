@@ -1,0 +1,21 @@
+def main():
+    mut total = 0
+    mut i = 0
+    while i < 200000:
+        mut d: Dict[str, str] = {}
+        d.insert("a", "hello")
+        d.insert("b", "world")
+        total = total + d.len()
+        i = i + 1
+
+    # exercise .get()/.get_or()/.values()/.items() on a separate dict, this
+    # one becomes coll_escaped (leak, not droppable) but must not crash
+    mut m: Map[str, str] = {}
+    m.insert("x", "one")
+    m.insert("y", "two")
+    mut got = m.get("x")
+    print("got=" + got)
+    for k, v in m.items():
+        print(k + "=" + v)
+
+    print("total=" + total.to_str())

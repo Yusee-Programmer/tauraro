@@ -2762,6 +2762,23 @@ static void      Dict_free(Dict* d) {
     }
     _tr_free(d->buckets); _tr_free(d);
 }
+/* Like Dict_free(), but for Dict[K,str]/Map[K,str] whose values are
+   _tr_str_box(TrStr)-allocated boxes (#54): unbox+release the TrStr, then
+   free the box itself, before freeing the node/key/buckets/struct. */
+static void      Dict_free_strval(Dict* d) {
+    if (!d) return;
+    for (size_t i=0; i<d->cap; i++) {
+        _DictNode* n=d->buckets[i];
+        while (n) {
+            _DictNode* nx=n->next;
+            if(n->key) _tr_free(n->key);
+            if(n->value) { _tr_str_release(*(TrStr*)n->value); _tr_free(n->value); }
+            _tr_free(n);
+            n=nx;
+        }
+    }
+    _tr_free(d->buckets); _tr_free(d);
+}
 /* Free all entries (and their key strings) but keep the Dict struct itself
    alive and reusable - used by clear(), unlike Dict_free() which also frees
    the struct (would otherwise leave m a dangling pointer after clear()). */
@@ -4474,6 +4491,22 @@ static void _tr_idict_free(TrIDict* d) {
     for (size_t i=0;i<d->cap;i++) {
         _TrIDictNode* n=d->buckets[i];
         while(n){ _TrIDictNode* nx=n->next; _tr_free(n); n=nx; }
+    }
+    _tr_free(d->buckets); _tr_free(d);
+}
+/* Like _tr_idict_free(), but for Dict[int,str]/Map[int,str] whose values are
+   _tr_str_box(TrStr)-allocated boxes (#54): unbox+release the TrStr, then
+   free the box itself, before freeing the node/buckets/struct. */
+static void _tr_idict_free_strval(TrIDict* d) {
+    if (!d) return;
+    for (size_t i=0;i<d->cap;i++) {
+        _TrIDictNode* n=d->buckets[i];
+        while(n){
+            _TrIDictNode* nx=n->next;
+            if(n->value) { _tr_str_release(*(TrStr*)n->value); _tr_free(n->value); }
+            _tr_free(n);
+            n=nx;
+        }
     }
     _tr_free(d->buckets); _tr_free(d);
 }

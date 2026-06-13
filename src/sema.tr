@@ -820,7 +820,9 @@ extend Sema:
                 mut kt = targs.get(0).read().name
                 mut vt = targs.get(1).read().name
                 if not self._coll_elem_droppable(kt): return false
-                if vt == "str": return false
+                # vt == "str": values are _tr_str_box(TrStr)-allocated; the
+                # codegen-side Dict_free_strval/_tr_idict_free_strval (#54)
+                # unbox+release each value, so this is safe.
                 if not self._coll_elem_droppable(vt): return false
                 return true
             else:
@@ -1144,11 +1146,31 @@ extend Sema:
                     self.mark_coll_arg(args.get(i))
                     self.mark_escaped_coll_args(args.get(i))
                     i = i + 1
-            case HirExpr.EMethodCall(obj, _, args, _):
+            case HirExpr.EMethodCall(obj, method, args, _):
                 # `obj` is the receiver (e.g. `l.append(...)`) - reading it to
                 # invoke a method on it doesn't alias the pointer elsewhere,
                 # so it is NOT marked here (only recursed into, for nested
                 # exprs). Every argument, however, IS marked.
+                #
+                # EXCEPTION (#54): for Dict[K,str]/Map[K,str], .get()/.get_or()/
+                # .values()/.items() return TrStr(s) via _tr_str_unbox() that
+                # SHARE the refcount/data pointer with the boxed value still
+                # stored in the dict (non-destructive unbox, no retain). If the
+                # dict were auto-dropped (Dict_free_strval/_tr_idict_free_strval
+                # releases each boxed value), and the unboxed TrStr also gets
+                # released via its own str-local auto-drop, that's a double
+                # release. So reading a str value out of such a dict marks the
+                # dict itself escaped (leak instead of double-free).
+                if method == "get" or method == "get_or" or method == "values" or method == "items":
+                    match obj.read():
+                        case HirExpr.EIdent(_, _, _):
+                            mut obj_ty = hir_expr_type(obj)
+                            if obj_ty.name == "Dict" or obj_ty.name == "Map":
+                                if obj_ty.args.len > 1:
+                                    mut obj_vt = obj_ty.args.get(1).read().name
+                                    if obj_vt == "str" or obj_vt == "String":
+                                        self.mark_coll_arg(obj)
+                        case _: pass
                 self.mark_escaped_coll_args(obj)
                 mut i = 0
                 while i < args.len:
@@ -1794,6 +1816,10 @@ extend Sema:
                 case HirStmt.SWhile(_sw_c, _):
                     self.mark_escaped_str_args(_sw_c)
                     self.mark_escaped_coll_args(_sw_c)
+                case HirStmt.SFor(_, _sf_iter, _):
+                    self.mark_escaped_coll_args(_sf_iter)
+                case HirStmt.SForUnpack(_, _sfu_iter, _):
+                    self.mark_escaped_coll_args(_sfu_iter)
                 case _: pass
             # Auto-drop: inject SAutoDrop stmts for all currently-open scopes
             # right before a control-transfer statement, so owned locals are
