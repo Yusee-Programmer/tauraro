@@ -213,7 +213,14 @@ static inline TrStr _tr_str_retain(TrStr s) {
 
 static inline void _tr_str_release(TrStr s) {
     if (s.rc) {
-        if (--(*s.rc) == 0) { _tr_free((void*)s.rc); }
+        if (--(*s.rc) == 0) {
+            /* _tr_str_new's combined allocation places `data` right after
+             * the refcount in the same block - freeing `rc` frees both.
+             * _tr_str_wrap's `data` is a SEPARATE allocation from its
+             * freshly-allocated rc block, so free it too. */
+            if (s.data != (char*)s.rc + sizeof(long)) { _tr_free(s.data); }
+            _tr_free((void*)s.rc);
+        }
     }
 }
 

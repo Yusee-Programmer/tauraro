@@ -166,6 +166,8 @@ pub class CGenerator:
     pub overloaded_sigs:  Map[str, bool]          # "ClassName_method" keys where multiple overloads exist
     pub type_alias_map:   Map[str, str]           # alias_name -> resolved C type string
     pub defer_stack:      Vec[str]                # deferred C statements for current function (LIFO)
+    pub wrap_temp_decls:  Vec[str]                # pending "TrStr _wtN = (_tr_str_wrap(...))" decls for the current top-level expr
+    pub wrap_temp_names:  Vec[str]                # names of the above, to _tr_str_release after the expr is consumed
 
     pub def init() -> CGenerator:
         mut g = CGenerator()
@@ -207,6 +209,8 @@ pub class CGenerator:
         g.overloaded_sigs = Map[str, bool].init(32)
         g.type_alias_map  = Map[str, str].init(16)
         g.defer_stack     = Vec[str].init(0)
+        g.wrap_temp_decls = Vec[str].init(0)
+        g.wrap_temp_names = Vec[str].init(0)
         return g
 
     pub def next_temp(self) -> str:
@@ -1315,8 +1319,50 @@ pub class CGenerator:
 
     # Extracts the raw `char*` from a TrStr-typed expression for passing to
     # legacy char*-based runtime helpers (_tr_str_*, strcmp, etc).
+    #
+    # If `e` is exactly a `_tr_str_wrap(...)` call, it produces a fresh,
+    # unique, rc=1 TrStr (per _tr_str_wrap's contract) that nothing else
+    # references. Extracting `.data` and discarding the TrStr struct (the
+    # old behavior, `_tr_strz(_tr_str_wrap(...))`) leaked both of its heap
+    # allocations. Instead, bind it to a named temp now and record it for
+    # release once the enclosing top-level expression/statement has
+    # consumed `.data` (see flush_wraps).
     pub def strz(self, e: str) -> str:
+        if e.starts_with("_tr_str_wrap(") and e.ends_with(")"):
+            mut tmp = "_wt" + self.next_temp()
+            self.wrap_temp_decls.push("TrStr " + tmp + " = (" + e + ")")
+            self.wrap_temp_names.push(tmp)
+            return tmp + ".data"
         return "_tr_strz(" + e + ")"
+
+    # If any `_tr_str_wrap(...)` temporaries were hoisted by `strz()` while
+    # generating `expr_s` (a complete top-level expression/condition/value),
+    # wrap it in a GCC statement-expression that declares the temps, computes
+    # `expr_s`, releases the temps, then yields the result. `is_void` must be
+    # true when `expr_s`'s value is discarded (e.g. an SExpr statement).
+    # Clears the pending lists either way.
+    pub def flush_wraps(self, expr_s: str, is_void: bool) -> str:
+        if self.wrap_temp_decls.len == 0:
+            return expr_s
+        mut out = "({ "
+        mut i = 0
+        while i < self.wrap_temp_decls.len:
+            out = out + self.wrap_temp_decls.get(i) + "; "
+            i = i + 1
+        if is_void:
+            out = out + expr_s + "; "
+        else:
+            out = out + "__auto_type _wr = (" + expr_s + "); "
+        i = 0
+        while i < self.wrap_temp_names.len:
+            out = out + "_tr_str_release(" + self.wrap_temp_names.get(i) + "); "
+            i = i + 1
+        if not is_void:
+            out = out + "_wr; "
+        out = out + "})"
+        self.wrap_temp_decls = Vec[str].init(0)
+        self.wrap_temp_names = Vec[str].init(0)
+        return out
 
     # Wraps a fresh heap char* (from a legacy _tr_str_* helper) into a
     # refcounted TrStr (rc=1) for use as a `str`-typed expression result.
@@ -1346,8 +1392,8 @@ pub class CGenerator:
         mut cond_s = self.gen_expr(cond)
         mut ty_n: str = hir_expr_type(cond).name
         if self.has_method(ty_n, "__bool__"):
-            return self.cls_method_c_call(ty_n, "__bool__", cond_s, "")
-        return cond_s
+            cond_s = self.cls_method_c_call(ty_n, "__bool__", cond_s, "")
+        return self.flush_wraps(cond_s, false)
 
     pub def gen_binop(self, op: str, l: Pointer[HirExpr], r: Pointer[HirExpr]) -> str:
         mut ls = self.gen_expr(l)
@@ -1355,6 +1401,20 @@ pub class CGenerator:
         mut lt_n: str = hir_expr_type(l).name
         mut rt_n: str = hir_expr_type(r).name
         if op == "+" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
+            # `_tr_str_wrap(...)` always produces a freshly-owned, unique
+            # TrStr (rc=1, not aliased to any other variable) - e.g. from
+            # `.to_str()`, `.to_upper()`, etc. used inline in a concat. If an
+            # operand is exactly such an expression, consume its `.data` and
+            # release it immediately after the concat call so its (up to
+            # two) heap allocations don't leak.
+            mut l_owned = ls.starts_with("_tr_str_wrap(") and ls.ends_with(")")
+            mut r_owned = rs.starts_with("_tr_str_wrap(") and rs.ends_with(")")
+            if l_owned and r_owned:
+                return "({ TrStr _cl = (" + ls + "); TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })"
+            elif l_owned:
+                return "({ TrStr _cl = (" + ls + "); TrStr _cres = _tr_strx_concat(_cl.data, " + self.strz(rs) + "); _tr_str_release(_cl); _cres; })"
+            elif r_owned:
+                return "({ TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concat(" + self.strz(ls) + ", _cr.data); _tr_str_release(_cr); _cres; })"
             return "_tr_strx_concat(" + self.strz(ls) + ", " + self.strz(rs) + ")"
         # String repetition: "ab" * 3  (or  3 * "ab"), Python-style.
         if op == "*" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
@@ -3978,7 +4038,7 @@ pub class CGenerator:
                             self.w(pad + "if (" + tmp_qr + ".tag == Result_Err) return " + tmp_qr + ";\n")
                             return
                         case _: pass
-                self.w(pad + self.gen_expr(e) + ";\n")
+                self.w(pad + self.flush_wraps(self.gen_expr(e), true) + ";\n")
             case HirStmt.SDefer(inner_defer):
                 # defer: save the C code now, emit it before each return.
                 mut saved_buf = self.buf
@@ -4026,6 +4086,7 @@ pub class CGenerator:
                     if self.cur_throws_ty != "":
                         # throws function: wrap return value in Result_Ok
                         mut ret_s = self.gen_expr(e)
+                        ret_s = self.flush_wraps(ret_s, false)
                         mut ret_ty_n = hir_expr_type(e).name
                         if _is_int_type(ret_ty_n) or ret_ty_n == "bool" or ret_ty_n == "char":
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(uintptr_t)(" + ret_s + ")});\n")
@@ -4036,7 +4097,9 @@ pub class CGenerator:
                         else:
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(" + ret_s + ")});\n")
                     else:
-                        self.w(pad + "return " + self.str_retain_wrap(e, self.gen_expr(e), true) + ";\n")
+                        mut ret_s2 = self.gen_expr(e)
+                        ret_s2 = self.flush_wraps(ret_s2, false)
+                        self.w(pad + "return " + self.str_retain_wrap(e, ret_s2, true) + ";\n")
             case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
                 mut c_ty = self.type_to_c(ty)
                 # If SLet.ty is Vec/List without generic args, recover c_ty from the init expression
@@ -4200,6 +4263,7 @@ pub class CGenerator:
                             match v.read():
                                 case HirExpr.EPropAccess(_, _, _): pass
                                 case _: self.str_local_names.insert(n, true)
+                        init_s = self.flush_wraps(init_s, false)
                         self.w(" = " + init_s + ";\n")
                 else:
                     if is_shared:
@@ -4218,6 +4282,7 @@ pub class CGenerator:
                         # assignment to that global, handled by the fall-through).
                         if not self.decl_vars.contains(n) and not self.global_vars.contains(n):
                             mut _sa_rhs = self.gen_expr(v)
+                            _sa_rhs = self.flush_wraps(_sa_rhs, false)
                             if hir_expr_type(t).name == "str":
                                 _sa_rhs = self.str_retain_wrap(v, _sa_rhs, false)
                                 self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
@@ -4234,7 +4299,8 @@ pub class CGenerator:
                             mut _si_obj = self.gen_expr(idx_obj)
                             mut _si_key = self.gen_expr(idx_key)
                             mut _si_val = self.gen_expr(v)
-                            self.w(pad + self.cls_method_c_call(idx_ty_n, "__setitem__", _si_obj, _si_key + ", " + _si_val) + ";\n")
+                            mut _si_call = self.cls_method_c_call(idx_ty_n, "__setitem__", _si_obj, _si_key + ", " + _si_val)
+                            self.w(pad + self.flush_wraps(_si_call, true) + ";\n")
                             return
                         # list[i] = str_value into a legacy List_str (char* elements):
                         # assign the raw char* lvalue, not the _tr_str_lit-wrapped rvalue.
@@ -4244,7 +4310,8 @@ pub class CGenerator:
                                 mut _li_obj = self.gen_expr(idx_obj)
                                 mut _li_key = self.gen_expr(idx_key)
                                 mut _li_lvalue = _li_obj + "->data[(_tr_bounds_check(" + _li_key + ", " + _li_obj + "->len), " + _li_key + ")]"
-                                self.w(pad + _li_lvalue + " = " + self.strz(self.gen_expr(v)) + ";\n")
+                                mut _li_stmt = _li_lvalue + " = " + self.strz(self.gen_expr(v))
+                                self.w(pad + self.flush_wraps(_li_stmt, true) + ";\n")
                                 return
                     case HirExpr.EMethodCall(mc_obj, mc_meth, mc_args, _):
                         # sema lowers bag[i] = v -> SAssign(EMethodCall(bag, "get_index", [i]), v)
@@ -4254,7 +4321,8 @@ pub class CGenerator:
                                 mut _si2_obj = self.gen_expr(mc_obj)
                                 mut _si2_key = self.gen_args(mc_args)
                                 mut _si2_val = self.gen_expr(v)
-                                self.w(pad + self.cls_method_c_call(mc_ty_n, "__setitem__", _si2_obj, _si2_key + ", " + _si2_val) + ";\n")
+                                mut _si2_call = self.cls_method_c_call(mc_ty_n, "__setitem__", _si2_obj, _si2_key + ", " + _si2_val)
+                                self.w(pad + self.flush_wraps(_si2_call, true) + ";\n")
                                 return
                     case _: pass
                 mut _assign_rhs = ""
@@ -4266,6 +4334,7 @@ pub class CGenerator:
                                 _assign_rhs = self.gen_list_literal(litems, tgt_ty)
                     case _: pass
                 if _assign_rhs == "": _assign_rhs = self.gen_expr(v)
+                _assign_rhs = self.flush_wraps(_assign_rhs, false)
                 if hir_expr_type(t).name == "str":
                     match t.read():
                         case HirExpr.EIdent(_an, _, _):
@@ -4328,12 +4397,15 @@ pub class CGenerator:
                     mut raise_s = self.gen_expr(e)
                     if _is_str_type(hir_expr_type(e).name): raise_s = self.strz(raise_s)
                     else: raise_s = "(char*)(" + raise_s + ")"
-                    self.w(pad + "_tr_exc_raise(" + raise_s + ");\n")
+                    self.w(pad + self.flush_wraps("_tr_exc_raise(" + raise_s + ")", true) + ";\n")
             case HirStmt.SAssert(cond, msg):
                 if msg as usize == 0 as usize:
-                    self.w(pad + "_TR_ASSERT(" + self.gen_expr(cond) + ");\n")
+                    mut _as_cond = self.gen_expr(cond)
+                    self.w(pad + self.flush_wraps("_TR_ASSERT(" + _as_cond + ")", true) + ";\n")
                 else:
-                    self.w(pad + "_TR_ASSERT_MSG(" + self.gen_expr(cond) + ", " + self.gen_expr(msg) + ");\n")
+                    mut _as_cond2 = self.gen_expr(cond)
+                    mut _as_msg = self.gen_expr(msg)
+                    self.w(pad + self.flush_wraps("_TR_ASSERT_MSG(" + _as_cond2 + ", " + _as_msg + ")", true) + ";\n")
             case HirStmt.SUnsafe(b):
                 self.w(pad + "/* unsafe block */\n")
                 self.gen_block(b, indent)
@@ -5544,8 +5616,8 @@ pub class CGenerator:
         if main_has_args:
             # Rename to avoid shadowing C's char** argv parameter
             if main_args_name == "argv": main_args_name = "_tr_main_argv"
-            self.w("    List_str* " + main_args_name + " = List_str_new();\n")
-            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_str_append(" + main_args_name + ", argv[_ai]); }\n")
+            self.w("    List_TrStr* " + main_args_name + " = List_TrStr_new();\n")
+            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(argv[_ai])); }\n")
 
         # Call top-level statements. A hoisted global var (declared at file scope
         # in Phase 3.6) is initialized here with an assignment, not re-declared.
@@ -6242,8 +6314,8 @@ pub class CGenerator:
         if main_has_args:
             # Rename to avoid shadowing C's char** argv parameter
             if main_args_name == "argv": main_args_name = "_tr_main_argv"
-            self.w("    List_str* " + main_args_name + " = List_str_new();\n")
-            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_str_append(" + main_args_name + ", argv[_ai]); }\n")
+            self.w("    List_TrStr* " + main_args_name + " = List_TrStr_new();\n")
+            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(argv[_ai])); }\n")
 
         i = 0
         if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.top_level_stmts as usize):

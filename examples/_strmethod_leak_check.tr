@@ -1,0 +1,16 @@
+def main():
+    mut total = 0
+    mut i = 0
+    while i < 300000:
+        mut s = "Hello World " + i.to_str()
+        # str method result used directly as a statement / condition,
+        # never assigned to a local - exercises wrapstr() temporaries
+        # that aren't operands of '+' concatenation.
+        if s.to_upper().contains("HELLO"):
+            total = total + s.to_lower().len()
+        print_count(s.trim().replace("o", "0"))
+        i = i + 1
+    print("total=" + total.to_str())
+
+def print_count(s: str):
+    pass
