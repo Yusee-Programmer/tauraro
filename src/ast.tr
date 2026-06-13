@@ -186,6 +186,7 @@ pub enum Expr:
     ERange(start: Pointer[Expr], end: Pointer[Expr], inclusive: bool)
     ESizeOf(ty: Pointer[AstType])
     EIfElse(cond: Pointer[Expr], then_expr: Pointer[Expr], else_expr: Pointer[Expr])
+    ETypeArg(ty: Pointer[AstType])
 
 # --- Chan-select arms ---------------------------------------------------------
 

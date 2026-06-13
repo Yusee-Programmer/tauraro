@@ -124,6 +124,7 @@ pub enum HirStmt:
     SMultiLet(names: Vec[str], is_mut: bool, val: Pointer[HirExpr])
     SChanSelect(cases: Vec[Pointer[HirChanSelectArm]])
     SDefer(stmt: Pointer[HirStmt])   # defer - deferred execution at function exit
+    SAutoDrop(name: str, class_name: str)  # compiler-inserted .free() for an owned, unmoved, unborrowed local going out of scope
 
 pub class HirBlock:
     pub stmts: Vec[Pointer[HirStmt]]

@@ -18,7 +18,7 @@ pub def _c_dot_to_safe(s: str) -> str:
     mut n = 0
     mut p = s as Pointer[char]
     while p.offset(n).read() as int != 0: n = n + 1
-    mut buf = _tr_str_slice(s, 0, n)
+    mut buf = s.slice(0, n)
     mut bp = buf as Pointer[char]
     mut j = 0
     while j < n:
@@ -321,7 +321,7 @@ pub class CGenerator:
         if n == "f32": return "float"
         if n == "bool": return "bool"
         if n == "char": return "char"
-        if _is_str_type(n): return "char*"
+        if _is_str_type(n): return "TrStr"
 
         # FFI / C interop types
         if n == "c_int": return "int"
@@ -371,7 +371,7 @@ pub class CGenerator:
             mut cp = self.cur_class as Pointer[char]
             while cp.offset(u_idx).read() as int != 0:
                 if cp.offset(u_idx).read() as int == 95: # '_'
-                    base_cls_n = _tr_str_slice(self.cur_class, 0, u_idx)
+                    base_cls_n = self.cur_class.slice(0, u_idx)
                     break
                 u_idx = u_idx + 1
             if self.classes.contains(base_cls_n):
@@ -483,7 +483,7 @@ pub class CGenerator:
         while np.offset(nlen).read() as int != 0: nlen = nlen + 1
         if nlen > 0:
             if np.offset(nlen - 1).read() as int == 42: # '*'
-                return _tr_str_slice(n, 0, nlen - 1) + "_ptr"
+                return n.slice(0, nlen - 1) + "_ptr"
         return n
 
     pub def list_elem_suffix(self, n: str) -> str:
@@ -493,6 +493,7 @@ pub class CGenerator:
             if cv == "long long": actual_n = "int"
             elif cv == "double": actual_n = "float"
             elif cv == "char*": actual_n = "str"
+            elif cv == "TrStr": actual_n = "str"
             elif cv == "bool": actual_n = "bool"
             elif cv == "char": actual_n = "char"
             elif cv == "unsigned long long": actual_n = "u64"
@@ -524,6 +525,7 @@ pub class CGenerator:
                 if concrete == "long long": arg_name = "int"
                 elif concrete == "double": arg_name = "float"
                 elif concrete == "char*": arg_name = "str"
+                elif concrete == "TrStr": arg_name = "str"
                 elif concrete == "bool": arg_name = "bool"
                 elif concrete == "char": arg_name = "char"
                 elif concrete == "unsigned long long": arg_name = "u64"
@@ -551,6 +553,7 @@ pub class CGenerator:
             if cv == "long long": tn = "int"
             elif cv == "double": tn = "float"
             elif cv == "char*": tn = "str"
+            elif cv == "TrStr": tn = "str"
             elif cv == "bool": tn = "bool"
             elif cv == "char": tn = "char"
             elif cv == "unsigned long long": tn = "u64"
@@ -1014,8 +1017,8 @@ pub class CGenerator:
         match e:
             case HirExpr.ELitInt(v, _): return v.to_str() + "LL"
             case HirExpr.ELitFloat(v, _): return _tr_float_to_c_lit(v)
-            case HirExpr.ELitStr(v, _): return "\"" + _escape_str_for_c(v) + "\""
-            case HirExpr.ERawStr(v, _): return "\"" + _escape_str_for_c(v) + "\""
+            case HirExpr.ELitStr(v, _): return "_tr_str_lit(\"" + _escape_str_for_c(v) + "\")"
+            case HirExpr.ERawStr(v, _): return "_tr_str_lit(\"" + _escape_str_for_c(v) + "\")"
             case HirExpr.ELitBytes(v, _): return "\"" + _escape_str_for_c(v) + "\""
             case HirExpr.ELitChar(v, _):
                 if v == 0: return "'\\0'"
@@ -1024,7 +1027,7 @@ pub class CGenerator:
                 if v == 13: return "'\\r'"
                 if v == 92: return "'\\\\'"
                 if v == 39: return "'\\''"
-                return "'" + _tr_char_to_str(v) + "'"
+                return "((char)" + v.to_str() + ")"
             case HirExpr.ELitBool(v, _):
                 if v: return "true"
                 else: return "false"
@@ -1044,10 +1047,10 @@ pub class CGenerator:
             case HirExpr.EIndex(o, idx, _): return self.gen_index(o, idx)
             case HirExpr.ESizeOf(target_ty, _):
                 mut sizeof_cty = self.type_to_c(target_ty)
-                mut sizeof_len = _tr_str_len(sizeof_cty)
+                mut sizeof_len = sizeof_cty.len
                 if sizeof_len > 0:
                     if (sizeof_cty as Pointer[char]).offset(sizeof_len - 1).read() as int == 42:
-                        sizeof_cty = _tr_str_slice(sizeof_cty, 0, sizeof_len - 1)
+                        sizeof_cty = sizeof_cty.slice(0, sizeof_len - 1)
                 return "((long long)sizeof(" + sizeof_cty + "))"
             case HirExpr.ECast(expr, target_ty):
                 # List/Vec -> Pointer[T]: decay to the underlying data array (C interop)
@@ -1055,6 +1058,25 @@ pub class CGenerator:
                     mut cast_src_ty: str = hir_expr_type(expr).name
                     if cast_src_ty == "List" or cast_src_ty == "Vec":
                         return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "->data))"
+                # `as str`: TrStr is a struct, can't C-cast to it. If the source
+                # expr is already str-typed it's a no-op; otherwise it's a
+                # generic/void* result (e.g. Dict.get(k) as str) - unbox it.
+                if _is_str_type(target_ty.name):
+                    mut cast_src_full_n: str = hir_expr_type(expr).name
+                    if _is_str_type(cast_src_full_n): return self.gen_expr(expr)
+                    # Raw pointer (e.g. `buffer as str` where buffer: Pointer[char],
+                    # typically a freshly-malloc'd buffer being handed off as an
+                    # owned string, as in read_file): wrap as an OWNED TrStr
+                    # (rc=1) so the buffer is freed when the string is released.
+                    # NOT a boxed-TrStr unbox (that's for `_tr_str_box`-produced
+                    # void* slots, e.g. Dict.get(k) as str).
+                    if cast_src_full_n == "Pointer":
+                        return "_tr_str_wrap((char*)(" + self.gen_expr(expr) + "))"
+                    return "_tr_str_unbox(" + self.gen_expr(expr) + ")"
+                # TrStr -> Pointer[char]/char*: extract the raw char* via strz
+                # (TrStr is a struct, can't C-cast it directly to a pointer).
+                if _is_str_type(hir_expr_type(expr).name):
+                    return "((" + self.type_to_c(target_ty) + ")(" + self.strz(self.gen_expr(expr)) + "))"
                 return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
             case HirExpr.EFString(parts, _): return self.gen_fstring(parts)
             case HirExpr.ETryExpr(expr, ok_ty):
@@ -1127,7 +1149,7 @@ pub class CGenerator:
         mut ui = 0
         while cp.offset(ui).read() as int != 0:
             if cp.offset(ui).read() as int == 95:
-                mut candidate = _tr_str_slice(cls_name, 0, ui)
+                mut candidate = cls_name.slice(0, ui)
                 if self.classes.contains(candidate):
                     mut base_cls = self.classes.get(candidate)
                     mut bmi = 0
@@ -1151,7 +1173,7 @@ pub class CGenerator:
         mut ui2 = 0
         while cp2.offset(ui2).read() as int != 0:
             if cp2.offset(ui2).read() as int == 95:
-                mut candidate2 = _tr_str_slice(cls_name, 0, ui2)
+                mut candidate2 = cls_name.slice(0, ui2)
                 if self.classes.contains(candidate2):
                     mut base_cls2 = self.classes.get(candidate2)
                     mut i2 = 0
@@ -1182,6 +1204,7 @@ pub class CGenerator:
             if c == "_Bool" or c == "bool": return "bool"
             if c == "char": return "char"
             if c == "char*": return "str"
+            if c == "TrStr": return "str"
         return n
 
     pub def mono_cls_name_for(self, ty: AstType) -> str:
@@ -1277,6 +1300,16 @@ pub class CGenerator:
             return "({ List_str* _dk = _tr_dict_keys(" + s + "); List_ptr* _dv = _tr_dict_values(" + s + "); _tr_dict_to_str((void*)_dk->data, (void*)_dv->data, _dk->len, " + vsize + ", _tr_fmt_str, " + vfmt + "); })"
         return "_tr_default_obj_str(\"" + cn + "\", (void*)(" + s + "))"
 
+    # Extracts the raw `char*` from a TrStr-typed expression for passing to
+    # legacy char*-based runtime helpers (_tr_str_*, strcmp, etc).
+    pub def strz(self, e: str) -> str:
+        return "_tr_strz(" + e + ")"
+
+    # Wraps a fresh heap char* (from a legacy _tr_str_* helper) into a
+    # refcounted TrStr (rc=1) for use as a `str`-typed expression result.
+    pub def wrapstr(self, e: str) -> str:
+        return "_tr_str_wrap(" + e + ")"
+
     pub def gen_cond_expr(self, cond: Pointer[HirExpr]) -> str:
         mut cond_s = self.gen_expr(cond)
         mut ty_n: str = hir_expr_type(cond).name
@@ -1290,12 +1323,12 @@ pub class CGenerator:
         mut lt_n: str = hir_expr_type(l).name
         mut rt_n: str = hir_expr_type(r).name
         if op == "+" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
-            return "_tr_str_concat(" + ls + ", " + rs + ")"
+            return "_tr_strx_concat(" + self.strz(ls) + ", " + self.strz(rs) + ")"
         # String repetition: "ab" * 3  (or  3 * "ab"), Python-style.
         if op == "*" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
             if _is_str_type(lt_n):
-                return "_tr_str_repeat(" + ls + ", (long long)(" + rs + "))"
-            return "_tr_str_repeat(" + rs + ", (long long)(" + ls + "))"
+                return "_tr_strx_repeat(" + self.strz(ls) + ", (long long)(" + rs + "))"
+            return "_tr_strx_repeat(" + self.strz(rs) + ", (long long)(" + ls + "))"
         if op == "and":
             mut lsa = ls
             mut rsa = rs
@@ -1312,12 +1345,14 @@ pub class CGenerator:
         if op == "in":
             if rt_n == "List" or rt_n == "Vec":
                 mut in_sfx: str = self.list_elem_suffix(lt_n)
-                return "List_" + in_sfx + "_contains(" + rs + ", " + ls + ")"
+                mut in_ls = ls
+                if in_sfx == "str": in_ls = self.strz(ls)
+                return "List_" + in_sfx + "_contains(" + rs + ", " + in_ls + ")"
             if rt_n == "Map" or rt_n == "Dict":
-                return "_tr_dict_contains(" + rs + ", " + ls + ")"
+                return "_tr_dict_contains(" + rs + ", " + self.strz(ls) + ")"
             if self.has_method(rt_n, "__contains__"):
                 return self.cls_method_c_call(rt_n, "__contains__", rs, ls)
-            return "_tr_contains(" + rs + ", " + ls + ")"
+            return "_tr_contains(" + self.strz(rs) + ", " + self.strz(ls) + ")"
         # Dunder dispatch for arithmetic and comparison ops
         mut dunder = ""
         if op == "+": dunder = "__add__"
@@ -1340,8 +1375,10 @@ pub class CGenerator:
         if op == "**": return "((long long)pow((double)(" + ls + "), (double)(" + rs + ")))"
         if op == "//": return "((long long)(" + ls + ") / (long long)(" + rs + "))"
         if (_is_str_type(lt_n) or _is_str_type(rt_n)) and (op == "==" or op == "!="):
-            if op == "==": return "(strcmp((char*)" + ls + ", (char*)" + rs + ") == 0)"
-            return "(strcmp((char*)" + ls + ", (char*)" + rs + ") != 0)"
+            if op == "==": return "(strcmp(" + self.strz(ls) + ", " + self.strz(rs) + ") == 0)"
+            return "(strcmp(" + self.strz(ls) + ", " + self.strz(rs) + ") != 0)"
+        if (_is_str_type(lt_n) or _is_str_type(rt_n)) and (op == "<" or op == ">" or op == "<=" or op == ">="):
+            return "(strcmp(" + self.strz(ls) + ", " + self.strz(rs) + ") " + op + " 0)"
         if self.enums.contains(lt_n) and (op == "==" or op == "!="):
             return "(" + ls + ".tag " + op + " " + rs + ".tag)"
         return "(" + ls + " " + op + " " + rs + ")"
@@ -1373,7 +1410,7 @@ pub class CGenerator:
             return obj_s + ".data." + p
         if t_n == "Pointer": return "(*" + obj_s + ")." + p
         if _is_str_type(t_n) and (p == "len" or p == "length"):
-            return "((long long)_tr_strlen(" + obj_s + "))"
+            return "((long long)_tr_strlen(" + self.strz(obj_s) + "))"
         if t_n == "StringBuilder" and (p == "len" or p == "length"):
             return "(" + obj_s + "->buf->len)"
         if t_n == "Result":
@@ -1382,15 +1419,13 @@ pub class CGenerator:
             if p == "ok":
                 mut full_ty = hir_expr_type(o)
                 if full_ty.args.len > 0:
-                    mut ok_ct = self.type_to_c(full_ty.args.get(0).read())
-                    return "((" + ok_ct + ")Result_unwrap(" + obj_s + "))"
+                    return self.unwrap_voidp_as("Result_unwrap(" + obj_s + ")", full_ty.args.get(0).read())
                 return "Result_unwrap(" + obj_s + ")"
             if p == "err":
                 mut full_ty2 = hir_expr_type(o)
                 if full_ty2.args.len > 1:
-                    mut err_ct = self.type_to_c(full_ty2.args.get(1).read())
-                    return "((" + err_ct + ")Result_unwrap_err(" + obj_s + "))"
-                return "(char*)Result_unwrap_err(" + obj_s + ")"
+                    return self.unwrap_voidp_as("Result_unwrap_err(" + obj_s + ")", full_ty2.args.get(1).read())
+                return "_tr_str_lit((char*)Result_unwrap_err(" + obj_s + "))"
             return obj_s + "." + p
         if t_n == "Option":
             if p == "is_some": return "(" + obj_s + ".tag == Option_Some)"
@@ -1416,11 +1451,17 @@ pub class CGenerator:
         if ty_n == "List" or ty_n == "Vec":
             # Bounds-checked access - works as both lvalue and rvalue.
             # The comma operator in the subscript runs the check then uses the index.
-            return os + "->data[(_tr_bounds_check(" + is_idx + ", " + os + "->len), " + is_idx + ")]"
+            mut idx_r = os + "->data[(_tr_bounds_check(" + is_idx + ", " + os + "->len), " + is_idx + ")]"
+            mut o_full_ty = hir_expr_type(o)
+            if o_full_ty.args.len > 0 and _is_str_type(self.resolve_generic_prim(o_full_ty.args.get(0).read().name)):
+                return "_tr_str_lit(" + idx_r + ")"
+            return idx_r
         if self.classes.contains(ty_n) and ty_n != "Vec" and ty_n != "List" and ty_n != "Map" and ty_n != "Dict":
             if self.has_method(ty_n, "__getitem__"):
                 return self.cls_method_c_call(ty_n, "__getitem__", os, is_idx)
             return ty_n + "_get_index(" + os + ", " + is_idx + ")"
+        if _is_str_type(ty_n):
+            return self.strz(os) + "[" + is_idx + "]"
         return os + "[" + is_idx + "]"
 
     pub def gen_call(self, callee: Pointer[HirExpr], args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
@@ -1485,7 +1526,7 @@ pub class CGenerator:
             if args.len > 0:
                 mut arg0 = args.get(0)
                 mut arg0_ty_n: str = hir_expr_type(arg0).name
-                if _is_str_type(arg0_ty_n): return "_tr_strlen(" + self.gen_expr(arg0) + ")"
+                if _is_str_type(arg0_ty_n): return "_tr_strlen(" + self.strz(self.gen_expr(arg0)) + ")"
                 if self.has_method(arg0_ty_n, "__len__"):
                     return self.cls_method_c_call(arg0_ty_n, "__len__", self.gen_expr(arg0), "")
                 return self.gen_expr(arg0) + "->len"
@@ -1590,15 +1631,16 @@ pub class CGenerator:
             if args.len > 0:
                 mut str_arg = args.get(0)
                 mut str_t_n: str = self.resolve_generic_prim(hir_expr_type(str_arg).name)
-                if _is_int_type(str_t_n): return "_tr_int_to_str((long long)(" + self.gen_expr(str_arg) + "))"
-                if _is_float_type(str_t_n): return "_tr_float_to_str((double)(" + self.gen_expr(str_arg) + "))"
-                if str_t_n == "bool": return "((" + self.gen_expr(str_arg) + ") ? \"true\" : \"false\")"
+                if _is_int_type(str_t_n): return "_tr_str_wrap(_tr_int_to_str((long long)(" + self.gen_expr(str_arg) + ")))"
+                if _is_float_type(str_t_n): return "_tr_str_wrap(_tr_float_to_str((double)(" + self.gen_expr(str_arg) + ")))"
+                if str_t_n == "bool": return "((" + self.gen_expr(str_arg) + ") ? _tr_str_lit(\"true\") : _tr_str_lit(\"false\"))"
                 if self.has_method(str_t_n, "__str__"):
                     return self.cls_method_c_call(str_t_n, "__str__", self.gen_expr(str_arg), "")
                 if self.has_method(str_t_n, "__repr__"):
                     return self.cls_method_c_call(str_t_n, "__repr__", self.gen_expr(str_arg), "")
-                return "(char*)(" + self.gen_expr(str_arg) + ")"
-            return "\"\""
+                if _is_str_type(str_t_n): return self.gen_expr(str_arg)
+                return "_tr_str_wrap((char*)(" + self.gen_expr(str_arg) + "))"
+            return "_tr_str_lit(\"\")"
 
         # repr() - detailed string representation
         if base_callee == "repr":
@@ -1609,18 +1651,19 @@ pub class CGenerator:
                     return self.cls_method_c_call(repr_t_n, "__repr__", self.gen_expr(repr_arg), "")
                 if self.has_method(repr_t_n, "__str__"):
                     return self.cls_method_c_call(repr_t_n, "__str__", self.gen_expr(repr_arg), "")
-                return "(char*)(" + self.gen_expr(repr_arg) + ")"
-            return "\"\""
+                if _is_str_type(repr_t_n): return self.gen_expr(repr_arg)
+                return "_tr_str_wrap((char*)(" + self.gen_expr(repr_arg) + "))"
+            return "_tr_str_lit(\"\")"
 
         # int() / float() / bool() - type coercions; int/float from str -> parse
         if base_callee == "int" or base_callee == "_tr_fn_int":
             if args.len > 0:
-                if _is_str_type(hir_expr_type(args.get(0)).name): return "_tr_str_to_int(" + self.gen_expr(args.get(0)) + ")"
+                if _is_str_type(hir_expr_type(args.get(0)).name): return "_tr_str_to_int(" + self.strz(self.gen_expr(args.get(0))) + ")"
                 return "(long long)(" + self.gen_expr(args.get(0)) + ")"
             return "0LL"
         if base_callee == "float" or base_callee == "_tr_fn_float":
             if args.len > 0:
-                if _is_str_type(hir_expr_type(args.get(0)).name): return "_tr_str_to_float(" + self.gen_expr(args.get(0)) + ")"
+                if _is_str_type(hir_expr_type(args.get(0)).name): return "_tr_str_to_float(" + self.strz(self.gen_expr(args.get(0))) + ")"
                 return "(double)(" + self.gen_expr(args.get(0)) + ")"
             return "0.0"
         if base_callee == "bool":
@@ -1972,6 +2015,23 @@ pub class CGenerator:
                 case _: pass
             if not is_fn_or_cls:
                 return self.cls_method_c_call(callee_cls_ty, "__call__", callee_s, self.gen_args(args))
+        # Direct calls to legacy runtime helpers (named `_tr_*`) from .tr source
+        # take raw char* for str params and return char*; unwrap TrStr-typed
+        # args and rewrap a char*-returning result at the boundary.
+        # Exception: names starting with `_tr_` that are actually user-defined
+        # Tauraro functions (e.g. hir.tr's `_tr_str_len`, imported across
+        # modules so not present in self.functions) use normal TrStr ABI.
+        if _starts_with_tr(base_callee) and not self.functions.contains(base_callee) and base_callee != "_tr_str_len":
+            mut _ext_call = callee_s + "(" + self.gen_args_extern(args) + ")"
+            if _is_str_type(call_ty.name):
+                if base_callee == "_tr_getenv": return "_tr_str_lit(" + _ext_call + ")"
+                return self.wrapstr(_ext_call)
+            # Known char*-returning helpers whose return type isn't tracked by
+            # sema (call_ty.name not "str") still allocate a fresh heap buffer
+            # and must be wrapped into TrStr (rc=1) for the new ABI.
+            if base_callee == "_tr_char_to_str" or base_callee == "_tr_char_to_str_alloc":
+                return self.wrapstr(_ext_call)
+            return _ext_call
         return callee_s + "(" + self.gen_args(args) + ")"
 
     pub def gen_print_call(self, args: Vec[Pointer[HirExpr]]) -> str:
@@ -1986,16 +2046,17 @@ pub class CGenerator:
         if ty0_n == "Pointer": return "printf(\"0x%llx\\n\", (unsigned long long)(uintptr_t)(" + s0 + "))"
         if ty0_n == "List" or ty0_n == "Vec" or ty0_n == "Set" or ty0_n == "Dict" or ty0_n == "Map":
             return "printf(\"%s\\n\", " + self.gen_collection_to_str(s0, hir_expr_type(arg0)) + ")"
+        if _is_str_type(ty0_n): return "printf(\"%s\\n\", _tr_strz(" + s0 + "))"
         mut mono0 = self.mono_cls_name_for(hir_expr_type(arg0))
         if self.has_method(mono0, "__str__"):
-            return "printf(\"%s\\n\", " + self.cls_method_c_call(mono0, "__str__", s0, "") + ")"
+            return "printf(\"%s\\n\", _tr_strz(" + self.cls_method_c_call(mono0, "__str__", s0, "") + "))"
         if self.has_method(mono0, "__repr__"):
-            return "printf(\"%s\\n\", " + self.cls_method_c_call(mono0, "__repr__", s0, "") + ")"
+            return "printf(\"%s\\n\", _tr_strz(" + self.cls_method_c_call(mono0, "__repr__", s0, "") + "))"
         if ty0_n == "void" or ty0_n == "" or ty0_n == "lambda":
             return "printf(\"%s\\n\", _TR_AUTO_STR(" + s0 + "))"
         if self.classes.contains(mono0):
             return "printf(\"%s\\n\", " + self.obj_to_str_expr(mono0, s0) + ")"
-        return "printf(\"%s\\n\", (char*)(" + s0 + "))"
+        return "printf(\"%s\\n\", _TR_AUTO_STR(" + s0 + "))"
 
     # Wrap an Option[T]/Result[T,E] payload expression for storage in the
     # generic `void* val` slot. Floats can't be cast to/from void* directly
@@ -2005,6 +2066,8 @@ pub class CGenerator:
         mut s = self.gen_expr(arg)
         if _is_float_type(a_ty_n):
             return "_tr_f64_to_ptr((double)(" + s + "))"
+        if _is_str_type(a_ty_n):
+            return "_tr_str_box(" + s + ")"
         return "(void*)(" + s + ")"
 
     # Unwrap a `void*` Option[T]/Result[T,E] payload back to type `ty`.
@@ -2012,8 +2075,36 @@ pub class CGenerator:
         mut tn: str = self.resolve_generic_prim(ty.name)
         if _is_float_type(tn):
             return "_tr_ptr_to_f64(" + expr_s + ")"
+        if _is_str_type(tn):
+            return "_tr_str_unbox(" + expr_s + ")"
         mut ct = self.type_to_c(ty)
         return "((" + ct + ")(" + expr_s + "))"
+
+    # Dict key arg: TrMap keys are char*, so str-typed keys must be unwrapped.
+    pub def dict_key_arg(self, e: Pointer[HirExpr]) -> str:
+        mut e_s = self.gen_expr(e)
+        if _is_str_type(hir_expr_type(e).name): return self.strz(e_s)
+        return e_s
+
+    # Dict value arg: TrMap values are void*, so str-typed values must be boxed.
+    pub def dict_val_arg(self, e: Pointer[HirExpr]) -> str:
+        mut e_s = self.gen_expr(e)
+        if _is_str_type(hir_expr_type(e).name): return "_tr_str_box(" + e_s + ")"
+        return e_s
+
+    # Like gen_args, but unwraps any TrStr-typed argument to raw char* via
+    # _tr_strz - for direct calls to legacy `_tr_*` runtime helpers.
+    pub def gen_args_extern(self, args: Vec[Pointer[HirExpr]]) -> str:
+        mut s = ""
+        mut i = 0
+        while i < args.len:
+            if i > 0: s = s + ", "
+            mut a = args.get(i)
+            mut a_ty_n: str = hir_expr_type(a).name
+            if _is_str_type(a_ty_n): s = s + self.strz(self.gen_expr(a))
+            else: s = s + self.gen_expr(a)
+            i = i + 1
+        return s
 
     pub def gen_args(self, args: Vec[Pointer[HirExpr]]) -> str:
         mut s = ""
@@ -2021,6 +2112,24 @@ pub class CGenerator:
         while i < args.len:
             if i > 0: s = s + ", "
             s = s + self.gen_expr(args.get(i))
+            i = i + 1
+        return s
+
+    # Like gen_args, but when elem_sfx == "str" (legacy char*-backed List_str),
+    # extracts the raw char* from any str(TrStr)-typed argument so it matches
+    # the legacy List_str_* signatures.
+    pub def gen_args_strify(self, args: Vec[Pointer[HirExpr]], elem_sfx: str) -> str:
+        if elem_sfx != "str": return self.gen_args(args)
+        mut s = ""
+        mut i = 0
+        while i < args.len:
+            if i > 0: s = s + ", "
+            mut a = args.get(i)
+            mut a_ty_n: str = self.resolve_generic_prim(hir_expr_type(a).name)
+            if _is_str_type(a_ty_n):
+                s = s + self.strz(self.gen_expr(a))
+            else:
+                s = s + self.gen_expr(a)
             i = i + 1
         return s
 
@@ -2075,18 +2184,24 @@ pub class CGenerator:
                 if method == "ok":
                     mut ok_cv = "NULL"
                     if args.len > 0:
-                        ok_cv = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                        ok_cv = self.wrap_voidp_arg(args.get(0))
                     return "((Result){.tag=Result_Ok, .data.Ok.val=" + ok_cv + "})"
                 elif method == "err":
                     mut err_cv = "NULL"
                     if args.len > 0:
-                        err_cv = "(void*)(" + self.gen_expr(args.get(0)) + ")"
+                        err_cv = self.wrap_voidp_arg(args.get(0))
                     return "((Result){.tag=Result_Err, .data.Err.err=" + err_cv + "})"
             # Instance methods on a Result value
             if method == "is_err": return "(" + obj_s + ".tag == Result_Err)"
             if method == "is_ok": return "(" + obj_s + ".tag == Result_Ok)"
-            if method == "unwrap": return "Result_unwrap(" + obj_s + ")"
-            if method == "unwrap_err": return "Result_unwrap_err(" + obj_s + ")"
+            if method == "unwrap":
+                if call_ty.name != "" and call_ty.name != "void":
+                    return self.unwrap_voidp_as("Result_unwrap(" + obj_s + ")", call_ty)
+                return "Result_unwrap(" + obj_s + ")"
+            if method == "unwrap_err":
+                if call_ty.name != "" and call_ty.name != "void":
+                    return self.unwrap_voidp_as("Result_unwrap_err(" + obj_s + ")", call_ty)
+                return "Result_unwrap_err(" + obj_s + ")"
             mut res_extra = ""
             if args.len > 0:
                 res_extra = ", " + self.gen_args(args)
@@ -2118,57 +2233,61 @@ pub class CGenerator:
 
         # Str.join static call: Str.join(parts, sep) -> _tr_str_join((List_str*)parts, sep)
         if obj_s == "Str" and method == "join":
-            if args.len >= 2: return "_tr_str_join((List_str*)" + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
-            if args.len == 1: return "_tr_str_join((List_str*)" + self.gen_expr(args.get(0)) + ", \"\")"
+            if args.len >= 2: return self.wrapstr("_tr_str_join((List_str*)" + self.gen_expr(args.get(0)) + ", " + self.strz(self.gen_expr(args.get(1))) + ")")
+            if args.len == 1: return self.wrapstr("_tr_str_join((List_str*)" + self.gen_expr(args.get(0)) + ", \"\")")
 
         # str primitive method dispatch - "hello".trim() -> _tr_str_strip("hello")
+        # See note above _is_str_type(t_n) block re: TrStr interim semantics.
         if t_n == "str":
+            mut os: str = self.strz(obj_s)
             mut str_arg0 = ""
             if args.len > 0: str_arg0 = self.gen_expr(args.get(0))
             mut str_arg1 = ""
             if args.len > 1: str_arg1 = self.gen_expr(args.get(1))
-            if method == "split":         return "_tr_str_split(" + obj_s + ", " + str_arg0 + ")"
-            if method == "split_to_vec":  return "_tr_str_split(" + obj_s + ", " + str_arg0 + ")"
-            if method == "trim" or method == "strip": return "_tr_str_strip(" + obj_s + ")"
-            if method == "trim_left":     return "_tr_str_trim_left(" + obj_s + ")"
-            if method == "trim_right":    return "_tr_str_trim_right(" + obj_s + ")"
-            if method == "to_upper":      return "_tr_str_upper(" + obj_s + ")"
-            if method == "to_lower":      return "_tr_str_lower(" + obj_s + ")"
-            if method == "capitalize":    return "_tr_str_capitalize(" + obj_s + ")"
-            if method == "title":         return "_tr_str_title(" + obj_s + ")"
-            if method == "reverse":       return "_tr_str_reverse(" + obj_s + ")"
-            if method == "repeat":        return "_tr_str_repeat(" + obj_s + ", " + str_arg0 + ")"
-            if method == "replace":       return "_tr_str_replace(" + obj_s + ", " + str_arg0 + ", " + str_arg1 + ")"
-            if method == "replace_first": return "_tr_str_replace_first(" + obj_s + ", " + str_arg0 + ", " + str_arg1 + ")"
-            if method == "slice":         return "_tr_str_slice(" + obj_s + ", " + str_arg0 + ", " + str_arg1 + ")"
-            if method == "strip_prefix":  return "_tr_str_strip_prefix(" + obj_s + ", " + str_arg0 + ")"
-            if method == "strip_suffix":  return "_tr_str_strip_suffix(" + obj_s + ", " + str_arg0 + ")"
-            if method == "remove_char":   return "_tr_str_remove_char(" + obj_s + ", " + str_arg0 + ")"
-            if method == "join":          return "_tr_str_join((List_str*)(void*)" + obj_s + ", " + str_arg0 + ")"
-            if method == "len":           return "_tr_strlen((char*)" + obj_s + ")"
-            if method == "index_of":      return "_tr_str_index_of(" + obj_s + ", " + str_arg0 + ")"
-            if method == "last_index_of": return "_tr_str_last_index_of(" + obj_s + ", " + str_arg0 + ")"
-            if method == "count":         return "_tr_str_count_occ(" + obj_s + ", " + str_arg0 + ")"
-            if method == "char_at":       return "_tr_str_char_at_code(" + obj_s + ", " + str_arg0 + ")"
-            if method == "starts_with":   return "_tr_str_starts_with(" + obj_s + ", " + str_arg0 + ")"
-            if method == "ends_with":     return "_tr_str_ends_with(" + obj_s + ", " + str_arg0 + ")"
-            if method == "contains":      return "_tr_str_contains(" + obj_s + ", " + str_arg0 + ")"
-            if method == "contains_char": return "_tr_str_contains_char(" + obj_s + ", " + str_arg0 + ")"
-            if method == "eq":            return "_tr_str_eq(" + obj_s + ", " + str_arg0 + ")"
-            if method == "is_digit":      return "_tr_str_is_digit(" + obj_s + ")"
-            if method == "is_alpha":      return "_tr_str_is_alpha(" + obj_s + ")"
-            if method == "is_alnum":      return "_tr_str_is_alnum(" + obj_s + ")"
-            if method == "is_space":      return "_tr_str_is_space(" + obj_s + ")"
-            if method == "is_upper":      return "_tr_str_is_upper(" + obj_s + ")"
-            if method == "is_lower":      return "_tr_str_is_lower(" + obj_s + ")"
-            if method == "parse_int":     return "_tr_str_to_int(" + obj_s + ")"
-            if method == "parse_float":   return "_tr_str_to_float(" + obj_s + ")"
-            if method == "parse_bool":    return "_tr_str_parse_bool(" + obj_s + ")"
-            if method == "lines":         return "_tr_str_lines(" + obj_s + ")"
-            if method == "words":         return "_tr_str_words(" + obj_s + ")"
-            if method == "lpad":          return "_tr_str_lpad(" + obj_s + ", " + str_arg0 + ", " + str_arg1 + ")"
-            if method == "rpad":          return "_tr_str_rpad(" + obj_s + ", " + str_arg0 + ", " + str_arg1 + ")"
-            if method == "center":        return "_tr_str_center(" + obj_s + ", " + str_arg0 + ")"
+            mut sa0: str = self.strz(str_arg0)
+            mut sa1: str = self.strz(str_arg1)
+            if method == "split":         return "_tr_str_split(" + os + ", " + sa0 + ")"
+            if method == "split_to_vec":  return "_tr_str_split(" + os + ", " + sa0 + ")"
+            if method == "trim" or method == "strip": return self.wrapstr("_tr_str_strip(" + os + ")")
+            if method == "trim_left":     return self.wrapstr("_tr_str_trim_left(" + os + ")")
+            if method == "trim_right":    return self.wrapstr("_tr_str_trim_right(" + os + ")")
+            if method == "to_upper":      return self.wrapstr("_tr_str_upper(" + os + ")")
+            if method == "to_lower":      return self.wrapstr("_tr_str_lower(" + os + ")")
+            if method == "capitalize":    return self.wrapstr("_tr_str_capitalize(" + os + ")")
+            if method == "title":         return self.wrapstr("_tr_str_title(" + os + ")")
+            if method == "reverse":       return self.wrapstr("_tr_str_reverse(" + os + ")")
+            if method == "repeat":        return self.wrapstr("_tr_str_repeat(" + os + ", " + str_arg0 + ")")
+            if method == "replace":       return self.wrapstr("_tr_str_replace(" + os + ", " + sa0 + ", " + sa1 + ")")
+            if method == "replace_first": return self.wrapstr("_tr_str_replace_first(" + os + ", " + sa0 + ", " + sa1 + ")")
+            if method == "slice":         return self.wrapstr("_tr_str_slice(" + os + ", " + str_arg0 + ", " + str_arg1 + ")")
+            if method == "strip_prefix":  return self.wrapstr("_tr_str_strip_prefix(" + os + ", " + sa0 + ")")
+            if method == "strip_suffix":  return self.wrapstr("_tr_str_strip_suffix(" + os + ", " + sa0 + ")")
+            if method == "remove_char":   return self.wrapstr("_tr_str_remove_char(" + os + ", " + sa0 + ")")
+            if method == "join":          return self.wrapstr("_tr_str_join((List_str*)(void*)" + obj_s + ", " + sa0 + ")")
+            if method == "len":           return "_tr_strlen(" + os + ")"
+            if method == "index_of":      return "_tr_str_index_of(" + os + ", " + sa0 + ")"
+            if method == "last_index_of": return "_tr_str_last_index_of(" + os + ", " + sa0 + ")"
+            if method == "count":         return "_tr_str_count_occ(" + os + ", " + sa0 + ")"
+            if method == "char_at":       return "_tr_str_char_at_code(" + os + ", " + str_arg0 + ")"
+            if method == "starts_with":   return "_tr_str_starts_with(" + os + ", " + sa0 + ")"
+            if method == "ends_with":     return "_tr_str_ends_with(" + os + ", " + sa0 + ")"
+            if method == "contains":      return "_tr_str_contains(" + os + ", " + sa0 + ")"
+            if method == "contains_char": return "_tr_str_contains_char(" + os + ", " + sa0 + ")"
+            if method == "eq":            return "_tr_str_eq(" + os + ", " + sa0 + ")"
+            if method == "is_digit":      return "_tr_str_is_digit(" + os + ")"
+            if method == "is_alpha":      return "_tr_str_is_alpha(" + os + ")"
+            if method == "is_alnum":      return "_tr_str_is_alnum(" + os + ")"
+            if method == "is_space":      return "_tr_str_is_space(" + os + ")"
+            if method == "is_upper":      return "_tr_str_is_upper(" + os + ")"
+            if method == "is_lower":      return "_tr_str_is_lower(" + os + ")"
+            if method == "parse_int":     return "_tr_str_to_int(" + os + ")"
+            if method == "parse_float":   return "_tr_str_to_float(" + os + ")"
+            if method == "parse_bool":    return "_tr_str_parse_bool(" + os + ")"
+            if method == "lines":         return "_tr_str_lines(" + os + ")"
+            if method == "words":         return "_tr_str_words(" + os + ")"
+            if method == "lpad":          return self.wrapstr("_tr_str_lpad(" + os + ", " + str_arg0 + ", " + sa1 + ")")
+            if method == "rpad":          return self.wrapstr("_tr_str_rpad(" + os + ", " + str_arg0 + ", " + sa1 + ")")
+            if method == "center":        return self.wrapstr("_tr_str_center(" + os + ", " + str_arg0 + ")")
 
         # Pointer method calls - intercept when:
         #   (a) receiver is explicitly Pointer[T], or
@@ -2220,7 +2339,11 @@ pub class CGenerator:
                 if args.len > 0: mx_init_v = "(long long)(" + self.gen_expr(args.get(0)) + ")"
                 return "_tr_mutexbox_new(" + mx_init_v + ")"
             if method == "lock" or method == "get":
-                return "_tr_mutexbox_lock_get(" + obj_s + ")"
+                mut mx_get = "_tr_mutexbox_lock_get(" + obj_s + ")"
+                mut mx_obj_ty = hir_expr_type(obj)
+                if mx_obj_ty.args.len > 0:
+                    return self.unwrap_voidp_as(mx_get, mx_obj_ty.args.get(0).read())
+                return mx_get
             if method == "set":
                 mut mx_sv = "0LL"
                 if args.len > 0: mx_sv = "(long long)(" + self.gen_expr(args.get(0)) + ")"
@@ -2433,19 +2556,19 @@ pub class CGenerator:
 
         # Primitive conversion methods
         if method == "to_str" or method == "to_string":
-            if _is_int_type(t_n): return "_tr_int_to_str((long long)(" + obj_s + "))"
-            if _is_float_type(t_n): return "_tr_float_to_str((double)(" + obj_s + "))"
-            if t_n == "bool": return "((" + obj_s + ") ? \"true\" : \"false\")"
-            if t_n == "char": return "_tr_char_to_str_alloc(" + obj_s + ")"
+            if _is_int_type(t_n): return self.wrapstr("_tr_int_to_str((long long)(" + obj_s + "))")
+            if _is_float_type(t_n): return self.wrapstr("_tr_float_to_str((double)(" + obj_s + "))")
+            if t_n == "bool": return "((" + obj_s + ") ? _tr_str_lit(\"true\") : _tr_str_lit(\"false\"))"
+            if t_n == "char": return self.wrapstr("_tr_char_to_str_alloc(" + obj_s + ")")
             # Fall through for class types (StringBuilder, user classes) so they hit their own branch
             if not (self.classes.contains(t_n) and t_n != "Vec" and t_n != "Map" and t_n != "Dict" and t_n != "List") and t_n != "StringBuilder":
                 return obj_s
         # String receivers parse; numeric receivers cast.
         if method == "to_float":
-            if _is_str_type(t_n): return "_tr_str_to_float(" + obj_s + ")"
+            if _is_str_type(t_n): return "_tr_str_to_float(" + self.strz(obj_s) + ")"
             return "(double)(" + obj_s + ")"
         if method == "to_int":
-            if _is_str_type(t_n): return "_tr_str_to_int(" + obj_s + ")"
+            if _is_str_type(t_n): return "_tr_str_to_int(" + self.strz(obj_s) + ")"
             return "(long long)(" + obj_s + ")"
 
         # Float math methods - expose libc math as methods on float/f64 values.
@@ -2481,13 +2604,13 @@ pub class CGenerator:
         # Int utility methods - format and math on integer types.
         if _is_int_type(t_n):
             if method == "to_hex":
-                return "({ char* _hb = (char*)_tr_checked_alloc(32); snprintf(_hb, 32, \"%llx\", (long long)(" + obj_s + ")); _hb; })"
+                return self.wrapstr("({ char* _hb = (char*)_tr_checked_alloc(32); snprintf(_hb, 32, \"%llx\", (long long)(" + obj_s + ")); _hb; })")
             if method == "to_HEX" or method == "to_hex_upper":
-                return "({ char* _hb = (char*)_tr_checked_alloc(32); snprintf(_hb, 32, \"%llX\", (long long)(" + obj_s + ")); _hb; })"
+                return self.wrapstr("({ char* _hb = (char*)_tr_checked_alloc(32); snprintf(_hb, 32, \"%llX\", (long long)(" + obj_s + ")); _hb; })")
             if method == "to_octal" or method == "to_oct":
-                return "({ char* _ob = (char*)_tr_checked_alloc(32); snprintf(_ob, 32, \"%llo\", (long long)(" + obj_s + ")); _ob; })"
+                return self.wrapstr("({ char* _ob = (char*)_tr_checked_alloc(32); snprintf(_ob, 32, \"%llo\", (long long)(" + obj_s + ")); _ob; })")
             if method == "to_binary" or method == "to_bin":
-                return "_tr_int_to_binary((long long)(" + obj_s + "))"
+                return self.wrapstr("_tr_int_to_binary((long long)(" + obj_s + "))")
             if method == "sign":
                 return "((long long)(((" + obj_s + ") > 0LL) - ((" + obj_s + ") < 0LL)))"
             if method == "clamp" and args.len == 2:
@@ -2526,65 +2649,77 @@ pub class CGenerator:
             if method == "pow" and args.len > 0:
                 return "((long long)pow((double)(" + obj_s + "),(double)(" + self.gen_expr(args.get(0)) + ")))"
         if method == "as_str":
+            # StringObj_as_str/StringBuilder_as_str already return TrStr
+            # (str return type -> TrStr); no extra wrapping needed.
             if t_n == "StringObj": return "StringObj_as_str(" + obj_s + ")"
+            if t_n == "StringBuilder": return "StringBuilder_as_str(" + obj_s + ")"
+            if _is_str_type(t_n): return obj_s
             return "(char*)(" + obj_s + ")"
         if method == "starts_with" and args.len > 0 and _is_str_type(t_n):
-            return "_tr_str_starts_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            return "_tr_str_starts_with(" + self.strz(obj_s) + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
         if method == "ends_with" and args.len > 0 and _is_str_type(t_n):
-            return "_tr_str_ends_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            return "_tr_str_ends_with(" + self.strz(obj_s) + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
         if method == "contains" and args.len > 0 and _is_str_type(t_n):
-            return "_tr_str_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            return "_tr_str_contains(" + self.strz(obj_s) + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
 
         # String method dispatch - must be before the generic TrStr_ fallback
+        # NOTE on interim semantics (Phase 2/TrStr migration): scalar `str`
+        # values are TrStr (refcounted). List[str]/Dict/Set string elements
+        # remain legacy char* (List_str etc, task #52, not yet migrated).
+        # Boundary: TrStr -> char* via _tr_strz(); char* -> TrStr from a
+        # legacy container/helper is wrapped via _tr_str_wrap() (fresh
+        # heap result, rc=1) so it participates in refcounting going forward.
         if _is_str_type(t_n):
-            if method == "upper" or method == "to_upper": return "_tr_str_upper(" + obj_s + ")"
-            if method == "lower" or method == "to_lower": return "_tr_str_lower(" + obj_s + ")"
-            if method == "strip" or method == "trim": return "_tr_str_strip(" + obj_s + ")"
-            if method == "trim_left": return "_tr_str_trim_left(" + obj_s + ")"
-            if method == "trim_right": return "_tr_str_trim_right(" + obj_s + ")"
+            mut os: str = self.strz(obj_s)
+            if method == "upper" or method == "to_upper": return self.wrapstr("_tr_str_upper(" + os + ")")
+            if method == "lower" or method == "to_lower": return self.wrapstr("_tr_str_lower(" + os + ")")
+            if method == "strip" or method == "trim": return self.wrapstr("_tr_str_strip(" + os + ")")
+            if method == "trim_left": return self.wrapstr("_tr_str_trim_left(" + os + ")")
+            if method == "trim_right": return self.wrapstr("_tr_str_trim_right(" + os + ")")
             if method == "replace" and args.len == 2:
-                return "_tr_str_replace(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
+                return self.wrapstr("_tr_str_replace(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ", " + self.strz(self.gen_expr(args.get(1))) + ")")
             if method == "split" and args.len > 0:
-                return "_tr_str_split(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_str_split(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
             if method == "find" and args.len > 0:
                 mut tmp_find: str = self.next_temp()
-                return "({ char* " + tmp_find + " = strstr(" + obj_s + ", " + self.gen_expr(args.get(0)) + "); " + tmp_find + " ? (long long)(" + tmp_find + " - (" + obj_s + ")) : -1LL; })"
+                return "({ char* " + tmp_find + " = strstr(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + "); " + tmp_find + " ? (long long)(" + tmp_find + " - (" + os + ")) : -1LL; })"
             if method == "slice" and args.len == 2:
-                return "_tr_str_slice(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
+                return self.wrapstr("_tr_str_slice(" + os + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")")
             if method == "index_of" and args.len > 0:
-                return "_tr_str_index_of(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_str_index_of(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
             if method == "last_index_of" and args.len > 0:
-                return "_tr_str_last_index_of(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_str_last_index_of(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
             if method == "len" or method == "length":
-                return "_tr_strlen(" + obj_s + ")"
+                return "_tr_strlen(" + os + ")"
             if method == "starts_with" and args.len > 0:
-                return "_tr_str_starts_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_str_starts_with(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
             if method == "ends_with" and args.len > 0:
-                return "_tr_str_ends_with(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_str_ends_with(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
             if method == "contains" and args.len > 0:
-                return "_tr_str_contains(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_str_contains(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")"
             if method == "strip_prefix" and args.len > 0:
-                return "_tr_str_strip_prefix(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return self.wrapstr("_tr_str_strip_prefix(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")")
             if method == "strip_suffix" and args.len > 0:
-                return "_tr_str_strip_suffix(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return self.wrapstr("_tr_str_strip_suffix(" + os + ", " + self.strz(self.gen_expr(args.get(0))) + ")")
             if method == "repeat" and args.len > 0:
-                return "_tr_str_repeat(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
-            if method == "reverse": return "_tr_str_reverse(" + obj_s + ")"
-            if method == "parse_int": return "_tr_str_to_int(" + obj_s + ")"
-            if method == "parse_float": return "_tr_str_to_float(" + obj_s + ")"
-            if method == "parse_bool": return "_tr_str_parse_bool(" + obj_s + ")"
+                return self.wrapstr("_tr_str_repeat(" + os + ", " + self.gen_expr(args.get(0)) + ")")
+            if method == "reverse": return self.wrapstr("_tr_str_reverse(" + os + ")")
+            if method == "parse_int": return "_tr_str_to_int(" + os + ")"
+            if method == "parse_float": return "_tr_str_to_float(" + os + ")"
+            if method == "parse_bool": return "_tr_str_parse_bool(" + os + ")"
             if method == "char_at" and args.len > 0:
-                return "_tr_str_char_at_code(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_str_char_at_code(" + os + ", " + self.gen_expr(args.get(0)) + ")"
             # str.split_once(sep) -> (left, right) at first occurrence; right="" if not found
             if method == "split_once" and args.len > 0:
-                mut _so_sep = self.gen_expr(args.get(0))
+                mut _so_sep = self.strz(self.gen_expr(args.get(0)))
                 mut _so_t = self.next_temp()
                 mut _so_p = self.next_temp()
-                return "({ char* " + _so_p + " = strstr(" + obj_s + ", " + _so_sep + "); " + _so_p + " ? _tr_str_tuple2(_tr_str_slice(" + obj_s + ", 0LL, (long long)(" + _so_p + " - (" + obj_s + "))), _tr_str_slice(" + _so_p + ", _tr_strlen(" + _so_sep + "), _tr_strlen(" + _so_p + "))) : _tr_str_tuple2(" + obj_s + ", \"\"); })"
+                return "({ char* " + _so_p + " = strstr(" + os + ", " + _so_sep + "); " + _so_p + " ? _tr_str_tuple2(_tr_str_slice(" + os + ", 0LL, (long long)(" + _so_p + " - (" + os + "))), _tr_str_slice(" + _so_p + ", _tr_strlen(" + _so_sep + "), _tr_strlen(" + _so_p + "))) : _tr_str_tuple2(" + os + ", \"\"); })"
 
         # When sema returns void/empty type, still dispatch known string methods on the object.
         # This handles chained calls like Process.shell_output(cmd).trim() where the intermediate
-        # return type is unknown to sema.
+        # return type is unknown to sema. (obj_s here is still legacy char* since its type was
+        # unresolved - leave as-is, do NOT wrap in TrStr.)
         if t_n == "void" or t_n == "":
             if method == "strip" or method == "trim": return "_tr_str_strip(" + obj_s + ")"
             if method == "upper" or method == "to_upper": return "_tr_str_upper(" + obj_s + ")"
@@ -2629,21 +2764,21 @@ pub class CGenerator:
             if method == "platform":   return "(_tr_is_windows() ? \"windows\" : \"linux\")"
         if obj_s == "Process" or class_name == "Process":
             if method == "system" and args.len > 0:
-                return "_tr_system(" + self.gen_expr(args.get(0)) + ")"
+                return "_tr_system(" + self.strz(self.gen_expr(args.get(0))) + ")"
             if method == "shell_output" and args.len > 0:
-                return "_tr_popen_read(" + self.gen_expr(args.get(0)) + ")"
+                return self.wrapstr("_tr_popen_read(" + self.strz(self.gen_expr(args.get(0))) + ")")
             if method == "exit" and args.len > 0:
                 return "_tr_exit(" + self.gen_expr(args.get(0)) + ")"
         if obj_s == "Env" or class_name == "Env":
             if method == "get_var" and args.len > 0:
-                return "_tr_getenv(" + self.gen_expr(args.get(0)) + ")"
+                return "_tr_str_lit(_tr_getenv(" + self.strz(self.gen_expr(args.get(0))) + "))"
             if method == "set_var" and args.len > 1:
-                return "_tr_setenv(" + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
+                return "_tr_setenv(" + self.strz(self.gen_expr(args.get(0))) + ", " + self.strz(self.gen_expr(args.get(1))) + ")"
         if obj_s == "Hash" or class_name == "Hash":
             if method == "sha256" and args.len > 0:
-                return "_tr_sha256_hex(" + self.gen_expr(args.get(0)) + ")"
+                return self.wrapstr("_tr_sha256_hex(" + self.strz(self.gen_expr(args.get(0))) + ")")
             if method == "md5" and args.len > 0:
-                return "_tr_md5_hex(" + self.gen_expr(args.get(0)) + ")"
+                return self.wrapstr("_tr_md5_hex(" + self.strz(self.gen_expr(args.get(0))) + ")")
         if obj_s == "File" or class_name == "File":
             if method == "dir_exists" and args.len > 0:
                 return "_tr_dir_exists(" + self.gen_expr(args.get(0)) + ")"
@@ -2663,11 +2798,11 @@ pub class CGenerator:
             if method == "append_char": return "StringBuilder_append_char(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             if method == "to_string": return "StringBuilder_to_string(" + obj_s + ")"
             if method == "len" or method == "length": return obj_s + "->buf->len"
-            if method == "free": return "StringBuilder_free(" + obj_s + ")"
+            if method == "free": return "StringBuilder__tr_fn_free(" + obj_s + ")"
 
         # len/length - only shortcut for non-user-class types
         if (method == "len" or method == "__len__" or method == "length") and not (self.classes.contains(t_n) and t_n != "Vec" and t_n != "Map" and t_n != "Dict" and t_n != "List") and not self.enums.contains(t_n):
-            if _is_str_type(t_n): return "_tr_strlen(" + obj_s + ")"
+            if _is_str_type(t_n): return "_tr_strlen(" + self.strz(obj_s) + ")"
             return "((long long)" + obj_s + "->len)"
 
         # __getitem__ dunder: sema lowers bag[i] -> EMethodCall(bag, "get_index", [i], void)
@@ -2821,24 +2956,26 @@ pub class CGenerator:
                     if _is_int_type(push_arg_ty) or push_arg_ty == "bool": elem_sfx = "i64"
                     elif _is_float_type(push_arg_ty): elem_sfx = "f64"
                     elif push_arg_ty == "str" or push_arg_ty == "char*": elem_sfx = "str"
-                return "List_" + elem_sfx + "_append(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "List_" + elem_sfx + "_append(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
             if method == "free": return "List_" + elem_sfx + "_free(" + obj_s + ")"
             if method == "pop":
                 mut pop_r = "List_" + elem_sfx + "_pop(" + obj_s + ")"
+                if elem_sfx == "str": return "_tr_str_lit(" + pop_r + ")"
                 if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer":
                     if _tr_strlen(call_ty.name) > 1:
                         return "((" + call_ty.name + "*)" + pop_r + ")"
                 return pop_r
             if method == "set":
-                return "List_" + elem_sfx + "_set(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "List_" + elem_sfx + "_set(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
             if method == "contains":
-                return "List_" + elem_sfx + "_contains(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "List_" + elem_sfx + "_contains(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
             if method == "get":
                 mut get_r = "List_" + elem_sfx + "_get(" + obj_s + ", " + self.gen_args(args) + ")"
+                if elem_sfx == "str": return "_tr_str_lit(" + get_r + ")"
                 if elem_sfx == "ptr" and call_ty.name == "Pointer" and call_ty.args.len > 0:
                     mut inner_ct = self.type_to_c(call_ty.args.get(0).read())
                     return "((" + inner_ct + "*)" + get_r + ")"
-                if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer" and call_ty.name != "List" and call_ty.name != "Vec" and call_ty.name != "Map" and call_ty.name != "Dict" and call_ty.name != "str":
+                if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer" and call_ty.name != "List" and call_ty.name != "Vec" and call_ty.name != "Map" and call_ty.name != "Dict" and call_ty.name != "str" and call_ty.name != "def":
                     if _tr_strlen(call_ty.name) > 1:
                         return "((" + call_ty.name + "*)" + get_r + ")"
                 return get_r
@@ -2856,7 +2993,7 @@ pub class CGenerator:
             if method == "extend":
                 return "List_" + elem_sfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "index_of":
-                return "List_" + elem_sfx + "_index_of(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "List_" + elem_sfx + "_index_of(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
             # sort() / sort_by(cmp_fn) - in-place sort
             if method == "sort" or method == "sort_asc":
                 return "_tr_list_sort_" + elem_sfx + "(" + obj_s + ", 1)"
@@ -2865,8 +3002,14 @@ pub class CGenerator:
             if method == "sort_by" and args.len > 0:
                 return "_tr_list_sort_by_" + elem_sfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             # first / last - aliases for get(0) / get(len-1)
-            if method == "first": return "List_" + elem_sfx + "_get(" + obj_s + ", 0LL)"
-            if method == "last": return "List_" + elem_sfx + "_get(" + obj_s + ", (long long)(" + obj_s + "->len - 1LL))"
+            if method == "first":
+                mut first_r = "List_" + elem_sfx + "_get(" + obj_s + ", 0LL)"
+                if elem_sfx == "str": return "_tr_str_lit(" + first_r + ")"
+                return first_r
+            if method == "last":
+                mut last_r = "List_" + elem_sfx + "_get(" + obj_s + ", (long long)(" + obj_s + "->len - 1LL))"
+                if elem_sfx == "str": return "_tr_str_lit(" + last_r + ")"
+                return last_r
             # any(pred) / all(pred) - boolean short-circuit over list
             if method == "any" and args.len > 0:
                 return "_tr_list_any_" + elem_sfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
@@ -2905,11 +3048,11 @@ pub class CGenerator:
                 if args.len == 0: return sfn + "new(16)"
                 return sfn + "new(" + self.gen_args(args) + ")"
             if method == "add" and args.len > 0:
-                return sfn + "add(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return sfn + "add(" + obj_s + ", " + self.gen_args_strify(args, set_elem) + ")"
             if method == "contains" or method == "has":
-                return sfn + "contains(" + obj_s + ", " + self.gen_args(args) + ")"
+                return sfn + "contains(" + obj_s + ", " + self.gen_args_strify(args, set_elem) + ")"
             if method == "remove" and args.len > 0:
-                return sfn + "remove(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return sfn + "remove(" + obj_s + ", " + self.gen_args_strify(args, set_elem) + ")"
             if method == "len" or method == "length":
                 return sfn + "len(" + obj_s + ")"
             if method == "is_empty":
@@ -2926,6 +3069,8 @@ pub class CGenerator:
                 return sfn + "difference(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             if method == "is_subset" and args.len > 0:
                 return sfn + "is_subset(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            if method == "free":
+                return sfn + "free(" + obj_s + ")"
 
         # Map/Dict method dispatch
         mut is_map_dict: bool = class_name == "Map" or class_name == "Dict" or class_name == "TrMap"
@@ -2953,22 +3098,24 @@ pub class CGenerator:
                 mut c_ty_c = self.type_to_c(call_ty)
                 if is_idict:
                     mut iget_r = "_tr_idict_get(" + obj_s + ", " + self.gen_args(args) + ")"
+                    if _is_str_type(call_ty.name): return "_tr_str_unbox(" + iget_r + ")"
                     if c_ty_c != "void" and c_ty_c != "":
                         return "((" + c_ty_c + ")(uintptr_t)" + iget_r + ")"
                     return iget_r
-                mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.gen_args(args) + ")"
+                mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
+                if _is_str_type(call_ty.name): return "_tr_str_unbox(" + mget_r + ")"
                 if c_ty_c != "void" and c_ty_c != "":
                     return "((" + c_ty_c + ")(uintptr_t)" + mget_r + ")"
                 return mget_r
             if method == "set" or method == "insert":
-                if is_idict: return "_tr_idict_set(" + obj_s + ", " + self.gen_args(args) + ")"
-                return "_tr_dict_set(" + obj_s + ", " + self.gen_args(args) + ")"
+                if is_idict: return "_tr_idict_set(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self.dict_val_arg(args.get(1)) + ")"
+                return "_tr_dict_set(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ", " + self.dict_val_arg(args.get(1)) + ")"
             if method == "contains" or method == "has":
                 if is_idict: return "_tr_idict_contains(" + obj_s + ", " + self.gen_args(args) + ")"
-                return "_tr_dict_contains(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "_tr_dict_contains(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
             if method == "remove":
                 if is_idict: return "_tr_idict_remove(" + obj_s + ", " + self.gen_args(args) + ")"
-                return "_tr_dict_remove(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "_tr_dict_remove(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
             if method == "len" or method == "length":
                 if is_idict: return "_tr_idict_len(" + obj_s + ")"
                 return "_tr_dict_len(" + obj_s + ")"
@@ -2995,11 +3142,23 @@ pub class CGenerator:
                 return "(_tr_dict_len(" + obj_s + ") == 0LL)"
             # get_or(key, default) - get with fallback
             if method == "get_or" and args.len >= 2:
-                mut _k = self.gen_expr(args.get(0))
+                mut _is_str_val = _is_str_type(call_ty.name)
                 mut _d = self.gen_expr(args.get(1))
+                if _is_str_val: _d = "_tr_str_box(" + _d + ")"
+                mut _res = ""
                 if is_idict:
-                    return "(_tr_idict_contains(" + obj_s + ", " + _k + ") ? _tr_idict_get(" + obj_s + ", " + _k + ") : (void*)(uintptr_t)(" + _d + "))"
-                return "(_tr_dict_contains(" + obj_s + ", " + _k + ") ? _tr_dict_get(" + obj_s + ", " + _k + ") : (void*)(uintptr_t)(" + _d + "))"
+                    mut _ik = self.gen_expr(args.get(0))
+                    _res = "(_tr_idict_contains(" + obj_s + ", " + _ik + ") ? _tr_idict_get(" + obj_s + ", " + _ik + ") : (void*)(uintptr_t)(" + _d + "))"
+                else:
+                    mut _k = self.dict_key_arg(args.get(0))
+                    _res = "(_tr_dict_contains(" + obj_s + ", " + _k + ") ? _tr_dict_get(" + obj_s + ", " + _k + ") : (void*)(uintptr_t)(" + _d + "))"
+                if _is_str_val: return "_tr_str_unbox(" + _res + ")"
+                return _res
+            # free() - release the underlying TrMap/TrIDict (buckets, nodes,
+            # key strings for str-keyed maps, and the struct itself).
+            if method == "free":
+                if is_idict: return "_tr_idict_free(" + obj_s + ")"
+                return "Dict_free(" + obj_s + ")"
 
         mut extra_args = ""
         if args.len > 0:
@@ -3048,6 +3207,8 @@ pub class CGenerator:
                             fargs = fargs + ", _tr_int_to_str(" + s + ")"
                         elif _is_float_type(ty_n):
                             fargs = fargs + ", _tr_float_to_str(" + s + ")"
+                        elif _is_str_type(ty_n):
+                            fargs = fargs + ", " + self.strz(s)
                         else:
                             fargs = fargs + ", (char*)(" + s + ")"
                     # Alignment / width only: ">10", "<10", "^10", "10"
@@ -3073,7 +3234,10 @@ pub class CGenerator:
                         else:
                             if _left_align: fmt = fmt + "%-" + _align_spec + "s"
                             else:           fmt = fmt + "%" + _align_spec + "s"
-                            fargs = fargs + ", (char*)(" + s + ")"
+                            if _is_str_type(ty_n):
+                                fargs = fargs + ", " + self.strz(s)
+                            else:
+                                fargs = fargs + ", (char*)(" + s + ")"
                 elif _is_int_type(ty_n):
                     fmt = fmt + "%lld"
                     fargs = fargs + ", (long long)(" + s + ")"
@@ -3092,19 +3256,22 @@ pub class CGenerator:
                 elif ty_n == "List" or ty_n == "Vec" or ty_n == "Set" or ty_n == "Dict" or ty_n == "Map":
                     fmt = fmt + "%s"
                     fargs = fargs + ", " + self.gen_collection_to_str(s, hir_expr_type(part.expr))
+                elif _is_str_type(ty_n):
+                    fmt = fmt + "%s"
+                    fargs = fargs + ", " + self.strz(s)
                 else:
                     fmt = fmt + "%s"
                     mut mono_fs = self.mono_cls_name_for(hir_expr_type(part.expr))
                     if self.has_method(mono_fs, "__str__"):
-                        fargs = fargs + ", " + self.cls_method_c_call(mono_fs, "__str__", s, "")
+                        fargs = fargs + ", " + self.strz(self.cls_method_c_call(mono_fs, "__str__", s, ""))
                     elif self.has_method(mono_fs, "__repr__"):
-                        fargs = fargs + ", " + self.cls_method_c_call(mono_fs, "__repr__", s, "")
+                        fargs = fargs + ", " + self.strz(self.cls_method_c_call(mono_fs, "__repr__", s, ""))
                     elif self.classes.contains(mono_fs):
                         fargs = fargs + ", " + self.obj_to_str_expr(mono_fs, s)
                     else:
                         fargs = fargs + ", (char*)(" + s + ")"
             i = i + 1
-        return "({ int _fz = snprintf(NULL,0,\"" + fmt + "\"" + fargs + "); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,\"" + fmt + "\"" + fargs + "); _fr; })"
+        return "_tr_str_wrap(({ int _fz = snprintf(NULL,0,\"" + fmt + "\"" + fargs + "); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,\"" + fmt + "\"" + fargs + "); _fr; }))"
 
     pub def gen_tuple(self, items: Vec[Pointer[HirExpr]]) -> str:
         if items.len == 0: return "((TrTuple){.data={0}})"
@@ -3112,7 +3279,12 @@ pub class CGenerator:
         mut i = 0
         while i < items.len:
             if i > 0: s = s + ", "
-            s = s + "(long long)(uintptr_t)(" + self.gen_expr(items.get(i)) + ")"
+            mut tup_e = items.get(i)
+            mut tup_es = self.gen_expr(tup_e)
+            if _is_str_type(self.resolve_generic_prim(hir_expr_type(tup_e).name)):
+                s = s + "(long long)(uintptr_t)_tr_str_box(" + tup_es + ")"
+            else:
+                s = s + "(long long)(uintptr_t)(" + tup_es + ")"
             i = i + 1
         return s + "}})"
 
@@ -3135,6 +3307,8 @@ pub class CGenerator:
             mut is_int = _is_int_type(arg_ty_name) or arg_ty_name == "bool" or arg_ty_name == "char"
             if is_int:
                 self.w("    " + c_arg_ty + " _arg" + ci.to_str() + " = (" + c_arg_ty + ")_a[" + (ci + 1).to_str() + "];\n")
+            elif _is_str_type(arg_ty_name):
+                self.w("    TrStr _arg" + ci.to_str() + " = _tr_str_unbox((void*)(uintptr_t)_a[" + (ci + 1).to_str() + "]);\n")
             else:
                 self.w("    " + c_arg_ty + " _arg" + ci.to_str() + " = (" + c_arg_ty + ")(uintptr_t)_a[" + (ci + 1).to_str() + "];\n")
             ci = ci + 1
@@ -3149,6 +3323,9 @@ pub class CGenerator:
         if ret_name == "void" or ret_name == "":
             self.w("    " + call_s + ";\n")
             self.w("    _tr_task_complete(_ts, 0LL);\n")
+        elif _is_str_type(ret_name):
+            self.w("    long long _r = (long long)(uintptr_t)_tr_str_box(" + call_s + ");\n")
+            self.w("    _tr_task_complete(_ts, _r);\n")
         else:
             self.w("    long long _r = (long long)(uintptr_t)(" + call_s + ");\n")
             self.w("    _tr_task_complete(_ts, _r);\n")
@@ -3182,6 +3359,8 @@ pub class CGenerator:
                     mut is_int = _is_int_type(arg_ty_name) or arg_ty_name == "bool" or arg_ty_name == "char"
                     if is_int:
                         s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(" + self.gen_expr(args.get(ai)) + "); "
+                    elif _is_str_type(arg_ty_name):
+                        s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(uintptr_t)_tr_str_box(" + self.gen_expr(args.get(ai)) + "); "
                     else:
                         s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(uintptr_t)(" + self.gen_expr(args.get(ai)) + "); "
                     ai = ai + 1
@@ -3193,6 +3372,8 @@ pub class CGenerator:
                 elif _is_int_type(ret_name) or ret_name == "bool" or ret_name == "char":
                     mut c_ret = self.type_to_c(call_ty)
                     s = s + "(" + c_ret + ")_r" + tmp + "; })"
+                elif _is_str_type(ret_name):
+                    s = s + "_tr_str_unbox((void*)(uintptr_t)_r" + tmp + "); })"
                 else:
                     mut c_ret2 = self.type_to_c(call_ty)
                     if c_ret2 == "void" or c_ret2 == "": c_ret2 = "void*"
@@ -3230,6 +3411,8 @@ pub class CGenerator:
                     mut is_int = _is_int_type(arg_ty_name) or arg_ty_name == "bool" or arg_ty_name == "char"
                     if is_int:
                         s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(" + self.gen_expr(args.get(ai)) + "); "
+                    elif _is_str_type(arg_ty_name):
+                        s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(uintptr_t)_tr_str_box(" + self.gen_expr(args.get(ai)) + "); "
                     else:
                         s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(uintptr_t)(" + self.gen_expr(args.get(ai)) + "); "
                     ai = ai + 1
@@ -3242,6 +3425,8 @@ pub class CGenerator:
                 elif _is_int_type(ret_name) or ret_name == "bool" or ret_name == "char":
                     mut c_ret = self.type_to_c(call_ty)
                     s = s + "(" + c_ret + ")_rto" + tmp + "; })"
+                elif _is_str_type(ret_name):
+                    s = s + "_tr_str_unbox((void*)(uintptr_t)_rto" + tmp + "); })"
                 else:
                     mut c_ret2 = self.type_to_c(call_ty)
                     if c_ret2 == "void" or c_ret2 == "": c_ret2 = "void*"
@@ -3256,10 +3441,16 @@ pub class CGenerator:
         pad = _indent_str(indent)
         mut tmp = "_tup" + self.next_temp()
         self.w(pad + "TrTuple " + tmp + " = " + self.gen_expr(val) + ";\n")
+        mut val_ty = hir_expr_type(val)
         mut i = 0
         while i < names.len:
             mut vname = _safe_c_varname(names.get(i))
-            self.w(pad + "long long " + vname + " = " + tmp + ".data[" + i.to_str() + "];\n")
+            mut elem_ty_n = ""
+            if val_ty.args.len > i: elem_ty_n = self.resolve_generic_prim(val_ty.args.get(i).read().name)
+            if _is_str_type(elem_ty_n):
+                self.w(pad + "TrStr " + vname + " = _tr_str_unbox((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]);\n")
+            else:
+                self.w(pad + "long long " + vname + " = " + tmp + ".data[" + i.to_str() + "];\n")
             self.decl_vars.insert(names.get(i), true)
             i = i + 1
 
@@ -3272,7 +3463,10 @@ pub class CGenerator:
         mut s = "({ List_" + sfx + "* " + l + " = List_" + sfx + "_new(); "
         mut i = 0
         while i < items.len:
-            s = s + "List_" + sfx + "_append(" + l + ", " + self.gen_expr(items.get(i)) + "); "
+            mut item_s = self.gen_expr(items.get(i))
+            if sfx == "str" and _is_str_type(hir_expr_type(items.get(i)).name):
+                item_s = self.strz(item_s)
+            s = s + "List_" + sfx + "_append(" + l + ", " + item_s + "); "
             i = i + 1
         return s + l + "; })"
 
@@ -3296,14 +3490,14 @@ pub class CGenerator:
             mut s = "({ TrIDict* " + tmp + " = _tr_idict_new(" + str(keys.len) + "LL); "
             mut i = 0
             while i < keys.len:
-                s = s + "_tr_idict_set(" + tmp + ", " + self.gen_expr(keys.get(i)) + ", " + self.gen_expr(vals.get(i)) + "); "
+                s = s + "_tr_idict_set(" + tmp + ", " + self.gen_expr(keys.get(i)) + ", " + self.dict_val_arg(vals.get(i)) + "); "
                 i = i + 1
             s = s + tmp + "; })"
             return s
         mut s = "({ TrMap* " + tmp + " = _tr_dict_new(" + str(keys.len) + "LL); "
         mut i = 0
         while i < keys.len:
-            s = s + "_tr_dict_set(" + tmp + ", " + self.gen_expr(keys.get(i)) + ", " + self.gen_expr(vals.get(i)) + "); "
+            s = s + "_tr_dict_set(" + tmp + ", " + self.dict_key_arg(keys.get(i)) + ", " + self.dict_val_arg(vals.get(i)) + "); "
             i = i + 1
         s = s + tmp + "; })"
         return s
@@ -3796,6 +3990,10 @@ pub class CGenerator:
                         mut ret_ty_n = hir_expr_type(e).name
                         if _is_int_type(ret_ty_n) or ret_ty_n == "bool" or ret_ty_n == "char":
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(uintptr_t)(" + ret_s + ")});\n")
+                        elif _is_float_type(ret_ty_n):
+                            self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=_tr_f64_to_ptr((double)(" + ret_s + "))});\n")
+                        elif _is_str_type(ret_ty_n):
+                            self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=_tr_str_box(" + ret_s + ")});\n")
                         else:
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(" + ret_s + ")});\n")
                     else:
@@ -3947,6 +4145,17 @@ pub class CGenerator:
                                         init_s = self.gen_dict_literal(d_keys, d_vals, d_ty)
                                 case _:
                                     init_s = self.gen_expr(v)
+                        # Dict.get/get_or returning a generic void* into a str-typed
+                        # local: gen_method_call only unboxes when call_ty is resolved
+                        # to "str"; recover here from the declared SLet type instead.
+                        if c_ty == "TrStr":
+                            match v.read():
+                                case HirExpr.EMethodCall(slv_obj, slv_method, _, slv_call_ty):
+                                    if (slv_method == "get" or slv_method == "get_or") and not _is_str_type(slv_call_ty.name):
+                                        mut slv_oty = hir_expr_type(slv_obj).name
+                                        if slv_oty == "Map" or slv_oty == "Dict":
+                                            init_s = "_tr_str_unbox(" + init_s + ")"
+                                case _: pass
                         self.w(" = " + init_s + ";\n")
                 else:
                     if is_shared:
@@ -3975,6 +4184,16 @@ pub class CGenerator:
                             mut _si_val = self.gen_expr(v)
                             self.w(pad + self.cls_method_c_call(idx_ty_n, "__setitem__", _si_obj, _si_key + ", " + _si_val) + ";\n")
                             return
+                        # list[i] = str_value into a legacy List_str (char* elements):
+                        # assign the raw char* lvalue, not the _tr_str_lit-wrapped rvalue.
+                        if idx_ty_n == "List" or idx_ty_n == "Vec":
+                            mut idx_full_ty = hir_expr_type(idx_obj)
+                            if idx_full_ty.args.len > 0 and _is_str_type(idx_full_ty.args.get(0).read().name):
+                                mut _li_obj = self.gen_expr(idx_obj)
+                                mut _li_key = self.gen_expr(idx_key)
+                                mut _li_lvalue = _li_obj + "->data[(_tr_bounds_check(" + _li_key + ", " + _li_obj + "->len), " + _li_key + ")]"
+                                self.w(pad + _li_lvalue + " = " + self.strz(self.gen_expr(v)) + ";\n")
+                                return
                     case HirExpr.EMethodCall(mc_obj, mc_meth, mc_args, _):
                         # sema lowers bag[i] = v -> SAssign(EMethodCall(bag, "get_index", [i]), v)
                         if mc_meth == "get_index" and mc_args.len > 0:
@@ -4039,9 +4258,12 @@ pub class CGenerator:
             case HirStmt.SRaise(e):
                 if self.cur_throws_ty != "":
                     # throws function: raise becomes return Result_Err
-                    self.w(pad + "return ((Result){.tag=Result_Err, .data.Err.err=(void*)(" + self.gen_expr(e) + ")});\n")
+                    self.w(pad + "return ((Result){.tag=Result_Err, .data.Err.err=" + self.wrap_voidp_arg(e) + "});\n")
                 else:
-                    self.w(pad + "_tr_exc_raise((char*)(" + self.gen_expr(e) + "));\n")
+                    mut raise_s = self.gen_expr(e)
+                    if _is_str_type(hir_expr_type(e).name): raise_s = self.strz(raise_s)
+                    else: raise_s = "(char*)(" + raise_s + ")"
+                    self.w(pad + "_tr_exc_raise(" + raise_s + ");\n")
             case HirStmt.SAssert(cond, msg):
                 if msg as usize == 0 as usize:
                     self.w(pad + "_TR_ASSERT(" + self.gen_expr(cond) + ");\n")
@@ -4099,7 +4321,7 @@ pub class CGenerator:
                     mut exit_ty_n: str = hir_expr_type(exit_actual).name
                     if self.has_method(exit_ty_n, "__exit__"):
                         mut ctx_exit = with_base + "_ctx" + rei.to_str()
-                        self.w(pad + self.cls_method_c_call(exit_ty_n, "__exit__", ctx_exit, "NULL, NULL, NULL") + ";\n")
+                        self.w(pad + self.cls_method_c_call(exit_ty_n, "__exit__", ctx_exit, "_tr_str_lit(\"\"), _tr_str_lit(\"\"), _tr_str_lit(\"\")") + ";\n")
                     rei = rei - 1
             case HirStmt.SAsm(code, outputs, inputs, clobbers):
                 mut asm_s = pad + "__asm__ volatile(\"" + _escape_str_for_c(code) + "\""
@@ -4176,6 +4398,8 @@ pub class CGenerator:
                 self.gen_multi_let(names, is_mut, val, indent)
             case HirStmt.SChanSelect(cs_arms):
                 self.gen_chan_select(cs_arms, indent)
+            case HirStmt.SAutoDrop(adn, adc):
+                self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
             case _: pass
 
     pub def gen_for_loop(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
@@ -4223,13 +4447,15 @@ pub class CGenerator:
             if self.has_method(it_cls, "__next__"):
                 mut next_ret = self.cls_method_ret_ty(it_cls, "__next__")
                 mut elem_ct = "void*"
+                mut elem_ty: AstType = AstType.init("void")
                 if next_ret.name == "Option" and next_ret.args.len > 0:
-                    elem_ct = self.type_to_c(next_ret.args.get(0).read())
+                    elem_ty = next_ret.args.get(0).read()
+                    elem_ct = self.type_to_c(elem_ty)
                 self.w(pad + "{ __auto_type " + tmp + "_it = " + self.cls_method_c_call(iter_ty_n, "__iter__", iter_s, "") + ";\n")
                 self.w(pad + "  while (1) {\n")
                 self.w(pad + "    __auto_type " + tmp + "_nx = " + self.cls_method_c_call(it_cls, "__next__", tmp + "_it", "") + ";\n")
                 self.w(pad + "    if (" + tmp + "_nx.tag == Option_None) break;\n")
-                self.w(pad + "    " + elem_ct + " " + var + " = (" + elem_ct + ")" + tmp + "_nx.data.Some.val;\n")
+                self.w(pad + "    " + elem_ct + " " + var + " = " + self.unwrap_voidp_as(tmp + "_nx.data.Some.val", elem_ty) + ";\n")
                 self.gen_block(body, indent + 2)
                 self.w(pad + "  }\n")
                 self.w(pad + "}\n")
@@ -4271,7 +4497,9 @@ pub class CGenerator:
         # increment at the body's end would skip it on continue -> infinite loop).
         self.w(pad + "{ __auto_type " + tmp + "_col = " + iter_s + ";\n")
         self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < " + tmp + "_col->len; " + tmp + "_i++) {\n")
-        if elem_c == "__auto_type":
+        if elem_c == "TrStr":
+            self.w(pad + "    TrStr " + var + " = _tr_str_lit(" + tmp + "_col->data[" + tmp + "_i]);\n")
+        elif elem_c == "__auto_type":
             self.w(pad + "    __auto_type " + var + " = " + tmp + "_col->data[" + tmp + "_i];\n")
         else:
             self.w(pad + "    " + elem_c + " " + var + " = (" + elem_c + ")" + tmp + "_col->data[" + tmp + "_i];\n")
@@ -4302,7 +4530,9 @@ pub class CGenerator:
                             self.w(pad + "{ __auto_type " + tmp + "_c = " + eu_col_s + ";\n")
                             self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < (long long)" + tmp + "_c->len; " + tmp + "_i++) {\n")
                             self.w(pad + "    long long " + eu_v0 + " = " + tmp + "_i;\n")
-                            if eu_elem_c == "__auto_type":
+                            if eu_elem_c == "TrStr":
+                                self.w(pad + "    TrStr " + eu_v1 + " = _tr_str_lit(" + tmp + "_c->data[" + tmp + "_i]);\n")
+                            elif eu_elem_c == "__auto_type":
                                 self.w(pad + "    __auto_type " + eu_v1 + " = " + tmp + "_c->data[" + tmp + "_i];\n")
                             else:
                                 self.w(pad + "    " + eu_elem_c + " " + eu_v1 + " = (" + eu_elem_c + ")" + tmp + "_c->data[" + tmp + "_i];\n")
@@ -4330,11 +4560,15 @@ pub class CGenerator:
                             self.w(pad + "{ __auto_type " + tmp + "_a = " + za_s + "; __auto_type " + tmp + "_b = " + zb_s + ";\n")
                             self.w(pad + "  long long " + tmp + "_n = (long long)(" + tmp + "_a->len < " + tmp + "_b->len ? " + tmp + "_a->len : " + tmp + "_b->len);\n")
                             self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < " + tmp + "_n; " + tmp + "_i++) {\n")
-                            if za_c == "__auto_type":
+                            if za_c == "TrStr":
+                                self.w(pad + "    TrStr " + zv0 + " = _tr_str_lit(" + tmp + "_a->data[" + tmp + "_i]);\n")
+                            elif za_c == "__auto_type":
                                 self.w(pad + "    __auto_type " + zv0 + " = " + tmp + "_a->data[" + tmp + "_i];\n")
                             else:
                                 self.w(pad + "    " + za_c + " " + zv0 + " = (" + za_c + ")" + tmp + "_a->data[" + tmp + "_i];\n")
-                            if zb_c == "__auto_type":
+                            if zb_c == "TrStr":
+                                self.w(pad + "    TrStr " + zv1 + " = _tr_str_lit(" + tmp + "_b->data[" + tmp + "_i]);\n")
+                            elif zb_c == "__auto_type":
                                 self.w(pad + "    __auto_type " + zv1 + " = " + tmp + "_b->data[" + tmp + "_i];\n")
                             else:
                                 self.w(pad + "    " + zb_c + " " + zv1 + " = (" + zb_c + ")" + tmp + "_b->data[" + tmp + "_i];\n")
@@ -4371,6 +4605,8 @@ pub class CGenerator:
                         self.w(pad + "      long long " + di_v0 + " = " + tmp + "_nd->key;\n")
                         if di_val_c == "void*" or di_val_c == "void":
                             self.w(pad + "      void* " + di_v1 + " = " + tmp + "_nd->value;\n")
+                        elif di_val_c == "TrStr":
+                            self.w(pad + "      TrStr " + di_v1 + " = _tr_str_unbox(" + tmp + "_nd->value);\n")
                         else:
                             self.w(pad + "      " + di_val_c + " " + di_v1 + " = (" + di_val_c + ")(uintptr_t)" + tmp + "_nd->value;\n")
                         self.gen_block(body, indent + 3)
@@ -4385,9 +4621,11 @@ pub class CGenerator:
                         self.w(pad + "  for (size_t " + tmp + "_bi = 0; " + tmp + "_bi < " + tmp + "_d->cap; " + tmp + "_bi++) {\n")
                         self.w(pad + "    _DictNode* " + tmp + "_nd = " + tmp + "_d->buckets[" + tmp + "_bi];\n")
                         self.w(pad + "    while (" + tmp + "_nd) {\n")
-                        self.w(pad + "      char* " + di_v0 + " = " + tmp + "_nd->key;\n")
+                        self.w(pad + "      TrStr " + di_v0 + " = _tr_str_lit(" + tmp + "_nd->key);\n")
                         if di_val_c == "void*" or di_val_c == "void":
                             self.w(pad + "      void* " + di_v1 + " = " + tmp + "_nd->value;\n")
+                        elif di_val_c == "TrStr":
+                            self.w(pad + "      TrStr " + di_v1 + " = _tr_str_unbox(" + tmp + "_nd->value);\n")
                         else:
                             self.w(pad + "      " + di_val_c + " " + di_v1 + " = (" + di_val_c + ")(uintptr_t)" + tmp + "_nd->value;\n")
                         self.gen_block(body, indent + 3)
@@ -4403,11 +4641,20 @@ pub class CGenerator:
         self.w(pad + "{ __auto_type " + tmp + "_col = " + fu_iter_s + ";\n")
         self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < (long long)" + tmp + "_col->len; " + tmp + "_i++) {\n")
         self.w(pad + "    TrTuple* " + tmp + "_pair = (TrTuple*)" + tmp + "_col->data[" + tmp + "_i];\n")
+        mut fu_elem_ty = hir_expr_type(iter)
+        mut fu_has_tuple_ty = fu_elem_ty.args.len > 0
         mut fu_pi = 0
         while fu_pi < vars.len:
             mut fu_vn = _safe_c_varname(vars.get(fu_pi))
             self.decl_vars.insert(vars.get(fu_pi), true)
-            self.w(pad + "    long long " + fu_vn + " = " + tmp + "_pair->data[" + fu_pi.to_str() + "];\n")
+            mut fu_elem_n = ""
+            if fu_has_tuple_ty:
+                mut fu_tt_r = fu_elem_ty.args.get(0).read()
+                if fu_tt_r.args.len > fu_pi: fu_elem_n = self.resolve_generic_prim(fu_tt_r.args.get(fu_pi).read().name)
+            if _is_str_type(fu_elem_n):
+                self.w(pad + "    TrStr " + fu_vn + " = _tr_str_unbox((void*)(uintptr_t)" + tmp + "_pair->data[" + fu_pi.to_str() + "]);\n")
+            else:
+                self.w(pad + "    long long " + fu_vn + " = " + tmp + "_pair->data[" + fu_pi.to_str() + "];\n")
             fu_pi = fu_pi + 1
         self.gen_block(body, indent + 2)
         self.w(pad + "  }\n")
@@ -4431,7 +4678,11 @@ pub class CGenerator:
             while i < catches.len:
                 mut cc = catches.get(i).read()
                 if cc.err_name != "":
-                    self.w(pad + "        char* " + cc.err_name + " = " + em + ";\n")
+                    # sema types the except-binding as `str` (TrStr); the
+                    # exception mechanism itself stores a raw char* message.
+                    # Wrap as a borrowed TrStr (rc=NULL) - the underlying
+                    # message is a literal/owned-elsewhere C string.
+                    self.w(pad + "        TrStr " + cc.err_name + " = _tr_str_lit(" + em + ");\n")
                     self.w(pad + "        (void)" + cc.err_name + ";\n")
                 self.gen_block(cc.body, indent + 2)
                 i = i + 1
@@ -4878,13 +5129,13 @@ pub class CGenerator:
                             mut found_s = false
                             mut sep_p = 0
                             while si2 <= nlen - 7 and not found_s:
-                                if _tr_str_slice(mn, si2, si2 + 7) == "__MONO_":
+                                if mn.slice(si2, si2 + 7) == "__MONO_":
                                     found_s = true
                                     sep_p = si2
                                 si2 = si2 + 1
                             if found_s:
-                                mut gfunc_n = _tr_str_slice(mn, 0, sep_p)
-                                mut gfunc_t = _tr_str_slice(mn, sep_p + 7, nlen)
+                                mut gfunc_n = mn.slice(0, sep_p)
+                                mut gfunc_t = mn.slice(sep_p + 7, nlen)
                                 if self.functions.contains(gfunc_n):
                                     self.ensure_mono_func(gfunc_n, gfunc_t)
                     case _: pass
@@ -5516,6 +5767,23 @@ pub class CGenerator:
                                 out.append("\n")
                         wii = wii + 1
             wi = wi + 1
+
+        # -- Module-level `mut`/`let` globals: extern declarations -------------
+        # Definitions (with initializers, run in main()) are emitted by
+        # generate_module_c's "Phase 3.6" only into the entry module's C file.
+        # Every other module's C file needs an `extern` declaration to
+        # reference these globals, so declare them here in the shared header.
+        mut hgi = 0
+        while hgi < prog.top_level_stmts.len:
+            match prog.top_level_stmts.get(hgi).read():
+                case HirStmt.SLet(hgn, _, _, _, _, hgty, hgval):
+                    mut hg_cty = self.type_to_c(hgty)
+                    if hg_cty == "void" or hg_cty == "__auto_type":
+                        if hgval as usize != 0 as usize: hg_cty = self.type_to_c(hir_expr_type(hgval))
+                    if hg_cty == "void" or hg_cty == "__auto_type": hg_cty = "long long"
+                    out.append("extern " + hg_cty + " " + hgn + ";\n")
+                case _: pass
+            hgi = hgi + 1
 
         # Restore all temporary buffers
         self.buf           = old_buf

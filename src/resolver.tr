@@ -20,6 +20,12 @@ from lexer import Lexer
 from parser import Parser
 from ast import Program, Decl, FunctionDef, ClassDef, EnumDef, InterfaceDef, ImportItem
 
+extern "C":
+    def _tr_dir_exists(path: str) -> bool
+    def _tr_opendir(path: str) -> Pointer[void]
+    def _tr_readdir(handle: Pointer[void]) -> str
+    def _tr_closedir(handle: Pointer[void])
+
 # --- Visibility helper --------------------------------------------------------
 
 pub def decl_is_pub(d: Decl) -> bool:
@@ -97,7 +103,7 @@ extend ModuleResolver:
             # Use unsafe slice to copy the directory prefix without a StringBuilder.
             mut dir_str = ""
             unsafe:
-                dir_str = _tr_str_slice(main_path, 0, dir_end)
+                dir_str = main_path.slice(0, dir_end)
             self.search_paths.push(dir_str)
             # Also add parent and grandparent of the source file directory.
             # This allows finding the repo-root std lib (e.g. core/) when the
@@ -112,7 +118,7 @@ extend ModuleResolver:
             if par_end > 0:
                 mut parent_dir = ""
                 unsafe:
-                    parent_dir = _tr_str_slice(dir_str, 0, par_end)
+                    parent_dir = dir_str.slice(0, par_end)
                 self.search_paths.push(parent_dir)
                 mut gp_end = 0
                 mut gj = 0
@@ -124,8 +130,25 @@ extend ModuleResolver:
                 if gp_end > 0:
                     mut gp_dir = ""
                     unsafe:
-                        gp_dir = _tr_str_slice(parent_dir, 0, gp_end)
+                        gp_dir = parent_dir.slice(0, gp_end)
                     self.search_paths.push(gp_dir)
+
+                # Auto-discover vendored taupkg dependencies: when a project is
+                # built via `taupkg build`, deps are copied into
+                # <build_dir>/<pkgname>/src/. Add each such <pkgname>/src as a
+                # search path so the dependency's own sibling-relative imports
+                # (e.g. `from app import App` inside watax.tr) resolve, and so
+                # `from <pkgname> import X` finds <build_dir>/<pkgname>/src/<pkgname>.tr.
+                mut vh = _tr_opendir(parent_dir)
+                if vh as usize != 0 as usize:
+                    mut vname = _tr_readdir(vh)
+                    while vname != "":
+                        if vname != "." and vname != "..":
+                            mut vpkg_src = parent_dir + "/" + vname + "/src"
+                            if _tr_dir_exists(vpkg_src):
+                                self.search_paths.push(vpkg_src)
+                        vname = _tr_readdir(vh)
+                    _tr_closedir(vh)
         self.resolve_file(main_path, true)
         mut p = Program.init()
         mut i = 0
@@ -199,7 +222,7 @@ extend ModuleResolver:
         mut n = 0
         mut p = mod_path as Pointer[char]
         while p.offset(n).read() as int != 0: n = n + 1
-        mut dir_path = _tr_str_slice(mod_path, 0, n)
+        mut dir_path = mod_path.slice(0, n)
         mut bp = dir_path as Pointer[char]
         mut j = 0
         while j < n:
@@ -223,7 +246,7 @@ extend ModuleResolver:
                 self.resolve_file(pkg_path, false)
                 if not already:
                     self.mod_dot_paths.push(mod_path)
-                    self.mod_file_paths.push(StringObj.init(pkg_path).as_str())
+                    self.mod_file_paths.push(pkg_path)
                 self.current_mod = saved_mod
                 return
  
@@ -234,7 +257,7 @@ extend ModuleResolver:
                 self.resolve_file(flat_path, false)
                 if not already:
                     self.mod_dot_paths.push(mod_path)
-                    self.mod_file_paths.push(StringObj.init(flat_path).as_str())
+                    self.mod_file_paths.push(flat_path)
                 self.current_mod = saved_mod
                 return
 

@@ -75,7 +75,7 @@ pub def strip_extension(path: str) -> str:
     mut end = len
     while end > 0:
         if p.offset(end - 1).read() as int == 46:
-            return _tr_str_slice(path, 0, end - 1)
+            return path.slice(0, end - 1)
         end = end - 1
     return path
 
@@ -179,7 +179,7 @@ pub def dir_of_path(path: str) -> str:
     mut end = len
     while end > 0:
         mut c = p.offset(end - 1).read() as int
-        if c == 47 or c == 92: return _tr_str_slice(path, 0, end)
+        if c == 47 or c == 92: return path.slice(0, end)
         end = end - 1
     return "./"
 
@@ -189,7 +189,7 @@ pub def strip_trailing_sep_inline(s: str) -> str:
     while p.offset(n).read() as int != 0: n = n + 1
     if n == 0: return s
     mut last = p.offset(n - 1).read() as int
-    if last == 47 or last == 92: return _tr_str_slice(s, 0, n - 1)
+    if last == 47 or last == 92: return s.slice(0, n - 1)
     return s
 
 pub def read_runtime_header(bin_path: str, input_path: str) -> str:
@@ -239,7 +239,7 @@ pub def strip_trailing_sep(s: str) -> str:
     while p.offset(n).read() as int != 0: n = n + 1
     if n == 0: return s
     mut last = p.offset(n - 1).read() as int
-    if last == 47 or last == 92: return _tr_str_slice(s, 0, n - 1)
+    if last == 47 or last == 92: return s.slice(0, n - 1)
     return s
 
 # Walk a PATH-style env-var string and call add_fn for each non-empty entry.
@@ -278,7 +278,7 @@ pub def get_path_env_entry(s: str, idx: int) -> str:
         if i < n: c = p.offset(i).read() as int
         if c == sep or i == n:
             if i > start:
-                if cur == idx: return _tr_str_slice(s, start, i)
+                if cur == idx: return s.slice(start, i)
                 cur = cur + 1
             start = i + 1
         i = i + 1
@@ -296,7 +296,7 @@ pub def path_to_native(s: str) -> str:
     mut n = 0
     mut p = s as Pointer[char]
     while p.offset(n).read() as int != 0: n = n + 1
-    mut buf = _tr_str_slice(s, 0, n)
+    mut buf = s.slice(0, n)
     mut bp = buf as Pointer[char]
     mut j = 0
     while j < n:
@@ -310,7 +310,7 @@ pub def dot_to_safe(s: str) -> str:
     mut n = 0
     mut p = s as Pointer[char]
     while p.offset(n).read() as int != 0: n = n + 1
-    mut buf = _tr_str_slice(s, 0, n)
+    mut buf = s.slice(0, n)
     mut bp = buf as Pointer[char]
     mut j = 0
     while j < n:
@@ -330,7 +330,7 @@ pub def dot_last_seg(s: str) -> str:
         if p.offset(j).read() as int == 46: last_dot = j
         j = j + 1
     if last_dot < 0: return s
-    return _tr_str_slice(s, last_dot + 1, n)
+    return s.slice(last_dot + 1, n)
 
 # Filename without directory: "dir/foo.tr" -> "foo.tr"
 pub def get_filename(path: str) -> str:
@@ -344,7 +344,7 @@ pub def get_filename(path: str) -> str:
         if c == 47 or c == 92: last_sep = j
         j = j + 1
     if last_sep < 0: return path
-    return _tr_str_slice(path, last_sep + 1, n)
+    return path.slice(last_sep + 1, n)
 
 # Count dots to get depth
 pub def get_dot_depth(dot_path: str) -> int:
@@ -371,10 +371,10 @@ pub def ensure_builtin_dirs(build_dir: str, dot_path: str) -> str:
         mut c = p.offset(i).read() as int
         if c == 0:
             # Last segment is the file name
-            mut last_seg = _tr_str_slice(dot_path, start, i)
+            mut last_seg = dot_path.slice(start, i)
             return current + last_seg + ".c"
         if c == 46: # '.'
-            mut seg = _tr_str_slice(dot_path, start, i)
+            mut seg = dot_path.slice(start, i)
             current = current + seg + "/"
             make_dir(current)
             start = i + 1
@@ -587,7 +587,7 @@ pub def main(args: Vec[str]):
             link_paths.push(args.get(i))
         elif arg == "-l" and i + 1 < args.len:
             i = i + 1
-            lib_flags.push(StringObj.init("-l" + args.get(i)).as_str())
+            lib_flags.push("-l" + args.get(i))
         elif str_starts_with(arg, "-l") and arg != "-l":
             lib_flags.push(arg)
         elif arg == "-O0": opt_level = "0"
@@ -754,7 +754,7 @@ pub def main(args: Vec[str]):
 
         mut mod_c = c_gen.generate_module_c(hir, class_set, fn_set, depth)
         write_file(c_path, mod_c)
-        all_c_files.push(StringObj.init(c_path).as_str())
+        all_c_files.push(c_path)
         mi = mi + 1
 
     # -- Main module C file (main.c) -------------------------------------------
@@ -802,7 +802,7 @@ pub def main(args: Vec[str]):
     mut main_c      = c_gen.generate_main_c(hir, main_class_set, main_fn_set)
     mut main_c_path = build_dir + "main.c"
     write_file(main_c_path, main_c)
-    all_c_files.push(StringObj.init(main_c_path).as_str())
+    all_c_files.push(main_c_path)
 
     if emit_mode == "c":
         print("Modular C output written to: " + build_dir)
@@ -832,7 +832,7 @@ pub def main(args: Vec[str]):
             if en_p.offset(en_len - 3).read() as int == 101:
                 if en_p.offset(en_len - 2).read() as int == 120:
                     if en_p.offset(en_len - 1).read() as int == 101:
-                        exe_name = _tr_str_slice(exe_name, 0, en_len - 4)
+                        exe_name = exe_name.slice(0, en_len - 4)
 
     mut exe_ext = ".exe"
     if not _tr_is_windows():

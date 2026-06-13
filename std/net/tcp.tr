@@ -168,7 +168,10 @@ extend TcpListener:
         return l
 
     pub def listen(host: str, port: int) -> TcpListener:
-        return TcpListener.bind(host, port, 128)
+        # 1024 (rather than 128) so a burst of near-simultaneous connections
+        # (e.g. a high-concurrency keep-alive load test) doesn't overflow the
+        # kernel's accept queue and get connection-reset before accept().
+        return TcpListener.bind(host, port, 1024)
 
     # Block until a client connects.
     pub def accept(self) -> TcpStream:

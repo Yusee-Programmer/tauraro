@@ -10,6 +10,7 @@ extern "C":
     def _tr_c_free(ptr: Pointer[char])
     def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
     def _tr_strlen(s: str) -> int
+    def _tr_str_lit(s: Pointer[char]) -> str
 
 pub class StringObj:
     pub data: Pointer[char]
@@ -29,7 +30,7 @@ extend StringObj:
         return obj
 
     pub def as_str(self) -> str:
-        return self.data as str
+        return _tr_str_lit(self.data)
 
     pub def append(self, other: str):
         mut slen = _tr_strlen(other)
@@ -122,5 +123,12 @@ extend StringBuilder:
         self.buf.len = 0
         unsafe: self.buf.data.offset(0).write('\0')
 
+    # Releases the StringObj's data buffer plus the heap-allocated StringObj
+    # struct itself (self.buf is a pointer) and the StringBuilder struct
+    # (self) - StringBuilder.init()/StringObj.init() each heap-allocate their
+    # struct, so a plain self.buf.destroy() leaked both small structs.
     pub def free(self):
         self.buf.destroy()
+        unsafe:
+            _tr_c_free(self.buf as Pointer[char])
+            _tr_c_free(self as Pointer[char])

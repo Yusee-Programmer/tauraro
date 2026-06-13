@@ -1314,7 +1314,15 @@ extend Parser:
                     e = box_expr(Expr.ECall(e, self.parse_arg_list()))
                 case Token.LBracket:
                     self.pos = self.pos + 1
-                    mut idx = self.parse_expr()
+                    # A generic argument that is itself a function-pointer type
+                    # (e.g. `Vec[def(HttpConn) -> bool].init(4)`) cannot be
+                    # parsed as a value expression - `def` doesn't start one.
+                    # Parse it as a type and carry it via ETypeArg.
+                    mut idx: Pointer[Expr] = 0 as Pointer[Expr]
+                    if self.peek() == Token.KwDef:
+                        idx = box_expr(Expr.ETypeArg(box_asttype(self.parse_type())))
+                    else:
+                        idx = self.parse_expr()
                     # Consume extra comma-separated type args (e.g. Map[str, T])
                     while self.peek() == Token.Comma:
                         self.pos = self.pos + 1
