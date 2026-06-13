@@ -142,6 +142,8 @@ pub class CGenerator:
     pub method_owners:  Map[str, bool]  # "ClassOrEnumName#method" -> true (extend methods, incl. enums)
     pub decl_vars:      Map[str, bool]
     pub str_local_names: Map[str, bool]  # TrStr-typed locals declared via SLet in current function (retain/release tracked)
+    pub coll_local_sfx: Map[str, str]    # List/Vec local name -> list_sfx (e.g. "i64"/"TrStr") for SAutoDrop's List_<sfx>_free; Dict/Map/Set don't need a suffix (Dict_free)
+    pub coll_local_idict: Map[str, bool] # Dict/Map/Set local name -> true if int-keyed (TrIDict*/_TrISet*, freed via _tr_idict_free instead of Dict_free)
     pub type_subst:     Map[str, str]   # T -> "long long" during mono gen
     pub mono_done:      Map[str, bool]  # "Vec_i64" -> true (prevents duplicate gen)
     pub list_type_done: Map[str, bool]  # "Token" -> true (prevents duplicate list gen)
@@ -185,6 +187,8 @@ pub class CGenerator:
         g.method_owners = Map[str, bool].init(64)
         g.decl_vars     = Map[str, bool].init(64)
         g.str_local_names = Map[str, bool].init(16)
+        g.coll_local_sfx = Map[str, str].init(16)
+        g.coll_local_idict = Map[str, bool].init(16)
         g.type_subst    = Map[str, str].init(8)
         g.mono_done     = Map[str, bool].init(32)
         g.list_type_done = Map[str, bool].init(16)
@@ -650,6 +654,8 @@ pub class CGenerator:
             self.cur_func  = m.name
             self.decl_vars = Map[str, bool].init(64)
             self.str_local_names = Map[str, bool].init(16)
+            self.coll_local_sfx = Map[str, str].init(16)
+            self.coll_local_idict = Map[str, bool].init(16)
             self.seed_params(m)
             mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
             self.w(sig + " {\n")
@@ -764,6 +770,8 @@ pub class CGenerator:
         self.cur_func = mono_fname
         self.decl_vars = Map[str, bool].init(64)
         self.str_local_names = Map[str, bool].init(16)
+        self.coll_local_sfx = Map[str, str].init(16)
+        self.coll_local_idict = Map[str, bool].init(16)
         self.seed_params(f)
         self.w(sig + " {\n")
         self.gen_func_body(f.body, 1)
@@ -4124,6 +4132,14 @@ pub class CGenerator:
                     if _init_sfx != "ptr":
                         c_ty = "List_" + self.list_sfx(_init_sfx) + "*"
                 if c_ty == "void" and v as usize != 0 as usize: c_ty = "__auto_type"
+                # Track the List_<sfx>* suffix for this local so SAutoDrop can
+                # call the matching List_<sfx>_free (only List/Vec need a
+                # suffix; Dict/Map/Set are uniformly TrMap*/_TrSet*, freed via
+                # Dict_free regardless of element type).
+                if (ty.name == "List" or ty.name == "Vec") and c_ty.starts_with("List_") and c_ty.ends_with("*"):
+                    self.coll_local_sfx.insert(n, c_ty.slice(5, c_ty.len() - 1))
+                elif (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty == "TrIDict*" or c_ty == "_TrISet*"):
+                    self.coll_local_idict.insert(n, true)
                 # ? propagation in let binding
                 if v as usize != 0 as usize:
                     match v.read():
@@ -4539,6 +4555,15 @@ pub class CGenerator:
                 if adc == "str":
                     if self.str_local_names.contains(adn):
                         self.w(pad + "_tr_str_release(" + _safe_c_varname(adn) + ");\n")
+                elif adc == "List" or adc == "Vec":
+                    if self.coll_local_sfx.contains(adn):
+                        mut _ad_sfx = self.coll_local_sfx.get(adn)
+                        self.w(pad + "List_" + _ad_sfx + "_free(" + _safe_c_varname(adn) + ");\n")
+                elif adc == "Dict" or adc == "Map" or adc == "Set":
+                    if self.coll_local_idict.contains(adn):
+                        self.w(pad + "_tr_idict_free(" + _safe_c_varname(adn) + ");\n")
+                    else:
+                        self.w(pad + "Dict_free(" + _safe_c_varname(adn) + ");\n")
                 else:
                     self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
             case _: pass
@@ -5533,6 +5558,8 @@ pub class CGenerator:
                     self.cur_throws_ty = m.throws_ty.name
                     self.decl_vars = Map[str, bool].init(64)
                     self.str_local_names = Map[str, bool].init(16)
+                    self.coll_local_sfx = Map[str, str].init(16)
+                    self.coll_local_idict = Map[str, bool].init(16)
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(m)
                     self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
@@ -5555,6 +5582,8 @@ pub class CGenerator:
                 self.cur_throws_ty = m.throws_ty.name
                 self.decl_vars = Map[str, bool].init(64)
                 self.str_local_names = Map[str, bool].init(16)
+                self.coll_local_sfx = Map[str, str].init(16)
+                self.coll_local_idict = Map[str, bool].init(16)
                 self.shared_vars = Map[str, str].init(8)
                 self.seed_params(m)
                 self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
@@ -5586,6 +5615,8 @@ pub class CGenerator:
                     self.cur_throws_ty = f.throws_ty.name
                     self.decl_vars = Map[str, bool].init(64)
                     self.str_local_names = Map[str, bool].init(16)
+                    self.coll_local_sfx = Map[str, str].init(16)
+                    self.coll_local_idict = Map[str, bool].init(16)
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(f)
                     self.w(self.get_inline_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
@@ -5642,6 +5673,8 @@ pub class CGenerator:
                 self.cur_func  = "main"
                 self.decl_vars = Map[str, bool].init(64)
                 self.str_local_names = Map[str, bool].init(16)
+                self.coll_local_sfx = Map[str, str].init(16)
+                self.coll_local_idict = Map[str, bool].init(16)
                 self.gen_func_body(f.body, 1)
                 self.cur_func  = ""
             i = i + 1
@@ -6093,6 +6126,8 @@ pub class CGenerator:
                         self.cur_func  = m.name
                         self.decl_vars = Map[str, bool].init(64)
                         self.str_local_names = Map[str, bool].init(16)
+                        self.coll_local_sfx = Map[str, str].init(16)
+                        self.coll_local_idict = Map[str, bool].init(16)
                         self.seed_params(m)
                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
                         self.gen_func_body(m.body, 1)
@@ -6114,6 +6149,8 @@ pub class CGenerator:
                         self.cur_func  = m.name
                         self.decl_vars = Map[str, bool].init(64)
                         self.str_local_names = Map[str, bool].init(16)
+                        self.coll_local_sfx = Map[str, str].init(16)
+                        self.coll_local_idict = Map[str, bool].init(16)
                         self.seed_params(m)
                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
                         self.gen_func_body(m.body, 1)
@@ -6147,6 +6184,8 @@ pub class CGenerator:
                         self.cur_class = f.class_name
                         self.decl_vars = Map[str, bool].init(64)
                         self.str_local_names = Map[str, bool].init(16)
+                        self.coll_local_sfx = Map[str, str].init(16)
+                        self.coll_local_idict = Map[str, bool].init(16)
                         self.seed_params(f)
                         self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
                         self.gen_func_body(f.body, 1)
@@ -6190,6 +6229,8 @@ pub class CGenerator:
                                         self.cur_throws_ty = m.throws_ty.name
                                         self.decl_vars = Map[str, bool].init(64)
                                         self.str_local_names = Map[str, bool].init(16)
+                                        self.coll_local_sfx = Map[str, str].init(16)
+                                        self.coll_local_idict = Map[str, bool].init(16)
                                         self.shared_vars = Map[str, str].init(8)
                                         self.seed_params(m)
                                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
@@ -6218,6 +6259,8 @@ pub class CGenerator:
                                         self.cur_throws_ty = m.throws_ty.name
                                         self.decl_vars = Map[str, bool].init(64)
                                         self.str_local_names = Map[str, bool].init(16)
+                                        self.coll_local_sfx = Map[str, str].init(16)
+                                        self.coll_local_idict = Map[str, bool].init(16)
                                         self.shared_vars = Map[str, str].init(8)
                                         self.seed_params(m)
                                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
@@ -6283,6 +6326,8 @@ pub class CGenerator:
                                 self.cur_throws_ty = f.throws_ty.name
                                 self.decl_vars = Map[str, bool].init(64)
                                 self.str_local_names = Map[str, bool].init(16)
+                                self.coll_local_sfx = Map[str, str].init(16)
+                                self.coll_local_idict = Map[str, bool].init(16)
                                 self.shared_vars = Map[str, str].init(8)
                                 self.seed_params(f)
                                 self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
@@ -6340,6 +6385,8 @@ pub class CGenerator:
                         self.cur_func  = "main"
                         self.decl_vars = Map[str, bool].init(64)
                         self.str_local_names = Map[str, bool].init(16)
+                        self.coll_local_sfx = Map[str, str].init(16)
+                        self.coll_local_idict = Map[str, bool].init(16)
                         self.gen_func_body(f.body, 1)
                         self.cur_func  = ""
                 i = i + 1

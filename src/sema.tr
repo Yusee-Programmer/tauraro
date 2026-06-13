@@ -35,6 +35,7 @@ pub class Symbol:
     pub decl_block_depth: int # auto-drop: nested-block depth (if/while bodies) at declaration; only depth==0 is droppable by the enclosing scope
     pub decl_block_id: int    # auto-drop: id of the innermost if/while C block open at declaration within the current scope; 0 = scope top-level
     pub str_escaped: bool     # auto-drop: a `str` local passed as a call/method-call ARGUMENT - may be aliased into a legacy List_str/Dict/Set (#52 not yet migrated); excluded from auto-drop to avoid UAF
+    pub coll_escaped: bool    # auto-drop: a List/Vec/Dict/Map/Set local that is ever read in a non-receiver position (call/method arg, assigned to another var, returned, stored in a literal) - raw unrefcounted pointer, so any alias must disable auto-free to avoid UAF
 
 extend Symbol:
     pub def init(name: str, kind: SymbolKind, ty: Pointer[AstType]) -> Symbol:
@@ -58,6 +59,7 @@ extend Symbol:
         s.decl_block_depth = 0
         s.decl_block_id = 0
         s.str_escaped = false
+        s.coll_escaped = false
         return s
 
 pub class Scope:
@@ -767,6 +769,18 @@ extend Sema:
 
     # -- Auto-drop: compiler-inserted .free() for owned class-typed locals -----
 
+    # True for element/key types whose List_<sfx>/Dict free function fully
+    # releases the stored values (primitives, or `str` via List_TrStr_free /
+    # Dict_free's strdup'd keys). Used to gate collection auto-drop to
+    # specializations with a known-correct, fully-releasing free function.
+    pub def _coll_elem_droppable(self, n: str) -> bool:
+        if n == "str": return true
+        if n == "int" or n == "float" or n == "bool" or n == "char": return true
+        if n == "i8" or n == "i16" or n == "i32" or n == "i64": return true
+        if n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize": return true
+        if n == "f32" or n == "f64": return true
+        return false
+
     # A local is auto-dropped at scope exit if it is a user-defined class with a
     # 'free' method, was never moved/returned/borrowed-out, was never freed
     # manually, and was definitely initialized on every path.
@@ -788,6 +802,32 @@ extend Sema:
             if sym.active_borrows > 0: return false
             if not sym.is_init or sym.is_maybe_init: return false
             return true
+        # List/Vec/Dict/Map/Set locals: raw unrefcounted heap pointers, so only
+        # auto-drop when this local NEVER appears in a non-receiver position
+        # (coll_escaped) - i.e. no other name can alias the same pointer - and
+        # only for "POD" specializations where the runtime free function fully
+        # releases all stored elements/keys/values (see _coll_elem_droppable).
+        # Dict/Map[*, str] is excluded: boxed TrStr values aren't released by
+        # Dict_free (#54, pre-existing gap, not made worse here).
+        if tn == "List" or tn == "Vec" or tn == "Dict" or tn == "Map" or tn == "Set":
+            if sym.coll_escaped: return false
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if sym.active_borrows > 0: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            mut targs = sym.ty.read().args
+            if tn == "Dict" or tn == "Map":
+                if targs.len < 2: return false
+                mut kt = targs.get(0).read().name
+                mut vt = targs.get(1).read().name
+                if not self._coll_elem_droppable(kt): return false
+                if vt == "str": return false
+                if not self._coll_elem_droppable(vt): return false
+                return true
+            else:
+                if targs.len < 1: return false
+                mut et = targs.get(0).read().name
+                if not self._coll_elem_droppable(et): return false
+                return true
         if not self.classes.contains(tn): return false
         if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Box" or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Option" or tn == "Result" or tn == "Chan": return false
         # StringBuilder/StringObj methods like as_str()/to_str() can return a
@@ -1053,6 +1093,124 @@ extend Sema:
                 self.mark_escaped_str_args(inner)
                 self.mark_escaped_str_args(to)
             case HirExpr.EYield(inner, _): self.mark_escaped_str_args(inner)
+            case _: pass
+
+    pub def mark_coll_escaped(self, name: str):
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name):
+                mut sym = self.scopes.get(i).variables.get(name)
+                sym.coll_escaped = true
+                self.scopes.get(i).variables.insert(name, sym)
+                return
+            i = i - 1
+
+    # If `e` is a bare List/Vec/Dict/Map/Set-typed identifier, mark its symbol
+    # as escaped: it is being read in a non-receiver position (call/method
+    # arg, assignment/let RHS, return value, literal element), so another
+    # name may now hold/alias the same raw pointer. Auto-freeing it would
+    # risk a use-after-free or double-free, so it's excluded from auto-drop
+    # entirely (becomes a leak instead, same trade-off as str_escaped).
+    pub def mark_coll_arg(self, e: Pointer[HirExpr]):
+        if e as usize == 0 as usize: return
+        if _is_invalid_ptr(e as usize): return
+        match e.read():
+            case HirExpr.EIdent(nm, _, _):
+                mut tn = hir_expr_type(e).name
+                if tn == "List" or tn == "Vec" or tn == "Dict" or tn == "Map" or tn == "Set": self.mark_coll_escaped(nm)
+            case _: pass
+
+    # Recursively scan a lowered expression for any bare List/Vec/Dict/Map/Set
+    # identifier appearing in a non-receiver position and mark it escaped.
+    # Unlike mark_escaped_str_args, there are NO retain-on-insert exceptions:
+    # collections are raw unrefcounted pointers, so passing one as an argument
+    # (even append/insert) may store/capture the pointer itself.
+    pub def mark_escaped_coll_args(self, e: Pointer[HirExpr]):
+        if e as usize == 0 as usize: return
+        if _is_invalid_ptr(e as usize): return
+        match e.read():
+            case HirExpr.EBinOp(_, l, r, _):
+                self.mark_coll_arg(l)
+                self.mark_escaped_coll_args(l)
+                self.mark_coll_arg(r)
+                self.mark_escaped_coll_args(r)
+            case HirExpr.EUnaryOp(_, inner, _):
+                self.mark_coll_arg(inner)
+                self.mark_escaped_coll_args(inner)
+            case HirExpr.ECall(callee, args, _):
+                self.mark_escaped_coll_args(callee)
+                mut i = 0
+                while i < args.len:
+                    self.mark_coll_arg(args.get(i))
+                    self.mark_escaped_coll_args(args.get(i))
+                    i = i + 1
+            case HirExpr.EMethodCall(obj, _, args, _):
+                # `obj` is the receiver (e.g. `l.append(...)`) - reading it to
+                # invoke a method on it doesn't alias the pointer elsewhere,
+                # so it is NOT marked here (only recursed into, for nested
+                # exprs). Every argument, however, IS marked.
+                self.mark_escaped_coll_args(obj)
+                mut i = 0
+                while i < args.len:
+                    self.mark_coll_arg(args.get(i))
+                    self.mark_escaped_coll_args(args.get(i))
+                    i = i + 1
+            case HirExpr.EPropAccess(obj, _, _): self.mark_escaped_coll_args(obj)
+            case HirExpr.EIndex(obj, idx, _):
+                self.mark_escaped_coll_args(obj)
+                self.mark_coll_arg(idx)
+                self.mark_escaped_coll_args(idx)
+            case HirExpr.ECast(inner, _):
+                self.mark_coll_arg(inner)
+                self.mark_escaped_coll_args(inner)
+            case HirExpr.ETryExpr(inner, _):
+                self.mark_coll_arg(inner)
+                self.mark_escaped_coll_args(inner)
+            case HirExpr.EIfElse(c, t, f, _):
+                self.mark_escaped_coll_args(c)
+                self.mark_coll_arg(t)
+                self.mark_escaped_coll_args(t)
+                self.mark_coll_arg(f)
+                self.mark_escaped_coll_args(f)
+            case HirExpr.EList(items, _):
+                mut i = 0
+                while i < items.len:
+                    self.mark_coll_arg(items.get(i))
+                    self.mark_escaped_coll_args(items.get(i))
+                    i = i + 1
+            case HirExpr.ESet(items, _):
+                mut i = 0
+                while i < items.len:
+                    self.mark_coll_arg(items.get(i))
+                    self.mark_escaped_coll_args(items.get(i))
+                    i = i + 1
+            case HirExpr.ETuple(items, _):
+                mut i = 0
+                while i < items.len:
+                    self.mark_coll_arg(items.get(i))
+                    self.mark_escaped_coll_args(items.get(i))
+                    i = i + 1
+            case HirExpr.EDict(keys, vals, _):
+                mut i = 0
+                while i < keys.len:
+                    self.mark_coll_arg(keys.get(i))
+                    self.mark_escaped_coll_args(keys.get(i))
+                    self.mark_coll_arg(vals.get(i))
+                    self.mark_escaped_coll_args(vals.get(i))
+                    i = i + 1
+            case HirExpr.ERange(s, en, _, _):
+                self.mark_escaped_coll_args(s)
+                self.mark_escaped_coll_args(en)
+            case HirExpr.EAwait(inner, _):
+                self.mark_coll_arg(inner)
+                self.mark_escaped_coll_args(inner)
+            case HirExpr.EAwaitTimeout(inner, to, _):
+                self.mark_coll_arg(inner)
+                self.mark_escaped_coll_args(inner)
+                self.mark_escaped_coll_args(to)
+            case HirExpr.EYield(inner, _):
+                self.mark_coll_arg(inner)
+                self.mark_escaped_coll_args(inner)
             case _: pass
 
     # True if `b`'s last statement already transfers control (return/break/continue),
@@ -1613,14 +1771,29 @@ extend Sema:
             # this statement as "escaped" (excluded from auto-drop) - see
             # mark_escaped_str_args.
             match _hs.read():
-                case HirStmt.SExpr(_es_e): self.mark_escaped_str_args(_es_e)
-                case HirStmt.SLet(_, _, _, _, _, _, _sl_v): self.mark_escaped_str_args(_sl_v)
+                case HirStmt.SExpr(_es_e):
+                    self.mark_escaped_str_args(_es_e)
+                    self.mark_escaped_coll_args(_es_e)
+                case HirStmt.SLet(_, _, _, _, _, _, _sl_v):
+                    self.mark_escaped_str_args(_sl_v)
+                    self.mark_coll_arg(_sl_v)
+                    self.mark_escaped_coll_args(_sl_v)
                 case HirStmt.SAssign(_sa_t, _sa_v):
                     self.mark_escaped_str_args(_sa_t)
                     self.mark_escaped_str_args(_sa_v)
-                case HirStmt.SReturn(_sr_e): self.mark_escaped_str_args(_sr_e)
-                case HirStmt.SIf(_si_c, _, _): self.mark_escaped_str_args(_si_c)
-                case HirStmt.SWhile(_sw_c, _): self.mark_escaped_str_args(_sw_c)
+                    self.mark_escaped_coll_args(_sa_t)
+                    self.mark_coll_arg(_sa_v)
+                    self.mark_escaped_coll_args(_sa_v)
+                case HirStmt.SReturn(_sr_e):
+                    self.mark_escaped_str_args(_sr_e)
+                    self.mark_coll_arg(_sr_e)
+                    self.mark_escaped_coll_args(_sr_e)
+                case HirStmt.SIf(_si_c, _, _):
+                    self.mark_escaped_str_args(_si_c)
+                    self.mark_escaped_coll_args(_si_c)
+                case HirStmt.SWhile(_sw_c, _):
+                    self.mark_escaped_str_args(_sw_c)
+                    self.mark_escaped_coll_args(_sw_c)
                 case _: pass
             # Auto-drop: inject SAutoDrop stmts for all currently-open scopes
             # right before a control-transfer statement, so owned locals are
