@@ -2887,7 +2887,7 @@ typedef struct { long long data[8]; } TrTuple;
 
 typedef struct { long long* __restrict__ data; size_t len; size_t capacity; } List_i64;
 static inline List_i64* List_i64_new(void) { List_i64* l=(List_i64*)malloc(sizeof(List_i64)); l->data=(long long*)malloc(sizeof(long long)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_i64_append(List_i64* l, long long val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(long long*)realloc(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_i64_append(List_i64* l, long long val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(long long*)realloc(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; }
 static inline bool List_i64_contains(List_i64* l, long long val) { for (size_t i = 0; i < l->len; i++) { if (l->data[i] == val) return true; } return false; }
 static inline long long List_i64_pop(List_i64* l) { if(!l||l->len==0) return 0LL; l->len--; return l->data[l->len]; }
 static inline void List_i64_set(List_i64* l, long long i, long long v) { if(l&&(size_t)i<l->len) l->data[i]=v; }
@@ -2896,7 +2896,7 @@ static inline void List_i64_free(List_i64* l) { if(l){ _tr_free(l->data); _tr_fr
 
 typedef struct { double* __restrict__ data; size_t len; size_t capacity; } List_f64;
 static inline List_f64* List_f64_new(void) { List_f64* l=(List_f64*)malloc(sizeof(List_f64)); l->data=(double*)malloc(sizeof(double)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_f64_append(List_f64* l, double val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(double*)realloc(l->data,sizeof(double)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_f64_append(List_f64* l, double val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(double*)realloc(l->data,sizeof(double)*l->capacity); } l->data[l->len++]=val; }
 static inline double List_f64_pop(List_f64* l) { if(!l||l->len==0) return 0.0; l->len--; return l->data[l->len]; }
 static inline void List_f64_free(List_f64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
@@ -2907,7 +2907,7 @@ static inline void List_f64_free(List_f64* l) { if(l){ _tr_free(l->data); _tr_fr
 #undef List_ptr
 typedef struct { char** data; size_t len; size_t capacity; } List_str;
 static inline List_str* List_str_new(void) { List_str* l=(List_str*)malloc(sizeof(List_str)); l->data=(char**)malloc(sizeof(char*)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_str_append(List_str* l, char* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(char**)realloc(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_str_append(List_str* l, char* val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(char**)realloc(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; }
 static inline char* List_str_pop(List_str* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
 static inline void List_str_free(List_str* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
@@ -2916,13 +2916,13 @@ static inline void List_str_free(List_str* l) { if(l){ _tr_free(l->data); _tr_fr
  * pointer. append() retains, free() releases every element. */
 typedef struct { TrStr* data; size_t len; size_t capacity; } List_TrStr;
 static inline List_TrStr* List_TrStr_new(void) { List_TrStr* l=(List_TrStr*)malloc(sizeof(List_TrStr)); l->data=(TrStr*)malloc(sizeof(TrStr)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_TrStr_append(List_TrStr* l, TrStr val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrStr*)realloc(l->data,sizeof(TrStr)*l->capacity); } l->data[l->len++]=_tr_str_retain(val); }
+static inline void List_TrStr_append(List_TrStr* l, TrStr val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(TrStr*)realloc(l->data,sizeof(TrStr)*l->capacity); } l->data[l->len++]=_tr_str_retain(val); }
 static inline TrStr List_TrStr_pop(List_TrStr* l) { if(!l||l->len==0) return _tr_str_lit(""); l->len--; return l->data[l->len]; }
 static inline void List_TrStr_free(List_TrStr* l) { if(l){ for(size_t i=0;i<l->len;i++) _tr_str_release(l->data[i]); _tr_free(l->data); _tr_free(l); } }
 /* Append without retaining: transfers ownership of `val`'s existing
  * reference to the list (used when `val` was just allocated with rc=1
  * specifically for this insertion, e.g. _tr_str_split tokens). */
-static inline void List_TrStr_append_owned(List_TrStr* l, TrStr val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrStr*)realloc(l->data,sizeof(TrStr)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_TrStr_append_owned(List_TrStr* l, TrStr val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(TrStr*)realloc(l->data,sizeof(TrStr)*l->capacity); } l->data[l->len++]=val; }
 
 /* ── List_str helpers (requires List_str typedef above) ─────────────────── */
 /* Appends `v` into `l`, transferring ownership if `v` is a freshly-owned
@@ -2974,34 +2974,34 @@ static int64_t _tr_list_all_TrStr(List_TrStr* l, _tr_pred_trstr_fn p) {
 
 typedef struct { void** data; size_t len; size_t capacity; } List_ptr;
 static inline List_ptr* List_ptr_new(void) { List_ptr* l=(List_ptr*)malloc(sizeof(List_ptr)); l->data=(void**)malloc(sizeof(void*)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_ptr_append(List_ptr* l, void* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(void**)realloc(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_ptr_append(List_ptr* l, void* val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(void**)realloc(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; }
 static inline void* List_ptr_pop(List_ptr* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
 static inline void List_ptr_free(List_ptr* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { _Bool* data; size_t len; size_t capacity; } List_bool;
 static inline List_bool* List_bool_new(void) { List_bool* l=(List_bool*)malloc(sizeof(List_bool)); l->data=(_Bool*)malloc(sizeof(_Bool)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_bool_append(List_bool* l, _Bool val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(_Bool*)realloc(l->data,sizeof(_Bool)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_bool_append(List_bool* l, _Bool val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(_Bool*)realloc(l->data,sizeof(_Bool)*l->capacity); } l->data[l->len++]=val; }
 static inline _Bool List_bool_get(List_bool* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_bool_set(List_bool* l, long long i, _Bool v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_bool_free(List_bool* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { int8_t* data; size_t len; size_t capacity; } List_i8;
 static inline List_i8* List_i8_new(void) { List_i8* l=(List_i8*)malloc(sizeof(List_i8)); l->data=(int8_t*)malloc(sizeof(int8_t)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_i8_append(List_i8* l, int8_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(int8_t*)realloc(l->data,sizeof(int8_t)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_i8_append(List_i8* l, int8_t val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(int8_t*)realloc(l->data,sizeof(int8_t)*l->capacity); } l->data[l->len++]=val; }
 static inline int8_t List_i8_get(List_i8* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_i8_set(List_i8* l, long long i, int8_t v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_i8_free(List_i8* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { int* data; size_t len; size_t capacity; } List_i32;
 static inline List_i32* List_i32_new(void) { List_i32* l=(List_i32*)malloc(sizeof(List_i32)); l->data=(int*)malloc(sizeof(int)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_i32_append(List_i32* l, int val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(int*)realloc(l->data,sizeof(int)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_i32_append(List_i32* l, int val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(int*)realloc(l->data,sizeof(int)*l->capacity); } l->data[l->len++]=val; }
 static inline int List_i32_get(List_i32* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_i32_set(List_i32* l, long long i, int v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_i32_free(List_i32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { char* data; size_t len; size_t capacity; } List_char;
 static inline List_char* List_char_new(void) { List_char* l=(List_char*)malloc(sizeof(List_char)); l->data=(char*)malloc(sizeof(char)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_char_append(List_char* l, char val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(char*)realloc(l->data,sizeof(char)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_char_append(List_char* l, char val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(char*)realloc(l->data,sizeof(char)*l->capacity); } l->data[l->len++]=val; }
 static inline char List_char_get(List_char* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_char_set(List_char* l, long long i, char v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_char_free(List_char* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
@@ -3102,7 +3102,7 @@ static inline List_ptr* _tr_idict_items(TrIDict* d) {
 
 typedef struct { uint8_t* data; size_t len; size_t capacity; } List_u8;
 static inline List_u8* List_u8_new(void) { List_u8* l=(List_u8*)malloc(sizeof(List_u8)); l->data=(uint8_t*)malloc(sizeof(uint8_t)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_u8_append(List_u8* l, uint8_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint8_t*)realloc(l->data,sizeof(uint8_t)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_u8_append(List_u8* l, uint8_t val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(uint8_t*)realloc(l->data,sizeof(uint8_t)*l->capacity); } l->data[l->len++]=val; }
 static inline uint8_t List_u8_get(List_u8* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_u8_set(List_u8* l, long long i, uint8_t v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_u8_free(List_u8* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
@@ -3118,7 +3118,7 @@ static inline List_u8* _tr_bytes_new(const uint8_t* data, size_t len) {
 
 typedef struct { uint32_t* data; size_t len; size_t capacity; } List_u32;
 static inline List_u32* List_u32_new(void) { List_u32* l=(List_u32*)malloc(sizeof(List_u32)); l->data=(uint32_t*)malloc(sizeof(uint32_t)*8); l->len=0; l->capacity=8; return l; }
-static inline void List_u32_append(List_u32* l, uint32_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint32_t*)realloc(l->data,sizeof(uint32_t)*l->capacity); } l->data[l->len++]=val; }
+static inline void List_u32_append(List_u32* l, uint32_t val) { if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(uint32_t*)realloc(l->data,sizeof(uint32_t)*l->capacity); } l->data[l->len++]=val; }
 static inline void List_u32_free(List_u32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 /* ── Extended Vec/List operations: remove, swap, clear, is_empty, extend ──── */
 static inline void List_i64_remove(List_i64* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
@@ -3186,7 +3186,7 @@ typedef struct { long long* data; size_t len; size_t capacity; } Set_i64;
 static inline Set_i64* Set_i64_new(void) { Set_i64* l=(Set_i64*)malloc(sizeof(Set_i64)); l->data=(long long*)malloc(sizeof(long long)*8); l->len=0; l->capacity=8; return l; }
 static inline void Set_i64_add(Set_i64* l, long long val) { 
     for (size_t i = 0; i < l->len; i++) { if (l->data[i] == val) return; }
-    if(l->len==l->capacity){ l->capacity*=2; l->data=(long long*)realloc(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; 
+    if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(long long*)realloc(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; 
 }
 static inline void Set_i64_free(Set_i64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
@@ -3194,7 +3194,7 @@ typedef struct { void** data; size_t len; size_t capacity; } Set_ptr;
 static inline Set_ptr* Set_ptr_new(void) { Set_ptr* l=(Set_ptr*)malloc(sizeof(Set_ptr)); l->data=(void**)malloc(sizeof(void*)*8); l->len=0; l->capacity=8; return l; }
 static inline void Set_ptr_add(Set_ptr* l, void* val) { 
     for (size_t i = 0; i < l->len; i++) { if (l->data[i] == val) return; }
-    if(l->len==l->capacity){ l->capacity*=2; l->data=(void**)realloc(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; 
+    if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(void**)realloc(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; 
 }
 static inline void Set_ptr_free(Set_ptr* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
@@ -3202,7 +3202,7 @@ typedef struct { char** data; size_t len; size_t capacity; } Set_str;
 static inline Set_str* Set_str_new(void) { Set_str* l=(Set_str*)malloc(sizeof(Set_str)); l->data=(char**)malloc(sizeof(char*)*8); l->len=0; l->capacity=8; return l; }
 static inline void Set_str_add(Set_str* l, char* val) { 
     for (size_t i = 0; i < l->len; i++) { if (strcmp(l->data[i], val) == 0) return; }
-    if(l->len==l->capacity){ l->capacity*=2; l->data=(char**)realloc(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; 
+    if(l->len==l->capacity){ l->capacity = l->capacity + l->capacity/2; l->data=(char**)realloc(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; 
 }
 static inline void Set_str_free(Set_str* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 

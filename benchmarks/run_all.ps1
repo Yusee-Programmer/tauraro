@@ -13,11 +13,16 @@ function Run-Bench($exe) {
     $proc = [System.Diagnostics.Process]::Start($psi)
 
     $peakMem = 0L
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
     while (-not $proc.HasExited) {
         try {
             $proc.Refresh()
             if ($proc.PeakWorkingSet64 -gt $peakMem) { $peakMem = $proc.PeakWorkingSet64 }
         } catch {}
+        if ($sw.Elapsed.TotalSeconds -gt 60) {
+            try { $proc.Kill() } catch {}
+            break
+        }
         Start-Sleep -Milliseconds 2
     }
     $out = $proc.StandardOutput.ReadToEnd()
@@ -91,9 +96,9 @@ foreach ($b in $benchmarks) {
     Write-Host "  Running..." -ForegroundColor DarkGray
     $c_res  = if ($c_ok)  { Run-Bench "$dir\bench_c.exe"  } else { @{ Time = $null; PeakMemKB = $null } }
     $rs_res = if ($rs_ok) { Run-Bench "$dir\bench_rs.exe" } else { @{ Time = $null; PeakMemKB = $null } }
-    # Self-hosted tauraroc places the exe in build/bench.exe
-    $tr_exe = if (Test-Path "$dir\build\bench.exe") { "$dir\build\bench.exe" } else { "$dir\bench.exe" }
-    $tr_res = if ($tr_ok) { Run-Bench $tr_exe } else { @{ Time = $null; PeakMemKB = $null } }
+    # Self-hosted tauraroc places the exe in <benchmarks>/build/bench.exe (shared, overwritten each iteration)
+    $tr_exe = "$BENCH\build\bench.exe"
+    $tr_res = if ($tr_ok -and (Test-Path $tr_exe)) { Run-Bench $tr_exe } else { @{ Time = $null; PeakMemKB = $null } }
 
     $c_time  = $c_res.Time
     $rs_time = $rs_res.Time

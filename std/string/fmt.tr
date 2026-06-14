@@ -103,6 +103,7 @@ extend Fmt:
             sb.append_char(pad_char)
             i = i + 1
         sb.append(s)
+        unsafe: _tr_c_free(s as Pointer[char])
         mut out = sb.to_owned()
         sb.free()
         return out
@@ -112,6 +113,7 @@ extend Fmt:
         if slen >= width: return s
         mut sb = StringBuilder.init(width + 1)
         sb.append(s)
+        unsafe: _tr_c_free(s as Pointer[char])
         mut i  = slen
         while i < width:
             sb.append_char(pad_char)
