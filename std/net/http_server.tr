@@ -369,6 +369,16 @@ extend HttpConn:
         self._horder  = Vec[str].init(8)
         self.last_status = 0
 
+    # Release the HttpConn heap instance itself (and any per-request state
+    # not already released by close()) once the connection is torn down.
+    pub def dispose(self):
+        if not self._closed:
+            self.request.free_owned()
+            self._headers.free()
+            self._horder.free()
+            self._closed = true
+        unsafe: _tr_c_free(self as Pointer[char])
+
 # ── HttpRoute ─────────────────────────────────────────────────────────────────
 
 pub class HttpRoute:
