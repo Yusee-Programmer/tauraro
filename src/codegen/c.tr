@@ -2129,6 +2129,20 @@ pub class CGenerator:
                 case _: pass
             if not is_fn_or_cls:
                 return self.cls_method_c_call(callee_cls_ty, "__call__", callee_s, self.gen_args(args))
+        # `unsafe: _tr_c_free(x as Pointer[char])` is the pre-TrStr-migration
+        # idiom for releasing a heap string's buffer. For a TrStr-typed `x`,
+        # `x as Pointer[char]` lowers to `_tr_strz(x)` (just `.data`), so
+        # `_tr_c_free(_tr_strz(x))` frees `.data` but leaks `x`'s separately
+        # allocated `.rc` block. Rewrite to `_tr_str_release(x)`, which frees
+        # both when the refcount drops to zero (and is a no-op for
+        # rc==NULL literals/borrows).
+        if base_callee == "_tr_c_free" and args.len == 1:
+            match args.get(0).read():
+                case HirExpr.ECast(_cf_inner, _):
+                    if _is_str_type(hir_expr_type(_cf_inner).name):
+                        return "_tr_str_release(" + self.gen_expr(_cf_inner) + ")"
+                case _: pass
+
         # Direct calls to legacy runtime helpers (named `_tr_*`) from .tr source
         # take raw char* for str params and return char*; unwrap TrStr-typed
         # args and rewrap a char*-returning result at the boundary.
@@ -3242,12 +3256,12 @@ pub class CGenerator:
                 mut c_ty_c = self.type_to_c(call_ty)
                 if is_idict:
                     mut iget_r = "_tr_idict_get(" + obj_s + ", " + self.gen_args(args) + ")"
-                    if _is_str_type(call_ty.name): return "_tr_str_unbox(" + iget_r + ")"
+                    if _is_str_type(call_ty.name): return "_tr_str_retain(_tr_str_unbox(" + iget_r + "))"
                     if c_ty_c != "void" and c_ty_c != "":
                         return "((" + c_ty_c + ")(uintptr_t)" + iget_r + ")"
                     return iget_r
                 mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
-                if _is_str_type(call_ty.name): return "_tr_str_unbox(" + mget_r + ")"
+                if _is_str_type(call_ty.name): return "_tr_str_retain(_tr_str_unbox(" + mget_r + "))"
                 if c_ty_c != "void" and c_ty_c != "":
                     return "((" + c_ty_c + ")(uintptr_t)" + mget_r + ")"
                 return mget_r
@@ -3306,9 +3320,16 @@ pub class CGenerator:
                     return "((" + _getor_c_ty + ")(uintptr_t)" + _res + ")"
                 return _res
             # free() - release the underlying TrMap/TrIDict (buckets, nodes,
-            # key strings for str-keyed maps, and the struct itself).
+            # key strings for str-keyed maps, and the struct itself). For
+            # Map[K,str]/Dict[K,str], values are _tr_str_box(TrStr)-allocated
+            # boxes (#54): use the _strval variant to release each boxed
+            # TrStr and free its box, avoiding a per-entry leak.
             if method == "free":
-                if is_idict: return "_tr_idict_free(" + obj_s + ")"
+                mut _val_is_str = obj_full_ty.args.len > 1 and _is_str_type(obj_full_ty.args.get(1).read().name)
+                if is_idict:
+                    if _val_is_str: return "_tr_idict_free_strval(" + obj_s + ")"
+                    return "_tr_idict_free(" + obj_s + ")"
+                if _val_is_str: return "Dict_free_strval(" + obj_s + ")"
                 return "Dict_free(" + obj_s + ")"
 
         mut extra_args = ""

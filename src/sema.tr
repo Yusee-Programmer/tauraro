@@ -1090,10 +1090,15 @@ extend Sema:
                         if mname == "append" or mname == "push" or mname == "extend" or mname == "set" or mname == "insert":
                             skip_mark = true
                     elif obj_ty.name == "Set":
-                        if mname == "add":
+                        if mname == "add" or mname == "contains" or mname == "remove":
                             skip_mark = true
                     elif obj_ty.name == "Map" or obj_ty.name == "Dict":
                         if (mname == "insert" or mname == "set") and i == 0:
+                            skip_mark = true
+                        # get/get_or/contains/remove/pop only look up the key
+                        # (i==0) - never store it - so the caller's local
+                        # remains sole owner and stays auto-drop eligible.
+                        elif (mname == "get" or mname == "get_or" or mname == "contains" or mname == "remove" or mname == "pop") and i == 0:
                             skip_mark = true
                     if not skip_mark:
                         self.mark_str_arg(args.get(i))

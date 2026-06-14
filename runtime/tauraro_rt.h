@@ -527,11 +527,30 @@ extern _Thread_local char*   _tr_thread_panic_message;
 /* Panic result: written by thread, read by joiner via _TrThreadObj */
 typedef struct { int panicked; char* panic_msg; } _TrSpawnResult;
 
+#ifndef _WIN32
+/* Debug helper: prints current process memory usage to stderr, tagged with
+ * `label`. Used to bisect memory growth across checkpoints during
+ * leak-hunting; not called by normal runtime code. No-op on non-Windows. */
+static inline void _tr_report_mem(const char* label) { (void)label; }
+#endif
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <psapi.h>
+#pragma comment(lib, "psapi.lib")
+
+/* Debug helper: prints current process working-set size to stderr, tagged
+ * with `label`. Used to bisect memory growth across checkpoints during
+ * leak-hunting; not called by normal runtime code. */
+static inline void _tr_report_mem(const char* label) {
+    PROCESS_MEMORY_COUNTERS pmc;
+    GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
+    fprintf(stderr, "%s: %zu bytes\n", label, (size_t)pmc.WorkingSetSize);
+    fflush(stderr);
+}
 
 typedef HANDLE _TrThread;
 /* Trampoline: routes void*(*)(void*) through DWORD WINAPI, installs
