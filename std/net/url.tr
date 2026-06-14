@@ -35,6 +35,9 @@ extend Url:
         self.fragment = fragment
         return self
 
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
     # ── Parsing ───────────────────────────────────────────────────────────────
 
     # Parse a full URL string into a Url.  Unrecognised parts are left empty.

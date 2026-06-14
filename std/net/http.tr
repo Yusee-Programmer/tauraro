@@ -17,6 +17,9 @@ extend HttpHeader:
         h.value = value
         return h
 
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
 pub class HttpClientResponse:
     pub status:  int
     pub body:    str

@@ -68,6 +68,9 @@ extend TimeDelta:
         sb.append(Fmt.zero_pad(s, 2))
         return sb.to_owned()
 
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
 # ─── DateTime ─────────────────────────────────────────────────────────────────
 
 pub class DateTime:
@@ -239,6 +242,9 @@ extend DateTime:
         sb.append(Fmt.zero_pad(self.second, 2))
         return sb.to_owned()
 
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
 # ─── Date ─────────────────────────────────────────────────────────────────────
 
 pub class Date:
@@ -286,6 +292,9 @@ extend Date:
     pub def after(self, other: Date) -> bool:
         return other.before(self)
 
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
 # ─── Time ─────────────────────────────────────────────────────────────────────
 
 pub class Time:
@@ -327,3 +336,6 @@ extend Time:
 
     pub def before(self, other: Time) -> bool:
         return self.total_seconds() < other.total_seconds()
+
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
