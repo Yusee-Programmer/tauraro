@@ -1039,13 +1039,27 @@ extend Sema:
                 # is_droppable_sym's is_param check) - the caller keeps sole
                 # ownership and remains safe to auto-drop at scope exit.
                 mut _call_is_ctor = false
+                mut _call_is_c_free = false
                 match callee.read():
                     case HirExpr.EIdent(_cnm, _, _):
                         if self.classes.contains(_cnm): _call_is_ctor = true
+                        if _cnm == "_tr_c_free": _call_is_c_free = true
                     case _: pass
                 mut i = 0
                 while i < args.len:
                     if _call_is_ctor: self.mark_str_arg(args.get(i))
+                    if _call_is_c_free:
+                        # `unsafe: _tr_c_free(x as Pointer[char])` manually frees
+                        # x's underlying TrStr.data - the std-lib idiom for
+                        # releasing strings returned by Str.slice/to_lower/
+                        # to_owned/etc, predating #53's auto-drop. If `x` is a
+                        # bare str-typed local, mark it escaped so #53 doesn't
+                        # ALSO insert a scope-exit _tr_str_release(x), which
+                        # would double-free x.data (and x.rc).
+                        match args.get(i).read():
+                            case HirExpr.ECast(_cf_inner, _):
+                                self.mark_str_arg(_cf_inner)
+                            case _: pass
                     self.mark_escaped_str_args(args.get(i))
                     i = i + 1
             case HirExpr.EMethodCall(obj, mname, args, _):

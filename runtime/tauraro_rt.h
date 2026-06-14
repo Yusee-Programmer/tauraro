@@ -172,6 +172,15 @@ static inline void* _tr_checked_alloc(size_t sz) {
     if (!p && sz > 0) { _TR_OOM_ABORT(); }
     return p;
 }
+/* Heap-allocated empty C string. Used by char*-returning helpers that need
+ * an "empty result" fallback - returning a static string literal (`""`)
+ * here would later be `_tr_str_wrap`'d (rc=1) and `_tr_str_release`'d,
+ * calling free() on a non-heap pointer (UB / -Wfree-nonheap-object). */
+static inline char* _tr_empty_heap_str(void) {
+    char* e = (char*)TAURARO_ALLOC(1);
+    e[0] = '\0';
+    return e;
+}
 /* ── Refcounted string (TrStr): fat-pointer str representation ──
  * `data` points at the NUL-terminated bytes. `rc` points at a heap
  * refcount, or is NULL for literal/immortal strings — in that case
@@ -195,14 +204,22 @@ static inline TrStr _tr_str_lit_passthrough(TrStr s) { return s; }
 #define _tr_str_lit(x) (_Generic((x), TrStr: _tr_str_lit_passthrough, default: _tr_str_lit_impl)(x))
 
 /* Allocates a new heap string of `len` bytes (plus NUL terminator)
- * with refcount 1. Caller fills t.data[0..len-1]. */
+ * with refcount 1. Caller fills t.data[0..len-1].
+ *
+ * `data` and `rc` are SEPARATE allocations (not one combined block):
+ * `_tr_strz(t)` returns `t.data` directly, and many call sites do
+ * `_tr_c_free(_tr_strz(x))` (the `unsafe: _tr_c_free(x as Pointer[char])`
+ * idiom in std/*.tr) - that free() must see a real malloc base pointer.
+ * A combined allocation with `data = block + sizeof(long)` would make
+ * that free() corrupt the heap (freeing a pointer 8 bytes past the
+ * block start). Two allocations cost one extra malloc per _tr_str_new
+ * call (concat/repeat/join/etc.) but keep `.data` independently valid. */
 static inline TrStr _tr_str_new(size_t len) {
-    char* block = (char*)_tr_checked_alloc(sizeof(long) + len + 1);
     TrStr t;
-    t.rc = (long*)block;
-    *t.rc = 1;
-    t.data = block + sizeof(long);
+    t.data = (char*)_tr_checked_alloc(len + 1);
     t.data[len] = '\0';
+    t.rc = (long*)_tr_checked_alloc(sizeof(long));
+    *t.rc = 1;
     return t;
 }
 
@@ -214,11 +231,7 @@ static inline TrStr _tr_str_retain(TrStr s) {
 static inline void _tr_str_release(TrStr s) {
     if (s.rc) {
         if (--(*s.rc) == 0) {
-            /* _tr_str_new's combined allocation places `data` right after
-             * the refcount in the same block - freeing `rc` frees both.
-             * _tr_str_wrap's `data` is a SEPARATE allocation from its
-             * freshly-allocated rc block, so free it too. */
-            if (s.data != (char*)s.rc + sizeof(long)) { _tr_free(s.data); }
+            _tr_free(s.data);
             _tr_free((void*)s.rc);
         }
     }
@@ -333,18 +346,18 @@ static inline int _tr_setenv(const char* name, const char* value) { return seten
 static inline int _tr_unsetenv(const char* name) { return unsetenv(name) == 0 ? 0 : -1; }
 #endif
 #ifdef TAURARO_BARE
-static inline char* _tr_popen_read(const char* cmd) { (void)cmd; return (char*)""; }
+static inline char* _tr_popen_read(const char* cmd) { (void)cmd; return _tr_empty_heap_str(); }
 #else
 static inline char* _tr_popen_read(const char* cmd) {
-    if (!cmd) return "";
+    if (!cmd) return _tr_empty_heap_str();
 #  ifdef _WIN32
     FILE* fp = _popen(cmd, "r");
 #  else
     FILE* fp = popen(cmd, "r");
 #  endif
-    if (!fp) return "";
+    if (!fp) return _tr_empty_heap_str();
     size_t cap = 4096, total = 0; char* buf = (char*)TAURARO_ALLOC(cap); char tmp[512];
-    if (!buf) { fclose(fp); return ""; }
+    if (!buf) { fclose(fp); return _tr_empty_heap_str(); }
     while (fgets(tmp, sizeof(tmp), fp)) {
         size_t n = strlen(tmp);
         if (total + n + 1 > cap) { cap = cap * 2 + n + 1; buf = (char*)TAURARO_REALLOC(buf, cap); if (!buf) break; }
@@ -2424,13 +2437,13 @@ static inline TrStr _tr_strx_concat(const char* a, const char* b) {
     return r;
 }
 static char* _tr_str_upper(const char* s) {
-    if (!s) return "";
+    if (!s) return _tr_empty_heap_str();
     char* r=(char*)TAURARO_ALLOC(strlen(s)+1);
     for (int i=0; (r[i]=(char)toupper((unsigned char)s[i])) || s[i]; i++);
     return r;
 }
 static char* _tr_str_lower(const char* s) {
-    if (!s) return "";
+    if (!s) return _tr_empty_heap_str();
     char* r=(char*)TAURARO_ALLOC(strlen(s)+1);
     for (int i=0; (r[i]=(char)tolower((unsigned char)s[i])) || s[i]; i++);
     return r;
@@ -2447,7 +2460,7 @@ static bool _tr_str_ends_with(const char* s, const char* suf) {
     return sl>=sufl && strcmp(s+sl-sufl,suf)==0;
 }
 static char* _tr_str_strip(const char* s) {
-    if (!s) return "";
+    if (!s) return _tr_empty_heap_str();
     while (isspace((unsigned char)*s)) s++;
     if (!*s) { char* e=(char*)TAURARO_ALLOC(1); *e='\0'; return e; }
     const char* end = s+strlen(s)-1;
