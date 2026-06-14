@@ -60,7 +60,9 @@ extend Base64:
             sb.append_char(_b64_char_at(((b0 % 4) << 4) | ((b1 >> 4) % 16)))
             sb.append_char(_b64_char_at((b1 % 16) << 2))
             sb.append_char(61)   # '='
-        return sb.to_string().as_str()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Decode a standard Base64 string.  Padding ('=') is handled automatically.
     # Note: binary data containing null bytes will be truncated by C-string semantics.
@@ -82,7 +84,9 @@ extend Base64:
             if v3 >= 0:
                 sb.append_char((((v2 % 4) << 6) | v3) % 256)
             i = i + 4
-        return sb.to_string().as_str()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # URL-safe variant: encodes using '-' and '_' instead of '+' and '/'.
     # No padding characters are emitted.
@@ -99,7 +103,10 @@ extend Base64:
             elif c == 61: i = i + 1               # skip '=' padding; continue directly
             else: result.append_char(c)
             if c != 61: i = i + 1
-        return result.to_string().as_str()
+        unsafe: _tr_c_free(encoded as Pointer[char])
+        mut out = result.to_owned()
+        result.free()
+        return out
 
     # Decode URL-safe Base64 (no padding required).
     pub def decode_url(s: str) -> str:
@@ -113,13 +120,13 @@ extend Base64:
             elif c == 95: sb_pad.append_char(47)  # '_' → '/'
             else: sb_pad.append_char(c)
             i = i + 1
-        mut padded = sb_pad.to_string().as_str()
-        mut plen = _tr_strlen(padded)
-        mut rem = plen % 4
+        mut rem = sb_pad.len() % 4
         if rem == 2:
             sb_pad.append("==")
-            padded = sb_pad.to_string().as_str()
         elif rem == 3:
             sb_pad.append_char(61)
-            padded = sb_pad.to_string().as_str()
-        return Base64.decode(padded)
+        mut padded = sb_pad.to_owned()
+        sb_pad.free()
+        mut result = Base64.decode(padded)
+        unsafe: _tr_c_free(padded as Pointer[char])
+        return result

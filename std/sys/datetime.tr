@@ -66,7 +66,9 @@ extend TimeDelta:
         sb.append(Fmt.zero_pad(mi, 2))
         sb.append(":")
         sb.append(Fmt.zero_pad(s, 2))
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     pub def free(self):
         unsafe: _tr_c_free(self as Pointer[char])
@@ -220,7 +222,9 @@ extend DateTime:
         sb.append(Fmt.zero_pad(self.minute, 2))
         sb.append(":")
         sb.append(Fmt.zero_pad(self.second, 2))
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # ISO 8601 date-only string: "YYYY-MM-DD"
     pub def date_str(self) -> str:
@@ -230,7 +234,9 @@ extend DateTime:
         sb.append(Fmt.zero_pad(self.month, 2))
         sb.append("-")
         sb.append(Fmt.zero_pad(self.day, 2))
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Time-only string: "HH:MM:SS"
     pub def time_str(self) -> str:
@@ -240,7 +246,9 @@ extend DateTime:
         sb.append(Fmt.zero_pad(self.minute, 2))
         sb.append(":")
         sb.append(Fmt.zero_pad(self.second, 2))
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     pub def free(self):
         unsafe: _tr_c_free(self as Pointer[char])
@@ -276,7 +284,9 @@ extend Date:
         sb.append(Fmt.zero_pad(self.month, 2))
         sb.append("-")
         sb.append(Fmt.zero_pad(self.day, 2))
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     pub def to_datetime(self) -> DateTime:
         return DateTime.init(self.year, self.month, self.day, 0, 0, 0)
@@ -326,7 +336,9 @@ extend Time:
         sb.append(Fmt.zero_pad(self.minute, 2))
         sb.append(":")
         sb.append(Fmt.zero_pad(self.second, 2))
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     pub def total_seconds(self) -> int:
         return self.hour * 3600 + self.minute * 60 + self.second

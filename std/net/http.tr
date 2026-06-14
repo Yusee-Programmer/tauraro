@@ -42,6 +42,9 @@ extend HttpClientResponse:
     pub def is_error(self) -> bool:
         return self.status >= 400
 
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
     # Return a named response header value or "" when absent.
     pub def header(self, name: str) -> str:
         if self.headers.contains(name): return self.headers.get(name)

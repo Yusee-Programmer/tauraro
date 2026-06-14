@@ -138,7 +138,9 @@ extend Url:
         if Str.len(self.fragment) > 0:
             sb.append("#")
             sb.append(self.fragment)
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # ── Percent-encoding ──────────────────────────────────────────────────────
 
@@ -166,7 +168,9 @@ extend Url:
                 if lo < 10: sb.append_char(lo + 48)
                 else:       sb.append_char(lo - 10 + 65)
             i = i + 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Decode a percent-encoded URL component.
     pub def decode_component(s: str) -> str:
@@ -192,4 +196,6 @@ extend Url:
             else:
                 sb.append_char(c)
                 i = i + 1
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out

@@ -43,7 +43,9 @@ extend Hex:
             sb.append_char(_hex_nibble_lower(byte >> 4))
             sb.append_char(_hex_nibble_lower(byte % 16))
             i = i + 1
-        return sb.to_string().as_str()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Encode bytes to uppercase hex string.
     pub def encode_upper(s: str) -> str:
@@ -56,7 +58,9 @@ extend Hex:
             sb.append_char(_hex_nibble_upper(byte >> 4))
             sb.append_char(_hex_nibble_upper(byte % 16))
             i = i + 1
-        return sb.to_string().as_str()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Decode a hex string back to bytes.  Returns "" on invalid input.
     # Input may be uppercase, lowercase, or mixed.
@@ -76,13 +80,21 @@ extend Hex:
         mut out_len = hex_len / 2
         mut sb = StringBuilder.init(out_len + 2)
         mut i = start
+        mut valid = true
         while i + 1 < n:
             mut hi = _hex_decode_nibble(p.offset(i).read() as int)
             mut lo = _hex_decode_nibble(p.offset(i + 1).read() as int)
-            if hi < 0 or lo < 0: return ""
+            if hi < 0 or lo < 0:
+                valid = false
+                break
             sb.append_char(((hi << 4) | lo) % 256)
             i = i + 2
-        return sb.to_string().as_str()
+        if not valid:
+            sb.free()
+            return ""
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Encode a raw memory buffer (Pointer[char] + length) to lowercase hex.
     pub def encode_bytes(data: Pointer[char], len: int) -> str:
@@ -93,7 +105,9 @@ extend Hex:
             sb.append_char(_hex_nibble_lower(byte >> 4))
             sb.append_char(_hex_nibble_lower(byte % 16))
             i = i + 1
-        return sb.to_string().as_str()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Format an int as a fixed-width hex string (no "0x" prefix).
     # width is the minimum number of hex characters; zero-padded on the left.
@@ -113,9 +127,11 @@ extend Hex:
         while pi < pad:
             buf.append_char(48)   # '0'
             pi = pi + 1
-        mut dp = digits.to_string().as_str() as Pointer[char]
         mut di = dlen - 1
         while di >= 0:
-            buf.append_char(dp.offset(di).read() as int)
+            buf.append_char(digits.buf.data.offset(di).read() as int)
             di = di - 1
-        return buf.to_string().as_str()
+        digits.free()
+        mut out = buf.to_owned()
+        buf.free()
+        return out

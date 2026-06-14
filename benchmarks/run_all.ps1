@@ -1,17 +1,37 @@
 # run_all.ps1 -- Tauraro Benchmark Suite: C vs Rust vs Tauraro (Windows)
-# Self-hosted compiler only.
+# Self-hosted compiler only. Reports both time (TIME_MS) and peak working-set memory.
 
 $ROOT    = Resolve-Path "$PSScriptRoot\..\.."
 $BENCH   = $PSScriptRoot
 $TAU_EXE = "$ROOT\tauraro\tauraroc.exe"
 
 function Run-Bench($exe) {
-    $out = & $exe 2>&1
-    $internal = $out | Where-Object { $_ -match "^TIME_MS:(\d+)" } | Select-Object -First 1
-    if ($internal -match "TIME_MS:(\d+)") {
-        return [double]$Matches[1] / 1000.0
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName               = $exe
+    $psi.RedirectStandardOutput = $true
+    $psi.UseShellExecute        = $false
+    $proc = [System.Diagnostics.Process]::Start($psi)
+
+    $peakMem = 0L
+    while (-not $proc.HasExited) {
+        try {
+            $proc.Refresh()
+            if ($proc.PeakWorkingSet64 -gt $peakMem) { $peakMem = $proc.PeakWorkingSet64 }
+        } catch {}
+        Start-Sleep -Milliseconds 2
     }
-    return $null
+    $out = $proc.StandardOutput.ReadToEnd()
+    try {
+        $proc.Refresh()
+        if ($proc.PeakWorkingSet64 -gt $peakMem) { $peakMem = $proc.PeakWorkingSet64 }
+    } catch {}
+
+    $time_s = $null
+    $line = $out -split "`n" | Where-Object { $_ -match "TIME_MS:(\d+)" } | Select-Object -First 1
+    if ($line -match "TIME_MS:(\d+)") {
+        $time_s = [double]$Matches[1] / 1000.0
+    }
+    return @{ Time = $time_s; PeakMemKB = [math]::Round($peakMem / 1024.0, 1) }
 }
 
 function Compile-C($src, $out) {
@@ -69,11 +89,15 @@ foreach ($b in $benchmarks) {
     $tr_ok = Compile-Tauraro  "$dir\bench.tr"
 
     Write-Host "  Running..." -ForegroundColor DarkGray
-    $c_time  = if ($c_ok)  { Run-Bench "$dir\bench_c.exe"  } else { $null }
-    $rs_time = if ($rs_ok) { Run-Bench "$dir\bench_rs.exe" } else { $null }
+    $c_res  = if ($c_ok)  { Run-Bench "$dir\bench_c.exe"  } else { @{ Time = $null; PeakMemKB = $null } }
+    $rs_res = if ($rs_ok) { Run-Bench "$dir\bench_rs.exe" } else { @{ Time = $null; PeakMemKB = $null } }
     # Self-hosted tauraroc places the exe in build/bench.exe
     $tr_exe = if (Test-Path "$dir\build\bench.exe") { "$dir\build\bench.exe" } else { "$dir\bench.exe" }
-    $tr_time = if ($tr_ok) { Run-Bench $tr_exe } else { $null }
+    $tr_res = if ($tr_ok) { Run-Bench $tr_exe } else { @{ Time = $null; PeakMemKB = $null } }
+
+    $c_time  = $c_res.Time
+    $rs_time = $rs_res.Time
+    $tr_time = $tr_res.Time
 
     $tau_c_ratio  = if ($null -ne $c_time  -and $null -ne $tr_time -and $c_time  -gt 0) { [math]::Round($tr_time / $c_time,  2) } else { $null }
     $tau_rs_ratio = if ($null -ne $rs_time -and $null -ne $tr_time -and $rs_time -gt 0) { [math]::Round($tr_time / $rs_time, 2) } else { $null }
@@ -85,9 +109,12 @@ foreach ($b in $benchmarks) {
         Tau_sec   = if ($null -ne $tr_time) { [math]::Round($tr_time, 3) } else { "FAIL" }
         TauOverC  = if ($null -ne $tau_c_ratio)  { "${tau_c_ratio}x" }  else { "--" }
         TauOverRs = if ($null -ne $tau_rs_ratio) { "${tau_rs_ratio}x" } else { "--" }
+        C_memKB   = if ($null -ne $c_res.PeakMemKB)  { $c_res.PeakMemKB }  else { "FAIL" }
+        Rs_memKB  = if ($null -ne $rs_res.PeakMemKB) { $rs_res.PeakMemKB } else { "FAIL" }
+        Tau_memKB = if ($null -ne $tr_res.PeakMemKB) { $tr_res.PeakMemKB } else { "FAIL" }
         _ratio    = $tau_c_ratio
     }
-    Write-Host "  Done: C=$($results[-1].C_sec)s  Rust=$($results[-1].Rust_sec)s  Tauraro=$($results[-1].Tau_sec)s" -ForegroundColor Gray
+    Write-Host "  Done: C=$($results[-1].C_sec)s ($($results[-1].C_memKB) KB)  Rust=$($results[-1].Rust_sec)s ($($results[-1].Rs_memKB) KB)  Tauraro=$($results[-1].Tau_sec)s ($($results[-1].Tau_memKB) KB)" -ForegroundColor Gray
     Write-Host ""
 }
 
@@ -96,9 +123,9 @@ Write-Host "  RESULTS  (seconds -- lower is faster)" -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host ""
 
-$fmt = "{0,-26} {1,8} {2,8} {3,10} {4,9} {5,9}"
+$fmt = "{0,-24} {1,8} {2,8} {3,10} {4,9} {5,9}"
 Write-Host ($fmt -f "Benchmark", "C(s)", "Rust(s)", "Tauraro(s)", "Tau/C", "Tau/Rust") -ForegroundColor White
-Write-Host ($fmt -f "--------------------------", "-------", "-------", "---------", "--------", "--------") -ForegroundColor DarkGray
+Write-Host ($fmt -f "------------------------", "-------", "-------", "---------", "--------", "--------") -ForegroundColor DarkGray
 
 foreach ($r in $results) {
     $line = $fmt -f $r.Benchmark, $r.C_sec, $r.Rust_sec, $r.Tau_sec, $r.TauOverC, $r.TauOverRs
@@ -115,4 +142,25 @@ foreach ($r in $results) {
 Write-Host ""
 Write-Host "  Tau/C    = Tauraro / C time    (< 1.00x = Tauraro faster than C)" -ForegroundColor DarkGray
 Write-Host "  Tau/Rust = Tauraro / Rust time (< 1.00x = Tauraro faster than Rust)" -ForegroundColor DarkGray
+Write-Host ""
+
+Write-Host "=================================================================" -ForegroundColor Cyan
+Write-Host "  PEAK MEMORY  (KB -- lower is more efficient)" -ForegroundColor Cyan
+Write-Host "=================================================================" -ForegroundColor Cyan
+Write-Host ""
+
+$mfmt = "{0,-24} {1,10} {2,10} {3,10} {4,9} {5,9}"
+Write-Host ($mfmt -f "Benchmark", "C(KB)", "Rust(KB)", "Tau(KB)", "Tau/C", "Tau/Rust") -ForegroundColor White
+Write-Host ($mfmt -f "------------------------", "---------", "---------", "---------", "--------", "--------") -ForegroundColor DarkGray
+
+foreach ($r in $results) {
+    $tau_c_mem  = if ($r.C_memKB  -is [double] -and $r.Tau_memKB -is [double] -and $r.C_memKB  -gt 0) { "$([math]::Round($r.Tau_memKB / $r.C_memKB, 2))x"  } else { "--" }
+    $tau_rs_mem = if ($r.Rs_memKB -is [double] -and $r.Tau_memKB -is [double] -and $r.Rs_memKB -gt 0) { "$([math]::Round($r.Tau_memKB / $r.Rs_memKB, 2))x" } else { "--" }
+    $line = $mfmt -f $r.Benchmark, $r.C_memKB, $r.Rs_memKB, $r.Tau_memKB, $tau_c_mem, $tau_rs_mem
+    Write-Host $line -ForegroundColor White
+}
+
+Write-Host ""
+Write-Host "  Tau/C    = Tauraro / C peak memory    (< 1.00x = Tauraro uses less memory than C)" -ForegroundColor DarkGray
+Write-Host "  Tau/Rust = Tauraro / Rust peak memory (< 1.00x = Tauraro uses less memory than Rust)" -ForegroundColor DarkGray
 Write-Host ""
