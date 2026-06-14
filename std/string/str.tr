@@ -227,7 +227,9 @@ extend Str:
         mut p  = low as Pointer[char]
         mut ch = p.offset(0).read() as int
         if ch >= 97 and ch <= 122:
-            return Str.to_upper(Str.slice(low, 0, 1)) + Str.slice(low, 1, Str.len(low))
+            mut result = Str.to_upper(Str.slice(low, 0, 1)) + Str.slice(low, 1, Str.len(low))
+            unsafe: _tr_c_free(low as Pointer[char])
+            return result
         return low
 
     # Title-case: capitalize each word.
@@ -385,6 +387,7 @@ extend Str:
         while True:
             mut rest = Str.slice(s, i, sl)
             mut pos = Str.index_of(rest, sub)
+            unsafe: _tr_c_free(rest as Pointer[char])
             if pos < 0: break
             n = n + 1
             i = i + pos + subl
@@ -477,9 +480,15 @@ extend Str:
     # Simple positional format: replaces each "{}" in template with the next value.
     pub def format(template: str, values: Vec[str]) -> str:
         mut result = template
+        mut owned  = false
         mut i      = 0
         while i < values.len:
-            result = Str.replace_first(result, "{}", values.get(i))
+            if Str.index_of(result, "{}") >= 0:
+                mut next = Str.replace_first(result, "{}", values.get(i))
+                if owned: unsafe: _tr_c_free(result as Pointer[char])
+                result = next
+                unsafe: _tr_c_free(next as Pointer[char])
+                owned  = true
             i = i + 1
         return result
 

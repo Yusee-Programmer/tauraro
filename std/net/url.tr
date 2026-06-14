@@ -59,6 +59,7 @@ extend Url:
         if slash_pos >= 0:
             authority  = Str.slice(rest, 0, slash_pos)
             after_auth = Str.slice(rest, slash_pos, rlen)
+        unsafe: _tr_c_free(rest as Pointer[char])
         # Split authority by ':' for port
         mut colon = Str.index_of(authority, ":")
         if colon >= 0:
@@ -81,6 +82,7 @@ extend Url:
                 u.fragment = Str.slice(after_q, h_in_q + 1, aq_len)
             else:
                 u.query = after_q
+            unsafe: _tr_c_free(after_q as Pointer[char])
         elif h_pos >= 0:
             u.path     = Str.slice(after_auth, 0, h_pos)
             u.fragment = Str.slice(after_auth, h_pos + 1, alen)
@@ -89,6 +91,9 @@ extend Url:
                 u.path = "/"
             else:
                 u.path = after_auth
+        unsafe:
+            _tr_c_free(authority as Pointer[char])
+            _tr_c_free(after_auth as Pointer[char])
         return u
 
     # ── Info ──────────────────────────────────────────────────────────────────
