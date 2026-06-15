@@ -2149,7 +2149,12 @@ pub class CGenerator:
         # Exception: names starting with `_tr_` that are actually user-defined
         # Tauraro functions (e.g. hir.tr's `_tr_str_len`, imported across
         # modules so not present in self.functions) use normal TrStr ABI.
-        if _starts_with_tr(base_callee) and not self.functions.contains(base_callee) and base_callee != "_tr_str_len":
+        # `extern "C": def _tr_xxx(...)` declarations ARE present in
+        # self.functions (with is_extern=true) since prog.functions includes
+        # extern decls -- those must still go through the char*-unwrapping
+        # path below, so check is_extern rather than mere presence.
+        mut _bc_is_user_fn = self.functions.contains(base_callee) and not self.functions.get(base_callee).is_extern
+        if _starts_with_tr(base_callee) and not _bc_is_user_fn and base_callee != "_tr_str_len":
             mut _ext_call = callee_s + "(" + self.gen_args_extern(args) + ")"
             if _is_str_type(call_ty.name):
                 if base_callee == "_tr_getenv": return "_tr_str_lit(" + _ext_call + ")"
@@ -2906,10 +2911,10 @@ pub class CGenerator:
 
         # Built-in module static dispatch: OS, Process, Env, Hash, File
         if obj_s == "OS" or class_name == "OS":
-            if method == "cwd":        return "_tr_cwd()"
+            if method == "cwd":        return self.wrapstr("_tr_cwd()")
             if method == "is_windows": return "_tr_is_windows()"
             if method == "is_linux":   return "(!_tr_is_windows())"
-            if method == "platform":   return "(_tr_is_windows() ? \"windows\" : \"linux\")"
+            if method == "platform":   return "(_tr_is_windows() ? _tr_str_lit(\"windows\") : _tr_str_lit(\"linux\"))"
         if obj_s == "Process" or class_name == "Process":
             if method == "system" and args.len > 0:
                 return "_tr_system(" + self.strz(self.gen_expr(args.get(0))) + ")"
@@ -2929,7 +2934,7 @@ pub class CGenerator:
                 return self.wrapstr("_tr_md5_hex(" + self.strz(self.gen_expr(args.get(0))) + ")")
         if obj_s == "File" or class_name == "File":
             if method == "dir_exists" and args.len > 0:
-                return "_tr_dir_exists(" + self.gen_expr(args.get(0)) + ")"
+                return "_tr_dir_exists(" + self.strz(self.gen_expr(args.get(0))) + ")"
 
         # Static call: Task.init(...) - obj is a type-name ident, hir_expr_type returns void/empty.
         # Recover class_name from obj_s when it matches a known user class.
