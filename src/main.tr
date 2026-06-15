@@ -10,6 +10,7 @@ from lexer import Lexer
 from parser import Parser
 from sema import Sema
 from ast import Decl
+from fmt import Formatter
 from codegen.c import CGenerator
 from codegen.llvm import LlvmGenerator
 
@@ -18,6 +19,7 @@ extern "C":
     def _tr_file_delete(path: str) -> int
     def _tr_getenv(name: str) -> str
     def _tr_exe_dir() -> str   # absolute dir of the running compiler exe (OS-level; reliable even when invoked by bare name via PATH)
+    def _tr_print_raw(s: str)  # print without trailing newline (for `tauraroc fmt` stdout output)
 
 # --- Helpers ------------------------------------------------------------------
 
@@ -26,6 +28,8 @@ pub def print_version():
 
 pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
+    print("       tauraroc fmt [-w] <file.tr>   Format source (stdout, or -w in place)")
+    print("       tauraroc lint <file.tr>       Analyze and report warnings/errors")
     print("Options:")
     print("  --version         Print version and exit")
     print("  --emit c          Emit generated C code to build/")
@@ -649,6 +653,40 @@ pub def cleanup_build(build_dir: str, all_c_files: Vec[str]):
         _tr_system("rm -rf \""  + build_dir + "include\"")
         _tr_system("rmdir \""   + build_dir + "\" 2>/dev/null")
 
+# --- `tauraroc fmt` -----------------------------------------------------------
+# Parse a single source file (no module resolution) and re-emit it in canonical
+# form, preserving comments. Prints to stdout, or rewrites the file with -w.
+pub def run_fmt(path0: str, write_in_place: bool):
+    mut path = path0
+    if not file_exists(path) and not str_ends_with_dot_tr(path):
+        path = path + ".tr"
+    mut source = read_file(path)
+    if source == "":
+        print("error: cannot read " + path)
+        _tr_exit(1)
+    mut lexer = Lexer.init(source)
+    lexer.record_comments = true
+    mut tokens = lexer.tokenize()
+    mut parser = Parser.init(tokens, lexer.token_lines)
+    parser.current_file = path
+    parser.cols = lexer.token_cols
+    parser.src_text = source
+    mut prog = parser.parse_program()
+    if parser.error_count > 0:
+        print("error: " + parser.error_count.to_str() + " parse error(s); not formatting " + path)
+        _tr_exit(1)
+    mut f = Formatter.init(lexer.comment_lines, lexer.comment_texts, lexer.comment_trailing)
+    mut formatted = f.format_program(prog)
+    if f.unsupported:
+        print("error: " + path + " uses a construct the formatter does not yet support; leaving it unchanged")
+        _tr_exit(1)
+    if write_in_place:
+        write_file(path, formatted)
+        print("formatted " + path)
+    else:
+        # Avoid print()'s extra newline (formatted already ends in one).
+        _tr_print_raw(formatted)
+
 # --- Main entry point ---------------------------------------------------------
 
 pub def main(args: Vec[str]):
@@ -658,6 +696,27 @@ pub def main(args: Vec[str]):
 
     if args.len == 2 and args.get(1) == "--version":
         print_version()
+        _tr_exit(0)
+
+    # Subcommands: `tauraroc fmt [-w] <file>` and `tauraroc lint <file>`.
+    mut subcmd = ""
+    if args.len >= 2:
+        mut a1 = args.get(1)
+        if a1 == "fmt" or a1 == "lint": subcmd = a1
+    if subcmd == "fmt":
+        mut write_in_place = false
+        mut fpath = ""
+        mut fk = 2
+        while fk < args.len:
+            mut fa = args.get(fk)
+            if fa == "-w" or fa == "--write": write_in_place = true
+            elif not str_starts_with(fa, "-"):
+                if fpath == "": fpath = fa
+            fk = fk + 1
+        if fpath == "":
+            print("error: fmt requires a file: tauraroc fmt [-w] <file.tr>")
+            _tr_exit(1)
+        run_fmt(fpath, write_in_place)
         _tr_exit(0)
 
     mut input_path  = ""
@@ -676,7 +735,13 @@ pub def main(args: Vec[str]):
     mut debug_mode  = false              # --debug         : ASAN + assertions
     mut strict_mode = false              # --strict        : alloc outside unsafe -> hard error
 
+    # `tauraroc lint <file>` runs resolution + semantic analysis and reports
+    # warnings/errors without producing an executable (like --check, but framed
+    # as linting). Skip the leading "lint" token in the arg scan below.
     mut i = 1
+    if subcmd == "lint":
+        check_only = true
+        i = 2
     while i < args.len:
         mut arg = args.get(i)
         if arg == "--version":
@@ -958,6 +1023,8 @@ pub def main(args: Vec[str]):
         main_class_set.insert(sema.nested_interfaces.get(nii).name, true)
         nii = nii + 1
 
+    if c_gen.emit_line_info:
+        c_gen.cur_src_file = to_fwd_slashes(input_path)
     mut main_c      = c_gen.generate_main_c(hir, main_class_set, main_fn_set)
     mut main_c_path = build_dir + "main.c"
     mut main_changed = true

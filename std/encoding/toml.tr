@@ -1,0 +1,485 @@
+# std.encoding.toml — TOML parser and serializer (v1, common subset).
+#
+# Supports: comments (`#`), bare/quoted keys, basic strings ("...") with
+# escapes, literal strings ('...'), integers, floats, booleans, arrays
+# ([...]), inline tables ({ k = v }), and `[table]` / `[a.b.c]` table
+# headers (nested tables). Dates/times are parsed as strings.
+#
+# Usage:
+#   from std.encoding.toml import TomlValue, Toml
+#   mut t = Toml.parse("title = \"hello\"\n[server]\nport = 8080\n")
+#   print(t.read().obj_get("server").read().obj_get("port").read().get_int())
+#   print(Toml.stringify(t))   # round-trips to canonical TOML
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_strlen(s: str) -> int
+    def _tr_str_to_float(s: str) -> float
+    def _tr_str_to_int(s: str) -> int
+    def _tr_int_to_str(n: int) -> str
+    def _tr_float_to_str(n: float) -> str
+
+# TomlValue.tag constants (mirrors the JSON model).
+pub def TOML_BOOL()  -> int: return 1
+pub def TOML_INT()   -> int: return 2
+pub def TOML_FLOAT() -> int: return 3
+pub def TOML_STR()   -> int: return 4
+pub def TOML_ARRAY() -> int: return 5
+pub def TOML_TABLE() -> int: return 6
+
+pub class TomlValue:
+    pub tag:   int
+    pub b_val: bool
+    pub i_val: int
+    pub f_val: float
+    pub s_val: str
+    pub items: Vec[Pointer[TomlValue]]   # array items OR table values
+    pub keys:  Vec[str]                   # table keys (parallel to items)
+
+extend TomlValue:
+    pub def _alloc() -> Pointer[TomlValue]:
+        mut raw = _tr_c_malloc(sizeof(TomlValue)) as Pointer[TomlValue]
+        mut v = TomlValue()
+        v.tag   = 0
+        v.b_val = false
+        v.i_val = 0
+        v.f_val = 0.0
+        v.s_val = ""
+        v.items = Vec[Pointer[TomlValue]].init(4)
+        v.keys  = Vec[str].init(4)
+        unsafe:
+            raw.write(v)
+            return raw
+
+    pub def init_bool(b: bool) -> Pointer[TomlValue]:
+        mut p = TomlValue._alloc()
+        mut v = p.read(); v.tag = 1; v.b_val = b
+        unsafe: p.write(v)
+        return p
+
+    pub def init_int(n: int) -> Pointer[TomlValue]:
+        mut p = TomlValue._alloc()
+        mut v = p.read(); v.tag = 2; v.i_val = n
+        unsafe: p.write(v)
+        return p
+
+    pub def init_float(f: float) -> Pointer[TomlValue]:
+        mut p = TomlValue._alloc()
+        mut v = p.read(); v.tag = 3; v.f_val = f
+        unsafe: p.write(v)
+        return p
+
+    pub def init_str(s: str) -> Pointer[TomlValue]:
+        mut p = TomlValue._alloc()
+        mut v = p.read(); v.tag = 4; v.s_val = s
+        unsafe: p.write(v)
+        return p
+
+    pub def init_array() -> Pointer[TomlValue]:
+        mut p = TomlValue._alloc()
+        mut v = p.read(); v.tag = 5
+        unsafe: p.write(v)
+        return p
+
+    pub def init_table() -> Pointer[TomlValue]:
+        mut p = TomlValue._alloc()
+        mut v = p.read(); v.tag = 6
+        unsafe: p.write(v)
+        return p
+
+    pub def is_bool(self)  -> bool: return self.tag == 1
+    pub def is_int(self)   -> bool: return self.tag == 2
+    pub def is_float(self) -> bool: return self.tag == 3
+    pub def is_str(self)   -> bool: return self.tag == 4
+    pub def is_array(self) -> bool: return self.tag == 5
+    pub def is_table(self) -> bool: return self.tag == 6
+
+    pub def get_bool(self)  -> bool:  return self.b_val
+    pub def get_int(self)   -> int:   return self.i_val
+    pub def get_float(self) -> float: return self.f_val
+    pub def get_str(self)   -> str:   return self.s_val
+
+    pub def push(self, v: Pointer[TomlValue]):
+        self.items.push(v)
+
+    pub def array_len(self) -> int:
+        return self.items.len
+
+    pub def array_get(self, i: int) -> Pointer[TomlValue]:
+        return self.items.get(i)
+
+    pub def obj_set(self, key: str, v: Pointer[TomlValue]):
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key:
+                self.items.set(i, v)
+                return
+            i = i + 1
+        self.keys.push(key)
+        self.items.push(v)
+
+    pub def obj_get(self, key: str) -> Pointer[TomlValue]:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key:
+                return self.items.get(i)
+            i = i + 1
+        return Pointer[TomlValue](0)
+
+    pub def obj_has(self, key: str) -> bool:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key: return true
+            i = i + 1
+        return false
+
+    pub def obj_len(self) -> int:
+        return self.keys.len
+
+    pub def obj_key(self, i: int) -> str:
+        return self.keys.get(i)
+
+    pub def obj_val(self, i: int) -> Pointer[TomlValue]:
+        return self.items.get(i)
+
+# ─── Parser ─────────────────────────────────────────────────────────────────
+
+pub class TomlParser:
+    pub src: str
+    pub pos: int
+    pub len: int
+
+extend TomlParser:
+    pub def init(src: str) -> TomlParser:
+        mut p = TomlParser()
+        p.src = src
+        p.pos = 0
+        p.len = _tr_strlen(src)
+        return p
+
+    pub def cur(self) -> int:
+        if self.pos >= self.len: return 0
+        return (self.src as Pointer[char]).offset(self.pos).read() as int
+
+    pub def peek_at(self, off: int) -> int:
+        mut q = self.pos + off
+        if q >= self.len: return 0
+        return (self.src as Pointer[char]).offset(q).read() as int
+
+    pub def advance(self):
+        self.pos = self.pos + 1
+
+    # Skip spaces/tabs only (not newlines).
+    pub def skip_inline_ws(self):
+        while self.pos < self.len:
+            mut c = self.cur()
+            if c == 32 or c == 9:
+                self.advance()
+            else:
+                break
+
+    # Skip whitespace, newlines, and full-line/trailing comments.
+    pub def skip_ws_and_comments(self):
+        while self.pos < self.len:
+            mut c = self.cur()
+            if c == 32 or c == 9 or c == 10 or c == 13:
+                self.advance()
+            elif c == 35:  # '#' comment to end of line
+                while self.pos < self.len and self.cur() != 10:
+                    self.advance()
+            else:
+                break
+
+    pub def is_bare_key_char(self, c: int) -> bool:
+        if c >= 97 and c <= 122: return true   # a-z
+        if c >= 65 and c <= 90:  return true   # A-Z
+        if c >= 48 and c <= 57:  return true   # 0-9
+        if c == 95 or c == 45:   return true   # '_' '-'
+        return false
+
+    pub def parse_key(self) -> str:
+        mut c = self.cur()
+        if c == 34 or c == 39:
+            return self.parse_quoted(c)
+        mut sb = StringBuilder.init(16)
+        while self.pos < self.len and self.is_bare_key_char(self.cur()):
+            sb.append_char(self.cur())
+            self.advance()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Parse a quoted string whose delimiter is `q` (34='"' basic, 39='\'' literal).
+    pub def parse_quoted(self, q: int) -> str:
+        self.advance()  # opening quote
+        mut sb = StringBuilder.init(32)
+        while self.pos < self.len:
+            mut c = self.cur()
+            if c == q:
+                self.advance()
+                break
+            if c == 92 and q == 34:  # escapes only in basic strings
+                self.advance()
+                mut esc = self.cur()
+                self.advance()
+                if esc == 110: sb.append_char(10)
+                elif esc == 116: sb.append_char(9)
+                elif esc == 114: sb.append_char(13)
+                elif esc == 92: sb.append_char(92)
+                elif esc == 34: sb.append_char(34)
+                elif esc == 98: sb.append_char(8)
+                elif esc == 102: sb.append_char(12)
+                else: sb.append_char(esc)
+            else:
+                sb.append_char(c)
+                self.advance()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def parse_value(self) -> Pointer[TomlValue]:
+        self.skip_inline_ws()
+        mut c = self.cur()
+        if c == 34: return TomlValue.init_str(self.parse_quoted(34))
+        if c == 39: return TomlValue.init_str(self.parse_quoted(39))
+        if c == 91: return self.parse_array()
+        if c == 123: return self.parse_inline_table()
+        # true / false
+        if c == 116 and self.peek_at(1) == 114:  # 't' 'r'...
+            self.pos = self.pos + 4
+            return TomlValue.init_bool(true)
+        if c == 102 and self.peek_at(1) == 97:    # 'f' 'a'...
+            self.pos = self.pos + 5
+            return TomlValue.init_bool(false)
+        return self.parse_number_or_datetime()
+
+    pub def parse_number_or_datetime(self) -> Pointer[TomlValue]:
+        mut start = self.pos
+        mut is_float = false
+        mut is_date = false
+        if self.cur() == 43 or self.cur() == 45: self.advance()  # +/-
+        while self.pos < self.len:
+            mut c = self.cur()
+            if c >= 48 and c <= 57:
+                self.advance()
+            elif c == 95:        # digit separator '_'
+                self.advance()
+            elif c == 46 or c == 101 or c == 69:  # '.' 'e' 'E'
+                is_float = true
+                self.advance()
+            elif c == 43 or c == 45:  # exponent sign
+                self.advance()
+            elif c == 58 or c == 84 or c == 90:  # ':' 'T' 'Z' (date/time)
+                is_date = true
+                self.advance()
+            else:
+                break
+        mut raw = ""
+        unsafe:
+            raw = self.src.slice(start, self.pos)
+        if is_date:
+            return TomlValue.init_str(raw)
+        # Strip '_' digit separators before numeric conversion.
+        mut clean = StringBuilder.init(16)
+        mut ri = 0
+        while ri < raw.len():
+            mut rc = (raw as Pointer[char]).offset(ri).read() as int
+            if rc != 95: clean.append_char(rc)
+            ri = ri + 1
+        mut cleaned = clean.to_owned()
+        clean.free()
+        if is_float:
+            return TomlValue.init_float(_tr_str_to_float(cleaned))
+        return TomlValue.init_int(_tr_str_to_int(cleaned))
+
+    pub def parse_array(self) -> Pointer[TomlValue]:
+        self.advance()  # '['
+        mut arr = TomlValue.init_array()
+        while true:
+            self.skip_ws_and_comments()
+            mut c = self.cur()
+            if c == 93:  # ']'
+                self.advance()
+                break
+            if c == 0: break
+            mut item = self.parse_value()
+            arr.read().push(item)
+            self.skip_ws_and_comments()
+            if self.cur() == 44: self.advance()  # ','
+        return arr
+
+    pub def parse_inline_table(self) -> Pointer[TomlValue]:
+        self.advance()  # '{'
+        mut tbl = TomlValue.init_table()
+        while true:
+            self.skip_inline_ws()
+            mut c = self.cur()
+            if c == 125:  # '}'
+                self.advance()
+                break
+            if c == 0: break
+            mut key = self.parse_key()
+            self.skip_inline_ws()
+            if self.cur() == 61: self.advance()  # '='
+            mut val = self.parse_value()
+            tbl.read().obj_set(key, val)
+            self.skip_inline_ws()
+            if self.cur() == 44: self.advance()  # ','
+        return tbl
+
+    # Navigate/create a nested table path (e.g. a.b.c) from `root`, returning
+    # the deepest table.
+    pub def descend(self, root: Pointer[TomlValue], path: Vec[str]) -> Pointer[TomlValue]:
+        mut cur = root
+        mut i = 0
+        while i < path.len:
+            mut seg = path.get(i)
+            mut nxt = cur.read().obj_get(seg)
+            if nxt as usize == 0 as usize:
+                nxt = TomlValue.init_table()
+                cur.read().obj_set(seg, nxt)
+            cur = nxt
+            i = i + 1
+        return cur
+
+    pub def parse_table_header(self) -> Vec[str]:
+        self.advance()  # '['
+        mut path = Vec[str].init(4)
+        while true:
+            self.skip_inline_ws()
+            mut c = self.cur()
+            if c == 93:  # ']'
+                self.advance()
+                break
+            if c == 0: break
+            if c == 46:  # '.'
+                self.advance()
+            else:
+                path.push(self.parse_key())
+        return path
+
+    pub def parse(self) -> Pointer[TomlValue]:
+        mut root = TomlValue.init_table()
+        mut cur = root
+        while self.pos < self.len:
+            self.skip_ws_and_comments()
+            mut c = self.cur()
+            if c == 0: break
+            if c == 91:  # '[' table header
+                mut path = self.parse_table_header()
+                cur = self.descend(root, path)
+            else:
+                mut key = self.parse_key()
+                self.skip_inline_ws()
+                if self.cur() == 61: self.advance()  # '='
+                mut val = self.parse_value()
+                cur.read().obj_set(key, val)
+        return root
+
+# ─── Serializer ───────────────────────────────────────────────────────────────
+
+pub def _toml_escape(s: str, sb: StringBuilder):
+    mut p = s as Pointer[char]
+    mut i = 0
+    mut n = _tr_strlen(s)
+    while i < n:
+        mut c = p.offset(i).read() as int
+        if c == 92: sb.append("\\\\")
+        elif c == 34: sb.append("\\\"")
+        elif c == 10: sb.append("\\n")
+        elif c == 9:  sb.append("\\t")
+        elif c == 13: sb.append("\\r")
+        else: sb.append_char(c)
+        i = i + 1
+
+# Write a scalar/array value (not a table) inline.
+pub def _toml_write_inline(node: TomlValue, sb: StringBuilder):
+    if node.tag == 1:
+        if node.b_val: sb.append("true")
+        else: sb.append("false")
+    elif node.tag == 2:
+        sb.append(_tr_int_to_str(node.i_val))
+    elif node.tag == 3:
+        sb.append(_tr_float_to_str(node.f_val))
+    elif node.tag == 4:
+        sb.append("\"")
+        _toml_escape(node.s_val, sb)
+        sb.append("\"")
+    elif node.tag == 5:
+        sb.append("[")
+        mut i = 0
+        while i < node.items.len:
+            if i > 0: sb.append(", ")
+            _toml_write_inline(node.items.get(i).read(), sb)
+            i = i + 1
+        sb.append("]")
+    elif node.tag == 6:
+        # Inline table form.
+        sb.append("{ ")
+        mut i = 0
+        while i < node.keys.len:
+            if i > 0: sb.append(", ")
+            sb.append(node.keys.get(i))
+            sb.append(" = ")
+            _toml_write_inline(node.items.get(i).read(), sb)
+            i = i + 1
+        sb.append(" }")
+
+# True if a value is a (non-inline) table that should become a [section].
+pub def _toml_is_table(node: TomlValue) -> bool:
+    return node.tag == 6
+
+# Write a table: scalar keys first, then nested [section]s. `prefix` is the
+# dotted path of the current table ("" for root).
+pub def _toml_write_table(node: TomlValue, prefix: str, sb: StringBuilder):
+    # Pass 1: scalar / array / inline values.
+    mut i = 0
+    while i < node.keys.len:
+        mut v = node.items.get(i).read()
+        if not _toml_is_table(v):
+            sb.append(node.keys.get(i))
+            sb.append(" = ")
+            _toml_write_inline(v, sb)
+            sb.append("\n")
+        i = i + 1
+    # Pass 2: nested tables as [section] headers.
+    i = 0
+    while i < node.keys.len:
+        mut v = node.items.get(i).read()
+        if _toml_is_table(v):
+            mut path = node.keys.get(i)
+            if prefix.len() > 0: path = prefix + "." + path
+            sb.append("\n[")
+            sb.append(path)
+            sb.append("]\n")
+            _toml_write_table(v, path, sb)
+        i = i + 1
+
+# ─── Public API ────────────────────────────────────────────────────────────────
+
+pub class Toml:
+    _dummy: int
+
+extend Toml:
+    pub def parse(src: str) -> Pointer[TomlValue]:
+        mut p = TomlParser.init(src)
+        return p.parse()
+
+    pub def stringify(v: Pointer[TomlValue]) -> str:
+        if v as usize == 0 as usize: return ""
+        mut sb = StringBuilder.init(256)
+        _toml_write_table(v.read(), "", sb)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def table()           -> Pointer[TomlValue]: return TomlValue.init_table()
+    pub def bool_val(b: bool)  -> Pointer[TomlValue]: return TomlValue.init_bool(b)
+    pub def int_val(n: int)    -> Pointer[TomlValue]: return TomlValue.init_int(n)
+    pub def float_val(f: float) -> Pointer[TomlValue]: return TomlValue.init_float(f)
+    pub def str_val(s: str)    -> Pointer[TomlValue]: return TomlValue.init_str(s)
+    pub def array()            -> Pointer[TomlValue]: return TomlValue.init_array()

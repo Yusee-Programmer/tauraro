@@ -1,0 +1,67 @@
+# tests/lang/07_toml.tr - std.encoding.toml parse/stringify round-trip.
+
+from std.test import TestRunner
+from std.encoding.toml import TomlValue, Toml
+
+def main():
+    mut t = TestRunner.init("07_toml")
+
+    t.section("scalars")
+    mut doc = Toml.parse("title = \"Tauraro\"\nport = 8080\nratio = 1.5\nenabled = true\n")
+    mut title: str = doc.read().obj_get("title").read().get_str()
+    t.assert_eq_str(title, "Tauraro", "string value")
+    t.assert_eq_int(doc.read().obj_get("port").read().get_int(), 8080, "int value")
+    t.assert_eq_float(doc.read().obj_get("ratio").read().get_float(), 1.5, 0.0001, "float value")
+    t.assert_true(doc.read().obj_get("enabled").read().get_bool(), "bool value")
+
+    t.section("integer separators + signs")
+    mut d2 = Toml.parse("big = 1_000_000\nneg = -42\n")
+    t.assert_eq_int(d2.read().obj_get("big").read().get_int(), 1000000, "underscore separators stripped")
+    t.assert_eq_int(d2.read().obj_get("neg").read().get_int(), -42, "negative int")
+
+    t.section("arrays")
+    mut d3 = Toml.parse("nums = [1, 2, 3]\nwords = [\"a\", \"b\"]\n")
+    mut arr = d3.read().obj_get("nums")
+    t.assert_eq_int(arr.read().array_len(), 3, "array length")
+    t.assert_eq_int(arr.read().array_get(0).read().get_int(), 1, "array elem 0")
+    t.assert_eq_int(arr.read().array_get(2).read().get_int(), 3, "array elem 2")
+    mut warr = d3.read().obj_get("words")
+    mut w0: str = warr.read().array_get(0).read().get_str()
+    t.assert_eq_str(w0, "a", "string array elem")
+
+    t.section("tables + dotted headers")
+    mut d4 = Toml.parse("[server]\nhost = \"localhost\"\nport = 9090\n\n[server.tls]\nenabled = false\n")
+    mut server = d4.read().obj_get("server")
+    t.assert_true(server.read().is_table(), "server is a table")
+    mut host: str = server.read().obj_get("host").read().get_str()
+    t.assert_eq_str(host, "localhost", "nested table string")
+    t.assert_eq_int(server.read().obj_get("port").read().get_int(), 9090, "nested table int")
+    mut tls = server.read().obj_get("tls")
+    t.assert_true(tls.read().is_table(), "deep table [server.tls]")
+    t.assert_false(tls.read().obj_get("enabled").read().get_bool(), "deep table bool")
+
+    t.section("comments + literal strings")
+    mut d5 = Toml.parse("# a comment\nname = 'literal'  # trailing\nx = 7\n")
+    mut nm: str = d5.read().obj_get("name").read().get_str()
+    t.assert_eq_str(nm, "literal", "literal string, comments ignored")
+    t.assert_eq_int(d5.read().obj_get("x").read().get_int(), 7, "value after comment")
+
+    t.section("inline tables")
+    mut d6 = Toml.parse("point = { x = 1, y = 2 }\n")
+    mut pt = d6.read().obj_get("point")
+    t.assert_true(pt.read().is_table(), "inline table parsed as table")
+    t.assert_eq_int(pt.read().obj_get("x").read().get_int(), 1, "inline table x")
+    t.assert_eq_int(pt.read().obj_get("y").read().get_int(), 2, "inline table y")
+
+    t.section("round-trip (parse -> stringify -> parse)")
+    mut original = "title = \"app\"\ncount = 3\n\n[db]\nname = \"main\"\n"
+    mut parsed1 = Toml.parse(original)
+    mut emitted: str = Toml.stringify(parsed1)
+    mut parsed2 = Toml.parse(emitted)
+    mut rt_title: str = parsed2.read().obj_get("title").read().get_str()
+    t.assert_eq_str(rt_title, "app", "round-trip top-level string")
+    t.assert_eq_int(parsed2.read().obj_get("count").read().get_int(), 3, "round-trip int")
+    mut rt_db: str = parsed2.read().obj_get("db").read().obj_get("name").read().get_str()
+    t.assert_eq_str(rt_db, "main", "round-trip nested table")
+
+    t.summary()

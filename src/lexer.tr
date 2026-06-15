@@ -112,6 +112,15 @@ pub class Lexer:
     pub pending_dedents: int    # dedents to emit before next token
     pub token_lines: Vec[int]   # parallel line numbers for each token
     pub token_cols: Vec[int]    # parallel 1-based columns for each token
+    # Comment capture (for `tauraroc fmt`): off by default so normal
+    # compilation pays nothing. When `record_comments` is set, each `#` comment
+    # is recorded with its line, text (after the '#'), and whether it trails
+    # code on the same line. Comments stay OUT of the token stream, so the
+    # parser/codegen are completely unaffected.
+    pub record_comments: bool
+    pub comment_lines:    Vec[int]
+    pub comment_texts:    Vec[str]
+    pub comment_trailing: Vec[bool]
 
     pub def init(source: str) -> Lexer:
         mut lx = Lexer()
@@ -132,6 +141,10 @@ pub class Lexer:
         lx.pending_dedents = 0
         lx.token_lines = Vec[int].init(1024)
         lx.token_cols = Vec[int].init(1024)
+        lx.record_comments = false
+        lx.comment_lines    = Vec[int].init(0)
+        lx.comment_texts    = Vec[str].init(0)
+        lx.comment_trailing = Vec[bool].init(0)
         return lx
 
     # Push the source location (line + column) for the token just emitted.
@@ -179,9 +192,17 @@ pub class Lexer:
             else:
                 break
 
-    pub def skip_comment(self):
-        while not self.at_end() and not char_is_newline(self.peek()):
-            self.advance()
+    pub def skip_comment(self, trailing: bool):
+        if self.record_comments:
+            mut sb = StringBuilder.init(32)
+            while not self.at_end() and not char_is_newline(self.peek()):
+                sb.append_char(self.advance())
+            self.comment_lines.push(self.line)
+            self.comment_texts.push(sb.to_string().as_str())
+            self.comment_trailing.push(trailing)
+        else:
+            while not self.at_end() and not char_is_newline(self.peek()):
+                self.advance()
 
     pub def read_int(self) -> Token:
         # Hexadecimal: 0x / 0X
@@ -415,7 +436,7 @@ pub class Lexer:
                 if char_is_newline(next_c) or next_c == 35:
                     if next_c == 35:
                         self.advance()
-                        self.skip_comment()
+                        self.skip_comment(false)   # standalone (own line)
                     else:
                         self.advance()
                         if next_c == 13 and self.peek() == 10: self.advance()
@@ -469,7 +490,7 @@ pub class Lexer:
                 continue
             if c == 35:
                 self.advance()
-                self.skip_comment()
+                self.skip_comment(true)   # trailing (code preceded it on this line)
                 if nesting == 0:
                     if not _peek_next_line_dot(self.src, self.pos, self.len):
                         tokens.push(Token.Newline)

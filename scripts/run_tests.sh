@@ -43,6 +43,25 @@ for f in "${FILES[@]}"; do
     fi
 done
 
+# --- Formatter idempotency check ------------------------------------------
+# `tauraroc fmt` must be idempotent: fmt(fmt(x)) == fmt(x). Verify on a couple
+# of representative example files (skipped silently if examples are absent).
+for FSAMPLE in examples/02_operators.tr examples/03_control_flow.tr; do
+    [ -f "$FSAMPLE" ] || continue
+    total=$((total + 1))
+    echo "==> fmt idempotency: $FSAMPLE"
+    f1=$("$TAURAROC" fmt "$FSAMPLE" 2>/dev/null)
+    f1file=$(mktemp)
+    printf '%s' "$f1" > "$f1file"
+    f2=$("$TAURAROC" fmt "$f1file" 2>/dev/null)
+    rm -f "$f1file"
+    if [ "$f1" != "$f2" ]; then
+        echo "  NOT IDEMPOTENT"
+        failed=$((failed + 1))
+        failed_files+=("fmt:$FSAMPLE")
+    fi
+done
+
 echo ""
 echo "==================================="
 echo "Test files: $total, failed: $failed"

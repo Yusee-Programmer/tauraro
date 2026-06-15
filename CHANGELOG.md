@@ -51,6 +51,12 @@ added here as each phase lands.
   statement's `flush_wraps`, matching `gen_args` for normal calls.
 
 ### Changed
+- Debug builds (`--debug`) now emit C `#line N "source.tr"` directives mapping
+  each generated statement back to its original Tauraro source file and line,
+  so GCC diagnostics and GDB backtraces reference the `.tr` source rather than
+  the generated C. Line directives are off by default (non-debug output is
+  unchanged). Paths are emitted with forward slashes for cross-platform C
+  string compatibility.
 - Incremental compilation: the build now compiles each module's generated C to
   its own object file (`gcc -c`) and links the objects, reusing the cached `.o`
   for any module whose generated C is byte-identical to the previous build (and
@@ -68,6 +74,24 @@ added here as each phase lands.
   is diagnostic-only and never affects codegen.)
 
 ### Added
+- `std/encoding/toml.tr`: a TOML parser and serializer (`TomlValue` tagged
+  tree + `Toml.parse`/`Toml.stringify`), modeled on `std/encoding/json.tr`.
+  Supports comments, bare/quoted keys, basic & literal strings, integers
+  (with `_` separators) / floats / booleans, arrays, inline tables, and
+  `[table]` / `[a.b.c]` nested table headers; round-trips. (YAML, a regex
+  backtracking engine, and other encodings remain deferred.)
+- `tauraroc fmt [-w] <file>`: a source formatter that re-emits canonically
+  formatted Tauraro, **preserving comments** (the lexer records them out-of-band
+  so the parser/codegen are unaffected). Standalone comments stay on their own
+  line; trailing comments stay attached to their code line. Binary/unary
+  sub-expressions are conservatively parenthesized so the output always
+  re-parses to the same AST. The formatter is idempotent (`fmt(fmt(x)) ==
+  fmt(x)`, verified on all formattable example files and in CI) and refuses to
+  rewrite a file containing a construct it cannot yet render (rather than
+  risk corrupting it).
+- `tauraroc lint <file>`: runs module resolution + semantic analysis and
+  reports warnings/errors without producing an executable.
+- CI / `scripts/run_tests.*` now include a formatter idempotency check.
 - `tests/lang/` and `tests/regression/` regression test suites (9 files,
   190 assertions) covering core language, collections, strings, classes &
   enums, error handling, concurrency, the #52/#54 string-collection fixes,

@@ -44,6 +44,24 @@ foreach ($f in $Files) {
     }
 }
 
+# --- Formatter idempotency check ------------------------------------------
+# `tauraroc fmt` must be idempotent: fmt(fmt(x)) == fmt(x).
+foreach ($FSAMPLE in @("examples/02_operators.tr", "examples/03_control_flow.tr")) {
+    if (-not (Test-Path $FSAMPLE)) { continue }
+    $total++
+    Write-Host "==> fmt idempotency: $FSAMPLE"
+    $f1 = & $TAURAROC fmt $FSAMPLE 2>$null | Out-String
+    $f1file = [System.IO.Path]::GetTempFileName()
+    Set-Content -Path $f1file -Value $f1 -NoNewline -Encoding utf8
+    $f2 = & $TAURAROC fmt $f1file 2>$null | Out-String
+    Remove-Item -Force $f1file -ErrorAction SilentlyContinue
+    if ($f1 -ne $f2) {
+        Write-Host "  NOT IDEMPOTENT"
+        $failed++
+        $failedFiles += "fmt:$FSAMPLE"
+    }
+}
+
 Write-Host ""
 Write-Host "==================================="
 Write-Host "Test files: $total, failed: $failed"
