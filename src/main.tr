@@ -305,6 +305,22 @@ pub def path_to_native(s: str) -> str:
         j = j + 1
     return buf
 
+# Convert backslashes to forward slashes, for embedding a path in a C string
+# literal (e.g. a `#line N "path"` directive). GCC/Clang accept forward slashes
+# on every platform, and forward slashes need no escaping inside a C string.
+pub def to_fwd_slashes(s: str) -> str:
+    mut n = 0
+    mut p = s as Pointer[char]
+    while p.offset(n).read() as int != 0: n = n + 1
+    mut buf = s.slice(0, n)
+    mut bp = buf as Pointer[char]
+    mut j = 0
+    while j < n:
+        if bp.offset(j).read() as int == 92:
+            unsafe: bp.offset(j).write(47 as char)  # '\' -> '/'
+        j = j + 1
+    return buf
+
 # Replace '.' with '_' in a dotted module path.
 pub def dot_to_safe(s: str) -> str:
     mut n = 0
@@ -473,6 +489,105 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
         if need_wsa:
             cmd = cmd + " -lws2_32 -mconsole"
     if verbose: print("  [CC] " + cmd)
+    return _tr_system(cmd)
+
+# Map a generated C file path to its object-file path (foo.c -> foo.o).
+pub def obj_path_for(c_path: str) -> str:
+    mut n = c_path.len()
+    if n > 2:
+        mut tail = c_path.slice(n - 2, n)
+        if tail == ".c":
+            return c_path.slice(0, n - 2) + ".o"
+    return c_path + ".o"
+
+# Incremental compile + link (Phase 7 / Tier1#3).
+#
+# Each module's C is compiled to its own .o with `gcc -c`; modules whose
+# generated .c was unchanged since the previous build (needs[i]==false) and
+# whose .o still exists are NOT recompiled - their cached .o is reused. All
+# .o files are then linked into the final executable. A global change to the
+# shared headers or compile flags forces `needs[i]=true` for every module
+# upstream in the caller, so header/flag changes invalidate the whole cache.
+#
+# This is correctness-preserving: identical .c + identical flags produce an
+# identical .o, so reusing it yields the same program as a from-scratch build.
+pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: str, inc_dir: str,
+                      link_paths: Vec[str], lib_flags: Vec[str],
+                      opt_level: str, verbose: bool, static_link: bool,
+                      target: str, sysroot: str, debug_mode: bool) -> int:
+    mut cc = detect_c_compiler()
+    mut triple = ""
+    mut cross_flags = ""
+    if target != "":
+        triple = resolve_target_triple(target)
+        cc = detect_cross_compiler(triple)
+        cross_flags = " --target=" + triple
+        cross_flags = cross_flags + target_extra_flags(triple)
+        if sysroot != "":
+            cross_flags = cross_flags + " --sysroot=\"" + sysroot + "\""
+    mut static_flag = ""
+    if static_link: static_flag = " -static"
+    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    if is_clang_compiler(cc):
+        warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
+    mut native_flags = ""
+    if target == "" and opt_level == "3":
+        native_flags = " -march=native -funroll-loops"
+    mut overflow_flag = ""
+    if opt_level != "3" and opt_level != "s":
+        overflow_flag = " -ftrapv"
+    mut dbg = ""
+    if debug_mode:
+        dbg = " -fsanitize=address,undefined -g"
+    # Flags common to both per-module `-c` compiles and the final link.
+    mut common = " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + dbg + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\""
+
+    # -- 1. Compile each changed module to its .o ------------------------------
+    mut o_files = Vec[str].init(c_files.len)
+    mut i = 0
+    mut compiled = 0
+    while i < c_files.len:
+        mut cpath = c_files.get(i)
+        mut opath = obj_path_for(cpath)
+        o_files.push(opath)
+        if needs.get(i) or not file_exists(opath):
+            mut ccmd = cc + common + " -c \"" + cpath + "\" -o \"" + opath + "\""
+            if verbose: print("  [CC -c] " + cpath)
+            mut crc = _tr_system(ccmd)
+            if crc != 0:
+                print("error: compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                return crc
+        else:
+            compiled = compiled + 1
+        i = i + 1
+    if verbose: print("  [incremental] reused " + str(compiled) + " of " + str(c_files.len) + " cached object(s)")
+
+    # -- 2. Link all .o into the output executable -----------------------------
+    mut cmd = cc + common + " -o \"" + exe_path + "\""
+    i = 0
+    while i < o_files.len:
+        cmd = cmd + " \"" + o_files.get(i) + "\""
+        i = i + 1
+    i = 0
+    while i < link_paths.len:
+        cmd = cmd + " \"" + link_paths.get(i) + "\""
+        i = i + 1
+    i = 0
+    while i < lib_flags.len:
+        cmd = cmd + " " + lib_flags.get(i)
+        i = i + 1
+    cmd = cmd + " -lm"
+    if _tr_is_windows():
+        mut need_wsa: bool = false
+        mut wi = 0
+        while wi < c_files.len:
+            mut cf = c_files.get(wi)
+            if _tr_str_contains(cf, "tcp.c") or _tr_str_contains(cf, "/net/"):
+                need_wsa = true
+            wi = wi + 1
+        if need_wsa:
+            cmd = cmd + " -lws2_32 -mconsole"
+    if verbose: print("  [LINK] " + cmd)
     return _tr_system(cmd)
 
 pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bool) -> int:
@@ -697,6 +812,9 @@ pub def main(args: Vec[str]):
 
     # -- C backend - modular output into build/ --------------------------------
     mut c_gen  = CGenerator.init()
+    # --debug: emit `#line N "src.tr"` directives so GCC/GDB diagnostics and
+    # backtraces map generated C back to the original Tauraro source.
+    c_gen.emit_line_info = debug_mode
     mut rt_h   = read_runtime_header(args.get(0), input_path)
 
     c_gen.register_program(hir)
@@ -707,17 +825,50 @@ pub def main(args: Vec[str]):
     mut build_dir = "build/"
     make_dir(build_dir)
 
+    # -- Incremental-build invalidation (Phase 7) ------------------------------
+    # The shared headers (tauraro_rt.h, tauraro_types.h) and the compile flags
+    # are inputs to EVERY module's object file. If any of them changed since
+    # the previous build, all cached .o files are stale and must be rebuilt.
+    # force_all carries that decision into the per-module needs_recompile flags.
+    mut types_h = c_gen.generate_types_header(hir)
+    types_h = types_h + c_gen.generate_module_compat(resolver.all_decl_modules, resolver.all_decls)
+    mut force_all = false
+    mut types_path = build_dir + "tauraro_types.h"
+    if file_exists(types_path):
+        if read_file(types_path) != types_h: force_all = true
+    else:
+        force_all = true
+    if rt_h != "":
+        mut rt_path = build_dir + "tauraro_rt.h"
+        if file_exists(rt_path):
+            if read_file(rt_path) != rt_h: force_all = true
+        else:
+            force_all = true
+    # Compile-flag signature: any change invalidates every object file.
+    mut flags_sig = "opt=" + opt_level + ";tgt=" + target
+    if static_link: flags_sig = flags_sig + ";static"
+    if debug_mode:  flags_sig = flags_sig + ";debug"
+    if sysroot != "": flags_sig = flags_sig + ";sysroot=" + sysroot
+    mut flags_path = build_dir + ".build_flags"
+    if file_exists(flags_path):
+        if read_file(flags_path) != flags_sig: force_all = true
+    else:
+        force_all = true
+    write_file(flags_path, flags_sig)
+
     # Write runtime headers to build/ and sync to runtime/.
     if rt_h != "":
         write_file(build_dir + "tauraro_rt.h", rt_h)
-    mut types_h = c_gen.generate_types_header(hir)
-    types_h = types_h + c_gen.generate_module_compat(resolver.all_decl_modules, resolver.all_decls)
-    write_file(build_dir + "tauraro_types.h", types_h)
+    write_file(types_path, types_h)
     if rt_h != "":
         sync_headers_to_runtime(rt_h, types_h)
 
     # -- Per-module C files ----------------------------------------------------
+    # all_c_files / needs_recompile stay parallel: needs_recompile[i] is true
+    # when module i's generated C changed (or force_all), so compile_all_c_-
+    # incremental knows which .o to rebuild vs reuse from the cache.
     mut all_c_files = Vec[str].init(32)
+    mut needs_recompile = Vec[bool].init(32)
 
     mut mi = 0
     while mi < resolver.mod_dot_paths.len:
@@ -752,9 +903,17 @@ pub def main(args: Vec[str]):
             c_path = build_dir + "module_" + dot_to_safe(dot_path) + ".c"
             depth  = 0
 
+        # Source file for this module's #line directives (parallel array).
+        if c_gen.emit_line_info and mi < resolver.mod_file_paths.len:
+            c_gen.cur_src_file = to_fwd_slashes(resolver.mod_file_paths.get(mi))
         mut mod_c = c_gen.generate_module_c(hir, class_set, fn_set, depth)
-        write_file(c_path, mod_c)
+        mut mod_changed = true
+        if not force_all:
+            if file_exists(c_path):
+                if read_file(c_path) == mod_c: mod_changed = false
+        if mod_changed: write_file(c_path, mod_c)
         all_c_files.push(c_path)
+        needs_recompile.push(mod_changed)
         mi = mi + 1
 
     # -- Main module C file (main.c) -------------------------------------------
@@ -801,8 +960,13 @@ pub def main(args: Vec[str]):
 
     mut main_c      = c_gen.generate_main_c(hir, main_class_set, main_fn_set)
     mut main_c_path = build_dir + "main.c"
-    write_file(main_c_path, main_c)
+    mut main_changed = true
+    if not force_all:
+        if file_exists(main_c_path):
+            if read_file(main_c_path) == main_c: main_changed = false
+    if main_changed: write_file(main_c_path, main_c)
     all_c_files.push(main_c_path)
+    needs_recompile.push(main_changed)
 
     if emit_mode == "c":
         print("Modular C output written to: " + build_dir)
@@ -847,15 +1011,14 @@ pub def main(args: Vec[str]):
         # Default (no -o): place in ./build/<srcname>[.exe].
         exe_path = build_dir + exe_name + exe_ext
 
-    if verbose: print("[5/5] Linking " + str(all_c_files.len) + " modules -> " + exe_path)
-    mut rc = compile_all_c(all_c_files, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode)
+    if verbose: print("[5/5] Compiling + linking " + str(all_c_files.len) + " modules -> " + exe_path)
+    # Incremental compile + link (Phase 7): per-module .o with cache reuse for
+    # unchanged modules, then a single link. build/ is intentionally kept
+    # populated (.c + .o + headers) so the next build can reuse cached objects.
+    mut rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode)
     if rc != 0:
         print("error: compilation failed (exit code " + str(rc) + ")")
         _tr_exit(rc)
-
-    # When -o is given: clean all intermediate files from build/, leaving only the exe.
-    if output_path != "":
-        cleanup_build(build_dir, all_c_files)
 
     if verbose: print("Done: " + exe_path)
 

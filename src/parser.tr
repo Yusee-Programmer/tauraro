@@ -32,12 +32,45 @@ pub def box_asttype(t: AstType) -> Pointer[AstType]:
         p.write(t)
         return p
 
+# Extract the `n`-th (1-based) line of `src`, without its trailing newline.
+# Returns "" if `n` is out of range. Used for source-snippet diagnostics.
+pub def _nth_source_line(src: str, n: int) -> str:
+    if n <= 0: return ""
+    mut p = src as Pointer[char]
+    mut i = 0
+    mut line = 1
+    mut sb = StringBuilder.init(80)
+    while True:
+        mut c = 0
+        unsafe:
+            c = p.offset(i).read() as int
+        if c == 0: break
+        if line == n:
+            if c == 10 or c == 13: break
+            sb.append_char(c)
+        elif line > n:
+            break
+        if c == 10: line = line + 1
+        i = i + 1
+    return sb.to_string().as_str()
+
+# A string of `n` spaces (for aligning a caret under a source column).
+pub def _spaces(n: int) -> str:
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    while i < n:
+        sb.append_char(32)
+        i = i + 1
+    return sb.to_string().as_str()
+
 # --- Parser class --------------------------------------------------------------
 
 pub class Parser:
     pub tokens: Vec[Token]
     pub pos: int
     pub lines: Vec[int]
+    pub cols: Vec[int]     # parallel 1-based columns (from lexer.token_cols); may be empty
+    pub src_text: str      # full source text, for source-snippet diagnostics ("" if unknown)
     pub error_count: int   # number of parse errors emitted (0 = clean parse)
     pub current_file: str  # source path, for diagnostic messages ("" if unknown)
 
@@ -46,6 +79,8 @@ extend Parser:
         mut p = Parser()
         p.tokens = tokens
         p.lines = lines
+        p.cols = Vec[int].init(0)
+        p.src_text = ""
         p.pos = 0
         p.error_count = 0
         p.current_file = ""
@@ -105,6 +140,45 @@ extend Parser:
         if self.lines.len > 0:
             return self.lines.get(self.lines.len - 1)
         return 0
+
+    # 1-based column of the current token (0 if column info is unavailable,
+    # e.g. for the f-string sub-parser which is given no token_cols).
+    pub def cur_col(self) -> int:
+        if self.pos < self.cols.len:
+            return self.cols.get(self.pos)
+        if self.cols.len > 0:
+            return self.cols.get(self.cols.len - 1)
+        return 0
+
+    # Render a diagnostic with the rustc-style format:
+    #   file:line:col: error: <msg>
+    #      N | <source line>
+    #        |     ^
+    #        FIX: <hint>
+    # Degrades gracefully: omits the col when 0, and the snippet/caret when
+    # the source text or column is unavailable.
+    pub def emit_diag(self, msg: str, hint: str):
+        mut ln  = self.cur_line()
+        mut col = self.cur_col()
+        mut loc = ""
+        if self.current_file.len() > 0:
+            loc = self.current_file + ":"
+        mut head = loc + str(ln)
+        if col > 0:
+            head = head + ":" + str(col)
+        print(head + ": error: " + msg)
+        # Source snippet + caret, when we have both the text and a column.
+        if self.src_text.len() > 0 and ln > 0:
+            mut srcline = _nth_source_line(self.src_text, ln)
+            if srcline.len() > 0:
+                mut gutter = "   " + str(ln) + " | "
+                print(gutter + srcline)
+                if col > 0:
+                    mut pad = _spaces(gutter.len() + col - 1)
+                    print(pad + "^")
+        if hint.len() > 0:
+            print("       FIX: " + hint)
+        self.error_count = self.error_count + 1
 
     pub def consume_ident(self) -> str:
         match self.peek():
@@ -1708,12 +1782,7 @@ extend Parser:
                     tok_desc = "'}'"
                     hint = "check for an extra '}' or a missing matching '{'."
                 case _: pass
-            mut loc = ""
-            if self.current_file.len() > 0:
-                loc = self.current_file + ":"
-            print(loc + str(self.cur_line()) + ": error: unexpected " + tok_desc + " in expression")
-            print("       FIX: " + hint)
-            self.error_count = self.error_count + 1
+            self.emit_diag("unexpected " + tok_desc + " in expression", hint)
             self.pos = self.pos + 1
         return box_expr(Expr.ELitNone)
 

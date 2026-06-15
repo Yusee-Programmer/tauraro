@@ -2503,7 +2503,21 @@ static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
 }
 static char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
 static char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
-static char* _tr_float_to_c_lit(double n)  { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%.17g",n); return b; }
+static char* _tr_float_to_c_lit(double n) {
+    char* b=(char*)TAURARO_ALLOC(32);
+    int len = snprintf(b,32,"%.17g",n);
+    /* %g on whole numbers (e.g. 7.0 -> "7") drops any marker that tells the C
+     * compiler this is a floating-point literal, so "7 / 2" would silently
+     * become integer division. Append ".0" when no '.', exponent, or
+     * inf/nan marker is present. */
+    int has_marker = 0;
+    for (int i = 0; i < len; i++) {
+        char c = b[i];
+        if (c=='.' || c=='e' || c=='E' || c=='n' || c=='N' || c=='i' || c=='I') { has_marker = 1; break; }
+    }
+    if (!has_marker) { b[len]='.'; b[len+1]='0'; b[len+2]='\0'; }
+    return b;
+}
 static char* _tr_bool_to_str(bool b)       { return b ? "true" : "false"; }
 
 /* _TR_AUTO_STR — convert any scalar to char* for f-string / print with unknown type.

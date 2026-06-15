@@ -171,6 +171,8 @@ pub class CGenerator:
     pub defer_stack:      Vec[str]                # deferred C statements for current function (LIFO)
     pub wrap_temp_decls:  Vec[str]                # pending "TrStr _wtN = (_tr_str_wrap(...))" decls for the current top-level expr
     pub wrap_temp_names:  Vec[str]                # names of the above, to _tr_str_release after the expr is consumed
+    pub emit_line_info:   bool                    # --debug: emit `#line N "src.tr"` directives for SLineMarker
+    pub cur_src_file:     str                     # source file of the module currently being generated (for #line)
 
     pub def init() -> CGenerator:
         mut g = CGenerator()
@@ -217,6 +219,8 @@ pub class CGenerator:
         g.defer_stack     = Vec[str].init(0)
         g.wrap_temp_decls = Vec[str].init(0)
         g.wrap_temp_names = Vec[str].init(0)
+        g.emit_line_info  = false
+        g.cur_src_file    = ""
         return g
 
     pub def next_temp(self) -> str:
@@ -2220,13 +2224,40 @@ pub class CGenerator:
         return e_s
 
     # Dict value arg: TrMap values are void*, so str-typed values must be boxed.
+    # The box takes its OWN reference (_tr_str_retain), mirroring
+    # List_TrStr_append's retain-on-insert (#52): each stored box owns a ref
+    # that Dict_free_strval/_tr_idict_free_strval releases at dict teardown.
+    # Without the retain, set'ing the SAME str local under two keys would make
+    # two boxes alias one reference -> double-free when the dict is freed.
+    #
+    # A FRESH str value (concat/call/method, rc=1, not bound to a local) is
+    # hoisted to a temp and released by the enclosing statement's flush_wraps,
+    # so retain(+1)+release(-1) nets to the single ref now owned by the box.
+    # A borrowed value (str local/param/field) keeps its own ref (released by
+    # its own scope-exit auto-drop, now that mark_escaped_str_args no longer
+    # excludes Dict/Map value args - see sema.tr); the box's retain is the
+    # independent reference the dict needs.
     pub def dict_val_arg(self, e: Pointer[HirExpr]) -> str:
         mut e_s = self.gen_expr(e)
-        if _is_str_type(hir_expr_type(e).name): return "_tr_str_box(" + e_s + ")"
+        if _is_str_type(hir_expr_type(e).name):
+            if self._is_fresh_str_expr(e):
+                mut tmp = "_dvt" + self.next_temp()
+                self.wrap_temp_decls.push("TrStr " + tmp + " = (" + e_s + ")")
+                self.wrap_temp_names.push(tmp)
+                return "_tr_str_box(_tr_str_retain(" + tmp + "))"
+            return "_tr_str_box(_tr_str_retain(" + e_s + "))"
         return e_s
 
     # Like gen_args, but unwraps any TrStr-typed argument to raw char* via
     # _tr_strz - for direct calls to legacy `_tr_*` runtime helpers.
+    #
+    # A FRESH str arg (concat/call/method) produces a rc=1 TrStr that is never
+    # bound to a local, so extracting its `.data` via a bare `_tr_strz()` and
+    # discarding the struct leaks both of its heap blocks. Mirror gen_args:
+    # hoist the fresh TrStr to a temp, use `tmp.data`, and record the temp for
+    # release by the enclosing statement's flush_wraps. Borrowed args (idents/
+    # literals/`_tr_str_wrap(...)` results) go through strz() unchanged - strz
+    # already hoists the wrap case and `_tr_strz` on a borrowed value is safe.
     pub def gen_args_extern(self, args: Vec[Pointer[HirExpr]]) -> str:
         mut s = ""
         mut i = 0
@@ -2234,7 +2265,15 @@ pub class CGenerator:
             if i > 0: s = s + ", "
             mut a = args.get(i)
             mut a_ty_n: str = hir_expr_type(a).name
-            if _is_str_type(a_ty_n): s = s + self.strz(self.gen_expr(a))
+            if _is_str_type(a_ty_n):
+                mut a_s = self.gen_expr(a)
+                if self._is_fresh_str_expr(a):
+                    mut tmp = "_aet" + self.next_temp()
+                    self.wrap_temp_decls.push("TrStr " + tmp + " = (" + a_s + ")")
+                    self.wrap_temp_names.push(tmp)
+                    s = s + tmp + ".data"
+                else:
+                    s = s + self.strz(a_s)
             else: s = s + self.gen_expr(a)
             i = i + 1
         return s
@@ -4623,6 +4662,16 @@ pub class CGenerator:
             case HirStmt.SBreak: self.w(pad + "break;\n")
             case HirStmt.SContinue: self.w(pad + "continue;\n")
             case HirStmt.SPass: self.w(pad + "/* pass */\n")
+            case HirStmt.SLineMarker(ln):
+                # In --debug builds, emit a C `#line` directive so GCC/GDB map
+                # the following generated C back to the original .tr source
+                # (file + line). `#line` must start at column 0. Otherwise
+                # render the same no-op comment the marker replaced, keeping
+                # non-debug output identical.
+                if self.emit_line_info and self.cur_src_file.len() > 0:
+                    self.w("#line " + str(ln) + " \"" + self.cur_src_file + "\"\n")
+                else:
+                    self.w(pad + "/* pass */\n")
             case HirStmt.SFree(name): self.w(pad + "if (" + name + ") { free(" + name + "); " + name + " = NULL; }\n")
             case HirStmt.SMultiLet(names, is_mut, val):
                 self.gen_multi_let(names, is_mut, val, indent)

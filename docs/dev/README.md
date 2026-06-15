@@ -12,6 +12,7 @@ Documentation](../std/README.md) instead.
 
 | # | File | Topics |
 |---|------|--------|
+| 00 | [Versioning & Stability Policy](00_versioning_policy.md) | Pre-1.0 versioning rules, where the version string lives, CHANGELOG.md conventions, error-code stability |
 | 01 | [How the Compiler Works](01_architecture.md) | Lexer → Parser → AST → Resolver → Sema/HIR → CGenerator pipeline, ownership/escape analysis, generic monomorphization, how to add a new keyword/statement |
 | 02 | [Building and Contributing](02_contributing.md) | Self-hosting bootstrap (gen1→gen2→gen3), "never patch generated C", runtime header sync, blessing checklist, commit conventions |
 | 03 | [Memory Model Internals](03_memory_model_internals.md) | `TrStr` refcounting, auto-drop/escape analysis, wrap-hoist, `List_TrStr`/`Dict_free_strval`, best practices for stdlib authors |

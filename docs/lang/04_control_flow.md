@@ -153,13 +153,15 @@ abs_val = x if x >= 0 else -x
 
 The syntax is: `value_if_true if condition else value_if_false`.
 
-**Compiler rule:** If the two branches produce different types, the compiler errors with [T-2].
+**Compiler rule:** If the two branches produce different types, the compiler errors.
+(This is a general type-mismatch diagnostic, not yet assigned a stable `[T-N]`
+code — see "Reserved" in [19 — Compiler Errors](19_compiler_errors.md).)
 
 #### Common Mistakes
 
 ```python
 # Type mismatch in branches:
-result = "ok" if success else 0    # ERROR [T-2]: branches have types str and int
+result = "ok" if success else 0    # ERROR: branches have types str and int
 result = "ok" if success else "error"   # CORRECT
 ```
 

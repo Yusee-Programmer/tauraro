@@ -1,0 +1,83 @@
+# tests/lang/06_concurrency.tr
+# Concurrency: Thread.spawn/join, Atomic[T], ThreadLocal[T], Mutex.
+
+from std.test import TestRunner
+
+def inc_task(counter: Atomic[int]) -> void:
+    mut i = 0
+    while i < 1000:
+        counter.add(1)
+        i = i + 1
+
+def sleep_task(ms: int) -> void:
+    Thread.sleep(ms)
+
+def local_task(tl: ThreadLocal[int]) -> void:
+    tl.set(999)
+
+async def test_thread_spawn(t: TestRunner):
+    mut t1: Thread = Thread.spawn(sleep_task, 10)
+    mut t2: Thread = Thread.spawn(sleep_task, 10)
+    t1.join()
+    t2.join()
+    t.assert_true(true, "Thread.spawn/join completes")
+
+async def test_atomic(t: TestRunner):
+    mut counter: Atomic[int] = Atomic.new(0)
+    task_group:
+        spawn inc_task(counter)
+        spawn inc_task(counter)
+        spawn inc_task(counter)
+    mut total = counter.load()
+    t.assert_eq_int(total, 3000, "3 tasks x 1000 increments == 3000")
+
+    mut old = counter.swap(0)
+    t.assert_eq_int(old, 3000, "swap returns old value")
+    t.assert_eq_int(counter.load(), 0, "swap sets new value")
+
+    mut ok1 = counter.cas(0, 42)
+    t.assert_true(ok1, "cas succeeds when current == expected")
+    t.assert_eq_int(counter.load(), 42, "cas updates value on success")
+
+    mut ok2 = counter.cas(0, 99)
+    t.assert_false(ok2, "cas fails when current != expected")
+    t.assert_eq_int(counter.load(), 42, "cas leaves value unchanged on failure")
+
+    counter.free()
+
+async def test_thread_local(t: TestRunner):
+    mut tl: ThreadLocal[int] = ThreadLocal.new(0)
+    tl.set(100)
+    t.assert_eq_int(tl.get(), 100, "main thread sets/gets its own value")
+
+    mut th: Thread = Thread.spawn(local_task, tl)
+    th.join()
+    t.assert_eq_int(tl.get(), 100, "main thread value unaffected by spawned thread")
+
+    tl.free()
+
+async def test_mutex(t: TestRunner):
+    mut m: Mutex[int] = Mutex.init(0)
+    mut v = m.get()
+    t.assert_eq_int(v, 0, "mutex initial value")
+    m.set(42)
+    t.assert_eq_int(m.get(), 42, "mutex value after set")
+    m.unlock()
+    t.assert_true(true, "mutex unlock ok")
+
+async def main():
+    mut t = TestRunner.init("06_concurrency")
+
+    t.section("Thread.spawn / join")
+    await test_thread_spawn(t)
+
+    t.section("Atomic[int]")
+    await test_atomic(t)
+
+    t.section("ThreadLocal[int]")
+    await test_thread_local(t)
+
+    t.section("Mutex auto-unlock")
+    await test_mutex(t)
+
+    t.summary()

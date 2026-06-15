@@ -125,6 +125,7 @@ pub enum HirStmt:
     SChanSelect(cases: Vec[Pointer[HirChanSelectArm]])
     SDefer(stmt: Pointer[HirStmt])   # defer - deferred execution at function exit
     SAutoDrop(name: str, class_name: str)  # compiler-inserted .free() for an owned, unmoved, unborrowed local going out of scope
+    SLineMarker(n: int)   # source-line marker (1 per source statement); emits a `#line` directive in --debug builds, else a no-op comment
 
 pub class HirBlock:
     pub stmts: Vec[Pointer[HirStmt]]

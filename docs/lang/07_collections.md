@@ -182,7 +182,7 @@ Fix: `mut data: List[int] = []`
 
 **Mixed element types:**
 ```python
-mut nums: List[int] = [1, 2, "three"]    # ERROR [T-2]: "three" has type str, expected int
+mut nums: List[int] = [1, 2, "three"]    # ERROR: "three" has type str, expected int
 ```
 Fix: All elements must be the same type.
 
@@ -190,9 +190,14 @@ Fix: All elements must be the same type.
 ```python
 mut ints:   List[int]   = []
 mut floats: List[float] = [1.0, 2.0]
-ints = floats    # ERROR [T-2]: incompatible List types
+ints = floats    # ERROR: incompatible List types
 ```
 Fix: Convert explicitly: `for x in floats: ints.append(x as int)`
+
+> Note: `[T-2]` is reserved for the Sendable field-type check described in
+> [16 — Concurrency](16_concurrency.md); the List type-mismatch diagnostics on
+> this page are not yet assigned a stable code (see "Reserved" in
+> [19 — Compiler Errors](19_compiler_errors.md)).
 
 **Out-of-bounds access:**
 ```python
@@ -760,7 +765,7 @@ Fix: `mut data: List[int] = []`
 
 ```python
 mut nums: List[int] = [1, 2, "three"]
-# ERROR [T-2]: element "three" has type str, expected int
+# ERROR: element "three" has type str, expected int
 ```
 Fix: Use a consistent element type. All elements must be the same type.
 
@@ -769,7 +774,7 @@ Fix: Use a consistent element type. All elements must be the same type.
 ```python
 mut ints:   List[int]   = []
 mut floats: List[float] = [1.0, 2.0]
-ints = floats    # ERROR [T-2]: incompatible List types
+ints = floats    # ERROR: incompatible List types
 ```
 Fix: Convert explicitly: `for x in floats: ints.append(x as int)`
 

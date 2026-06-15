@@ -1,0 +1,159 @@
+# tests/lang/05_error_handling.tr
+# Error handling: throws/?/Result[T,E], try/except/finally, custom error types.
+
+from std.test import TestRunner
+
+def parse_int_safe(s: str) throws str -> int:
+    if len(s) == 0:
+        raise("empty string")
+    mut i = 0
+    mut result = 0
+    while i < len(s):
+        mut code = ord(s[i + 0])
+        if code < 48 or code > 57:
+            raise(f"not a digit at position {i}: '{s[i + 0]}'")
+        result = result * 10 + (code - 48)
+        i += 1
+    return result
+
+def doubled(s: str) throws str -> int:
+    mut n = parse_int_safe(s)?
+    return n * 2
+
+def quadrupled(s: str) throws str -> int:
+    mut n = doubled(s)?
+    return n * 2
+
+class ParseError:
+    pub message:  str
+    pub position: int
+
+extend ParseError:
+    pub def init(msg: str, pos: int) -> ParseError:
+        mut e = ParseError()
+        e.message  = msg
+        e.position = pos
+        return e
+
+def parse_strict(s: str) throws ParseError -> int:
+    if len(s) == 0:
+        raise(ParseError.init("empty input", 0))
+    mut i = 0
+    while i < len(s):
+        if ord(s[i + 0]) < 48 or ord(s[i + 0]) > 57:
+            raise(ParseError.init(f"unexpected char '{s[i + 0]}'", i))
+        i += 1
+    return int(s)
+
+def risky_divide(a: int, b: int) -> int:
+    if b == 0:
+        raise("division by zero")
+    return a / b
+
+def level3(s: str) throws str -> int:
+    return parse_int_safe(s)?
+
+def level2(s: str) throws str -> int:
+    return level3(s)?
+
+def level1(s: str) throws str -> int:
+    return level2(s)?
+
+def main():
+    mut t = TestRunner.init("05_error_handling")
+
+    t.section("throws -> Result[T,E]")
+    mut r1: Result[int, str] = parse_int_safe("42")
+    t.assert_true(r1.is_ok, "valid input -> is_ok")
+    t.assert_eq_int(r1.ok, 42, "Result.ok holds parsed value")
+
+    mut r2: Result[int, str] = parse_int_safe("abc")
+    t.assert_true(r2.is_err, "invalid input -> is_err")
+
+    mut r3: Result[int, str] = parse_int_safe("")
+    t.assert_true(r3.is_err, "empty input -> is_err")
+    t.assert_eq_str(r3.err, "empty string", "error message for empty input")
+
+    t.section("? propagation")
+    mut d1: Result[int, str] = doubled("7")
+    t.assert_true(d1.is_ok, "doubled(7) is_ok")
+    t.assert_eq_int(d1.ok, 14, "doubled(7) == 14")
+
+    mut d2: Result[int, str] = doubled("xyz")
+    t.assert_true(d2.is_err, "doubled(xyz) is_err")
+
+    mut q1: Result[int, str] = quadrupled("3")
+    t.assert_true(q1.is_ok, "quadrupled(3) is_ok")
+    t.assert_eq_int(q1.ok, 12, "quadrupled(3) == 12")
+
+    t.section("custom error type")
+    mut ps1: Result[int, ParseError] = parse_strict("123")
+    t.assert_true(ps1.is_ok, "parse_strict valid is_ok")
+    t.assert_eq_int(ps1.ok, 123, "parse_strict valid value")
+
+    mut ps2: Result[int, ParseError] = parse_strict("12x4")
+    t.assert_true(ps2.is_err, "parse_strict invalid is_err")
+    t.assert_eq_int(ps2.err.position, 2, "ParseError carries position")
+
+    t.section("try / except")
+    try:
+        mut result = risky_divide(10, 2)
+        t.assert_eq_int(result, 5, "10 / 2 == 5, no exception")
+    except e:
+        t.fail("unexpected exception: " + e)
+
+    try:
+        mut result2 = risky_divide(10, 0)
+        t.fail("expected exception, got result")
+    except e:
+        t.assert_eq_str(e, "division by zero", "caught division-by-zero message")
+
+    t.section("try / except / finally")
+    mut finally_ran = false
+    mut except_ran = false
+    try:
+        raise("something went wrong")
+    except e:
+        except_ran = true
+    finally:
+        finally_ran = true
+    t.assert_true(except_ran, "except block ran")
+    t.assert_true(finally_ran, "finally block ran after except")
+
+    mut cleanup_ran = false
+    try:
+        pass
+    finally:
+        cleanup_ran = true
+    t.assert_true(cleanup_ran, "finally runs without exception")
+
+    t.section("nested try")
+    mut outer_msg = ""
+    try:
+        try:
+            raise("inner error")
+        except e:
+            raise("outer error propagated from inner")
+    except e:
+        outer_msg = e
+    t.assert_eq_str(outer_msg, "outer error propagated from inner", "nested try re-raise propagates")
+
+    t.section("mixed models")
+    mut converted = false
+    try:
+        mut r: Result[int, str] = parse_int_safe("hello")
+        if r.is_err:
+            raise(r.err)
+    except e:
+        converted = true
+    t.assert_true(converted, "Result error converted to exception")
+
+    t.section("deep call chain")
+    mut chain_r: Result[int, str] = level1("999")
+    t.assert_true(chain_r.is_ok, "deep chain ok")
+    t.assert_eq_int(chain_r.ok, 999, "deep chain value propagated")
+
+    mut chain_e: Result[int, str] = level1("bad")
+    t.assert_true(chain_e.is_err, "deep chain error propagated")
+
+    t.summary()
