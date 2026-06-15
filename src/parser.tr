@@ -1863,13 +1863,24 @@ extend Parser:
             self.expect_newline()
 
         mut is_public = False
-        match self.peek():
-            case Token.KwPub:
-                is_public = True
-                self.pos = self.pos + 1
-        
-            case _:
-                pass
+        mut is_export = False
+        # Leading visibility modifiers: `pub` and/or `export` in any order.
+        # `export` implies public (the symbol must be visible to be exported).
+        mut _scan_mods = True
+        while _scan_mods:
+            _scan_mods = False
+            match self.peek():
+                case Token.KwPub:
+                    is_public = True
+                    self.pos = self.pos + 1
+                    _scan_mods = True
+                case Token.KwExport:
+                    is_export = True
+                    is_public = True
+                    self.pos = self.pos + 1
+                    _scan_mods = True
+                case _:
+                    pass
         match self.peek():
             case Token.KwFrom:
                 return self.parse_from_import()
@@ -1890,6 +1901,7 @@ extend Parser:
                 mut f = self.parse_function_def(False)
                 f.line = _fline
                 f.is_public = is_public
+                f.is_export = is_export
                 f.decorators = decorators
                 return box_decl(Decl.DFunction(f))
             case Token.KwClass:
