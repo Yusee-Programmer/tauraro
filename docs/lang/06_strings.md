@@ -17,7 +17,9 @@ A `str` in Tauraro is a pointer to a null-terminated UTF-8 byte sequence. The co
 9. [Character Access](#character-access)
 10. [StringBuilder Pattern](#stringbuilder-pattern)
 11. [Raw Byte Access](#raw-byte-access)
-12. [Common String Mistakes](#common-string-mistakes)
+12. [Memory: Avoiding String-Related Leaks and Corruption](#memory-avoiding-string-related-leaks-and-corruption)
+13. [StringBuilder: as_str() vs to_owned() / to_string()](#stringbuilder-as_str-vs-to_owned--to_string)
+14. [Common String Mistakes](#common-string-mistakes)
 
 ---
 
@@ -729,6 +731,149 @@ Fix: `if s[i] as int == 65:`  or  `if s[i] == 'A':`
   mut SPACE:   int = 32
   ```
 - For UTF-8 processing, always document whether the function handles multi-byte characters or ASCII-only.
+
+---
+
+## Memory: Avoiding String-Related Leaks and Corruption
+
+### When to use
+
+Read this section any time you pass a **freshly computed string expression**
+(not a plain variable) directly into a function or method call — especially
+`+` concatenation results, `.to_str()`/`.to_string()` results, or the return
+value of another call.
+
+### How it works
+
+Under the hood, `str` is a reference-counted `TrStr` (`{rc, len, data}`). The
+compiler automatically inserts `retain`/`release` calls so that heap strings
+are freed exactly once, at scope exit, with no manual `free()`. This works
+correctly for the overwhelming majority of code, including:
+
+```python
+mut name = "Tauraro"
+mut msg  = "Hello, " + name + "!"   # heap TrStr, freed at scope exit — fine
+print(msg)
+
+mut combined = a.to_str() + "-" + b.to_str()   # fine: bound to a local first
+log(combined)
+```
+
+**The one pattern to avoid** is passing a *freshly constructed* string
+expression **directly** as a call argument, without binding it to a local
+first:
+
+```python
+# AVOID — fresh concat expression passed directly as a call argument
+resp.set_header("Cache-Control", "public, max-age=" + max_age.to_str())
+```
+
+In most cases the compiler's wrap-hoist pass handles this safely. But for some
+call-site shapes (e.g. inside conditionals, nested calls, or methods on
+objects that store the string), a fresh `+`/`.to_str()`/`.to_string()`/call
+expression passed straight into another call can corrupt unrelated memory or
+leak — and the symptom often shows up far away from the actual call (a
+different `Dict`/`Map` entry comes back garbled, or a crash appears only under
+load), which makes it hard to diagnose from the call site alone.
+
+### Fix — bind fresh string expressions to a `mut` local first
+
+```python
+# SAFE — bind the fresh expression to a local, then pass the local
+mut cache_val = "public, max-age=" + max_age.to_str()
+resp.set_header("Cache-Control", cache_val)
+```
+
+This costs nothing at runtime (the compiler would have created a temporary
+either way) and removes any ambiguity about the temporary's lifetime.
+
+### Common Mistakes
+
+```python
+# WRONG — fresh f-string passed directly as an argument deep in a call chain
+log.info("user " + user.name + " logged in at " + now().to_str())
+
+# RIGHT — bind first
+mut entry = "user " + user.name + " logged in at " + now().to_str()
+log.info(entry)
+```
+
+```python
+# WRONG — fresh .to_string() result passed directly
+emit(sb.to_string())
+
+# RIGHT
+mut out = sb.to_string()
+emit(out)
+```
+
+### Best Practices
+
+- **Rule of thumb:** if the argument expression contains `+`, `.to_str()`,
+  `.to_string()`, or a call that returns `str`, assign it to a `mut` local on
+  its own line, then pass the local.
+- Apply this proactively in hot paths that build headers, log lines, keys, or
+  messages from concatenation — these are the spots where this pattern shows
+  up most often.
+- This is purely a call-argument concern. Assigning a fresh string expression
+  to a variable and using that variable normally (printing it, storing it,
+  returning it) is always safe.
+
+---
+
+## `StringBuilder`: `as_str()` vs `to_owned()` / `to_string()`
+
+### When to use
+
+Use [`StringBuilder`](#stringbuilder-pattern) for building strings
+incrementally. When you're done, you must choose the right accessor depending
+on whether the builder will be freed before or after you're done with the
+result.
+
+### How it works
+
+```python
+import std.core.string
+
+mut sb = StringBuilder.init()
+sb.append("Hello, ")
+sb.append("world!")
+
+# as_str(): borrows the builder's internal buffer — valid only while
+# `sb` is alive and not mutated further. Do NOT free `sb` while still
+# using the result of as_str().
+mut view = sb.as_str()
+print(view)
+
+# to_owned() / to_string(): returns an independent heap copy — safe to
+# use after `sb` goes out of scope or is freed/cleared.
+mut owned = sb.to_string()
+sb.free()          # sb's buffer is gone, but `owned` is still valid
+print(owned)
+```
+
+### Common Mistakes
+
+```python
+# WRONG — using as_str()'s result after freeing/clearing the builder
+mut sb = StringBuilder.init()
+sb.append("data")
+mut view = sb.as_str()
+sb.free()
+print(view)          # use-after-free: view pointed into sb's buffer
+```
+
+### Best Practices
+
+- If the result needs to outlive the `StringBuilder` (returned from a
+  function, stored in a struct/collection, used after `.clear()`/`.free()`),
+  use `.to_string()` / `.to_owned()`.
+- If the result is used immediately, in the same scope, before any further
+  mutation of the builder, `.as_str()` avoids an extra copy.
+- Call `sb.free()` once you're done with the builder if it was constructed
+  with `StringBuilder.init()` inside a long-lived loop — see [13 — Memory and
+  Ownership §Advanced: Releasing Memory Early](13_memory_and_ownership.md#advanced-releasing-memory-early)
+  for when and why to do this manually.
 
 ---
 

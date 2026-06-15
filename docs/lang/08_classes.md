@@ -300,6 +300,36 @@ field will be an empty string, numeric fields will be `0`. Always set every fiel
   readable.
 - Validate arguments at the top of `init` before touching any fields.
 
+### Releasing Resources: `dispose()` vs `free()`
+
+If your class owns a resource that the caller may want to release before the
+end of scope (a buffer, a connection, a builder — see [13 — Memory and
+Ownership §Advanced: Releasing Memory Early](13_memory_and_ownership.md#advanced-releasing-memory-early)),
+give it an explicit cleanup method. The name you choose matters:
+
+- **Name it `dispose()`** if an instance might ever be **constructed inside a
+  method, mutated, and then returned** to the caller:
+
+  ```python
+  extend Conn:
+      pub def take_buffer(self) -> Buffer:
+          mut raw = self.buf
+          raw.write(some_value)
+          return raw    # `raw` must still be valid after this line
+  ```
+
+  If `Buffer` had a method literally named `free`, the compiler's auto-drop
+  would see the local `raw` has a `free()` method and free it at scope
+  exit — **before** the `return` takes effect — leaving the caller with a
+  dangling value. Naming the method `dispose()` avoids this entirely.
+
+- **`free()` is fine** for classes that own their resource for their entire
+  lifetime and are never returned out of the scope that constructed them
+  (e.g. a private helper allocated and released within the same function).
+
+When in doubt, prefer `dispose()` — it is safe in every case, whereas `free()`
+is only safe for the narrower "owns it forever, never returned" pattern.
+
 ---
 
 ## 6. Visibility (`pub`)

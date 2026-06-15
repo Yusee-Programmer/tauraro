@@ -12,7 +12,7 @@ from std.async.send    import Sendable
 
 # Import everything at once
 from std.async import Thread, Atomic, ThreadLocal, Mutex, RWLock, Sendable
-from std.async import Task, Future, Channel, TaskGroup
+from std.async import Task, Future, Channel, TaskGroup, StructuredGroup
 from std.async import Semaphore, WaitGroup, Barrier, Once, Timer, Ticker
 ```
 
@@ -270,14 +270,15 @@ def main():
 These higher-level primitives provide named tasks, futures, and group coordination on top of the OS threading layer.
 
 ```python
-from std.async.task      import Task, Future
-from std.async.channel   import Channel
-from std.async.group     import TaskGroup
-from std.async.semaphore import Semaphore
-from std.async.waitgroup import WaitGroup
-from std.async.barrier   import Barrier
-from std.async.once      import Once
-from std.async.timer     import Timer, Ticker
+from std.async.task       import Task, Future
+from std.async.channel    import Channel
+from std.async.group      import TaskGroup
+from std.async.structured import StructuredGroup
+from std.async.semaphore  import Semaphore
+from std.async.waitgroup  import WaitGroup
+from std.async.barrier    import Barrier
+from std.async.once       import Once
+from std.async.timer      import Timer, Ticker
 ```
 
 ### Task
@@ -291,6 +292,7 @@ from std.async.timer     import Timer, Ticker
 | `t.await_()` | Block until done, return result |
 | `t.await_timeout(ms)` | `true` if done within deadline |
 | `t.is_done()` | |
+| `t.is_cancelled()` | |
 | `t.has_error()` | |
 | `t.get_error()` | Error message or `""` |
 | `t.free()` | |
@@ -320,7 +322,11 @@ Bounded MPMC ring buffer channel (distinct from the built-in `Chan[T]`).
 | `ch.send_timeout(val, ms)` | Send with deadline |
 | `ch.recv_timeout(ms)` | Receive with deadline |
 | `ch.close()` | Mark closed; wakes blocked receivers |
+| `ch.is_closed()` | `true` once `close()` has been called |
 | `ch.len()` | Current buffered count |
+| `ch.cap()` | Channel capacity |
+| `ch.is_empty()` | `true` when `len() == 0` |
+| `ch.is_full()` | `true` when `len() >= cap()` |
 | `ch.free()` | |
 
 ### TaskGroup
@@ -332,8 +338,46 @@ Bounded MPMC ring buffer channel (distinct from the built-in `Chan[T]`).
 | `tg.wait_all()` | Block until all tasks done |
 | `tg.wait_all_timeout(ms)` | `true` if all done within deadline |
 | `tg.cancel_all()` | Cancel all pending tasks |
+| `tg.all_done()` | `true` when every task has completed/cancelled |
 | `tg.pending_count()` | Tasks not yet done |
+| `tg.len()` | Total number of tasks in the group |
 | `tg.free()` | |
+
+### StructuredGroup
+
+**When**: You spawn real OS threads and need any panic that escapes a
+thread to be caught and re-raised in the calling thread instead of
+crashing the process or being silently swallowed.
+
+**Why**: Unlike `TaskGroup` (which tracks logical `Task` handles you
+complete yourself), `StructuredGroup` spawns the threads for you and
+records panic state.
+
+| Method | Description |
+|--------|-------------|
+| `StructuredGroup.new()` | Empty group |
+| `sg.go(fn)` | Spawn a zero-argument closure as a thread with panic recovery |
+| `sg.wait_all()` | Join all spawned threads; collects first panic message |
+| `sg.ok()` | `true` when no thread panicked |
+| `sg.first_panic()` | Message of the first panic, or `""` |
+| `sg.rethrow()` | Raise the collected panic in the current thread (call after `wait_all()`) |
+| `sg.len()` | Number of threads still tracked (before `wait_all()`) |
+
+**The 'static bound:** arguments captured by `fn` must be `int`/`bool`/`str`/`Pointer`
+or a class that implements `Sendable` — the compiler enforces this at
+`sg.go()` sites just like the `spawn` keyword.
+
+```python
+from std.async.structured import StructuredGroup
+
+mut sg = StructuredGroup.new()
+sg.go(worker_a)
+sg.go(worker_b)
+sg.wait_all()
+if not sg.ok():
+    print(f"a worker panicked: {sg.first_panic()}")
+    sg.rethrow()
+```
 
 ### Semaphore
 
@@ -374,13 +418,23 @@ once.free()
 
 ### Timer / Ticker
 
+Both fire by sending a value on a `Channel`, via a background thread.
+`Timer` fires once after `ms` milliseconds; `Ticker` fires every `ms`
+milliseconds until stopped.
+
 ```python
-from std.async.timer   import Timer
+from std.async.timer   import Timer, Ticker
 from std.async.channel import Channel
 
 mut sig = Channel.new(1)
 mut t = Timer.new(500, sig)    # fire after 500ms
 mut _ = sig.recv()             # block until tick
-t.stop()
+t.stop()                       # also closes sig
 sig.free()
+
+mut tk_ch = Channel.new(1)
+mut tk = Ticker.new(100, tk_ch)  # ticks every 100ms
+mut tick = tk_ch.recv()
+tk.stop()                       # also closes tk_ch
+tk_ch.free()
 ```

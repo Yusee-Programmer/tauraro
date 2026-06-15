@@ -155,6 +155,18 @@ jobs:
           rm -rf src/build
 
       # -------------------------------------------------------
+      # SHA256 checksum of the compiler binary for this platform.
+      # The .sha256 file is bundled inside the main artifact (next to
+      # the binary and source trees) AND uploaded separately so it can
+      # be downloaded standalone and pasted into the release notes.
+      # -------------------------------------------------------
+      - name: Generate SHA256 checksum
+        shell: bash
+        run: |
+          sha256sum "tauraroc${{ matrix.ext }}" > "tauraroc-${{ matrix.platform }}.sha256"
+          cat "tauraroc-${{ matrix.platform }}.sha256"
+
+      # -------------------------------------------------------
       # Artifact = the compiler binary plus the source/library/sample
       # trees that make a usable SDK bundle. (Not the whole workspace:
       # no .git, docs, bootstrap scratch, or build output.)
@@ -166,11 +178,23 @@ jobs:
           if-no-files-found: error
           path: |
             tauraroc${{ matrix.ext }}
+            tauraroc-${{ matrix.platform }}.sha256
             src/
             std/
             runtime/
             examples/
             benchmarks/
+
+      # -------------------------------------------------------
+      # Standalone checksum artifact, one per OS target, so it can be
+      # downloaded and pasted into the GitHub release notes manually.
+      # -------------------------------------------------------
+      - name: Upload SHA256 checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauraroc-${{ matrix.platform }}-sha256
+          if-no-files-found: error
+          path: tauraroc-${{ matrix.platform }}.sha256
 
   # -----------------------------------------------------------------
   # Release: runs only on v* tag pushes after all builds pass.
@@ -211,6 +235,33 @@ jobs:
           name: tauraroc-macos-arm64
           path: release/macos-arm64/
 
+      # Per-platform binary checksums (generated during the build job),
+      # downloaded here so they can be folded into the combined
+      # SHA256SUMS.txt and also published as individual release assets.
+      - name: Download linux-x64 checksum
+        uses: actions/download-artifact@v4
+        with:
+          name: tauraroc-linux-x64-sha256
+          path: release/checksums/
+
+      - name: Download linux-arm64 checksum
+        uses: actions/download-artifact@v4
+        with:
+          name: tauraroc-linux-arm64-sha256
+          path: release/checksums/
+
+      - name: Download windows-x64 checksum
+        uses: actions/download-artifact@v4
+        with:
+          name: tauraroc-windows-x64-sha256
+          path: release/checksums/
+
+      - name: Download macos-arm64 checksum
+        uses: actions/download-artifact@v4
+        with:
+          name: tauraroc-macos-arm64-sha256
+          path: release/checksums/
+
       # zip -j strips the path so the binary sits at the zip root:
       # unzip tauraroc-linux-x64.zip -d bootstrap/tauraroc-linux-x64/
       # → bootstrap/tauraroc-linux-x64/tauraroc
@@ -222,6 +273,21 @@ jobs:
           zip -j release/assets/tauraroc-windows-x64.zip release/windows-x64/tauraroc.exe
           zip -j release/assets/tauraroc-macos-arm64.zip release/macos-arm64/tauraroc
 
+      # -------------------------------------------------------
+      # Combined SHA256SUMS.txt: checksums of the release zips
+      # (what users actually download) plus the raw per-platform
+      # binary checksums from the build job, for reference.
+      # -------------------------------------------------------
+      - name: Generate combined SHA256SUMS.txt
+        run: |
+          cd release/assets
+          sha256sum *.zip > SHA256SUMS.txt
+          cd -
+          echo "" >> release/assets/SHA256SUMS.txt
+          echo "# Per-platform binary checksums (uncompressed):" >> release/assets/SHA256SUMS.txt
+          cat release/checksums/*.sha256 >> release/assets/SHA256SUMS.txt
+          cat release/assets/SHA256SUMS.txt
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -232,4 +298,5 @@ jobs:
             release/assets/tauraroc-linux-x64.zip \
             release/assets/tauraroc-linux-arm64.zip \
             release/assets/tauraroc-windows-x64.zip \
-            release/assets/tauraroc-macos-arm64.zip
+            release/assets/tauraroc-macos-arm64.zip \
+            release/assets/SHA256SUMS.txt

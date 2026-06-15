@@ -2,6 +2,10 @@
 
 Complete reference for the Tauraro standard library (`std`).
 
+See also: [Language Documentation](../lang/README.md) ·
+[Developer & Contributor Documentation](../dev/README.md) (compiler internals,
+building libraries with `taupkg`)
+
 ## Modules
 
 | Module | Description |
@@ -11,13 +15,14 @@ Complete reference for the Tauraro standard library (`std`).
 | [`std.compress`](compress.md) | Compression: zlib compress/decompress, raw deflate/inflate (`-lz` required) |
 | [`std.crypto`](crypto.md) | Cryptography: SHA-256, HMAC-SHA256, MD5, UUID v4 |
 | [`std.encoding`](encoding.md) | Data encoding: JSON, Base64, Hex |
+| [`std.gpu`](../lang/18_gpu_and_asm.md) | OpenMP-backed parallel dispatch (`Gpu.parallel`); replaces the deprecated `gpu:` block |
 | [`std.io`](io.md) | File I/O, directory operations, path manipulation, console, buffered I/O |
 | [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
 | [`std.math`](math.md) | Integer math, floating-point math, bitwise operations, statistics, random |
 | [`std.net`](net.md) | TCP, UDP, DNS, URL, HTTP client (7 verbs), HTTPS client (OpenSSL), HTTP server + router |
 | [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count |
 | [`std.string`](string.md) | String utilities (Str), formatting (Fmt), parsing, line/word splitting, `split_to_vec` |
-| [`std.sys`](sys.md) | Environment variables, file system, process control, timing, OS info, platform detection |
+| [`std.sys`](sys.md) | Environment variables, file system, process control, timing, OS info, platform detection, graceful-shutdown signal handling |
 | [`std.test`](test.md) | Lightweight unit-testing framework |
 | [`std.unicode`](unicode.md) | UTF-8 codepoint iteration, slicing, case conversion, Unicode classification |
 

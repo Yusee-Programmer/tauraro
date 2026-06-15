@@ -142,6 +142,15 @@ The first match wins.
 | 10 | `packages/sites/` | Project-local site packages (CWD-relative) |
 | 11+ | `TAURARO_PATH` entries | User-specified extra paths (see below) |
 
+**Vendored taupkg dependencies:** Immediately after adding the grandparent
+search path (priority 4), the resolver scans the entry file's parent directory
+for subdirectories that contain a `src/` folder — the layout `taupkg build`
+produces when it vendors dependencies (e.g. `<project>/watax/src/`). Each such
+`<pkgname>/src` directory is added as a search path automatically, so a
+vendored package's own sibling-relative imports (e.g. `from app import App`
+inside `watax.tr`) resolve without any extra configuration, and
+`from <pkgname> import X` finds `<pkgname>/src/<pkgname>.tr`.
+
 **Recursive resolution:** Each imported module is scanned for its own imports, which are resolved transitively. The compiler builds the full dependency graph before emitting any C.
 
 **Error for missing module:**

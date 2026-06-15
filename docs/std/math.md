@@ -114,6 +114,9 @@ print(str(Math.pow_mod(2, 10, 100))) # 24
 | `FloatMath.acos` | `(x: float) -> float` | `float` | Arccosine. |
 | `FloatMath.atan` | `(x: float) -> float` | `float` | Arctangent. |
 | `FloatMath.atan2` | `(y: float, x: float) -> float` | `float` | Two-argument arctangent. |
+| `FloatMath.sinh` | `(x: float) -> float` | `float` | Hyperbolic sine. |
+| `FloatMath.cosh` | `(x: float) -> float` | `float` | Hyperbolic cosine. |
+| `FloatMath.tanh` | `(x: float) -> float` | `float` | Hyperbolic tangent. |
 
 ### Exponential / logarithm
 
@@ -123,6 +126,7 @@ print(str(Math.pow_mod(2, 10, 100))) # 24
 | `FloatMath.cbrt` | `(x: float) -> float` | `float` | Cube root. |
 | `FloatMath.pow` | `(base: float, exp: float) -> float` | `float` | `base^exp`. |
 | `FloatMath.exp` | `(x: float) -> float` | `float` | `e^x`. |
+| `FloatMath.exp2` | `(x: float) -> float` | `float` | `2^x`. |
 | `FloatMath.log` | `(x: float) -> float` | `float` | Natural logarithm. |
 | `FloatMath.log2` | `(x: float) -> float` | `float` | Base-2 logarithm. |
 | `FloatMath.log10` | `(x: float) -> float` | `float` | Base-10 logarithm. |
@@ -141,6 +145,7 @@ print(str(Math.pow_mod(2, 10, 100))) # 24
 | Method | Signature | Returns | Description |
 |---|---|---|---|
 | `FloatMath.abs` | `(x: float) -> float` | `float` | Absolute value. |
+| `FloatMath.mod` | `(x: float, y: float) -> float` | `float` | Floating-point remainder of `x / y` (`fmod`). |
 | `FloatMath.hypot` | `(x: float, y: float) -> float` | `float` | Euclidean distance √(x²+y²). |
 | `FloatMath.deg_to_rad` | `(deg: float) -> float` | `float` | Degrees → radians. |
 | `FloatMath.rad_to_deg` | `(rad: float) -> float` | `float` | Radians → degrees. |
@@ -177,7 +182,7 @@ print(str(p > 3.0))                           # true
 | `Bits.rotl64` | `(x: int, n: int) -> int` | `int` | Rotate `x` left by `n` bits. |
 | `Bits.rotr64` | `(x: int, n: int) -> int` | `int` | Rotate `x` right by `n` bits. |
 | `Bits.bswap32` | `(x: int) -> int` | `int` | Reverse byte order of the low 32 bits. |
-| `Bits.bit_field` | `(x: int, lo: int, hi: int) -> int` | `int` | Extract bits `[lo, hi)` from `x`. |
+| `Bits.bit_field` | `(x: int, lo: int, hi: int) -> int` | `int` | Extract bits `[lo, hi]` (inclusive) from `x`. |
 
 ### Example
 

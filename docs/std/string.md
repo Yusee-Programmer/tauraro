@@ -6,7 +6,7 @@ from std.string.fmt import Fmt   # number/value formatting (static methods)
 ```
 
 All methods are **static** — called as `Str.method(...)` or `Fmt.method(...)`.  
-`str` values are immutable UTF-8 byte sequences; all operations return new strings.
+`str` values are reference-counted, immutable-from-the-outside UTF-8 byte sequences; every `Str`/`Fmt` operation returns a freshly allocated string rather than mutating its input. If you need to build a string incrementally (e.g. in a loop), use `StringBuilder` from `std.core.string` — see [StringBuilder](#stdcorestring--stringbuilder) below — instead of repeated `+` concatenation.
 
 ---
 
@@ -241,4 +241,56 @@ args.push(Fmt.int_to_str(42))
 args.push(Fmt.float_to_str(9.81, 2))
 mut msg = Fmt.format("Answer: {}, g: {}", args)
 print(msg)   # "Answer: 42, g: 9.81"
+```
+
+---
+
+## std.core.string — StringBuilder
+
+**When**: Building a string incrementally (e.g. inside a loop) — `Str`/`Fmt` always allocate a new string per call, so chained `+` concatenation in a loop is O(n²). `StringBuilder` amortizes growth like a growable buffer.
+**Why**: All of `Str`'s and `Fmt`'s own implementations (`slice`, `to_upper`, `format`, `int_to_str`, etc.) are built on `StringBuilder` internally — it's the same tool available to your code.
+
+```tauraro
+from std.core.string import StringBuilder
+
+mut sb = StringBuilder.init(16)
+sb.append("Hello, ")
+sb.append("World")
+sb.append_char(33)          # '!'
+mut out = sb.to_owned()      # heap str, independent of sb
+sb.free()
+print(out)                    # "Hello, World!"
+```
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `StringBuilder.init` | `(initial_capacity: int) -> StringBuilder` | `StringBuilder` | Create a builder with at least `initial_capacity` bytes reserved (minimum 16). |
+| `append` | `(self, s: str)` | `void` | Append the bytes of `s`, growing the buffer if needed. |
+| `append_char` | `(self, c: int)` | `void` | Append a single byte with ASCII code `c`. |
+| `append_int` | `(self, n: int)` | `void` | Append the decimal representation of `n` (handles negatives). |
+| `append_float` | `(self, f: float)` | `void` | Append `f.to_str()`. |
+| `len` | `(self) -> int` | `int` | Number of bytes written so far. |
+| `as_str` | `(self) -> str` | `str` | Borrowed view of the builder's current contents — valid only while `sb` is alive and not mutated further. |
+| `to_owned` | `(self) -> str` | `str` | Allocate and return a new, independent `str` copy of the current contents. **Prefer this** when returning the result from a function. |
+| `to_string` | `(self) -> StringObj` | `StringObj` | Allocate a new `StringObj` (heap-owned string view) wrapping a copy of the current contents. |
+| `clear` | `(self)` | `void` | Reset length to 0 without freeing the underlying buffer (keeps capacity). |
+| `free` | `(self)` | `void` | Release the builder's internal buffer and the builder itself. Call when done with `sb`. |
+
+> **`as_str()` vs `to_owned()`**: `as_str()` returns a string that aliases the builder's internal buffer — it becomes invalid once `sb.free()` runs or `sb` is mutated again. `to_owned()` copies the data into a new allocation that you own independently, which is almost always what you want when returning a built string from a function (the pattern used throughout `Str`/`Fmt`: `mut out = sb.to_owned(); sb.free(); return out`).
+
+### Example
+
+```tauraro
+from std.core.string import StringBuilder
+
+def build_csv(nums: Vec[int]) -> str:
+    mut sb = StringBuilder.init(64)
+    mut i  = 0
+    while i < nums.len():
+        if i > 0: sb.append(",")
+        sb.append_int(nums.get(i))
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
 ```

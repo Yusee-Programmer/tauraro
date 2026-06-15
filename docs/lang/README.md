@@ -2,6 +2,10 @@
 
 **Tauraro** — compiled, statically-typed, Python-syntax. C performance. Compiler does the hard work.
 
+See also: [Standard Library Documentation](../std/README.md) ·
+[Developer & Contributor Documentation](../dev/README.md) (compiler internals,
+building libraries with `taupkg`)
+
 ---
 
 ## Core Documentation
@@ -27,7 +31,7 @@ Every core doc covers: **What it is → When to use it → How it works → Comm
 | 15 | [Modules](15_modules.md) | import, from, pub, export, module resolution, TAURARO_PATH |
 | 16 | [Concurrency](16_concurrency.md) | async/await, spawn, task_group:, channels, Sendable |
 | 17 | [Extern & FFI](17_extern_and_ffi.md) | extern "C", variadic functions, linking, ABI |
-| 18 | [GPU & Inline Assembly](18_gpu_and_asm.md) | gpu: blocks, OpenMP, asm(), memory barriers |
+| 18 | [GPU & Inline Assembly](18_gpu_and_asm.md) | std.gpu.Gpu (OpenMP dispatch), deprecated gpu: blocks, asm(), memory barriers |
 | 19 | [Compiler Error Reference](19_compiler_errors.md) | Every error code with cause, example, and fix |
 | 20 | [Advanced Patterns](20_advanced_patterns.md) | Idioms, design patterns, performance, best practices |
 | 21 | [Operator Overloading](21_operator_overloading.md) | Dunder methods: `__add__`, `__str__`, `__iter__`, `with` |

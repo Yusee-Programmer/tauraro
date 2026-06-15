@@ -96,7 +96,22 @@ obj.read().obj_val(i: int)   -> Pointer[JsonValue]
 
 ```tauraro
 v.read().to_str()              -> str   # compact JSON string
-v.read().to_pretty(indent: int) -> str  # 2-space indented JSON
+v.read().to_pretty(indent: int) -> str  # pretty-printed with 2-space indentation
+                                         # (the `indent` parameter is currently unused)
+```
+
+### Resource cleanup
+
+`JsonValue` trees are heap-allocated and not managed by auto-drop. Call
+`v.read().dispose()` to recursively free a whole tree (child nodes, their
+`items`/`keys` lists, and the node itself) once you're done with it. Note that
+`dispose()` does **not** free `s_val` — string-node values are commonly string
+literals, which must never be passed to a free function.
+
+```tauraro
+mut v = Json.parse(src)
+# ... use v ...
+v.read().dispose()
 ```
 
 ### `Json` class (static API)
