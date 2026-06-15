@@ -8,46 +8,57 @@ Tauraro provides two mechanisms for low-level parallel and hardware-specific cod
 
 | Feature | Purpose |
 |---------|---------|
-| `gpu:` block | Parallel loop execution via OpenMP; forward-compatible with GPU backends |
-| `@parallel` / `@vectorize` | Loop hints for parallelism and SIMD vectorization |
+| `std.gpu.Gpu` | OpenMP-backed parallel dispatch (the supported way to run work across CPU cores) |
+| `gpu:` block | **Deprecated.** Still parses for source compatibility, but compiles to a plain sequential block — no pragmas are emitted. Use `std.gpu.Gpu` instead. |
 | `asm(...)` | Inline assembly — must be inside `unsafe:` |
+
+> **Note:** `@parallel` and `@vectorize` loop-hint decorators described in earlier
+> drafts of this document were never implemented and do not exist in the
+> compiler. Do not use them — they are silently ignored by no codegen path
+> (in fact, an unrecognized decorator is a compile error). Use `std.gpu.Gpu`
+> or hand-written `gpu:`-free OpenMP via `extern "C"` if you need pragmas.
 
 ---
 
-## `gpu:` Blocks — Parallel Loop Execution
+## `std.gpu.Gpu` — Parallel Dispatch
 
 ### When to use
 
-Use `gpu:` when you have a loop whose iterations are **fully independent** and you want to run them in parallel across all available CPU cores (or, in future compiler versions, on a GPU).
+Use `Gpu.parallel` when you have `n` independent units of work — a
+data-parallel transform, an embarrassingly parallel simulation, a matrix
+operation where rows are independent, or per-pixel image processing — and you
+want to run them across all available CPU cores via OpenMP.
 
-Use cases:
-- Data-parallel transforms: squaring, scaling, normalizing arrays
-- Embarrassingly parallel simulations
-- Matrix operations where rows are independent
-- Image processing — per-pixel transforms
-
-Do **not** use `gpu:` on loops with loop-carried dependencies (where iteration `i` reads results from iteration `i-1`).
+Do **not** use it for loops with loop-carried dependencies (where iteration
+`i` reads results written by iteration `i-1`).
 
 ### How it works
 
-`gpu:` marks the enclosed code as a candidate for parallel execution. In the current compiler, `gpu:` generates **OpenMP parallel pragmas**. With `-fopenmp`, iterations run in parallel across CPU cores. Without `-fopenmp`, the code runs sequentially — no code changes needed.
-
-**Basic parallel loop:**
 ```python
-gpu:
-    for i in range(1000):
-        data[i] = compute(i)
+from std.gpu import Gpu
+
+print(f"openmp available: {Gpu.has_openmp()}")
+print(f"threads: {Gpu.num_threads()}")
 ```
 
-With `-fopenmp` this compiles to:
-```c
-#pragma omp parallel for
-for (int64_t i = 0; i < 1000; i++) {
-    data[i] = compute(i);
-}
+`Gpu.parallel(n, fn_ptr)` runs `n` iterations in parallel via
+`_tr_gpu_openmp_parallel_i64`, where `fn_ptr` is a `Pointer[void]` to a
+function taking a single `int` (the iteration index). On builds without
+OpenMP, it runs the same `n` iterations sequentially — no code changes
+needed, and no error or warning.
+
+```python
+from std.gpu import Gpu
+
+def square_at(i: int) -> void:
+    output[i] = input[i] * input[i]   # output/input must be in scope (e.g. globals)
+
+def main():
+    unsafe:
+        Gpu.parallel(n, square_at as Pointer[void])
 ```
 
-**Enabling OpenMP:**
+**Enabling OpenMP at build time:**
 ```bash
 # Linux / macOS:
 tauraroc program.tr -fopenmp --run
@@ -61,104 +72,57 @@ Control thread count at runtime:
 OMP_NUM_THREADS=8 ./program.exe
 ```
 
-**Safe to parallelize — iterations are independent:**
-```python
-gpu:
-    for i in range(n):
-        output[i] = input[i] * input[i]    # no dependency on other iterations
-```
-
-**Unsafe to parallelize — loop-carried dependency:**
-```python
-gpu:
-    for i in range(1, n):
-        result[i] = result[i-1] + delta[i]    # RACE: i reads result written by i-1
-```
-
-**Non-loop statements in a `gpu:` block** run inside the parallel region but without per-statement parallelism directives:
-```python
-gpu:
-    setup()               # runs in parallel region, single-threaded
-    for i in range(n):    # gets #pragma omp for — truly parallel
-        process(i)
-    collect()             # runs after parallel loop
-```
-
-**Nested `gpu:` blocks:**
-```python
-gpu:
-    for i in range(rows):
-        gpu:
-            for j in range(cols):
-                matrix[i * cols + j] = f(i, j)
-```
-This generates nested `#pragma omp parallel` sections. Whether the inner parallelism is effective depends on the OpenMP runtime's nested parallelism setting (`OMP_NESTED=true`).
-
 ### Common Mistakes
 
-**Mistake: parallelizing a loop with a loop-carried dependency.**
+**Mistake: a loop-carried dependency inside the dispatched function.**
 ```python
 mut acc = 0
-gpu:
-    for i in range(n):
-        acc += input[i]    # RACE — multiple threads write acc concurrently
+def add_at(i: int) -> void:
+    acc += input[i]    # RACE — multiple threads write acc concurrently
 ```
-Use a reduction pattern or `Atomic[int]` for reductions:
+Use `Atomic[int]` for reductions:
 ```python
 mut acc: Atomic[int] = Atomic.new(0)
-gpu:
-    for i in range(n):
-        acc.add(input[i])
+def add_at(i: int) -> void:
+    acc.add(input[i])
 ```
 
-**Mistake: expecting `gpu:` to parallelize without `-fopenmp`.**
-Without `-fopenmp`, `gpu:` is a no-op — the loop runs sequentially. There is no error or warning.
+**Mistake: expecting `Gpu.parallel` to help for small `n`.**
+For small workloads the thread dispatch overhead can exceed the benefit.
+Check `Gpu.has_openmp()` and benchmark with and without `-fopenmp`.
 
-**Mistake: using `gpu:` on a loop that modifies a shared data structure.**
+**Mistake: writing to a shared collection from the dispatched function.**
 ```python
-gpu:
-    for i in range(n):
-        shared_list.append(i)    # RACE — append is not thread-safe
+def append_at(i: int) -> void:
+    shared_list.append(i)    # RACE — append is not thread-safe
 ```
-Write to pre-allocated indexed positions (`output[i] = ...`) instead of using append.
+Write to pre-allocated indexed positions (`output[i] = ...`) instead.
 
 ### Best Practices
 
-1. Only use `gpu:` on loops where every iteration writes to a different memory location.
-2. Pre-allocate the output array before the `gpu:` block — do not call `append` inside it.
-3. Use `--emit c` to inspect the generated OpenMP pragmas before benchmarking.
-4. Benchmark with and without `-fopenmp` to verify the parallelism is helping — for small `n`, the thread overhead may exceed the benefit.
+1. Only dispatch functions where every iteration writes to a different memory location.
+2. Pre-allocate the output array before calling `Gpu.parallel` — do not call `append` from inside it.
+3. Wrap the `Gpu.parallel` call in `unsafe:` (it takes a raw `Pointer[void]`).
+4. Benchmark with and without `-fopenmp` to verify the parallelism is helping.
 
 ---
 
-## `@parallel` and `@vectorize` Loop Hints
+## The Deprecated `gpu:` Block
 
-### When to use
-
-Use `@parallel` on a `for` loop when you want a single loop parallelized without wrapping the whole block in `gpu:`. Use `@vectorize` to hint that the loop body is SIMD-vectorizable.
-
-### How it works
+Older code may still contain `gpu:` blocks:
 
 ```python
-@parallel
-for i in range(n):
-    output[i] = a[i] + b[i]
-
-@vectorize
-for i in range(n):
-    result[i] = input[i] * 2.0
+gpu:
+    for i in range(n):
+        data[i] = compute(i)
 ```
 
-`@parallel` generates `#pragma omp parallel for`. `@vectorize` generates `#pragma omp simd`. Both require `-fopenmp` to take effect.
-
-### Common Mistakes
-
-The same dependency rules apply as for `gpu:` — only use these hints on independent loops.
-
-### Best Practices
-
-1. Use `@vectorize` on tight arithmetic loops operating on `f32` or `float` arrays — the compiler can emit SIMD instructions.
-2. Combine `@parallel @vectorize` on the same loop for both multi-core and SIMD parallelism.
+The parser still accepts this syntax, but codegen now emits the body as a
+plain sequential block with a `/* deprecated gpu: block - use std.gpu for GPU
+dispatch */` comment — **no OpenMP pragmas are generated**, regardless of
+`-fopenmp`. Existing `gpu:` blocks keep compiling and running correctly
+(sequentially); they simply gain no parallelism. Migrate to `std.gpu.Gpu` (above)
+to actually parallelize the loop.
 
 ---
 
@@ -308,7 +272,7 @@ If the assembly modifies a register you did not declare in the clobber list, the
 
 ### When to use
 
-The `gpu:` keyword is designed to be forward-compatible with true GPU compute. In the current compiler it maps to OpenMP CPU parallelism. For actual GPU kernel programming today, compile CUDA or HIP kernels separately and call them via `extern "C"`.
+`std.gpu.Gpu` maps to OpenMP CPU parallelism. For actual GPU kernel programming today, compile CUDA or HIP kernels separately and call them via `extern "C"`.
 
 ### How it works
 
@@ -352,18 +316,10 @@ tauraroc main.tr kernel.o --run
 
 ## Inspecting Compiler Output
 
-Use `--emit c` to see the C the compiler generates before passing it to GCC. This is essential for verifying that `gpu:` blocks produce the expected OpenMP directives and that `asm()` contains the intended instructions.
+Use `--emit c` to see the C the compiler generates before passing it to GCC. This is essential for verifying that `asm()` contains the intended instructions, and for confirming that any leftover `gpu:` blocks compile to the documented sequential `/* deprecated gpu: block */` form rather than pragmas.
 
 ```bash
 tauraroc --emit c program.tr
-```
-
-Example output for a `gpu:` loop:
-```c
-#pragma omp parallel for
-for (int64_t i = 0; i < 1000; i++) {
-    data[i] = compute(i);
-}
 ```
 
 Example output for `asm("pause")`:
@@ -373,9 +329,11 @@ __asm__ volatile("pause");
 
 ---
 
-## Full Example: Combining `gpu:`, `sizeof`, and `asm()`
+## Full Example: Combining `std.gpu.Gpu`, `sizeof`, and `asm()`
 
 ```python
+from std.gpu import Gpu
+
 const KB = 1024
 const MB = 1024 * KB
 
@@ -383,13 +341,8 @@ def parallel_square(n: int) -> List[int]:
     mut result: List[int] = []
     mut i = 0
     while i < n:
-        result.append(0)
+        result.append(i * i)
         i += 1
-
-    gpu:
-        for i in range(n):
-            result[i] = i * i    # each iteration writes a distinct index
-
     return result
 
 def cpu_timing_demo() -> void:
@@ -414,6 +367,8 @@ def main():
     mut squares = parallel_square(8)
     for x in squares:
         print(f"  {x}")
+
+    print(f"--- gpu ({'openmp' if Gpu.has_openmp() else 'sequential'}, {Gpu.num_threads()} threads) ---")
 
     print("--- cpu timing ---")
     cpu_timing_demo()

@@ -5,7 +5,7 @@ from std.net.tcp  import TcpStream, TcpListener
 from std.net.udp  import UdpSocket
 from std.net.dns  import Dns
 from std.net.url  import Url
-from std.net.http import HttpClient, HttpResponse, HttpHeader
+from std.net.http import HttpClient, HttpClientResponse, HttpHeader
 ```
 
 > **Platform note** — All socket classes require `-lws2_32` on Windows (Winsock).  
@@ -178,6 +178,7 @@ print("127.0.0.1 → " + host)
 | `is_valid` | `() -> bool` | `bool` | `true` when both `scheme` and `host` are non-empty. |
 | `Url.encode_component` | `(s: str) -> str` | `str` | Percent-encode a URL component value. Unreserved chars (`A-Z a-z 0-9 - _ . ~`) are kept as-is. |
 | `Url.decode_component` | `(s: str) -> str` | `str` | Decode `%XX` sequences back to raw bytes. |
+| `free` | `()` | `void` | Release this `Url` instance. |
 
 ### Example
 
@@ -214,20 +215,31 @@ print(Url.decode_component(enc))   # "a+b=c&d=e"
 ## std.net.http — HTTP/1.0 Client
 
 **When**: You need to make HTTP requests — REST APIs, web scraping, health checks, webhooks.
-**Why**: A stateful client with configurable headers and timeout; all verbs return a structured `HttpResponse` with parsed status code and response headers.
+**Why**: A stateful client with configurable headers and timeout; all verbs return a structured `HttpClientResponse` with parsed status code and response headers.
 
-### HttpResponse
+### HttpHeader
+
+A simple `name`/`value` pair.
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `HttpHeader.init` | `(name: str, value: str) -> HttpHeader` | `HttpHeader` | Create a header pair. |
+| `free` | `()` | `void` | Release this `HttpHeader` instance. |
+
+### HttpClientResponse
 
 | Field / Method | Type / Signature | Description |
 |---|---|---|
 | `status` | `int` | HTTP status code (e.g. `200`, `404`). |
 | `body` | `str` | Response body text. |
 | `headers` | `Map[str]` | Parsed response headers (name → value). |
+| `HttpClientResponse.init` | `(status: int, body: str) -> HttpClientResponse` | Construct a response directly (status + body; empty headers map). |
 | `is_ok` | `() -> bool` | `true` for 2xx status codes. |
 | `is_redirect` | `() -> bool` | `true` for 3xx status codes. |
 | `is_error` | `() -> bool` | `true` for 4xx/5xx status codes. |
 | `header` | `(name: str) -> str` | Return a response header value, or `""` if absent. |
 | `to_string` | `() -> str` | Human-readable `"HTTP NNN Reason\n<body>"`. |
+| `free` | `()` | Release this `HttpClientResponse` instance. |
 
 ### HttpClient
 
@@ -236,13 +248,13 @@ print(Url.decode_component(enc))   # "a+b=c&d=e"
 | `HttpClient.init` | `(host: str, port: int) -> HttpClient` | `HttpClient` | Create a client for `host:port`. Default timeout: 5000 ms. |
 | `set_header` | `(name: str, value: str)` | `void` | Add a header to all subsequent requests. |
 | `set_timeout` | `(ms: int)` | `void` | Set timeout hint in milliseconds. |
-| `get` | `(path: str) -> HttpResponse` | `HttpResponse` | Send a `GET` request. |
-| `post` | `(path: str, data: str) -> HttpResponse` | `HttpResponse` | Send a `POST` with `application/x-www-form-urlencoded` body. |
-| `post_json` | `(path: str, data: str) -> HttpResponse` | `HttpResponse` | Send a `POST` with `application/json` body. |
-| `put` | `(path: str, data: str) -> HttpResponse` | `HttpResponse` | Send a `PUT` with `application/octet-stream` body. |
-| `patch` | `(path: str, data: str) -> HttpResponse` | `HttpResponse` | Send a `PATCH` with `application/octet-stream` body. |
-| `delete` | `(path: str) -> HttpResponse` | `HttpResponse` | Send a `DELETE` request. |
-| `head` | `(path: str) -> HttpResponse` | `HttpResponse` | Send a `HEAD` request (response body will be empty per HTTP spec). |
+| `get` | `(path: str) -> HttpClientResponse` | `HttpClientResponse` | Send a `GET` request. |
+| `post` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | Send a `POST` with `application/x-www-form-urlencoded` body. |
+| `post_json` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | Send a `POST` with `application/json` body. |
+| `put` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | Send a `PUT` with `application/octet-stream` body. |
+| `patch` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | Send a `PATCH` with `application/octet-stream` body. |
+| `delete` | `(path: str) -> HttpClientResponse` | `HttpClientResponse` | Send a `DELETE` request. |
+| `head` | `(path: str) -> HttpClientResponse` | `HttpClientResponse` | Send a `HEAD` request (response body will be empty per HTTP spec). |
 
 ### Example
 
@@ -278,7 +290,7 @@ print(r3.header("Content-Type"))           # "application/json"
 **Why**: Identical API to `HttpClient` but tunnelled through OpenSSL.
 
 > **Opt-in** — compile with `-DTAURARO_TLS_OPENSSL -lssl -lcrypto`.
-> Without those flags all methods return `HttpResponse { status: 0, body: "tls connect failed" }`.
+> Without those flags all methods return `HttpClientResponse { status: 0, body: "tls connect failed" }`.
 
 ```tauraro
 from std.net.https import HttpsClient
@@ -289,13 +301,13 @@ from std.net.https import HttpsClient
 | `HttpsClient.init` | `(host: str, port: int) -> HttpsClient` | `HttpsClient` | Create a TLS client. Default timeout: 10 000 ms. |
 | `set_header` | `(name: str, value: str)` | `void` | Add a header to all requests. |
 | `set_timeout` | `(ms: int)` | `void` | Set timeout hint. |
-| `get` | `(path: str) -> HttpResponse` | `HttpResponse` | HTTPS GET. |
-| `post` | `(path: str, data: str) -> HttpResponse` | `HttpResponse` | HTTPS POST (form-encoded). |
-| `post_json` | `(path: str, data: str) -> HttpResponse` | `HttpResponse` | HTTPS POST (JSON). |
-| `put` | `(path: str, data: str) -> HttpResponse` | `HttpResponse` | HTTPS PUT. |
-| `patch` | `(path: str, data: str) -> HttpResponse` | `HttpResponse` | HTTPS PATCH. |
-| `delete` | `(path: str) -> HttpResponse` | `HttpResponse` | HTTPS DELETE. |
-| `head` | `(path: str) -> HttpResponse` | `HttpResponse` | HTTPS HEAD. |
+| `get` | `(path: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS GET. |
+| `post` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS POST (form-encoded). |
+| `post_json` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS POST (JSON). |
+| `put` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS PUT. |
+| `patch` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS PATCH. |
+| `delete` | `(path: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS DELETE. |
+| `head` | `(path: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS HEAD. |
 
 ### Example
 
@@ -319,7 +331,7 @@ if r.is_ok():
 **Why**: Provides a minimal but complete HTTP server foundation — request parsing, path-parameter routing, response helpers — designed so FastAPI/Flask-style frameworks can be built on top.
 
 ```tauraro
-from std.net.http_server import HttpServer, HttpRequest, HttpConn, HttpRouter, HttpParser
+from std.net.http_server import HttpServer, HttpRequest, HttpResponse, HttpConn, HttpRouter, HttpParser
 ```
 
 ### HttpRequest
@@ -330,29 +342,66 @@ from std.net.http_server import HttpServer, HttpRequest, HttpConn, HttpRouter, H
 | `path` | `str` | URL path, e.g. `"/users/42"`. |
 | `query` | `str` | Raw query string without `?`. |
 | `body` | `str` | Request body. |
-| `headers` | `Map[str]` | Request headers. |
-| `params` | `Map[str]` | Path parameters extracted by the router (`:id` → `"42"`). |
+| `headers` | `Map[str, str]` | Request headers (names stored lowercased). |
+| `params` | `Map[str, str]` | Path parameters extracted by the router (`:id` → `"42"`). |
 | `route_id` | `int` | Application route integer, `-1` when unmatched. |
-| `header(name)` | `str` | Get a request header, or `""`. |
+| `version` | `str` | `"HTTP/1.1"` or `"HTTP/1.0"`, as sent by the client. |
+| `recv_ms` | `int` | `Clock.now_ms()` timestamp when this request was parsed (for timing middleware). |
+| `HttpRequest.init` | `() -> HttpRequest` | Construct an empty request (used internally by the parser). |
+| `header(name)` | `str` | Get a request header (case-insensitive), or `""`. |
 | `get_param(name)` | `str` | Get a path parameter, or `""`. |
-| `query_param(key)` | `str` | Parse a `key=value` pair from the query string. |
+| `query_param(key)` | `str` | First value of a `key=value` pair from the query string, percent-decoded. |
+| `form_param(key)` | `str` | First value of a `key=value` pair from an `application/x-www-form-urlencoded` body, percent-decoded. |
+| `is_form()` | `bool` | `true` when `Content-Type` contains `application/x-www-form-urlencoded`. |
 | `content_type()` | `str` | `Content-Type` header shorthand. |
 | `is_json()` | `bool` | `true` when `Content-Type` contains `application/json`. |
+| `is_multipart()` | `bool` | `true` when `Content-Type` contains `multipart/form-data`. |
+| `has_cookie()` | `bool` | `true` when the client sent a `Cookie` header. |
 | `cookies()` | `str` | Raw `Cookie` header value. |
+| `keep_alive()` | `bool` | Whether the connection should remain open for another request (HTTP/1.1 defaults to keep-alive unless `Connection: close`; HTTP/1.0 defaults to close unless `Connection: keep-alive`). |
+| `free_owned()` | `void` | Release the request's headers/params maps and string fields, then the request itself. Called internally by `HttpConn.close()`/`dispose()`. |
+
+### HttpResponse
+
+A response builder: status code, body, and headers (in insertion order for deterministic wire output).
+
+| Field / Method | Type / Signature | Description |
+|---|---|---|
+| `status` | `int` | HTTP status code. |
+| `body` | `str` | Response body text. |
+| `headers` | `Map[str, str]` | Response headers (name → value, last write wins). |
+| `HttpResponse.init` | `(status: int, body: str) -> HttpResponse` | Create a response with empty headers. |
+| `set_header` | `(name: str, value: str)` | Set/replace a header, tracking insertion order. |
+| `is_ok()` | `() -> bool` | `true` for 2xx status codes. |
+| `is_redirect()` | `() -> bool` | `true` for 3xx status codes. |
+| `is_error()` | `() -> bool` | `true` for 4xx/5xx status codes. |
+| `to_wire()` | `() -> str` | Serialize to a full HTTP/1.1 response (status line, headers, `Content-Length`, body). |
+| `dispose()` | `()` | Free this `HttpResponse` instance (called by `HttpConn.send_response` after the headers/`_order`/body are dealt with — not part of auto-drop). |
 
 ### HttpConn
 
+Combines a parsed `request: HttpRequest` with the live `TcpStream` so handlers can write a response.
+
 | Method | Signature | Description |
 |---|---|---|
-| `send_response` | `(resp: HttpResponse)` | Write a pre-built response. |
-| `send_text` | `(status: int, text: str)` | Plain-text response. |
+| `HttpConn.init` | `(req: HttpRequest, stream: TcpStream) -> HttpConn` | Construct a connection (used internally by `HttpServer.accept()`). |
+| `set_resp_header` | `(name: str, value: str)` | Queue a response header that is merged into every subsequent `send_*` call on this connection (e.g. cookies). |
+| `send_response` | `(resp: HttpResponse)` | Write a pre-built response, merging connection-level headers and `Connection: keep-alive`/`close`, then disposes `resp`. |
+| `send_text` | `(status: int, text: str)` | Plain-text response (`text/plain; charset=utf-8`). |
 | `send_json` | `(status: int, json: str)` | JSON response (`application/json`). |
 | `send_html` | `(status: int, html: str)` | HTML response (`text/html; charset=utf-8`). |
-| `send_status` | `(status: int)` | Status-only with empty body. |
-| `redirect` | `(url: str, permanent: bool)` | 301/302 redirect. |
-| `close` | `()` | Close the TCP connection. |
+| `send_status` | `(status: int)` | Status-only response with empty body. |
+| `redirect` | `(url: str, permanent: bool)` | Send a `Location` redirect — 302 (or 301 when `permanent`). |
+| `set_cookie` | `(name: str, value: str, path: str, http_only: bool)` | Queue a `Set-Cookie` header for the next `send_*` call. |
+| `close` | `()` | Close the underlying TCP connection and free the request/header state. |
+| `reset_for` | `(req: HttpRequest)` | Replace `request` with a new parsed request and reset per-request response-header state, for serving another request on the same keep-alive connection. |
+| `dispose` | `()` | Release the `HttpConn` instance itself (and any per-request state not already released by `close()`). |
 
-Fields: `request: HttpRequest`.
+Fields: `request: HttpRequest`, `last_status: int` (status of the most recent `send_response`, `0` if none yet).
+
+### HttpRoute
+
+A single registered route: `method: str`, `pattern: str`, `route_id: int`. Created via `HttpRoute.init(method, pattern, route_id) -> HttpRoute`; normally you don't construct these directly — use `HttpRouter`'s shorthand methods.
 
 ### HttpRouter
 
@@ -365,6 +414,20 @@ Fields: `request: HttpRequest`.
 
 Patterns support `:name` segments: `/users/:id/posts/:pid`.
 
+### HttpParser
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `HttpParser.parse` | `(raw: str) -> HttpRequest` | `HttpRequest` | Parse a raw HTTP request (request line, headers, body) into an `HttpRequest`. |
+| `HttpParser.content_length` | `(hdr: str) -> int` | `int` | Extract the `Content-Length` value from a raw header section, or `0` when absent. |
+
+### HttpMiddleware (interface)
+
+| Method | Signature | Description |
+|---|---|---|
+| `before` | `(req: HttpRequest) -> bool` | Called before routing/handling; return `false` to short-circuit. |
+| `after` | `(conn: HttpConn)` | Called after the response has been prepared. |
+
 ### HttpServer
 
 | Method | Signature | Returns | Description |
@@ -372,12 +435,14 @@ Patterns support `:name` segments: `/users/:id/posts/:pid`.
 | `HttpServer.init` | `(host: str, port: int) -> HttpServer` | `HttpServer` | Create server (not yet bound). |
 | `start` | `() -> bool` | `bool` | Bind and listen. `true` on success. |
 | `accept` | `() -> HttpConn` | `HttpConn` | Block until next request; parses and routes it. |
+| `read_next` | `(stream: TcpStream) -> HttpRequest` | `HttpRequest` | Read and parse one request off an already-connected stream and run the router. Returns a request with empty `method` if the client closed the connection. |
 | `stop` | `()` | `void` | Stop accepting connections. |
 | `is_running` | `() -> bool` | `bool` | `true` while the server is active. |
 | `set_router` | `(router: HttpRouter)` | `void` | Replace the internal router. |
 | `router` | `() -> HttpRouter` | `HttpRouter` | Access the internal router for inline registration. |
-| `set_recv_buf` | `(bytes: int)` | `void` | Set recv buffer size (default 64 KiB). |
-| `get / post / put / patch / delete / head / options / any` | `(pattern, route_id)` | `void` | Shorthand route registration on the server. |
+| `set_recv_buf` | `(bytes: int)` | `void` | Set recv buffer size (default 64 KiB). Increase for large uploads. |
+| `get / post / put / patch / delete / head / options` | `(pattern, route_id)` | `void` | Shorthand route registration on the server. |
+| `any` | `(pattern, route_id)` | `void` | Register the same route id for any HTTP method (`"*"`). |
 
 ### Example — minimal REST API
 

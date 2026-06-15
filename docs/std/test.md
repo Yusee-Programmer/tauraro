@@ -32,6 +32,7 @@ Creates a new runner with the given suite name.  Pass/fail counters start at zer
 ```tauraro
 t.assert_true(cond: bool, msg: str)
 t.assert_false(cond: bool, msg: str)
+t.assert_eq_bool(got: bool, want: bool, msg: str)
 ```
 
 ### Integer assertions
@@ -41,6 +42,9 @@ t.assert_eq_int(got: int,  want: int, msg: str)
 t.assert_ne_int(a: int,    b: int,    msg: str)
 t.assert_gt_int(a: int,    b: int,    msg: str)   # a > b
 t.assert_lt_int(a: int,    b: int,    msg: str)   # a < b
+t.assert_ge_int(a: int,    b: int,    msg: str)   # a >= b
+t.assert_le_int(a: int,    b: int,    msg: str)   # a <= b
+t.assert_in_range(value: int, lo: int, hi: int, msg: str)  # lo <= value <= hi
 ```
 
 ### String assertions
@@ -48,6 +52,9 @@ t.assert_lt_int(a: int,    b: int,    msg: str)   # a < b
 ```tauraro
 t.assert_eq_str(got: str, want: str, msg: str)
 t.assert_ne_str(a: str,   b: str,    msg: str)
+t.assert_contains(s: str, sub: str, msg: str)        # s contains sub
+t.assert_starts_with(s: str, prefix: str, msg: str)  # s starts with prefix
+t.assert_ends_with(s: str, suffix: str, msg: str)    # s ends with suffix
 ```
 
 ### Float assertions
@@ -57,16 +64,24 @@ t.assert_eq_float(got: float, want: float, eps: float, msg: str)  # |got - want|
 t.assert_ne_float(a: float,   b: float,    eps: float, msg: str)  # |a - b| > eps
 ```
 
-### Unconditional failure
+### Unconditional failure / skip
 
 ```tauraro
 t.fail(msg: str)   # always records a FAIL — use in unreachable branches
+t.skip(msg: str)   # prints "  SKIP: msg" — does not affect pass/fail counts
 ```
 
 ### Grouping
 
 ```tauraro
 t.section(label: str)   # prints "  [label]" — cosmetic only, no effect on counts
+```
+
+### State
+
+```tauraro
+t.ok() -> bool     # true when no assertions have failed so far
+t.reset()          # reset passed/failed counters to zero (reuse runner for sub-suites)
 ```
 
 ### Summary

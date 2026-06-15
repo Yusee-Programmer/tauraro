@@ -2,12 +2,13 @@
 
 ```tauraro
 from std.sys.env      import Env
-from std.sys.fs       import delete_file, copy_file, file_size, rename_file, is_file
+from std.sys.fs       import Fs
 from std.sys.process  import Process
-from std.sys.time     import Stopwatch, timestamp, sleep_ms
+from std.sys.time     import Clock
 from std.sys.os       import OS
 from std.sys.platform import Platform
 from std.sys.datetime import DateTime, Date, Time, TimeDelta
+from std.sys.signal   import Signal
 ```
 
 ---
@@ -25,18 +26,21 @@ mut env = Env.init()
 
 | Method | Signature | Returns | Description |
 |---|---|---|---|
-| `init` | `() -> Env` | `Env` | Snapshot `argc`/`argv` at program start. |
+| `init` | `() -> Env` | `Env` | Snapshot `argc`/`argv` at program start. Pre-populates `Env.path`. |
 | `get_var` | `(name: str) -> str` | `str` | Value of env variable `name`. Returns `""` if unset. |
-| `get_var_or` | `(name: str, default: str) -> str` | `str` | Return `default` if the variable is unset. |
 | `has_var` | `(name: str) -> bool` | `bool` | `true` if the variable is defined. |
-| `set_var` | `(name: str, value: str)` | `void` | Set an environment variable for the current process. |
-| `unset_var` | `(name: str)` | `void` | Remove an environment variable. |
+| `set_var` | `(name: str, value: str) -> bool` | `bool` | Set an environment variable for the current process. `true` on success. |
+| `unset_var` | `(name: str) -> bool` | `bool` | Remove an environment variable. `true` on success. |
 | `get_arg_count` | `() -> int` | `int` | Number of program arguments (includes argv[0]). |
 | `get_arg` | `(i: int) -> str` | `str` | Argument at index `i`. Returns `""` for out-of-range. |
-| `get_arg_or` | `(i: int, default: str) -> str` | `str` | Return `default` for out-of-range. |
 | `all_args` | `() -> Vec[str]` | `Vec[str]` | All arguments as a vector (index 0 = program name). |
 | `user_args` | `() -> Vec[str]` | `Vec[str]` | Arguments from index 1 onward (skips program name). |
 | `program_name` | `str` field | `str` | `argv[0]` — the program path. |
+| `path` | `Vec[str]` field | `Vec[str]` | Module search path (like Python's `sys.path`), pre-populated with cwd, exe dir, `std`, and `packages` directories. |
+| `path_insert` | `(dir: str)` | `void` | Prepend `dir` to `Env.path` (checked first). |
+| `path_add` | `(dir: str)` | `void` | Append `dir` to `Env.path` (checked last). |
+| `path_contains` | `(dir: str) -> bool` | `bool` | `true` if `dir` is already in `Env.path`. |
+| `path_remove` | `(dir: str)` | `void` | Remove `dir` from `Env.path` (no-op if absent). |
 
 ### Example
 
@@ -47,7 +51,7 @@ mut env = Env.init()
 print("Running: " + env.program_name)
 print("Args: " + str(env.get_arg_count()))
 
-mut home = env.get_var_or("HOME", "/tmp")
+mut home = env.get_var("HOME")
 print("HOME = " + home)
 
 env.set_var("MY_FLAG", "1")
@@ -56,6 +60,10 @@ env.unset_var("MY_FLAG")
 print(str(env.has_var("MY_FLAG")))   # false
 
 mut args = env.user_args()           # everything after argv[0]
+
+# Module search path
+env.path_insert("./local_modules")
+print(str(env.path_contains("./local_modules")))  # true
 ```
 
 ---
@@ -63,125 +71,98 @@ mut args = env.user_args()           # everything after argv[0]
 ## std.sys.fs — File-system operations
 
 **When**: Moving, copying, deleting, or sizing files without reading their contents.
-**Why**: These complement `std.io.file`; they focus on file metadata and path-level operations.
+**Why**: `Fs` is a static-method class that complements `std.io.file`; it focuses on file metadata and path-level operations.
 
-| Function | Signature | Returns | Description |
+| Method | Signature | Returns | Description |
 |---|---|---|---|
-| `delete_file` | `(path: str)` | `void` | Delete a file. No-op if absent. |
-| `rename_file` | `(src: str, dst: str) -> bool` | `bool` | Move/rename a file. `true` on success. |
-| `file_size` | `(path: str) -> int` | `int` | File size in bytes. Returns `0` if not found. |
-| `copy_file` | `(src: str, dst: str) -> bool` | `bool` | Copy `src` to `dst`. `true` on success. |
-| `is_file` | `(path: str) -> bool` | `bool` | `true` if the path exists and is a regular file. |
+| `Fs.delete` | `(path: str) -> bool` | `bool` | Delete a file. `true` on success. |
+| `Fs.rename` | `(old_path: str, new_path: str) -> bool` | `bool` | Move/rename a file. `true` on success. |
+| `Fs.size` | `(path: str) -> int` | `int` | File size in bytes. Returns `-1` if not found. |
+| `Fs.copy` | `(src: str, dst: str) -> bool` | `bool` | Copy `src` to `dst`. `true` on success. |
+| `Fs.is_file` | `(path: str) -> bool` | `bool` | `true` if the path exists and is a regular file. |
 
 ### Example
 
 ```tauraro
-from std.sys.fs import copy_file, rename_file, file_size, delete_file
+from std.sys.fs import Fs
 
-copy_file("a.txt", "b.txt")
-rename_file("b.txt", "c.txt")
-mut sz = file_size("c.txt")
+Fs.copy("a.txt", "b.txt")
+Fs.rename("b.txt", "c.txt")
+mut sz = Fs.size("c.txt")
 print("Size: " + str(sz))
-delete_file("c.txt")
+Fs.delete("c.txt")
 ```
 
 ---
 
 ## std.sys.process — Process control
 
-**When**: You need to run shell commands, capture their output, or exit the program.
-**Why**: Wraps `popen`/`system` with structured return types; `Process` class bundles exit code + stdout.
-
-### Process class
-
-```tauraro
-mut p = Process.run("echo hello")
-if p.succeeded():
-    print(p.get_output())
-```
+**When**: You need to run shell commands, capture their output, exit the program, or sleep.
+**Why**: `Process` is a static-method class wrapping `popen`/`system`/`exit` for process lifecycle and child execution. Overlapping OS identity helpers (hostname, username) live in `std.sys.os`.
 
 | Method | Signature | Returns | Description |
 |---|---|---|---|
-| `Process.run` | `(cmd: str) -> Process` | `Process` | Execute `cmd`, capture stdout and exit code. |
-| `succeeded` | `() -> bool` | `bool` | `true` if exit code was 0. |
-| `get_output` | `() -> str` | `str` | Captured stdout of the command. |
-| `exit_code` | `int` field | `int` | Raw exit code. |
-
-### Free functions
-
-| Function | Signature | Returns | Description |
-|---|---|---|---|
-| `get_pid` | `() -> int` | `int` | Current process ID. |
-| `exit` | `(code: int)` | `void` | Terminate the process with `code`. |
-| `run` | `(cmd: str) -> int` | `int` | Execute a shell command; return its exit code. |
-| `run_capture` | `(cmd: str) -> str` | `str` | Execute and capture stdout as a string. |
-| `run_ok` | `(cmd: str) -> bool` | `bool` | `true` if exit code is 0. |
+| `Process.exit` | `(code: int)` | `void` | Terminate the current process. `0` = success, non-zero = failure. |
+| `Process.get_pid` | `() -> int` | `int` | OS process identifier of the running program. |
+| `Process.system` | `(cmd: str) -> int` | `int` | Run `cmd` in the system shell; return the exit code (`0` = success). |
+| `Process.shell_output` | `(cmd: str) -> str` | `str` | Run `cmd` and capture its stdout as a string. |
+| `Process.check_call` | `(cmd: str) -> bool` | `bool` | Run `cmd`; return `true` if the exit code is `0`. |
+| `Process.sleep_ms` | `(ms: int)` | `void` | Sleep for at least `ms` milliseconds. |
+| `Process.sleep` | `(s: int)` | `void` | Sleep for at least `s` seconds. |
 
 ### Example
 
 ```tauraro
-from std.sys.process import Process, get_pid, run_capture
+from std.sys.process import Process
 
-print("PID: " + str(get_pid()))
-mut out = run_capture("echo hello")
+print("PID: " + str(Process.get_pid()))
+
+mut out = Process.shell_output("echo hello")
 print(out)    # "hello\n"
 
-mut p = Process.run("ls -la")
-if p.succeeded():
-    print(p.get_output())
+if Process.check_call("ls -la"):
+    print("listing succeeded")
+
+Process.sleep_ms(100)
+Process.exit(0)
 ```
 
 ---
 
-## std.sys.time — Timing and sleep
+## std.sys.time — Timing via the Clock class
 
 **When**: You need to sleep, measure elapsed time, or get a Unix timestamp.
-**Why**: `Stopwatch` is easier than calling `time_ms()` twice; `sleep_ms` maps directly to Windows/POSIX sleep.
-
-### Free functions
-
-| Function | Signature | Returns | Description |
-|---|---|---|---|
-| `sleep_ms` | `(ms: int)` | `void` | Sleep for `ms` milliseconds. |
-| `sleep_s` | `(s: int)` | `void` | Sleep for `s` seconds. |
-| `timestamp` | `() -> int` | `int` | Unix timestamp in seconds. |
-| `time_ms` | `() -> int` | `int` | Milliseconds since an unspecified epoch (monotonic). |
-| `time_ns` | `() -> int` | `int` | Nanoseconds since an unspecified epoch (monotonic). |
-| `elapsed_ms` | `(start: int) -> int` | `int` | `time_ms() - start` — handy one-liner for measuring a duration. |
-| `format_duration_ms` | `(ms: int) -> str` | `str` | Human-readable string like `"1h 3m 2s 400ms"`. |
-
-### Stopwatch class
+**Why**: `Clock.init()` records a start point so `elapsed_ms()` is a one-liner; the static helpers map directly to Windows/POSIX sleep and time functions.
 
 ```tauraro
-mut sw = Stopwatch.start()
+mut c = Clock.init()
 # ... work ...
-mut ms = sw.elapsed()
+mut ms = c.elapsed_ms()
 ```
 
 | Method | Signature | Returns | Description |
 |---|---|---|---|
-| `start` | `() -> Stopwatch` | `Stopwatch` | Create and immediately start. |
-| `elapsed` | `() -> int` | `int` | Milliseconds since start (or last `reset`). |
-| `stop` | `()` | `void` | Pause the stopwatch. |
-| `reset` | `()` | `void` | Restart from zero. |
-| `is_running` | `() -> bool` | `bool` | |
+| `Clock.init` | `() -> Clock` | `Clock` | Create a `Clock`, recording the current time as its start point. |
+| `Clock.sleep_ms` | `(ms: int)` | `void` | Pause the current thread for at least `ms` milliseconds. |
+| `Clock.sleep_s` | `(s: int)` | `void` | Pause for at least `s` seconds. |
+| `Clock.timestamp` | `() -> int` | `int` | Wall-clock time as seconds since the Unix epoch. |
+| `Clock.now_ms` | `() -> int` | `int` | High-resolution wall-clock time in milliseconds (monotonic). |
+| `elapsed_ms` | `(self) -> int` | `int` | Milliseconds elapsed since this `Clock` was created. |
+
+Fields: `start_time: int`.
 
 ### Example
 
 ```tauraro
-from std.sys.time import Stopwatch, elapsed_ms, time_ms, timestamp
+from std.sys.time import Clock
 
-mut t0 = time_ms()
-sleep_ms(50)
-mut dt = elapsed_ms(t0)   # >= 50
+mut c = Clock.init()
+Clock.sleep_ms(50)
+mut dt = c.elapsed_ms()   # >= 50
 print("elapsed: " + str(dt) + "ms")
 
-mut ts = timestamp()
+mut ts = Clock.timestamp()
 print("unix time: " + str(ts))
-
-mut sw = Stopwatch.start()
-# ... work ...
-print("duration: " + str(sw.elapsed()) + "ms")
 ```
 
 ---
@@ -404,3 +385,31 @@ print(now.to_string())   # "14:30:00"
 | `before` | `(other: Time) -> bool` | `bool` | |
 
 Fields: `hour: int`, `minute: int`, `second: int`.
+
+---
+
+## std.sys.signal — Graceful shutdown (Ctrl+C / SIGINT, SIGTERM)
+
+**When**: You're writing a long-running server, listener, or worker-pool loop and want it to exit cleanly on Ctrl+C or `SIGTERM` instead of being killed mid-request.
+**Why**: `Signal` installs OS signal handlers once at startup that set an internal flag; your accept/work loop polls that flag each iteration and exits on its own terms (closing sockets, flushing logs, etc.).
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Signal.install_shutdown_handler` | `()` | `void` | Register handlers for `SIGINT`/`SIGTERM` that set a flag checked by `shutdown_requested()`. Call once at startup, before entering the accept/work loop. |
+| `Signal.shutdown_requested` | `() -> bool` | `bool` | `true` once Ctrl+C (`SIGINT`) or `SIGTERM` has been received. |
+
+### Example
+
+```tauraro
+from std.sys.signal import Signal
+from std.sys.time   import Clock
+
+Signal.install_shutdown_handler()
+
+print("Server running. Press Ctrl+C to stop.")
+while not Signal.shutdown_requested():
+    # ... accept connections, process work, etc. ...
+    Clock.sleep_ms(100)
+
+print("Shutdown requested — cleaning up and exiting.")
+```

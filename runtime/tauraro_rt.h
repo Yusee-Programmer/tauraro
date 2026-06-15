@@ -4063,6 +4063,26 @@ static inline char* _tr_exe_dir(void) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * Shutdown signal — Ctrl+C (SIGINT) / SIGTERM sets a flag, polled by server
+ * accept loops to exit cleanly instead of being killed mid-request.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#ifndef TAURARO_BARE
+#include <signal.h>
+static volatile int _tr_shutdown_flag = 0;
+static void _tr_shutdown_signal_handler(int sig) { (void)sig; _tr_shutdown_flag = 1; }
+static inline void _tr_install_shutdown_handler(void) {
+    signal(SIGINT, _tr_shutdown_signal_handler);
+#ifdef SIGTERM
+    signal(SIGTERM, _tr_shutdown_signal_handler);
+#endif
+}
+static inline bool _tr_shutdown_requested(void) { return _tr_shutdown_flag != 0; }
+#else
+static inline void _tr_install_shutdown_handler(void) {}
+static inline bool _tr_shutdown_requested(void) { return false; }
+#endif
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * REGEX — POSIX regex.h on Linux/Mac; stubs on Windows and bare-metal.
  * ═══════════════════════════════════════════════════════════════════════════ */
 #ifndef TAURARO_BARE

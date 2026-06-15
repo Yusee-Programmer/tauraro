@@ -899,10 +899,13 @@ def main():
     rt.handler(conn)        # call the stored handler directly
 ```
 
-> **Note:** a callable *element type* in a generic literal —
-> `Vec[def(int) -> int].init()` — is not yet supported (in expression position
-> the brackets parse as an index). Wrap the callable in a small struct field (as
-> above) and use `Vec[YourStruct]`.
+> **Note:** a callable *element type* in a generic type argument —
+> `Vec[def(int) -> int].init()` — **is** supported (see
+> [Generics §Function-Pointer Type Arguments](11_generics.md#function-pointer-type-arguments)).
+> Use it for a homogeneous list of callables with no extra per-entry data.
+> When each entry also needs metadata (a route pattern, a name, a priority),
+> wrap the callable in a small struct field (as above) and use
+> `Vec[YourStruct]` instead.
 
 ---
 

@@ -1,6 +1,8 @@
 # std.collections — Data Structures
 
 ```tauraro
+from std.collections.vec     import Vec
+from std.collections.dict    import MultiDict
 from std.collections.stack   import Stack
 from std.collections.queue   import Queue
 from std.collections.deque   import Deque
@@ -10,6 +12,65 @@ from std.collections.tuple   import Pair, StrPair, Triple
 from std.collections.heap    import MinHeap, MaxHeap
 from std.collections.list    import LinkedList, ListNode
 from std.collections.graph   import Graph, GraphEdge
+```
+
+---
+
+## Vec[T]
+
+**When**: You need a generic, growable, random-access array of any element type — the building block most other collections in this module are implemented on top of.
+**Why**: Re-exported from `std.core.vec`; backed by a raw malloc'd buffer with doubling growth, generic over `T`.
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `init` | `(cap: int) -> Vec[T]` | `Vec[T]` | Create an empty vec with the given initial capacity (minimum 4). |
+| `push` | `(val: T)` | `void` | Append an element, doubling capacity if full. |
+| `append` | `(val: T)` | `void` | Alias for `push` (matches the builtin `List` API). |
+| `pop` | `() -> T` | `T` | Remove and return the last element. |
+| `get` | `(i: int) -> T` | `T` | Element at index `i`. |
+| `set` | `(i: int, val: T)` | `void` | Overwrite the element at index `i`. |
+| `len` | `int` field | `int` | Current number of elements. |
+| `capacity` | `int` field | `int` | Current backing-buffer capacity. |
+| `extend` | `(other: Vec[T])` | `void` | Append all elements from `other`. |
+| `contains` | `(val: T) -> bool` | `bool` | `true` if any element equals `val` (uses `==`). |
+| `remove` | `(i: int)` | `void` | Remove the element at index `i`, shifting later elements left. |
+| `swap` | `(a: int, b: int)` | `void` | Swap the elements at indices `a` and `b`. |
+| `is_empty` | `() -> bool` | `bool` | |
+| `clear` | `()` | `void` | Reset `len` to 0 (keeps the backing buffer). |
+| `first` | `() -> T` | `T` | First element. Caller must ensure the vec is non-empty. |
+| `last` | `() -> T` | `T` | Last element. Caller must ensure the vec is non-empty. |
+| `index_of` | `(val: T) -> int` | `int` | First index of `val`, or `-1` if absent. |
+| `last_index_of` | `(val: T) -> int` | `int` | Last index of `val`, or `-1` if absent. |
+| `count` | `(val: T) -> int` | `int` | Number of elements equal to `val`. |
+| `reverse` | `()` | `void` | Reverse the elements in place. |
+| `reversed` | `() -> Vec[T]` | `Vec[T]` | New vec with elements in reverse order (original unchanged). |
+| `clone` | `() -> Vec[T]` | `Vec[T]` | Shallow copy with its own backing buffer. |
+| `copy` | `() -> Vec[T]` | `Vec[T]` | Alias for `clone`. |
+| `reserve` | `(min_cap: int)` | `void` | Grow capacity (by doubling) to at least `min_cap`. Never shrinks. |
+| `truncate` | `(n: int)` | `void` | Shorten to `n` elements (no-op if `n >= len`). |
+| `sum` | `() -> T` | `T` | Sum of all elements (`T` must support `+`). Vec must be non-empty. |
+| `min_val` | `() -> T` | `T` | Smallest element (`T` must support `<`). Vec must be non-empty. |
+| `max_val` | `() -> T` | `T` | Largest element (`T` must support `<`). Vec must be non-empty. |
+| `sort` | `()` | `void` | In-place ascending insertion sort (`T` must support `<`). |
+| `sort_desc` | `()` | `void` | In-place descending sort. |
+| `free` | `()` | `void` | Free the backing buffer and reset to empty. |
+
+### Example
+
+```tauraro
+from std.collections.vec import Vec
+
+mut v = Vec[int].init(4)
+v.push(3)
+v.push(1)
+v.push(2)
+v.sort()                    # [1, 2, 3]
+print(str(v.get(0)))        # 1
+print(str(v.sum()))         # 6
+print(str(v.contains(2)))   # true
+v.free()
 ```
 
 ---
@@ -162,25 +223,56 @@ print(str(s.equals(s)))           # true
 
 ---
 
+## MultiDict
+
+**When**: You need a simple string-to-string map with a tracked element count — config maps, header tables, simple lookups.
+**Why**: Thin convenience wrapper over `Map[str]` with `Dict`-like naming (`set`/`get`/`has`/`remove`).
+**Backed by**: `Map[str]`.
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `init` | `() -> MultiDict` | `MultiDict` | Create an empty map. |
+| `set` | `(key: str, value: str)` | `void` | Insert or overwrite the value for `key`. |
+| `get` | `(key: str) -> str` | `str` | Value for `key`, or `""` if absent. |
+| `has` | `(key: str) -> bool` | `bool` | `true` if `key` is present. |
+| `remove` | `(key: str)` | `void` | Remove `key`. No-op if absent. |
+| `len` | `() -> int` | `int` | Number of entries. |
+
+### Example
+
+```tauraro
+from std.collections.dict import MultiDict
+
+mut d = MultiDict.init()
+d.set("name", "Alice")
+d.set("role", "admin")
+print(d.get("name"))        # "Alice"
+print(str(d.has("role")))   # true
+d.remove("role")
+print(str(d.len()))          # 1
+print(d.get("role"))         # ""  — absent key
+```
+
+---
+
 ## Counter
 
 **When**: You need to count string occurrences — word frequency, vote tallies, histogram building.
-**Why**: Cleaner than a `Map` with manual increment; provides `most_common`, `merge`, and `total`.
+**Why**: Cleaner than a `Map` with manual increment; tracks both per-key and overall totals.
+**Backed by**: `Map[int]`.
 
 ### Methods
 
 | Method | Signature | Returns | Description |
 |---|---|---|---|
 | `init` | `() -> Counter` | `Counter` | Create an empty counter. |
-| `add` | `(key: str)` | `void` | Increment the count for `key` by 1. |
-| `add_n` | `(key: str, n: int)` | `void` | Increment the count for `key` by `n`. |
-| `count` | `(key: str) -> int` | `int` | Current count (0 if unseen). |
-| `total` | `() -> int` | `int` | Sum of all counts. |
-| `has` | `(key: str) -> bool` | `bool` | `true` if the key has been counted at least once. |
-| `reset` | `(key: str)` | `void` | Set the count for `key` back to 0. |
-| `keys` | `() -> Vec[str]` | `Vec[str]` | All keys with a non-zero count. |
-| `merge` | `(other: Counter)` | `void` | Add all counts from `other` into `self`. |
-| `most_common` | `(n: int) -> Vec[str]` | `Vec[str]` | Top `n` keys by count, descending. |
+| `add` | `(key: str)` | `void` | Increment the count for `key` by 1 (inserts with count 1 if absent). Also increments the running total. |
+| `count` | `(key: str) -> int` | `int` | Current count for `key` (0 if never added). |
+| `total` | `() -> int` | `int` | Sum of all `add()` calls made on this counter. |
+| `has` | `(key: str) -> bool` | `bool` | `true` if the key has been added at least once. |
+| `reset` | `(key: str)` | `void` | Remove `key` entirely and subtract its count from the running total. |
 
 ### Example
 
@@ -194,8 +286,10 @@ cnt.add("cat")
 cnt.add("cat")
 print(str(cnt.count("cat")))    # 3
 print(str(cnt.total()))         # 4
-mut top = cnt.most_common(1)
-print(top.get(0))               # "cat"
+print(str(cnt.has("dog")))      # true
+cnt.reset("dog")
+print(str(cnt.has("dog")))      # false
+print(str(cnt.total()))         # 3
 ```
 
 ---
@@ -203,7 +297,7 @@ print(top.get(0))               # "cat"
 ## Pair / StrPair / Triple
 
 **When**: You need a lightweight, fixed-size group of two or three values — coordinate points, key-value pairs, RGB triples.
-**Why**: No heap overhead for a `Vec`; expressive field names (`first`, `second`, `a`, `b`, `c`).
+**Why**: No heap overhead for a `Vec`; expressive field names (`first`, `second`, `third`).
 
 ### Pair — two integers
 
@@ -213,9 +307,8 @@ print(top.get(0))               # "cat"
 | `second` | `int` field | `int` | Second element. |
 | `init` | `(a: int, b: int) -> Pair` | `Pair` | |
 | `swap` | `() -> Pair` | `Pair` | New `Pair` with elements swapped. |
-| `sum` | `() -> int` | `int` | `first + second` |
-| `max` | `() -> int` | `int` | Larger of the two values. |
-| `min` | `() -> int` | `int` | Smaller of the two values. |
+| `eq` | `(other: Pair) -> bool` | `bool` | `true` if both elements are equal. |
+| `free` | `(self)` | `void` | Free the heap allocation backing this `Pair`. |
 
 ### StrPair — two strings
 
@@ -224,18 +317,16 @@ print(top.get(0))               # "cat"
 | `first` | `str` field | `str` | |
 | `second` | `str` field | `str` | |
 | `init` | `(a: str, b: str) -> StrPair` | `StrPair` | |
-| `swap` | `() -> StrPair` | `StrPair` | New `StrPair` with elements swapped. |
-| `concat` | `() -> str` | `str` | `first + second` |
+| `eq` | `(other: StrPair) -> bool` | `bool` | `true` if both elements are equal. |
+| `free` | `(self)` | `void` | Free the heap allocation backing this `StrPair`. |
 
 ### Triple — three integers
 
 | Method / Field | Signature | Returns | Description |
 |---|---|---|---|
-| `a`, `b`, `c` | `int` fields | `int` | Elements. |
+| `first`, `second`, `third` | `int` fields | `int` | Elements. |
 | `init` | `(a: int, b: int, c: int) -> Triple` | `Triple` | |
-| `sum` | `() -> int` | `int` | `a + b + c` |
-| `max` | `() -> int` | `int` | Largest of the three. |
-| `min` | `() -> int` | `int` | Smallest of the three. |
+| `free` | `(self)` | `void` | Free the heap allocation backing this `Triple`. |
 
 ### Example
 
@@ -243,16 +334,15 @@ print(top.get(0))               # "cat"
 from std.collections.tuple import Pair, StrPair, Triple
 
 mut p = Pair.init(3, 7)
-print(str(p.max()))      # 7
 mut sw = p.swap()
 print(str(sw.first))     # 7
+print(str(p.eq(sw)))     # false
 
 mut kv = StrPair.init("name", "Alice")
-print(kv.concat())       # "nameAlice"
+print(kv.first + kv.second)  # "nameAlice"
 
 mut t = Triple.init(1, 5, 3)
-print(str(t.sum()))      # 9
-print(str(t.max()))      # 5
+print(str(t.first + t.second + t.third))  # 9
 ```
 
 ---

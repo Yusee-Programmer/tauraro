@@ -234,6 +234,60 @@ The standard library ships these generic types that you can use directly:
 
 ---
 
+## Function-Pointer Type Arguments
+
+### When to Use
+
+Use this when you need a homogeneous collection of callables — a dispatch
+table, a list of handlers, a pipeline of transform steps — where every
+element has the same `def(...) -> R` signature.
+
+### How It Works
+
+A generic type argument can itself be a function-pointer type, written
+`def(ParamTypes...) -> R`. This lets `Vec[def(...) -> R]`, `List[def(...) -> R]`,
+and similar generic containers hold plain top-level functions directly:
+
+```python
+def add1(x: int) -> int:
+    return x + 1
+
+def mul2(x: int) -> int:
+    return x * 2
+
+def main():
+    mut fns = Vec[def(int) -> int].init(2)
+    fns.push(add1)
+    fns.push(mul2)
+    print(fns.get(0)(10))    # 11
+    print(fns.get(1)(10))    # 20
+```
+
+The parser recognizes that `def` cannot begin a value expression inside
+`[...]`, so `Vec[def(int) -> int]` is parsed as a type argument (`ETypeArg`)
+rather than an index expression. Each element is a zero-cost function
+pointer — pushing `add1`/`mul2` stores the function's address, not a closure.
+
+### Common Mistakes
+
+```python
+# WRONG: mixing a function-pointer element type with a non-function value
+mut fns = Vec[def(int) -> int].init(2)
+fns.push(42)    # ERROR: 42 is not a def(int) -> int
+```
+
+### Best Practices
+
+- Prefer this over the "wrap the callable in a struct field" workaround
+  (see [Functions §First-Class Functions](05_functions.md#first-class-functions-callables))
+  when every element really does share one signature and you don't need
+  extra per-entry data (like a route pattern or name).
+- When each entry needs additional metadata alongside the callable (a name,
+  a pattern, a priority), keep using a small struct with a `def(...) -> R`
+  field and `Vec[YourStruct]` instead.
+
+---
+
 ## Type Constraints with `where`
 
 ### When to Use

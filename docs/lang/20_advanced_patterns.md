@@ -474,7 +474,7 @@ Most programs don't need manual optimization. Profile first. Apply these techniq
 | `StringBuilder` | String assembly inside loops |
 | `@inline` | Small helpers called in measured hot loops |
 | Pool pattern | High-frequency allocation of fixed-size objects |
-| `gpu:` | Independent element-wise work over large arrays |
+| `std.gpu.Gpu.parallel` | Independent element-wise work over large arrays |
 | Bit flags | Fixed-set boolean properties on hot objects |
 
 ---
@@ -608,27 +608,33 @@ extend IntPool:
 
 ---
 
-### Parallelism with gpu:
+### Parallelism with std.gpu.Gpu
 
 **When to use:** Independent element-wise work over large arrays. Each iteration must be fully independent with no loop-carried dependencies.
 
 ```python
-def normalize(values: List[float], scale: float) -> List[float]:
-    mut n = len(values)
-    mut result: List[float] = []
+from std.gpu import Gpu
+
+mut values: List[float] = []   # populated elsewhere
+mut result: List[float] = []
+mut scale: float = 1.0
+
+def normalize_at(i: int) -> void:
+    result[i] = values[i] / scale
+
+def normalize(n: int) -> void:
     mut i = 0
     while i < n:
         result.append(0.0)
         i = i + 1
-
-    gpu:
-        for i in range(n):
-            result[i] = values[i] / scale
-
-    return result
+    unsafe:
+        Gpu.parallel(n, normalize_at as Pointer[void])
 ```
 
-Compile with `-fopenmp` to enable actual parallelism. See chapter 18 for full `gpu:` rules.
+Compile with `-fopenmp` to enable actual parallelism (`Gpu.parallel` falls back
+to sequential execution otherwise). The older `gpu:` block keyword is
+**deprecated** — it now compiles to a plain sequential block with no pragmas.
+See chapter 18 for the full `std.gpu.Gpu` reference.
 
 ---
 
@@ -954,9 +960,9 @@ See chapter 16 for the full thread safety model and [Advanced — Sendable](adva
 | Narrow interfaces | Polymorphism with minimal coupling |
 | Dependency injection | Any code that needs to be testable or swappable |
 | Pool | High-frequency allocation of fixed-size objects |
-| @inline + gpu: | Hot inner loops that are provably parallel |
+| `@inline` + `std.gpu.Gpu` | Hot inner loops that are provably parallel |
 
-The most important performance insight: **measure before optimizing**. Use `--emit c` to see what the compiler generates, compile with `-O2`, and profile before reaching for `@inline`, `gpu:`, or manual memory management.
+The most important performance insight: **measure before optimizing**. Use `--emit c` to see what the compiler generates, compile with `-O2`, and profile before reaching for `@inline`, `std.gpu.Gpu`, or manual memory management.
 
 ---
 

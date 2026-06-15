@@ -1,11 +1,14 @@
-# std.io — File I/O, Buffered I/O, Directories, Paths, Console
+# std.io — File I/O, Buffered I/O, Directories, Paths, Console, Async Polling
 
 ```tauraro
-from std.io.file    import File
-from std.io.bufio   import BufReader, BufWriter
-from std.io.dir     import make_dir, remove_dir, dir_exists, list_dir
-from std.io.path    import path_join, path_basename, path_dirname, path_extension
-from std.io.console import print_line, eprint, read_line
+from std.io.file       import File
+from std.io.bufio      import BufReader, BufWriter
+from std.io.dir        import Dir
+from std.io.path       import Path
+from std.io.console    import Console
+from std.io.poll       import IOPoll, IOEvent
+from std.io.event_loop import EventLoop
+from std.sys.fs        import Fs
 ```
 
 ---
@@ -159,33 +162,40 @@ print(line1 + " " + line2 + " " + line3)   # "alpha beta gamma"
 ## std.io.dir — Directory operations
 
 **When**: You need to create, delete, or list directories.
-**Why**: Cross-platform wrappers over `mkdir`/`rmdir`/`opendir` with `bool` return values for error checking.
+**Why**: Cross-platform wrappers over `mkdir`/`rmdir`/`opendir` with `bool` return values for error checking, via the `Dir` class.
 
-### Functions
+```tauraro
+from std.io.dir import Dir
 
-| Function | Signature | Returns | Description |
+mut d = Dir.init("tmp")
+d.make()
+mut entries = d.list()
+```
+
+### Dir class
+
+| Method | Signature | Returns | Description |
 |---|---|---|---|
-| `make_dir` | `(path: str) -> bool` | `bool` | Create a single directory. `true` on success. |
-| `make_dir_all` | `(path: str) -> bool` | `bool` | Create directory and all missing parents. |
-| `remove_dir` | `(path: str) -> bool` | `bool` | Remove an **empty** directory. |
-| `remove_dir_all` | `(path: str) -> bool` | `bool` | Recursively remove a directory and all its contents. |
-| `dir_exists` | `(path: str) -> bool` | `bool` | `true` if the path is an existing directory. |
-| `list_dir` | `(path: str) -> Vec[str]` | `Vec[str]` | Entry names (not full paths) in `path`. |
-| `dir_count` | `(path: str) -> int` | `int` | Number of entries in `path`. |
-| `walk` | `(path: str) -> Vec[str]` | `Vec[str]` | Recursively collect all file paths under `path`. |
+| `init` | `(path: str) -> Dir` | `Dir` | Create a `Dir` bound to `path`. |
+| `make` | `(self) -> bool` | `bool` | Create the directory. `true` on success or if it already exists. |
+| `remove` | `(self) -> bool` | `bool` | Remove the directory (must be **empty**). `true` on success. |
+| `exists` | `(self) -> bool` | `bool` | `true` if `self.path` is an existing directory. |
+| `list` | `(self) -> Vec[str]` | `Vec[str]` | Entry names (not full paths), excluding `"."` and `".."`. |
+| `count` | `(self) -> int` | `int` | Number of entries (excluding `"."` and `".."`). |
 
 ### Example
 
 ```tauraro
-from std.io.dir  import make_dir, list_dir, remove_dir_all
+from std.io.dir  import Dir
 from std.io.file import File
-from std.io.path import path_join
+from std.io.path import Path
 
-make_dir("tmp")
-File.write_text(path_join("tmp", "a.txt"), "hello")
-mut entries = list_dir("tmp")   # ["a.txt"]
-print(str(entries.len()))       # 1
-remove_dir_all("tmp")
+mut d = Dir.init("tmp")
+d.make()
+File.write_text(Path.init("tmp").join("a.txt"), "hello")
+mut entries = d.list()           # ["a.txt"]
+print(str(entries.len()))        # 1
+d.remove()
 ```
 
 ---
@@ -193,59 +203,224 @@ remove_dir_all("tmp")
 ## std.io.path — Path manipulation
 
 **When**: You need to join, split, inspect, or normalise file paths in a cross-platform way.
-**Why**: Avoids manual string slicing; handles Windows `\` vs POSIX `/` transparently.
+**Why**: Avoids manual string slicing; handles Windows `\` vs POSIX `/` via the `Path` class.
 
-All functions treat `/` as the canonical separator and normalise `\` to `/`.
+`Path` wraps a string in `self.value`; `/` and `\` are both treated as separators by `dirname`/`basename`/`join`.
 
-| Function | Signature | Returns | Description |
+```tauraro
+from std.io.path import Path
+
+mut p = Path.init("a/b/c.txt")
+print(p.basename())   # "c.txt"
+```
+
+### Path class
+
+| Method | Signature | Returns | Description |
 |---|---|---|---|
-| `path_normalize` | `(p: str) -> str` | `str` | Replace `\` with `/`. |
-| `path_join` | `(a: str, b: str) -> str` | `str` | Join two path segments with `/`. |
-| `path_dirname` | `(p: str) -> str` | `str` | Directory portion including trailing `/`. |
-| `path_basename` | `(p: str) -> str` | `str` | Final component (file name + extension). |
-| `path_extension` | `(p: str) -> str` | `str` | Last extension including dot, e.g. `".gz"`. |
-| `path_strip_extension` | `(p: str) -> str` | `str` | Remove the last extension. |
-| `path_with_extension` | `(p: str, ext: str) -> str` | `str` | Replace the extension. |
-| `path_is_absolute` | `(p: str) -> bool` | `bool` | `true` for paths starting with `/` or a drive letter. |
-| `path_canonicalize` | `(p: str) -> str` | `str` | Resolve `.` and `..` components. |
-| `path_split` | `(p: str) -> Vec[str]` | `Vec[str]` | Split the path into its components. |
+| `init` | `(p: str) -> Path` | `Path` | Create a `Path` wrapping `p`. |
+| `normalize` | `(self) -> str` | `str` | Replace every `\` with `/`. |
+| `join` | `(self, other: str) -> str` | `str` | Join `self.value` with `other`, inserting exactly one `/` between them (handles existing trailing/leading separators). |
+| `dirname` | `(self) -> str` | `str` | Directory portion including trailing separator, e.g. `"a/b/c.txt"` → `"a/b/"`. Returns `"./"` if there is no separator. |
+| `basename` | `(self) -> str` | `str` | Final component (file name + extension), e.g. `"a/b/c.txt"` → `"c.txt"`. |
+| `extension` | `(self) -> str` | `str` | Last extension including dot, e.g. `".gz"`. Returns `""` if there is no extension. |
+| `strip_extension` | `(self) -> str` | `str` | Remove the last extension, e.g. `"a.b.c"` → `"a.b"`. |
+| `is_absolute` | `(self) -> bool` | `bool` | `true` for paths starting with `/` or a Windows drive letter (`X:`). |
+| `to_str` | `(self) -> str` | `str` | Return the underlying string (`self.value`). |
 
 ### Example
 
 ```tauraro
-from std.io.path import path_join, path_extension, path_dirname, path_basename
+from std.io.path import Path
 
-mut full = path_join("src", "main.tr")         # "src/main.tr"
-mut ext  = path_extension("archive.tar.gz")   # ".gz"
-mut dir  = path_dirname("a/b/c.txt")           # "a/b/"
-mut base = path_basename("a/b/c.txt")          # "c.txt"
+mut full = Path.init("src").join("main.tr")          # "src/main.tr"
+mut ext  = Path.init("archive.tar.gz").extension()    # ".gz"
+mut dir  = Path.init("a/b/c.txt").dirname()           # "a/b/"
+mut base = Path.init("a/b/c.txt").basename()          # "c.txt"
 ```
 
 ---
 
 ## std.io.console — Console I/O
 
-**When**: You need to print to stdout/stderr or prompt the user for input.
-**Why**: Provides newline-safe helpers and a read-with-prompt function cleaner than raw `print`.
+**When**: You need to print to stdout/stderr, prompt the user for input, or use ANSI colors.
+**Why**: Provides newline-safe helpers, typed input readers, and color/clear-screen helpers via the static-method `Console` class.
 
-| Function | Signature | Returns | Description |
+### Output
+
+| Method | Signature | Returns | Description |
 |---|---|---|---|
-| `print_line` | `(s: str)` | `void` | Print `s` followed by a newline to stdout. |
-| `print_raw` | `(s: str)` | `void` | Print `s` with no trailing newline. |
-| `eprint` | `(s: str)` | `void` | Print `s` to stderr (no newline). |
-| `eprintln` | `(s: str)` | `void` | Print `s` + newline to stderr. |
-| `read_line` | `(prompt: str) -> str` | `str` | Print `prompt`, then read one line from stdin (newline stripped). |
-| `input_line` | `() -> str` | `str` | Read one line from stdin with no prompt. |
+| `Console.println` | `(s: str)` | `void` | Print `s` followed by a newline to stdout. |
+| `Console.print` | `(s: str)` | `void` | Print `s` with no trailing newline. |
+| `Console.eprint` | `(s: str)` | `void` | Print `s` to stderr (no newline). |
+| `Console.eprintln` | `(s: str)` | `void` | Print `s` to stderr (no newline; same as `eprint`). |
+
+### Input
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Console.read_line` | `(prompt: str) -> str` | `str` | Print `prompt`, then read one line from stdin (newline stripped). |
+| `Console.input_line` | `() -> str` | `str` | Read one line from stdin with no prompt. |
+| `Console.read_int` | `(prompt: str) -> int` | `int` | Print `prompt`, read a line, and parse it as an integer (returns `0` on parse failure). |
+| `Console.read_float` | `(prompt: str) -> float` | `float` | Print `prompt`, read a line, and parse it as a float. |
+
+### Screen control
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Console.clear` | `()` | `void` | Clear the terminal screen. |
+
+### Colors (ANSI codes)
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Console.set_color` | `(code: int)` | `void` | Set foreground color to `code` (e.g. `Console.RED()`). |
+| `Console.reset_color` | `()` | `void` | Reset colors to default. |
+| `Console.print_colored` | `(s: str, code: int)` | `void` | Print `s` in color `code`, then reset. |
+| `Console.println_colored` | `(s: str, code: int)` | `void` | Print `s` + newline in color `code`, then reset. |
+
+Color constants (each a zero-arg static method returning the ANSI code): `Console.BLACK()`, `Console.RED()`, `Console.GREEN()`, `Console.YELLOW()`, `Console.BLUE()`, `Console.MAGENTA()`, `Console.CYAN()`, `Console.WHITE()`, and bright variants `Console.BRIGHT_RED()`, `Console.BRIGHT_GREEN()`, `Console.BRIGHT_YELLOW()`, `Console.BRIGHT_BLUE()`, `Console.BRIGHT_MAGENTA()`, `Console.BRIGHT_CYAN()`, `Console.BRIGHT_WHITE()`.
 
 ### Example
 
 ```tauraro
-from std.io.console import print_line, read_line, eprintln
+from std.io.console import Console
 
-print_line("Enter your name:")
-mut name = input_line()
-print_line("Hello, " + name + "!")
-eprintln("stderr message")
+Console.println("Enter your name:")
+mut name = Console.input_line()
+Console.println("Hello, " + name + "!")
+Console.eprintln("stderr message")
+
+Console.print_colored("Warning!", Console.YELLOW())
+Console.println("")
 ```
 
-> **Tip** — The built-in `print(s)` maps directly to `printf` and is slightly faster for simple debug output. Use `print_line` when you need a guaranteed newline without appending `"\n"` manually.
+> **Tip** — The built-in `print(s)` maps directly to `printf` and is slightly faster for simple debug output. Use `Console.println` when you need a guaranteed newline without appending `"\n"` manually.
+
+---
+
+## std.io.poll — IOPoll: async I/O readiness
+
+**When**: You are building an I/O-bound server or client that needs to wait on many sockets/file descriptors without blocking on each one individually.
+**Why**: Wraps the `_TrIOPoll` C runtime abstraction (epoll on Linux, IOCP on Windows, kqueue on macOS/BSD, no-op stub under `TAURARO_KERNEL`) behind a single cross-platform interface.
+
+```tauraro
+from std.io.poll import IOPoll, IOEvent
+
+mut poll = IOPoll.new()
+poll.add(fd, IOPoll.POLLIN(), my_ctx_int)
+mut events = poll.wait(100)   # 100 ms timeout
+for ev in events:
+    print("fd ready: events=" + str(ev.events) + " ctx=" + str(ev.userdata))
+poll.destroy()
+```
+
+### Event flags
+
+Combine with `|`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `IOPoll.POLLIN()`  | `0x01` | readable |
+| `IOPoll.POLLOUT()` | `0x02` | writable |
+| `IOPoll.POLLERR()` | `0x04` | error condition |
+| `IOPoll.POLLHUP()` | `0x08` | connection closed / hangup |
+
+### IOPoll class
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `new` | `() -> IOPoll` | `IOPoll` | Create a new poll instance (allocates the underlying OS handle). |
+| `add` | `(self, fd: int, events: int, userdata: int) -> bool` | `bool` | Register `fd` for readiness events. `userdata` is an opaque int (index/id) returned in matching `IOEvent`s. |
+| `modify` | `(self, fd: int, events: int, userdata: int) -> bool` | `bool` | Update the registered event mask/userdata for `fd`. |
+| `remove` | `(self, fd: int) -> bool` | `bool` | Remove `fd` from the poll set. |
+| `wait` | `(self, timeout_ms: int) -> Vec[IOEvent]` | `Vec[IOEvent]` | Wait up to `timeout_ms` for events (`-1` = block indefinitely). Returns ready descriptors (may be empty on timeout). |
+| `destroy` | `(self)` | `void` | Release the underlying OS handle. |
+
+### IOEvent class
+
+| Field/Method | Signature | Returns | Description |
+|---|---|---|---|
+| `fd` | `int` | `int` | The file descriptor / handle that is ready. |
+| `events` | `int` | `int` | Bitmask of ready events (see flags above). |
+| `userdata` | `int` | `int` | The opaque value passed to `add`/`modify`. |
+| `readable` | `(self) -> bool` | `bool` | `true` if `POLLIN` is set. |
+| `writable` | `(self) -> bool` | `bool` | `true` if `POLLOUT` is set. |
+| `error` | `(self) -> bool` | `bool` | `true` if `POLLERR` is set. |
+| `hangup` | `(self) -> bool` | `bool` | `true` if `POLLHUP` is set. |
+
+---
+
+## std.io.event_loop — EventLoop: single-threaded async reactor
+
+**When**: You're writing an I/O-bound server/client that needs to handle many connections on one thread without blocking ("Node.js model" — not M:N coroutines). For CPU-bound work, combine `EventLoop` on the I/O thread with a `ThreadPool` for workers.
+**Why**: A small wrapper around `IOPoll` that tracks a running flag, iteration count, and elapsed time.
+
+```tauraro
+from std.io.event_loop import EventLoop
+from std.io.poll import IOPoll
+
+mut loop = EventLoop.new()
+loop.add_fd(fd, IOPoll.POLLIN(), my_handler_id)
+loop.run(100, 50)   # run 100 poll cycles, 50ms timeout each
+loop.stop()
+```
+
+Full server pattern (manual loop using `poll_once`):
+
+```tauraro
+mut server = TcpListener.listen("0.0.0.0", 8080)
+mut loop   = EventLoop.new()
+loop.add_fd(server.fd, IOPoll.POLLIN(), 0)   # 0 = server sentinel
+
+while loop.is_running():
+    mut evs = loop.poll_once(50)             # wait up to 50ms
+    for ev in evs:
+        if ev.userdata == 0:                  # new connection
+            mut client = server.accept_nb()
+            loop.add_fd(client.fd, IOPoll.POLLIN(), client.fd)
+        else:
+            handle_client(ev.fd)              # read/write without blocking
+```
+
+### EventLoop class
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `new` | `() -> EventLoop` | `EventLoop` | Create a new event loop (creates its own `IOPoll`, sets `running = true`). |
+| `add_fd` | `(self, fd: int, events: int, userdata: int) -> bool` | `bool` | Register `fd` for readiness notifications. `userdata` is caller-managed (e.g. connection id). |
+| `modify_fd` | `(self, fd: int, events: int, userdata: int) -> bool` | `bool` | Update the event mask for a registered `fd`. |
+| `remove_fd` | `(self, fd: int) -> bool` | `bool` | Remove `fd` from the loop. |
+| `poll_once` | `(self, timeout_ms: int) -> Vec[IOEvent]` | `Vec[IOEvent]` | Run one poll cycle and return ready events. `-1` blocks forever, `0` is non-blocking, `>0` is a millisecond timeout. |
+| `run` | `(self, max_iter: int, timeout_ms: int) -> int` | `int` | Run poll cycles until `stop()` is called or `max_iter` cycles complete (`0` = unlimited). Returns the total number of events seen across all cycles. |
+| `stop` | `(self)` | `void` | Signal the loop to stop after the current cycle. |
+| `is_running` | `(self) -> bool` | `bool` | `true` while the loop has not been stopped. |
+| `elapsed_ms` | `(self) -> int` | `int` | Milliseconds elapsed since `EventLoop.new()`. |
+| `destroy` | `(self)` | `void` | Stop the loop and destroy its underlying `IOPoll`. |
+
+> **Note** — `run()` only counts and tallies events; it does not itself dispatch them to handlers. For real servers, drive your own loop with `poll_once()` as shown above, or process the `Vec[IOEvent]` returned by `run`'s underlying `poll_once` calls yourself.
+
+---
+
+## std.sys.fs — File-system operations
+
+**When**: You need to delete, rename/move, copy, or check files outside the `File`/`Dir` instance APIs.
+**Why**: Small static-method `Fs` class for common filesystem operations.
+
+```tauraro
+from std.sys.fs import Fs
+
+Fs.copy("a.txt", "b.txt")
+Fs.rename("b.txt", "c.txt")
+Fs.delete("c.txt")
+```
+
+### Fs class — static methods
+
+| Method | Signature | Returns | Description |
+|---|---|---|---|
+| `Fs.delete` | `(path: str) -> bool` | `bool` | Delete a file. `true` on success. |
+| `Fs.rename` | `(old_path: str, new_path: str) -> bool` | `bool` | Rename (or move) a file. `true` on success. |
+| `Fs.size` | `(path: str) -> int` | `int` | File size in bytes, or `-1` if the file does not exist. |
+| `Fs.copy` | `(src: str, dst: str) -> bool` | `bool` | Copy `src` to `dst` by reading and rewriting the full content. `false` if `src` does not exist. |
+| `Fs.is_file` | `(path: str) -> bool` | `bool` | `true` if `path` names a regular file that can be opened for reading. |

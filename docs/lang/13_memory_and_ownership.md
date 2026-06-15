@@ -458,6 +458,139 @@ for item in big_list:
 
 ---
 
+## Advanced: Releasing Memory Early
+
+### When to Use
+
+Scope-based auto-drop (Rule M-1) is correct and sufficient for almost all
+code: memory is freed when the owning variable goes out of scope, with no
+manual `free()`. There are a few advanced situations where you want memory
+released **before** scope exit:
+
+- A long-running loop (request-handling loop, parser main loop, simulation
+  step) that allocates a sizeable temporary on every iteration — waiting
+  until the *function* returns to free thousands of iterations' worth of
+  temporaries would inflate peak memory.
+- A resource that should be released as soon as you're logically done with
+  it (a `StringBuilder` used to assemble one message, a buffer used to decode
+  one packet), even though the enclosing scope continues for a while longer.
+- Library/class authors providing an explicit "I'm done with this" API so
+  callers in tight loops aren't forced to restructure their code into many
+  small scopes just to get per-iteration cleanup.
+
+For str values specifically, also see [06 — Strings §Memory: Avoiding
+String-Related Leaks and Corruption](06_strings.md#memory-avoiding-string-related-leaks-and-corruption).
+
+### How It Works
+
+**1. Per-iteration auto-drop already happens for locals declared inside the loop body.**
+
+```python
+mut i = 0
+while i < 1000000:
+    mut chunk = build_chunk(i)   # Own, declared INSIDE the loop body
+    process(chunk)
+    # free(chunk) injected at the END OF EACH ITERATION — not deferred
+    i += 1
+```
+
+No manual action needed here — declaring the temporary *inside* the loop body
+(rather than reusing one `mut` declared before the loop) is enough for the
+compiler to free it every iteration.
+
+**2. `.clear()` on collections frees elements while keeping the container.**
+
+```python
+mut batch: List[str] = []
+mut i = 0
+while i < 1000000:
+    batch.append(make_record(i))
+    if len(batch) >= 1000:
+        flush(batch)
+        batch.clear()    # frees the 1000 buffered str elements now,
+                          # keeps `batch`'s backing array for reuse
+    i += 1
+```
+
+`.clear()` releases every element the collection currently holds (including
+boxed `str` values — see [03 — Memory Model Internals: List_TrStr /
+Dict_free_strval](../dev/03_memory_model_internals.md) for the implementation
+detail) without freeing the collection itself, so you can keep reusing it.
+
+**3. `dispose()` for resource classes — call it when you're logically done.**
+
+Library types that wrap a resource (a `StringBuilder`, a connection, a
+buffer) typically expose an explicit cleanup method so you can release it
+before the enclosing scope ends:
+
+```python
+import std.core.string
+
+mut i = 0
+while i < 1000000:
+    mut sb = StringBuilder.init()
+    sb.append("record ")
+    sb.append_int(i)
+    emit(sb.to_string())   # to_string() copies out — safe to use after free
+    sb.free()              # release sb's buffer NOW, not at end of `main`
+    i += 1
+```
+
+If `sb` were declared once *before* the loop and reused, the compiler's
+auto-drop would only free it once, at the end of the function — calling
+`.free()`/`.dispose()` per iteration is how you bound memory use in that case.
+
+**4. Manual `dealloc` for raw pointers — see [14 — Unsafe & Pointers: Manual
+Allocation](14_unsafe_and_pointers.md#manual-allocation-alloc-and-dealloc).**
+Every `alloc[T](n)` must be matched by exactly one `dealloc(ptr)`; this is the
+one place Tauraro requires a manual free, and it is always inside `unsafe:`.
+
+### Common Mistakes
+
+```python
+# WRONG — reusing one builder across iterations without releasing it,
+# expecting per-iteration cleanup that auto-drop does not provide here
+mut sb = StringBuilder.init()    # declared ONCE, before the loop
+mut i = 0
+while i < 1000000:
+    sb.append(f"record {i}\n")
+    emit_and_reset(sb)           # if this doesn't clear sb internally,
+    i += 1                       # sb's buffer grows unbounded
+# free(sb) only fires here, after 1,000,000 iterations of growth
+```
+
+```python
+# WRONG — naming a "construct locally, mutate, then return" cleanup
+# method `free` instead of `dispose` — auto-drop frees it before return
+extend Conn:
+    pub def take_buffer(self) -> Buffer:
+        mut raw = self.buf
+        raw.write(v)
+        return raw    # if Buffer has a method named `free`, auto-drop
+                       # may free `raw` here, before the return takes effect
+```
+Fix: name such cleanup methods `dispose()`, not `free()` — see [Best
+Practices & Pitfalls #2](../dev/06_best_practices_pitfalls.md) if you're
+writing this kind of class yourself.
+
+### Best Practices
+
+- Default to scope-based auto-drop. Reach for `.clear()`/`.dispose()`/`.free()`
+  only when profiling or memory growth shows a long-lived loop needs it.
+- Declare loop-body temporaries *inside* the loop body so per-iteration
+  auto-drop applies — don't hoist a `mut` above the loop "to avoid
+  reallocating" unless the type's API is specifically designed for reuse
+  (e.g. `StringBuilder` + `.clear()`).
+- When writing your own resource class with a manual cleanup method, name it
+  `dispose()` (not `free()`) if instances are ever constructed locally,
+  mutated, and returned — see [13 — Memory and Ownership] above and [Best
+  Practices & Pitfalls #2](../dev/06_best_practices_pitfalls.md).
+- After calling `.free()`/`.dispose()` manually, do not use the value again —
+  the compiler does not track manual frees the way it tracks scope exits, so
+  use-after-free on a manually freed value is your responsibility to avoid.
+
+---
+
 ## Ownership in Practice — Quick Reference
 
 **Passing a class to a function (borrow — most common):**

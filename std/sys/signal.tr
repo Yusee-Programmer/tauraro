@@ -1,0 +1,28 @@
+# std.sys.signal — OS shutdown signal (Ctrl+C / SIGINT, SIGTERM) handling.
+#
+# Lets long-running servers (HTTP listeners, worker pools) exit their accept
+# loop cleanly on Ctrl+C instead of being killed mid-request.
+#
+#   from std.sys.signal import Signal
+#
+#   Signal.install_shutdown_handler()
+#   while not Signal.shutdown_requested():
+#       ...
+
+extern "C":
+    def _tr_install_shutdown_handler()
+    def _tr_shutdown_requested() -> bool
+
+pub class Signal:
+    pass
+
+extend Signal:
+    # Register handlers for SIGINT/SIGTERM that set a flag checked by
+    # `shutdown_requested()`. Call once at startup, before entering the
+    # accept loop.
+    pub def install_shutdown_handler():
+        unsafe: _tr_install_shutdown_handler()
+
+    # True once Ctrl+C (SIGINT) or SIGTERM has been received.
+    pub def shutdown_requested() -> bool:
+        unsafe: return _tr_shutdown_requested()

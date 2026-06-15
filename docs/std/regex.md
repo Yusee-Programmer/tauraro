@@ -16,7 +16,7 @@ from std.regex import Regex
 |---|---|---|---|
 | `Regex.compile` | `(pattern: str) -> Regex` | `Regex` | Compile a POSIX extended regex pattern. |
 | `Regex.compile_icase` | `(pattern: str) -> Regex` | `Regex` | Same, but case-insensitive matching. |
-| `match` | `(self, text: str) -> bool` | `bool` | `true` when the pattern matches `text`. |
+| `match` | `(self, text: str) -> bool` | `bool` | `true` when the entire `text` is matched by the pattern (use `contains`/`find` for partial matches). |
 | `find_start` | `(self, text: str, from_: int) -> int` | `int` | Byte offset of first match at or after `from_`, or `-1`. |
 | `find_len` | `(self, text: str, from_: int) -> int` | `int` | Byte length of first match at or after `from_`, or `0`. |
 | `find` | `(self, text: str, from_: int) -> str` | `str` | Matched substring, or `""` when no match. |

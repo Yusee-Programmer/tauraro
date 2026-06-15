@@ -124,10 +124,10 @@ Produce new vectors from multiple inputs.
 
 | Method | Signature | Returns | Description |
 |---|---|---|---|
-| `Transform.windows` | `(v: Vec[int], w: int) -> Vec[int]` | `Vec[int]` | Starting indices of each sliding window of size `w`. |
-| `Transform.chunks` | `(v: Vec[int], w: int) -> Vec[int]` | `Vec[int]` | Starting indices of each non-overlapping chunk of size `w`. |
+| `Transform.windows` | `(v: Vec[int], w: int) -> Vec[int]` | `Vec[int]` | The element at the start of each sliding window of size `w` (i.e. `v[0], v[1], …, v[len-w]`). |
+| `Transform.chunks` | `(v: Vec[int], w: int) -> Vec[int]` | `Vec[int]` | Starting indices of each non-overlapping chunk of size `w` (i.e. `0, w, 2w, …`). |
 
-> **Note** — `windows` and `chunks` return index vectors, not sub-vectors. Use the indices with `v.get(i)` to `v.get(i+w-1)` to access each window or chunk.
+> **Note** — `windows` returns the *values* at each window start position (not sub-vectors or indices), while `chunks` returns *indices*. To materialize a window/chunk, use the returned value/index together with `w` to index into `v` yourself.
 
 ### Folds
 
