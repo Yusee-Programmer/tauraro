@@ -1,0 +1,20 @@
+def main():
+    mut sd: Map[int, str] = {}
+    sd.insert(1, "alpha")
+    sd.insert(2, "beta")
+    mut vals = sd.values()
+    mut i = 0
+    while i < vals.len():
+        print("val=" + vals.get(i))
+        i = i + 1
+
+    mut ssd: Map[str, str] = {}
+    ssd.insert("k1", "one")
+    ssd.insert("k2", "two")
+    mut svals = ssd.values()
+    mut j = 0
+    while j < svals.len():
+        print("sval=" + svals.get(j))
+        j = j + 1
+
+    print("done")

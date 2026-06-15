@@ -1,0 +1,20 @@
+enum MyResult2:
+    Ok(int)
+    Err(val: str)
+
+def make_pair() -> (int, str):
+    return (42, "hello_tuple")
+
+def main():
+    mut a, b = make_pair()
+    print("a=" + a.to_str())
+    print("b=" + b)
+
+    mut r: MyResult2 = MyResult2.Ok(7)
+    match r:
+        case MyResult2.Ok(v):
+            print("ok=" + v.to_str())
+        case MyResult2.Err(e):
+            print("err=" + e)
+
+    print("done")

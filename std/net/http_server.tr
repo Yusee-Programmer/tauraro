@@ -74,8 +74,9 @@ extend HttpRequest:
     # HTTP header names are case-insensitive; the parser stores them lowercased.
     pub def header(self, name: str) -> str:
         mut key = Str.to_lower(name)
-        if self.headers.contains(key): return self.headers.get(key)
-        return ""
+        mut result = ""
+        if self.headers.contains(key): result = self.headers.get(key)
+        return result
 
     # Return a path parameter by name (set by router), or "" when absent.
     pub def get_param(self, name: str) -> str:
@@ -95,7 +96,8 @@ extend HttpRequest:
                 mut k = Str.slice(pair, 0, eq)
                 if Str.eq(k, key):
                     mut v = Str.slice(pair, eq + 1, Str.len(pair))
-                    return Url.decode_component(Str.replace(v, "+", " "))
+                    mut decoded = Url.decode_component(Str.replace(v, "+", " "))
+                    return decoded
             i = i + 1
         return ""
 
@@ -146,37 +148,23 @@ extend HttpRequest:
 
     # Free this request's headers/params maps (incl. values - every value is
     # a heap-allocated Str.slice/Str.to_lower result, parser-owned, never a
-    # string literal), the heap-owned method/path/query/body fields (set by
-    # HttpParser.parse via Str.slice whenever non-empty; empty fields are the
-    # "" literal default from init() and must not be freed), and finally this
-    # HttpRequest struct itself.
+    # string literal), the method/path/query/body/version fields (each
+    # `_tr_c_free(x as Pointer[char])` is rewritten by c.tr to
+    # `_tr_str_release(x)`, which is a no-op for string-literal defaults from
+    # init() and releases both .data and .rc for heap Str.slice results), and
+    # finally this HttpRequest struct itself.
     pub def free_owned(self):
-        mut hv = self.headers.values()
-        mut hi = 0
-        while hi < hv.len:
-            unsafe: _tr_c_free(hv.get(hi) as Pointer[char])
-            hi = hi + 1
-        hv.free()
+        # Map[str,str].free() (Dict_free_strval, #54) releases each boxed
+        # TrStr value and frees its box, in addition to the usual
+        # buckets/nodes/key-strings/struct - no separate values() loop needed.
         self.headers.free()
-        mut pv = self.params.values()
-        mut pi = 0
-        while pi < pv.len:
-            unsafe: _tr_c_free(pv.get(pi) as Pointer[char])
-            pi = pi + 1
-        pv.free()
         self.params.free()
-        # method/path/query/version/body are only ever Str.slice'd (heap) by
-        # HttpParser.parse() when it successfully parses a request line (i.e.
-        # method is non-empty); for the placeholder HttpRequest.init() (empty
-        # method, returned by read_next() on EOF/garbage) every field is a
-        # string literal ("" / "/" / "HTTP/1.1") and must not be freed.
-        if Str.len(self.method) > 0:
-            unsafe:
-                _tr_c_free(self.method as Pointer[char])
-                _tr_c_free(self.path as Pointer[char])
-                if Str.len(self.query) > 0: _tr_c_free(self.query as Pointer[char])
-                if Str.len(self.body) > 0: _tr_c_free(self.body as Pointer[char])
-                if self.version_owned: _tr_c_free(self.version as Pointer[char])
+        unsafe:
+            _tr_c_free(self.method as Pointer[char])
+            _tr_c_free(self.path as Pointer[char])
+            _tr_c_free(self.query as Pointer[char])
+            _tr_c_free(self.body as Pointer[char])
+            _tr_c_free(self.version as Pointer[char])
         unsafe: _tr_c_free(self as Pointer[char])
 
 # ── HttpResponse ──────────────────────────────────────────────────────────────
@@ -380,6 +368,16 @@ extend HttpConn:
         self._headers = Map[str, str].init(8)
         self._horder  = Vec[str].init(8)
         self.last_status = 0
+
+    # Release the HttpConn heap instance itself (and any per-request state
+    # not already released by close()) once the connection is torn down.
+    pub def dispose(self):
+        if not self._closed:
+            self.request.free_owned()
+            self._headers.free()
+            self._horder.free()
+            self._closed = true
+        unsafe: _tr_c_free(self as Pointer[char])
 
 # ── HttpRoute ─────────────────────────────────────────────────────────────────
 

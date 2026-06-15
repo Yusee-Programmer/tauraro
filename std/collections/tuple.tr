@@ -22,6 +22,9 @@ extend Pair:
     pub def eq(self, other: Pair) -> bool:
         return self.first == other.first and self.second == other.second
 
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
 # ─── StrPair ─────────────────────────────────────────────────────────────────
 
 pub class StrPair:
@@ -38,6 +41,9 @@ extend StrPair:
     pub def eq(self, other: StrPair) -> bool:
         return self.first == other.first and self.second == other.second
 
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
 # ─── Triple ──────────────────────────────────────────────────────────────────
 
 pub class Triple:
@@ -52,3 +58,6 @@ extend Triple:
         t.second = b
         t.third  = c
         return t
+
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])

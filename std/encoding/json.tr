@@ -420,7 +420,9 @@ extend JsonParser:
             else:
                 sb.append_char(c)
                 self.advance()
-        return sb.to_string().as_str()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     pub def parse_number(self) -> Pointer[JsonValue]:
         mut start = self.pos

@@ -81,7 +81,9 @@ extend BufReader:
                     done = true
                 else:
                     sb.append_char(ch)
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     pub def close(self):
         if self.open:
@@ -138,6 +140,7 @@ extend BufWriter:
             mut content: str = self._buf.to_owned()
             mut p = content as Pointer[char]
             _tr_c_fwrite(p, 1, n, self._fp)
+            unsafe: _tr_c_free(content as Pointer[char])
         self._buf.clear()
 
     # Flush remaining data and close the file.

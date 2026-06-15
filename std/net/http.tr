@@ -17,6 +17,9 @@ extend HttpHeader:
         h.value = value
         return h
 
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
+
 pub class HttpClientResponse:
     pub status:  int
     pub body:    str
@@ -38,6 +41,9 @@ extend HttpClientResponse:
 
     pub def is_error(self) -> bool:
         return self.status >= 400
+
+    pub def free(self):
+        unsafe: _tr_c_free(self as Pointer[char])
 
     # Return a named response header value or "" when absent.
     pub def header(self, name: str) -> str:
@@ -64,7 +70,9 @@ extend HttpClientResponse:
             sb.append(" Unknown")
         sb.append("\n")
         sb.append(self.body)
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
 pub class HttpClient:
     pub host:      str
@@ -95,7 +103,9 @@ extend HttpClient:
         sb.append("Host: ")
         sb.append(self.host)
         sb.append("\r\nConnection: close\r\n")
-        return sb.to_owned()
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # Parse HTTP status line "HTTP/1.x NNN ..." → int; 0 on failure.
     def _parse_status(self, raw: str) -> int:
@@ -110,25 +120,31 @@ extend HttpClient:
         return d1 * 100 + d2 * 10 + d3
 
     # Parse a raw HTTP response into an HttpClientResponse (status + headers + body).
+    # Consumes (frees) `raw`.
     def _parse_response(self, raw: str) -> HttpClientResponse:
         mut code = self._parse_status(raw)
         if code == 0: code = 200
         mut sep  = Str.index_of(raw, "\r\n\r\n")
-        mut body = raw
-        if sep >= 0: body = Str.slice(raw, sep + 4, Str.len(raw))
+        if sep < 0:
+            return HttpClientResponse.init(code, raw)
+        mut body = Str.slice(raw, sep + 4, Str.len(raw))
         mut resp = HttpClientResponse.init(code, body)
-        if sep < 0: return resp
-        mut hdr_sec   = Str.slice(raw, 0, sep)
+        mut hdr_sec = Str.slice(raw, 0, sep)
+        unsafe: _tr_c_free(raw as Pointer[char])
         mut first_nl  = Str.index_of(hdr_sec, "\r\n")
-        if first_nl < 0: return resp
+        if first_nl < 0:
+            unsafe: _tr_c_free(hdr_sec as Pointer[char])
+            return resp
         mut hdr_start = first_nl + 2
         mut hdr_len   = Str.len(hdr_sec)
         while hdr_start < hdr_len:
             mut tail     = Str.slice(hdr_sec, hdr_start, hdr_len)
             mut line_end = Str.index_of(tail, "\r\n")
             mut line     = tail
+            mut line_is_tail = true
             if line_end >= 0:
                 line      = Str.slice(tail, 0, line_end)
+                line_is_tail = false
                 hdr_start = hdr_start + line_end + 2
             else:
                 hdr_start = hdr_len
@@ -137,6 +153,11 @@ extend HttpClient:
                 mut hname  = Str.slice(line, 0, colon)
                 mut hvalue = Str.slice(line, colon + 2, Str.len(line))
                 resp.headers.insert(hname, hvalue)
+                unsafe: _tr_c_free(hname as Pointer[char])
+            if not line_is_tail:
+                unsafe: _tr_c_free(line as Pointer[char])
+            unsafe: _tr_c_free(tail as Pointer[char])
+        unsafe: _tr_c_free(hdr_sec as Pointer[char])
         return resp
 
     # Send a GET request and return the response.
@@ -148,9 +169,14 @@ extend HttpClient:
         sb.append("GET ")
         sb.append(path)
         sb.append(" HTTP/1.0\r\n")
-        sb.append(self._build_headers())
+        mut _hdrs = self._build_headers()
+        sb.append(_hdrs)
+        unsafe: _tr_c_free(_hdrs as Pointer[char])
         sb.append("\r\n")
-        stream.send(sb.to_owned())
+        mut wire = sb.to_owned()
+        sb.free()
+        stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
         mut raw = stream.recv(65536)
         stream.close()
         return self._parse_response(raw)
@@ -165,13 +191,21 @@ extend HttpClient:
         sb.append("POST ")
         sb.append(path)
         sb.append(" HTTP/1.0\r\n")
-        sb.append(self._build_headers())
+        mut _hdrs = self._build_headers()
+        sb.append(_hdrs)
+        unsafe: _tr_c_free(_hdrs as Pointer[char])
         sb.append("Content-Length: ")
         if clen == 0: sb.append("0")
-        else: sb.append(Fmt.int_to_str(clen))
+        else:
+            mut clen_s = Fmt.int_to_str(clen)
+            sb.append(clen_s)
+            unsafe: _tr_c_free(clen_s as Pointer[char])
         sb.append("\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\n")
         sb.append(data)
-        stream.send(sb.to_owned())
+        mut wire = sb.to_owned()
+        sb.free()
+        stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
         mut raw = stream.recv(65536)
         stream.close()
         return self._parse_response(raw)
@@ -186,13 +220,21 @@ extend HttpClient:
         sb.append("POST ")
         sb.append(path)
         sb.append(" HTTP/1.0\r\n")
-        sb.append(self._build_headers())
+        mut _hdrs = self._build_headers()
+        sb.append(_hdrs)
+        unsafe: _tr_c_free(_hdrs as Pointer[char])
         sb.append("Content-Length: ")
         if clen == 0: sb.append("0")
-        else: sb.append(Fmt.int_to_str(clen))
+        else:
+            mut clen_s = Fmt.int_to_str(clen)
+            sb.append(clen_s)
+            unsafe: _tr_c_free(clen_s as Pointer[char])
         sb.append("\r\nContent-Type: application/json\r\n\r\n")
         sb.append(data)
-        stream.send(sb.to_owned())
+        mut wire = sb.to_owned()
+        sb.free()
+        stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
         mut raw = stream.recv(65536)
         stream.close()
         return self._parse_response(raw)
@@ -207,13 +249,21 @@ extend HttpClient:
         sb.append("PUT ")
         sb.append(path)
         sb.append(" HTTP/1.0\r\n")
-        sb.append(self._build_headers())
+        mut _hdrs = self._build_headers()
+        sb.append(_hdrs)
+        unsafe: _tr_c_free(_hdrs as Pointer[char])
         sb.append("Content-Length: ")
         if clen == 0: sb.append("0")
-        else: sb.append(Fmt.int_to_str(clen))
+        else:
+            mut clen_s = Fmt.int_to_str(clen)
+            sb.append(clen_s)
+            unsafe: _tr_c_free(clen_s as Pointer[char])
         sb.append("\r\nContent-Type: application/octet-stream\r\n\r\n")
         sb.append(data)
-        stream.send(sb.to_owned())
+        mut wire = sb.to_owned()
+        sb.free()
+        stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
         mut raw = stream.recv(65536)
         stream.close()
         return self._parse_response(raw)
@@ -228,13 +278,21 @@ extend HttpClient:
         sb.append("PATCH ")
         sb.append(path)
         sb.append(" HTTP/1.0\r\n")
-        sb.append(self._build_headers())
+        mut _hdrs = self._build_headers()
+        sb.append(_hdrs)
+        unsafe: _tr_c_free(_hdrs as Pointer[char])
         sb.append("Content-Length: ")
         if clen == 0: sb.append("0")
-        else: sb.append(Fmt.int_to_str(clen))
+        else:
+            mut clen_s = Fmt.int_to_str(clen)
+            sb.append(clen_s)
+            unsafe: _tr_c_free(clen_s as Pointer[char])
         sb.append("\r\nContent-Type: application/octet-stream\r\n\r\n")
         sb.append(data)
-        stream.send(sb.to_owned())
+        mut wire = sb.to_owned()
+        sb.free()
+        stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
         mut raw = stream.recv(65536)
         stream.close()
         return self._parse_response(raw)
@@ -248,9 +306,14 @@ extend HttpClient:
         sb.append("DELETE ")
         sb.append(path)
         sb.append(" HTTP/1.0\r\n")
-        sb.append(self._build_headers())
+        mut _hdrs = self._build_headers()
+        sb.append(_hdrs)
+        unsafe: _tr_c_free(_hdrs as Pointer[char])
         sb.append("\r\n")
-        stream.send(sb.to_owned())
+        mut wire = sb.to_owned()
+        sb.free()
+        stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
         mut raw = stream.recv(65536)
         stream.close()
         return self._parse_response(raw)
@@ -264,9 +327,14 @@ extend HttpClient:
         sb.append("HEAD ")
         sb.append(path)
         sb.append(" HTTP/1.0\r\n")
-        sb.append(self._build_headers())
+        mut _hdrs = self._build_headers()
+        sb.append(_hdrs)
+        unsafe: _tr_c_free(_hdrs as Pointer[char])
         sb.append("\r\n")
-        stream.send(sb.to_owned())
+        mut wire = sb.to_owned()
+        sb.free()
+        stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
         mut raw = stream.recv(65536)
         stream.close()
         return self._parse_response(raw)

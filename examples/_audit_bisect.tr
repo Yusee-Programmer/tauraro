@@ -1,0 +1,13 @@
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.core.string import StringBuilder
+
+def main():
+    mut i = 0
+    while i < 200000:
+        mut s = "Hello, World! " + Fmt.int_to_str(i)
+        mut up = Str.to_upper(s)
+        mut lo = Str.to_lower(up)
+        mut rev = Str.reverse(lo)
+        i = i + 1
+    print("done")

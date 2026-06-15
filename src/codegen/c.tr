@@ -141,6 +141,10 @@ pub class CGenerator:
     pub functions:      Map[str, HirFunction]
     pub method_owners:  Map[str, bool]  # "ClassOrEnumName#method" -> true (extend methods, incl. enums)
     pub decl_vars:      Map[str, bool]
+    pub str_local_names: Map[str, bool]  # TrStr-typed locals declared via SLet in current function (retain/release tracked)
+    pub coll_local_sfx: Map[str, str]    # List/Vec local name -> list_sfx (e.g. "i64"/"TrStr") for SAutoDrop's List_<sfx>_free; Dict/Map/Set don't need a suffix (Dict_free)
+    pub coll_local_idict: Map[str, bool] # Dict/Map/Set local name -> true if int-keyed (TrIDict*/_TrISet*, freed via _tr_idict_free instead of Dict_free)
+    pub coll_local_strval: Map[str, bool] # Dict/Map local name -> true if value type is str (_tr_str_box'd; freed via Dict_free_strval/_tr_idict_free_strval, #54)
     pub type_subst:     Map[str, str]   # T -> "long long" during mono gen
     pub mono_done:      Map[str, bool]  # "Vec_i64" -> true (prevents duplicate gen)
     pub list_type_done: Map[str, bool]  # "Token" -> true (prevents duplicate list gen)
@@ -165,6 +169,8 @@ pub class CGenerator:
     pub overloaded_sigs:  Map[str, bool]          # "ClassName_method" keys where multiple overloads exist
     pub type_alias_map:   Map[str, str]           # alias_name -> resolved C type string
     pub defer_stack:      Vec[str]                # deferred C statements for current function (LIFO)
+    pub wrap_temp_decls:  Vec[str]                # pending "TrStr _wtN = (_tr_str_wrap(...))" decls for the current top-level expr
+    pub wrap_temp_names:  Vec[str]                # names of the above, to _tr_str_release after the expr is consumed
 
     pub def init() -> CGenerator:
         mut g = CGenerator()
@@ -181,6 +187,10 @@ pub class CGenerator:
         g.functions     = Map[str, HirFunction].init(256)
         g.method_owners = Map[str, bool].init(64)
         g.decl_vars     = Map[str, bool].init(64)
+        g.str_local_names = Map[str, bool].init(16)
+        g.coll_local_sfx = Map[str, str].init(16)
+        g.coll_local_idict = Map[str, bool].init(16)
+        g.coll_local_strval = Map[str, bool].init(16)
         g.type_subst    = Map[str, str].init(8)
         g.mono_done     = Map[str, bool].init(32)
         g.list_type_done = Map[str, bool].init(16)
@@ -205,6 +215,8 @@ pub class CGenerator:
         g.overloaded_sigs = Map[str, bool].init(32)
         g.type_alias_map  = Map[str, str].init(16)
         g.defer_stack     = Vec[str].init(0)
+        g.wrap_temp_decls = Vec[str].init(0)
+        g.wrap_temp_names = Vec[str].init(0)
         return g
 
     pub def next_temp(self) -> str:
@@ -413,7 +425,7 @@ pub class CGenerator:
                 mut elem = ty.args.get(0).read()
                 mut sfx = self.list_elem_suffix(elem.name)
                 if sfx == "ptr": return "List_ptr*"
-                return "List_" + sfx + "*"
+                return "List_" + self.list_sfx(sfx) + "*"
             return "List_ptr*"
 
         if n == "Vec":
@@ -421,7 +433,7 @@ pub class CGenerator:
                 mut elem = ty.args.get(0).read()
                 mut sfx = self.list_elem_suffix(elem.name)
                 if sfx == "ptr": return "List_ptr*"
-                return "List_" + sfx + "*"
+                return "List_" + self.list_sfx(sfx) + "*"
             return "List_ptr*"
 
         if n == "Map" or n == "Dict":
@@ -509,6 +521,15 @@ pub class CGenerator:
             self.ensure_list_type(actual_n)
             return actual_n
         return "ptr"
+
+    # List[T]/Vec[T] use a refcounted-string element representation
+    # (List_TrStr) for str elements, distinct from the char*-based
+    # "str" suffix used by Set/Dict codegen (set_elem/dict_key_arg/
+    # gen_args_strify). Map "str" -> "TrStr" for List/Vec-only codegen
+    # paths; all other suffixes pass through unchanged.
+    pub def list_sfx(self, elem_sfx: str) -> str:
+        if elem_sfx == "str": return "TrStr"
+        return elem_sfx
 
 
 
@@ -634,6 +655,10 @@ pub class CGenerator:
             self.cur_class = mono_name
             self.cur_func  = m.name
             self.decl_vars = Map[str, bool].init(64)
+            self.str_local_names = Map[str, bool].init(16)
+            self.coll_local_sfx = Map[str, str].init(16)
+            self.coll_local_idict = Map[str, bool].init(16)
+            self.coll_local_strval = Map[str, bool].init(16)
             self.seed_params(m)
             mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
             self.w(sig + " {\n")
@@ -747,6 +772,10 @@ pub class CGenerator:
         self.cur_class = ""
         self.cur_func = mono_fname
         self.decl_vars = Map[str, bool].init(64)
+        self.str_local_names = Map[str, bool].init(16)
+        self.coll_local_sfx = Map[str, str].init(16)
+        self.coll_local_idict = Map[str, bool].init(16)
+        self.coll_local_strval = Map[str, bool].init(16)
         self.seed_params(f)
         self.w(sig + " {\n")
         self.gen_func_body(f.body, 1)
@@ -930,7 +959,7 @@ pub class CGenerator:
                     mut j = 0
                     while j < v.fields.len:
                         mut fld = v.fields.get(j)
-                        self.ws("            " + self.type_to_c(fld.ty) + " " + fld.name + ";\n")
+                        self.ws("            " + self.type_to_c(fld.ty) + " " + _safe_c_varname(fld.name) + ";\n")
                         j = j + 1
                     self.ws("        } " + v.name + ";\n")
                 i = i + 1
@@ -948,12 +977,19 @@ pub class CGenerator:
                 mut j = 0
                 while j < v.fields.len:
                     if j > 0: self.ws(", ")
-                    self.ws(self.type_to_c(v.fields.get(j).ty) + " " + v.fields.get(j).name)
+                    self.ws(self.type_to_c(v.fields.get(j).ty) + " " + _safe_c_varname(v.fields.get(j).name))
                     j = j + 1
                 self.ws(") { " + e.name + " _r = {.tag=" + e.name + "_" + v.name + "}; ")
                 j = 0
                 while j < v.fields.len:
-                    self.ws("_r.data." + v.name + "." + v.fields.get(j).name + " = " + v.fields.get(j).name + "; ")
+                    mut _ef = v.fields.get(j)
+                    mut _efn = _safe_c_varname(_ef.name)
+                    # Retain str payload fields: the enum value may outlive the
+                    # caller's argument local, which can auto-drop at scope exit.
+                    if _is_str_type(self.resolve_generic_prim(_ef.ty.name)):
+                        self.ws("_r.data." + v.name + "." + _efn + " = _tr_str_retain(" + _efn + "); ")
+                    else:
+                        self.ws("_r.data." + v.name + "." + _efn + " = " + _efn + "; ")
                     j = j + 1
                 self.ws("return _r; }\n")
             i = i + 1
@@ -1289,7 +1325,7 @@ pub class CGenerator:
                 return "({ List_i64* _sl = _tr_iset_to_list(" + s + "); _tr_collection_to_str((void*)_sl->data, _sl->len, sizeof(long long), _tr_fmt_i64, \"{\", \"}\", \", \"); })"
             mut set_fmt = "_tr_fmt_str_raw"
             if _is_str_type(set_tn): set_fmt = "_tr_fmt_str"
-            return "({ List_str* _sl = _tr_set_to_list(" + s + "); _tr_collection_to_str((void*)_sl->data, _sl->len, sizeof(char*), " + set_fmt + ", \"{\", \"}\", \", \"); })"
+            return "({ List_TrStr* _sl = _tr_set_to_list(" + s + "); char* _r = _tr_collection_to_str((void*)_sl->data, _sl->len, sizeof(TrStr), " + set_fmt + ", \"{\", \"}\", \", \"); List_TrStr_free(_sl); _r; })"
         if cn == "Dict" or cn == "Map":
             mut val_ty = AstType.init("str")
             if ty.args.len > 1: val_ty = ty.args.get(1).read()
@@ -1297,25 +1333,86 @@ pub class CGenerator:
             mut vfmt = self.ensure_elem_fmt_fn(val_ty)
             mut vsize = "sizeof(void*)"
             if _is_float_type(val_tn): vsize = "sizeof(double)"
-            return "({ List_str* _dk = _tr_dict_keys(" + s + "); List_ptr* _dv = _tr_dict_values(" + s + "); _tr_dict_to_str((void*)_dk->data, (void*)_dv->data, _dk->len, " + vsize + ", _tr_fmt_str, " + vfmt + "); })"
+            return "({ List_TrStr* _dk = _tr_dict_keys(" + s + "); List_ptr* _dv = _tr_dict_values(" + s + "); char* _r = _tr_dict_to_str((void*)_dk->data, (void*)_dv->data, _dk->len, " + vsize + ", _tr_fmt_str, " + vfmt + "); List_TrStr_free(_dk); List_ptr_free(_dv); _r; })"
         return "_tr_default_obj_str(\"" + cn + "\", (void*)(" + s + "))"
 
     # Extracts the raw `char*` from a TrStr-typed expression for passing to
     # legacy char*-based runtime helpers (_tr_str_*, strcmp, etc).
+    #
+    # If `e` is exactly a `_tr_str_wrap(...)` call, it produces a fresh,
+    # unique, rc=1 TrStr (per _tr_str_wrap's contract) that nothing else
+    # references. Extracting `.data` and discarding the TrStr struct (the
+    # old behavior, `_tr_strz(_tr_str_wrap(...))`) leaked both of its heap
+    # allocations. Instead, bind it to a named temp now and record it for
+    # release once the enclosing top-level expression/statement has
+    # consumed `.data` (see flush_wraps).
     pub def strz(self, e: str) -> str:
+        if e.starts_with("_tr_str_wrap(") and e.ends_with(")"):
+            mut tmp = "_wt" + self.next_temp()
+            self.wrap_temp_decls.push("TrStr " + tmp + " = (" + e + ")")
+            self.wrap_temp_names.push(tmp)
+            return tmp + ".data"
         return "_tr_strz(" + e + ")"
+
+    # If any `_tr_str_wrap(...)` temporaries were hoisted by `strz()` while
+    # generating `expr_s` (a complete top-level expression/condition/value),
+    # wrap it in a GCC statement-expression that declares the temps, computes
+    # `expr_s`, releases the temps, then yields the result. `is_void` must be
+    # true when `expr_s`'s value is discarded (e.g. an SExpr statement).
+    # Clears the pending lists either way.
+    pub def flush_wraps(self, expr_s: str, is_void: bool) -> str:
+        if self.wrap_temp_decls.len == 0:
+            return expr_s
+        mut out = "({ "
+        mut i = 0
+        while i < self.wrap_temp_decls.len:
+            out = out + self.wrap_temp_decls.get(i) + "; "
+            i = i + 1
+        if is_void:
+            out = out + expr_s + "; "
+        else:
+            out = out + "__auto_type _wr = (" + expr_s + "); "
+        i = 0
+        while i < self.wrap_temp_names.len:
+            out = out + "_tr_str_release(" + self.wrap_temp_names.get(i) + "); "
+            i = i + 1
+        if not is_void:
+            out = out + "_wr; "
+        out = out + "})"
+        self.wrap_temp_decls = Vec[str].init(0)
+        self.wrap_temp_names = Vec[str].init(0)
+        return out
 
     # Wraps a fresh heap char* (from a legacy _tr_str_* helper) into a
     # refcounted TrStr (rc=1) for use as a `str`-typed expression result.
     pub def wrapstr(self, e: str) -> str:
         return "_tr_str_wrap(" + e + ")"
 
+    # Wrap `s` (the generated C expression for `e`) with `_tr_str_retain(...)`
+    # when `e` is an ALIAS of an existing TrStr (an EIdent referencing a `str`
+    # local/param) - i.e. `s` shares a buffer with something else whose
+    # lifetime is independent. Fresh values (concat results, calls, literals)
+    # and EPropAccess reads (borrowed field access) already own/borrow their
+    # buffer correctly and pass through unchanged. For `is_return=true` with an
+    # EIdent that's a tracked str local, no retain - ownership transfers to the
+    # caller (matches the SAutoDrop exclusion for `return x`).
+    pub def str_retain_wrap(self, e: Pointer[HirExpr], s: str, is_return: bool) -> str:
+        if _is_invalid_ptr(e as usize): return s
+        mut ety = hir_expr_type(e)
+        if ety.name != "str": return s
+        match e.read():
+            case HirExpr.EIdent(nm, _, _):
+                if is_return and self.str_local_names.contains(nm): return s
+                return "_tr_str_retain(" + s + ")"
+            case _:
+                return s
+
     pub def gen_cond_expr(self, cond: Pointer[HirExpr]) -> str:
         mut cond_s = self.gen_expr(cond)
         mut ty_n: str = hir_expr_type(cond).name
         if self.has_method(ty_n, "__bool__"):
-            return self.cls_method_c_call(ty_n, "__bool__", cond_s, "")
-        return cond_s
+            cond_s = self.cls_method_c_call(ty_n, "__bool__", cond_s, "")
+        return self.flush_wraps(cond_s, false)
 
     pub def gen_binop(self, op: str, l: Pointer[HirExpr], r: Pointer[HirExpr]) -> str:
         mut ls = self.gen_expr(l)
@@ -1323,6 +1420,22 @@ pub class CGenerator:
         mut lt_n: str = hir_expr_type(l).name
         mut rt_n: str = hir_expr_type(r).name
         if op == "+" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
+            # `_tr_str_wrap(...)` always produces a freshly-owned, unique
+            # TrStr (rc=1, not aliased to any other variable) - e.g. from
+            # `.to_str()`, `.to_upper()`, etc. used inline in a concat. Same
+            # for any ECall/EMethodCall/EBinOp operand (e.g. a nested `a + b`
+            # concat, or `Str.to_upper(x)`): both return a fresh TrStr by
+            # value with its own rc/data allocation. If an operand is one of
+            # these, consume its `.data` and release it immediately after the
+            # concat call so its (up to two) heap allocations don't leak.
+            mut l_owned = (ls.starts_with("_tr_str_wrap(") and ls.ends_with(")")) or self._is_fresh_str_expr(l)
+            mut r_owned = (rs.starts_with("_tr_str_wrap(") and rs.ends_with(")")) or self._is_fresh_str_expr(r)
+            if l_owned and r_owned:
+                return "({ TrStr _cl = (" + ls + "); TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })"
+            elif l_owned:
+                return "({ TrStr _cl = (" + ls + "); TrStr _cres = _tr_strx_concat(_cl.data, " + self.strz(rs) + "); _tr_str_release(_cl); _cres; })"
+            elif r_owned:
+                return "({ TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concat(" + self.strz(ls) + ", _cr.data); _tr_str_release(_cr); _cres; })"
             return "_tr_strx_concat(" + self.strz(ls) + ", " + self.strz(rs) + ")"
         # String repetition: "ab" * 3  (or  3 * "ab"), Python-style.
         if op == "*" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
@@ -1345,9 +1458,7 @@ pub class CGenerator:
         if op == "in":
             if rt_n == "List" or rt_n == "Vec":
                 mut in_sfx: str = self.list_elem_suffix(lt_n)
-                mut in_ls = ls
-                if in_sfx == "str": in_ls = self.strz(ls)
-                return "List_" + in_sfx + "_contains(" + rs + ", " + in_ls + ")"
+                return "List_" + self.list_sfx(in_sfx) + "_contains(" + rs + ", " + ls + ")"
             if rt_n == "Map" or rt_n == "Dict":
                 return "_tr_dict_contains(" + rs + ", " + self.strz(ls) + ")"
             if self.has_method(rt_n, "__contains__"):
@@ -1483,7 +1594,7 @@ pub class CGenerator:
                                         match idx_expr.read():
                                             case HirExpr.EIdent(elem_n, _, _):
                                                 mut sfx = self.list_elem_suffix(elem_n)
-                                                return "(void*)List_" + sfx + "_new()"
+                                                return "(void*)List_" + self.list_sfx(sfx) + "_new()"
                                             case _: pass
                                 case _: pass
                         case _: pass
@@ -1744,14 +1855,17 @@ pub class CGenerator:
 
         # Option / Result constructors
         if base_callee == "Some":
-            if args.len > 0: return "_tr_option_some((void*)(" + self.gen_expr(args.get(0)) + "))"
-            return "_tr_option_none()"
+            mut some_cv2 = "NULL"
+            if args.len > 0: some_cv2 = self.wrap_voidp_arg(args.get(0))
+            return "((Option){.tag=Option_Some, .data.Some.val=" + some_cv2 + "})"
         if base_callee == "Ok":
-            if args.len > 0: return "_tr_result_ok((void*)(" + self.gen_expr(args.get(0)) + "))"
-            return "_tr_result_ok(NULL)"
+            mut ok_cv2 = "NULL"
+            if args.len > 0: ok_cv2 = self.wrap_voidp_arg(args.get(0))
+            return "((Result){.tag=Result_Ok, .data.Ok.val=" + ok_cv2 + "})"
         if base_callee == "Err":
-            if args.len > 0: return "_tr_result_err((void*)(" + self.gen_expr(args.get(0)) + "))"
-            return "_tr_result_err(NULL)"
+            mut err_cv2 = "NULL"
+            if args.len > 0: err_cv2 = self.wrap_voidp_arg(args.get(0))
+            return "((Result){.tag=Result_Err, .data.Err.err=" + err_cv2 + "})"
 
         # Intercept alloc
         if base_callee == "alloc" or base_callee == "core_alloc_alloc":
@@ -2015,6 +2129,20 @@ pub class CGenerator:
                 case _: pass
             if not is_fn_or_cls:
                 return self.cls_method_c_call(callee_cls_ty, "__call__", callee_s, self.gen_args(args))
+        # `unsafe: _tr_c_free(x as Pointer[char])` is the pre-TrStr-migration
+        # idiom for releasing a heap string's buffer. For a TrStr-typed `x`,
+        # `x as Pointer[char]` lowers to `_tr_strz(x)` (just `.data`), so
+        # `_tr_c_free(_tr_strz(x))` frees `.data` but leaks `x`'s separately
+        # allocated `.rc` block. Rewrite to `_tr_str_release(x)`, which frees
+        # both when the refcount drops to zero (and is a no-op for
+        # rc==NULL literals/borrows).
+        if base_callee == "_tr_c_free" and args.len == 1:
+            match args.get(0).read():
+                case HirExpr.ECast(_cf_inner, _):
+                    if _is_str_type(hir_expr_type(_cf_inner).name):
+                        return "_tr_str_release(" + self.gen_expr(_cf_inner) + ")"
+                case _: pass
+
         # Direct calls to legacy runtime helpers (named `_tr_*`) from .tr source
         # take raw char* for str params and return char*; unwrap TrStr-typed
         # args and rewrap a char*-returning result at the boundary.
@@ -2106,12 +2234,32 @@ pub class CGenerator:
             i = i + 1
         return s
 
+    # True for `str`-typed expressions that produce a FRESH, independently-
+    # owned TrStr (rc=1 new allocation): nested calls and concatenations.
+    # Such a value, if passed directly as a call argument, is never bound to
+    # a local (so SAutoDrop can't release it) and the callee's parameter is
+    # never auto-dropped either - it would leak. EIdent/EPropAccess/literals
+    # are borrowed/immortal and don't need this.
+    pub def _is_fresh_str_expr(self, e: Pointer[HirExpr]) -> bool:
+        match e.read():
+            case HirExpr.ECall(_, _, _): return true
+            case HirExpr.EMethodCall(_, _, _, _): return true
+            case HirExpr.EBinOp(_, _, _, _): return true
+            case _: return false
+
     pub def gen_args(self, args: Vec[Pointer[HirExpr]]) -> str:
         mut s = ""
         mut i = 0
         while i < args.len:
             if i > 0: s = s + ", "
-            s = s + self.gen_expr(args.get(i))
+            mut a = args.get(i)
+            mut a_s = self.gen_expr(a)
+            if _is_str_type(hir_expr_type(a).name) and self._is_fresh_str_expr(a):
+                mut tmp = "_at" + self.next_temp()
+                self.wrap_temp_decls.push("TrStr " + tmp + " = (" + a_s + ")")
+                self.wrap_temp_names.push(tmp)
+                a_s = tmp
+            s = s + a_s
             i = i + 1
         return s
 
@@ -2231,10 +2379,10 @@ pub class CGenerator:
                 opt_extra = ", " + self.gen_args(args)
             return "Option_" + method + "(" + obj_s + opt_extra + ")"
 
-        # Str.join static call: Str.join(parts, sep) -> _tr_str_join((List_str*)parts, sep)
+        # Str.join static call: Str.join(parts, sep) -> _tr_trstr_join((List_TrStr*)parts, sep)
         if obj_s == "Str" and method == "join":
-            if args.len >= 2: return self.wrapstr("_tr_str_join((List_str*)" + self.gen_expr(args.get(0)) + ", " + self.strz(self.gen_expr(args.get(1))) + ")")
-            if args.len == 1: return self.wrapstr("_tr_str_join((List_str*)" + self.gen_expr(args.get(0)) + ", \"\")")
+            if args.len >= 2: return "_tr_trstr_join((List_TrStr*)" + self.gen_expr(args.get(0)) + ", " + self.strz(self.gen_expr(args.get(1))) + ")"
+            if args.len == 1: return "_tr_trstr_join((List_TrStr*)" + self.gen_expr(args.get(0)) + ", \"\")"
 
         # str primitive method dispatch - "hello".trim() -> _tr_str_strip("hello")
         # See note above _is_str_type(t_n) block re: TrStr interim semantics.
@@ -2263,7 +2411,7 @@ pub class CGenerator:
             if method == "strip_prefix":  return self.wrapstr("_tr_str_strip_prefix(" + os + ", " + sa0 + ")")
             if method == "strip_suffix":  return self.wrapstr("_tr_str_strip_suffix(" + os + ", " + sa0 + ")")
             if method == "remove_char":   return self.wrapstr("_tr_str_remove_char(" + os + ", " + sa0 + ")")
-            if method == "join":          return self.wrapstr("_tr_str_join((List_str*)(void*)" + obj_s + ", " + sa0 + ")")
+            if method == "join":          return "_tr_trstr_join((List_TrStr*)(void*)" + obj_s + ", " + sa0 + ")"
             if method == "len":           return "_tr_strlen(" + os + ")"
             if method == "index_of":      return "_tr_str_index_of(" + os + ", " + sa0 + ")"
             if method == "last_index_of": return "_tr_str_last_index_of(" + os + ", " + sa0 + ")"
@@ -2714,7 +2862,7 @@ pub class CGenerator:
                 mut _so_sep = self.strz(self.gen_expr(args.get(0)))
                 mut _so_t = self.next_temp()
                 mut _so_p = self.next_temp()
-                return "({ char* " + _so_p + " = strstr(" + os + ", " + _so_sep + "); " + _so_p + " ? _tr_str_tuple2(_tr_str_slice(" + os + ", 0LL, (long long)(" + _so_p + " - (" + os + "))), _tr_str_slice(" + _so_p + ", _tr_strlen(" + _so_sep + "), _tr_strlen(" + _so_p + "))) : _tr_str_tuple2(" + os + ", \"\"); })"
+                return "({ char* " + _so_p + " = strstr(" + os + ", " + _so_sep + "); " + _so_p + " ? _tr_str_tuple2(_tr_str_wrap(_tr_str_slice(" + os + ", 0LL, (long long)(" + _so_p + " - (" + os + ")))), _tr_str_wrap(_tr_str_slice(" + _so_p + ", _tr_strlen(" + _so_sep + "), _tr_strlen(" + _so_p + ")))) : _tr_str_tuple2(_tr_str_lit(" + os + "), _tr_str_lit(\"\")); })"
 
         # When sema returns void/empty type, still dispatch known string methods on the object.
         # This handles chained calls like Process.shell_output(cmd).trim() where the intermediate
@@ -2949,6 +3097,7 @@ pub class CGenerator:
                 is_list_vec = true
  
         if is_list_vec:
+            mut lsfx: str = self.list_sfx(elem_sfx)
             if method == "append" or method == "push":
                 # If elem_sfx is still "ptr" but the argument is a known primitive, infer the right suffix
                 if elem_sfx == "ptr" and args.len > 0:
@@ -2956,22 +3105,29 @@ pub class CGenerator:
                     if _is_int_type(push_arg_ty) or push_arg_ty == "bool": elem_sfx = "i64"
                     elif _is_float_type(push_arg_ty): elem_sfx = "f64"
                     elif push_arg_ty == "str" or push_arg_ty == "char*": elem_sfx = "str"
-                return "List_" + elem_sfx + "_append(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
-            if method == "free": return "List_" + elem_sfx + "_free(" + obj_s + ")"
+                    lsfx = self.list_sfx(elem_sfx)
+                mut append_args = self.gen_args_strify(args, elem_sfx)
+                if lsfx == "TrStr": append_args = self.gen_args(args)
+                return "List_" + lsfx + "_append(" + obj_s + ", " + append_args + ")"
+            if method == "free": return "List_" + lsfx + "_free(" + obj_s + ")"
             if method == "pop":
-                mut pop_r = "List_" + elem_sfx + "_pop(" + obj_s + ")"
-                if elem_sfx == "str": return "_tr_str_lit(" + pop_r + ")"
+                mut pop_r = "List_" + lsfx + "_pop(" + obj_s + ")"
+                if lsfx == "TrStr": return pop_r
                 if elem_sfx == "ptr" and call_ty.name != "" and call_ty.name != "void" and call_ty.name != "Pointer":
                     if _tr_strlen(call_ty.name) > 1:
                         return "((" + call_ty.name + "*)" + pop_r + ")"
                 return pop_r
             if method == "set":
-                return "List_" + elem_sfx + "_set(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
+                mut set_args = self.gen_args_strify(args, elem_sfx)
+                if lsfx == "TrStr": set_args = self.gen_args(args)
+                return "List_" + lsfx + "_set(" + obj_s + ", " + set_args + ")"
             if method == "contains":
-                return "List_" + elem_sfx + "_contains(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
+                mut contains_args = self.gen_args_strify(args, elem_sfx)
+                if lsfx == "TrStr": contains_args = self.gen_args(args)
+                return "List_" + lsfx + "_contains(" + obj_s + ", " + contains_args + ")"
             if method == "get":
-                mut get_r = "List_" + elem_sfx + "_get(" + obj_s + ", " + self.gen_args(args) + ")"
-                if elem_sfx == "str": return "_tr_str_lit(" + get_r + ")"
+                mut get_r = "List_" + lsfx + "_get(" + obj_s + ", " + self.gen_args(args) + ")"
+                if lsfx == "TrStr": return get_r
                 if elem_sfx == "ptr" and call_ty.name == "Pointer" and call_ty.args.len > 0:
                     mut inner_ct = self.type_to_c(call_ty.args.get(0).read())
                     return "((" + inner_ct + "*)" + get_r + ")"
@@ -2981,61 +3137,63 @@ pub class CGenerator:
                 return get_r
             if method == "len" or method == "length": return "((long long)" + obj_s + "->len)"
             if method == "new" or method == "init":
-                return "(void*)List_" + elem_sfx + "_new()"
+                return "(void*)List_" + lsfx + "_new()"
             if method == "remove":
-                return "List_" + elem_sfx + "_remove(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "List_" + lsfx + "_remove(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "swap":
-                return "List_" + elem_sfx + "_swap(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "List_" + lsfx + "_swap(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "clear":
-                return "List_" + elem_sfx + "_clear(" + obj_s + ")"
+                return "List_" + lsfx + "_clear(" + obj_s + ")"
             if method == "is_empty":
-                return "List_" + elem_sfx + "_is_empty(" + obj_s + ")"
+                return "List_" + lsfx + "_is_empty(" + obj_s + ")"
             if method == "extend":
-                return "List_" + elem_sfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
+                return "List_" + lsfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "index_of":
-                return "List_" + elem_sfx + "_index_of(" + obj_s + ", " + self.gen_args_strify(args, elem_sfx) + ")"
+                mut idx_args = self.gen_args_strify(args, elem_sfx)
+                if lsfx == "TrStr": idx_args = self.gen_args(args)
+                return "List_" + lsfx + "_index_of(" + obj_s + ", " + idx_args + ")"
             # sort() / sort_by(cmp_fn) - in-place sort
             if method == "sort" or method == "sort_asc":
-                return "_tr_list_sort_" + elem_sfx + "(" + obj_s + ", 1)"
+                return "_tr_list_sort_" + lsfx + "(" + obj_s + ", 1)"
             if method == "sort_desc":
-                return "_tr_list_sort_" + elem_sfx + "(" + obj_s + ", -1)"
+                return "_tr_list_sort_" + lsfx + "(" + obj_s + ", -1)"
             if method == "sort_by" and args.len > 0:
-                return "_tr_list_sort_by_" + elem_sfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_list_sort_by_" + lsfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             # first / last - aliases for get(0) / get(len-1)
             if method == "first":
-                mut first_r = "List_" + elem_sfx + "_get(" + obj_s + ", 0LL)"
-                if elem_sfx == "str": return "_tr_str_lit(" + first_r + ")"
+                mut first_r = "List_" + lsfx + "_get(" + obj_s + ", 0LL)"
+                if lsfx == "TrStr": return first_r
                 return first_r
             if method == "last":
-                mut last_r = "List_" + elem_sfx + "_get(" + obj_s + ", (long long)(" + obj_s + "->len - 1LL))"
-                if elem_sfx == "str": return "_tr_str_lit(" + last_r + ")"
+                mut last_r = "List_" + lsfx + "_get(" + obj_s + ", (long long)(" + obj_s + "->len - 1LL))"
+                if lsfx == "TrStr": return last_r
                 return last_r
             # any(pred) / all(pred) - boolean short-circuit over list
             if method == "any" and args.len > 0:
-                return "_tr_list_any_" + elem_sfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_list_any_" + lsfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             if method == "all" and args.len > 0:
-                return "_tr_list_all_" + elem_sfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                return "_tr_list_all_" + lsfx + "(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             # sum / min_val / max_val - numeric aggregates
             if method == "sum":
-                return "_tr_list_sum_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_sum_" + lsfx + "(" + obj_s + ")"
             if method == "min_val" or method == "min":
-                return "_tr_list_min_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_min_" + lsfx + "(" + obj_s + ")"
             if method == "max_val" or method == "max":
-                return "_tr_list_max_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_max_" + lsfx + "(" + obj_s + ")"
             # join(sep) - concatenate string elements with separator
             if method == "join":
                 mut sep_s = "\"\""
                 if args.len > 0: sep_s = self.gen_expr(args.get(0))
-                return "_tr_str_join((List_str*)" + obj_s + ", " + sep_s + ")"
+                return "_tr_trstr_join((List_TrStr*)" + obj_s + ", " + self.strz(sep_s) + ")"
             # reversed_copy() - return a new reversed list
             if method == "reversed" or method == "reversed_copy":
-                return "_tr_list_reversed_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_reversed_" + lsfx + "(" + obj_s + ")"
             # reverse in place
             if method == "reverse":
-                return "_tr_list_reverse_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_reverse_" + lsfx + "(" + obj_s + ")"
             # clone: shallow copy with a fresh backing buffer
             if method == "clone" or method == "copy":
-                return "_tr_list_clone_" + elem_sfx + "(" + obj_s + ")"
+                return "_tr_list_clone_" + lsfx + "(" + obj_s + ")"
 
         # Set[T] method dispatch - backed by _TrSet (hash set via TrMap with bool values)
         if class_name == "Set":
@@ -3098,12 +3256,12 @@ pub class CGenerator:
                 mut c_ty_c = self.type_to_c(call_ty)
                 if is_idict:
                     mut iget_r = "_tr_idict_get(" + obj_s + ", " + self.gen_args(args) + ")"
-                    if _is_str_type(call_ty.name): return "_tr_str_unbox(" + iget_r + ")"
+                    if _is_str_type(call_ty.name): return "_tr_str_retain(_tr_str_unbox(" + iget_r + "))"
                     if c_ty_c != "void" and c_ty_c != "":
                         return "((" + c_ty_c + ")(uintptr_t)" + iget_r + ")"
                     return iget_r
                 mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
-                if _is_str_type(call_ty.name): return "_tr_str_unbox(" + mget_r + ")"
+                if _is_str_type(call_ty.name): return "_tr_str_retain(_tr_str_unbox(" + mget_r + "))"
                 if c_ty_c != "void" and c_ty_c != "":
                     return "((" + c_ty_c + ")(uintptr_t)" + mget_r + ")"
                 return mget_r
@@ -3123,7 +3281,11 @@ pub class CGenerator:
                 if is_idict: return "_tr_idict_keys(" + obj_s + ")"
                 return "_tr_dict_keys(" + obj_s + ")"
             if method == "values":
-                if is_idict: return "_tr_idict_values(" + obj_s + ")"
+                mut _vals_strval = call_ty.name == "List" and call_ty.args.len > 0 and _is_str_type(call_ty.args.get(0).read().name)
+                if is_idict:
+                    if _vals_strval: return "_tr_idict_values_strval(" + obj_s + ")"
+                    return "_tr_idict_values(" + obj_s + ")"
+                if _vals_strval: return "_tr_dict_values_strval(" + obj_s + ")"
                 return "_tr_dict_values(" + obj_s + ")"
             if method == "items":
                 if is_idict: return "_tr_idict_items(" + obj_s + ")"
@@ -3153,11 +3315,21 @@ pub class CGenerator:
                     mut _k = self.dict_key_arg(args.get(0))
                     _res = "(_tr_dict_contains(" + obj_s + ", " + _k + ") ? _tr_dict_get(" + obj_s + ", " + _k + ") : (void*)(uintptr_t)(" + _d + "))"
                 if _is_str_val: return "_tr_str_unbox(" + _res + ")"
+                mut _getor_c_ty = self.type_to_c(call_ty)
+                if _getor_c_ty != "void" and _getor_c_ty != "" and _getor_c_ty != "TrStr":
+                    return "((" + _getor_c_ty + ")(uintptr_t)" + _res + ")"
                 return _res
             # free() - release the underlying TrMap/TrIDict (buckets, nodes,
-            # key strings for str-keyed maps, and the struct itself).
+            # key strings for str-keyed maps, and the struct itself). For
+            # Map[K,str]/Dict[K,str], values are _tr_str_box(TrStr)-allocated
+            # boxes (#54): use the _strval variant to release each boxed
+            # TrStr and free its box, avoiding a per-entry leak.
             if method == "free":
-                if is_idict: return "_tr_idict_free(" + obj_s + ")"
+                mut _val_is_str = obj_full_ty.args.len > 1 and _is_str_type(obj_full_ty.args.get(1).read().name)
+                if is_idict:
+                    if _val_is_str: return "_tr_idict_free_strval(" + obj_s + ")"
+                    return "_tr_idict_free(" + obj_s + ")"
+                if _val_is_str: return "Dict_free_strval(" + obj_s + ")"
                 return "Dict_free(" + obj_s + ")"
 
         mut extra_args = ""
@@ -3282,7 +3454,10 @@ pub class CGenerator:
             mut tup_e = items.get(i)
             mut tup_es = self.gen_expr(tup_e)
             if _is_str_type(self.resolve_generic_prim(hir_expr_type(tup_e).name)):
-                s = s + "(long long)(uintptr_t)_tr_str_box(" + tup_es + ")"
+                # Retain before boxing: the box's TrStr shares .data/.rc with
+                # tup_es's source; without a retain, the source's auto-drop
+                # would free .data while the box still points at it (UAF).
+                s = s + "(long long)(uintptr_t)_tr_str_box(_tr_str_retain(" + tup_es + "))"
             else:
                 s = s + "(long long)(uintptr_t)(" + tup_es + ")"
             i = i + 1
@@ -3448,7 +3623,10 @@ pub class CGenerator:
             mut elem_ty_n = ""
             if val_ty.args.len > i: elem_ty_n = self.resolve_generic_prim(val_ty.args.get(i).read().name)
             if _is_str_type(elem_ty_n):
-                self.w(pad + "TrStr " + vname + " = _tr_str_unbox((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]);\n")
+                # Retain: _tr_str_unbox is non-destructive and shares the
+                # box's refcount. Without retaining, an auto-drop of `vname`
+                # could free data the (leaked) box's TrStr still points at.
+                self.w(pad + "TrStr " + vname + " = _tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]));\n")
             else:
                 self.w(pad + "long long " + vname + " = " + tmp + ".data[" + i.to_str() + "];\n")
             self.decl_vars.insert(names.get(i), true)
@@ -3459,14 +3637,13 @@ pub class CGenerator:
         if ty.args.len > 0: sfx = self.list_elem_suffix(ty.args.get(0).read().name)
         elif items.len > 0:
             sfx = self.list_elem_suffix(hir_expr_type(items.get(0)).name)
+        mut lsfx = self.list_sfx(sfx)
         mut l = "_l_" + self.next_temp()
-        mut s = "({ List_" + sfx + "* " + l + " = List_" + sfx + "_new(); "
+        mut s = "({ List_" + lsfx + "* " + l + " = List_" + lsfx + "_new(); "
         mut i = 0
         while i < items.len:
             mut item_s = self.gen_expr(items.get(i))
-            if sfx == "str" and _is_str_type(hir_expr_type(items.get(i)).name):
-                item_s = self.strz(item_s)
-            s = s + "List_" + sfx + "_append(" + l + ", " + item_s + "); "
+            s = s + "List_" + lsfx + "_append(" + l + ", " + item_s + "); "
             i = i + 1
         return s + l + "; })"
 
@@ -3505,7 +3682,7 @@ pub class CGenerator:
     pub def gen_list_comp(self, element: Pointer[HirExpr], generators: Vec[Pointer[HirComprehension]]) -> str:
         mut tmp = self.next_temp()
         mut elem_ty_n: str = hir_expr_type(element).name
-        mut sfx = self.list_elem_suffix(elem_ty_n)
+        mut sfx = self.list_sfx(self.list_elem_suffix(elem_ty_n))
         mut s = "({ List_" + sfx + "* " + tmp + " = List_" + sfx + "_new(); "
         mut i = 0
         while i < generators.len:
@@ -3939,7 +4116,7 @@ pub class CGenerator:
                             self.w(pad + "if (" + tmp_qr + ".tag == Result_Err) return " + tmp_qr + ";\n")
                             return
                         case _: pass
-                self.w(pad + self.gen_expr(e) + ";\n")
+                self.w(pad + self.flush_wraps(self.gen_expr(e), true) + ";\n")
             case HirStmt.SDefer(inner_defer):
                 # defer: save the C code now, emit it before each return.
                 mut saved_buf = self.buf
@@ -3987,6 +4164,7 @@ pub class CGenerator:
                     if self.cur_throws_ty != "":
                         # throws function: wrap return value in Result_Ok
                         mut ret_s = self.gen_expr(e)
+                        ret_s = self.flush_wraps(ret_s, false)
                         mut ret_ty_n = hir_expr_type(e).name
                         if _is_int_type(ret_ty_n) or ret_ty_n == "bool" or ret_ty_n == "char":
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(uintptr_t)(" + ret_s + ")});\n")
@@ -3997,7 +4175,9 @@ pub class CGenerator:
                         else:
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(" + ret_s + ")});\n")
                     else:
-                        self.w(pad + "return " + self.gen_expr(e) + ";\n")
+                        mut ret_s2 = self.gen_expr(e)
+                        ret_s2 = self.flush_wraps(ret_s2, false)
+                        self.w(pad + "return " + self.str_retain_wrap(e, ret_s2, true) + ";\n")
             case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
                 mut c_ty = self.type_to_c(ty)
                 # If SLet.ty is Vec/List without generic args, recover c_ty from the init expression
@@ -4020,8 +4200,18 @@ pub class CGenerator:
                                     pass
                         case _: pass
                     if _init_sfx != "ptr":
-                        c_ty = "List_" + _init_sfx + "*"
+                        c_ty = "List_" + self.list_sfx(_init_sfx) + "*"
                 if c_ty == "void" and v as usize != 0 as usize: c_ty = "__auto_type"
+                # Track the List_<sfx>* suffix for this local so SAutoDrop can
+                # call the matching List_<sfx>_free (only List/Vec need a
+                # suffix; Dict/Map/Set are uniformly TrMap*/_TrSet*, freed via
+                # Dict_free regardless of element type).
+                if (ty.name == "List" or ty.name == "Vec") and c_ty.starts_with("List_") and c_ty.ends_with("*"):
+                    self.coll_local_sfx.insert(n, c_ty.slice(5, c_ty.len() - 1))
+                elif (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty == "TrIDict*" or c_ty == "_TrISet*"):
+                    self.coll_local_idict.insert(n, true)
+                if (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 1 and _is_str_type(ty.args.get(1).read().name):
+                    self.coll_local_strval.insert(n, true)
                 # ? propagation in let binding
                 if v as usize != 0 as usize:
                     match v.read():
@@ -4156,6 +4346,12 @@ pub class CGenerator:
                                         if slv_oty == "Map" or slv_oty == "Dict":
                                             init_s = "_tr_str_unbox(" + init_s + ")"
                                 case _: pass
+                        if c_ty == "TrStr":
+                            init_s = self.str_retain_wrap(v, init_s, false)
+                            match v.read():
+                                case HirExpr.EPropAccess(_, _, _): pass
+                                case _: self.str_local_names.insert(n, true)
+                        init_s = self.flush_wraps(init_s, false)
                         self.w(" = " + init_s + ";\n")
                 else:
                     if is_shared:
@@ -4173,7 +4369,16 @@ pub class CGenerator:
                         # when it names a file-scope global (then it's a plain
                         # assignment to that global, handled by the fall-through).
                         if not self.decl_vars.contains(n) and not self.global_vars.contains(n):
-                            self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + self.gen_expr(v) + ";\n")
+                            mut _sa_rhs = self.gen_expr(v)
+                            _sa_rhs = self.flush_wraps(_sa_rhs, false)
+                            if hir_expr_type(t).name == "str":
+                                _sa_rhs = self.str_retain_wrap(v, _sa_rhs, false)
+                                self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                match v.read():
+                                    case HirExpr.EPropAccess(_, _, _): pass
+                                    case _: self.str_local_names.insert(n, true)
+                            else:
+                                self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                             self.decl_vars.insert(n, true)
                             return
                     case HirExpr.EIndex(idx_obj, idx_key, _):
@@ -4182,7 +4387,8 @@ pub class CGenerator:
                             mut _si_obj = self.gen_expr(idx_obj)
                             mut _si_key = self.gen_expr(idx_key)
                             mut _si_val = self.gen_expr(v)
-                            self.w(pad + self.cls_method_c_call(idx_ty_n, "__setitem__", _si_obj, _si_key + ", " + _si_val) + ";\n")
+                            mut _si_call = self.cls_method_c_call(idx_ty_n, "__setitem__", _si_obj, _si_key + ", " + _si_val)
+                            self.w(pad + self.flush_wraps(_si_call, true) + ";\n")
                             return
                         # list[i] = str_value into a legacy List_str (char* elements):
                         # assign the raw char* lvalue, not the _tr_str_lit-wrapped rvalue.
@@ -4192,7 +4398,8 @@ pub class CGenerator:
                                 mut _li_obj = self.gen_expr(idx_obj)
                                 mut _li_key = self.gen_expr(idx_key)
                                 mut _li_lvalue = _li_obj + "->data[(_tr_bounds_check(" + _li_key + ", " + _li_obj + "->len), " + _li_key + ")]"
-                                self.w(pad + _li_lvalue + " = " + self.strz(self.gen_expr(v)) + ";\n")
+                                mut _li_stmt = _li_lvalue + " = " + self.strz(self.gen_expr(v))
+                                self.w(pad + self.flush_wraps(_li_stmt, true) + ";\n")
                                 return
                     case HirExpr.EMethodCall(mc_obj, mc_meth, mc_args, _):
                         # sema lowers bag[i] = v -> SAssign(EMethodCall(bag, "get_index", [i]), v)
@@ -4202,7 +4409,8 @@ pub class CGenerator:
                                 mut _si2_obj = self.gen_expr(mc_obj)
                                 mut _si2_key = self.gen_args(mc_args)
                                 mut _si2_val = self.gen_expr(v)
-                                self.w(pad + self.cls_method_c_call(mc_ty_n, "__setitem__", _si2_obj, _si2_key + ", " + _si2_val) + ";\n")
+                                mut _si2_call = self.cls_method_c_call(mc_ty_n, "__setitem__", _si2_obj, _si2_key + ", " + _si2_val)
+                                self.w(pad + self.flush_wraps(_si2_call, true) + ";\n")
                                 return
                     case _: pass
                 mut _assign_rhs = ""
@@ -4214,6 +4422,20 @@ pub class CGenerator:
                                 _assign_rhs = self.gen_list_literal(litems, tgt_ty)
                     case _: pass
                 if _assign_rhs == "": _assign_rhs = self.gen_expr(v)
+                _assign_rhs = self.flush_wraps(_assign_rhs, false)
+                if hir_expr_type(t).name == "str":
+                    match t.read():
+                        case HirExpr.EIdent(_an, _, _):
+                            if self.str_local_names.contains(_an):
+                                mut _strtmp = "_strtmp" + self.next_temp()
+                                mut _wrapped_rhs = self.str_retain_wrap(v, _assign_rhs, false)
+                                self.w(pad + "TrStr " + _strtmp + " = " + _wrapped_rhs + ";\n")
+                                self.w(pad + "_tr_str_release(" + _safe_c_varname(_an) + ");\n")
+                                self.w(pad + _safe_c_varname(_an) + " = " + _strtmp + ";\n")
+                                return
+                        case HirExpr.EPropAccess(_, _, _):
+                            _assign_rhs = self.str_retain_wrap(v, _assign_rhs, false)
+                        case _: pass
                 self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
             case HirStmt.SIf(c, t, e):
                 self.w(pad + "if (" + self.gen_cond_expr(c) + ") {\n")
@@ -4263,12 +4485,15 @@ pub class CGenerator:
                     mut raise_s = self.gen_expr(e)
                     if _is_str_type(hir_expr_type(e).name): raise_s = self.strz(raise_s)
                     else: raise_s = "(char*)(" + raise_s + ")"
-                    self.w(pad + "_tr_exc_raise(" + raise_s + ");\n")
+                    self.w(pad + self.flush_wraps("_tr_exc_raise(" + raise_s + ")", true) + ";\n")
             case HirStmt.SAssert(cond, msg):
                 if msg as usize == 0 as usize:
-                    self.w(pad + "_TR_ASSERT(" + self.gen_expr(cond) + ");\n")
+                    mut _as_cond = self.gen_expr(cond)
+                    self.w(pad + self.flush_wraps("_TR_ASSERT(" + _as_cond + ")", true) + ";\n")
                 else:
-                    self.w(pad + "_TR_ASSERT_MSG(" + self.gen_expr(cond) + ", " + self.gen_expr(msg) + ");\n")
+                    mut _as_cond2 = self.gen_expr(cond)
+                    mut _as_msg = self.gen_expr(msg)
+                    self.w(pad + self.flush_wraps("_TR_ASSERT_MSG(" + _as_cond2 + ", " + _as_msg + ")", true) + ";\n")
             case HirStmt.SUnsafe(b):
                 self.w(pad + "/* unsafe block */\n")
                 self.gen_block(b, indent)
@@ -4399,7 +4624,49 @@ pub class CGenerator:
             case HirStmt.SChanSelect(cs_arms):
                 self.gen_chan_select(cs_arms, indent)
             case HirStmt.SAutoDrop(adn, adc):
-                self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
+                if adc == "str":
+                    if self.str_local_names.contains(adn):
+                        self.w(pad + "_tr_str_release(" + _safe_c_varname(adn) + ");\n")
+                elif adc == "List" or adc == "Vec":
+                    if self.coll_local_sfx.contains(adn):
+                        mut _ad_sfx = self.coll_local_sfx.get(adn)
+                        self.w(pad + "List_" + _ad_sfx + "_free(" + _safe_c_varname(adn) + ");\n")
+                elif adc == "Dict" or adc == "Map" or adc == "Set":
+                    mut _ad_strval = self.coll_local_strval.contains(adn)
+                    if self.coll_local_idict.contains(adn):
+                        if _ad_strval:
+                            self.w(pad + "_tr_idict_free_strval(" + _safe_c_varname(adn) + ");\n")
+                        else:
+                            self.w(pad + "_tr_idict_free(" + _safe_c_varname(adn) + ");\n")
+                    else:
+                        if _ad_strval:
+                            self.w(pad + "Dict_free_strval(" + _safe_c_varname(adn) + ");\n")
+                        else:
+                            self.w(pad + "Dict_free(" + _safe_c_varname(adn) + ");\n")
+                else:
+                    # Item #2: release str-typed fields after the user's free()
+                    # runs. Capture each field's TrStr value BEFORE free() (so
+                    # free() can still read it - e.g. to log it), then release
+                    # the captured copy AFTER free() returns - this drops the
+                    # instance's own reference (severed once free() deallocates
+                    # `self`) without racing free()'s own access to the field.
+                    mut _adn_safe = _safe_c_varname(adn)
+                    mut _ad_tmps = Vec[str].init(0)
+                    if self.classes.contains(adc):
+                        mut _ad_cls = self.classes.get(adc)
+                        mut _ad_fi = 0
+                        while _ad_fi < _ad_cls.fields.len:
+                            mut _ad_fld = _ad_cls.fields.get(_ad_fi)
+                            if _is_str_type(self.resolve_generic_prim(_ad_fld.ty.name)):
+                                mut _ad_tmp = "_ad_f" + self.next_temp()
+                                self.w(pad + "TrStr " + _ad_tmp + " = " + _adn_safe + "->" + _safe_c_varname(_ad_fld.name) + ";\n")
+                                _ad_tmps.push(_ad_tmp)
+                            _ad_fi = _ad_fi + 1
+                    self.w(pad + self.cls_method_c_call(adc, "free", adn, "") + ";\n")
+                    mut _ad_ti = 0
+                    while _ad_ti < _ad_tmps.len:
+                        self.w(pad + "_tr_str_release(" + _ad_tmps.get(_ad_ti) + ");\n")
+                        _ad_ti = _ad_ti + 1
             case _: pass
 
     pub def gen_for_loop(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
@@ -4877,7 +5144,7 @@ pub class CGenerator:
                                 if _gv.name == vn and _gv.fields.len > 0: gaf = _gv.fields.get(0).name
                                 _gvi = _gvi + 1
                         self.decl_vars.insert(field, true)
-                        gbindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + gaf + ";\n"
+                        gbindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + _safe_c_varname(gaf) + ";\n"
                     case Pattern.PVariantBindMany(tn, vn, fields):
                         gcond = subj + ".tag == " + tn + "_" + vn
                         mut _gbi = 0
@@ -4893,7 +5160,7 @@ pub class CGenerator:
                                         if _gv2.name == vn and _gbi < _gv2.fields.len: _gact = _gv2.fields.get(_gbi).name
                                         _gvi2 = _gvi2 + 1
                                 self.decl_vars.insert(_gbf, true)
-                                gbindings = gbindings + "__auto_type " + _safe_c_varname(_gbf) + " = " + subj + ".data." + vn + "." + _gact + ";\n"
+                                gbindings = gbindings + "__auto_type " + _safe_c_varname(_gbf) + " = " + subj + ".data." + vn + "." + _safe_c_varname(_gact) + ";\n"
                             _gbi = _gbi + 1
                     case Pattern.PBind(gn):
                         gcond = "1"
@@ -4948,7 +5215,7 @@ pub class CGenerator:
                                 actual_fld = _ev.fields.get(0).name
                             _vi = _vi + 1
                     self.decl_vars.insert(field, true)
-                    bindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + actual_fld + ";\n"
+                    bindings = "__auto_type " + _safe_c_varname(field) + " = " + subj + ".data." + vn + "." + _safe_c_varname(actual_fld) + ";\n"
                 case Pattern.PVariantBindMany(tn, vn, fields):
                     cond = subj + ".tag == " + tn + "_" + vn
                     mut _bi = 0
@@ -4965,7 +5232,7 @@ pub class CGenerator:
                                         _actual = _ev2.fields.get(_bi).name
                                     _vi2 = _vi2 + 1
                             self.decl_vars.insert(_bf, true)
-                            bindings = bindings + "__auto_type " + _safe_c_varname(_bf) + " = " + subj + ".data." + vn + "." + _actual + ";\n"
+                            bindings = bindings + "__auto_type " + _safe_c_varname(_bf) + " = " + subj + ".data." + vn + "." + _safe_c_varname(_actual) + ";\n"
                         _bi = _bi + 1
                 case Pattern.PBind(n):
                     cond = "1"
@@ -5391,6 +5658,10 @@ pub class CGenerator:
                     self.cur_func  = m.name
                     self.cur_throws_ty = m.throws_ty.name
                     self.decl_vars = Map[str, bool].init(64)
+                    self.str_local_names = Map[str, bool].init(16)
+                    self.coll_local_sfx = Map[str, str].init(16)
+                    self.coll_local_idict = Map[str, bool].init(16)
+                    self.coll_local_strval = Map[str, bool].init(16)
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(m)
                     self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
@@ -5412,6 +5683,10 @@ pub class CGenerator:
                 self.cur_func  = m.name
                 self.cur_throws_ty = m.throws_ty.name
                 self.decl_vars = Map[str, bool].init(64)
+                self.str_local_names = Map[str, bool].init(16)
+                self.coll_local_sfx = Map[str, str].init(16)
+                self.coll_local_idict = Map[str, bool].init(16)
+                self.coll_local_strval = Map[str, bool].init(16)
                 self.shared_vars = Map[str, str].init(8)
                 self.seed_params(m)
                 self.w(self.get_inline_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
@@ -5442,6 +5717,10 @@ pub class CGenerator:
                     self.cur_class = f.class_name
                     self.cur_throws_ty = f.throws_ty.name
                     self.decl_vars = Map[str, bool].init(64)
+                    self.str_local_names = Map[str, bool].init(16)
+                    self.coll_local_sfx = Map[str, str].init(16)
+                    self.coll_local_idict = Map[str, bool].init(16)
+                    self.coll_local_strval = Map[str, bool].init(16)
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(f)
                     self.w(self.get_inline_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
@@ -5472,8 +5751,8 @@ pub class CGenerator:
         if main_has_args:
             # Rename to avoid shadowing C's char** argv parameter
             if main_args_name == "argv": main_args_name = "_tr_main_argv"
-            self.w("    List_str* " + main_args_name + " = List_str_new();\n")
-            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_str_append(" + main_args_name + ", argv[_ai]); }\n")
+            self.w("    List_TrStr* " + main_args_name + " = List_TrStr_new();\n")
+            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(argv[_ai])); }\n")
 
         # Call top-level statements. A hoisted global var (declared at file scope
         # in Phase 3.6) is initialized here with an assignment, not re-declared.
@@ -5497,6 +5776,10 @@ pub class CGenerator:
             if f.name == "main":
                 self.cur_func  = "main"
                 self.decl_vars = Map[str, bool].init(64)
+                self.str_local_names = Map[str, bool].init(16)
+                self.coll_local_sfx = Map[str, str].init(16)
+                self.coll_local_idict = Map[str, bool].init(16)
+                self.coll_local_strval = Map[str, bool].init(16)
                 self.gen_func_body(f.body, 1)
                 self.cur_func  = ""
             i = i + 1
@@ -5947,6 +6230,10 @@ pub class CGenerator:
                         self.cur_class = c.name
                         self.cur_func  = m.name
                         self.decl_vars = Map[str, bool].init(64)
+                        self.str_local_names = Map[str, bool].init(16)
+                        self.coll_local_sfx = Map[str, str].init(16)
+                        self.coll_local_idict = Map[str, bool].init(16)
+                        self.coll_local_strval = Map[str, bool].init(16)
                         self.seed_params(m)
                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
                         self.gen_func_body(m.body, 1)
@@ -5967,6 +6254,10 @@ pub class CGenerator:
                         self.cur_class = e.name
                         self.cur_func  = m.name
                         self.decl_vars = Map[str, bool].init(64)
+                        self.str_local_names = Map[str, bool].init(16)
+                        self.coll_local_sfx = Map[str, str].init(16)
+                        self.coll_local_idict = Map[str, bool].init(16)
+                        self.coll_local_strval = Map[str, bool].init(16)
                         self.seed_params(m)
                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
                         self.gen_func_body(m.body, 1)
@@ -5999,6 +6290,10 @@ pub class CGenerator:
                         self.cur_func  = f.name
                         self.cur_class = f.class_name
                         self.decl_vars = Map[str, bool].init(64)
+                        self.str_local_names = Map[str, bool].init(16)
+                        self.coll_local_sfx = Map[str, str].init(16)
+                        self.coll_local_idict = Map[str, bool].init(16)
+                        self.coll_local_strval = Map[str, bool].init(16)
                         self.seed_params(f)
                         self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
                         self.gen_func_body(f.body, 1)
@@ -6041,6 +6336,10 @@ pub class CGenerator:
                                         self.cur_func  = m.name
                                         self.cur_throws_ty = m.throws_ty.name
                                         self.decl_vars = Map[str, bool].init(64)
+                                        self.str_local_names = Map[str, bool].init(16)
+                                        self.coll_local_sfx = Map[str, str].init(16)
+                                        self.coll_local_idict = Map[str, bool].init(16)
+                                        self.coll_local_strval = Map[str, bool].init(16)
                                         self.shared_vars = Map[str, str].init(8)
                                         self.seed_params(m)
                                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, c.name) + " {\n")
@@ -6068,6 +6367,10 @@ pub class CGenerator:
                                         self.cur_func  = m.name
                                         self.cur_throws_ty = m.throws_ty.name
                                         self.decl_vars = Map[str, bool].init(64)
+                                        self.str_local_names = Map[str, bool].init(16)
+                                        self.coll_local_sfx = Map[str, str].init(16)
+                                        self.coll_local_idict = Map[str, bool].init(16)
+                                        self.coll_local_strval = Map[str, bool].init(16)
                                         self.shared_vars = Map[str, str].init(8)
                                         self.seed_params(m)
                                         self.w(self.get_proto_attrs(m) + self.gen_func_sig(m, e.name) + " {\n")
@@ -6132,6 +6435,10 @@ pub class CGenerator:
                                 self.cur_class = f.class_name
                                 self.cur_throws_ty = f.throws_ty.name
                                 self.decl_vars = Map[str, bool].init(64)
+                                self.str_local_names = Map[str, bool].init(16)
+                                self.coll_local_sfx = Map[str, str].init(16)
+                                self.coll_local_idict = Map[str, bool].init(16)
+                                self.coll_local_strval = Map[str, bool].init(16)
                                 self.shared_vars = Map[str, str].init(8)
                                 self.seed_params(f)
                                 self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
@@ -6163,8 +6470,8 @@ pub class CGenerator:
         if main_has_args:
             # Rename to avoid shadowing C's char** argv parameter
             if main_args_name == "argv": main_args_name = "_tr_main_argv"
-            self.w("    List_str* " + main_args_name + " = List_str_new();\n")
-            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_str_append(" + main_args_name + ", argv[_ai]); }\n")
+            self.w("    List_TrStr* " + main_args_name + " = List_TrStr_new();\n")
+            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(argv[_ai])); }\n")
 
         i = 0
         if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.top_level_stmts as usize):
@@ -6188,6 +6495,10 @@ pub class CGenerator:
                     if f.name == "main":
                         self.cur_func  = "main"
                         self.decl_vars = Map[str, bool].init(64)
+                        self.str_local_names = Map[str, bool].init(16)
+                        self.coll_local_sfx = Map[str, str].init(16)
+                        self.coll_local_idict = Map[str, bool].init(16)
+                        self.coll_local_strval = Map[str, bool].init(16)
                         self.gen_func_body(f.body, 1)
                         self.cur_func  = ""
                 i = i + 1

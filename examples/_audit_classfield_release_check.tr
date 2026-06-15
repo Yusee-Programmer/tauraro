@@ -1,0 +1,26 @@
+class Widget:
+    s: str
+    n: int
+
+    pub def init(s: str, n: int) -> Widget:
+        mut w = Widget()
+        w.s = s
+        w.n = n
+        return w
+
+    # Reads self.s before deallocating - tests that the compiler's
+    # field-release (after free()) doesn't race with this read.
+    pub def free(self):
+        if self.n == 99999:
+            print("freeing last=" + self.s)
+        unsafe:
+            _tr_c_free(self as Pointer[char])
+
+def main():
+    mut i = 0
+    while i < 100000:
+        mut name = "widget_" + i.to_str()
+        mut w = Widget.init(name, i)
+        i = i + 1
+
+    print("done")
