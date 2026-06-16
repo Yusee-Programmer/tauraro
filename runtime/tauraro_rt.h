@@ -2242,9 +2242,18 @@ typedef struct {
     int          n_io;
     int          inited;
 } _TrSchedG;
-/* Per-OS-thread scheduler: thread-per-core multicore = N worker threads, each
- * running its own independent scheduler + reactor (shared-nothing). */
-static __thread _TrSchedG _tr_g = {0};
+/* Per-OS-thread scheduler (thread-per-core multicore = N worker threads, each
+ * with its own independent scheduler + reactor). It MUST be a single shared
+ * global across all translation units - a `static` per-TU copy would mean a
+ * coroutine that parks in one module (e.g. std/net) and the scheduler that
+ * runs it in another (e.g. main) see different state. Defined once in the
+ * _TR_MAIN TU, extern everywhere else; thread-local so each worker OS thread
+ * still gets its own instance. */
+#ifdef _TR_MAIN
+__thread _TrSchedG _tr_g = {0};
+#else
+extern __thread _TrSchedG _tr_g;
+#endif
 
 static long long _tr_mono_ms(void) {
 #if defined(_WIN32)

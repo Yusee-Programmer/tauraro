@@ -253,6 +253,13 @@ extend TcpListener:
     # Await the next client connection without blocking the worker: when the
     # accept queue is empty, park the coroutine on the listener's readiness and
     # yield to other tasks. Returns a connected, non-blocking TcpStream.
+    #
+    # KNOWN ISSUE (Tier 3 WIP): returning a class instance (TcpStream) from a
+    # method *across* a coroutine park currently misbehaves; until the codegen
+    # fix lands, prefer the equivalent inline form in an accept loop:
+    #     mut s = listener.accept_nb()
+    #     if s.fd >= 0: <spawn handler with s.fd>
+    #     else:        Coro.await_readable(listener.fd)
     pub def accept_async(self) -> TcpStream:
         while true:
             mut s: TcpStream = self.accept_nb()
