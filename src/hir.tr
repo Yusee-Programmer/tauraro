@@ -157,6 +157,7 @@ pub class HirFunction:
     pub is_async: bool
     pub is_extern: bool
     pub is_public: bool
+    pub is_export: bool
     pub is_static: bool
     pub is_variadic: bool
     pub is_decorator: bool

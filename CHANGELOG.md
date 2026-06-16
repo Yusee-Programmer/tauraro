@@ -51,6 +51,19 @@ added here as each phase lands.
   statement's `flush_wraps`, matching `gen_args` for normal calls.
 
 ### Changed
+- **Async/await is now a green-thread runtime.** `async def` / `await` no
+  longer spawn an OS thread per `await` and block the caller. Instead each task
+  is a lightweight **stackful coroutine** (Windows Fibers / POSIX `ucontext`)
+  with its own small stack, and `await` is a cheap context switch driven by a
+  cooperative scheduler. A single OS thread runs many tasks; `await` suspends
+  the caller and resumes it with the callee's result without blocking. The
+  scheduler integrates the `_TrIOPoll` reactor (epoll / IOCP-select / kqueue),
+  so an `await` on a socket parks the task on fd-readiness and yields the worker
+  — true non-blocking I/O, no thread blocked per connection. Nested `await`
+  chains, cooperative `Coro.sleep_ms` (timer-parked) and `Coro.yield_now`, and
+  reactor-based `Coro.await_readable`/`await_writable` are provided via the new
+  `std/async/coro` module. (`spawn`/`task_group` keep OS-thread parallelism for
+  CPU-bound work; multi-core green-thread scheduling is future work.)
 - Debug builds (`--debug`) now emit C `#line N "source.tr"` directives mapping
   each generated statement back to its original Tauraro source file and line,
   so GCC diagnostics and GDB backtraces reference the `.tr` source rather than
@@ -74,6 +87,17 @@ added here as each phase lands.
   is diagnostic-only and never affects codegen.)
 
 ### Added
+- Bidirectional FFI / library export: an `export def` function is given C-ABI
+  external linkage (`__declspec(dllexport)` on Windows, default visibility on
+  ELF/Mach-O via the new `TR_EXPORT` macro). The new `tauraroc --lib` mode
+  builds a shared library (`.dll`/`.so`) instead of an executable (compiling
+  every module `-fPIC` and linking `-shared`) and emits a self-contained C
+  header declaring the exported functions, so C/Rust/etc. consumers can call
+  into Tauraro code. Verified end-to-end (and in CI) by a C program linking the
+  generated library through the generated header. (Exports with primitive /
+  pointer signatures are fully self-contained; signatures using Tauraro struct
+  types like `TrStr`/`Result` still require the runtime header — a documented
+  v1 limitation.)
 - `std/encoding/toml.tr`: a TOML parser and serializer (`TomlValue` tagged
   tree + `Toml.parse`/`Toml.stringify`), modeled on `std/encoding/json.tr`.
   Supports comments, bare/quoted keys, basic & literal strings, integers

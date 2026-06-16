@@ -62,6 +62,31 @@ foreach ($FSAMPLE in @("examples/02_operators.tr", "examples/03_control_flow.tr"
     }
 }
 
+# --- FFI / cdylib export check --------------------------------------------
+$cc = (Get-Command gcc -ErrorAction SilentlyContinue)
+if ($cc) {
+    $total++
+    Write-Host "==> cdylib export"
+    $libdir = Join-Path $env:TEMP ("tau_cdylib_" + [System.Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $libdir | Out-Null
+    "export def add(a: int, b: int) -> int:`n    return a + b`nexport def multiply(a: int, b: int) -> int:`n    return a * b" | Set-Content -Path (Join-Path $libdir "lib.tr") -Encoding utf8
+    & $TAURAROC (Join-Path $libdir "lib.tr") -o (Join-Path $libdir "lib") --lib 2>$null | Out-Null
+    "#include `"lib.h`"`n#include <stdio.h>`nint main(void){ printf(`"%lld %lld\n`", add(3,4), multiply(5,6)); return 0; }" | Set-Content -Path (Join-Path $libdir "consumer.c") -Encoding utf8
+    $cout = ""
+    if (Test-Path (Join-Path $libdir "lib.dll")) {
+        & gcc (Join-Path $libdir "consumer.c") "-I$libdir" (Join-Path $libdir "lib.dll") -o (Join-Path $libdir "consumer.exe") 2>$null | Out-Null
+        if (Test-Path (Join-Path $libdir "consumer.exe")) {
+            $cout = (& (Join-Path $libdir "consumer.exe") 2>$null | Out-String).Trim()
+        }
+    }
+    if ($cout -ne "7 30") {
+        Write-Host "  FAILED (got: '$cout')"
+        $failed++
+        $failedFiles += "cdylib_export"
+    }
+    Remove-Item -Recurse -Force $libdir -ErrorAction SilentlyContinue
+}
+
 Write-Host ""
 Write-Host "==================================="
 Write-Host "Test files: $total, failed: $failed"

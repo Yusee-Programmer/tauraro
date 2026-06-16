@@ -35,3 +35,4 @@ from std.async.once       import Once
 from std.async.timer      import Timer, Ticker
 from std.async.thread     import Thread, Atomic, ThreadLocal
 from std.async.send       import Sendable
+from std.async.coro       import Coro

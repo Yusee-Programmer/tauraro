@@ -873,6 +873,11 @@ pub class CGenerator:
             else:
                 fname = base_sig_key
         mut sig = ret_ty_str + " " + fname + "("
+        # Exported (FFI) functions get a dllexport/visibility attribute so they
+        # land in a shared library's exported symbol table. Only free functions
+        # (no class) are exportable with a stable C name.
+        if f.is_export and class_name == "":
+            sig = "TR_EXPORT " + sig
         mut first = true
 
         if class_name != "" and not f.is_static:
@@ -3509,15 +3514,18 @@ pub class CGenerator:
 
     # -- Real async/await -----------------------------------------------------
 
+    # Emit a coroutine entry wrapper for an async function call. The wrapper
+    # runs as a green-thread (_tr_co_go), unpacks its boxed args, calls the
+    # target, and RETURNS the (boxed) result — the scheduler stores it as the
+    # coroutine's result, which `await` reads via _tr_co_await. Args are packed
+    # starting at index 0 (no task-state slot in the coroutine model).
     pub def emit_async_wrapper_for_call(self, fn_name: str, args: Vec[Pointer[HirExpr]], ret_name: str):
         if self.async_wrappers.contains(fn_name): return
         self.async_wrappers.insert(fn_name, true)
         mut nargs = args.len
-        # Emit: static void* _tr_async_wrap_FNAME(void* _vp) { ... }
         self.w("static void* _tr_async_wrap_" + fn_name + "(void* _vp) {\n")
         self.w("    long long* _a = (long long*)_vp;\n")
-        self.w("    _TrTaskState* _ts = (_TrTaskState*)(uintptr_t)_a[0];\n")
-        # Cast each arg back
+        self.w("    (void)_a;\n")
         mut ci = 0
         while ci < nargs:
             mut arg_ty_name = hir_expr_type(args.get(ci)).name
@@ -3525,13 +3533,12 @@ pub class CGenerator:
             if c_arg_ty == "void" or c_arg_ty == "": c_arg_ty = "long long"
             mut is_int = _is_int_type(arg_ty_name) or arg_ty_name == "bool" or arg_ty_name == "char"
             if is_int:
-                self.w("    " + c_arg_ty + " _arg" + ci.to_str() + " = (" + c_arg_ty + ")_a[" + (ci + 1).to_str() + "];\n")
+                self.w("    " + c_arg_ty + " _arg" + ci.to_str() + " = (" + c_arg_ty + ")_a[" + ci.to_str() + "];\n")
             elif _is_str_type(arg_ty_name):
-                self.w("    TrStr _arg" + ci.to_str() + " = _tr_str_unbox((void*)(uintptr_t)_a[" + (ci + 1).to_str() + "]);\n")
+                self.w("    TrStr _arg" + ci.to_str() + " = _tr_str_unbox((void*)(uintptr_t)_a[" + ci.to_str() + "]);\n")
             else:
-                self.w("    " + c_arg_ty + " _arg" + ci.to_str() + " = (" + c_arg_ty + ")(uintptr_t)_a[" + (ci + 1).to_str() + "];\n")
+                self.w("    " + c_arg_ty + " _arg" + ci.to_str() + " = (" + c_arg_ty + ")(uintptr_t)_a[" + ci.to_str() + "];\n")
             ci = ci + 1
-        # Build the call
         mut call_s = fn_name + "("
         mut ai = 0
         while ai < nargs:
@@ -3541,15 +3548,16 @@ pub class CGenerator:
         call_s = call_s + ")"
         if ret_name == "void" or ret_name == "":
             self.w("    " + call_s + ";\n")
-            self.w("    _tr_task_complete(_ts, 0LL);\n")
+            self.w("    free(_a);\n")
+            self.w("    return NULL;\n")
         elif _is_str_type(ret_name):
-            self.w("    long long _r = (long long)(uintptr_t)_tr_str_box(" + call_s + ");\n")
-            self.w("    _tr_task_complete(_ts, _r);\n")
+            self.w("    void* _r = (void*)(uintptr_t)_tr_str_box(" + call_s + ");\n")
+            self.w("    free(_a);\n")
+            self.w("    return _r;\n")
         else:
-            self.w("    long long _r = (long long)(uintptr_t)(" + call_s + ");\n")
-            self.w("    _tr_task_complete(_ts, _r);\n")
-        self.w("    free(_a);\n")
-        self.w("    return NULL;\n")
+            self.w("    void* _r = (void*)(uintptr_t)(" + call_s + ");\n")
+            self.w("    free(_a);\n")
+            self.w("    return _r;\n")
         self.w("}\n")
 
     pub def gen_await_call(self, expr: Pointer[HirExpr]) -> str:
@@ -3568,24 +3576,25 @@ pub class CGenerator:
                 self.emit_async_wrapper_for_call(fn_name, args, ret_name)
                 mut nargs = args.len
                 mut tmp = self.next_temp()
-                mut buf_size = (nargs + 1).to_str()
+                # Pack args (at least one slot - the wrapper frees this buffer).
+                mut buf_size = nargs.to_str()
+                if nargs == 0: buf_size = "1"
                 mut s = "({ long long* _ab" + tmp + " = (long long*)_tr_checked_alloc(" + buf_size + " * sizeof(long long)); "
-                s = s + "_TrTaskState* _ts" + tmp + " = _tr_task_new(); "
-                s = s + "_ab" + tmp + "[0] = (long long)(uintptr_t)_ts" + tmp + "; "
                 mut ai = 0
                 while ai < nargs:
                     mut arg_ty_name = hir_expr_type(args.get(ai)).name
                     mut is_int = _is_int_type(arg_ty_name) or arg_ty_name == "bool" or arg_ty_name == "char"
                     if is_int:
-                        s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(" + self.gen_expr(args.get(ai)) + "); "
+                        s = s + "_ab" + tmp + "[" + ai.to_str() + "] = (long long)(" + self.gen_expr(args.get(ai)) + "); "
                     elif _is_str_type(arg_ty_name):
-                        s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(uintptr_t)_tr_str_box(" + self.gen_expr(args.get(ai)) + "); "
+                        s = s + "_ab" + tmp + "[" + ai.to_str() + "] = (long long)(uintptr_t)_tr_str_box(" + self.gen_expr(args.get(ai)) + "); "
                     else:
-                        s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(uintptr_t)(" + self.gen_expr(args.get(ai)) + "); "
+                        s = s + "_ab" + tmp + "[" + ai.to_str() + "] = (long long)(uintptr_t)(" + self.gen_expr(args.get(ai)) + "); "
                     ai = ai + 1
-                s = s + "_tr_async_pool_submit(_tr_global_async_pool, _tr_async_wrap_" + fn_name + ", _ab" + tmp + "); "
-                s = s + "long long _r" + tmp + " = _tr_task_await(_ts" + tmp + "); "
-                s = s + "_tr_task_free(_ts" + tmp + "); "
+                # Spawn a coroutine for the call and cooperatively await it.
+                s = s + "_TrCoro* _co" + tmp + " = _tr_co_go(_tr_async_wrap_" + fn_name + ", _ab" + tmp + "); "
+                s = s + "long long _r" + tmp + " = _tr_co_await(_co" + tmp + "); "
+                s = s + "_tr_co_free(_co" + tmp + "); "
                 if ret_name == "void":
                     s = s + "0LL; })"
                 elif _is_int_type(ret_name) or ret_name == "bool" or ret_name == "char":
@@ -3619,26 +3628,25 @@ pub class CGenerator:
                 self.emit_async_wrapper_for_call(fn_name, args, ret_name)
                 mut nargs = args.len
                 mut tmp = self.next_temp()
-                mut buf_size = (nargs + 1).to_str()
+                mut buf_size = nargs.to_str()
+                if nargs == 0: buf_size = "1"
                 mut ms_s = self.gen_expr(ms_expr)
                 mut s = "({ long long* _ab" + tmp + " = (long long*)_tr_checked_alloc(" + buf_size + " * sizeof(long long)); "
-                s = s + "_TrTaskState* _ts" + tmp + " = _tr_task_new(); "
-                s = s + "_ab" + tmp + "[0] = (long long)(uintptr_t)_ts" + tmp + "; "
                 mut ai = 0
                 while ai < nargs:
                     mut arg_ty_name = hir_expr_type(args.get(ai)).name
                     mut is_int = _is_int_type(arg_ty_name) or arg_ty_name == "bool" or arg_ty_name == "char"
                     if is_int:
-                        s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(" + self.gen_expr(args.get(ai)) + "); "
+                        s = s + "_ab" + tmp + "[" + ai.to_str() + "] = (long long)(" + self.gen_expr(args.get(ai)) + "); "
                     elif _is_str_type(arg_ty_name):
-                        s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(uintptr_t)_tr_str_box(" + self.gen_expr(args.get(ai)) + "); "
+                        s = s + "_ab" + tmp + "[" + ai.to_str() + "] = (long long)(uintptr_t)_tr_str_box(" + self.gen_expr(args.get(ai)) + "); "
                     else:
-                        s = s + "_ab" + tmp + "[" + (ai + 1).to_str() + "] = (long long)(uintptr_t)(" + self.gen_expr(args.get(ai)) + "); "
+                        s = s + "_ab" + tmp + "[" + ai.to_str() + "] = (long long)(uintptr_t)(" + self.gen_expr(args.get(ai)) + "); "
                     ai = ai + 1
-                s = s + "_tr_async_pool_submit(_tr_global_async_pool, _tr_async_wrap_" + fn_name + ", _ab" + tmp + "); "
+                s = s + "_TrCoro* _co" + tmp + " = _tr_co_go(_tr_async_wrap_" + fn_name + ", _ab" + tmp + "); "
                 s = s + "long long _rto" + tmp + " = 0LL; "
-                s = s + "_tr_task_await_timeout(_ts" + tmp + ", (long long)(" + ms_s + "), &_rto" + tmp + "); "
-                s = s + "_tr_task_free(_ts" + tmp + "); "
+                s = s + "_tr_co_await_timeout(_co" + tmp + ", (long long)(" + ms_s + "), &_rto" + tmp + "); "
+                s = s + "_tr_co_free(_co" + tmp + "); "
                 if ret_name == "void":
                     s = s + "0LL; })"
                 elif _is_int_type(ret_name) or ret_name == "bool" or ret_name == "char":
@@ -6359,6 +6367,36 @@ pub class CGenerator:
         return self.buf.to_string().as_str()
 
     # Generate main.c: main-module implementations + C entry point.
+    # Emit a C header (`--lib`) declaring every `export def` free function, so
+    # C/Rust/etc. consumers can call into the generated shared library. The
+    # generated tauraro_rt.h / tauraro_types.h are included so the declarations
+    # resolve TrStr/Result/collection types used at the boundary.
+    pub def generate_export_header(self, prog: HirProgram) -> str:
+        self.buf = StringBuilder.init(4096)
+        self.w("/* Generated by `tauraroc --lib`. Exported Tauraro functions. */\n")
+        self.w("#ifndef TAURARO_EXPORTS_H\n#define TAURARO_EXPORTS_H\n\n")
+        # Self-contained: only standard C types so a consumer links against the
+        # library WITHOUT pulling in the Tauraro runtime. (Exports whose
+        # signatures use Tauraro struct types like TrStr/Result are noted below;
+        # those need tauraro_rt.h and are a documented v1 limitation.)
+        self.w("#include <stdbool.h>\n#include <stdint.h>\n\n")
+        self.w("#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n")
+        mut i = 0
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
+            while i < prog.functions.len:
+                mut f = prog.functions.get(i)
+                if not _is_invalid_ptr(f as usize):
+                    if f.is_export and not f.is_extern:
+                        mut sig = self.gen_func_sig(f, "")
+                        # Drop the dllexport/visibility attribute for the
+                        # consumer-side declaration.
+                        if sig.starts_with("TR_EXPORT "):
+                            sig = sig.slice(10, sig.len())
+                        self.w(sig + ";\n")
+                i = i + 1
+        self.w("\n#ifdef __cplusplus\n}\n#endif\n#endif\n")
+        return self.buf.to_string().as_str()
+
     pub def generate_main_c(self, prog: HirProgram, class_set: Map[str, bool], fn_set: Map[str, bool]) -> str:
         self.buf = StringBuilder.init(65536)
 

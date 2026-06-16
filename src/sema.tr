@@ -1801,6 +1801,7 @@ extend Sema:
         hf.is_async = f.is_async
         hf.is_extern = f.is_extern
         hf.is_public = f.is_public
+        hf.is_export = f.is_export
         mut _has_self = false
         mut _si = 0
         while _si < hparams.len:

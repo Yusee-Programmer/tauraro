@@ -6,7 +6,7 @@
 
   <p>
     <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache%202.0-blue?style=flat-square" alt="License"/>
-    <img src="https://img.shields.io/badge/version-v0.0.5-brightgreen?style=flat-square" alt="Version"/>
+    <img src="https://img.shields.io/badge/version-v0.0.6-brightgreen?style=flat-square" alt="Version"/>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Platform"/>
     <img src="https://img.shields.io/badge/bilingual-English%20%2B%20Hausa-orange?style=flat-square" alt="Bilingual"/>
     <img src="https://img.shields.io/badge/backend-GCC%20%2F%20Clang-red?style=flat-square" alt="Backend"/>

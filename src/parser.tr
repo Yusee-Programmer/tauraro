@@ -1959,6 +1959,7 @@ extend Parser:
                         mut f = self.parse_function_def(False)
                         f.is_async = True
                         f.is_public = is_public
+                        f.is_export = is_export
                         f.decorators = decorators
                         return box_decl(Decl.DFunction(f))
                     case _:

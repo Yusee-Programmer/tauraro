@@ -10,6 +10,15 @@
 #ifndef TAURARO_RT_H
 #define TAURARO_RT_H
 
+/* TR_EXPORT — symbol-visibility attribute for `export def` functions, so they
+ * appear in the dynamic symbol table of a shared library (`tauraroc --lib`).
+ * On Windows: __declspec(dllexport); on ELF/Mach-O: default visibility. */
+#if defined(_WIN32) || defined(__CYGWIN__)
+#  define TR_EXPORT __declspec(dllexport)
+#else
+#  define TR_EXPORT __attribute__((visibility("default")))
+#endif
+
 /* Must be defined before any system header to expose full POSIX/platform extensions:
  * pthread_rwlock_t, setenv, strdup, struct addrinfo, NI_NAMEREQD, clock_gettime, etc. */
 #if defined(__linux__)
@@ -2181,6 +2190,314 @@ static inline int   _tr_iopoll_mod_h(char* p, long long fd, long long ev, long l
     { return _tr_iopoll_mod((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
 static inline int   _tr_iopoll_del_h(char* p, long long fd)
     { return _tr_iopoll_del((_TrIOPoll*)p,(int)fd); }
+
+/* =========================================================================
+ * Green-thread scheduler - stackful coroutines + non-blocking reactor.
+ *
+ * This is Tauraro's async/await engine. Each `async`/`spawn` task is a
+ * lightweight stackful coroutine (Windows Fiber / POSIX ucontext) with its
+ * own small stack. `await` is a cheap context switch, NOT an OS thread
+ * spawn - so a single OS thread cooperatively runs millions of tasks. An
+ * `await` on a socket parks the task on fd-readiness via the _TrIOPoll
+ * reactor (epoll/IOCP-select/kqueue) and yields, so no thread ever blocks on
+ * I/O (Node.js / Redis single-reactor model; multicore = future work).
+ * ========================================================================= */
+#if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)
+
+#if defined(_WIN32)
+typedef LPVOID _tr_coctx_t;
+#else
+#include <ucontext.h>
+typedef ucontext_t _tr_coctx_t;
+#endif
+
+typedef void* (*_tr_coro_fn)(void*);
+typedef enum { _TRC_READY, _TRC_RUN, _TRC_SUSP, _TRC_DONE } _tr_costate;
+
+typedef struct _TrCoro {
+    _tr_coctx_t      ctx;
+#if !defined(_WIN32)
+    char*            stack;
+#endif
+    _tr_coro_fn      fn;
+    void*            arg;
+    _tr_costate      state;
+    long long        result;
+    long long        wake_at;     /* timer deadline (ms); 0 = not sleeping  */
+    int              io_fd;       /* fd parked on the reactor; -1 = none    */
+    struct _TrCoro*  joiner;      /* coro waiting for this one to finish    */
+    struct _TrCoro*  next;        /* ready-queue link                       */
+    struct _TrCoro*  snext;       /* sleep-list link                        */
+} _TrCoro;
+
+typedef struct {
+    _tr_coctx_t  main_ctx;
+    _TrCoro*     current;
+    _TrCoro*     rhead;
+    _TrCoro*     rtail;
+    _TrCoro*     shead;           /* timer-parked coros                     */
+    _TrIOPoll*   reactor;
+    int          n_sleep;
+    int          n_io;
+    int          inited;
+} _TrSchedG;
+static _TrSchedG _tr_g = {0};
+
+static long long _tr_mono_ms(void) {
+#if defined(_WIN32)
+    return (long long)GetTickCount64();
+#else
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#endif
+}
+
+static void _tr_sched_ensure(void) {
+    if (_tr_g.inited) return;
+    _tr_g.inited = 1;
+    _tr_g.current = NULL; _tr_g.rhead = _tr_g.rtail = NULL; _tr_g.shead = NULL;
+    _tr_g.reactor = NULL; _tr_g.n_sleep = 0; _tr_g.n_io = 0;
+#if defined(_WIN32)
+    _tr_g.main_ctx = ConvertThreadToFiber(NULL);
+    if (!_tr_g.main_ctx) {
+        /* Thread was already a fiber (e.g. nested) - fetch the current one. */
+        _tr_g.main_ctx = GetCurrentFiber();
+    }
+#endif
+}
+
+static void _tr_rpush(_TrCoro* c) {
+    c->next = NULL;
+    if (_tr_g.rtail) _tr_g.rtail->next = c; else _tr_g.rhead = c;
+    _tr_g.rtail = c;
+    c->state = _TRC_READY;
+}
+static _TrCoro* _tr_rpop(void) {
+    _TrCoro* c = _tr_g.rhead;
+    if (!c) return NULL;
+    _tr_g.rhead = c->next;
+    if (!_tr_g.rhead) _tr_g.rtail = NULL;
+    c->next = NULL;
+    return c;
+}
+
+static void _tr_co_to_sched(_TrCoro* from) {
+#if defined(_WIN32)
+    (void)from; SwitchToFiber(_tr_g.main_ctx);
+#else
+    swapcontext(&from->ctx, &_tr_g.main_ctx);
+#endif
+}
+static void _tr_co_to_coro(_TrCoro* to) {
+#if defined(_WIN32)
+    SwitchToFiber(to->ctx);
+#else
+    swapcontext(&_tr_g.main_ctx, &to->ctx);
+#endif
+}
+
+#if defined(_WIN32)
+static void CALLBACK _tr_co_entry(LPVOID p) {
+    _TrCoro* c = (_TrCoro*)p;
+    c->result = (long long)(uintptr_t)c->fn(c->arg);
+    c->state = _TRC_DONE;
+    if (c->joiner) { _TrCoro* j = c->joiner; c->joiner = NULL; _tr_rpush(j); }
+    SwitchToFiber(_tr_g.main_ctx);   /* control returns to the scheduler */
+}
+#else
+static void _tr_co_entry(void) {
+    _TrCoro* c = _tr_g.current;
+    c->result = (long long)(uintptr_t)c->fn(c->arg);
+    c->state = _TRC_DONE;
+    if (c->joiner) { _TrCoro* j = c->joiner; c->joiner = NULL; _tr_rpush(j); }
+    /* uc_link returns us to main_ctx automatically. */
+}
+#endif
+
+#define _TR_CORO_STACK (256 * 1024)
+
+/* Spawn a coroutine running fn(arg); returns its handle. */
+static _TrCoro* _tr_co_go(_tr_coro_fn fn, void* arg) {
+    _tr_sched_ensure();
+    _TrCoro* c = (_TrCoro*)calloc(1, sizeof(_TrCoro));
+    c->fn = fn; c->arg = arg; c->io_fd = -1;
+#if defined(_WIN32)
+    c->ctx = CreateFiber(_TR_CORO_STACK, _tr_co_entry, c);
+#else
+    c->stack = (char*)malloc(_TR_CORO_STACK);
+    getcontext(&c->ctx);
+    c->ctx.uc_stack.ss_sp = c->stack;
+    c->ctx.uc_stack.ss_size = _TR_CORO_STACK;
+    c->ctx.uc_link = &_tr_g.main_ctx;
+    makecontext(&c->ctx, _tr_co_entry, 0);
+#endif
+    _tr_rpush(c);
+    return c;
+}
+
+static void _tr_co_free(_TrCoro* c) {
+    if (!c) return;
+#if defined(_WIN32)
+    if (c->ctx) DeleteFiber(c->ctx);
+#else
+    if (c->stack) free(c->stack);
+#endif
+    free(c);
+}
+
+/* Run one scheduler step: dispatch a ready coro, or block on the reactor /
+ * timers until one becomes runnable. Returns 0 when nothing remains to do. */
+static int _tr_sched_step(void) {
+    _TrCoro* c = _tr_rpop();
+    if (c) {
+        _tr_g.current = c;
+        c->state = _TRC_RUN;
+        _tr_co_to_coro(c);
+        _tr_g.current = NULL;
+        return 1;
+    }
+    if (_tr_g.n_sleep == 0 && _tr_g.n_io == 0) return 0;   /* fully idle */
+
+    /* Compute the next timer deadline. */
+    long long now = _tr_mono_ms();
+    long long earliest = -1;
+    for (_TrCoro* s = _tr_g.shead; s; s = s->snext) {
+        if (earliest < 0 || s->wake_at < earliest) earliest = s->wake_at;
+    }
+    int timeout = -1;   /* block indefinitely if only I/O is pending */
+    if (earliest >= 0) { timeout = (int)(earliest - now); if (timeout < 0) timeout = 0; }
+
+    if (_tr_g.n_io > 0 && _tr_g.reactor) {
+        _TrIOEvent evs[64];
+        int n = _tr_iopoll_wait(_tr_g.reactor, evs, 64, timeout);
+        for (int i = 0; i < n; i++) {
+            _TrCoro* k = (_TrCoro*)evs[i].userdata;
+            if (k && k->state == _TRC_SUSP && k->io_fd >= 0) {
+                _tr_iopoll_del(_tr_g.reactor, k->io_fd);
+                k->io_fd = -1; _tr_g.n_io--;
+                _tr_rpush(k);
+            }
+        }
+    } else if (timeout > 0) {
+#if defined(_WIN32)
+        Sleep((DWORD)timeout);
+#else
+        struct timespec ts; ts.tv_sec = timeout / 1000; ts.tv_nsec = (timeout % 1000) * 1000000; nanosleep(&ts, NULL);
+#endif
+    }
+
+    /* Wake any timers that are now due. */
+    now = _tr_mono_ms();
+    _TrCoro** pp = &_tr_g.shead;
+    while (*pp) {
+        _TrCoro* s = *pp;
+        if (s->wake_at <= now) {
+            *pp = s->snext; s->snext = NULL; s->wake_at = 0; _tr_g.n_sleep--;
+            _tr_rpush(s);
+        } else {
+            pp = &s->snext;
+        }
+    }
+    return 1;
+}
+
+/* Drain the scheduler until every coroutine has finished. */
+static void _tr_sched_run(void) { while (_tr_sched_step()) {} }
+
+/* Cooperative yield: requeue the current coro behind the others. */
+static void _tr_co_yield(void) {
+    _TrCoro* c = _tr_g.current;
+    if (!c) return;
+    _tr_rpush(c);
+    _tr_co_to_sched(c);
+}
+
+/* Suspend the current coro for `ms` milliseconds (timer-parked). Outside a
+ * coroutine this is a plain sleep. */
+static void _tr_co_sleep_ms(long long ms) {
+    _TrCoro* c = _tr_g.current;
+    if (!c) {
+#if defined(_WIN32)
+        Sleep((DWORD)ms);
+#else
+        struct timespec ts; ts.tv_sec = ms / 1000; ts.tv_nsec = (ms % 1000) * 1000000; nanosleep(&ts, NULL);
+#endif
+        return;
+    }
+    c->wake_at = _tr_mono_ms() + ms;
+    c->state = _TRC_SUSP;
+    c->snext = _tr_g.shead; _tr_g.shead = c; _tr_g.n_sleep++;
+    _tr_co_to_sched(c);
+}
+
+/* Park the current coro until `fd` is ready for `events` (TAURARO_POLLIN/OUT).
+ * Returns immediately (1) outside a coroutine - caller should use blocking I/O
+ * there. Inside a coro: registers with the reactor and yields. */
+static int _tr_co_await_fd(int fd, unsigned int events) {
+    _TrCoro* c = _tr_g.current;
+    if (!c) return 1;
+    if (!_tr_g.reactor) _tr_g.reactor = _tr_iopoll_create();
+    c->io_fd = fd;
+    c->state = _TRC_SUSP;
+    _tr_iopoll_add(_tr_g.reactor, fd, events, (void*)c);
+    _tr_g.n_io++;
+    _tr_co_to_sched(c);
+    return 1;
+}
+
+/* Await another coroutine's completion and return its result. Works both
+ * inside a coro (cooperative suspend) and from the top level (pumps the
+ * scheduler until the target finishes). */
+static long long _tr_co_await(_TrCoro* target) {
+    if (!target) return 0;
+    if (_tr_g.current) {
+        if (target->state != _TRC_DONE) {
+            target->joiner = _tr_g.current;
+            _tr_g.current->state = _TRC_SUSP;
+            _tr_co_to_sched(_tr_g.current);
+        }
+        return target->result;
+    }
+    while (target->state != _TRC_DONE) {
+        if (!_tr_sched_step()) break;
+    }
+    return target->result;
+}
+
+static int       _tr_co_done(_TrCoro* c)         { return c && c->state == _TRC_DONE; }
+static long long  _tr_co_result(_TrCoro* c)       { return c ? c->result : 0; }
+
+/* Await with a millisecond deadline. Returns 1 if the target finished (out =
+ * result), 0 on timeout. Inside a coroutine the timeout is best-effort (we
+ * cooperatively join); from the top level the scheduler is pumped until the
+ * target finishes or the deadline passes. */
+static int _tr_co_await_timeout(_TrCoro* target, long long ms, long long* out) {
+    if (!target) { if (out) *out = 0; return 1; }
+    if (_tr_g.current) {
+        long long r = _tr_co_await(target);
+        if (out) *out = r;
+        return 1;
+    }
+    long long deadline = _tr_mono_ms() + ms;
+    while (target->state != _TRC_DONE) {
+        if (_tr_mono_ms() >= deadline) { if (out) *out = 0; return 0; }
+        if (!_tr_sched_step()) break;
+    }
+    if (out) *out = target->result;
+    return target->state == _TRC_DONE;
+}
+
+/* Tauraro-callable handle-based wrappers - extern "C" decls in std/async. */
+static char*     _tr_co_go_h(void* fn, void* arg) { return (char*)_tr_co_go((_tr_coro_fn)fn, arg); }
+static long long  _tr_co_await_h(char* c)          { return _tr_co_await((_TrCoro*)c); }
+static void       _tr_co_free_h(char* c)           { _tr_co_free((_TrCoro*)c); }
+static void       _tr_co_yield_h(void)             { _tr_co_yield(); }
+static void       _tr_co_sleep_h(long long ms)     { _tr_co_sleep_ms(ms); }
+static int        _tr_co_await_fd_h(long long fd, long long ev) { return _tr_co_await_fd((int)fd, (unsigned int)ev); }
+static void       _tr_co_run_h(void)               { _tr_sched_run(); }
+static int        _tr_co_done_h(char* c)           { return _tr_co_done((_TrCoro*)c); }
+
+#endif /* green-thread scheduler */
 
 /* ── TCP socket helpers ─────────────────────────────────────────────── */
 #if defined(TAURARO_BARE) || defined(TAURARO_WASM)

@@ -24,7 +24,7 @@ extern "C":
 # --- Helpers ------------------------------------------------------------------
 
 pub def print_version():
-    print("tauraroc v0.0.5")
+    print("tauraroc v0.0.6")
 
 pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
@@ -40,6 +40,7 @@ pub def print_usage():
     print("  --verbose         Show all pipeline phases")
     print("  --backend llvm    Use LLVM IR backend instead of C")
     print("  -o <path>         Output executable name (temp .c files are deleted)")
+    print("  --lib             Build a shared library (.so/.dll) of `export def`s + a C header")
     print("  -O0/-O1/-O2/-O3  Optimization level (default: -O2)")
     print("  -Os               Optimize for size")
     print("  --link <path>     Link a file by path (.c .o .a .dll .lib .so)")
@@ -518,7 +519,7 @@ pub def obj_path_for(c_path: str) -> str:
 pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: str, inc_dir: str,
                       link_paths: Vec[str], lib_flags: Vec[str],
                       opt_level: str, verbose: bool, static_link: bool,
-                      target: str, sysroot: str, debug_mode: bool) -> int:
+                      target: str, sysroot: str, debug_mode: bool, build_shared: bool) -> int:
     mut cc = detect_c_compiler()
     mut triple = ""
     mut cross_flags = ""
@@ -543,8 +544,11 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
     mut dbg = ""
     if debug_mode:
         dbg = " -fsanitize=address,undefined -g"
+    # Shared-library builds need position-independent code in every object.
+    mut pic = ""
+    if build_shared: pic = " -fPIC"
     # Flags common to both per-module `-c` compiles and the final link.
-    mut common = " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + dbg + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\""
+    mut common = " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + dbg + pic + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\""
 
     # -- 1. Compile each changed module to its .o ------------------------------
     mut o_files = Vec[str].init(c_files.len)
@@ -566,8 +570,10 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
         i = i + 1
     if verbose: print("  [incremental] reused " + str(compiled) + " of " + str(c_files.len) + " cached object(s)")
 
-    # -- 2. Link all .o into the output executable -----------------------------
-    mut cmd = cc + common + " -o \"" + exe_path + "\""
+    # -- 2. Link all .o into the output executable (or shared library) ---------
+    mut shared_flag = ""
+    if build_shared: shared_flag = " -shared"
+    mut cmd = cc + common + shared_flag + " -o \"" + exe_path + "\""
     i = 0
     while i < o_files.len:
         cmd = cmd + " \"" + o_files.get(i) + "\""
@@ -582,15 +588,10 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
         i = i + 1
     cmd = cmd + " -lm"
     if _tr_is_windows():
-        mut need_wsa: bool = false
-        mut wi = 0
-        while wi < c_files.len:
-            mut cf = c_files.get(wi)
-            if _tr_str_contains(cf, "tcp.c") or _tr_str_contains(cf, "/net/"):
-                need_wsa = true
-            wi = wi + 1
-        if need_wsa:
-            cmd = cmd + " -lws2_32 -mconsole"
+        # ws2_32 is needed for sockets AND for the async scheduler's reactor
+        # (select/FD_ISSET on Windows). It is a standard system import library,
+        # so always link it; -mconsole keeps console apps as console subsystem.
+        cmd = cmd + " -lws2_32 -mconsole"
     if verbose: print("  [LINK] " + cmd)
     return _tr_system(cmd)
 
@@ -734,6 +735,7 @@ pub def main(args: Vec[str]):
     mut sysroot     = ""                 # --sysroot <path>: explicit sysroot
     mut debug_mode  = false              # --debug         : ASAN + assertions
     mut strict_mode = false              # --strict        : alloc outside unsafe -> hard error
+    mut lib_mode    = false              # --lib           : build a shared library (.so/.dll) of `export def`s + a header
 
     # `tauraroc lint <file>` runs resolution + semantic analysis and reports
     # warnings/errors without producing an executable (like --check, but framed
@@ -786,6 +788,8 @@ pub def main(args: Vec[str]):
             debug_mode = true
         elif arg == "--strict":
             strict_mode = true
+        elif arg == "--lib":
+            lib_mode = true
         elif not str_starts_with(arg, "-"):
             if input_path == "":
                 input_path = arg
@@ -1065,8 +1069,12 @@ pub def main(args: Vec[str]):
                     if en_p.offset(en_len - 1).read() as int == 101:
                         exe_name = exe_name.slice(0, en_len - 4)
 
+    # Output extension: shared library (.dll/.so) in --lib mode, else exe.
     mut exe_ext = ".exe"
-    if not _tr_is_windows():
+    if lib_mode:
+        if _tr_is_windows(): exe_ext = ".dll"
+        else: exe_ext = ".so"
+    elif not _tr_is_windows():
         exe_ext = ""
     mut exe_path = ""
     if output_path != "":
@@ -1078,11 +1086,21 @@ pub def main(args: Vec[str]):
         # Default (no -o): place in ./build/<srcname>[.exe].
         exe_path = build_dir + exe_name + exe_ext
 
+    # --lib: emit a C header declaring the `export def` functions, next to the
+    # library, so C/Rust/etc. consumers can link against it.
+    if lib_mode:
+        mut hdr = c_gen.generate_export_header(hir)
+        mut hdr_path = build_dir + exe_name + ".h"
+        if output_path != "":
+            hdr_path = exe_name + ".h"
+        write_file(hdr_path, hdr)
+        if verbose: print("[lib] header: " + hdr_path)
+
     if verbose: print("[5/5] Compiling + linking " + str(all_c_files.len) + " modules -> " + exe_path)
     # Incremental compile + link (Phase 7): per-module .o with cache reuse for
     # unchanged modules, then a single link. build/ is intentionally kept
     # populated (.c + .o + headers) so the next build can reuse cached objects.
-    mut rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode)
+    mut rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode, lib_mode)
     if rc != 0:
         print("error: compilation failed (exit code " + str(rc) + ")")
         _tr_exit(rc)
