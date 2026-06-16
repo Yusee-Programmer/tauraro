@@ -2225,6 +2225,7 @@ typedef struct _TrCoro {
     long long        result;
     long long        wake_at;     /* timer deadline (ms); 0 = not sleeping  */
     int              io_fd;       /* fd parked on the reactor; -1 = none    */
+    int              detached;    /* 1 = scheduler frees it on completion   */
     struct _TrCoro*  joiner;      /* coro waiting for this one to finish    */
     struct _TrCoro*  next;        /* ready-queue link                       */
     struct _TrCoro*  snext;       /* sleep-list link                        */
@@ -2241,7 +2242,9 @@ typedef struct {
     int          n_io;
     int          inited;
 } _TrSchedG;
-static _TrSchedG _tr_g = {0};
+/* Per-OS-thread scheduler: thread-per-core multicore = N worker threads, each
+ * running its own independent scheduler + reactor (shared-nothing). */
+static __thread _TrSchedG _tr_g = {0};
 
 static long long _tr_mono_ms(void) {
 #if defined(_WIN32)
@@ -2354,6 +2357,9 @@ static int _tr_sched_step(void) {
         c->state = _TRC_RUN;
         _tr_co_to_coro(c);
         _tr_g.current = NULL;
+        /* A detached task (Coro.spawn / per-connection handler) has no joiner
+         * to free it - the scheduler reclaims it once it finishes. */
+        if (c->state == _TRC_DONE && c->detached) _tr_co_free(c);
         return 1;
     }
     if (_tr_g.n_sleep == 0 && _tr_g.n_io == 0) return 0;   /* fully idle */
@@ -2467,6 +2473,13 @@ static long long _tr_co_await(_TrCoro* target) {
 static int       _tr_co_done(_TrCoro* c)         { return c && c->state == _TRC_DONE; }
 static long long  _tr_co_result(_TrCoro* c)       { return c ? c->result : 0; }
 
+/* Spawn a DETACHED task: runs fn(arg) as a green thread that the scheduler
+ * frees on completion (no join). Used for per-connection handlers. */
+static void _tr_co_spawn(_tr_coro_fn fn, void* arg) {
+    _TrCoro* c = _tr_co_go(fn, arg);
+    c->detached = 1;
+}
+
 /* Await with a millisecond deadline. Returns 1 if the target finished (out =
  * result), 0 on timeout. Inside a coroutine the timeout is best-effort (we
  * cooperatively join); from the top level the scheduler is pumped until the
@@ -2489,6 +2502,7 @@ static int _tr_co_await_timeout(_TrCoro* target, long long ms, long long* out) {
 
 /* Tauraro-callable handle-based wrappers - extern "C" decls in std/async. */
 static char*     _tr_co_go_h(void* fn, void* arg) { return (char*)_tr_co_go((_tr_coro_fn)fn, arg); }
+static void       _tr_co_spawn_h(void* fn, void* arg) { _tr_co_spawn((_tr_coro_fn)fn, arg); }
 static long long  _tr_co_await_h(char* c)          { return _tr_co_await((_TrCoro*)c); }
 static void       _tr_co_free_h(char* c)           { _tr_co_free((_TrCoro*)c); }
 static void       _tr_co_yield_h(void)             { _tr_co_yield(); }

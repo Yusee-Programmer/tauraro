@@ -21,6 +21,7 @@ extern "C":
     def _tr_co_sleep_h(ms: int)
     def _tr_co_run_h()
     def _tr_co_await_fd_h(fd: int, ev: int) -> int
+    def _tr_co_spawn_h(fn: Pointer[char], arg: Pointer[char])
 
 # Reactor event flags (mirror TAURARO_POLLIN / TAURARO_POLLOUT).
 pub def POLL_IN()  -> int: return 1
@@ -39,6 +40,15 @@ extend Coro:
     # Voluntarily yield the worker to other ready tasks for one turn.
     pub def yield_now():
         _tr_co_yield_h()
+
+    # Spawn a DETACHED green-thread running `fn(arg)`. The task runs
+    # concurrently with the caller (and every other task) on this worker; the
+    # scheduler frees it when it finishes. `fn` is a `def(Pointer[char])`
+    # function value and `arg` an opaque pointer it receives (cast both with
+    # `as Pointer[char]` inside `unsafe:`). Used to handle each accepted
+    # connection on its own green thread.
+    pub def spawn(fn: Pointer[char], arg: Pointer[char]):
+        _tr_co_spawn_h(fn, arg)
 
     # Park the current task until `fd` is readable, yielding the worker.
     pub def await_readable(fd: int) -> int:

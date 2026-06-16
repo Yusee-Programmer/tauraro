@@ -29,6 +29,8 @@ extern "C":
     def _tr_tcp_accept_nb(server_fd: int) -> int
     def _tr_c_malloc(size: int) -> Pointer[char]
     def _tr_free(p: Pointer[char])
+    # Green-thread reactor: park the current coroutine until fd is ready.
+    def _tr_co_await_fd_h(fd: int, ev: int) -> int
 
 # TAURARO_WOULD_BLOCK (-2): returned by non-blocking ops when no data is ready.
 pub def WOULD_BLOCK() -> int: return -2
@@ -133,6 +135,40 @@ extend TcpStream:
     pub def would_block(self) -> bool:
         return self._wb
 
+    # ── Async API (green-thread, non-blocking via the reactor) ────────────────
+    # These run inside an `async def` / spawned task: when the socket is not
+    # ready they park the coroutine on the reactor (epoll/IOCP/kqueue) and yield
+    # the worker to other tasks, so no OS thread ever blocks on I/O.
+
+    # Receive up to `cap` bytes, awaiting readability if needed.
+    pub def recv_async(self, cap: int) -> str:
+        if not self.nonblocking: self.set_nonblocking()
+        while true:
+            mut data: str = self.recv_nb(cap)
+            if not self._wb:
+                return data
+            # Would block: park until the socket is readable, then retry.
+            _tr_co_await_fd_h(self.fd, 1)
+        return ""   # unreachable (loop only exits via return); satisfies F-3
+
+    # Send all of `data`, awaiting writability as the send buffer drains.
+    pub def send_async(self, data: str) -> int:
+        if not self.nonblocking: self.set_nonblocking()
+        mut p = data as Pointer[char]
+        mut total = 0
+        while p.offset(total).read() as int != 0: total = total + 1
+        mut sent = 0
+        while sent < total:
+            mut chunk: str = data.slice(sent, total)
+            mut n = self.send_nb(chunk)
+            if self._wb:
+                _tr_co_await_fd_h(self.fd, 2)
+            elif n <= 0:
+                return sent
+            else:
+                sent = sent + n
+        return sent
+
     # ── Common ────────────────────────────────────────────────────────────────
 
     pub def close(self):
@@ -213,6 +249,18 @@ extend TcpListener:
             s.host = ""
         s.port = 0
         return s
+
+    # Await the next client connection without blocking the worker: when the
+    # accept queue is empty, park the coroutine on the listener's readiness and
+    # yield to other tasks. Returns a connected, non-blocking TcpStream.
+    pub def accept_async(self) -> TcpStream:
+        while true:
+            mut s: TcpStream = self.accept_nb()
+            if s.fd >= 0:
+                return s
+            # No pending connection: park until the listener is readable.
+            _tr_co_await_fd_h(self.fd, 1)
+        return TcpStream()   # unreachable; satisfies F-3
 
     # Switch the listener fd to non-blocking mode (for use with accept_nb).
     pub def set_nonblocking(self) -> bool:
