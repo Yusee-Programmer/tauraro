@@ -1977,14 +1977,20 @@ static inline int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int 
     { (void)p;(void)ev;(void)maxev;(void)timeout_ms; return 0; }
 
 #elif defined(_WIN32)
-/* ── Windows: select()-backed _TrIOPoll ──────────────────────────────────
- * IOCP is completion-based (only signals after an overlapped op is posted),
- * which doesn't match the epoll/kqueue *readiness* semantics this API
- * promises (register fd, get notified when it becomes readable/writable
- * without having posted anything). select() gives true readiness semantics
- * and works directly with the non-blocking sockets used by recv_nb/send_nb/
- * accept_nb. FD_SETSIZE is raised before winsock2.h's first include (this
- * is that first include site) so a few thousand connections can be polled. */
+/* ── Windows: WSAPoll-backed _TrIOPoll ────────────────────────────────────
+ * A poll()-style *readiness* reactor (register fd, get notified when it is
+ * readable/writable). Replaces the former select() backend: WSAPoll drops
+ * select()'s FD_SETSIZE ceiling and the per-wait three-fd_set rebuild, keeping
+ * a single persistent, dynamically-grown pollfd array - so it scales to many
+ * thousands of connections with a much smaller per-wait constant (still O(n)
+ * in registered fds, but no fixed cap and no rebuild). It stays readiness-based
+ * (POLLRDNORM/POLLWRNORM) so it works directly with the non-blocking sockets
+ * used by recv_nb/send_nb/accept_nb; IOCP would be O(ready) but is completion-
+ * based and would require overlapped I/O throughout the TCP layer. FD_SETSIZE
+ * is still raised before winsock2.h in case any other code path uses fd_set. */
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600   /* Vista+ : required for WSAPoll / WSAPOLLFD */
+#endif
 #ifndef FD_SETSIZE
 #define FD_SETSIZE 4096
 #endif
@@ -1995,23 +2001,53 @@ static inline int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int 
 #pragma comment(lib, "ws2_32.lib")
 #endif
 typedef struct {
-    int      fds[FD_SETSIZE];
-    uint32_t events[FD_SETSIZE];
-    void*    userdata[FD_SETSIZE];
-    int      count;
+    WSAPOLLFD* pfds;       /* fd + requested events (in) + returned revents (out) */
+    void**     userdata;   /* parallel to pfds: the parked coro / registration ptr */
+    int        count;
+    int        cap;
 } _TrIOPoll;
 static inline _TrIOPoll* _tr_iopoll_create(void) {
-    return (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
+    _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
+    if (!p) return NULL;
+    p->cap = 64;
+    p->pfds = (WSAPOLLFD*)calloc((size_t)p->cap, sizeof(WSAPOLLFD));
+    p->userdata = (void**)calloc((size_t)p->cap, sizeof(void*));
+    if (!p->pfds || !p->userdata) { free(p->pfds); free(p->userdata); free(p); return NULL; }
+    return p;
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if (p) free(p); }
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+    if (p) { free(p->pfds); free(p->userdata); free(p); }
+}
+static inline SHORT _tr_poll_events(uint32_t ev) {
+    SHORT e = 0;
+    if (ev & TAURARO_POLLIN)  e |= POLLRDNORM;
+    if (ev & TAURARO_POLLOUT) e |= POLLWRNORM;
+    return e;
+}
 static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
     for (int i = 0; i < p->count; i++) {
-        if (p->fds[i] == fd) { p->events[i] = ev; p->userdata[i] = ud; return 0; }
+        if (p->pfds[i].fd == (SOCKET)fd) {
+            p->pfds[i].events = _tr_poll_events(ev);
+            p->pfds[i].revents = 0;
+            p->userdata[i] = ud;
+            return 0;
+        }
     }
-    if (p->count >= FD_SETSIZE) return -1;
+    if (p->count >= p->cap) {
+        int ncap = p->cap * 2;
+        WSAPOLLFD* nf = (WSAPOLLFD*)realloc(p->pfds, (size_t)ncap * sizeof(WSAPOLLFD));
+        void** nu = (void**)realloc(p->userdata, (size_t)ncap * sizeof(void*));
+        if (nf) p->pfds = nf;
+        if (nu) p->userdata = nu;
+        if (!nf || !nu) return -1;
+        p->cap = ncap;
+    }
     int idx = p->count++;
-    p->fds[idx] = fd; p->events[idx] = ev; p->userdata[idx] = ud;
+    p->pfds[idx].fd = (SOCKET)fd;
+    p->pfds[idx].events = _tr_poll_events(ev);
+    p->pfds[idx].revents = 0;
+    p->userdata[idx] = ud;
     return 0;
 }
 static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
@@ -2019,10 +2055,9 @@ static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
 static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     if (!p) return -1;
     for (int i = 0; i < p->count; i++) {
-        if (p->fds[i] == fd) {
+        if (p->pfds[i].fd == (SOCKET)fd) {
             p->count--;
-            p->fds[i]      = p->fds[p->count];
-            p->events[i]   = p->events[p->count];
+            p->pfds[i]     = p->pfds[p->count];
             p->userdata[i] = p->userdata[p->count];
             return 0;
         }
@@ -2035,31 +2070,21 @@ static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int 
         if (timeout_ms > 0) Sleep((DWORD)timeout_ms);
         return 0;
     }
-    fd_set rfds, wfds, efds;
-    FD_ZERO(&rfds); FD_ZERO(&wfds); FD_ZERO(&efds);
-    for (int i = 0; i < p->count; i++) {
-        if (p->events[i] & TAURARO_POLLIN)  FD_SET((SOCKET)p->fds[i], &rfds);
-        if (p->events[i] & TAURARO_POLLOUT) FD_SET((SOCKET)p->fds[i], &wfds);
-        FD_SET((SOCKET)p->fds[i], &efds);
-    }
-    struct timeval tv;
-    struct timeval* tvp = NULL;
-    if (timeout_ms >= 0) {
-        tv.tv_sec  = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
-        tvp = &tv;
-    }
-    int sel = select(0, &rfds, &wfds, &efds, tvp);
-    if (sel <= 0) return 0;
+    int pr = WSAPoll(p->pfds, (ULONG)p->count, timeout_ms);
+    if (pr <= 0) return 0;
     int n = 0;
     for (int i = 0; i < p->count && n < maxev; i++) {
+        SHORT re = p->pfds[i].revents;
+        if (!re) continue;
         uint32_t e = 0;
-        SOCKET s = (SOCKET)p->fds[i];
-        if (FD_ISSET(s, &rfds)) e |= TAURARO_POLLIN;
-        if (FD_ISSET(s, &wfds)) e |= TAURARO_POLLOUT;
-        if (FD_ISSET(s, &efds)) e |= TAURARO_POLLERR;
+        if (re & (POLLRDNORM | POLLIN))          e |= TAURARO_POLLIN;
+        if (re & (POLLWRNORM | POLLOUT))         e |= TAURARO_POLLOUT;
+        if (re & (POLLERR | POLLHUP | POLLNVAL)) e |= TAURARO_POLLERR;
+        /* A half-close/error must still wake a read waiter so it can observe
+         * EOF via recv()==0, matching select()/epoll behavior. */
+        if ((re & (POLLHUP | POLLERR)) && (p->pfds[i].events & POLLRDNORM)) e |= TAURARO_POLLIN;
         if (e) {
-            out[n].fd       = p->fds[i];
+            out[n].fd       = (int)p->pfds[i].fd;
             out[n].events   = e;
             out[n].userdata = p->userdata[i];
             n++;
