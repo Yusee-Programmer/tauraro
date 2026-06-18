@@ -8,14 +8,14 @@
 #   if init_once.do_once():
 #       heavy_global_init()
 
-from std.async.send import Sendable
+from std.async.send import Sendable, UnsafeSendable
 
 extern "C":
     def _tr_once_new_h() -> Pointer[char]
     def _tr_once_do_h(o: Pointer[char]) -> bool
     def _tr_once_free_h(o: Pointer[char])
 
-pub class Once implements Sendable:
+pub class Once implements Sendable, UnsafeSendable:
     pub handle: Pointer[char]
 
 extend Once:

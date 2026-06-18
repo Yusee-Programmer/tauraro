@@ -1,0 +1,13 @@
+# Liveness probe for the MIR analysis.
+# - `a` is defined before the if and used AFTER it  -> live across all blocks.
+# - `b` is defined before the if and used ONLY inside the then-branch
+#       -> live into the then-branch, dead afterward.
+# - `c` is defined inside the then-branch and used only there
+#       -> live only within that block.
+def probe(n: int) -> int:
+    mut a = n + 1
+    mut b = n + 2
+    if n > 0:
+        mut c = b + 10
+        a = a + c
+    return a

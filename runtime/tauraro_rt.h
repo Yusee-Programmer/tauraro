@@ -184,6 +184,17 @@ extern long _tr_live_strs;
 #define _TR_MEMCOUNT_STR_DEC() ((void)0)
 #endif
 
+/* Net live heap allocations (alloc'd minus freed) under -DTAURARO_MEMCOUNT,
+ * else 0. Exposed to Tauraro so leak-gate tests can assert a workload returns
+ * to its starting allocation count. */
+static inline long long _tr_mem_live(void) {
+#ifdef TAURARO_MEMCOUNT
+    return (long long)_tr_live_allocs;
+#else
+    return 0LL;
+#endif
+}
+
 // Wrappers for core library to avoid signature conflicts
 static inline void* _tr_c_malloc(size_t size) {
     void* p = TAURARO_ALLOC(size);

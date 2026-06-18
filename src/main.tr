@@ -13,6 +13,7 @@ from ast import Decl
 from fmt import Formatter
 from codegen.c import CGenerator
 from codegen.llvm import LlvmGenerator
+from mir import lower_program, dump_mir
 
 extern "C":
     def _tr_is_windows() -> bool
@@ -865,7 +866,8 @@ pub def main(args: Vec[str]):
         return
 
     if emit_mode == "mir":
-        print("[MIR] " + str(hir.functions.len) + " functions lowered")
+        mut mir_prog = lower_program(hir)
+        print(dump_mir(mir_prog))
         return
 
     if verbose: print("[3/5] Code generation (backend=" + backend + ")...")

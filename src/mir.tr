@@ -1,0 +1,384 @@
+# compiler/src/mir.tr — Mid-level IR (control-flow graph) for Tauraro.
+#
+# The MIR is a flat control-flow graph: each function is a list of basic blocks,
+# each block a list of statements ending in one terminator (goto / branch /
+# return). Nested `if`/`while` from the HIR are flattened into blocks + edges.
+#
+# WHY: a CFG is the right substrate for (a) a clean LLVM backend (LLVM IR is also
+# a CFG of basic blocks with br/ret), and (b) precise dataflow analysis — move,
+# liveness, drop elaboration, borrow checking — which the tree-shaped HIR cannot
+# express. See docs/dev/memory_model.md.
+#
+# STATUS: foundation. This lowering builds the CFG and keeps expressions opaque
+# (carrying the original HIR expr) — flattening expressions into MIR operands and
+# re-pointing the C backend at the MIR come later, each fixpoint-verified. This
+# module is additive: nothing in the live HIR->C pipeline calls it yet; `--emit
+# mir` dumps it for inspection.
+
+from hir import HirProgram, HirFunction, HirBlock, HirStmt, HirExpr
+from core.vec import Vec
+
+# A MIR statement (straight-line; no control flow — that lives in terminators).
+pub enum MirStmt:
+    MDeclare(place: str, value: Pointer[HirExpr])   # `let place = value`
+    MAssign(place: str, value: Pointer[HirExpr])    # `place = value`
+    MEval(value: Pointer[HirExpr])                  # evaluate for side effects
+
+# A basic block terminator: exactly one per block, defines the out-edges.
+pub enum MirTerm:
+    TGoto(target: int)                              # -> bb{target}
+    TBranch(cond: Pointer[HirExpr], t: int, e: int) # cond ? bb{t} : bb{e}
+    TReturn(value: Pointer[HirExpr])
+    TReturnVoid()
+    TUnset()                                        # placeholder until set
+
+pub def box_mirstmt(s: MirStmt) -> Pointer[MirStmt]:
+    unsafe:
+        mut p = alloc[MirStmt](1)
+        p.write(s)
+        return p
+
+pub def box_mirterm(t: MirTerm) -> Pointer[MirTerm]:
+    unsafe:
+        mut p = alloc[MirTerm](1)
+        p.write(t)
+        return p
+
+pub class MirBlock:
+    pub id:    int
+    pub stmts: Vec[Pointer[MirStmt]]
+    pub term:  Pointer[MirTerm]
+
+pub class MirFunction:
+    pub name:   str
+    pub params: Vec[str]
+    pub blocks: Vec[MirBlock]
+
+pub class MirProgram:
+    pub functions: Vec[MirFunction]
+
+# Builds the CFG for one function: owns the block list and a "current block"
+# cursor; statements append to the current block, control flow opens new blocks.
+pub class MirBuilder:
+    pub blocks: Vec[MirBlock]
+    pub cur:    int
+
+extend MirBuilder:
+    pub def init() -> MirBuilder:
+        mut b = MirBuilder()
+        b.blocks = Vec[MirBlock].init(8)
+        b.cur    = -1
+        return b
+
+    # Create a fresh block, return its id.
+    pub def new_block(self) -> int:
+        mut blk   = MirBlock()
+        blk.id    = self.blocks.len
+        blk.stmts = Vec[Pointer[MirStmt]].init(4)
+        blk.term  = box_mirterm(MirTerm.TUnset())
+        self.blocks.push(blk)
+        return blk.id
+
+    pub def push_stmt(self, s: MirStmt):
+        if self.cur >= 0:
+            self.blocks.get(self.cur).stmts.push(box_mirstmt(s))
+
+    pub def set_term(self, t: MirTerm):
+        if self.cur >= 0:
+            self.blocks.get(self.cur).term = box_mirterm(t)
+
+    # True once the current block already has a real terminator (so we must not
+    # append more straight-line statements to it).
+    pub def terminated(self) -> bool:
+        if self.cur < 0: return true
+        match self.blocks.get(self.cur).term.read():
+            case MirTerm.TUnset(): return false
+            case _: return true
+
+extend MirProgram:
+    pub def init() -> MirProgram:
+        mut p = MirProgram()
+        p.functions = Vec[MirFunction].init(16)
+        return p
+
+# Lower one HIR block's statements into the builder's CFG, flattening control flow.
+def lower_stmts(b: MirBuilder, hb: HirBlock):
+    mut i = 0
+    while i < hb.stmts.len:
+        if b.terminated():
+            # Code after a return/branch on this path is unreachable; open a new
+            # block to keep the CFG well-formed.
+            b.cur = b.new_block()
+        mut sp = hb.stmts.get(i)
+        match sp.read():
+            case HirStmt.SLet(nm, _, _, _, _, _, val):
+                b.push_stmt(MirStmt.MDeclare(nm, val))
+            case HirStmt.SAssign(tgt, val):
+                # Record the place when the target is a simple local, so liveness
+                # can track def/use; field/index targets stay opaque (eval).
+                match tgt.read():
+                    case HirExpr.EIdent(tn, _, _): b.push_stmt(MirStmt.MAssign(tn, val))
+                    case _: b.push_stmt(MirStmt.MEval(val))
+            case HirStmt.SExpr(e):
+                b.push_stmt(MirStmt.MEval(e))
+            case HirStmt.SReturn(v):
+                b.set_term(MirTerm.TReturn(v))
+            case HirStmt.SIf(cond, then_b, else_b):
+                mut tb = b.new_block()
+                mut eb = b.new_block()
+                mut jb = b.new_block()
+                b.set_term(MirTerm.TBranch(cond, tb, eb))
+                b.cur = tb
+                lower_stmts(b, then_b)
+                if not b.terminated(): b.set_term(MirTerm.TGoto(jb))
+                b.cur = eb
+                lower_stmts(b, else_b)
+                if not b.terminated(): b.set_term(MirTerm.TGoto(jb))
+                b.cur = jb
+            case HirStmt.SWhile(cond, body):
+                mut hdr  = b.new_block()
+                mut body_b = b.new_block()
+                mut exit_b = b.new_block()
+                b.set_term(MirTerm.TGoto(hdr))
+                b.cur = hdr
+                b.set_term(MirTerm.TBranch(cond, body_b, exit_b))
+                b.cur = body_b
+                lower_stmts(b, body)
+                if not b.terminated(): b.set_term(MirTerm.TGoto(hdr))
+                b.cur = exit_b
+            case _:
+                pass    # other statement kinds: not yet lowered (foundation)
+        i = i + 1
+
+pub def lower_function(hf: HirFunction) -> MirFunction:
+    mut mf    = MirFunction()
+    mf.name   = hf.name
+    mf.params = Vec[str].init(hf.params.len)
+    mut pi = 0
+    while pi < hf.params.len:
+        mf.params.push(hf.params.get(pi).name)
+        pi = pi + 1
+    mut b  = MirBuilder.init()
+    b.cur  = b.new_block()           # entry block bb0
+    lower_stmts(b, hf.body)
+    if not b.terminated(): b.set_term(MirTerm.TReturnVoid())
+    mf.blocks = b.blocks
+    return mf
+
+pub def lower_program(hir: HirProgram) -> MirProgram:
+    mut mp = MirProgram.init()
+    mut i = 0
+    while i < hir.functions.len:
+        mp.functions.push(lower_function(hir.functions.get(i)))
+        i = i + 1
+    return mp
+
+# ── Dataflow: place liveness over the CFG ────────────────────────────────────
+# This is what the HIR scope-heuristic could NOT do: compute, on the real
+# control-flow graph, where each place is live — so drops/releases can later be
+# placed at true last-use per path (handling conditional moves/returns).
+# Conservative by design (over-approximates uses; skips a few exotic expr forms)
+# so liveness is never under-estimated — safe to drive drops on later.
+
+def set_contains(v: Vec[str], s: str) -> bool:
+    mut i = 0
+    while i < v.len:
+        if v.get(i) == s: return true
+        i = i + 1
+    return false
+
+def set_add(v: Vec[str], s: str) -> bool:
+    if set_contains(v, s): return false
+    v.push(s)
+    return true
+
+# Collect every identifier read anywhere in `e` into `out` (a use set).
+def collect_uses(e: Pointer[HirExpr], out: Vec[str]):
+    if e as usize == 0 as usize: return
+    match e.read():
+        case HirExpr.EIdent(nm, _, _): set_add(out, nm)
+        case HirExpr.EBinOp(_, l, r, _):
+            collect_uses(l, out)
+            collect_uses(r, out)
+        case HirExpr.EUnaryOp(_, x, _): collect_uses(x, out)
+        case HirExpr.ECall(callee, args, _):
+            collect_uses(callee, out)
+            mut i = 0
+            while i < args.len:
+                collect_uses(args.get(i), out)
+                i = i + 1
+        case HirExpr.EMethodCall(obj, _, args, _):
+            collect_uses(obj, out)
+            mut i = 0
+            while i < args.len:
+                collect_uses(args.get(i), out)
+                i = i + 1
+        case HirExpr.EPropAccess(obj, _, _): collect_uses(obj, out)
+        case HirExpr.EIndex(obj, idx, _):
+            collect_uses(obj, out)
+            collect_uses(idx, out)
+        case HirExpr.ECast(x, _): collect_uses(x, out)
+        case HirExpr.EAwait(x, _): collect_uses(x, out)
+        case HirExpr.EIfElse(c, t, f, _):
+            collect_uses(c, out)
+            collect_uses(t, out)
+            collect_uses(f, out)
+        case _: pass
+
+# Gather a block's used and defined places (over-approximating uses).
+def block_use_def(blk: MirBlock, uses: Vec[str], defs: Vec[str]):
+    mut i = 0
+    while i < blk.stmts.len:
+        match blk.stmts.get(i).read():
+            case MirStmt.MDeclare(p, val):
+                collect_uses(val, uses)
+                set_add(defs, p)
+            case MirStmt.MAssign(p, val):
+                collect_uses(val, uses)
+                set_add(defs, p)
+            case MirStmt.MEval(val): collect_uses(val, uses)
+        i = i + 1
+    match blk.term.read():
+        case MirTerm.TBranch(cond, _, _): collect_uses(cond, uses)
+        case MirTerm.TReturn(val): collect_uses(val, uses)
+        case _: pass
+
+def block_succs(blk: MirBlock, out: Vec[int]):
+    match blk.term.read():
+        case MirTerm.TGoto(n): out.push(n)
+        case MirTerm.TBranch(_, t, e):
+            out.push(t)
+            out.push(e)
+        case _: pass
+
+# A set of place names. Wrapped in a named class because nested generics
+# (`Vec[Vec[str]]`) lose their inner element type in the C backend, whereas
+# `Vec[LiveSet]` (a Vec of a named class) lowers correctly.
+#
+# All set operations are METHODS that touch `self.items` directly. Binding
+# `liveset.items` to a `mut` local instead would make the collection auto-drop
+# free that borrowed alias at scope exit, corrupting the LiveSet — so the
+# fixpoint below only ever calls these methods, never aliases `.items`.
+pub class LiveSet:
+    pub items: Vec[str]
+
+extend LiveSet:
+    pub def init() -> LiveSet:
+        mut s = LiveSet()
+        s.items = Vec[str].init(2)
+        return s
+
+    pub def has(self, s: str) -> bool:
+        mut i = 0
+        while i < self.items.len:
+            if self.items.get(i) == s: return true
+            i = i + 1
+        return false
+
+    pub def add(self, s: str) -> bool:    # returns true if newly added
+        if self.has(s): return false
+        self.items.push(s)
+        return true
+
+    # Add every member of `other`; return true if anything was new.
+    pub def union_in(self, other: LiveSet) -> bool:
+        mut changed = false
+        mut i = 0
+        while i < other.items.len:
+            if self.add(other.items.get(i)): changed = true
+            i = i + 1
+        return changed
+
+    # Add members of `src` that are NOT defined in `block`; return true if new.
+    pub def union_except(self, src: LiveSet, block: LiveSet) -> bool:
+        mut changed = false
+        mut i = 0
+        while i < src.items.len:
+            if not block.has(src.items.get(i)):
+                if self.add(src.items.get(i)): changed = true
+            i = i + 1
+        return changed
+
+# Backward liveness to fixpoint. Returns live-out sets per block (by block id).
+# Sets grow monotonically, so "anything added this round" detects the fixpoint.
+#   live_out[b] = U over successors s of live_in[s]
+#   live_in[b]  = uses[b] U (live_out[b] - defs[b])
+pub def compute_liveness(mf: MirFunction) -> Vec[LiveSet]:
+    mut n = mf.blocks.len
+    mut uses     = Vec[LiveSet].init(n)
+    mut defs     = Vec[LiveSet].init(n)
+    mut live_in  = Vec[LiveSet].init(n)
+    mut live_out = Vec[LiveSet].init(n)
+    mut i = 0
+    while i < n:
+        mut u = LiveSet.init()
+        mut d = LiveSet.init()
+        block_use_def(mf.blocks.get(i), u.items, d.items)
+        uses.push(u)
+        defs.push(d)
+        live_in.push(LiveSet.init())
+        live_out.push(LiveSet.init())
+        i = i + 1
+    mut changed = true
+    while changed:
+        changed = false
+        mut bi = n - 1
+        while bi >= 0:
+            mut blk = mf.blocks.get(bi)
+            mut sl  = Vec[int].init(2)
+            block_succs(blk, sl)
+            mut si = 0
+            while si < sl.len:
+                if live_out.get(bi).union_in(live_in.get(sl.get(si))): changed = true
+                si = si + 1
+            if live_in.get(bi).union_in(uses.get(bi)): changed = true
+            if live_in.get(bi).union_except(live_out.get(bi), defs.get(bi)): changed = true
+            bi = bi - 1
+    return live_out
+
+def set_str(v: Vec[str]) -> str:
+    mut s = "{"
+    mut i = 0
+    while i < v.len:
+        if i > 0: s = s + ", "
+        s = s + v.get(i)
+        i = i + 1
+    return s + "}"
+
+# ── Textual dump (for `--emit mir`) ──────────────────────────────────────────
+def term_str(t: Pointer[MirTerm]) -> str:
+    match t.read():
+        case MirTerm.TGoto(n):           return "goto bb" + n.to_str()
+        case MirTerm.TBranch(_, tt, ee): return "branch <cond> ? bb" + tt.to_str() + " : bb" + ee.to_str()
+        case MirTerm.TReturn(_):         return "return <expr>"
+        case MirTerm.TReturnVoid():      return "return"
+        case MirTerm.TUnset():           return "<unset>"
+    return "<?>"
+
+def stmt_str(s: Pointer[MirStmt]) -> str:
+    match s.read():
+        case MirStmt.MDeclare(p, _): return "let " + p + " = <expr>"
+        case MirStmt.MAssign(p, _):  return p + " = <expr>"
+        case MirStmt.MEval(_):       return "eval <expr>"
+    return "<?>"
+
+pub def dump_mir(mp: MirProgram) -> str:
+    mut out = ""
+    mut fi = 0
+    while fi < mp.functions.len:
+        mut f = mp.functions.get(fi)
+        out = out + "fn " + f.name + "(" + f.params.len.to_str() + " params), " + f.blocks.len.to_str() + " blocks:\n"
+        mut live = compute_liveness(f)
+        mut bi = 0
+        while bi < f.blocks.len:
+            mut blk = f.blocks.get(bi)
+            out = out + "  bb" + blk.id.to_str() + ":\n"
+            mut si = 0
+            while si < blk.stmts.len:
+                out = out + "    " + stmt_str(blk.stmts.get(si)) + "\n"
+                si = si + 1
+            out = out + "    " + term_str(blk.term) + "\n"
+            out = out + "    ; live_out " + set_str(live.get(blk.id).items) + "\n"
+            bi = bi + 1
+        fi = fi + 1
+    return out

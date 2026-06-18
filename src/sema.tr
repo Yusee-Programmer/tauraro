@@ -518,18 +518,26 @@ extend Sema:
             case _: pass
 
     pub def check_class_sendable_fields(self, c: ClassDef):
+        # Does the class carry the explicit unsafe-thread-safety assertion?
+        # `implements Sendable, UnsafeSendable` is Tauraro's `unsafe impl Send`:
+        # it lets a class hold a raw, opaque `Pointer` handle (whose contents the
+        # compiler cannot reason about) while still crossing thread boundaries.
+        # It is greppable and deliberate - not a silent blanket exemption.
+        mut has_unsafe = false
+        mut ui = 0
+        while ui < c.iface_names.len:
+            if c.iface_names.get(ui) == "UnsafeSendable": has_unsafe = true
+            ui = ui + 1
         mut cfi = 0
         while cfi < c.fields.len:
             mut fd = c.fields.get(cfi)
             if fd.ty as usize != 0 as usize:
                 mut fty = fd.ty.read()
                 if fty.name == "Pointer":
-                    # An opaque raw Pointer handle (e.g. a mutex/condvar-backed C
-                    # object wrapped by WaitGroup/Semaphore/Channel/...). The
-                    # compiler can't reason about its contents, so 'implements
-                    # Sendable' on the wrapping class is the author's explicit
-                    # thread-safety assertion (cf. Rust's `unsafe impl Send`).
-                    pass
+                    # A raw Pointer field is only allowed in a Sendable class when
+                    # the author has explicitly opted in via UnsafeSendable.
+                    if not has_unsafe:
+                        self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but holds a raw 'Pointer' field '" + fd.name + "', which the compiler cannot prove thread-safe.\n      FIX: If '" + c.name + "' wraps an internally-synchronized handle, assert it explicitly: 'implements Sendable, UnsafeSendable'.\n      Otherwise wrap the data in Mutex[T]/Atomic[T], or drop 'implements Sendable'.")
                 elif not self.is_sendable_type(fty.name):
                     self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but field '" + fd.name + ": " + fty.name + "' is not Sendable.\n      FIX: Wrap '" + fd.name + "' in Mutex[" + fty.name + "] for exclusive access, RwLock[" + fty.name + "] for reader-writer, or Atomic[T] for numeric/flag types.\n      Or remove 'implements Sendable' if '" + c.name + "' is only used on one thread.")
                 elif fty.name == "int" or fty.name == "float" or fty.name == "bool":
