@@ -1,5 +1,7 @@
 # 16 — Concurrency
 
+> **See also:** [Concurrency Guide — Models, Primitives, Patterns & Best Practices](advanced/07_concurrency_guide.md) for the full picture (OS threads vs green threads vs thread-per-core, a decision matrix, and best-practice combinations), and [`examples/concurrency/`](../../examples/concurrency/) for runnable examples of every pattern.
+
 ---
 
 ## Overview

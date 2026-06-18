@@ -4370,6 +4370,11 @@ static inline int _tr_tcp_connect_nb(const char* host, int port) {
 }
 #endif /* non-blocking socket API */
 
+/* Binary-safe non-blocking send: like _tr_tcp_send_nb but takes a raw byte
+ * pointer + explicit length (no NUL-terminated str), for framed protocols
+ * (e.g. WebSocket) whose payloads contain NUL bytes. */
+static inline int _tr_tcp_send_raw(int fd, char* buf, int len) { return _tr_tcp_send_nb(fd, buf, len); }
+
 /* -- Random (LCG-64) ------------------------------------------------------- */
 typedef struct { unsigned long long s; } _TrRng;
 static inline _TrRng* _tr_rng_new(long long seed) {
@@ -4675,6 +4680,61 @@ static inline char* _tr_sha256_bytes_of(char* input, int ilen) {
     memcpy(out,dig,32); return out;
 }
 
+/* ── SHA-1 + WebSocket accept key ─────────────────────────────────────────
+ * SHA-1 is only used for the RFC 6455 WebSocket handshake (it is NOT a secure
+ * hash and must not be used for anything else). _tr_ws_accept(key) computes
+ * base64(SHA1(key + WS_GUID)), the Sec-WebSocket-Accept response value. */
+typedef struct { uint32_t h[5]; uint64_t len; uint8_t buf[64]; size_t n; } _TrSHA1Ctx;
+static inline uint32_t _tr_sha1_rol(uint32_t v, int b){ return (v<<b)|(v>>(32-b)); }
+static inline void _tr_sha1_block(_TrSHA1Ctx* c, const uint8_t* p){
+    uint32_t w[80];
+    for(int i=0;i<16;i++) w[i]=((uint32_t)p[i*4]<<24)|((uint32_t)p[i*4+1]<<16)|((uint32_t)p[i*4+2]<<8)|((uint32_t)p[i*4+3]);
+    for(int i=16;i<80;i++) w[i]=_tr_sha1_rol(w[i-3]^w[i-8]^w[i-14]^w[i-16],1);
+    uint32_t a=c->h[0],b=c->h[1],cc=c->h[2],d=c->h[3],e=c->h[4];
+    for(int i=0;i<80;i++){
+        uint32_t f,k;
+        if(i<20){f=(b&cc)|((~b)&d);k=0x5A827999;}
+        else if(i<40){f=b^cc^d;k=0x6ED9EBA1;}
+        else if(i<60){f=(b&cc)|(b&d)|(cc&d);k=0x8F1BBCDC;}
+        else {f=b^cc^d;k=0xCA62C1D6;}
+        uint32_t t=_tr_sha1_rol(a,5)+f+e+k+w[i];
+        e=d;d=cc;cc=_tr_sha1_rol(b,30);b=a;a=t;
+    }
+    c->h[0]+=a;c->h[1]+=b;c->h[2]+=cc;c->h[3]+=d;c->h[4]+=e;
+}
+static inline void _tr_sha1_init(_TrSHA1Ctx* c){ c->h[0]=0x67452301;c->h[1]=0xEFCDAB89;c->h[2]=0x98BADCFE;c->h[3]=0x10325476;c->h[4]=0xC3D2E1F0;c->len=0;c->n=0; }
+static inline void _tr_sha1_update(_TrSHA1Ctx* c, const uint8_t* d, size_t len){
+    c->len += (uint64_t)len*8;
+    while(len){ size_t k=64-c->n; if(k>len)k=len; memcpy(c->buf+c->n,d,k); c->n+=k; d+=k; len-=k; if(c->n==64){ _tr_sha1_block(c,c->buf); c->n=0; } }
+}
+static inline void _tr_sha1_final(_TrSHA1Ctx* c, uint8_t* out){
+    uint64_t total = c->len;   /* message bit-length, fixed BEFORE padding bytes bump c->len */
+    uint8_t pad=0x80; _tr_sha1_update(c,&pad,1);
+    uint8_t z=0; while(c->n!=56) _tr_sha1_update(c,&z,1);
+    uint8_t lb[8]; for(int i=0;i<8;i++) lb[i]=(uint8_t)(total>>(56-i*8)); _tr_sha1_update(c,lb,8);
+    for(int i=0;i<5;i++){ out[i*4]=(uint8_t)(c->h[i]>>24);out[i*4+1]=(uint8_t)(c->h[i]>>16);out[i*4+2]=(uint8_t)(c->h[i]>>8);out[i*4+3]=(uint8_t)c->h[i]; }
+}
+static inline char* _tr_ws_accept(char* key){
+    static const char* GUID="258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    static const char* B64="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    _TrSHA1Ctx c; uint8_t dig[20];
+    _tr_sha1_init(&c);
+    if(key) _tr_sha1_update(&c,(const uint8_t*)key,strlen(key));
+    _tr_sha1_update(&c,(const uint8_t*)GUID,strlen(GUID));
+    _tr_sha1_final(&c,dig);
+    char* out=(char*)TAURARO_ALLOC(29); if(!out) return NULL;  /* 20 bytes -> 28 b64 chars + NUL */
+    int o=0;
+    for(int i=0;i<18;i+=3){
+        uint32_t v=((uint32_t)dig[i]<<16)|((uint32_t)dig[i+1]<<8)|dig[i+2];
+        out[o++]=B64[(v>>18)&63];out[o++]=B64[(v>>12)&63];out[o++]=B64[(v>>6)&63];out[o++]=B64[v&63];
+    }
+    /* final 2 bytes (18,19) -> 3 chars + '=' */
+    uint32_t v=((uint32_t)dig[18]<<16)|((uint32_t)dig[19]<<8);
+    out[o++]=B64[(v>>18)&63];out[o++]=B64[(v>>12)&63];out[o++]=B64[(v>>6)&63];out[o++]='=';
+    out[o]='\0';
+    return out;
+}
+
 /* ── HMAC-SHA256 ────────────────────────────────────────────────────────── */
 static inline char* _tr_hmac_sha256(char* key, int klen, char* msg) {
     uint8_t k[64]={0}; _TrSHA256Ctx ctx;
@@ -4803,11 +4863,37 @@ static inline void _tr_tls_close(char* h) {
     if(!h) return; _TrTLSConn* c=(_TrTLSConn*)h;
     SSL_shutdown(c->ssl);SSL_free(c->ssl);SSL_CTX_free(c->ctx);_TR_SOCK_CLOSE(c->fd);TAURARO_FREE(c);
 }
+/* ── Server side: one SSL_CTX (cert+key), one _TrTLSConn per accepted fd ──
+ * SSL_accept/read/write are blocking, so server TLS is for the thread-per-
+ * connection model (listen_tls), where blocking a worker thread is fine. */
+static inline char* _tr_tls_server_new(char* cert, char* key) {
+    static _Atomic int _tr_ssl_once_s = 0;
+    if (atomic_fetch_add(&_tr_ssl_once_s,1)==0){SSL_library_init();SSL_load_error_strings();OpenSSL_add_all_algorithms();}
+    SSL_CTX* ctx=SSL_CTX_new(TLS_server_method());
+    if(!ctx) return NULL;
+    if(SSL_CTX_use_certificate_chain_file(ctx,cert)<=0){SSL_CTX_free(ctx);return NULL;}
+    if(SSL_CTX_use_PrivateKey_file(ctx,key,SSL_FILETYPE_PEM)<=0){SSL_CTX_free(ctx);return NULL;}
+    return (char*)ctx;
+}
+static inline char* _tr_tls_accept(char* ctxh, int fd) {
+    if(!ctxh) return NULL;
+    SSL* ssl=SSL_new((SSL_CTX*)ctxh); if(!ssl) return NULL;
+    SSL_set_fd(ssl,fd);
+    if(SSL_accept(ssl)!=1){SSL_free(ssl);return NULL;}
+    _TrTLSConn* c=(_TrTLSConn*)TAURARO_ALLOC(sizeof(_TrTLSConn));
+    if(!c){SSL_free(ssl);return NULL;}
+    c->ctx=NULL; c->ssl=ssl; c->fd=fd;   /* ctx is shared/server-owned, not freed per-conn */
+    return (char*)c;
+}
+static inline void _tr_tls_server_free(char* ctxh) { if(ctxh) SSL_CTX_free((SSL_CTX*)ctxh); }
 #else
 static inline char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
 static inline int   _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
 static inline char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
 static inline void  _tr_tls_close(char* h)          { (void)h; }
+static inline char* _tr_tls_server_new(char* c, char* k) { (void)c;(void)k; return NULL; }
+static inline char* _tr_tls_accept(char* x, int fd) { (void)x;(void)fd; return NULL; }
+static inline void  _tr_tls_server_free(char* x) { (void)x; }
 #endif
 
 /* ═══════════════════════════════════════════════════════════════════════════

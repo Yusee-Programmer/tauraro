@@ -1,0 +1,42 @@
+# Concurrency 02 — Shared mutable state (Mutex & RwLock)
+#
+# SCENARIO: many threads update one compound value (a running total) and many
+# threads read a config value.
+#
+# - Atomic covers simple counters; for COMPOUND state (read-modify-write of a
+#   bigger structure, or several fields kept consistent) use Mutex[T].
+# - RwLock[T] when reads vastly outnumber writes: many readers OR one writer.
+
+# Mutex guards a shared accumulator. .get() locks + reads, .set() writes +
+# unlocks. The compiler auto-unlocks at scope exit if you only .get().
+def add_to_total(m: Mutex[int], amount: int) -> void:
+    mut cur = m.get()
+    m.set(cur + amount)
+
+# RwLock readers take a shared lock; writers take it exclusively.
+def reader(rw: RwLock[int]) -> void:
+    mut v = rw.read()
+    rw.read_unlock()
+    print("  reader saw " + v.to_str())
+
+async def main():
+    print("=== Mutex[int] (compound update) ===")
+    mut total: Mutex[int] = Mutex.init(0)
+    task_group:
+        spawn add_to_total(total, 10)
+        spawn add_to_total(total, 20)
+        spawn add_to_total(total, 30)
+    mut final = total.get()      # 60
+    total.unlock()
+    print("total after 3 threads = " + final.to_str())
+
+    print("=== RwLock[int] (read-heavy) ===")
+    mut cfg: RwLock[int] = RwLock.init(42)
+    task_group:
+        spawn reader(cfg)
+        spawn reader(cfg)
+        spawn reader(cfg)
+    # A writer takes the lock exclusively:
+    mut old = cfg.write()
+    cfg.write_set(100)
+    print("config updated " + old.to_str() + " -> 100")

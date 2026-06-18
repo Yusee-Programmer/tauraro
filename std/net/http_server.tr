@@ -332,6 +332,82 @@ extend HttpConn:
     pub def send_status(self, status: int):
         HttpConn.send_text(self, status, "")
 
+    # ── Streaming responses (HTTP/1.1 chunked transfer-encoding) ──────────────
+    # For responses whose length isn't known up front, or that are produced
+    # incrementally (large files, live feeds): begin_chunked() sends the status
+    # line + headers, write_chunk() emits each piece, end_chunked() terminates.
+    # The body is never buffered whole in memory. The connection stays usable
+    # for keep-alive afterwards (chunked encoding is self-delimiting).
+    #
+    #   c.begin_chunked(200, "text/plain")
+    #   while more: c.write_chunk(next_piece())
+    #   c.end_chunked()
+    pub def begin_chunked(self, status: int, content_type: str):
+        if self._closed: return
+        mut sb = StringBuilder.init(128)
+        sb.append("HTTP/1.1 ")
+        mut ss = Fmt.int_to_str(status)
+        sb.append(ss)
+        unsafe: _tr_c_free(ss as Pointer[char])
+        sb.append(" OK\r\nContent-Type: ")
+        sb.append(content_type)
+        sb.append("\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n")
+        mut wire = sb.to_owned()
+        sb.free()
+        self._stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
+        self.last_status = status
+
+    # Emit one chunk of a chunked response. Empty data is ignored (a 0-length
+    # chunk would prematurely terminate the response - use end_chunked()).
+    pub def write_chunk(self, data: str):
+        if self._closed: return
+        mut n = Str.len(data)
+        if n == 0: return
+        mut sb = StringBuilder.init(n + 16)
+        mut hx = Fmt.int_to_hex(n)
+        sb.append(hx)
+        unsafe: _tr_c_free(hx as Pointer[char])
+        sb.append("\r\n")
+        sb.append(data)
+        sb.append("\r\n")
+        mut wire = sb.to_owned()
+        sb.free()
+        self._stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
+
+    # Terminate a chunked response (the final zero-length chunk).
+    pub def end_chunked(self):
+        if self._closed: return
+        self._stream.send("0\r\n\r\n")
+
+    # ── Server-Sent Events (text/event-stream over chunked) ───────────────────
+    # begin_sse() opens an event stream; send_event() pushes one `data:` event.
+    # The handler typically loops sending events until the client disconnects
+    # (a send returning <= 0). Built on chunked encoding so it works over the
+    # existing keep-alive connection.
+    #
+    #   c.begin_sse()
+    #   c.send_event("hello")
+    #   c.send_event("{\"tick\":1}")
+    pub def begin_sse(self):
+        if self._closed: return
+        mut hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
+        self._stream.send(hdr)
+        self.last_status = 200
+
+    # Push a single SSE event carrying `data` (sent as one chunk: "data: ...\n\n").
+    pub def send_event(self, data: str):
+        if self._closed: return
+        mut sb = StringBuilder.init(Str.len(data) + 8)
+        sb.append("data: ")
+        sb.append(data)
+        sb.append("\n\n")
+        mut ev = sb.to_owned()
+        sb.free()
+        HttpConn.write_chunk(self, ev)
+        unsafe: _tr_c_free(ev as Pointer[char])
+
     # Redirect to another URL.
     pub def redirect(self, url: str, permanent: bool):
         mut code = 302

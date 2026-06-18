@@ -1,0 +1,37 @@
+# Concurrency 05 — Green threads via the Coro API (cooperative, 1 OS thread)
+#
+# SCENARIO: run many lightweight tasks on ONE OS thread. Green threads are the
+# engine behind async servers (one per connection). They are cheap (no OS
+# thread each) and cooperative: a task runs until it `yield`s or `await`s a
+# resource, then the scheduler picks the next ready task.
+#
+# Coro.spawn(fn, arg)   start a detached green thread (fn: def(Pointer[char]))
+# Coro.yield_now()      give other ready tasks a turn
+# Coro.sleep_ms(ms)     park on a timer, yielding the worker (non-blocking)
+# Coro.run()            drive the scheduler until every spawned task finishes
+#
+# This is the foundation of thread-per-core servers: one worker thread runs a
+# Coro scheduler + a reactor (epoll/kqueue/WSAPoll); see watax `listen_async`
+# and bench/tau_server.tr for the networked version.
+
+from std.async.coro import Coro
+
+# A green task. It receives an opaque Pointer[char] arg (here used as a small
+# int id). It cooperatively yields between steps so peers interleave.
+def task(arg: Pointer[char]):
+    mut id: int = 0
+    unsafe: id = arg as int
+    mut step = 0
+    while step < 3:
+        print("  task " + id.to_str() + " step " + step.to_str())
+        Coro.yield_now()        # cooperative hand-off to other green threads
+        step = step + 1
+
+def main():
+    print("=== 3 cooperative green threads, interleaved on 1 thread ===")
+    mut i = 1
+    while i <= 3:
+        unsafe: Coro.spawn(task as Pointer[char], i as Pointer[char])
+        i = i + 1
+    Coro.run()                  # run all tasks to completion
+    print("all green threads finished")

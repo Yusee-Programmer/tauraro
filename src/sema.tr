@@ -523,7 +523,14 @@ extend Sema:
             mut fd = c.fields.get(cfi)
             if fd.ty as usize != 0 as usize:
                 mut fty = fd.ty.read()
-                if not self.is_sendable_type(fty.name):
+                if fty.name == "Pointer":
+                    # An opaque raw Pointer handle (e.g. a mutex/condvar-backed C
+                    # object wrapped by WaitGroup/Semaphore/Channel/...). The
+                    # compiler can't reason about its contents, so 'implements
+                    # Sendable' on the wrapping class is the author's explicit
+                    # thread-safety assertion (cf. Rust's `unsafe impl Send`).
+                    pass
+                elif not self.is_sendable_type(fty.name):
                     self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but field '" + fd.name + ": " + fty.name + "' is not Sendable.\n      FIX: Wrap '" + fd.name + "' in Mutex[" + fty.name + "] for exclusive access, RwLock[" + fty.name + "] for reader-writer, or Atomic[T] for numeric/flag types.\n      Or remove 'implements Sendable' if '" + c.name + "' is only used on one thread.")
                 elif fty.name == "int" or fty.name == "float" or fty.name == "bool":
                     self.warnings.push("[T-3] Sendable class '" + c.name + "' has primitive field '" + fd.name + ": " + fty.name + "' that may cause data races if mutated from multiple threads.\n      FIX: Use 'Atomic[" + fty.name + "]' for safe concurrent mutation, or ensure this field is written only before the object is shared across threads.")
@@ -1534,6 +1541,23 @@ extend Sema:
 
     pub def analyze(self, prog: Program) -> HirProgram:
         mut hp = HirProgram.init()
+
+        # Pre-register every class/actor name so `extend T:` blocks attach their
+        # methods regardless of declaration/import order. Without this, an
+        # `extend T` processed before T's own `class T` decl (e.g. T lives in a
+        # module the entry file imports *after* the extending module) silently
+        # drops its methods, because register_decl only attaches when
+        # self.classes already contains the target. Inserting the same ClassDef
+        # objects up front makes attachment order-independent.
+        mut ppi = 0
+        while ppi < prog.decls.len:
+            match prog.decls.get(ppi).read():
+                case Decl.DClass(c):
+                    if not self.classes.contains(c.name): self.classes.insert(c.name, c)
+                case Decl.DActor(c):
+                    if not self.classes.contains(c.name): self.classes.insert(c.name, c)
+                case _: pass
+            ppi = ppi + 1
 
         mut i = 0
         while i < prog.decls.len:

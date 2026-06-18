@@ -4,6 +4,8 @@
 # held simultaneously.  acquire() blocks when count == 0.
 # release() increments the count and wakes one waiting thread.
 
+from std.async.send import Sendable
+
 extern "C":
     def _tr_sema_new_h(init: int, maxv: int) -> Pointer[char]
     def _tr_sema_acquire_h(s: Pointer[char])
@@ -12,7 +14,7 @@ extern "C":
     def _tr_sema_release_h(s: Pointer[char])
     def _tr_sema_free_h(s: Pointer[char])
 
-pub class Semaphore:
+pub class Semaphore implements Sendable:
     pub handle: Pointer[char]
 
 extend Semaphore:

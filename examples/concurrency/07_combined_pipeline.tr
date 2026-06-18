@@ -1,0 +1,53 @@
+# Concurrency 07 — A real-world combination (fan-out work pipeline)
+#
+# SCENARIO: a job queue processed by a fixed set of worker threads, with live
+# metrics. This is the bread-and-butter server/batch pattern, and it shows the
+# RIGHT way to combine primitives:
+#
+#   Chan[int]   — the job queue (decouples producer from workers; back-pressure
+#                 from the bounded capacity)
+#   spawn       — N worker OS threads pull jobs concurrently (true parallelism)
+#   WaitGroup   — knows when every worker has drained the queue and exited
+#   Atomic[int] — lock-free metrics (jobs processed, running total)
+#
+# Producer closes the channel -> each worker's `for job in ch` ends -> worker
+# signals the WaitGroup -> main proceeds once all workers are done.
+
+from std.async.waitgroup import WaitGroup
+
+def producer(ch: Chan[int]) -> void:
+    mut i = 1
+    while i <= 10:
+        ch.send(i)          # jobs 1..10
+        i = i + 1
+    ch.close()              # signal "no more work"
+
+def worker(ch: Chan[int], processed: Atomic[int], total: Atomic[int], wg: WaitGroup) -> void:
+    for job in ch:          # workers race to pull jobs; each job goes to one worker
+        processed.increment()
+        total.add(job)
+    wg.done()               # this worker has drained its share and is exiting
+
+async def main():
+    mut ch: Chan[int]        = Chan.init(4)     # bounded queue (back-pressure)
+    mut processed: Atomic[int] = Atomic.new(0)
+    mut total: Atomic[int]     = Atomic.new(0)
+    mut wg = WaitGroup.new()
+    wg.add(3)                                   # 3 workers
+
+    # Start workers + producer as detached threads; the WaitGroup (not the
+    # thread handles) defines "done".
+    spawn worker(ch, processed, total, wg)
+    spawn worker(ch, processed, total, wg)
+    spawn worker(ch, processed, total, wg)
+    spawn producer(ch)
+
+    wg.wait()                                   # block until all 3 workers exit
+
+    print("jobs processed = " + processed.load().to_str())   # 10
+    print("sum of jobs     = " + total.load().to_str())      # 1+...+10 = 55
+    print("(work was split across 3 worker threads)")
+
+    wg.free()
+    processed.free()
+    total.free()

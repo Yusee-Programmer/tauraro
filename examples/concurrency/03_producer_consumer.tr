@@ -1,0 +1,46 @@
+# Concurrency 03 — Producer/consumer & worker pool (Chan[T] + ThreadPool)
+#
+# SCENARIO 1: one producer streams jobs through a typed channel to one
+#             consumer; the producer closes the channel to signal "done".
+# SCENARIO 2: a bounded ThreadPool fans work out across a fixed number of
+#             threads (caps concurrency + memory vs. unbounded `spawn`).
+#
+# Chan[T] is the backbone of pipelines and fan-out/fan-in: senders push,
+# receivers `for v in ch` until the channel is closed and drained.
+
+def producer(ch: Chan[int]) -> void:
+    mut i = 1
+    while i <= 5:
+        ch.send(i * 100)     # 100,200,300,400,500
+        i = i + 1
+    ch.close()               # closing lets the consumer's `for` loop end
+
+def consumer(ch: Chan[int], result: Mutex[int]) -> void:
+    mut sum = 0
+    for v in ch:             # iterates until the channel is closed + drained
+        sum = sum + v
+    result.set(sum)          # 1500
+
+def pool_job(id: int) -> void:
+    print("  pool job " + id.to_str() + " done")
+
+async def main():
+    print("=== Chan[T] producer/consumer ===")
+    mut ch: Chan[int] = Chan.init(4)        # buffered channel, capacity 4
+    mut result: Mutex[int] = Mutex.init(0)
+    task_group:
+        spawn producer(ch)
+        spawn consumer(ch, result)
+    mut total = result.get()
+    result.unlock()
+    print("consumer summed = " + total.to_str())    # 1500
+
+    print("=== ThreadPool (bounded fan-out) ===")
+    mut pool: ThreadPool = ThreadPool.new(3)  # at most 3 threads run at once
+    mut j = 1
+    while j <= 6:
+        pool.spawn(pool_job, j)
+        j = j + 1
+    pool.wait()                                # block until all jobs finish
+    pool.free()
+    print("all pool jobs done")
