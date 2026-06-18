@@ -44,6 +44,10 @@ pub class TcpStream:
     pub host:        str
     pub port:        int
     pub _wb:         bool   # last nb op would-block flag
+    pub async_mode:  bool   # when true, recv()/send() transparently use the
+                            # reactor (recv_async/send_async) so existing
+                            # blocking-style code runs cooperatively on a green
+                            # thread without modification (see App.listen_async).
 
 extend TcpStream:
     # ── Blocking API ─────────────────────────────────────────────────────────
@@ -60,16 +64,19 @@ extend TcpStream:
         if s.fd >= 0: s.connected = true
         return s
 
-    # Send data (blocking).  Returns bytes sent, or -1 on error.
+    # Send data (blocking, or cooperative non-blocking in async_mode).
+    # Returns bytes sent, or -1 on error.
     pub def send(self, data: str) -> int:
+        if self.async_mode: return self.send_async(data)
         if not self.connected: return -1
         mut p = data as Pointer[char]
         mut n = 0
         while p.offset(n).read() as int != 0: n = n + 1
         return _tr_tcp_send(self.fd, data, n)
 
-    # Receive up to cap bytes (blocking).
+    # Receive up to cap bytes (blocking, or cooperative non-blocking in async_mode).
     pub def recv(self, cap: int) -> str:
+        if self.async_mode: return self.recv_async(cap)
         if not self.connected: return ""
         mut buf = _tr_c_malloc(cap + 1)
         mut n   = _tr_tcp_recv(self.fd, buf, cap)
@@ -152,12 +159,18 @@ extend TcpStream:
         return ""   # unreachable (loop only exits via return); satisfies F-3
 
     # Send all of `data`, awaiting writability as the send buffer drains.
+    # Fast path sends the whole buffer in one send_nb with NO allocation (the
+    # common case for small responses); only a partial send falls back to
+    # slicing the remainder, and that slice is freed to avoid a per-call leak.
     pub def send_async(self, data: str) -> int:
         if not self.nonblocking: self.set_nonblocking()
         mut p = data as Pointer[char]
         mut total = 0
         while p.offset(total).read() as int != 0: total = total + 1
+        mut n0 = self.send_nb(data)
+        if not self._wb and n0 >= total: return n0
         mut sent = 0
+        if not self._wb and n0 > 0: sent = n0
         while sent < total:
             mut chunk: str = data.slice(sent, total)
             mut n = self.send_nb(chunk)

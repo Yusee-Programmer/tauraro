@@ -535,13 +535,16 @@ extend HttpParser:
             if q >= 0:
                 req.path  = Str.slice(full_path, 0, q)
                 req.query = Str.slice(full_path, q + 1, Str.len(full_path))
-                if not full_path_is_after:
-                    unsafe: _tr_c_free(full_path as Pointer[char])
-                unsafe: _tr_c_free(after as Pointer[char])
             else:
-                req.path  = full_path
-                if not full_path_is_after:
-                    unsafe: _tr_c_free(after as Pointer[char])
+                # A fresh slice, NOT `req.path = full_path`: storing the borrowed
+                # `full_path` local into a field retains it (rc=2) while the local
+                # is never auto-dropped (#53), so the path string leaked every
+                # request. A fresh slice is owned outright (rc=1) and freed by
+                # free_owned(). Both branches now share the same cleanup below.
+                req.path  = Str.slice(full_path, 0, Str.len(full_path))
+            if not full_path_is_after:
+                unsafe: _tr_c_free(full_path as Pointer[char])
+            unsafe: _tr_c_free(after as Pointer[char])
         if request_ln_owned:
             unsafe: _tr_c_free(request_ln as Pointer[char])
         unsafe: _tr_c_free(hdr_sec as Pointer[char])
@@ -550,14 +553,17 @@ extend HttpParser:
         while hdr_pos < hdr_len:
             mut tail     = Str.slice(rest_hdrs, hdr_pos, hdr_len)
             mut line_end = Str.index_of(tail, "\r\n")
-            mut line     = tail
-            mut line_is_tail = true
+            mut line_len = line_end
             if line_end >= 0:
-                line    = Str.slice(tail, 0, line_end)
-                line_is_tail = false
                 hdr_pos = hdr_pos + line_end + 2
             else:
-                hdr_pos = hdr_len
+                line_len = Str.len(tail)
+                hdr_pos  = hdr_len
+            # Always a FRESH slice (never `line = tail`): aliasing the borrowed
+            # `tail` local retains it (rc=2) and the final header line - which has
+            # no trailing CRLF - was then never freed (leaked one str/request),
+            # because the local is not auto-dropped (#53).
+            mut line  = Str.slice(tail, 0, line_len)
             mut colon = Str.index_of(line, ": ")
             if colon >= 0:
                 # Header names are case-insensitive: store lowercased so lookups
@@ -565,14 +571,22 @@ extend HttpParser:
                 mut hname_raw = Str.slice(line, 0, colon)
                 mut hname     = Str.to_lower(hname_raw)
                 unsafe: _tr_c_free(hname_raw as Pointer[char])
-                mut hvalue = Str.slice(line, colon + 2, Str.len(line))
-                req.headers.insert(hname, hvalue)
+                # Pass the value slice INLINE (a fresh rc=1 expression), not via
+                # a named local: dict_val_arg hoists a fresh str value to a temp
+                # that flush_wraps releases, netting the stored box to rc=1 so
+                # Dict_free_strval frees it at free_owned(). A named local would
+                # instead rely on str-local auto-drop (#53, not yet implemented)
+                # to balance the box's retain, leaking the value at rc=2.
+                req.headers.insert(hname, Str.slice(line, colon + 2, Str.len(line)))
                 # Dict_set() strdup()s the key, so the lowercased copy we just
                 # allocated is no longer needed once it's been copied in.
                 unsafe: _tr_c_free(hname as Pointer[char])
-            if not line_is_tail:
-                unsafe: _tr_c_free(line as Pointer[char])
+            unsafe: _tr_c_free(line as Pointer[char])
             unsafe: _tr_c_free(tail as Pointer[char])
+        # rest_hdrs is a heap Str.slice (the header section after the request
+        # line); free its buffer now that all headers have been parsed out of
+        # it. (When first_line < 0 it is the "" literal, a no-op release.)
+        unsafe: _tr_c_free(rest_hdrs as Pointer[char])
         return req
 
     # Content-Length value from a raw header section, or 0 when absent.
@@ -621,7 +635,12 @@ extend HttpServer:
         s.port       = port
         s._running   = false
         s._router    = HttpRouter.init()
-        s._recv_buf  = 65536
+        # 16 KiB: per-recv() chunk size + StringBuilder seed capacity. recv()
+        # mallocs (cap+1) on every call, so under high concurrency each in-flight
+        # green thread holds one such buffer - 16 KiB keeps that transient small
+        # while still reading typical request headers in a single recv(); the
+        # StringBuilder grows automatically for larger requests/bodies.
+        s._recv_buf  = 16384
         return s
 
     # Attach a pre-built router (optional — use server.router() to get the internal one).

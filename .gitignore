@@ -9,6 +9,7 @@
 # Generated build directories (tauraroc output, cargo, etc.)
 build/
 target/
+bench/
 
 # Runtime headers copied into benchmark build dirs
 **/tauraro_rt.h

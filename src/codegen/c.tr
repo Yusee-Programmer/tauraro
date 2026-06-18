@@ -6257,6 +6257,25 @@ pub class CGenerator:
 
         self.w("#include \"" + inc_prefix + "tauraro_types.h\"\n\n")
 
+        # -- Register ALL module-level globals into global_vars FIRST -----------
+        # Module .c files are generated before generate_main_c (which also
+        # registers these). Without this, an assignment to a module-level global
+        # inside a function in THIS module (e.g. `_WAX_APP = self`) would be
+        # mis-emitted as a shadowing `__auto_type` local instead of a write to
+        # the (extern) file-scope global. prog.top_level_stmts holds every
+        # module's globals merged, so registering them here is correct.
+        mut _gvm = 0
+        if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.top_level_stmts as usize):
+            while _gvm < prog.top_level_stmts.len:
+                match prog.top_level_stmts.get(_gvm).read():
+                    case HirStmt.SLet(_gvn, _, _, _, _, _, _): self.global_vars.insert(_gvn, true)
+                    case HirStmt.SAssign(_gvt, _):
+                        match _gvt.read():
+                            case HirExpr.EIdent(_gvn2, _, _): self.global_vars.insert(_gvn2, true)
+                            case _: pass
+                    case _: pass
+                _gvm = _gvm + 1
+
         # -- Forward declarations for private (non-pub) functions in this module -
         # Public functions are already declared in tauraro_types.h.
         # Private helpers defined after their call sites need a prototype here

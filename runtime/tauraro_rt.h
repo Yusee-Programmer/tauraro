@@ -149,17 +149,55 @@
     do { if (!(cond)) { fprintf(stderr, "assertion failed: %s\n  message: %s\n  at %s:%d\n", #cond, (msg), __FILE__, __LINE__); abort(); } } while(0)
 #endif
 
+/* Opt-in live-allocation counter for leak bisection. Compile with
+ * -DTAURARO_MEMCOUNT to enable; _tr_report_mem() then also prints the net
+ * number of outstanding (alloc'd minus freed) heap blocks, so a steady
+ * per-request delta localizes a leak by object count. Zero-cost otherwise. */
+#ifdef TAURARO_MEMCOUNT
+#ifdef _TR_MAIN
+long _tr_live_allocs = 0;
+long _tr_live_dicts = 0;
+long _tr_live_lists = 0;
+long _tr_live_strs = 0;
+#else
+extern long _tr_live_allocs;
+extern long _tr_live_dicts;
+extern long _tr_live_lists;
+extern long _tr_live_strs;
+#endif
+#define _TR_MEMCOUNT_INC() (_tr_live_allocs++)
+#define _TR_MEMCOUNT_DEC() (_tr_live_allocs--)
+#define _TR_MEMCOUNT_DICT_INC() (_tr_live_dicts++)
+#define _TR_MEMCOUNT_DICT_DEC() (_tr_live_dicts--)
+#define _TR_MEMCOUNT_LIST_INC() (_tr_live_lists++)
+#define _TR_MEMCOUNT_LIST_DEC() (_tr_live_lists--)
+#define _TR_MEMCOUNT_STR_INC() (_tr_live_strs++)
+#define _TR_MEMCOUNT_STR_DEC() (_tr_live_strs--)
+#else
+#define _TR_MEMCOUNT_INC() ((void)0)
+#define _TR_MEMCOUNT_DEC() ((void)0)
+#define _TR_MEMCOUNT_DICT_INC() ((void)0)
+#define _TR_MEMCOUNT_DICT_DEC() ((void)0)
+#define _TR_MEMCOUNT_LIST_INC() ((void)0)
+#define _TR_MEMCOUNT_LIST_DEC() ((void)0)
+#define _TR_MEMCOUNT_STR_INC() ((void)0)
+#define _TR_MEMCOUNT_STR_DEC() ((void)0)
+#endif
+
 // Wrappers for core library to avoid signature conflicts
 static inline void* _tr_c_malloc(size_t size) {
-    return TAURARO_ALLOC(size);
+    void* p = TAURARO_ALLOC(size);
+    if (p) _TR_MEMCOUNT_INC();
+    return p;
 }
 static inline void* _tr_c_calloc(size_t count, size_t size) {
     void* p = TAURARO_CALLOC(count, size);
     if (!p && count * size > 0) { _TR_OOM_ABORT(); }
+    if (p) _TR_MEMCOUNT_INC();
     return p;
 }
 static inline void _tr_free(void* p) {
-    if (p) TAURARO_FREE(p);
+    if (p) { _TR_MEMCOUNT_DEC(); TAURARO_FREE(p); }
 }
 static inline void _tr_c_free(void* ptr) { _tr_free(ptr); }
 
@@ -174,11 +212,17 @@ static inline void _tr_eprint(char* s) { (void)s; }
 #endif
 
 static inline void* _tr_c_realloc(void* ptr, size_t size) {
-    return TAURARO_REALLOC(ptr, size);
+    void* p = TAURARO_REALLOC(ptr, size);
+    /* realloc(NULL, n) acts as malloc -> a new live block; realloc of an
+     * existing block frees the old internally (no _tr_free) and keeps the
+     * same logical block, so only the fresh-allocation case is counted. */
+    if (!ptr && p) _TR_MEMCOUNT_INC();
+    return p;
 }
 static inline void* _tr_checked_alloc(size_t sz) {
     void* p = TAURARO_CALLOC(1, sz);
     if (!p && sz > 0) { _TR_OOM_ABORT(); }
+    if (p) _TR_MEMCOUNT_INC();
     return p;
 }
 /* Heap-allocated empty C string. Used by char*-returning helpers that need
@@ -188,6 +232,7 @@ static inline void* _tr_checked_alloc(size_t sz) {
 static inline char* _tr_empty_heap_str(void) {
     char* e = (char*)TAURARO_ALLOC(1);
     e[0] = '\0';
+    _TR_MEMCOUNT_INC();
     return e;
 }
 /* ── Refcounted string (TrStr): fat-pointer str representation ──
@@ -229,6 +274,7 @@ static inline TrStr _tr_str_new(size_t len) {
     t.data[len] = '\0';
     t.rc = (long*)_tr_checked_alloc(sizeof(long));
     *t.rc = 1;
+    _TR_MEMCOUNT_STR_INC();
     return t;
 }
 
@@ -240,6 +286,7 @@ static inline TrStr _tr_str_retain(TrStr s) {
 static inline void _tr_str_release(TrStr s) {
     if (s.rc) {
         if (--(*s.rc) == 0) {
+            _TR_MEMCOUNT_STR_DEC();
             _tr_free(s.data);
             _tr_free((void*)s.rc);
         }
@@ -256,6 +303,7 @@ static inline TrStr _tr_str_wrap_impl(char* owned_data) {
     t.data = owned_data;
     t.rc = (long*)_tr_checked_alloc(sizeof(long));
     *t.rc = 1;
+    _TR_MEMCOUNT_STR_INC();
     return t;
 }
 static inline TrStr _tr_str_wrap_passthrough(TrStr s) { return s; }
@@ -557,7 +605,11 @@ static inline void _tr_report_mem(const char* label) { (void)label; }
 static inline void _tr_report_mem(const char* label) {
     PROCESS_MEMORY_COUNTERS pmc;
     GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
+#ifdef TAURARO_MEMCOUNT
+    fprintf(stderr, "%s: %zu bytes, %ld allocs, %ld dicts, %ld lists, %ld strs\n", label, (size_t)pmc.WorkingSetSize, _tr_live_allocs, _tr_live_dicts, _tr_live_lists, _tr_live_strs);
+#else
     fprintf(stderr, "%s: %zu bytes\n", label, (size_t)pmc.WorkingSetSize);
+#endif
     fflush(stderr);
 }
 
@@ -3105,9 +3157,9 @@ static size_t _dict_hash(const char* k, size_t cap) {
     return h%cap;
 }
 static Dict* Dict_new(void) {
-    Dict* d=(Dict*)malloc(sizeof(Dict));
+    Dict* d=(Dict*)malloc(sizeof(Dict)); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_DICT_INC();
     d->cap=16; d->len=0;
-    d->buckets=(_DictNode**)calloc(16,sizeof(_DictNode*));
+    d->buckets=(_DictNode**)calloc(16,sizeof(_DictNode*)); _TR_MEMCOUNT_INC();
     return d;
 }
 static void Dict_set(Dict* d, char* key, void* val) {
@@ -3115,8 +3167,8 @@ static void Dict_set(Dict* d, char* key, void* val) {
     size_t i=_dict_hash(key,d->cap);
     _DictNode* n=d->buckets[i];
     while (n) { if (strcmp(n->key,key)==0) { n->value=val; return; } n=n->next; }
-    _DictNode* nd=(_DictNode*)malloc(sizeof(_DictNode));
-    nd->key=strdup(key); nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++;
+    _DictNode* nd=(_DictNode*)malloc(sizeof(_DictNode)); _TR_MEMCOUNT_INC();
+    nd->key=strdup(key); _TR_MEMCOUNT_INC(); nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++;
 }
 static void*     Dict_get(Dict* d, char* key) {
     if (!d||!key) return NULL;
@@ -3143,6 +3195,7 @@ static void      Dict_remove(Dict* d, char* key) {
 }
 static void      Dict_free(Dict* d) {
     if (!d) return;
+    _TR_MEMCOUNT_DICT_DEC();
     for (size_t i=0; i<d->cap; i++) {
         _DictNode* n=d->buckets[i];
         while (n) { _DictNode* nx=n->next; if(n->key) _tr_free(n->key); _tr_free(n); n=nx; }
@@ -3154,6 +3207,7 @@ static void      Dict_free(Dict* d) {
    free the box itself, before freeing the node/key/buckets/struct. */
 static void      Dict_free_strval(Dict* d) {
     if (!d) return;
+    _TR_MEMCOUNT_DICT_DEC();
     for (size_t i=0; i<d->cap; i++) {
         _DictNode* n=d->buckets[i];
         while (n) {
@@ -3270,10 +3324,10 @@ static inline void List_str_free(List_str* l) { if(l){ _tr_free(l->data); _tr_fr
  * Parallel to List_str (char**); element is the 16-byte TrStr fat
  * pointer. append() retains, free() releases every element. */
 typedef struct { TrStr* data; size_t len; size_t capacity; } List_TrStr;
-static inline List_TrStr* List_TrStr_new(void) { List_TrStr* l=(List_TrStr*)malloc(sizeof(List_TrStr)); l->data=(TrStr*)malloc(sizeof(TrStr)*8); l->len=0; l->capacity=8; return l; }
+static inline List_TrStr* List_TrStr_new(void) { List_TrStr* l=(List_TrStr*)malloc(sizeof(List_TrStr)); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_LIST_INC(); l->data=(TrStr*)malloc(sizeof(TrStr)*8); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_TrStr_append(List_TrStr* l, TrStr val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrStr*)realloc(l->data,sizeof(TrStr)*l->capacity); } l->data[l->len++]=_tr_str_retain(val); }
 static inline TrStr List_TrStr_pop(List_TrStr* l) { if(!l||l->len==0) return _tr_str_lit(""); l->len--; return l->data[l->len]; }
-static inline void List_TrStr_free(List_TrStr* l) { if(l){ for(size_t i=0;i<l->len;i++) _tr_str_release(l->data[i]); _tr_free(l->data); _tr_free(l); } }
+static inline void List_TrStr_free(List_TrStr* l) { if(l){ _TR_MEMCOUNT_LIST_DEC(); for(size_t i=0;i<l->len;i++) _tr_str_release(l->data[i]); _tr_free(l->data); _tr_free(l); } }
 /* Append without retaining: transfers ownership of `val`'s existing
  * reference to the list (used when `val` was just allocated with rc=1
  * specifically for this insertion, e.g. _tr_str_split tokens). */
@@ -3328,10 +3382,10 @@ static int64_t _tr_list_all_TrStr(List_TrStr* l, _tr_pred_trstr_fn p) {
 }
 
 typedef struct { void** data; size_t len; size_t capacity; } List_ptr;
-static inline List_ptr* List_ptr_new(void) { List_ptr* l=(List_ptr*)malloc(sizeof(List_ptr)); l->data=(void**)malloc(sizeof(void*)*8); l->len=0; l->capacity=8; return l; }
+static inline List_ptr* List_ptr_new(void) { List_ptr* l=(List_ptr*)malloc(sizeof(List_ptr)); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_LIST_INC(); l->data=(void**)malloc(sizeof(void*)*8); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_ptr_append(List_ptr* l, void* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(void**)realloc(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; }
 static inline void* List_ptr_pop(List_ptr* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
-static inline void List_ptr_free(List_ptr* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+static inline void List_ptr_free(List_ptr* l) { if(l){ _TR_MEMCOUNT_LIST_DEC(); _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { _Bool* data; size_t len; size_t capacity; } List_bool;
 static inline List_bool* List_bool_new(void) { List_bool* l=(List_bool*)malloc(sizeof(List_bool)); l->data=(_Bool*)malloc(sizeof(_Bool)*8); l->len=0; l->capacity=8; return l; }
