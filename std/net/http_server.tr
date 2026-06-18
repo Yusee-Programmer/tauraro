@@ -54,6 +54,7 @@ pub class HttpRequest:
     pub version:  str       # "HTTP/1.1" or "HTTP/1.0"
     pub version_owned: bool # true when `version` is a heap Str.slice (HttpParser.parse set it), not the init() literal
     pub recv_ms:  int       # Clock.now_ms() when this request was parsed (for timing middleware)
+    pub oversized: bool     # true when the declared Content-Length exceeded the server's body limit (handler should 413)
 
 extend HttpRequest:
     pub def init() -> HttpRequest:
@@ -68,6 +69,7 @@ extend HttpRequest:
         r.version    = "HTTP/1.1"
         r.version_owned = false
         r.recv_ms    = _tr_time_ms()
+        r.oversized  = false
         return r
 
     # Return a header value by name (case-insensitive), or "" when absent.
@@ -225,6 +227,7 @@ extend HttpResponse:
         elif self.status == 404:    sb.append("Not Found")
         elif self.status == 405:    sb.append("Method Not Allowed")
         elif self.status == 409:    sb.append("Conflict")
+        elif self.status == 413:    sb.append("Payload Too Large")
         elif self.status == 422:    sb.append("Unprocessable Entity")
         elif self.status == 429:    sb.append("Too Many Requests")
         elif self.status == 500:    sb.append("Internal Server Error")
@@ -627,6 +630,7 @@ pub class HttpServer:
     pub _running:    bool
     pub _router:     HttpRouter
     pub _recv_buf:   int
+    pub _max_body:   int   # reject request bodies larger than this many bytes (0 = unlimited)
 
 extend HttpServer:
     pub def init(host: str, port: int) -> HttpServer:
@@ -635,6 +639,10 @@ extend HttpServer:
         s.port       = port
         s._running   = false
         s._router    = HttpRouter.init()
+        # Default body cap: 8 MiB. Guards against a client sending a huge (or
+        # lying) Content-Length and exhausting memory. Raise via set_max_body()
+        # for large uploads, or set 0 to disable the cap.
+        s._max_body  = 8388608
         # 16 KiB: per-recv() chunk size + StringBuilder seed capacity. recv()
         # mallocs (cap+1) on every call, so under high concurrency each in-flight
         # green thread holds one such buffer - 16 KiB keeps that transient small
@@ -654,6 +662,12 @@ extend HttpServer:
     # Set the recv buffer size (default 64 KiB). Increase for large uploads.
     pub def set_recv_buf(self, bytes: int):
         self._recv_buf = bytes
+
+    # Set the maximum accepted request-body size in bytes (0 = unlimited).
+    # Requests whose Content-Length exceeds this are flagged oversized; the
+    # body read is also capped so an oversized/lying length can't exhaust memory.
+    pub def set_max_body(self, bytes: int):
+        self._max_body = bytes
 
     # Bind and listen. Returns true on success.
     pub def start(self) -> bool:
@@ -691,7 +705,14 @@ extend HttpServer:
         unsafe: _tr_c_free(hdr_for_clen as Pointer[char])
         mut have = Str.len(raw) - (header_end + 4)
         unsafe: _tr_c_free(raw as Pointer[char])
-        while have < clen:
+        # Cap how much body we accumulate: stop once we've read past the limit
+        # (plus the headers already buffered) so a huge/lying Content-Length
+        # cannot drive unbounded memory growth. read_next() flags the request
+        # oversized from the declared Content-Length and the handler returns 413.
+        mut cap_total = clen
+        if self._max_body > 0 and clen > self._max_body:
+            cap_total = self._max_body + 1
+        while have < cap_total:
             mut more = stream.recv(self._recv_buf)
             if Str.len(more) == 0: break
             sb.append(more)
@@ -714,6 +735,14 @@ extend HttpServer:
             return empty
         mut req = HttpParser.parse(raw)
         unsafe: _tr_c_free(raw as Pointer[char])
+        # Flag oversized requests from the (already-parsed) Content-Length header
+        # so the dispatch layer can reject them with 413 without trusting the
+        # truncated body that _read_full deliberately stopped accumulating.
+        if self._max_body > 0:
+            mut cl: str = req.header("content-length")
+            if Str.len(cl) > 0 and Str.parse_int(cl) > self._max_body:
+                req.oversized = true
+            unsafe: _tr_c_free(cl as Pointer[char])
         self._router.dispatch(req)
         return req
 
