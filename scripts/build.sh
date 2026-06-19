@@ -16,7 +16,7 @@ if [ "$(uname -m)" = "aarch64" ] && [ "$(uname -s)" = "Linux" ]; then
     echo "==> ARM64 Linux: installing musl-tools for portable binary"
     sudo apt-get install -y --no-install-recommends musl-tools
     mkdir -p "$HOME/.local/bin"
-    printf '#!/bin/sh\nexec musl-gcc -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700 "$@"\n' > "$HOME/.local/bin/gcc"
+    printf '#!/bin/sh\nexec musl-gcc -std=gnu11 -D_GNU_SOURCE "$@"\n' > "$HOME/.local/bin/gcc"
     chmod +x "$HOME/.local/bin/gcc"
     export PATH="$HOME/.local/bin:$PATH"
     STATIC_FLAG="--static"
@@ -26,16 +26,11 @@ fi
 if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" != "aarch64" ]; then
     mkdir -p "$HOME/.local/bin"
     if [ ! -f "$HOME/.local/bin/gcc" ]; then
-        printf '#!/bin/sh\nexec /usr/bin/gcc -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700 "$@"\n' > "$HOME/.local/bin/gcc"
+        printf '#!/bin/sh\nexec /usr/bin/gcc -std=gnu11 -D_GNU_SOURCE "$@"\n' > "$HOME/.local/bin/gcc"
         chmod +x "$HOME/.local/bin/gcc"
     fi
     export PATH="$HOME/.local/bin:$PATH"
 fi
-
-# Also override CC in the environment for tauraroc's compilation
-export CC="gcc"
-export CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700"
-export LDFLAGS="-lm -lpthread"
 
 echo "==> Compiling src/main.tr → ./tauraroc"
 "$BOOTSTRAP" src/main.tr -o tauraroc $STATIC_FLAG

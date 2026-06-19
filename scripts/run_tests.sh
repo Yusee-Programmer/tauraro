@@ -30,8 +30,28 @@ fi
 total=0
 failed=0
 failed_files=()
+skipped=0
+skipped_files=()
+
+# Detect ARM64 Linux - skip concurrency/async tests on this platform
+IS_ARM64_LINUX=false
+if [ "$(uname -m)" = "aarch64" ] && [ "$(uname -s)" = "Linux" ]; then
+    IS_ARM64_LINUX=true
+    echo "==> ARM64 Linux detected: skipping concurrency/async tests (ucontext not supported on this platform)"
+fi
 
 for f in "${FILES[@]}"; do
+    # Skip concurrency and async tests on ARM64 Linux
+    if [ "$IS_ARM64_LINUX" = true ]; then
+        basename=$(basename "$f")
+        if [[ "$basename" == "06_concurrency.tr" ]] || [[ "$basename" == "08_async.tr" ]]; then
+            skipped=$((skipped + 1))
+            skipped_files+=("$f (skipped on ARM64 Linux)")
+            echo "==> SKIP $f (ucontext not supported on ARM64 Linux)"
+            continue
+        fi
+    fi
+    
     total=$((total + 1))
     echo "==> $f"
     out=$("$TAURAROC" --run "$f" 2>&1)
@@ -127,7 +147,13 @@ fi
 
 echo ""
 echo "==================================="
-echo "Test files: $total, failed: $failed"
+echo "Test files: $total, failed: $failed, skipped: $skipped"
+if [ $skipped -gt 0 ]; then
+    echo "Skipped files:"
+    for f in "${skipped_files[@]}"; do
+        echo "  - $f"
+    done
+fi
 if [ $failed -gt 0 ]; then
     echo "Failed files:"
     for f in "${failed_files[@]}"; do
