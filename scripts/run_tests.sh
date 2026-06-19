@@ -90,8 +90,12 @@ CEOF
     cout=""
     if [ -n "$libfile" ]; then
         "$CCBIN" "$libdir/consumer.c" -I"$libdir" "$libfile" -o "$libdir/consumer" >/dev/null 2>&1
-        [ -f "$libdir/consumer" ] && cout=$("$libdir/consumer" 2>/dev/null)
-        [ -z "$cout" ] && [ -f "$libdir/consumer.exe" ] && cout=$("$libdir/consumer.exe" 2>/dev/null)
+        # Run from the lib dir with it on the dynamic-loader search path so the
+        # shared object is found at runtime (ELF: LD_LIBRARY_PATH, Mach-O:
+        # DYLD_LIBRARY_PATH; Windows resolves the .dll from the cwd). Without
+        # this the consumer fails to start on Linux/macOS -> empty output.
+        cout=$(cd "$libdir" && LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" DYLD_LIBRARY_PATH="$libdir:${DYLD_LIBRARY_PATH:-}" ./consumer 2>/dev/null)
+        [ -z "$cout" ] && [ -f "$libdir/consumer.exe" ] && cout=$(cd "$libdir" && ./consumer.exe 2>/dev/null)
     fi
     if [ "$cout" != "7 30" ]; then
         echo "  FAILED (got: '$cout')"

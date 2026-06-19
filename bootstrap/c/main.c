@@ -1624,9 +1624,6 @@ __attribute__((hot)) void run_fmt(TrStr path0, bool write_in_place) {
 __attribute__((hot)) int main(int argc, char** argv) {
     _tr_argc = argc; _tr_argv = argv;
     _tr_init_console();
-#ifndef TAURARO_BARE
-    _tr_global_async_pool = _tr_threadpool_auto();
-#endif
     List_TrStr* args = List_TrStr_new();
     for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(args, _tr_str_lit(argv[_ai])); }
     /* pass */
@@ -2569,7 +2566,7 @@ __auto_type methods = _t1851.data.DExtend.methods;
     _tr_str_release(exe_ext);
     _tr_str_release(exe_path);
 #ifndef TAURARO_BARE
-    if (_tr_global_async_pool) { _tr_threadpool_free(_tr_global_async_pool); _tr_global_async_pool = NULL; }
+    _tr_async_pool_shutdown();
 #endif
     return 0;
 }
