@@ -113,6 +113,13 @@ printf "${CYN}=================================================================$
 
 declare -a results=()
 
+# Self-hosted tauraroc writes intermediates + the exe to a CWD-relative
+# `build/` dir. Anchor CWD to $BENCH so that dir is always $BENCH/build and
+# matches the path we measure below -- otherwise (e.g. invoked from the repo
+# root) we'd compile into <cwd>/build but MEASURE a stale $BENCH/build/bench
+# from a previous run, reporting bogus (often huge) numbers.
+cd "$BENCH" || exit 1
+
 for entry in "${benchmarks[@]}"; do
     name="${entry%%|*}"
     dir="$BENCH/${entry##*|}"

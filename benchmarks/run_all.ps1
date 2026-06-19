@@ -85,6 +85,14 @@ Write-Host ""
 
 $results = @()
 
+# Self-hosted tauraroc writes intermediates + the exe to a CWD-relative
+# `build/` dir. Anchor CWD to $BENCH so that dir is always $BENCH\build and
+# matches the path we measure below -- otherwise (e.g. invoked from the repo
+# root) we'd compile into <cwd>\build but MEASURE a stale $BENCH\build\bench.exe
+# left over from a previous run, reporting bogus (often huge) numbers.
+Push-Location $BENCH
+try {
+
 foreach ($b in $benchmarks) {
     $dir = Join-Path $BENCH $b.dir
     Write-Host "Compiling $($b.name)..." -ForegroundColor Yellow
@@ -122,6 +130,8 @@ foreach ($b in $benchmarks) {
     Write-Host "  Done: C=$($results[-1].C_sec)s ($($results[-1].C_memKB) KB)  Rust=$($results[-1].Rust_sec)s ($($results[-1].Rs_memKB) KB)  Tauraro=$($results[-1].Tau_sec)s ($($results[-1].Tau_memKB) KB)" -ForegroundColor Gray
     Write-Host ""
 }
+
+} finally { Pop-Location }
 
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "  RESULTS  (seconds -- lower is faster)" -ForegroundColor Cyan
