@@ -1537,12 +1537,15 @@ extend Sema:
         mut psi = 0
         while psi < plan.len:
             mut site = plan.get(psi)
-            mut ppi = 0
-            while ppi < site.places.len:
-                mut nm = site.places.get(ppi)
-                if self.block_str_decl(site.hir_block, nm) and (not self.block_has_autodrop(site.hir_block, nm)):
-                    site.hir_block.push(box_hirstmt(HirStmt.SAutoDrop(nm, "str")))
-                ppi = ppi + 1
+            # If the body ends in return/break/continue, the existing jump-drainage
+            # already released its locals — don't double-drop (or emit dead code).
+            if not self.block_ends_in_jump(site.hir_block):
+                mut ppi = 0
+                while ppi < site.places.len:
+                    mut nm = site.places.get(ppi)
+                    if self.block_str_decl(site.hir_block, nm) and (not self.block_has_autodrop(site.hir_block, nm)):
+                        site.hir_block.push(box_hirstmt(HirStmt.SAutoDrop(nm, "str")))
+                    ppi = ppi + 1
             psi = psi + 1
 
     pub def declare(self, name: str, kind: SymbolKind, ty: Pointer[AstType], is_mut: bool):

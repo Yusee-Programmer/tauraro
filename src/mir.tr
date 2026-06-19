@@ -48,6 +48,9 @@ pub class MirBlock:
     pub id:    int
     pub stmts: Vec[Pointer[MirStmt]]
     pub term:  Pointer[MirTerm]
+    pub hir_block: HirBlock      # the HIR block whose statements fill this block
+                                 # (null for terminator-only blocks); lets the
+                                 # drop plan map a MIR drop back to a HIR position
 
 # A clean MIR->HIR drop mapping: the fall-through end of `hir_block` corresponds
 # to MIR block `block_id`, so MIR `drop[block_id]` should be released at the end
@@ -56,14 +59,13 @@ pub class MirBlock:
 # without tracking statement positions.
 pub class DropSite:
     pub hir_block: HirBlock
-    pub block_id:  int
     pub places:    Vec[str]    # filled by mir_if_drop_plan: names to release here
 
 pub class MirFunction:
     pub name:   str
     pub params: Vec[str]
     pub blocks: Vec[MirBlock]
-    pub drop_sites: Vec[DropSite]
+    pub if_bodies: Vec[HirBlock]   # then/else body HIR blocks (drop targets)
     # True iff every statement in the body was fully lowered into the CFG (no
     # `case _: pass` fallthrough). Only COMPLETE functions may drive MIR-based
     # codegen / drop insertion — for incomplete ones the analysis is unsound
@@ -80,7 +82,8 @@ pub class MirBuilder:
     pub blocks: Vec[MirBlock]
     pub cur:    int
     pub complete: bool          # cleared when an unlowered statement form is hit
-    pub drop_sites: Vec[DropSite]
+    pub cur_hb: HirBlock        # HIR block currently being lowered (for tagging)
+    pub if_bodies: Vec[HirBlock]
 
 extend MirBuilder:
     pub def init() -> MirBuilder:
@@ -88,7 +91,7 @@ extend MirBuilder:
         b.blocks = Vec[MirBlock].init(8)
         b.cur    = -1
         b.complete = true
-        b.drop_sites = Vec[DropSite].init(4)
+        b.if_bodies = Vec[HirBlock].init(4)
         return b
 
     # Create a fresh block, return its id.
@@ -102,7 +105,13 @@ extend MirBuilder:
 
     pub def push_stmt(self, s: MirStmt):
         if self.cur >= 0:
-            self.blocks.get(self.cur).stmts.push(box_mirstmt(s))
+            mut blk = self.blocks.get(self.cur)
+            blk.stmts.push(box_mirstmt(s))
+            # Tag the block with the HIR block it's being filled from (the first
+            # statement wins; good enough since a block is filled from one HIR
+            # block).
+            if blk.hir_block as usize == 0 as usize:
+                blk.hir_block = self.cur_hb
 
     pub def set_term(self, t: MirTerm):
         if self.cur >= 0:
@@ -124,6 +133,8 @@ extend MirProgram:
 
 # Lower one HIR block's statements into the builder's CFG, flattening control flow.
 def lower_stmts(b: MirBuilder, hb: HirBlock):
+    mut saved_hb = b.cur_hb
+    b.cur_hb = hb
     mut i = 0
     while i < hb.stmts.len:
         if b.terminated():
@@ -148,23 +159,16 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 mut tb = b.new_block()
                 mut eb = b.new_block()
                 mut jb = b.new_block()
+                # The then/else HIR blocks are drop targets: a str declared there
+                # and dead at the body's fall-through end leaks today (the HIR gap).
+                b.if_bodies.push(then_b)
+                b.if_bodies.push(else_b)
                 b.set_term(MirTerm.TBranch(cond, tb, eb))
                 b.cur = tb
                 lower_stmts(b, then_b)
-                # Single-block fall-through then-body: record a clean drop site.
-                if b.cur == tb and not b.terminated():
-                    mut ds_t = DropSite()
-                    ds_t.hir_block = then_b
-                    ds_t.block_id  = tb
-                    b.drop_sites.push(ds_t)
                 if not b.terminated(): b.set_term(MirTerm.TGoto(jb))
                 b.cur = eb
                 lower_stmts(b, else_b)
-                if b.cur == eb and not b.terminated():
-                    mut ds_e = DropSite()
-                    ds_e.hir_block = else_b
-                    ds_e.block_id  = eb
-                    b.drop_sites.push(ds_e)
                 if not b.terminated(): b.set_term(MirTerm.TGoto(jb))
                 b.cur = jb
             case HirStmt.SWhile(cond, body):
@@ -178,6 +182,80 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 lower_stmts(b, body)
                 if not b.terminated(): b.set_term(MirTerm.TGoto(hdr))
                 b.cur = exit_b
+            case HirStmt.SFor(_, fiter, fbody):
+                # Model like SWhile (body runs 0+ times). The loop VAR is left
+                # undeclared in the MIR (treated as a non-owned borrow) so it's
+                # never auto-dropped — the HIR for-loop codegen owns the loop var.
+                # Using `fiter` as the header cond keeps the iterable live across
+                # the loop (correct) and captures its uses.
+                mut for_hdr  = b.new_block()
+                mut for_body = b.new_block()
+                mut for_exit = b.new_block()
+                b.set_term(MirTerm.TGoto(for_hdr))
+                b.cur = for_hdr
+                b.set_term(MirTerm.TBranch(fiter, for_body, for_exit))
+                b.cur = for_body
+                lower_stmts(b, fbody)
+                if not b.terminated(): b.set_term(MirTerm.TGoto(for_hdr))
+                b.cur = for_exit
+            case HirStmt.SForUnpack(_, fuiter, fubody):
+                mut fu_hdr  = b.new_block()
+                mut fu_body = b.new_block()
+                mut fu_exit = b.new_block()
+                b.set_term(MirTerm.TGoto(fu_hdr))
+                b.cur = fu_hdr
+                b.set_term(MirTerm.TBranch(fuiter, fu_body, fu_exit))
+                b.cur = fu_body
+                lower_stmts(b, fubody)
+                if not b.terminated(): b.set_term(MirTerm.TGoto(fu_hdr))
+                b.cur = fu_exit
+            case HirStmt.SMatch(msubj, marms):
+                # N-way match -> chain of 2-way branches, all arm bodies joining a
+                # common exit. The subject drives each branch cond (stays live +
+                # captures its uses). Pattern BINDINGS are left undeclared in the
+                # MIR (non-owned borrows) so they're never auto-dropped — the HIR
+                # match codegen owns them. Each arm body IS a drop target.
+                mut m_exit = b.new_block()
+                mut mai = 0
+                while mai < marms.len:
+                    mut marm = marms.get(mai)
+                    mut arm_body = b.new_block()
+                    mut arm_next = b.new_block()
+                    b.set_term(MirTerm.TBranch(msubj, arm_body, arm_next))
+                    b.cur = arm_body
+                    if marm.guard as usize != 0 as usize:
+                        b.push_stmt(MirStmt.MEval(marm.guard))
+                    b.if_bodies.push(marm.body)
+                    lower_stmts(b, marm.body)
+                    if not b.terminated(): b.set_term(MirTerm.TGoto(m_exit))
+                    b.cur = arm_next
+                    mai = mai + 1
+                if not b.terminated(): b.set_term(MirTerm.TGoto(m_exit))
+                b.cur = m_exit
+            case HirStmt.SAssert(acond, amsg):
+                b.push_stmt(MirStmt.MEval(acond))
+                if amsg as usize != 0 as usize:
+                    b.push_stmt(MirStmt.MEval(amsg))
+            case HirStmt.SRaise(rval):
+                # `raise` exits, but we model it as a plain eval (non-terminating)
+                # so liveness only OVER-approximates (keeps values live past it) —
+                # never an early drop. The HIR codegen owns the actual unwinding.
+                if rval as usize != 0 as usize:
+                    b.push_stmt(MirStmt.MEval(rval))
+            case HirStmt.SWith(witems, _, wbody):
+                # `with items as aliases: body` — evaluate the context exprs
+                # (captures their uses), then inline the body transparently. The
+                # aliases are non-owned (HIR codegen runs __enter__/__exit__).
+                mut wi = 0
+                while wi < witems.len:
+                    b.push_stmt(MirStmt.MEval(witems.get(wi)))
+                    wi = wi + 1
+                lower_stmts(b, wbody)
+            case HirStmt.SMultiLet(_, _, mlval):
+                # Tuple/destructuring let: evaluate the value (captures its uses);
+                # the bound names are left undeclared in the MIR (non-owned) so
+                # they're never auto-dropped — HIR codegen owns them.
+                b.push_stmt(MirStmt.MEval(mlval))
             case HirStmt.SLineMarker(_):
                 pass    # source-line marker: semantically a no-op, keeps completeness
             case HirStmt.SAutoDrop(_, _):
@@ -189,6 +267,7 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 # statement would corrupt liveness/ownership).
                 b.complete = false
         i = i + 1
+    b.cur_hb = saved_hb
 
 pub def lower_function(hf: HirFunction) -> MirFunction:
     mut mf    = MirFunction()
@@ -204,7 +283,7 @@ pub def lower_function(hf: HirFunction) -> MirFunction:
     if not b.terminated(): b.set_term(MirTerm.TReturnVoid())
     mf.blocks = b.blocks
     mf.complete = b.complete
-    mf.drop_sites = b.drop_sites
+    mf.if_bodies = b.if_bodies
     return mf
 
 pub def lower_program(hir: HirProgram) -> MirProgram:
@@ -602,25 +681,49 @@ pub def compute_drops(mf: MirFunction, live_out: Vec[LiveSet]) -> Vec[LiveSet]:
 # incomplete function it returns empty (caller keeps the HIR drop machinery). The
 # caller (sema) is responsible for the type filter (str only, declared-in-block)
 # and emitting the SAutoDrop — this only provides the proven WHERE+WHAT.
+# True if HIR block `hb` is one of the function's if/else body blocks.
+def is_if_body(mf: MirFunction, hb: HirBlock) -> bool:
+    mut i = 0
+    while i < mf.if_bodies.len:
+        if mf.if_bodies.get(i) as usize == hb as usize: return true
+        i = i + 1
+    return false
+
+# Find (or create+append) the DropSite for HIR block `hb` in `out`.
+def site_for(out: Vec[DropSite], hb: HirBlock) -> DropSite:
+    mut i = 0
+    while i < out.len:
+        if out.get(i).hir_block as usize == hb as usize: return out.get(i)
+        i = i + 1
+    mut s = DropSite()
+    s.hir_block = hb
+    s.places = Vec[str].init(4)
+    out.push(s)
+    return s
+
 pub def mir_if_drop_plan(hf: HirFunction) -> Vec[DropSite]:
     mut out = Vec[DropSite].init(4)
     mut mf  = lower_function(hf)
     if not mf.complete: return out
-    if mf.drop_sites.len == 0: return out
+    if mf.if_bodies.len == 0: return out
     mut live  = compute_liveness(mf)
     mut drops = compute_drops(mf, live)
-    mut si = 0
-    while si < mf.drop_sites.len:
-        mut site = mf.drop_sites.get(si)
-        if site.block_id >= 0 and site.block_id < drops.len:
-            mut dd = drops.get(site.block_id)
-            site.places = Vec[str].init(dd.items.len)
+    # For every MIR block that belongs to an if/else body, schedule its dead-owned
+    # places to be released at the END of that body's HIR block. Grouping by HIR
+    # block (not MIR block) handles multi-block bodies: a place that dies in any
+    # block of the body — before or after nested control flow — is dropped once,
+    # at the body's fall-through end (sound: always after its last use).
+    mut bi = 0
+    while bi < mf.blocks.len:
+        mut blk = mf.blocks.get(bi)
+        if blk.hir_block as usize != 0 as usize and is_if_body(mf, blk.hir_block):
+            mut dd = drops.get(blk.id)
             mut pi = 0
             while pi < dd.items.len:
-                site.places.push(dd.items.get(pi))
+                mut site = site_for(out, blk.hir_block)
+                set_add(site.places, dd.items.get(pi))
                 pi = pi + 1
-            if site.places.len > 0: out.push(site)
-        si = si + 1
+        bi = bi + 1
     return out
 
 def set_str(v: Vec[str]) -> str:
