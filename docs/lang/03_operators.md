@@ -121,7 +121,7 @@ Using `<`, `>`, `<=`, `>=` on strings performs lexicographic (byte-by-byte) comp
 # Comparing int and float without cast:
 n: int = 10
 f: float = 10.0
-n == f    # ERROR [T-2]: cannot compare int and float
+n == f    # ERROR: cannot compare int and float
 n as float == f    # OK
 ```
 
@@ -285,7 +285,7 @@ Augmented assignment operators compile to their expanded forms in C.
 
 ```python
 x = 10
-x += 5    # ERROR [M-6]: cannot assign to immutable binding 'x'
+x += 5    # ERROR [M-8]: cannot assign to immutable binding 'x'
 ```
 
 Augmented assignment requires `mut`. Forgetting it on the original declaration is the most
@@ -598,10 +598,15 @@ avg = total / count     # integer division if both are int!
 ```python
 mut a: int = 10
 mut b: float = 3.0
-mut c = a * b    # ERROR [T-2]: cannot multiply int and float
+mut c = a * b    # ERROR: cannot multiply int and float
 ```
 
 **Fix:** `mut c = a as float * b`
+
+> Note: `[T-2]` is reserved for the Sendable field-type check described in
+> [16 — Concurrency](16_concurrency.md); the numeric type-mismatch diagnostics
+> on this page are not yet assigned a stable code (see "Reserved" in
+> [19 — Compiler Errors](19_compiler_errors.md)).
 
 ### Bitwise vs Logical Confusion
 

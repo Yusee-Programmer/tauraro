@@ -312,6 +312,7 @@ pub class FunctionDef:
     pub is_async: bool
     pub is_extern: bool
     pub is_public: bool
+    pub is_export: bool   # `export def` - emit a C-ABI dllexport/visibility wrapper for FFI
     pub body: Block
     pub line: int
 
@@ -329,6 +330,7 @@ extend FunctionDef:
         f.is_async = false
         f.is_extern = false
         f.is_public = false
+        f.is_export = false
         f.body = Block.init()
         f.line = 0
         return f
@@ -358,6 +360,7 @@ pub class ClassDef:
     pub is_public: bool
     pub is_class: bool
     pub line: int
+    pub docstring: str
 
 extend ClassDef:
     pub def init(name: str) -> ClassDef:
@@ -373,6 +376,7 @@ extend ClassDef:
         c.is_public = false
         c.is_class = true
         c.line = 0
+        c.docstring = ""
         return c
 
 pub class VariantDef:

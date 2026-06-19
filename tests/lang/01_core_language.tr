@@ -1,0 +1,57 @@
+# tests/lang/01_core_language.tr
+# Core language: variables, mutability, operators, control flow.
+
+from std.test import TestRunner
+
+def fib(n: int) -> int:
+    if n < 2: return n
+    mut a = 0
+    mut b = 1
+    mut i = 2
+    while i <= n:
+        mut c = a + b
+        a = b
+        b = c
+        i = i + 1
+    return b
+
+def classify(n: int) -> str:
+    if n > 0:   return "positive"
+    elif n < 0: return "negative"
+    else:       return "zero"
+
+def main():
+    mut t = TestRunner.init("01_core_language")
+
+    t.section("variables and mutability")
+    x = 10
+    mut y = 5
+    y = y + 1
+    t.assert_eq_int(x, 10, "immutable binding keeps its value")
+    t.assert_eq_int(y, 6, "mut binding can be reassigned")
+
+    t.section("arithmetic operators")
+    t.assert_eq_int(2 + 3 * 4, 14, "operator precedence")
+    t.assert_eq_int(10 % 3, 1, "modulo")
+    t.assert_eq_float(7.0 / 2.0, 3.5, 0.0001, "float division")
+    t.assert_eq_int((7 / 2) as int, 3, "int division truncates")
+
+    t.section("comparison and boolean operators")
+    t.assert_true(3 > 2 and 2 > 1, "and")
+    t.assert_true(1 > 2 or 2 > 1, "or")
+    t.assert_false(not (1 == 1), "not")
+
+    t.section("control flow")
+    t.assert_eq_str(classify(5), "positive", "if/elif/else: positive")
+    t.assert_eq_str(classify(-5), "negative", "if/elif/else: negative")
+    t.assert_eq_str(classify(0), "zero", "if/elif/else: zero")
+
+    t.section("loops")
+    t.assert_eq_int(fib(10), 55, "while-loop fibonacci")
+
+    mut total = 0
+    for i in range(1, 6):
+        total = total + i
+    t.assert_eq_int(total, 15, "for-range sum 1..5")
+
+    t.summary()

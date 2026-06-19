@@ -10,6 +10,8 @@
 #   let v = ch.recv()
 #   ch.close()
 
+from std.async.send import Sendable, UnsafeSendable
+
 extern "C":
     def _tr_chan_new_h(cap: int) -> Pointer[char]
     def _tr_chan_send_h(ch: Pointer[char], val: int)
@@ -24,7 +26,7 @@ extern "C":
     def _tr_chan_cap_h(ch: Pointer[char]) -> int
     def _tr_chan_free_h(ch: Pointer[char])
 
-pub class Channel:
+pub class Channel implements Sendable, UnsafeSendable:
     pub handle: Pointer[char]
 
 extend Channel:

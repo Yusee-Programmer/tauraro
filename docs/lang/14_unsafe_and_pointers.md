@@ -50,7 +50,7 @@ print(f"y = {y}, x = {x}")     # y = 42, x = 100
 |-----------|-----------|
 | `&x` address-of | Produces a raw pointer that ownership tracking cannot follow |
 | `p.read()` | May access freed or invalid memory |
-| `p.write(v)` | May corrupt memory |
+| `p.write(v)` | May corrupt memory — outside `unsafe:` this is a compile error `[P-1]` |
 | `p.offset(n)` | May produce an out-of-bounds pointer |
 | `alloc[T](n)` | Bypasses automatic memory management |
 | `dealloc(ptr)` | Bypasses ownership tracking |

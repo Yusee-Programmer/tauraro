@@ -100,71 +100,66 @@ task_group:
 
 ---
 
-### [T-2] Race Condition Detected
+### [T-2] Sendable Class Has a Non-Sendable Field
 
 ```
-error [T-2]: race condition — 'counter' is mutated by multiple threads without synchronization
+error [T-2]: Class 'Counter' declares 'implements Sendable' but field 'data: List[int]' is not Sendable.
+      FIX: Wrap 'data' in Mutex[List[int]] for exclusive access, RwLock[List[int]] for reader-writer,
+      or Atomic[T] for numeric/flag types.
+      Or remove 'implements Sendable' if 'Counter' is only used on one thread.
 ```
 
-**Cause:** Two or more concurrent operations read and write the same mutable value without a lock.
+**Cause:** A class declares `implements Sendable`, but one of its fields has a
+type that is not itself `Sendable` (e.g. a bare `List[T]` or another
+non-Sendable class). This would let the field be shared across threads without
+synchronization.
 
 **How it works:**
 
 ```python
-# WRONG: data race
-mut counter = 0
+# WRONG: declares Sendable but has a non-Sendable field
+class Counter implements Sendable:
+    pub items: List[int]    # T-2: List[int] is not Sendable
 
-def increment() -> void:
-    counter = counter + 1    # T-2: no synchronization
-
-task_group:
-    spawn increment()
-    spawn increment()
-
-# RIGHT: use Atomic or Mutex
-mut counter = Atomic[int].init(0)
-
-def increment_safe(c: Atomic[int]) -> void:
-    c.fetch_add(1)
-
-task_group:
-    spawn increment_safe(counter)
-    spawn increment_safe(counter)
+# RIGHT: wrap the field
+class Counter implements Sendable:
+    pub items: Mutex[List[int]]
 ```
 
 ---
 
-### [T-3] Potential Deadlock
+### [T-3] Primitive Field in a Sendable Class (warning)
 
 ```
-error [T-3]: potential deadlock — holding 'lock_a' while awaiting 'lock_b'
+warning [T-3]: Sendable class 'Counter' has primitive field 'count: int' that may cause
+      data races if mutated from multiple threads.
+      FIX: Use 'Atomic[int]' for safe concurrent mutation, or ensure this field
+      is written only before the object is shared across threads.
 ```
 
-**Cause:** The compiler detected a code path where a thread holds one lock while waiting to acquire another, which can deadlock if another thread acquires them in the opposite order.
+**Cause:** A `Sendable` class has a plain numeric/bool field. Unlike
+non-Sendable fields (which are a hard `[T-2]` error), primitive fields are
+*allowed* — but mutating them from multiple threads without `Atomic[T]` is a
+data race. This is a warning, not an error, because read-only or
+single-writer usage is safe.
 
 **How it works:**
 
 ```python
-mut lock_a = Mutex[int].init(0)
-mut lock_b = Mutex[int].init(0)
+# Triggers T-3 warning: 'count' could be raced on
+class Counter implements Sendable:
+    pub count: int
 
-def thread_1() -> void:
-    mut g_a = lock_a.lock()    # acquires lock_a
-    mut g_b = lock_b.lock()    # T-3: holding lock_a, acquiring lock_b
+# Fix: use Atomic[int] for fields mutated from multiple threads
+class Counter implements Sendable:
+    pub count: Atomic[int]
 
-def thread_2() -> void:
-    mut g_b = lock_b.lock()    # acquires lock_b
-    mut g_a = lock_a.lock()    # deadlock if thread_1 already holds lock_a
+def increment(c: Counter) -> void:
+    c.count.fetch_add(1)
 
-# RIGHT: always acquire locks in the same order
-def thread_1() -> void:
-    mut g_a = lock_a.lock()
-    mut g_b = lock_b.lock()
-    # ... both operations ...
-
-def thread_2() -> void:
-    mut g_a = lock_a.lock()    # same order as thread_1
-    mut g_b = lock_b.lock()
+task_group:
+    spawn increment(shared_counter)
+    spawn increment(shared_counter)
 ```
 
 ---

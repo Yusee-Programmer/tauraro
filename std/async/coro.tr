@@ -1,0 +1,64 @@
+# std.async.coro - cooperative controls for the green-thread runtime.
+#
+# Tauraro's `async def` / `await` run on a stackful-coroutine scheduler
+# (Windows Fibers / POSIX ucontext) driven by a non-blocking I/O reactor
+# (epoll / IOCP-select / kqueue). A single OS thread cooperatively runs many
+# tasks; `await` is a cheap context switch, not a thread spawn.
+#
+# This module exposes the cooperative controls an `async def` body can use to
+# yield the worker to other ready tasks:
+#
+#   from std.async.coro import Coro
+#   async def worker():
+#       Coro.sleep_ms(10)      # non-blocking: parks on a timer, yields worker
+#       Coro.yield_now()       # let other ready tasks run a turn
+#
+# Coro.await_readable / await_writable park the current task on socket
+# readiness via the reactor, so no OS thread ever blocks on I/O.
+
+extern "C":
+    def _tr_co_yield_h()
+    def _tr_co_sleep_h(ms: int)
+    def _tr_co_run_h()
+    def _tr_co_await_fd_h(fd: int, ev: int) -> int
+    def _tr_co_spawn_h(fn: Pointer[char], arg: Pointer[char])
+
+# Reactor event flags (mirror TAURARO_POLLIN / TAURARO_POLLOUT).
+pub def POLL_IN()  -> int: return 1
+pub def POLL_OUT() -> int: return 2
+
+pub class Coro:
+    _dummy: int
+
+extend Coro:
+    # Suspend the current task for `ms` milliseconds. Inside an async task this
+    # parks on a timer and yields the worker to other tasks (non-blocking);
+    # outside any task it falls back to a plain sleep.
+    pub def sleep_ms(ms: int):
+        _tr_co_sleep_h(ms)
+
+    # Voluntarily yield the worker to other ready tasks for one turn.
+    pub def yield_now():
+        _tr_co_yield_h()
+
+    # Spawn a DETACHED green-thread running `fn(arg)`. The task runs
+    # concurrently with the caller (and every other task) on this worker; the
+    # scheduler frees it when it finishes. `fn` is a `def(Pointer[char])`
+    # function value and `arg` an opaque pointer it receives (cast both with
+    # `as Pointer[char]` inside `unsafe:`). Used to handle each accepted
+    # connection on its own green thread.
+    pub def spawn(fn: Pointer[char], arg: Pointer[char]):
+        _tr_co_spawn_h(fn, arg)
+
+    # Park the current task until `fd` is readable, yielding the worker.
+    pub def await_readable(fd: int) -> int:
+        return _tr_co_await_fd_h(fd, 1)
+
+    # Park the current task until `fd` is writable, yielding the worker.
+    pub def await_writable(fd: int) -> int:
+        return _tr_co_await_fd_h(fd, 2)
+
+    # Drive the scheduler until every spawned task has finished. Useful at the
+    # top level to drain detached tasks before exit.
+    pub def run():
+        _tr_co_run_h()

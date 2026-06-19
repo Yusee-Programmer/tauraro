@@ -54,6 +54,7 @@ pub class HttpRequest:
     pub version:  str       # "HTTP/1.1" or "HTTP/1.0"
     pub version_owned: bool # true when `version` is a heap Str.slice (HttpParser.parse set it), not the init() literal
     pub recv_ms:  int       # Clock.now_ms() when this request was parsed (for timing middleware)
+    pub oversized: bool     # true when the declared Content-Length exceeded the server's body limit (handler should 413)
 
 extend HttpRequest:
     pub def init() -> HttpRequest:
@@ -68,6 +69,7 @@ extend HttpRequest:
         r.version    = "HTTP/1.1"
         r.version_owned = false
         r.recv_ms    = _tr_time_ms()
+        r.oversized  = false
         return r
 
     # Return a header value by name (case-insensitive), or "" when absent.
@@ -225,6 +227,7 @@ extend HttpResponse:
         elif self.status == 404:    sb.append("Not Found")
         elif self.status == 405:    sb.append("Method Not Allowed")
         elif self.status == 409:    sb.append("Conflict")
+        elif self.status == 413:    sb.append("Payload Too Large")
         elif self.status == 422:    sb.append("Unprocessable Entity")
         elif self.status == 429:    sb.append("Too Many Requests")
         elif self.status == 500:    sb.append("Internal Server Error")
@@ -328,6 +331,82 @@ extend HttpConn:
     # Convenience: status-only response with empty body.
     pub def send_status(self, status: int):
         HttpConn.send_text(self, status, "")
+
+    # ── Streaming responses (HTTP/1.1 chunked transfer-encoding) ──────────────
+    # For responses whose length isn't known up front, or that are produced
+    # incrementally (large files, live feeds): begin_chunked() sends the status
+    # line + headers, write_chunk() emits each piece, end_chunked() terminates.
+    # The body is never buffered whole in memory. The connection stays usable
+    # for keep-alive afterwards (chunked encoding is self-delimiting).
+    #
+    #   c.begin_chunked(200, "text/plain")
+    #   while more: c.write_chunk(next_piece())
+    #   c.end_chunked()
+    pub def begin_chunked(self, status: int, content_type: str):
+        if self._closed: return
+        mut sb = StringBuilder.init(128)
+        sb.append("HTTP/1.1 ")
+        mut ss = Fmt.int_to_str(status)
+        sb.append(ss)
+        unsafe: _tr_c_free(ss as Pointer[char])
+        sb.append(" OK\r\nContent-Type: ")
+        sb.append(content_type)
+        sb.append("\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n")
+        mut wire = sb.to_owned()
+        sb.free()
+        self._stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
+        self.last_status = status
+
+    # Emit one chunk of a chunked response. Empty data is ignored (a 0-length
+    # chunk would prematurely terminate the response - use end_chunked()).
+    pub def write_chunk(self, data: str):
+        if self._closed: return
+        mut n = Str.len(data)
+        if n == 0: return
+        mut sb = StringBuilder.init(n + 16)
+        mut hx = Fmt.int_to_hex(n)
+        sb.append(hx)
+        unsafe: _tr_c_free(hx as Pointer[char])
+        sb.append("\r\n")
+        sb.append(data)
+        sb.append("\r\n")
+        mut wire = sb.to_owned()
+        sb.free()
+        self._stream.send(wire)
+        unsafe: _tr_c_free(wire as Pointer[char])
+
+    # Terminate a chunked response (the final zero-length chunk).
+    pub def end_chunked(self):
+        if self._closed: return
+        self._stream.send("0\r\n\r\n")
+
+    # ── Server-Sent Events (text/event-stream over chunked) ───────────────────
+    # begin_sse() opens an event stream; send_event() pushes one `data:` event.
+    # The handler typically loops sending events until the client disconnects
+    # (a send returning <= 0). Built on chunked encoding so it works over the
+    # existing keep-alive connection.
+    #
+    #   c.begin_sse()
+    #   c.send_event("hello")
+    #   c.send_event("{\"tick\":1}")
+    pub def begin_sse(self):
+        if self._closed: return
+        mut hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
+        self._stream.send(hdr)
+        self.last_status = 200
+
+    # Push a single SSE event carrying `data` (sent as one chunk: "data: ...\n\n").
+    pub def send_event(self, data: str):
+        if self._closed: return
+        mut sb = StringBuilder.init(Str.len(data) + 8)
+        sb.append("data: ")
+        sb.append(data)
+        sb.append("\n\n")
+        mut ev = sb.to_owned()
+        sb.free()
+        HttpConn.write_chunk(self, ev)
+        unsafe: _tr_c_free(ev as Pointer[char])
 
     # Redirect to another URL.
     pub def redirect(self, url: str, permanent: bool):
@@ -535,13 +614,16 @@ extend HttpParser:
             if q >= 0:
                 req.path  = Str.slice(full_path, 0, q)
                 req.query = Str.slice(full_path, q + 1, Str.len(full_path))
-                if not full_path_is_after:
-                    unsafe: _tr_c_free(full_path as Pointer[char])
-                unsafe: _tr_c_free(after as Pointer[char])
             else:
-                req.path  = full_path
-                if not full_path_is_after:
-                    unsafe: _tr_c_free(after as Pointer[char])
+                # A fresh slice, NOT `req.path = full_path`: storing the borrowed
+                # `full_path` local into a field retains it (rc=2) while the local
+                # is never auto-dropped (#53), so the path string leaked every
+                # request. A fresh slice is owned outright (rc=1) and freed by
+                # free_owned(). Both branches now share the same cleanup below.
+                req.path  = Str.slice(full_path, 0, Str.len(full_path))
+            if not full_path_is_after:
+                unsafe: _tr_c_free(full_path as Pointer[char])
+            unsafe: _tr_c_free(after as Pointer[char])
         if request_ln_owned:
             unsafe: _tr_c_free(request_ln as Pointer[char])
         unsafe: _tr_c_free(hdr_sec as Pointer[char])
@@ -550,14 +632,17 @@ extend HttpParser:
         while hdr_pos < hdr_len:
             mut tail     = Str.slice(rest_hdrs, hdr_pos, hdr_len)
             mut line_end = Str.index_of(tail, "\r\n")
-            mut line     = tail
-            mut line_is_tail = true
+            mut line_len = line_end
             if line_end >= 0:
-                line    = Str.slice(tail, 0, line_end)
-                line_is_tail = false
                 hdr_pos = hdr_pos + line_end + 2
             else:
-                hdr_pos = hdr_len
+                line_len = Str.len(tail)
+                hdr_pos  = hdr_len
+            # Always a FRESH slice (never `line = tail`): aliasing the borrowed
+            # `tail` local retains it (rc=2) and the final header line - which has
+            # no trailing CRLF - was then never freed (leaked one str/request),
+            # because the local is not auto-dropped (#53).
+            mut line  = Str.slice(tail, 0, line_len)
             mut colon = Str.index_of(line, ": ")
             if colon >= 0:
                 # Header names are case-insensitive: store lowercased so lookups
@@ -565,14 +650,22 @@ extend HttpParser:
                 mut hname_raw = Str.slice(line, 0, colon)
                 mut hname     = Str.to_lower(hname_raw)
                 unsafe: _tr_c_free(hname_raw as Pointer[char])
-                mut hvalue = Str.slice(line, colon + 2, Str.len(line))
-                req.headers.insert(hname, hvalue)
+                # Pass the value slice INLINE (a fresh rc=1 expression), not via
+                # a named local: dict_val_arg hoists a fresh str value to a temp
+                # that flush_wraps releases, netting the stored box to rc=1 so
+                # Dict_free_strval frees it at free_owned(). A named local would
+                # instead rely on str-local auto-drop (#53, not yet implemented)
+                # to balance the box's retain, leaking the value at rc=2.
+                req.headers.insert(hname, Str.slice(line, colon + 2, Str.len(line)))
                 # Dict_set() strdup()s the key, so the lowercased copy we just
                 # allocated is no longer needed once it's been copied in.
                 unsafe: _tr_c_free(hname as Pointer[char])
-            if not line_is_tail:
-                unsafe: _tr_c_free(line as Pointer[char])
+            unsafe: _tr_c_free(line as Pointer[char])
             unsafe: _tr_c_free(tail as Pointer[char])
+        # rest_hdrs is a heap Str.slice (the header section after the request
+        # line); free its buffer now that all headers have been parsed out of
+        # it. (When first_line < 0 it is the "" literal, a no-op release.)
+        unsafe: _tr_c_free(rest_hdrs as Pointer[char])
         return req
 
     # Content-Length value from a raw header section, or 0 when absent.
@@ -613,6 +706,7 @@ pub class HttpServer:
     pub _running:    bool
     pub _router:     HttpRouter
     pub _recv_buf:   int
+    pub _max_body:   int   # reject request bodies larger than this many bytes (0 = unlimited)
 
 extend HttpServer:
     pub def init(host: str, port: int) -> HttpServer:
@@ -621,7 +715,16 @@ extend HttpServer:
         s.port       = port
         s._running   = false
         s._router    = HttpRouter.init()
-        s._recv_buf  = 65536
+        # Default body cap: 8 MiB. Guards against a client sending a huge (or
+        # lying) Content-Length and exhausting memory. Raise via set_max_body()
+        # for large uploads, or set 0 to disable the cap.
+        s._max_body  = 8388608
+        # 16 KiB: per-recv() chunk size + StringBuilder seed capacity. recv()
+        # mallocs (cap+1) on every call, so under high concurrency each in-flight
+        # green thread holds one such buffer - 16 KiB keeps that transient small
+        # while still reading typical request headers in a single recv(); the
+        # StringBuilder grows automatically for larger requests/bodies.
+        s._recv_buf  = 16384
         return s
 
     # Attach a pre-built router (optional — use server.router() to get the internal one).
@@ -635,6 +738,12 @@ extend HttpServer:
     # Set the recv buffer size (default 64 KiB). Increase for large uploads.
     pub def set_recv_buf(self, bytes: int):
         self._recv_buf = bytes
+
+    # Set the maximum accepted request-body size in bytes (0 = unlimited).
+    # Requests whose Content-Length exceeds this are flagged oversized; the
+    # body read is also capped so an oversized/lying length can't exhaust memory.
+    pub def set_max_body(self, bytes: int):
+        self._max_body = bytes
 
     # Bind and listen. Returns true on success.
     pub def start(self) -> bool:
@@ -672,7 +781,14 @@ extend HttpServer:
         unsafe: _tr_c_free(hdr_for_clen as Pointer[char])
         mut have = Str.len(raw) - (header_end + 4)
         unsafe: _tr_c_free(raw as Pointer[char])
-        while have < clen:
+        # Cap how much body we accumulate: stop once we've read past the limit
+        # (plus the headers already buffered) so a huge/lying Content-Length
+        # cannot drive unbounded memory growth. read_next() flags the request
+        # oversized from the declared Content-Length and the handler returns 413.
+        mut cap_total = clen
+        if self._max_body > 0 and clen > self._max_body:
+            cap_total = self._max_body + 1
+        while have < cap_total:
             mut more = stream.recv(self._recv_buf)
             if Str.len(more) == 0: break
             sb.append(more)
@@ -695,6 +811,14 @@ extend HttpServer:
             return empty
         mut req = HttpParser.parse(raw)
         unsafe: _tr_c_free(raw as Pointer[char])
+        # Flag oversized requests from the (already-parsed) Content-Length header
+        # so the dispatch layer can reject them with 413 without trusting the
+        # truncated body that _read_full deliberately stopped accumulating.
+        if self._max_body > 0:
+            mut cl: str = req.header("content-length")
+            if Str.len(cl) > 0 and Str.parse_int(cl) > self._max_body:
+                req.oversized = true
+            unsafe: _tr_c_free(cl as Pointer[char])
         self._router.dispatch(req)
         return req
 

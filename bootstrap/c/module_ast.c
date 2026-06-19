@@ -291,6 +291,8 @@ __attribute__((malloc,returns_nonnull,hot)) FunctionDef* FunctionDef_init(TrStr 
     /* pass */
     f->is_public = false;
     /* pass */
+    f->is_export = false;
+    /* pass */
     f->body = Block_init();
     /* pass */
     f->line = 0LL;
@@ -336,6 +338,8 @@ __attribute__((malloc,returns_nonnull,hot)) ClassDef* ClassDef_init(TrStr name) 
     c->is_class = true;
     /* pass */
     c->line = 0LL;
+    /* pass */
+    c->docstring = _tr_str_lit("");
     /* pass */
     return c;
 }

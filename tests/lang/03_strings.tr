@@ -1,0 +1,105 @@
+# tests/lang/03_strings.tr
+# Strings: literals, concatenation, f-strings, str.method() dispatch.
+
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("03_strings")
+
+    t.section("length and indexing")
+    s: str = "Hello"
+    t.assert_eq_int(len(s), 5, "len()")
+    t.assert_eq_int("hello".len(), 5, "str.len()")
+    t.assert_eq_int("".len(), 0, "empty str len")
+
+    first_char: char = s[0]
+    t.assert_eq_int(ord(first_char), 72, "ord(first char) == 'H'")
+
+    t.section("concatenation")
+    mut combined = "Hello" + ", " + "world" + "!"
+    t.assert_eq_str(combined, "Hello, world!", "string concat")
+    t.assert_eq_str("count: " + str(42), "count: 42", "concat with str(int)")
+
+    t.section("f-strings")
+    name: str = "Tauraro"
+    version: int = 2
+    t.assert_eq_str(f"Hello from {name} v{version}!", "Hello from Tauraro v2!", "f-string interpolation")
+    a: int = 10
+    b: int = 3
+    t.assert_eq_int(a + b, 13, "f-string expr a+b (sanity)")
+
+    t.section("trim and case")
+    mut raw = "  Hello, World!  "
+    t.assert_eq_str(raw.trim(), "Hello, World!", "trim")
+    t.assert_eq_str(raw.trim_left(), "Hello, World!  ", "trim_left")
+    t.assert_eq_str(raw.trim_right(), "  Hello, World!", "trim_right")
+    t.assert_eq_str("hello".to_upper(), "HELLO", "to_upper")
+    t.assert_eq_str("HELLO".to_lower(), "hello", "to_lower")
+
+    t.section("contains / starts_with / ends_with")
+    t.assert_true("tauraro".contains("aura"), "contains true")
+    t.assert_false("tauraro".contains("rust"), "contains false")
+    t.assert_true("tauraro".starts_with("tau"), "starts_with true")
+    t.assert_true("tauraro".ends_with("raro"), "ends_with true")
+
+    t.section("index_of")
+    t.assert_eq_int("hello".index_of("ll"), 2, "index_of found")
+    t.assert_eq_int("hello".index_of("xy"), -1, "index_of not found")
+
+    t.section("replace / repeat / reverse")
+    t.assert_eq_str("hello world".replace("world", "tauraro"), "hello tauraro", "replace single")
+    t.assert_eq_str("aababab".replace("ab", "X"), "aXXX", "replace multiple")
+    t.assert_eq_str("ab".repeat(3), "ababab", "repeat")
+    t.assert_eq_str("hello".reverse(), "olleh", "reverse")
+
+    t.section("slice")
+    t.assert_eq_str("hello world".slice(6, 11), "world", "slice mid")
+    t.assert_eq_str("abcdef".slice(2, 5), "cde", "slice general")
+
+    t.section("to_int / to_float")
+    t.assert_eq_int("42".to_int(), 42, "to_int")
+    t.assert_eq_float("3.14".to_float(), 3.14, 0.0001, "to_float")
+
+    t.section("split / join")
+    csv: str = "one,two,three,four"
+    mut parts: List[str] = csv.split(",")
+    t.assert_eq_int(parts.len, 4, "split length")
+    t.assert_eq_str(parts.get(0), "one", "split first")
+    t.assert_eq_str(parts.get(3), "four", "split last")
+
+    mut joined = Str.join(parts, " | ")
+    t.assert_eq_str(joined, "one | two | three | four", "Str.join")
+
+    t.section("split_once")
+    mut path2 = "users/profile/settings"
+    mut pair = path2.split_once("/")
+    t.assert_eq_str(pair.get(0), "users", "split_once head")
+    t.assert_eq_str(pair.get(1), "profile/settings", "split_once tail")
+
+    mut no_sep = "noseparator"
+    mut ns_pair = no_sep.split_once("/")
+    t.assert_eq_str(ns_pair.get(0), "noseparator", "split_once no-sep head")
+    t.assert_eq_str(ns_pair.get(1), "", "split_once no-sep tail")
+
+    t.section("multi-line chaining")
+    mut result = "  Hello, World!  "
+        .trim()
+        .to_lower()
+        .replace("world", "tauraro")
+    t.assert_eq_str(result, "hello, tauraro!", "chained methods")
+
+    t.section("conversions")
+    t.assert_eq_str(str(42), "42", "str(int)")
+    t.assert_eq_str(str(true), "true", "str(bool)")
+    t.assert_eq_int(int("123"), 123, "int(str)")
+    t.assert_eq_float(float("9.81"), 9.81, 0.0001, "float(str)")
+
+    t.section("comparison")
+    p1 = "hello"
+    p2 = "hello"
+    p3 = "world"
+    t.assert_true(p1 == p2, "string equality")
+    t.assert_true(p1 != p3, "string inequality")
+    t.assert_true(p1 < p3, "string ordering")
+
+    t.summary()

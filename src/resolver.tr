@@ -190,6 +190,8 @@ extend ModuleResolver:
         mut tokens  = lexer.tokenize()
         mut parser  = Parser.init(tokens, lexer.token_lines)
         parser.current_file = path
+        parser.cols = lexer.token_cols
+        parser.src_text = source
         mut prog    = parser.parse_program()
         self.parse_errors = self.parse_errors + parser.error_count
 

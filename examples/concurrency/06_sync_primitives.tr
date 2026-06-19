@@ -1,0 +1,86 @@
+# Concurrency 06 — Coordination primitives (WaitGroup, Semaphore, Once, Barrier)
+#
+# SCENARIO: the std.async coordination toolkit. These wrap thread-safe C
+# objects (mutex/condvar/atomics) and are `implements Sendable`, so they can be
+# shared across the OS threads they coordinate.
+#
+#   WaitGroup  "wait until these N workers are done"
+#   Semaphore  cap concurrent access to a resource at N
+#   Once       run an initializer exactly once, even under a race
+#   Barrier    rendezvous: no thread proceeds until all N arrive
+
+from std.async.waitgroup import WaitGroup
+from std.async.semaphore import Semaphore
+from std.async.once import Once
+from std.async.barrier import Barrier
+
+# WaitGroup worker: do a unit of work, fold it into an atomic, then signal done.
+def wg_worker(wg: WaitGroup, total: Atomic[int], amount: int) -> void:
+    total.add(amount)
+    wg.done()
+
+# Semaphore worker: only `permits` of these run the critical section at once.
+def sem_worker(sem: Semaphore, done: Atomic[int]) -> void:
+    sem.acquire()           # blocks if all permits are taken
+    done.increment()        # (the protected section)
+    sem.release()
+
+# Once worker: only the first caller's do_once() returns true.
+def once_worker(once: Once, winners: Atomic[int]) -> void:
+    if once.do_once():
+        winners.increment()
+
+async def main():
+    print("=== WaitGroup (wait for N workers) ===")
+    mut wg    = WaitGroup.new()
+    mut total: Atomic[int] = Atomic.new(0)
+    wg.add(4)
+    task_group:
+        spawn wg_worker(wg, total, 10)
+        spawn wg_worker(wg, total, 20)
+        spawn wg_worker(wg, total, 30)
+        spawn wg_worker(wg, total, 40)
+    wg.wait()                                  # returns once all 4 called done()
+    print("  total after WaitGroup = " + total.load().to_str())   # 100
+    wg.free()
+    total.free()
+
+    print("=== Semaphore (cap concurrency at 2) ===")
+    mut sem  = Semaphore.new(2, 2)             # 2 permits
+    mut done: Atomic[int] = Atomic.new(0)
+    task_group:
+        spawn sem_worker(sem, done)
+        spawn sem_worker(sem, done)
+        spawn sem_worker(sem, done)
+        spawn sem_worker(sem, done)
+        spawn sem_worker(sem, done)
+    print("  workers completed = " + done.load().to_str())        # 5
+    sem.free()
+    done.free()
+
+    print("=== Once (exactly-once init under a race) ===")
+    mut once    = Once.new()
+    mut winners: Atomic[int] = Atomic.new(0)
+    task_group:
+        spawn once_worker(once, winners)
+        spawn once_worker(once, winners)
+        spawn once_worker(once, winners)
+    print("  do_once() winners = " + winners.load().to_str())     # 1
+    once.free()
+    winners.free()
+
+    print("=== Barrier (3 threads rendezvous) ===")
+    mut bar     = Barrier.new(3)
+    mut arrived: Atomic[int] = Atomic.new(0)
+    task_group:
+        spawn barrier_worker(bar, arrived)
+        spawn barrier_worker(bar, arrived)
+        spawn barrier_worker(bar, arrived)
+    print("  all passed the barrier = " + arrived.load().to_str())  # 3
+    bar.free()
+    arrived.free()
+
+# Each thread arrives, waits at the barrier until all 3 are present, then proceeds.
+def barrier_worker(bar: Barrier, arrived: Atomic[int]) -> void:
+    bar.wait()              # blocks until all 3 threads reach here
+    arrived.increment()

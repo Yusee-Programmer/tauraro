@@ -104,13 +104,13 @@ def increment_first(data: List[int]) -> mut_ref int from data:
 
 ### The Error This Prevents
 
-Without `from`, returning a pointer to a local is caught as [M-4]:
+Without `from`, returning a pointer to a local is caught as [L-1]:
 
 ```python
-# WRONG — triggers M-4:
+# WRONG — triggers L-1:
 def get_ref() -> Pointer[int]:
     mut x = 42
-    return &x       # M-4: x is freed when function returns
+    return &x       # L-1: x is freed when function returns
 
 # RIGHT — return by value:
 def get_value() -> int:
@@ -127,13 +127,13 @@ When the compiler sees a call site like:
 mut p = get_first(nums)
 ```
 
-It knows `p`'s lifetime is bounded by `nums`. If you try to use `p` after `nums` has been moved or freed, the compiler emits [M-4]:
+It knows `p`'s lifetime is bounded by `nums`. If you try to use `p` after `nums` has been moved or freed, the compiler emits [M-1]:
 
 ```python
 mut nums = [10, 20, 30]
 mut p = get_first(nums)
 send_away(nums)           # moves nums — ownership transferred
-print(p.read())           # M-4: nums was moved, p is now dangling
+print(p.read())           # M-1: nums was moved, p is now dangling
 ```
 
 ---

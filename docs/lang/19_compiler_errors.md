@@ -1,6 +1,12 @@
 # 19 — Compiler Error Reference
 
-Every error the Tauraro compiler emits includes a rule code `[X-N]`. This page documents every rule, organized by category, with its cause, a triggering example, and the fix.
+Every error the Tauraro compiler emits includes a rule code `[X-N]`. This page
+documents every rule **as actually implemented in `src/sema.tr`**, organized by
+category, with its cause, a triggering example, and the fix.
+
+> Some codes are emitted from more than one check (see "Known overlaps" at the
+> bottom). Where that's the case, each situation is documented as a separate
+> numbered case under the same code.
 
 ---
 
@@ -8,316 +14,312 @@ Every error the Tauraro compiler emits includes a rule code `[X-N]`. This page d
 
 | Code | Category | Short Description |
 |------|----------|-------------------|
-| [M-1] | Memory | Heap allocation not tracked |
-| [M-2] | Memory | Use after move |
-| [M-3] | Memory | Double free |
-| [M-4] | Memory | Dangling pointer (borrow escapes) |
-| [M-5] | Memory | Null dereference |
-| [M-6] | Memory | Assign to immutable binding |
-| [M-7] | Memory | Assign `none` to value type |
-| [T-1] | Type | No implicit coercion — use `as` |
-| [T-2] | Type | Type mismatch in operation |
-| [T-3] | Type | Wrong argument type |
-| [T-4] | Type | Return type mismatch / unhandled Result |
-| [T-5] | Type | Cannot infer type |
-| [N-1] | Name | Reserved name used as declaration |
-| [F-1] | Function | Wrong number of arguments |
-| [F-2] | Function | Parameter shadowed / undefined call |
-| [F-3] | Function | Missing return on code path |
-| [E-1] | Existence | Method does not exist on receiver's type |
+| [M-1] | Memory | Use after move |
+| [M-2] | Memory | Move while borrowed |
+| [M-3] | Memory | Aliased mutable access in a call |
+| [M-4] | Memory | Mutation while borrowed |
+| [M-5] | Memory | Use of a possibly-moved value (flow-sensitive) |
+| [M-6] | Memory | Use after `dealloc()` |
+| [M-7] | Memory | `none` assigned to a non-`Option` type |
+| [M-8] | Memory | Assign to immutable binding |
+| [T-1] | Concurrency | Type crossing a thread boundary is not `Sendable` |
+| [T-2] | Concurrency | `Sendable` class has a non-`Sendable` field |
+| [T-3] | Concurrency (warning) | `Sendable` class has an unguarded primitive field |
+| [T-4] | Type | Unhandled `Result` from a `throws` call |
+| [T-5] | Type | Numeric value used as an `if`/`while` condition |
+| [N-1] | Name | Reserved/keyword name used as a declaration |
+| [F-3] | Function | Missing `return` on a code path |
+| [E-1] | Existence | (1) Non-exhaustive `match`; (2) explicit `main()` call; (3) no such method on type |
 | [E-2] | Existence | Nested declaration used outside `main()` |
-| [U-1] | Unsafe | `alloc`/`dealloc` outside `unsafe:` (with `--strict`) |
+| [S-1] | Shared | `Shared[Self]` field creates a reference cycle |
+| [I-1] | Interface / Init | (1) `implements` an undefined interface; (2) variable used before assignment |
+| [I-2] | Interface / Init | (1) Class missing an interface method; (2) variable not initialized on all paths |
+| [I-3] | Interface | Method signature doesn't match the interface |
+| [L-1] | Lifetime | Local pointer may not outlive its function |
+| [P-1] | Unsafe | `.write()` on a `Pointer` outside `unsafe:` |
+| [U-1] | Unsafe | `alloc`/`dealloc`/`alloc_array` outside `unsafe:` (with `--strict`) |
+
+See [13 — Memory and Ownership](13_memory_and_ownership.md) for the conceptual
+model behind the M-series and L-1.
 
 ---
 
 ## Memory Rules (M-series)
 
-### [M-1] Heap Allocation Not Tracked
+### [M-1] Use After Move
 
-**Message:** `heap allocation in 'x' must be tracked — assign to a named binding`
+**Message:** `'data' was moved and cannot be used again.`
 
-**Cause:** An `alloc` result was used inline without being bound to a named variable, so the compiler cannot track the allocation's lifetime.
+**Cause:** A variable was passed to a function/context that takes ownership
+(moves it), then used again afterward.
 
-**When to use `unsafe:`:** All manual `alloc`/`dealloc` calls require an `unsafe:` block. This error fires when the compiler detects an allocation that it cannot pair with a corresponding free.
-
-**How it works:**
-```python
-# WRONG:
-unsafe:
-    process(alloc[char](256))   # M-1: allocation not tracked
-
-# RIGHT:
-unsafe:
-    mut buf: Pointer[char] = alloc[char](256)
-    process(buf)
-    dealloc(buf)
-```
-
-**Common Mistakes:**
-- Passing `alloc(...)` directly as a function argument
-- Allocating inside a loop without a binding, making it impossible for the compiler to detect the matching `dealloc`
-
-**Best Practices:** Always bind allocations to a named variable immediately. Use `try/finally` to guarantee `dealloc` is reached even on error paths.
-
----
-
-### [M-2] Use After Move
-
-**Message:** `'data' was moved into 'send' and is no longer valid`
-
-**Cause:** A variable was passed to a function that takes ownership (moves), then used again afterward.
-
-**How it works:**
 ```python
 # WRONG:
 data = load_bytes()
 send(data)           # data is moved here
-print(len(data))     # M-2: data is no longer valid
+print(len(data))     # M-1: data was moved and cannot be used again
 
-# RIGHT: use before moving
+# RIGHT: use before moving, or clone
 print(len(data))
 send(data)
 ```
 
-**Common Mistakes:**
-- Passing the same owned value to two different functions
-- Storing an owned value in a container then continuing to use the original binding
-
-**Best Practices:** Use `Shared[T]` when you need multiple owners. Use `clone(val)` for an explicit deep copy before the move.
+**FIX:** Use the variable that now owns the value, or call `.clone()` to copy
+before moving.
 
 ---
 
-### [M-3] Double Free
+### [M-2] Move While Borrowed
 
-**Message:** `'buf' was already freed`
+**Message:** `Cannot move 'data' while it is borrowed.`
 
-**Cause:** `dealloc` was called on a pointer that was already freed, or on a pointer that was not allocated by `alloc`.
+**Cause:** A variable is moved into another binding/call while an active
+borrow (`ref`/`mut_ref`/a `view`-style local) into it is still alive.
 
-**How it works:**
 ```python
-# WRONG:
+mut data = [1, 2, 3]
+view = ref data[0]
+consume(data)    # M-2: data is borrowed by 'view'
+```
+
+**FIX:** The borrow must end before `data` can be moved.
+
+---
+
+### [M-3] Aliased Mutable Access in a Call
+
+**Message:** `'buf' appears twice in the same call, creating aliased mutable access.`
+
+**Cause:** The same mutable value is passed as two arguments to the same call,
+giving the callee two simultaneous mutable handles to the same memory.
+
+```python
+mut buf = [1, 2, 3]
+merge(buf, buf)    # M-3: 'buf' appears twice in the same call
+```
+
+**FIX:** Clone one of the arguments: `merge(buf, buf.clone())`.
+
+---
+
+### [M-4] Mutation While Borrowed
+
+**Message:** `Cannot mutate 'items' while 'view' holds a reference into it.`
+
+**Cause:** A container/value is mutated (e.g. `.append()`, re-assignment,
+`.clear()`) while a `ref`/`mut_ref` borrow into it is still live.
+
+```python
+mut items = [1, 2, 3]
+view = ref items[0]
+items.append(4)    # M-4: 'items' is mutated while 'view' borrows into it
+```
+
+**FIX:** Finish using `view` before modifying `items`, or copy it first:
+`mut copy = view`.
+
+---
+
+### [M-5] Use of a Possibly-Moved Value (Flow-Sensitive)
+
+**Message:** `'data' may have been moved on some code paths, making this use unsafe.`
+
+**Cause:** On at least one branch of an `if`/`match`/loop, `data` was moved,
+but on others it wasn't — so using `data` after the branches merge is unsafe
+in general.
+
+```python
+data = load_bytes()
+if flag:
+    send(data)        # moved on this branch only
+print(len(data))       # M-5: 'data' may have been moved on some code paths
+```
+
+**FIX:** Ensure `data` is not moved before this point on any branch, or
+restructure so the use is inside the branch where it's still valid.
+
+---
+
+### [M-6] Use After `dealloc()`
+
+**Message:** `'buf' was freed by 'dealloc()' and can no longer be used.`
+
+**Cause:** A `Pointer[T]` that was passed to `dealloc()` is used again. This
+also covers double-`dealloc()` (the second call is itself a use of a freed
+pointer).
+
+```python
 unsafe:
     mut buf: Pointer[char] = alloc[char](128)
     dealloc(buf)
-    dealloc(buf)    # M-3: double free
-
-# RIGHT:
-unsafe:
-    mut buf: Pointer[char] = alloc[char](128)
-    dealloc(buf)
-    # buf is no longer valid — don't use it
+    dealloc(buf)    # M-6: 'buf' was freed by 'dealloc()' and can no longer be used
 ```
 
-**Best Practices:** Structure code so every allocation has exactly one `dealloc`, in a `finally:` block if exceptions are possible.
+**FIX:** Remove all uses of `buf` after `dealloc()`, or restructure so the
+pointer is freed only when no longer needed.
 
 ---
 
-### [M-4] Dangling Pointer / Lifetime Error
+### [M-7] `none` Assigned to a Non-`Option` Type
 
-**Message:** `returning pointer to 'p' which will be freed when the function exits`
+**Message:** `Cannot assign 'none' to 'x' which has type 'int'. Only Option[T] can hold 'none'.`
 
-**Cause:** Returning a `Pointer[T]` or borrow that refers to a local variable — the memory becomes invalid when the function returns.
-
-**How it works:**
-```python
-# WRONG:
-def get_ref() -> Pointer[int]:
-    mut x = 42
-    return &x       # M-4: x freed at function exit
-
-# RIGHT: return by value (transfers ownership)
-def get_value() -> int:
-    return 42
-```
-
-When you genuinely need to return a pointer to data owned by a parameter, use the `from` lifetime annotation:
-
-```python
-# Pointer lifetime bounded by caller's 'data'
-def get_first(data: List[int]) -> Pointer[int] from data:
-    return data.raw_ptr()
-```
-
-See [Advanced — Lifetimes](advanced/01_lifetimes.md) for the full `from` annotation system.
-
-**Best Practices:** Prefer returning owned values over pointers. Only use `from` annotations when you have a genuine need for zero-copy access into caller-owned data.
-
----
-
-### [M-5] Null Dereference
-
-**Message:** `'p' may be null — check before dereferencing`
-
-**Cause:** Accessing a field or calling a method on a variable that the compiler can determine may be `none`/null.
-
-**How it works:**
-```python
-# WRONG:
-mut p: Point = none
-p.x = 10    # M-5: p is null
-
-# RIGHT:
-mut p: Point = Point.init(0, 0)
-p.x = 10
-
-# Or check first:
-if p as usize != 0 as usize:
-    p.x = 10
-```
-
-**Best Practices:** Initialize class variables at declaration. Use `Option[T]` for values that are intentionally nullable, and unwrap with a check.
-
----
-
-### [M-6] Cannot Assign to Immutable Binding
-
-**Message:** `cannot assign to immutable binding 'x'`
-
-**Cause:** Assigning to a variable declared without `mut`.
-
-**How it works:**
-```python
-# WRONG:
-x = 10
-x = 20    # M-6: x is immutable
-
-# RIGHT:
-mut x = 10
-x = 20    # OK
-```
-
-**When to use:** Immutable bindings (`x = value`, no `mut`) are the default. They document intent: this value does not change. Only reach for `mut` when the value will genuinely need reassignment.
-
----
-
-### [M-7] None Assigned to Non-Optional Type
-
-**Message:** `cannot assign 'none' to 'x' which has type 'int'`
-
-**Cause:** `none` was assigned to a variable whose type is not `Option[T]`.
-
-**How it works:**
 ```python
 # WRONG:
 mut x: int = none    # M-7
 
 # RIGHT:
 mut x: Option[int] = none    # Option can hold none
-mut x: int = 0               # Use zero for "not set" when appropriate
+mut x: int = 0               # use a real value when 'not set' is needed
 ```
 
-**Best Practices:** Use `Option[T]` for values that are genuinely optional. Avoid using `none` as a sentinel in non-optional types.
+**FIX:** Use `Option[T]` as the type, or give the variable a real initial value.
 
 ---
 
-## Type Rules (T-series)
+### [M-8] Immutable by Default
 
-### [T-1] No Implicit Type Coercion
+**Message:** `Cannot assign to 'count' a second time because it is immutable.`
 
-**Message:** `cannot assign int to float without explicit cast`
+**Cause:** Assigning to a variable declared without `mut`.
 
-**Cause:** A value of one numeric type was used where a different numeric type was expected, without an explicit `as` cast.
-
-**How it works:**
 ```python
 # WRONG:
-mut x: int = 10
-mut y: float = x          # T-1: int → float without cast
-
-def set_float(f: float): ...
-set_float(x)              # T-1: wrong argument type
+x = 10
+x = 20    # M-8: cannot assign to 'x' a second time because it is immutable
 
 # RIGHT:
-mut y: float = x as float
-set_float(x as float)
+mut x = 10
+x = 20    # OK
 ```
 
-**Why:** Implicit coercion silently loses precision (large `int` → `float`) or truncates (`float` → `int`). Every conversion must be an explicit, intentional decision.
-
-**Thread safety:** [T-1] is also emitted when passing a non-`Sendable` type across a thread boundary. See [Advanced — Sendable](advanced/06_sendable.md).
+**FIX:** Declare it as `mut count = ...` if it needs to change.
 
 ---
 
-### [T-2] Type Mismatch in Operation
+## No Double-Free, No Dangling Pointers
 
-**Message:** `cannot add int and float` / `expected int, got str`
+These are *structural guarantees*, not separate error codes:
 
-**Cause:** An operator or function received operands/arguments of incompatible types.
+- **No double-free of `Own` variables**: the compiler injects exactly one
+  `free()` per `Own` variable at scope exit, on every path. Manual
+  double-`dealloc()` of an `unsafe:` pointer is caught by **[M-6]** above.
+- **No dangling pointers from local returns**: returning a pointer/borrow into
+  a local without a `from` annotation is caught by **[L-1]** (see below), not
+  an M-code.
 
-**How it works:**
+---
+
+## Concurrency Rules (T-1 / T-2 / T-3)
+
+See [16 — Concurrency](16_concurrency.md) and
+[Advanced — Sendable](advanced/06_sendable.md) for the full model.
+
+### [T-1] Type Is Not Sendable
+
+**Message:** `Type 'X' is not Sendable and cannot be safely shared across threads.` /
+`'Shared[X]' cannot safely cross thread boundaries because 'X' is not Sendable.`
+
+**Cause:** A value crossing a thread boundary (`spawn`, `Thread.spawn`,
+`ThreadPool.spawn`, or `Shared[T]`) has a type that does not
+`implements Sendable`.
+
+```python
+class Config:
+    pub data: List[int]    # List is NOT Sendable
+
+def main():
+    mut cfg = Config()
+    spawn process(cfg)     # T-1: 'Config' is not Sendable
+```
+
+**FIX:** Wrap in `Mutex[Config]`/`Atomic[T]` for the offending field(s), or add
+`implements Sendable` to `Config` once its fields are all `Sendable`.
+
+---
+
+### [T-2] Sendable Class Has a Non-Sendable Field
+
+**Message:** `Class 'Counter' declares 'implements Sendable' but field 'data: List[int]' is not Sendable.`
+
 ```python
 # WRONG:
-mut a: int = 5
-mut b: float = 3.0
-mut c = a + b              # T-2: cannot add int and float
-
-mut items: List[int] = [1, 2, "three"]    # T-2: expected int, got str
+class Counter implements Sendable:
+    pub items: List[int]    # T-2: List[int] is not Sendable
 
 # RIGHT:
-mut c = a as float + b
-mut items: List[int] = [1, 2, 3]
+class Counter implements Sendable:
+    pub items: Mutex[List[int]]
 ```
 
-**Thread safety:** [T-2] is also emitted for detected data race conditions in concurrent code.
+**FIX:** Wrap the field in `Mutex[T]`/`RwLock[T]`/`Atomic[T]`, or remove
+`implements Sendable` if the class is only used on one thread.
 
 ---
 
-### [T-3] Wrong Argument Type
+### [T-3] Primitive Field in a Sendable Class (warning)
 
-**Message:** `argument 1 of 'foo' expects 'int', got 'str'`
+**Message:** `Sendable class 'Counter' has primitive field 'count: int' that may cause data races if mutated from multiple threads.`
 
-**Cause:** A function call passed an argument whose type does not match the parameter's declared type.
+This is a **warning**, not an error — primitive fields are allowed in
+`Sendable` classes (unlike T-2), but mutating them from multiple threads
+without `Atomic[T]` is a data race.
 
-**How it works:**
 ```python
-def greet(count: int) -> void:
-    print(f"hello {count} times")
+class Counter implements Sendable:
+    pub count: int    # T-3 warning
 
-# WRONG:
-greet("five")    # T-3: expected int, got str
-
-# RIGHT:
-greet(5)
+# Fix for concurrent mutation:
+class Counter implements Sendable:
+    pub count: Atomic[int]
 ```
 
-**Thread safety:** [T-3] is also emitted for potential deadlock situations (holding a lock while awaiting another). See [Advanced — Sendable](advanced/06_sendable.md).
+**FIX:** Use `Atomic[T]` for fields mutated from multiple threads, or ensure
+the field is written only before the object is shared.
 
 ---
+
+## Type Rules (T-4 / T-5)
 
 ### [T-4] Unhandled Result from `throws` Function
 
-**Message:** `'parse_int()' returns a Result and its error must be handled`
+**Message:** `'parse_int()' returns a Result and its error must be handled.`
 
-**Cause:** A `throws` function was called as a statement with no assignment and no `?` operator, discarding the error silently.
-
-**How it works:**
 ```python
 # WRONG:
 parse_int(s)    # T-4: result discarded
 
 # RIGHT (three options):
 parse_int(s)?             # propagate with ?
-mut r = parse_int(s)      # assign to variable
+mut r = parse_int(s)      # assign to a variable
 _ = parse_int(s)          # explicitly discard
 ```
 
+**FIX:** Assign the result and match on it, use `?` to propagate, or
+`_ = fn(...)` to explicitly discard.
+
 ---
 
-### [T-5] Cannot Infer Type
+### [T-5] Numeric Value Used as a Condition
 
-**Message:** `cannot infer type of 'x' without initializer`
+**Message:** `'x' is a number (int) and cannot be used as an 'if' condition.`
 
-**Cause:** A variable was declared without a type annotation and without an initializer.
+**Cause:** Tauraro does not treat `0`/non-zero as truthy/falsy implicitly —
+`if`/`while` conditions must be `bool`.
 
-**How it works:**
 ```python
+mut x: int = 0
+
 # WRONG:
-mut x    # T-5: no type, no value
+if x:           # T-5: 'x' is a number and cannot be used as an 'if' condition
+    print("nonzero")
 
 # RIGHT:
-mut x: int = 0
-mut x = 0      # type inferred from value
+if x != 0:
+    print("nonzero")
 ```
+
+**FIX:** Write `if x != 0:` to explicitly check for non-zero.
 
 ---
 
@@ -325,13 +327,13 @@ mut x = 0      # type inferred from value
 
 ### [N-1] Reserved Name Used as Declaration
 
-**Message:** `'int' is a keyword and cannot be used as a function name`
+**Message:** `'int' is a keyword/built-in type and cannot be used as a name.` /
+`'int' is a ... and is reserved.`
 
-**Cause:** A function, class, or variable was given the name of a language keyword or built-in type.
+**Cause:** A variable, function, or top-level declaration was given the name
+of a language keyword or built-in type (`int`, `float`, `str`, `bool`, `List`,
+`Dict`, `Option`, `Result`, ...).
 
-**When to use:** This prevents accidentally shadowing built-in operations. Reserved names include all keywords (`if`, `while`, `def`, `class`, ...) and all built-in type names (`int`, `float`, `str`, `bool`, `char`, `List`, `Dict`, `Option`, `Result`, ...).
-
-**How it works:**
 ```python
 # WRONG:
 def int(x: str) -> int:    # N-1: 'int' is reserved
@@ -342,61 +344,16 @@ def to_int(x: str) -> int:
     return int(x)
 ```
 
+**FIX:** Choose a different name (e.g. `my_int`, `to_int`).
+
 ---
 
 ## Function Rules (F-series)
 
-### [F-1] Wrong Number of Arguments
-
-**Message:** `'add' expects 2 arguments, got 3`
-
-**Cause:** A function was called with a different number of arguments than it declares parameters.
-
-**How it works:**
-```python
-def add(a: int, b: int) -> int:
-    return a + b
-
-# WRONG:
-add(1, 2, 3)    # F-1: too many arguments
-add(1)          # F-1: too few arguments
-
-# RIGHT:
-add(1, 2)
-```
-
----
-
-### [F-2] Parameter Shadowed / Undefined Function
-
-**Message:** `parameter 'n' is shadowed by local variable` / `'foo' is not defined`
-
-**Cause (shadowing):** A local variable inside the function re-declares a parameter name.
-
-**How it works:**
-```python
-# WRONG:
-def double(n: int) -> int:
-    mut n = n * 2    # F-2: re-declaring parameter 'n'
-    return n
-
-# RIGHT:
-def double(n: int) -> int:
-    mut result = n * 2
-    return result
-```
-
-**Cause (undefined):** Calling a function that has not been declared anywhere visible in the current scope or any imported module.
-
----
-
 ### [F-3] Missing Return on Code Path
 
-**Message:** `function 'sign' returns 'int' but is missing a return on at least one code path`
+**Message:** `Function 'sign' returns 'int' but is missing a return statement on at least one code path.`
 
-**Cause:** A non-`void` function has at least one execution path that reaches the end without a `return`.
-
-**How it works:**
 ```python
 # WRONG:
 def sign(n: int) -> int:
@@ -411,38 +368,82 @@ def sign(n: int) -> int:
     else:       return 0
 ```
 
-**Not checked for:**
-- `void` functions (`return` is optional)
-- Constructor functions named `init` or `new`
-- Interface method signatures (no body)
-- `extern "C"` declarations (no body)
+**FIX:** Add a return at the end, or ensure all `if`/`elif`/`else` branches
+return.
+
+**Not checked for:** `void` functions, `init`/constructor functions, interface
+method signatures (no body), `extern "C"` declarations (no body).
+
+> `[F-1]` and `[F-2]` are reserved for future function-call checks
+> (argument-count and parameter-shadowing) — see "Reserved / Not Yet
+> Implemented" below.
 
 ---
 
 ## Existence Rules (E-series)
 
-### [E-1] No Method Found on Type
+`[E-1]` is currently emitted for **three unrelated situations**. All three
+share the "E" (existence/exhaustiveness) category but are otherwise distinct
+checks — see "Known overlaps" below.
+
+### [E-1] (1): Non-Exhaustive `match`
+
+**Message:** `Non-exhaustive match on 'Color': missing variant 'Blue'`
+
+**Cause:** A `match` on an `enum` value does not cover every variant and has
+no wildcard (`_`) arm.
+
+```python
+enum Color:
+    Red
+    Green
+    Blue
+
+def name(c: Color) -> str:
+    match c:
+        Color.Red:   return "red"
+        Color.Green: return "green"
+    # E-1: missing variant 'Blue'
+```
+
+**FIX:** Add a `Color.Blue` arm, or a wildcard `_:` arm.
+
+---
+
+### [E-1] (2): Explicit Call to `main()`
+
+**Message:** `Explicit call to 'main()' is forbidden. The compiler automatically invokes main() as the program entry point.`
+
+```python
+def main():
+    print("hi")
+    main()    # E-1: explicit call to main() is forbidden
+```
+
+**FIX:** Remove the `main()` call — the compiler invokes it automatically.
+
+---
+
+### [E-1] (3): No Method Found on Type
 
 **Message:** `No method 'foo' found on type 'Bar'.`
 
 **Cause:** A method call `obj.foo(...)` was made on a value whose class `Bar`
-(nor any of its base classes) declares a method named `foo`, and `foo` is not
-one of the universal dunder/built-in methods (`init`, `to_str`, `__eq__`, etc.)
-or a compiler-dispatched method on a built-in type (`Thread`, `Mutex`, `File`,
-`OS`, ...).
+(nor any base class) declares a method `foo`, and `foo` is not a universal
+dunder/built-in (`init`, `to_str`, `__eq__`, ...) or a compiler-dispatched
+method on a built-in type (`Thread`, `Mutex`, `File`, `OS`, ...).
 
-**How it works:**
 ```python
 pub class Foo:
     pub x: int
 
 def main():
     mut f = Foo()
-    f.nonexistent_method()   # E-1: no such method on 'Foo'
+    f.nonexistent_method()   # E-1: no method 'nonexistent_method' found on type 'Foo'
 ```
 
-**Fix:** Define `pub def nonexistent_method(self, ...)` in `Foo`, or add it via
-`extend Foo:` for `Foo` or one of its base classes.
+**FIX:** Define `pub def nonexistent_method(self, ...)` in `Foo`, or add it via
+`extend Foo:` on `Foo` or a base class.
 
 ---
 
@@ -451,11 +452,9 @@ def main():
 **Message:** `Nested class/def/enum/interface declarations are only supported inside main().`
 
 **Cause:** A `class`, `def`, `enum`, `interface`, or `extend` statement appears
-inside the body of a function other than `main()`. Local (nested) declarations,
-Java-style, are only allowed in `main()` — see
+inside the body of a function other than `main()`. See
 [Local (Nested) Declarations in `main()`](05_functions.md#local-nested-declarations-in-main).
 
-**How it works:**
 ```python
 def helper():
     class Foo:    # E-2: not inside main()
@@ -466,22 +465,194 @@ def main():
         pub x: int
 ```
 
-**Fix:** Move the declaration to module (top-level) scope, or move the
+**FIX:** Move the declaration to module (top-level) scope, or move the
 surrounding logic into `main()`.
 
 ---
 
-## Unsafe Rules (U-series)
+## Shared Ownership (S-series)
 
-### [U-1] Manual Memory Outside `unsafe:` Block
+### [S-1] `Shared[Self]` Reference Cycle
 
-**Message:** `'alloc' may only be called inside an 'unsafe:' block (--strict mode)`
+**Message:** `'Node' has a 'Shared[Node]' field 'parent' - this creates a reference cycle that leaks memory.`
 
-**Cause:** `alloc` or `dealloc` was called outside an `unsafe:` block when the compiler was invoked with `--strict`.
+**Cause:** A class has a field typed `Shared[Self]` (directly or via a field
+of its own type), which creates a strong reference cycle that the
+reference-counted `Shared[T]` can never collect.
 
-**When to use:** The `--strict` flag enables all safety checks. In strict mode, every manual memory operation must be explicitly wrapped in `unsafe:` to signal that you have audited the code.
+```python
+# WRONG:
+class Node implements Shared:
+    pub parent: Shared[Node]    # S-1: reference cycle
 
-**How it works:**
+# RIGHT: use Weak for back-references
+class Node implements Shared:
+    pub parent: Weak[Node]
+```
+
+**FIX:** Use `Weak[Node]` for back-references to break the cycle.
+
+---
+
+## Interface Rules (I-series)
+
+`[I-1]` and `[I-2]` are each emitted for **two unrelated situations** — one
+about `implements`/interface conformance, the other about definite
+assignment of local variables. `[I-3]` is interface-only. See "Known overlaps"
+below.
+
+### [I-1] (1): `implements` an Undefined Interface
+
+**Message:** `Class 'Worker' declares 'implements Runnable' but interface 'Runnable' is not defined.`
+
+```python
+# WRONG: 'Runnable' was never declared
+class Worker implements Runnable:
+    pub def run(self): ...
+```
+
+**FIX:** Define `interface Runnable:` before this class, or check for typos.
+
+---
+
+### [I-1] (2): Variable Used Before Assignment
+
+**Message:** `Variable 'total' is used before being assigned a value.`
+
+```python
+def sum_positive(items: List[int]) -> int:
+    mut total: int
+    print(total)    # I-1: 'total' is used before being assigned a value
+    for x in items:
+        if x > 0: total = total + x
+    return total
+```
+
+**FIX:** Assign a value before use, e.g. `mut total = 0`.
+
+---
+
+### [I-2] (1): Class Missing an Interface Method
+
+**Message:** `Class 'Worker' implements 'Runnable' but is missing method 'run'.`
+
+```python
+interface Runnable:
+    def run(self) -> void
+
+# WRONG: Worker never defines run()
+class Worker implements Runnable:
+    pub id: int
+```
+
+**FIX:** Add the missing method to `extend Worker:`.
+
+---
+
+### [I-2] (2): Not Initialized on All Code Paths
+
+**Message:** `'total' is not initialized on all code paths before this use.`
+
+```python
+def classify(n: int) -> int:
+    mut result: int
+    if n > 0:
+        result = 1
+    # I-2: 'result' is not initialized on all code paths (n <= 0 branch)
+    return result
+```
+
+**FIX:** Initialize `result` before the `if`, or ensure every branch assigns
+a value.
+
+---
+
+### [I-3] Method Signature Mismatch With Interface
+
+**Message:** `Class 'Worker': method 'run' returns 'int' but interface 'Runnable' declares '-> void'.` /
+`Class 'Worker': method 'run' has 2 parameter(s) but interface 'Runnable' requires 1.`
+
+**Cause:** A class implements an interface, but one of its methods has a
+different return type or parameter count than the interface declares.
+
+```python
+interface Runnable:
+    def run(self) -> void
+
+# WRONG: return type mismatch
+class Worker implements Runnable:
+    pub def run(self) -> int:    # I-3: declares '-> void'
+        return 0
+```
+
+**FIX:** Match the interface's return type and parameter list exactly.
+
+---
+
+## Lifetime Rules (L-series)
+
+### [L-1] Local Pointer May Not Outlive Its Function
+
+**Message:** `'x' is a local Pointer that may not outlive this function call. Returning it is unsafe.`
+
+**Cause:** A function returns a `Pointer[T]`/`ref T`/`mut_ref T` that points
+into a local variable (not a parameter), without the memory escaping via
+`unsafe:` heap allocation. The pointee is freed when the function returns.
+
+```python
+# WRONG:
+def get_ref() -> Pointer[int]:
+    mut x = 42
+    return &x       # L-1: 'x' is a local Pointer that may not outlive this function
+
+# RIGHT: return by value
+def get_value() -> int:
+    return 42
+```
+
+When you genuinely need to return a pointer into a **parameter's** data, use
+the `from` lifetime annotation — see
+[Advanced — Lifetimes](advanced/01_lifetimes.md):
+
+```python
+def get_first(data: List[int]) -> Pointer[int] from data:
+    return data.raw_ptr()
+```
+
+**FIX:** Annotate the return type with `from <param>` if the pointer borrows
+from a parameter, or wrap the allocation in `unsafe:` if it is genuinely
+heap-allocated and intentionally escapes.
+
+---
+
+## Unsafe Rules (P-series / U-series)
+
+### [P-1] `.write()` on a Pointer Outside `unsafe:`
+
+**Message:** `'.write()' on a Pointer mutates raw memory and must be inside an 'unsafe:' block.`
+
+```python
+# WRONG:
+mut p: Pointer[int] = ...
+p.write(42)    # P-1: must be inside 'unsafe:'
+
+# RIGHT:
+unsafe:
+    p.write(42)
+```
+
+**FIX:** Wrap the call in `unsafe:`.
+
+---
+
+### [U-1] Manual Memory Outside `unsafe:` Block (`--strict`)
+
+**Message:** `'alloc' used outside an 'unsafe:' block.` / `'alloc'/'dealloc' used outside an 'unsafe:' block.`
+
+**Cause:** `alloc`/`dealloc`/`alloc_array` (and similar raw-memory builtins)
+were called outside an `unsafe:` block when the compiler was invoked with
+`--strict`.
+
 ```python
 # WRONG (with --strict):
 mut buf: Pointer[char] = alloc[char](256)    # U-1
@@ -493,13 +664,60 @@ unsafe:
     dealloc(buf)
 ```
 
-**Best Practices:** Always compile with `--strict` for production code. The `unsafe:` annotation serves as documentation that this block has been manually reviewed.
+**FIX:** Wrap raw memory operations in `unsafe:` to signal manual memory
+management.
+
+**Best Practice:** Always compile with `--strict` for production code — the
+`unsafe:` annotation documents that the block has been manually reviewed.
+
+---
+
+## Known Overlaps (Same Code, Different Checks)
+
+These codes are emitted by more than one independent check in `src/sema.tr`.
+This is documented here for accuracy rather than fixed by renaming, to avoid
+an error-code churn for tooling that pattern-matches on codes mid-0.x. A
+future `0.x` release may split these into distinct codes (noted in
+`CHANGELOG.md` as a breaking change when it happens — see
+[00 — Versioning Policy](../dev/00_versioning_policy.md)):
+
+- **`[E-1]`**: non-exhaustive `match` / explicit `main()` call / no method on type.
+- **`[I-1]`**: undefined `implements` interface / variable used before assignment.
+- **`[I-2]`**: class missing an interface method / variable not initialized on all paths.
+
+---
+
+## Reserved / Not Yet Implemented
+
+These codes (or specific checks) are referenced in other docs as planned
+diagnostics but are **not currently emitted** by `src/sema.tr`. Code that
+triggers these situations either compiles without a dedicated error, or fails
+later with a generic message:
+
+- **`[F-1]`** — Wrong number of arguments to a function call. Not currently
+  checked by sema; a mismatched call may fail at the C-compiler stage with a
+  generic error instead.
+- **`[F-2]`** — A local variable shadowing a function parameter name. Not
+  currently detected; the shadowing local simply takes effect (see
+  [05 — Functions](05_functions.md#function-rules-quick-reference)).
+- **Numeric type-mismatch diagnostics** described in
+  [02 — Variables and Types](02_variables_and_types.md) (e.g. assigning `int`
+  to `float` without `as`, `int + float` without a cast) and
+  [03 — Operators](03_operators.md), [04 — Control Flow](04_control_flow.md)
+  (ternary branch type mismatch), and [07 — Collections](07_collections.md)
+  (list element / list-assignment type mismatch) — these produce a generic
+  type error today, not a stable `[T-N]` code. `[T-1]`/`[T-2]`/`[T-5]` are
+  already allocated to the concurrency and condition checks documented above.
+- **`mut x` with no type and no initializer** (["cannot infer type"], see
+  [02 — Variables and Types](02_variables_and_types.md)) — produces a generic
+  error, not a dedicated code.
 
 ---
 
 ## Parse Errors
 
-Parse errors have no rule code — they are reported directly with the source location.
+Parse errors have no rule code — they are reported directly with the source
+location.
 
 ### Unexpected Indentation
 
@@ -526,7 +744,8 @@ def foo():
 ParseError at line 8: unexpected token '='
 ```
 
-**Cause:** Often a syntax error in an expression, or a keyword used in the wrong context.
+**Cause:** Often a syntax error in an expression, or a keyword used in the
+wrong context.
 
 ---
 
@@ -536,17 +755,31 @@ ParseError at line 8: unexpected token '='
 ParseError at line 3: expected ':' after 'if' condition
 ```
 
-**Fix:** Add `:` at the end of every `if`, `elif`, `else`, `while`, `for`, `def`, `class`, and `extend` header.
+**Fix:** Add `:` at the end of every `if`, `elif`, `else`, `while`, `for`,
+`def`, `class`, and `extend` header.
+
+---
+
+### Missing Parameter Type Annotation
+
+```
+ParseError at line 2: expected ':' after parameter name
+```
+
+**Cause:** A function parameter was written without `: Type`. All parameters
+must be annotated (see [05 — Functions](05_functions.md)).
 
 ---
 
 ## Linker / C Compiler Errors
 
-These appear after the Tauraro compiler succeeds but the C compiler (GCC/Clang) fails.
+These appear after the Tauraro compiler succeeds but the C compiler
+(GCC/Clang) fails.
 
 ### undefined reference to `function_name`
 
-**Cause:** A function declared in `extern "C"` is not present in any linked library.
+**Cause:** A function declared in `extern "C"` is not present in any linked
+library.
 
 ```
 undefined reference to `curl_easy_init`
@@ -558,7 +791,9 @@ undefined reference to `curl_easy_init`
 
 ### conflicting types for 'name'
 
-**Cause:** Two declarations of the same C symbol with different types — typically a mismatch between your `extern "C"` annotation and the actual C function signature.
+**Cause:** Two declarations of the same C symbol with different types —
+typically a mismatch between your `extern "C"` annotation and the actual C
+function signature.
 
 **Fix:** Correct the `extern "C"` declaration to match the C header exactly.
 
@@ -566,7 +801,8 @@ undefined reference to `curl_easy_init`
 
 ### assignment from incompatible pointer type
 
-**Cause:** Assigning a `List_ptr*` (generic list) to a `List_i64*` (typed list). This happens when an empty list literal `[]` has no type context.
+**Cause:** Assigning a `List_ptr*` (generic list) to a `List_i64*` (typed
+list). This happens when an empty list literal `[]` has no type context.
 
 **Fix:** Annotate empty list literals explicitly: `mut data: List[int] = []`
 
@@ -611,7 +847,8 @@ if p as usize != 0 as usize:
 
 **Cause:** Unbounded recursion or very deep call stacks.
 
-**Fix:** Convert recursive algorithms to iterative form, or increase the OS stack size limit.
+**Fix:** Convert recursive algorithms to iterative form, or increase the OS
+stack size limit.
 
 ---
 
@@ -644,7 +881,9 @@ tauraroc --emit ast program.tr
 tauraroc --emit c program.tr
 ```
 
-If an error comes from GCC, look at the generated C and search for the reported line number. Type mismatches and undefined symbols are usually obvious in the C output.
+If an error comes from GCC, look at the generated C and search for the
+reported line number. Type mismatches and undefined symbols are usually
+obvious in the C output.
 
 ### Use --verbose for the full pipeline
 

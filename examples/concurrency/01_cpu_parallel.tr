@@ -1,0 +1,29 @@
+# Concurrency 01 — CPU-bound parallel work (OS threads)
+#
+# SCENARIO: sum 0..N split across worker threads (map-reduce). CPU-bound work
+# belongs on OS threads (`task_group` + `spawn`) so it runs on real cores.
+# Threads combine results lock-free via Atomic[int] — no mutex needed for a
+# simple counter/accumulator.
+#
+# Pattern: task_group (structured: waits for all) + Atomic (lock-free combine).
+
+# Each worker sums one chunk [lo, hi) and folds it into the shared total.
+def sum_chunk(lo: int, hi: int, total: Atomic[int]) -> void:
+    mut local = 0
+    mut i = lo
+    while i < hi:
+        local = local + i
+        i = i + 1
+    total.add(local)        # one atomic op per worker, not per element
+
+async def main():
+    mut total: Atomic[int] = Atomic.new(0)
+    # Fan out 4 chunks of 0..1000 across 4 OS threads; the block joins them all.
+    task_group:
+        spawn sum_chunk(0,   250,  total)
+        spawn sum_chunk(250, 500,  total)
+        spawn sum_chunk(500, 750,  total)
+        spawn sum_chunk(750, 1000, total)
+    # 0+1+...+999 = 499500
+    print("parallel sum 0..1000 = " + total.load().to_str())
+    total.free()

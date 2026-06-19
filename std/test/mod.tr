@@ -92,11 +92,11 @@ extend TestRunner:
 
     pub def assert_eq_str(self, got: str, want: str, msg: str):
         if got == want: self._pass()
-        else:           self._fail(f"{msg} — expected \"{want}\", got \"{got}\"")
+        else:           self._fail(f'{msg} — expected "{want}", got "{got}"')
 
     pub def assert_ne_str(self, a: str, b: str, msg: str):
         if a != b: self._pass()
-        else:      self._fail(f"{msg} — expected strings to differ, both are \"{a}\"")
+        else:      self._fail(f'{msg} — expected strings to differ, both are "{a}"')
 
     # Pass when s contains the substring sub.
     pub def assert_contains(self, s: str, sub: str, msg: str):
@@ -117,7 +117,7 @@ extend TestRunner:
             if ok: found = true
             i = i + 1
         if found: self._pass()
-        else:     self._fail(f"{msg} — \"{s}\" does not contain \"{sub}\"")
+        else:     self._fail(f'{msg} — "{s}" does not contain "{sub}"')
 
     pub def assert_starts_with(self, s: str, prefix: str, msg: str):
         mut sp = s as Pointer[char]
@@ -130,7 +130,7 @@ extend TestRunner:
                 return
             mut sc = sp.offset(i).read() as int
             if sc == 0 or sc != pc:
-                self._fail(f"{msg} — \"{s}\" does not start with \"{prefix}\"")
+                self._fail(f'{msg} — "{s}" does not start with "{prefix}"')
                 return
             i = i + 1
 
@@ -142,13 +142,13 @@ extend TestRunner:
         while sp.offset(sl).read() as int != 0: sl = sl + 1
         while ep.offset(el).read() as int != 0: el = el + 1
         if el > sl:
-            self._fail(f"{msg} — \"{s}\" does not end with \"{suffix}\"")
+            self._fail(f'{msg} — "{s}" does not end with "{suffix}"')
             return
         mut off = sl - el
         mut i   = 0
         while i < el:
             if sp.offset(off + i).read() as int != ep.offset(i).read() as int:
-                self._fail(f"{msg} — \"{s}\" does not end with \"{suffix}\"")
+                self._fail(f'{msg} — "{s}" does not end with "{suffix}"')
                 return
             i = i + 1
         self._pass()

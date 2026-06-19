@@ -10,6 +10,15 @@
 #ifndef TAURARO_RT_H
 #define TAURARO_RT_H
 
+/* TR_EXPORT — symbol-visibility attribute for `export def` functions, so they
+ * appear in the dynamic symbol table of a shared library (`tauraroc --lib`).
+ * On Windows: __declspec(dllexport); on ELF/Mach-O: default visibility. */
+#if defined(_WIN32) || defined(__CYGWIN__)
+#  define TR_EXPORT __declspec(dllexport)
+#else
+#  define TR_EXPORT __attribute__((visibility("default")))
+#endif
+
 /* Must be defined before any system header to expose full POSIX/platform extensions:
  * pthread_rwlock_t, setenv, strdup, struct addrinfo, NI_NAMEREQD, clock_gettime, etc. */
 #if defined(__linux__)
@@ -140,17 +149,66 @@
     do { if (!(cond)) { fprintf(stderr, "assertion failed: %s\n  message: %s\n  at %s:%d\n", #cond, (msg), __FILE__, __LINE__); abort(); } } while(0)
 #endif
 
+/* Opt-in live-allocation counter for leak bisection. Compile with
+ * -DTAURARO_MEMCOUNT to enable; _tr_report_mem() then also prints the net
+ * number of outstanding (alloc'd minus freed) heap blocks, so a steady
+ * per-request delta localizes a leak by object count. Zero-cost otherwise. */
+#ifdef TAURARO_MEMCOUNT
+#ifdef _TR_MAIN
+long _tr_live_allocs = 0;
+long _tr_live_dicts = 0;
+long _tr_live_lists = 0;
+long _tr_live_strs = 0;
+#else
+extern long _tr_live_allocs;
+extern long _tr_live_dicts;
+extern long _tr_live_lists;
+extern long _tr_live_strs;
+#endif
+#define _TR_MEMCOUNT_INC() (_tr_live_allocs++)
+#define _TR_MEMCOUNT_DEC() (_tr_live_allocs--)
+#define _TR_MEMCOUNT_DICT_INC() (_tr_live_dicts++)
+#define _TR_MEMCOUNT_DICT_DEC() (_tr_live_dicts--)
+#define _TR_MEMCOUNT_LIST_INC() (_tr_live_lists++)
+#define _TR_MEMCOUNT_LIST_DEC() (_tr_live_lists--)
+#define _TR_MEMCOUNT_STR_INC() (_tr_live_strs++)
+#define _TR_MEMCOUNT_STR_DEC() (_tr_live_strs--)
+#else
+#define _TR_MEMCOUNT_INC() ((void)0)
+#define _TR_MEMCOUNT_DEC() ((void)0)
+#define _TR_MEMCOUNT_DICT_INC() ((void)0)
+#define _TR_MEMCOUNT_DICT_DEC() ((void)0)
+#define _TR_MEMCOUNT_LIST_INC() ((void)0)
+#define _TR_MEMCOUNT_LIST_DEC() ((void)0)
+#define _TR_MEMCOUNT_STR_INC() ((void)0)
+#define _TR_MEMCOUNT_STR_DEC() ((void)0)
+#endif
+
+/* Net live heap allocations (alloc'd minus freed) under -DTAURARO_MEMCOUNT,
+ * else 0. Exposed to Tauraro so leak-gate tests can assert a workload returns
+ * to its starting allocation count. */
+static inline long long _tr_mem_live(void) {
+#ifdef TAURARO_MEMCOUNT
+    return (long long)_tr_live_allocs;
+#else
+    return 0LL;
+#endif
+}
+
 // Wrappers for core library to avoid signature conflicts
 static inline void* _tr_c_malloc(size_t size) {
-    return TAURARO_ALLOC(size);
+    void* p = TAURARO_ALLOC(size);
+    if (p) _TR_MEMCOUNT_INC();
+    return p;
 }
 static inline void* _tr_c_calloc(size_t count, size_t size) {
     void* p = TAURARO_CALLOC(count, size);
     if (!p && count * size > 0) { _TR_OOM_ABORT(); }
+    if (p) _TR_MEMCOUNT_INC();
     return p;
 }
 static inline void _tr_free(void* p) {
-    if (p) TAURARO_FREE(p);
+    if (p) { _TR_MEMCOUNT_DEC(); TAURARO_FREE(p); }
 }
 static inline void _tr_c_free(void* ptr) { _tr_free(ptr); }
 
@@ -165,11 +223,17 @@ static inline void _tr_eprint(char* s) { (void)s; }
 #endif
 
 static inline void* _tr_c_realloc(void* ptr, size_t size) {
-    return TAURARO_REALLOC(ptr, size);
+    void* p = TAURARO_REALLOC(ptr, size);
+    /* realloc(NULL, n) acts as malloc -> a new live block; realloc of an
+     * existing block frees the old internally (no _tr_free) and keeps the
+     * same logical block, so only the fresh-allocation case is counted. */
+    if (!ptr && p) _TR_MEMCOUNT_INC();
+    return p;
 }
 static inline void* _tr_checked_alloc(size_t sz) {
     void* p = TAURARO_CALLOC(1, sz);
     if (!p && sz > 0) { _TR_OOM_ABORT(); }
+    if (p) _TR_MEMCOUNT_INC();
     return p;
 }
 /* Heap-allocated empty C string. Used by char*-returning helpers that need
@@ -179,6 +243,7 @@ static inline void* _tr_checked_alloc(size_t sz) {
 static inline char* _tr_empty_heap_str(void) {
     char* e = (char*)TAURARO_ALLOC(1);
     e[0] = '\0';
+    _TR_MEMCOUNT_INC();
     return e;
 }
 /* ── Refcounted string (TrStr): fat-pointer str representation ──
@@ -220,6 +285,7 @@ static inline TrStr _tr_str_new(size_t len) {
     t.data[len] = '\0';
     t.rc = (long*)_tr_checked_alloc(sizeof(long));
     *t.rc = 1;
+    _TR_MEMCOUNT_STR_INC();
     return t;
 }
 
@@ -231,6 +297,7 @@ static inline TrStr _tr_str_retain(TrStr s) {
 static inline void _tr_str_release(TrStr s) {
     if (s.rc) {
         if (--(*s.rc) == 0) {
+            _TR_MEMCOUNT_STR_DEC();
             _tr_free(s.data);
             _tr_free((void*)s.rc);
         }
@@ -247,6 +314,7 @@ static inline TrStr _tr_str_wrap_impl(char* owned_data) {
     t.data = owned_data;
     t.rc = (long*)_tr_checked_alloc(sizeof(long));
     *t.rc = 1;
+    _TR_MEMCOUNT_STR_INC();
     return t;
 }
 static inline TrStr _tr_str_wrap_passthrough(TrStr s) { return s; }
@@ -548,7 +616,11 @@ static inline void _tr_report_mem(const char* label) { (void)label; }
 static inline void _tr_report_mem(const char* label) {
     PROCESS_MEMORY_COUNTERS pmc;
     GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
+#ifdef TAURARO_MEMCOUNT
+    fprintf(stderr, "%s: %zu bytes, %ld allocs, %ld dicts, %ld lists, %ld strs\n", label, (size_t)pmc.WorkingSetSize, _tr_live_allocs, _tr_live_dicts, _tr_live_lists, _tr_live_strs);
+#else
     fprintf(stderr, "%s: %zu bytes\n", label, (size_t)pmc.WorkingSetSize);
+#endif
     fflush(stderr);
 }
 
@@ -1916,14 +1988,20 @@ static inline int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int 
     { (void)p;(void)ev;(void)maxev;(void)timeout_ms; return 0; }
 
 #elif defined(_WIN32)
-/* ── Windows: select()-backed _TrIOPoll ──────────────────────────────────
- * IOCP is completion-based (only signals after an overlapped op is posted),
- * which doesn't match the epoll/kqueue *readiness* semantics this API
- * promises (register fd, get notified when it becomes readable/writable
- * without having posted anything). select() gives true readiness semantics
- * and works directly with the non-blocking sockets used by recv_nb/send_nb/
- * accept_nb. FD_SETSIZE is raised before winsock2.h's first include (this
- * is that first include site) so a few thousand connections can be polled. */
+/* ── Windows: WSAPoll-backed _TrIOPoll ────────────────────────────────────
+ * A poll()-style *readiness* reactor (register fd, get notified when it is
+ * readable/writable). Replaces the former select() backend: WSAPoll drops
+ * select()'s FD_SETSIZE ceiling and the per-wait three-fd_set rebuild, keeping
+ * a single persistent, dynamically-grown pollfd array - so it scales to many
+ * thousands of connections with a much smaller per-wait constant (still O(n)
+ * in registered fds, but no fixed cap and no rebuild). It stays readiness-based
+ * (POLLRDNORM/POLLWRNORM) so it works directly with the non-blocking sockets
+ * used by recv_nb/send_nb/accept_nb; IOCP would be O(ready) but is completion-
+ * based and would require overlapped I/O throughout the TCP layer. FD_SETSIZE
+ * is still raised before winsock2.h in case any other code path uses fd_set. */
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600   /* Vista+ : required for WSAPoll / WSAPOLLFD */
+#endif
 #ifndef FD_SETSIZE
 #define FD_SETSIZE 4096
 #endif
@@ -1934,23 +2012,53 @@ static inline int  _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* ev, int maxev, int 
 #pragma comment(lib, "ws2_32.lib")
 #endif
 typedef struct {
-    int      fds[FD_SETSIZE];
-    uint32_t events[FD_SETSIZE];
-    void*    userdata[FD_SETSIZE];
-    int      count;
+    WSAPOLLFD* pfds;       /* fd + requested events (in) + returned revents (out) */
+    void**     userdata;   /* parallel to pfds: the parked coro / registration ptr */
+    int        count;
+    int        cap;
 } _TrIOPoll;
 static inline _TrIOPoll* _tr_iopoll_create(void) {
-    return (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
+    _TrIOPoll* p = (_TrIOPoll*)calloc(1, sizeof(_TrIOPoll));
+    if (!p) return NULL;
+    p->cap = 64;
+    p->pfds = (WSAPOLLFD*)calloc((size_t)p->cap, sizeof(WSAPOLLFD));
+    p->userdata = (void**)calloc((size_t)p->cap, sizeof(void*));
+    if (!p->pfds || !p->userdata) { free(p->pfds); free(p->userdata); free(p); return NULL; }
+    return p;
 }
-static inline void _tr_iopoll_destroy(_TrIOPoll* p) { if (p) free(p); }
+static inline void _tr_iopoll_destroy(_TrIOPoll* p) {
+    if (p) { free(p->pfds); free(p->userdata); free(p); }
+}
+static inline SHORT _tr_poll_events(uint32_t ev) {
+    SHORT e = 0;
+    if (ev & TAURARO_POLLIN)  e |= POLLRDNORM;
+    if (ev & TAURARO_POLLOUT) e |= POLLWRNORM;
+    return e;
+}
 static inline int _tr_iopoll_add(_TrIOPoll* p, int fd, uint32_t ev, void* ud) {
     if (!p) return -1;
     for (int i = 0; i < p->count; i++) {
-        if (p->fds[i] == fd) { p->events[i] = ev; p->userdata[i] = ud; return 0; }
+        if (p->pfds[i].fd == (SOCKET)fd) {
+            p->pfds[i].events = _tr_poll_events(ev);
+            p->pfds[i].revents = 0;
+            p->userdata[i] = ud;
+            return 0;
+        }
     }
-    if (p->count >= FD_SETSIZE) return -1;
+    if (p->count >= p->cap) {
+        int ncap = p->cap * 2;
+        WSAPOLLFD* nf = (WSAPOLLFD*)realloc(p->pfds, (size_t)ncap * sizeof(WSAPOLLFD));
+        void** nu = (void**)realloc(p->userdata, (size_t)ncap * sizeof(void*));
+        if (nf) p->pfds = nf;
+        if (nu) p->userdata = nu;
+        if (!nf || !nu) return -1;
+        p->cap = ncap;
+    }
     int idx = p->count++;
-    p->fds[idx] = fd; p->events[idx] = ev; p->userdata[idx] = ud;
+    p->pfds[idx].fd = (SOCKET)fd;
+    p->pfds[idx].events = _tr_poll_events(ev);
+    p->pfds[idx].revents = 0;
+    p->userdata[idx] = ud;
     return 0;
 }
 static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
@@ -1958,10 +2066,9 @@ static inline int _tr_iopoll_mod(_TrIOPoll* p, int fd, uint32_t ev, void* ud)
 static inline int _tr_iopoll_del(_TrIOPoll* p, int fd) {
     if (!p) return -1;
     for (int i = 0; i < p->count; i++) {
-        if (p->fds[i] == fd) {
+        if (p->pfds[i].fd == (SOCKET)fd) {
             p->count--;
-            p->fds[i]      = p->fds[p->count];
-            p->events[i]   = p->events[p->count];
+            p->pfds[i]     = p->pfds[p->count];
             p->userdata[i] = p->userdata[p->count];
             return 0;
         }
@@ -1974,31 +2081,21 @@ static inline int _tr_iopoll_wait(_TrIOPoll* p, _TrIOEvent* out, int maxev, int 
         if (timeout_ms > 0) Sleep((DWORD)timeout_ms);
         return 0;
     }
-    fd_set rfds, wfds, efds;
-    FD_ZERO(&rfds); FD_ZERO(&wfds); FD_ZERO(&efds);
-    for (int i = 0; i < p->count; i++) {
-        if (p->events[i] & TAURARO_POLLIN)  FD_SET((SOCKET)p->fds[i], &rfds);
-        if (p->events[i] & TAURARO_POLLOUT) FD_SET((SOCKET)p->fds[i], &wfds);
-        FD_SET((SOCKET)p->fds[i], &efds);
-    }
-    struct timeval tv;
-    struct timeval* tvp = NULL;
-    if (timeout_ms >= 0) {
-        tv.tv_sec  = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
-        tvp = &tv;
-    }
-    int sel = select(0, &rfds, &wfds, &efds, tvp);
-    if (sel <= 0) return 0;
+    int pr = WSAPoll(p->pfds, (ULONG)p->count, timeout_ms);
+    if (pr <= 0) return 0;
     int n = 0;
     for (int i = 0; i < p->count && n < maxev; i++) {
+        SHORT re = p->pfds[i].revents;
+        if (!re) continue;
         uint32_t e = 0;
-        SOCKET s = (SOCKET)p->fds[i];
-        if (FD_ISSET(s, &rfds)) e |= TAURARO_POLLIN;
-        if (FD_ISSET(s, &wfds)) e |= TAURARO_POLLOUT;
-        if (FD_ISSET(s, &efds)) e |= TAURARO_POLLERR;
+        if (re & (POLLRDNORM | POLLIN))          e |= TAURARO_POLLIN;
+        if (re & (POLLWRNORM | POLLOUT))         e |= TAURARO_POLLOUT;
+        if (re & (POLLERR | POLLHUP | POLLNVAL)) e |= TAURARO_POLLERR;
+        /* A half-close/error must still wake a read waiter so it can observe
+         * EOF via recv()==0, matching select()/epoll behavior. */
+        if ((re & (POLLHUP | POLLERR)) && (p->pfds[i].events & POLLRDNORM)) e |= TAURARO_POLLIN;
         if (e) {
-            out[n].fd       = p->fds[i];
+            out[n].fd       = (int)p->pfds[i].fd;
             out[n].events   = e;
             out[n].userdata = p->userdata[i];
             n++;
@@ -2181,6 +2278,337 @@ static inline int   _tr_iopoll_mod_h(char* p, long long fd, long long ev, long l
     { return _tr_iopoll_mod((_TrIOPoll*)p,(int)fd,(uint32_t)ev,(void*)(uintptr_t)(unsigned long long)ud); }
 static inline int   _tr_iopoll_del_h(char* p, long long fd)
     { return _tr_iopoll_del((_TrIOPoll*)p,(int)fd); }
+
+/* =========================================================================
+ * Green-thread scheduler - stackful coroutines + non-blocking reactor.
+ *
+ * This is Tauraro's async/await engine. Each `async`/`spawn` task is a
+ * lightweight stackful coroutine (Windows Fiber / POSIX ucontext) with its
+ * own small stack. `await` is a cheap context switch, NOT an OS thread
+ * spawn - so a single OS thread cooperatively runs millions of tasks. An
+ * `await` on a socket parks the task on fd-readiness via the _TrIOPoll
+ * reactor (epoll/IOCP-select/kqueue) and yields, so no thread ever blocks on
+ * I/O (Node.js / Redis single-reactor model; multicore = future work).
+ * ========================================================================= */
+#if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)
+
+#if defined(_WIN32)
+typedef LPVOID _tr_coctx_t;
+#else
+#include <ucontext.h>
+typedef ucontext_t _tr_coctx_t;
+#endif
+
+typedef void* (*_tr_coro_fn)(void*);
+typedef enum { _TRC_READY, _TRC_RUN, _TRC_SUSP, _TRC_DONE } _tr_costate;
+
+typedef struct _TrCoro {
+    _tr_coctx_t      ctx;
+#if !defined(_WIN32)
+    char*            stack;
+#endif
+    _tr_coro_fn      fn;
+    void*            arg;
+    _tr_costate      state;
+    long long        result;
+    long long        wake_at;     /* timer deadline (ms); 0 = not sleeping  */
+    int              io_fd;       /* fd parked on the reactor; -1 = none    */
+    int              detached;    /* 1 = scheduler frees it on completion   */
+    struct _TrCoro*  joiner;      /* coro waiting for this one to finish    */
+    struct _TrCoro*  next;        /* ready-queue link                       */
+    struct _TrCoro*  snext;       /* sleep-list link                        */
+} _TrCoro;
+
+typedef struct {
+    _tr_coctx_t  main_ctx;
+    _TrCoro*     current;
+    _TrCoro*     rhead;
+    _TrCoro*     rtail;
+    _TrCoro*     shead;           /* timer-parked coros                     */
+    _TrIOPoll*   reactor;
+    int          n_sleep;
+    int          n_io;
+    int          inited;
+} _TrSchedG;
+/* Per-OS-thread scheduler (thread-per-core multicore = N worker threads, each
+ * with its own independent scheduler + reactor). It MUST be a single shared
+ * global across all translation units - a `static` per-TU copy would mean a
+ * coroutine that parks in one module (e.g. std/net) and the scheduler that
+ * runs it in another (e.g. main) see different state. Defined once in the
+ * _TR_MAIN TU, extern everywhere else; thread-local so each worker OS thread
+ * still gets its own instance. */
+#ifdef _TR_MAIN
+__thread _TrSchedG _tr_g = {0};
+#else
+extern __thread _TrSchedG _tr_g;
+#endif
+
+static long long _tr_mono_ms(void) {
+#if defined(_WIN32)
+    return (long long)GetTickCount64();
+#else
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#endif
+}
+
+static void _tr_sched_ensure(void) {
+    if (_tr_g.inited) return;
+    _tr_g.inited = 1;
+    _tr_g.current = NULL; _tr_g.rhead = _tr_g.rtail = NULL; _tr_g.shead = NULL;
+    _tr_g.reactor = NULL; _tr_g.n_sleep = 0; _tr_g.n_io = 0;
+#if defined(_WIN32)
+    _tr_g.main_ctx = ConvertThreadToFiber(NULL);
+    if (!_tr_g.main_ctx) {
+        /* Thread was already a fiber (e.g. nested) - fetch the current one. */
+        _tr_g.main_ctx = GetCurrentFiber();
+    }
+#endif
+}
+
+static void _tr_rpush(_TrCoro* c) {
+    c->next = NULL;
+    if (_tr_g.rtail) _tr_g.rtail->next = c; else _tr_g.rhead = c;
+    _tr_g.rtail = c;
+    c->state = _TRC_READY;
+}
+static _TrCoro* _tr_rpop(void) {
+    _TrCoro* c = _tr_g.rhead;
+    if (!c) return NULL;
+    _tr_g.rhead = c->next;
+    if (!_tr_g.rhead) _tr_g.rtail = NULL;
+    c->next = NULL;
+    return c;
+}
+
+static void _tr_co_to_sched(_TrCoro* from) {
+#if defined(_WIN32)
+    (void)from; SwitchToFiber(_tr_g.main_ctx);
+#else
+    swapcontext(&from->ctx, &_tr_g.main_ctx);
+#endif
+}
+static void _tr_co_to_coro(_TrCoro* to) {
+#if defined(_WIN32)
+    SwitchToFiber(to->ctx);
+#else
+    swapcontext(&_tr_g.main_ctx, &to->ctx);
+#endif
+}
+
+#if defined(_WIN32)
+static void CALLBACK _tr_co_entry(LPVOID p) {
+    _TrCoro* c = (_TrCoro*)p;
+    c->result = (long long)(uintptr_t)c->fn(c->arg);
+    c->state = _TRC_DONE;
+    if (c->joiner) { _TrCoro* j = c->joiner; c->joiner = NULL; _tr_rpush(j); }
+    SwitchToFiber(_tr_g.main_ctx);   /* control returns to the scheduler */
+}
+#else
+static void _tr_co_entry(void) {
+    _TrCoro* c = _tr_g.current;
+    c->result = (long long)(uintptr_t)c->fn(c->arg);
+    c->state = _TRC_DONE;
+    if (c->joiner) { _TrCoro* j = c->joiner; c->joiner = NULL; _tr_rpush(j); }
+    /* uc_link returns us to main_ctx automatically. */
+}
+#endif
+
+#define _TR_CORO_STACK (256 * 1024)
+
+/* Spawn a coroutine running fn(arg); returns its handle. */
+static _TrCoro* _tr_co_go(_tr_coro_fn fn, void* arg) {
+    _tr_sched_ensure();
+    _TrCoro* c = (_TrCoro*)calloc(1, sizeof(_TrCoro));
+    c->fn = fn; c->arg = arg; c->io_fd = -1;
+#if defined(_WIN32)
+    c->ctx = CreateFiber(_TR_CORO_STACK, _tr_co_entry, c);
+#else
+    c->stack = (char*)malloc(_TR_CORO_STACK);
+    getcontext(&c->ctx);
+    c->ctx.uc_stack.ss_sp = c->stack;
+    c->ctx.uc_stack.ss_size = _TR_CORO_STACK;
+    c->ctx.uc_link = &_tr_g.main_ctx;
+    makecontext(&c->ctx, _tr_co_entry, 0);
+#endif
+    _tr_rpush(c);
+    return c;
+}
+
+static void _tr_co_free(_TrCoro* c) {
+    if (!c) return;
+#if defined(_WIN32)
+    if (c->ctx) DeleteFiber(c->ctx);
+#else
+    if (c->stack) free(c->stack);
+#endif
+    free(c);
+}
+
+/* Run one scheduler step: dispatch a ready coro, or block on the reactor /
+ * timers until one becomes runnable. Returns 0 when nothing remains to do. */
+static int _tr_sched_step(void) {
+    _TrCoro* c = _tr_rpop();
+    if (c) {
+        _tr_g.current = c;
+        c->state = _TRC_RUN;
+        _tr_co_to_coro(c);
+        _tr_g.current = NULL;
+        /* A detached task (Coro.spawn / per-connection handler) has no joiner
+         * to free it - the scheduler reclaims it once it finishes. */
+        if (c->state == _TRC_DONE && c->detached) _tr_co_free(c);
+        return 1;
+    }
+    if (_tr_g.n_sleep == 0 && _tr_g.n_io == 0) return 0;   /* fully idle */
+
+    /* Compute the next timer deadline. */
+    long long now = _tr_mono_ms();
+    long long earliest = -1;
+    for (_TrCoro* s = _tr_g.shead; s; s = s->snext) {
+        if (earliest < 0 || s->wake_at < earliest) earliest = s->wake_at;
+    }
+    int timeout = -1;   /* block indefinitely if only I/O is pending */
+    if (earliest >= 0) { timeout = (int)(earliest - now); if (timeout < 0) timeout = 0; }
+
+    if (_tr_g.n_io > 0 && _tr_g.reactor) {
+        _TrIOEvent evs[64];
+        int n = _tr_iopoll_wait(_tr_g.reactor, evs, 64, timeout);
+        for (int i = 0; i < n; i++) {
+            _TrCoro* k = (_TrCoro*)evs[i].userdata;
+            if (k && k->state == _TRC_SUSP && k->io_fd >= 0) {
+                _tr_iopoll_del(_tr_g.reactor, k->io_fd);
+                k->io_fd = -1; _tr_g.n_io--;
+                _tr_rpush(k);
+            }
+        }
+    } else if (timeout > 0) {
+#if defined(_WIN32)
+        Sleep((DWORD)timeout);
+#else
+        struct timespec ts; ts.tv_sec = timeout / 1000; ts.tv_nsec = (timeout % 1000) * 1000000; nanosleep(&ts, NULL);
+#endif
+    }
+
+    /* Wake any timers that are now due. */
+    now = _tr_mono_ms();
+    _TrCoro** pp = &_tr_g.shead;
+    while (*pp) {
+        _TrCoro* s = *pp;
+        if (s->wake_at <= now) {
+            *pp = s->snext; s->snext = NULL; s->wake_at = 0; _tr_g.n_sleep--;
+            _tr_rpush(s);
+        } else {
+            pp = &s->snext;
+        }
+    }
+    return 1;
+}
+
+/* Drain the scheduler until every coroutine has finished. */
+static void _tr_sched_run(void) { while (_tr_sched_step()) {} }
+
+/* Cooperative yield: requeue the current coro behind the others. */
+static void _tr_co_yield(void) {
+    _TrCoro* c = _tr_g.current;
+    if (!c) return;
+    _tr_rpush(c);
+    _tr_co_to_sched(c);
+}
+
+/* Suspend the current coro for `ms` milliseconds (timer-parked). Outside a
+ * coroutine this is a plain sleep. */
+static void _tr_co_sleep_ms(long long ms) {
+    _TrCoro* c = _tr_g.current;
+    if (!c) {
+#if defined(_WIN32)
+        Sleep((DWORD)ms);
+#else
+        struct timespec ts; ts.tv_sec = ms / 1000; ts.tv_nsec = (ms % 1000) * 1000000; nanosleep(&ts, NULL);
+#endif
+        return;
+    }
+    c->wake_at = _tr_mono_ms() + ms;
+    c->state = _TRC_SUSP;
+    c->snext = _tr_g.shead; _tr_g.shead = c; _tr_g.n_sleep++;
+    _tr_co_to_sched(c);
+}
+
+/* Park the current coro until `fd` is ready for `events` (TAURARO_POLLIN/OUT).
+ * Returns immediately (1) outside a coroutine - caller should use blocking I/O
+ * there. Inside a coro: registers with the reactor and yields. */
+static int _tr_co_await_fd(int fd, unsigned int events) {
+    _TrCoro* c = _tr_g.current;
+    if (!c) return 1;
+    if (!_tr_g.reactor) _tr_g.reactor = _tr_iopoll_create();
+    c->io_fd = fd;
+    c->state = _TRC_SUSP;
+    _tr_iopoll_add(_tr_g.reactor, fd, events, (void*)c);
+    _tr_g.n_io++;
+    _tr_co_to_sched(c);
+    return 1;
+}
+
+/* Await another coroutine's completion and return its result. Works both
+ * inside a coro (cooperative suspend) and from the top level (pumps the
+ * scheduler until the target finishes). */
+static long long _tr_co_await(_TrCoro* target) {
+    if (!target) return 0;
+    if (_tr_g.current) {
+        if (target->state != _TRC_DONE) {
+            target->joiner = _tr_g.current;
+            _tr_g.current->state = _TRC_SUSP;
+            _tr_co_to_sched(_tr_g.current);
+        }
+        return target->result;
+    }
+    while (target->state != _TRC_DONE) {
+        if (!_tr_sched_step()) break;
+    }
+    return target->result;
+}
+
+static int       _tr_co_done(_TrCoro* c)         { return c && c->state == _TRC_DONE; }
+static long long  _tr_co_result(_TrCoro* c)       { return c ? c->result : 0; }
+
+/* Spawn a DETACHED task: runs fn(arg) as a green thread that the scheduler
+ * frees on completion (no join). Used for per-connection handlers. */
+static void _tr_co_spawn(_tr_coro_fn fn, void* arg) {
+    _TrCoro* c = _tr_co_go(fn, arg);
+    c->detached = 1;
+}
+
+/* Await with a millisecond deadline. Returns 1 if the target finished (out =
+ * result), 0 on timeout. Inside a coroutine the timeout is best-effort (we
+ * cooperatively join); from the top level the scheduler is pumped until the
+ * target finishes or the deadline passes. */
+static int _tr_co_await_timeout(_TrCoro* target, long long ms, long long* out) {
+    if (!target) { if (out) *out = 0; return 1; }
+    if (_tr_g.current) {
+        long long r = _tr_co_await(target);
+        if (out) *out = r;
+        return 1;
+    }
+    long long deadline = _tr_mono_ms() + ms;
+    while (target->state != _TRC_DONE) {
+        if (_tr_mono_ms() >= deadline) { if (out) *out = 0; return 0; }
+        if (!_tr_sched_step()) break;
+    }
+    if (out) *out = target->result;
+    return target->state == _TRC_DONE;
+}
+
+/* Tauraro-callable handle-based wrappers - extern "C" decls in std/async. */
+static char*     _tr_co_go_h(void* fn, void* arg) { return (char*)_tr_co_go((_tr_coro_fn)fn, arg); }
+static void       _tr_co_spawn_h(void* fn, void* arg) { _tr_co_spawn((_tr_coro_fn)fn, arg); }
+static long long  _tr_co_await_h(char* c)          { return _tr_co_await((_TrCoro*)c); }
+static void       _tr_co_free_h(char* c)           { _tr_co_free((_TrCoro*)c); }
+static void       _tr_co_yield_h(void)             { _tr_co_yield(); }
+static void       _tr_co_sleep_h(long long ms)     { _tr_co_sleep_ms(ms); }
+static int        _tr_co_await_fd_h(long long fd, long long ev) { return _tr_co_await_fd((int)fd, (unsigned int)ev); }
+static void       _tr_co_run_h(void)               { _tr_sched_run(); }
+static int        _tr_co_done_h(char* c)           { return _tr_co_done((_TrCoro*)c); }
+
+#endif /* green-thread scheduler */
 
 /* ── TCP socket helpers ─────────────────────────────────────────────── */
 #if defined(TAURARO_BARE) || defined(TAURARO_WASM)
@@ -2503,7 +2931,21 @@ static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
 }
 static char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
 static char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
-static char* _tr_float_to_c_lit(double n)  { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%.17g",n); return b; }
+static char* _tr_float_to_c_lit(double n) {
+    char* b=(char*)TAURARO_ALLOC(32);
+    int len = snprintf(b,32,"%.17g",n);
+    /* %g on whole numbers (e.g. 7.0 -> "7") drops any marker that tells the C
+     * compiler this is a floating-point literal, so "7 / 2" would silently
+     * become integer division. Append ".0" when no '.', exponent, or
+     * inf/nan marker is present. */
+    int has_marker = 0;
+    for (int i = 0; i < len; i++) {
+        char c = b[i];
+        if (c=='.' || c=='e' || c=='E' || c=='n' || c=='N' || c=='i' || c=='I') { has_marker = 1; break; }
+    }
+    if (!has_marker) { b[len]='.'; b[len+1]='0'; b[len+2]='\0'; }
+    return b;
+}
 static char* _tr_bool_to_str(bool b)       { return b ? "true" : "false"; }
 
 /* _TR_AUTO_STR — convert any scalar to char* for f-string / print with unknown type.
@@ -2751,9 +3193,9 @@ static size_t _dict_hash(const char* k, size_t cap) {
     return h%cap;
 }
 static Dict* Dict_new(void) {
-    Dict* d=(Dict*)malloc(sizeof(Dict));
+    Dict* d=(Dict*)malloc(sizeof(Dict)); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_DICT_INC();
     d->cap=16; d->len=0;
-    d->buckets=(_DictNode**)calloc(16,sizeof(_DictNode*));
+    d->buckets=(_DictNode**)calloc(16,sizeof(_DictNode*)); _TR_MEMCOUNT_INC();
     return d;
 }
 static void Dict_set(Dict* d, char* key, void* val) {
@@ -2761,8 +3203,8 @@ static void Dict_set(Dict* d, char* key, void* val) {
     size_t i=_dict_hash(key,d->cap);
     _DictNode* n=d->buckets[i];
     while (n) { if (strcmp(n->key,key)==0) { n->value=val; return; } n=n->next; }
-    _DictNode* nd=(_DictNode*)malloc(sizeof(_DictNode));
-    nd->key=strdup(key); nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++;
+    _DictNode* nd=(_DictNode*)malloc(sizeof(_DictNode)); _TR_MEMCOUNT_INC();
+    nd->key=strdup(key); _TR_MEMCOUNT_INC(); nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++;
 }
 static void*     Dict_get(Dict* d, char* key) {
     if (!d||!key) return NULL;
@@ -2789,6 +3231,7 @@ static void      Dict_remove(Dict* d, char* key) {
 }
 static void      Dict_free(Dict* d) {
     if (!d) return;
+    _TR_MEMCOUNT_DICT_DEC();
     for (size_t i=0; i<d->cap; i++) {
         _DictNode* n=d->buckets[i];
         while (n) { _DictNode* nx=n->next; if(n->key) _tr_free(n->key); _tr_free(n); n=nx; }
@@ -2800,6 +3243,7 @@ static void      Dict_free(Dict* d) {
    free the box itself, before freeing the node/key/buckets/struct. */
 static void      Dict_free_strval(Dict* d) {
     if (!d) return;
+    _TR_MEMCOUNT_DICT_DEC();
     for (size_t i=0; i<d->cap; i++) {
         _DictNode* n=d->buckets[i];
         while (n) {
@@ -2884,6 +3328,16 @@ static inline long long _tr_idict_len(TrIDict* d) { return d ? (long long)d->len
 /* ── Built-in Tuple (up to 8 elements, all stored as long long) ────────── */
 typedef struct { long long data[8]; } TrTuple;
 
+/* List_TrTuple: vector of builtin tuples (Vec[Tuple]). Predefined here so the
+   codegen needn't lazily emit it (which races the types-header global decls). */
+typedef struct { TrTuple* data; size_t len; size_t capacity; } List_TrTuple;
+static inline List_TrTuple* List_TrTuple_new(void) { List_TrTuple* l=(List_TrTuple*)malloc(sizeof(List_TrTuple)); l->data=(TrTuple*)malloc(sizeof(TrTuple)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_TrTuple_append(List_TrTuple* l, TrTuple val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrTuple*)realloc(l->data,sizeof(TrTuple)*l->capacity); } l->data[l->len++]=val; }
+static inline TrTuple List_TrTuple_get(List_TrTuple* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline TrTuple List_TrTuple_pop(List_TrTuple* l) { if(!l||l->len==0) return (TrTuple){0}; l->len--; return l->data[l->len]; }
+static inline void List_TrTuple_set(List_TrTuple* l, long long i, TrTuple v) { if(l&&(size_t)i<l->len) l->data[i]=v; }
+static inline void List_TrTuple_free(List_TrTuple* l) { if(l){ free(l->data); free(l); } }
+
 /* ── List types (bootstrap phase) ─────────────────────────────────── */
 
 typedef struct { long long* __restrict__ data; size_t len; size_t capacity; } List_i64;
@@ -2916,10 +3370,10 @@ static inline void List_str_free(List_str* l) { if(l){ _tr_free(l->data); _tr_fr
  * Parallel to List_str (char**); element is the 16-byte TrStr fat
  * pointer. append() retains, free() releases every element. */
 typedef struct { TrStr* data; size_t len; size_t capacity; } List_TrStr;
-static inline List_TrStr* List_TrStr_new(void) { List_TrStr* l=(List_TrStr*)malloc(sizeof(List_TrStr)); l->data=(TrStr*)malloc(sizeof(TrStr)*8); l->len=0; l->capacity=8; return l; }
+static inline List_TrStr* List_TrStr_new(void) { List_TrStr* l=(List_TrStr*)malloc(sizeof(List_TrStr)); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_LIST_INC(); l->data=(TrStr*)malloc(sizeof(TrStr)*8); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_TrStr_append(List_TrStr* l, TrStr val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrStr*)realloc(l->data,sizeof(TrStr)*l->capacity); } l->data[l->len++]=_tr_str_retain(val); }
 static inline TrStr List_TrStr_pop(List_TrStr* l) { if(!l||l->len==0) return _tr_str_lit(""); l->len--; return l->data[l->len]; }
-static inline void List_TrStr_free(List_TrStr* l) { if(l){ for(size_t i=0;i<l->len;i++) _tr_str_release(l->data[i]); _tr_free(l->data); _tr_free(l); } }
+static inline void List_TrStr_free(List_TrStr* l) { if(l){ _TR_MEMCOUNT_LIST_DEC(); for(size_t i=0;i<l->len;i++) _tr_str_release(l->data[i]); _tr_free(l->data); _tr_free(l); } }
 /* Append without retaining: transfers ownership of `val`'s existing
  * reference to the list (used when `val` was just allocated with rc=1
  * specifically for this insertion, e.g. _tr_str_split tokens). */
@@ -2974,10 +3428,10 @@ static int64_t _tr_list_all_TrStr(List_TrStr* l, _tr_pred_trstr_fn p) {
 }
 
 typedef struct { void** data; size_t len; size_t capacity; } List_ptr;
-static inline List_ptr* List_ptr_new(void) { List_ptr* l=(List_ptr*)malloc(sizeof(List_ptr)); l->data=(void**)malloc(sizeof(void*)*8); l->len=0; l->capacity=8; return l; }
+static inline List_ptr* List_ptr_new(void) { List_ptr* l=(List_ptr*)malloc(sizeof(List_ptr)); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_LIST_INC(); l->data=(void**)malloc(sizeof(void*)*8); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_ptr_append(List_ptr* l, void* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(void**)realloc(l->data,sizeof(void*)*l->capacity); } l->data[l->len++]=val; }
 static inline void* List_ptr_pop(List_ptr* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
-static inline void List_ptr_free(List_ptr* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
+static inline void List_ptr_free(List_ptr* l) { if(l){ _TR_MEMCOUNT_LIST_DEC(); _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { _Bool* data; size_t len; size_t capacity; } List_bool;
 static inline List_bool* List_bool_new(void) { List_bool* l=(List_bool*)malloc(sizeof(List_bool)); l->data=(_Bool*)malloc(sizeof(_Bool)*8); l->len=0; l->capacity=8; return l; }
@@ -3017,7 +3471,11 @@ static inline List_TrStr* _tr_dict_keys(TrMap* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _DictNode* n = d->buckets[i];
-        while (n) { if (n->key && n->value) List_TrStr_append_owned(out, _tr_str_wrap(n->key)); n = n->next; }
+        /* strdup the key: the returned TrStr owns its own buffer (rc=1), so
+           freeing the list (List_TrStr_free -> _tr_str_release) doesn't free
+           the dict's own key storage (which would dangle d's keys -> a later
+           d.get() / d[key] would miss). */
+        while (n) { if (n->key && n->value) List_TrStr_append_owned(out, _tr_str_wrap(strdup(n->key))); n = n->next; }
     }
     return out;
 }
@@ -3937,6 +4395,11 @@ static inline int _tr_tcp_connect_nb(const char* host, int port) {
 }
 #endif /* non-blocking socket API */
 
+/* Binary-safe non-blocking send: like _tr_tcp_send_nb but takes a raw byte
+ * pointer + explicit length (no NUL-terminated str), for framed protocols
+ * (e.g. WebSocket) whose payloads contain NUL bytes. */
+static inline int _tr_tcp_send_raw(int fd, char* buf, int len) { return _tr_tcp_send_nb(fd, buf, len); }
+
 /* -- Random (LCG-64) ------------------------------------------------------- */
 typedef struct { unsigned long long s; } _TrRng;
 static inline _TrRng* _tr_rng_new(long long seed) {
@@ -4242,6 +4705,61 @@ static inline char* _tr_sha256_bytes_of(char* input, int ilen) {
     memcpy(out,dig,32); return out;
 }
 
+/* ── SHA-1 + WebSocket accept key ─────────────────────────────────────────
+ * SHA-1 is only used for the RFC 6455 WebSocket handshake (it is NOT a secure
+ * hash and must not be used for anything else). _tr_ws_accept(key) computes
+ * base64(SHA1(key + WS_GUID)), the Sec-WebSocket-Accept response value. */
+typedef struct { uint32_t h[5]; uint64_t len; uint8_t buf[64]; size_t n; } _TrSHA1Ctx;
+static inline uint32_t _tr_sha1_rol(uint32_t v, int b){ return (v<<b)|(v>>(32-b)); }
+static inline void _tr_sha1_block(_TrSHA1Ctx* c, const uint8_t* p){
+    uint32_t w[80];
+    for(int i=0;i<16;i++) w[i]=((uint32_t)p[i*4]<<24)|((uint32_t)p[i*4+1]<<16)|((uint32_t)p[i*4+2]<<8)|((uint32_t)p[i*4+3]);
+    for(int i=16;i<80;i++) w[i]=_tr_sha1_rol(w[i-3]^w[i-8]^w[i-14]^w[i-16],1);
+    uint32_t a=c->h[0],b=c->h[1],cc=c->h[2],d=c->h[3],e=c->h[4];
+    for(int i=0;i<80;i++){
+        uint32_t f,k;
+        if(i<20){f=(b&cc)|((~b)&d);k=0x5A827999;}
+        else if(i<40){f=b^cc^d;k=0x6ED9EBA1;}
+        else if(i<60){f=(b&cc)|(b&d)|(cc&d);k=0x8F1BBCDC;}
+        else {f=b^cc^d;k=0xCA62C1D6;}
+        uint32_t t=_tr_sha1_rol(a,5)+f+e+k+w[i];
+        e=d;d=cc;cc=_tr_sha1_rol(b,30);b=a;a=t;
+    }
+    c->h[0]+=a;c->h[1]+=b;c->h[2]+=cc;c->h[3]+=d;c->h[4]+=e;
+}
+static inline void _tr_sha1_init(_TrSHA1Ctx* c){ c->h[0]=0x67452301;c->h[1]=0xEFCDAB89;c->h[2]=0x98BADCFE;c->h[3]=0x10325476;c->h[4]=0xC3D2E1F0;c->len=0;c->n=0; }
+static inline void _tr_sha1_update(_TrSHA1Ctx* c, const uint8_t* d, size_t len){
+    c->len += (uint64_t)len*8;
+    while(len){ size_t k=64-c->n; if(k>len)k=len; memcpy(c->buf+c->n,d,k); c->n+=k; d+=k; len-=k; if(c->n==64){ _tr_sha1_block(c,c->buf); c->n=0; } }
+}
+static inline void _tr_sha1_final(_TrSHA1Ctx* c, uint8_t* out){
+    uint64_t total = c->len;   /* message bit-length, fixed BEFORE padding bytes bump c->len */
+    uint8_t pad=0x80; _tr_sha1_update(c,&pad,1);
+    uint8_t z=0; while(c->n!=56) _tr_sha1_update(c,&z,1);
+    uint8_t lb[8]; for(int i=0;i<8;i++) lb[i]=(uint8_t)(total>>(56-i*8)); _tr_sha1_update(c,lb,8);
+    for(int i=0;i<5;i++){ out[i*4]=(uint8_t)(c->h[i]>>24);out[i*4+1]=(uint8_t)(c->h[i]>>16);out[i*4+2]=(uint8_t)(c->h[i]>>8);out[i*4+3]=(uint8_t)c->h[i]; }
+}
+static inline char* _tr_ws_accept(char* key){
+    static const char* GUID="258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    static const char* B64="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    _TrSHA1Ctx c; uint8_t dig[20];
+    _tr_sha1_init(&c);
+    if(key) _tr_sha1_update(&c,(const uint8_t*)key,strlen(key));
+    _tr_sha1_update(&c,(const uint8_t*)GUID,strlen(GUID));
+    _tr_sha1_final(&c,dig);
+    char* out=(char*)TAURARO_ALLOC(29); if(!out) return NULL;  /* 20 bytes -> 28 b64 chars + NUL */
+    int o=0;
+    for(int i=0;i<18;i+=3){
+        uint32_t v=((uint32_t)dig[i]<<16)|((uint32_t)dig[i+1]<<8)|dig[i+2];
+        out[o++]=B64[(v>>18)&63];out[o++]=B64[(v>>12)&63];out[o++]=B64[(v>>6)&63];out[o++]=B64[v&63];
+    }
+    /* final 2 bytes (18,19) -> 3 chars + '=' */
+    uint32_t v=((uint32_t)dig[18]<<16)|((uint32_t)dig[19]<<8);
+    out[o++]=B64[(v>>18)&63];out[o++]=B64[(v>>12)&63];out[o++]=B64[(v>>6)&63];out[o++]='=';
+    out[o]='\0';
+    return out;
+}
+
 /* ── HMAC-SHA256 ────────────────────────────────────────────────────────── */
 static inline char* _tr_hmac_sha256(char* key, int klen, char* msg) {
     uint8_t k[64]={0}; _TrSHA256Ctx ctx;
@@ -4370,11 +4888,37 @@ static inline void _tr_tls_close(char* h) {
     if(!h) return; _TrTLSConn* c=(_TrTLSConn*)h;
     SSL_shutdown(c->ssl);SSL_free(c->ssl);SSL_CTX_free(c->ctx);_TR_SOCK_CLOSE(c->fd);TAURARO_FREE(c);
 }
+/* ── Server side: one SSL_CTX (cert+key), one _TrTLSConn per accepted fd ──
+ * SSL_accept/read/write are blocking, so server TLS is for the thread-per-
+ * connection model (listen_tls), where blocking a worker thread is fine. */
+static inline char* _tr_tls_server_new(char* cert, char* key) {
+    static _Atomic int _tr_ssl_once_s = 0;
+    if (atomic_fetch_add(&_tr_ssl_once_s,1)==0){SSL_library_init();SSL_load_error_strings();OpenSSL_add_all_algorithms();}
+    SSL_CTX* ctx=SSL_CTX_new(TLS_server_method());
+    if(!ctx) return NULL;
+    if(SSL_CTX_use_certificate_chain_file(ctx,cert)<=0){SSL_CTX_free(ctx);return NULL;}
+    if(SSL_CTX_use_PrivateKey_file(ctx,key,SSL_FILETYPE_PEM)<=0){SSL_CTX_free(ctx);return NULL;}
+    return (char*)ctx;
+}
+static inline char* _tr_tls_accept(char* ctxh, int fd) {
+    if(!ctxh) return NULL;
+    SSL* ssl=SSL_new((SSL_CTX*)ctxh); if(!ssl) return NULL;
+    SSL_set_fd(ssl,fd);
+    if(SSL_accept(ssl)!=1){SSL_free(ssl);return NULL;}
+    _TrTLSConn* c=(_TrTLSConn*)TAURARO_ALLOC(sizeof(_TrTLSConn));
+    if(!c){SSL_free(ssl);return NULL;}
+    c->ctx=NULL; c->ssl=ssl; c->fd=fd;   /* ctx is shared/server-owned, not freed per-conn */
+    return (char*)c;
+}
+static inline void _tr_tls_server_free(char* ctxh) { if(ctxh) SSL_CTX_free((SSL_CTX*)ctxh); }
 #else
 static inline char* _tr_tls_connect(char* h, int p) { (void)h;(void)p; return NULL; }
 static inline int   _tr_tls_send(char* h, char* d)  { (void)h;(void)d; return -1; }
 static inline char* _tr_tls_recv(char* h, int c)    { (void)h;(void)c; return _tr_strdup(""); }
 static inline void  _tr_tls_close(char* h)          { (void)h; }
+static inline char* _tr_tls_server_new(char* c, char* k) { (void)c;(void)k; return NULL; }
+static inline char* _tr_tls_accept(char* x, int fd) { (void)x;(void)fd; return NULL; }
+static inline void  _tr_tls_server_free(char* x) { (void)x; }
 #endif
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -4742,6 +5286,21 @@ static char* _tr_fmt_char(const void* p) {
 static char* _tr_fmt_str(const void* p) {
     const char* s = *(const char* const*)p;
     if (!s) s = "";
+    size_t n = strlen(s);
+    char* b = (char*)_tr_checked_alloc(n + 3);
+    b[0] = '\'';
+    memcpy(b + 1, s, n);
+    b[n + 1] = '\'';
+    b[n + 2] = '\0';
+    return b;
+}
+/* Boxed-string Dict/Map value, quoted Python-repr style: 'text'.
+   Dict values are stored as void* boxes (_tr_str_box -> TrStr*), so the slot
+   is a TrStr*, not a char*. Unbox it before quoting (plain _tr_fmt_str would
+   read the TrStr* address as a char* and print garbage). */
+static char* _tr_fmt_str_box(const void* p) {
+    TrStr* box = *(TrStr* const*)p;
+    const char* s = (box && box->data) ? box->data : "";
     size_t n = strlen(s);
     char* b = (char*)_tr_checked_alloc(n + 3);
     b[0] = '\'';

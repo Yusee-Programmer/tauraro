@@ -12,7 +12,7 @@
 
 ## When You Need This
 
-- You are getting [M-2] (use after move) errors and don't understand why
+- You are getting [M-1] (use after move) errors and don't understand why
 - You need to pass a value to multiple functions
 - You are building data structures or concurrent systems that share mutable state
 - You want to understand why your code compiles when you expected it not to

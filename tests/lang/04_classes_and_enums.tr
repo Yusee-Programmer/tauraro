@@ -1,0 +1,212 @@
+# tests/lang/04_classes_and_enums.tr
+# Classes (fields, methods, static, inheritance/super) and enums (match, data variants, Option).
+
+from std.test import TestRunner
+
+class Point:
+    pub x: int
+    pub y: int
+
+    pub def init(px: int, py: int) -> Point:
+        mut p = Point()
+        p.x = px
+        p.y = py
+        return p
+
+    pub def origin() -> Point:
+        return Point.init(0, 0)
+
+    pub def distance_sq(self) -> int:
+        return self.x * self.x + self.y * self.y
+
+    pub def translate(self, dx: int, dy: int) -> void:
+        self.x += dx
+        self.y += dy
+
+class Counter:
+    pub value: int
+    step: int
+
+extend Counter:
+    pub def init(start: int, step: int) -> Counter:
+        mut c = Counter()
+        c.value = start
+        c.step  = step
+        return c
+
+    pub def increment(self) -> void:
+        self.value += self.step
+
+    pub def get(self) -> int:
+        return self.value
+
+class Shape:
+    pub color: str
+
+    pub def init(color: str) -> Shape:
+        mut s = Shape()
+        s.color = color
+        return s
+
+    pub def area(self) -> float:
+        return 0.0
+
+class Circle extends Shape:
+    pub radius: float
+
+    pub def init(color: str, radius: float) -> Circle:
+        mut c = Circle()
+        c.color  = color
+        c.radius = radius
+        return c
+
+    pub def area(self) -> float:
+        return 3.14159 * self.radius * self.radius
+
+enum Direction:
+    North
+    South
+    East
+    West
+
+extend Direction:
+    pub def opposite(self) -> Direction:
+        match self:
+            case Direction.North: return Direction.South
+            case Direction.South: return Direction.North
+            case Direction.East:  return Direction.West
+            case Direction.West:  return Direction.East
+            case _:               return Direction.North
+
+    pub def name(self) -> str:
+        match self:
+            case Direction.North: return "North"
+            case Direction.South: return "South"
+            case Direction.East:  return "East"
+            case Direction.West:  return "West"
+            case _:               return "Unknown"
+
+enum ShapeKind:
+    Circle(radius: float)
+    Rect(width: float, height: float)
+    Point
+
+extend ShapeKind:
+    pub def area(self) -> float:
+        match self:
+            case ShapeKind.Circle(r):
+                return 3.14159 * r * r
+            case ShapeKind.Rect(w, h):
+                return w * h
+            case ShapeKind.Point:
+                return 0.0
+            case _:
+                return 0.0
+
+enum ParseResult:
+    Ok(value: int)
+    Err(message: str)
+
+def safe_parse(s: str) -> ParseResult:
+    if len(s) == 0:
+        return ParseResult.Err("empty string")
+    mut n = int(s)
+    if n < 0:
+        return ParseResult.Err(f"negative: {s}")
+    return ParseResult.Ok(n)
+
+def find_first(items: List[int], target: int) -> Option[int]:
+    mut i = 0
+    while i < len(items):
+        mut cur: int = items[i + 0]
+        if cur == target:
+            return Option.Some(i)
+        i += 1
+    return Option.None
+
+def main():
+    mut t = TestRunner.init("04_classes_and_enums")
+
+    t.section("class fields and methods")
+    mut p = Point.init(3, 4)
+    t.assert_eq_int(p.x, 3, "constructor sets x")
+    t.assert_eq_int(p.y, 4, "constructor sets y")
+    t.assert_eq_int(p.distance_sq(), 25, "method computes distance_sq")
+
+    p.translate(1, -1)
+    t.assert_eq_int(p.x, 4, "translate updates x")
+    t.assert_eq_int(p.y, 3, "translate updates y")
+
+    t.section("static methods")
+    mut origin = Point.origin()
+    t.assert_eq_int(origin.x, 0, "static factory x")
+    t.assert_eq_int(origin.y, 0, "static factory y")
+
+    t.section("extend blocks")
+    mut c = Counter.init(0, 5)
+    c.increment()
+    c.increment()
+    c.increment()
+    t.assert_eq_int(c.get(), 15, "counter increments by step")
+
+    t.section("inheritance")
+    mut circle = Circle.init("red", 5.0)
+    t.assert_eq_str(circle.color, "red", "inherited field 'color'")
+    t.assert_eq_float(circle.area(), 78.53975, 0.001, "overridden area()")
+
+    mut plain_shape = Shape.init("blue")
+    t.assert_eq_float(plain_shape.area(), 0.0, 0.0001, "base area() default")
+
+    t.section("simple enum + match")
+    mut d: Direction = Direction.North
+    t.assert_eq_str(d.name(), "North", "enum variant name")
+    t.assert_eq_str(d.opposite().name(), "South", "enum match returns opposite")
+
+    d = Direction.East
+    t.assert_eq_str(d.opposite().name(), "West", "East opposite is West")
+
+    t.section("data-carrying enum variants")
+    mut sk_circle: ShapeKind = ShapeKind.Circle(5.0)
+    mut sk_rect:   ShapeKind = ShapeKind.Rect(3.0, 4.0)
+    mut sk_point:  ShapeKind = ShapeKind.Point
+    t.assert_eq_float(sk_circle.area(), 78.53975, 0.001, "ShapeKind.Circle area")
+    t.assert_eq_float(sk_rect.area(), 12.0, 0.0001, "ShapeKind.Rect area")
+    t.assert_eq_float(sk_point.area(), 0.0, 0.0001, "ShapeKind.Point area")
+
+    t.section("Result-style enum")
+    match safe_parse("42"):
+        case ParseResult.Ok(v):
+            t.assert_eq_int(v, 42, "safe_parse ok value")
+        case ParseResult.Err(e):
+            t.fail("expected Ok, got Err: " + e)
+        case _:
+            t.fail("unreachable")
+
+    match safe_parse(""):
+        case ParseResult.Ok(v):
+            t.fail("expected Err, got Ok")
+        case ParseResult.Err(e):
+            t.assert_eq_str(e, "empty string", "safe_parse err message")
+        case _:
+            t.fail("unreachable")
+
+    t.section("Option[T]")
+    mut data: List[int] = [10, 20, 30, 40, 50]
+    match find_first(data, 30):
+        case Option.Some(idx):
+            mut idx_val: int = idx as int
+            t.assert_eq_int(idx_val, 2, "find_first finds index")
+        case Option.None:
+            t.fail("expected Some, got None")
+        case _:
+            t.fail("unreachable")
+
+    match find_first(data, 99):
+        case Option.Some(idx):
+            t.fail("expected None, got Some")
+        case Option.None:
+            t.assert_true(true, "find_first returns None for missing value")
+        case _:
+            t.fail("unreachable")
+
+    t.summary()

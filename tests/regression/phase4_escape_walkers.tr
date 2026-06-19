@@ -1,0 +1,52 @@
+# tests/regression/phase4_escape_walkers.tr
+# Regression coverage for Phase 4: exhaustive escape-analysis walkers in
+# mark_escaped_str_args / mark_escaped_coll_args (src/sema.tr). Each section
+# exercises a HirExpr variant that was previously a silent `case _: pass`
+# (str/collection locals referenced through it were not excluded from
+# auto-drop, risking a use-after-free/double-free).
+
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("phase4_escape_walkers")
+
+    t.section("str local read via f-string interpolation (EFString)")
+    mut name: str = "tauraro"
+    mut greeting: str = f"hello, {name}!"
+    t.assert_eq_str(greeting, "hello, tauraro!", "f-string reads str local")
+    t.assert_eq_str(name, "tauraro", "str local still valid after f-string")
+
+    t.section("List[str] read via f-string interpolation (EFString)")
+    mut tags: List[str] = ["a", "b", "c"]
+    mut msg: str = f"tags: {len(tags)}"
+    t.assert_eq_str(msg, "tags: 3", "f-string reads List[str] local")
+    t.assert_eq_int(len(tags), 3, "List[str] local still valid after f-string")
+
+    t.section("closure capturing str local (EClosure)")
+    mut captured: str = "captured-str"
+    mut get_captured_len = def () -> int:
+        return len(captured)
+    t.assert_eq_int(get_captured_len(), 12, "closure reads captured str")
+    t.assert_eq_str(captured, "captured-str", "captured str local still valid")
+
+    t.section("closure capturing List[str] local (EClosure)")
+    mut items: List[str] = ["x", "y"]
+    mut get_len = def () -> int:
+        return len(items)
+    t.assert_eq_int(get_len(), 2, "closure reads captured List[str]")
+    t.assert_eq_int(len(items), 2, "captured List[str] local still valid")
+
+    t.section("list comprehension over List[str] (EListComp)")
+    mut words: List[str] = ["alpha", "beta", "gamma"]
+    mut uppers: List[str] = [w.to_upper() for w in words]
+    t.assert_eq_int(len(uppers), 3, "list comprehension result length")
+    t.assert_eq_str(uppers[0], "ALPHA", "list comprehension element 0")
+    t.assert_eq_str(words[1], "beta", "source List[str] local still valid")
+
+    t.section("list comprehension with filter (EListComp + ifs)")
+    mut nums: List[int] = [1, 2, 3, 4, 5, 6]
+    mut evens: List[int] = [n for n in nums if n % 2 == 0]
+    t.assert_eq_int(len(evens), 3, "filtered comprehension length")
+    t.assert_eq_int(evens[0], 2, "filtered comprehension first element")
+
+    t.summary()

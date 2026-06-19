@@ -1,5 +1,7 @@
 # 16 — Concurrency
 
+> **See also:** [Concurrency Guide — Models, Primitives, Patterns & Best Practices](advanced/07_concurrency_guide.md) for the full picture (OS threads vs green threads vs thread-per-core, a decision matrix, and best-practice combinations), and [`examples/concurrency/`](../../examples/concurrency/) for runnable examples of every pattern.
+
 ---
 
 ## Overview
@@ -28,9 +30,9 @@ Tauraro provides a layered concurrency model:
 
 | Code | Meaning |
 |------|---------|
-| `[T-1]` | Value passed to `spawn` is not `Sendable` |
-| `[T-2]` | Race condition detected statically |
-| `[T-3]` | Deadlock detected statically |
+| `[T-1]` | Value passed to `spawn`/`Thread.spawn`/`Shared[T]` is not `Sendable` |
+| `[T-2]` | A class `implements Sendable` but declares a field whose type is not `Sendable` |
+| `[T-3]` | *(warning)* A `Sendable` class has a primitive field that may race if mutated from multiple threads — wrap it in `Atomic[T]` |
 
 ---
 

@@ -6,6 +6,7 @@ from core.alloc import alloc, dealloc
 from core.io import _tr_exit, write_file, append_file
 from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
+from mir import mir_if_drop_plan, DropSite
 
 
 pub enum SymbolKind:
@@ -346,6 +347,8 @@ extend Sema:
                     bi = bi + 1
                 s = s + ")"
             s = s + ":\n"
+            if c.docstring != "":
+                s = s + "  doc: " + c.docstring + "\n"
             if c.fields.len > 0:
                 s = s + "  fields:\n"
                 mut fi = 0
@@ -518,12 +521,27 @@ extend Sema:
             case _: pass
 
     pub def check_class_sendable_fields(self, c: ClassDef):
+        # Does the class carry the explicit unsafe-thread-safety assertion?
+        # `implements Sendable, UnsafeSendable` is Tauraro's `unsafe impl Send`:
+        # it lets a class hold a raw, opaque `Pointer` handle (whose contents the
+        # compiler cannot reason about) while still crossing thread boundaries.
+        # It is greppable and deliberate - not a silent blanket exemption.
+        mut has_unsafe = false
+        mut ui = 0
+        while ui < c.iface_names.len:
+            if c.iface_names.get(ui) == "UnsafeSendable": has_unsafe = true
+            ui = ui + 1
         mut cfi = 0
         while cfi < c.fields.len:
             mut fd = c.fields.get(cfi)
             if fd.ty as usize != 0 as usize:
                 mut fty = fd.ty.read()
-                if not self.is_sendable_type(fty.name):
+                if fty.name == "Pointer":
+                    # A raw Pointer field is only allowed in a Sendable class when
+                    # the author has explicitly opted in via UnsafeSendable.
+                    if not has_unsafe:
+                        self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but holds a raw 'Pointer' field '" + fd.name + "', which the compiler cannot prove thread-safe.\n      FIX: If '" + c.name + "' wraps an internally-synchronized handle, assert it explicitly: 'implements Sendable, UnsafeSendable'.\n      Otherwise wrap the data in Mutex[T]/Atomic[T], or drop 'implements Sendable'.")
+                elif not self.is_sendable_type(fty.name):
                     self.error("[T-2] Class '" + c.name + "' declares 'implements Sendable' but field '" + fd.name + ": " + fty.name + "' is not Sendable.\n      FIX: Wrap '" + fd.name + "' in Mutex[" + fty.name + "] for exclusive access, RwLock[" + fty.name + "] for reader-writer, or Atomic[T] for numeric/flag types.\n      Or remove 'implements Sendable' if '" + c.name + "' is only used on one thread.")
                 elif fty.name == "int" or fty.name == "float" or fty.name == "bool":
                     self.warnings.push("[T-3] Sendable class '" + c.name + "' has primitive field '" + fd.name + ": " + fty.name + "' that may cause data races if mutated from multiple threads.\n      FIX: Use 'Atomic[" + fty.name + "]' for safe concurrent mutation, or ensure this field is written only before the object is shared across threads.")
@@ -1070,8 +1088,9 @@ extend Sema:
                 # (insert/set arg 0) all retain-on-insert (List_TrStr_append,
                 # _tr_dict_set's strdup), so the str local does NOT alias the
                 # collection's storage - safe to keep eligible for auto-drop.
-                # Dict/Map VALUE args (arg 1) still use box/no-retain - keep
-                # marking those as escaped.
+                # As of Phase 5 (Tier2b), Dict/Map VALUE args (arg 1) also
+                # retain-on-box (dict_val_arg -> _tr_str_box(_tr_str_retain)),
+                # so they too are safe to leave eligible for auto-drop.
                 mut obj_ty = hir_expr_type(obj)
                 # Static-method call on a class name (e.g. `Str.to_upper(s)`,
                 # `Fmt.int_to_str(n)`): `obj` is the class identifier itself,
@@ -1093,7 +1112,10 @@ extend Sema:
                         if mname == "add" or mname == "contains" or mname == "remove":
                             skip_mark = true
                     elif obj_ty.name == "Map" or obj_ty.name == "Dict":
-                        if (mname == "insert" or mname == "set") and i == 0:
+                        # Both key (i==0, strdup'd) and value (i==1, boxed
+                        # with retain) take independent references on insert/
+                        # set, so neither aliases the caller's local.
+                        if (mname == "insert" or mname == "set") and (i == 0 or i == 1):
                             skip_mark = true
                         # get/get_or/contains/remove/pop only look up the key
                         # (i==0) - never store it - so the caller's local
@@ -1143,7 +1165,80 @@ extend Sema:
                 self.mark_escaped_str_args(inner)
                 self.mark_escaped_str_args(to)
             case HirExpr.EYield(inner, _): self.mark_escaped_str_args(inner)
-            case _: pass
+            # f-string interpolations only read/format their operands (no
+            # storage), so just recurse for nested escapes.
+            case HirExpr.EFString(parts, _):
+                mut i = 0
+                while i < parts.len:
+                    mut part = parts.get(i)
+                    if part.is_expr: self.mark_escaped_str_args(part.expr)
+                    i = i + 1
+            # A closure capturing a `str` local holds a reference that may
+            # outlive the enclosing scope (the closure itself may be stored
+            # or returned), so captured str locals are excluded from
+            # auto-drop. The closure body's own statements are independently
+            # walked by lower_block when the body is lowered.
+            case HirExpr.EClosure(_, _, _, _, captures):
+                mut i = 0
+                while i < captures.len:
+                    mut cap = captures.get(i)
+                    if cap.ty.name == "str": self.mark_str_escaped(cap.name)
+                    i = i + 1
+            # `super.method(args)` may stash a str arg into a base-class
+            # field, same reasoning as constructor calls in ECall.
+            case HirExpr.ESuperMethodCall(_, _, args, _):
+                mut i = 0
+                while i < args.len:
+                    self.mark_str_arg(args.get(i))
+                    self.mark_escaped_str_args(args.get(i))
+                    i = i + 1
+            case HirExpr.ESuperPropAccess(_, _, _): pass
+            # The comprehension element may be a bare str identifier stored
+            # into the resulting List[str]/Set[str] - mark it escaped, same
+            # as EList items. Source/filter exprs are only read.
+            case HirExpr.EListComp(element, generators, _):
+                self.mark_str_arg(element)
+                self.mark_escaped_str_args(element)
+                mut i = 0
+                while i < generators.len:
+                    mut gen = generators.get(i).read()
+                    self.mark_escaped_str_args(gen.iter)
+                    mut j = 0
+                    while j < gen.ifs.len:
+                        self.mark_escaped_str_args(gen.ifs.get(j))
+                        j = j + 1
+                    i = i + 1
+            case HirExpr.EGeneratorExpr(element, generators, _):
+                self.mark_str_arg(element)
+                self.mark_escaped_str_args(element)
+                mut i = 0
+                while i < generators.len:
+                    mut gen = generators.get(i).read()
+                    self.mark_escaped_str_args(gen.iter)
+                    mut j = 0
+                    while j < gen.ifs.len:
+                        self.mark_escaped_str_args(gen.ifs.get(j))
+                        j = j + 1
+                    i = i + 1
+            case HirExpr.ESlice(start, stop, step, _):
+                self.mark_escaped_str_args(start)
+                self.mark_escaped_str_args(stop)
+                self.mark_escaped_str_args(step)
+            # ETry's try/catch/finally blocks are walked statement-by-statement
+            # by lower_block when each block is lowered, so no recursion is
+            # needed here.
+            case HirExpr.ETry(_, _, _, _): pass
+            # Leaf/literal variants - nothing to recurse into or mark.
+            case HirExpr.ELitInt(_, _): pass
+            case HirExpr.ELitFloat(_, _): pass
+            case HirExpr.ELitStr(_, _): pass
+            case HirExpr.ELitBytes(_, _): pass
+            case HirExpr.ERawStr(_, _): pass
+            case HirExpr.ELitChar(_, _): pass
+            case HirExpr.ELitBool(_, _): pass
+            case HirExpr.ELitNone(_): pass
+            case HirExpr.ESizeOf(_, _): pass
+            case HirExpr.EIdent(_, _, _): pass
 
     pub def mark_coll_escaped(self, name: str):
         mut i = self.scopes.len - 1
@@ -1293,7 +1388,86 @@ extend Sema:
             case HirExpr.EYield(inner, _):
                 self.mark_coll_arg(inner)
                 self.mark_escaped_coll_args(inner)
-            case _: pass
+            # f-string interpolations only read/format their operands (no
+            # storage of the collection pointer itself), so just recurse.
+            case HirExpr.EFString(parts, _):
+                mut i = 0
+                while i < parts.len:
+                    mut part = parts.get(i)
+                    if part.is_expr: self.mark_escaped_coll_args(part.expr)
+                    i = i + 1
+            # A closure capturing a List/Vec/Dict/Map/Set local holds an
+            # aliasing reference that may outlive the enclosing scope, so
+            # the captured collection is excluded from auto-drop. The
+            # closure body's own statements are independently walked by
+            # lower_block when the body is lowered.
+            case HirExpr.EClosure(_, _, _, _, captures):
+                mut i = 0
+                while i < captures.len:
+                    mut cap = captures.get(i)
+                    mut ctn = cap.ty.name
+                    if ctn == "List" or ctn == "Vec" or ctn == "Dict" or ctn == "Map" or ctn == "Set":
+                        self.mark_coll_escaped(cap.name)
+                    i = i + 1
+            # `super.method(args)` may stash a collection arg into a
+            # base-class field, same reasoning as ECall args.
+            case HirExpr.ESuperMethodCall(_, _, args, _):
+                mut i = 0
+                while i < args.len:
+                    self.mark_coll_arg(args.get(i))
+                    self.mark_escaped_coll_args(args.get(i))
+                    i = i + 1
+            case HirExpr.ESuperPropAccess(_, _, _): pass
+            # The comprehension element may be a bare List/Dict/etc.
+            # identifier stored into the resulting collection - mark it
+            # escaped, same as EList items. Source/filter exprs are only
+            # iterated/read.
+            case HirExpr.EListComp(element, generators, _):
+                self.mark_coll_arg(element)
+                self.mark_escaped_coll_args(element)
+                mut i = 0
+                while i < generators.len:
+                    mut gen = generators.get(i).read()
+                    self.mark_escaped_coll_args(gen.iter)
+                    mut j = 0
+                    while j < gen.ifs.len:
+                        self.mark_escaped_coll_args(gen.ifs.get(j))
+                        j = j + 1
+                    i = i + 1
+            case HirExpr.EGeneratorExpr(element, generators, _):
+                self.mark_coll_arg(element)
+                self.mark_escaped_coll_args(element)
+                mut i = 0
+                while i < generators.len:
+                    mut gen = generators.get(i).read()
+                    self.mark_escaped_coll_args(gen.iter)
+                    mut j = 0
+                    while j < gen.ifs.len:
+                        self.mark_escaped_coll_args(gen.ifs.get(j))
+                        j = j + 1
+                    i = i + 1
+            case HirExpr.ESlice(start, stop, step, _):
+                self.mark_coll_arg(start)
+                self.mark_escaped_coll_args(start)
+                self.mark_coll_arg(stop)
+                self.mark_escaped_coll_args(stop)
+                self.mark_coll_arg(step)
+                self.mark_escaped_coll_args(step)
+            # ETry's try/catch/finally blocks are walked statement-by-statement
+            # by lower_block when each block is lowered, so no recursion is
+            # needed here.
+            case HirExpr.ETry(_, _, _, _): pass
+            # Leaf/literal variants - nothing to recurse into or mark.
+            case HirExpr.ELitInt(_, _): pass
+            case HirExpr.ELitFloat(_, _): pass
+            case HirExpr.ELitStr(_, _): pass
+            case HirExpr.ELitBytes(_, _): pass
+            case HirExpr.ERawStr(_, _): pass
+            case HirExpr.ELitChar(_, _): pass
+            case HirExpr.ELitBool(_, _): pass
+            case HirExpr.ELitNone(_): pass
+            case HirExpr.ESizeOf(_, _): pass
+            case HirExpr.EIdent(_, _, _): pass
 
     # True if `b`'s last statement already transfers control (return/break/continue),
     # meaning any needed auto-drops were already injected by lower_block at that point.
@@ -1329,6 +1503,81 @@ extend Sema:
     pub def finalize_scope_drops(self, hb: HirBlock):
         if not self.block_ends_in_jump(hb):
             self.append_drops_from(hb, self.scopes.len - 1)
+
+    # #53 HYBRID: true if `hb` directly declares `nm` as a `str` local.
+    pub def block_str_decl(self, hb: HirBlock, nm: str) -> bool:
+        mut i = 0
+        while i < hb.stmts.len:
+            match hb.stmts.get(i).read():
+                case HirStmt.SLet(sn, _, _, _, _, sty, _):
+                    if sn == nm and sty.name == "str": return true
+                case _: pass
+            i = i + 1
+        return false
+
+    # #53 HYBRID: true if `hb` already contains an SAutoDrop for `nm`.
+    pub def block_has_autodrop(self, hb: HirBlock, nm: str) -> bool:
+        mut i = 0
+        while i < hb.stmts.len:
+            match hb.stmts.get(i).read():
+                case HirStmt.SAutoDrop(dn, _):
+                    if dn == nm: return true
+                case _: pass
+            i = i + 1
+        return false
+
+    # #53 HYBRID: returns the collection type name (List/Vec/Dict/Map/Set) if `hb`
+    # directly declares `nm` as that collection, else "".
+    pub def block_coll_decl(self, hb: HirBlock, nm: str) -> str:
+        mut i = 0
+        while i < hb.stmts.len:
+            match hb.stmts.get(i).read():
+                case HirStmt.SLet(sn, _, _, _, _, sty, _):
+                    if sn == nm:
+                        mut tn = sty.name
+                        if tn == "List" or tn == "Vec" or tn == "Dict" or tn == "Map" or tn == "Set":
+                            return tn
+                case _: pass
+            i = i + 1
+        return ""
+
+    # #53 HYBRID: a collection local is safe to MIR-drop only if sema's own
+    # collection-droppability predicate clears it (not coll_escaped, POD/str-value
+    # elements, not moved/borrowed). Collections are raw pointers (unlike
+    # refcounted str), so this escape gate is REQUIRED for soundness.
+    pub def coll_droppable_by_sema(self, nm: str) -> bool:
+        mut sym = self.resolve(nm)
+        if sym.name == "": return false
+        return self.is_droppable_sym(sym)
+
+    # #53 HYBRID: drive if-body fall-through drops from the MIR drop schedule.
+    # The MIR (built from the just-lowered `hf`) computes, for complete functions,
+    # which locals are owned-but-dead at an if/else/match/try body's fall-through
+    # end — exactly the leak the HIR scope/jump machinery misses. We release a name
+    # the MIR proved dead that is DECLARED in that body block and not already
+    # dropped. `str` (refcounted) needs no escape gate; COLLECTIONS (raw ptrs) are
+    # gated on sema's is_droppable_sym (coll_escaped etc.). Must run while the
+    # function scope is still open so coll_droppable_by_sema sees live symbols.
+    pub def apply_mir_if_drops(self, hf: HirFunction):
+        mut plan = mir_if_drop_plan(hf)
+        mut psi = 0
+        while psi < plan.len:
+            mut site = plan.get(psi)
+            # If the body ends in return/break/continue, the existing jump-drainage
+            # already released its locals — don't double-drop (or emit dead code).
+            if not self.block_ends_in_jump(site.hir_block):
+                mut ppi = 0
+                while ppi < site.places.len:
+                    mut nm = site.places.get(ppi)
+                    if (not self.block_has_autodrop(site.hir_block, nm)):
+                        if self.block_str_decl(site.hir_block, nm):
+                            site.hir_block.push(box_hirstmt(HirStmt.SAutoDrop(nm, "str")))
+                        else:
+                            mut ctn = self.block_coll_decl(site.hir_block, nm)
+                            if ctn != "" and self.coll_droppable_by_sema(nm):
+                                site.hir_block.push(box_hirstmt(HirStmt.SAutoDrop(nm, ctn)))
+                    ppi = ppi + 1
+            psi = psi + 1
 
     pub def declare(self, name: str, kind: SymbolKind, ty: Pointer[AstType], is_mut: bool):
         # Rule N-1: Reserved name protection (skip 'self', internal '_*' names, short generics)
@@ -1376,8 +1625,61 @@ extend Sema:
 
         return Symbol.init("", SymbolKind.SVariable, box_asttype(AstType.init("void")))
 
+    # #10: True if `nm` names a type (class/enum/interface/builtin primitive).
+    pub def is_type_name(self, nm: str) -> bool:
+        if self.classes.contains(nm) or self.enums.contains(nm) or self.interfaces.contains(nm): return true
+        if nm == "int" or nm == "float" or nm == "bool" or nm == "char" or nm == "str" or nm == "void": return true
+        if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" or nm == "isize": return true
+        if nm == "u8" or nm == "u16" or nm == "u32" or nm == "u64" or nm == "usize": return true
+        if nm == "f32" or nm == "f64": return true
+        return false
+
+    # #10: If `raw` is a bare identifier naming a TYPE (not a variable), return
+    # that type's name; else "". Used by `==`/`!=` for runtime type comparison.
+    pub def type_ref_name(self, raw: Pointer[Expr]) -> str:
+        if raw as usize == 0 as usize: return ""
+        match raw.read():
+            case Expr.EIdent(nm):
+                if not self.is_type_name(nm): return ""
+                # A real local/global VARIABLE named like a type shadows it
+                # (e.g. `mut int = 5`); only then is this not a type reference.
+                # Builtin cast names (int/float/...) are SFunction, and class
+                # names are SClass - both are valid type refs in `==` position.
+                mut s = self.resolve(nm)
+                if s.name != "" and s.kind == SymbolKind.SVariable: return ""
+                return nm
+            case _: return ""
+
+    # True when `name` is NOT bound in any function-local scope but IS a
+    # file-scope global. Used to let a bare `name = expr` inside a function
+    # introduce a fresh local that shadows the global (Python-like), instead
+    # of erroring on an immutable global.
+    pub def is_global_not_local(self, name: str) -> bool:
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name): return false
+            i = i - 1
+        return self.globals.contains(name)
+
     pub def analyze(self, prog: Program) -> HirProgram:
         mut hp = HirProgram.init()
+
+        # Pre-register every class/actor name so `extend T:` blocks attach their
+        # methods regardless of declaration/import order. Without this, an
+        # `extend T` processed before T's own `class T` decl (e.g. T lives in a
+        # module the entry file imports *after* the extending module) silently
+        # drops its methods, because register_decl only attaches when
+        # self.classes already contains the target. Inserting the same ClassDef
+        # objects up front makes attachment order-independent.
+        mut ppi = 0
+        while ppi < prog.decls.len:
+            match prog.decls.get(ppi).read():
+                case Decl.DClass(c):
+                    if not self.classes.contains(c.name): self.classes.insert(c.name, c)
+                case Decl.DActor(c):
+                    if not self.classes.contains(c.name): self.classes.insert(c.name, c)
+                case _: pass
+            ppi = ppi + 1
 
         mut i = 0
         while i < prog.decls.len:
@@ -1645,6 +1947,7 @@ extend Sema:
         hf.is_async = f.is_async
         hf.is_extern = f.is_extern
         hf.is_public = f.is_public
+        hf.is_export = f.is_export
         mut _has_self = false
         mut _si = 0
         while _si < hparams.len:
@@ -1664,6 +1967,11 @@ extend Sema:
                     self.error("[F-3] Function '" + f.name + "' returns '" + ret_nm + "' but is missing a return statement on at least one code path. FIX: Add a return at the end, or ensure all if/elif/else branches return.")
 
         self.finalize_scope_drops(hf.body)
+        # #53 HYBRID: fill the if-body fall-through leak from the MIR drop schedule
+        # (HIR machinery handled top-level/while/jump drops above). BEFORE
+        # exit_scope so the collection escape gate (coll_droppable_by_sema) can read
+        # live symbols.
+        self.apply_mir_if_drops(hf)
         self.exit_scope()
         # Restore async context and lifetime context
         self.in_async_fn = saved_async
@@ -2033,6 +2341,17 @@ extend Sema:
                                 # Bare `name = expr` with no prior declaration and no `mut`:
                                 # declares an IMMUTABLE binding (Rust-like default).
                                 self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), false)
+                            elif self.scopes.len > 0 and self.is_global_not_local(sa_decl_name) and not sa_existing.is_mut:
+                                # Inside a function, assigning to a name that only
+                                # exists as an IMMUTABLE global introduces a fresh
+                                # LOCAL that shadows the global (Python-like).
+                                # (A `mut` global stays mutable from functions and
+                                # falls through to the normal-assignment path.)
+                                # Emitted as SLet so codegen declares a new C local;
+                                # C scoping makes earlier reads see the global.
+                                self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), true)
+                                self.mark_init(sa_decl_name)
+                                return box_hirstmt(HirStmt.SLet(sa_decl_name, Ownership.Own, true, false, false, hir_expr_type(hv), hv))
                             elif sa_existing.kind == SymbolKind.SVariable and not sa_existing.is_mut:
                                 self.error("[M-8] Cannot assign to '" + sa_decl_name + "' a second time because it is immutable.\n      FIX: Declare it as 'mut " + sa_decl_name + " = ...' if it needs to change.")
                         case _: pass
@@ -2548,7 +2867,11 @@ extend Sema:
                 return box_hirstmt(HirStmt.SMultiLet(names, is_mut, hval))
             case Stmt.SLine(n):
                 self.current_line = n
-                return box_hirstmt(HirStmt.SPass)
+                # Preserve the line number into HIR so codegen can emit a
+                # `#line` directive (debug builds). With line directives off
+                # it renders as the same no-op comment SPass used to produce,
+                # keeping non-debug output byte-identical.
+                return box_hirstmt(HirStmt.SLineMarker(n))
             case _: return box_hirstmt(HirStmt.SPass)
 
     pub def variant_field_ty(self, type_name: str, variant_name: str, field_idx: int) -> AstType:
@@ -2679,6 +3002,21 @@ extend Sema:
             case Expr.EBinOp(op, left, right):
                 mut hleft = self.lower_expr(left)
                 mut hright = self.lower_expr(right)
+                # #10 runtime type comparison: `T == U`, `obj == T`, `5 == int`,
+                # etc. When either side is a bare type name (class/enum/interface/
+                # primitive that isn't a variable), compare the TYPE NAMES. A value
+                # operand contributes its static type name (so `5 == int` is True,
+                # `obj == MyClass` is True for a MyClass instance). Lowered to a
+                # str comparison of the two names.
+                if op == "==" or op == "!=":
+                    mut lref = self.type_ref_name(left)
+                    mut rref = self.type_ref_name(right)
+                    if lref != "" or rref != "":
+                        mut lname = lref
+                        if lname == "": lname = hir_expr_type(hleft).name
+                        mut rname = rref
+                        if rname == "": rname = hir_expr_type(hright).name
+                        return box_hirexpr(HirExpr.EBinOp(op, box_hirexpr(HirExpr.ELitStr(lname, AstType.init("str"))), box_hirexpr(HirExpr.ELitStr(rname, AstType.init("str"))), AstType.init("bool")))
                 mut bin_ty = hir_expr_type(hleft)
                 if bin_ty.name == "void": bin_ty = hir_expr_type(hright)
                 if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "&&" or op == "||":
@@ -3315,7 +3653,7 @@ extend Sema:
                             if self.current_func_generics.get(fi) == iname: is_param = true
                             fi = fi + 1
 
-                        if self.is_primitive_name(iname) or iname == "str" or iname == "Str" or is_param or _tr_strlen(iname) == 1 or self.classes.contains(iname) or iname == "StringObj" or iname == "StringBuilder" or self.enums.contains(iname) or iname == "Vec" or iname == "List" or iname == "Map":
+                        if self.is_primitive_name(iname) or iname == "str" or iname == "Str" or is_param or _tr_strlen(iname) == 1 or self.classes.contains(iname) or iname == "StringObj" or iname == "StringBuilder" or self.enums.contains(iname) or iname == "Vec" or iname == "List" or iname == "Map" or iname == "Tuple" or iname == "tuple":
                             is_generic = true
                             generic_arg_n = iname
                     case Expr.EIndex(_, _):
@@ -3355,6 +3693,17 @@ extend Sema:
                         cls_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
                         return box_hirexpr(HirExpr.EIdent(obj_name, cls_ty, false))
                     return hexpr_obj
+                # Dict/Map index access d[key]: lower to get_index carrying the
+                # VALUE type so the read path unboxes str values and the write
+                # path (SAssign) dispatches to dict-set. (Handled for both read
+                # and write in codegen's EMethodCall "get_index" branches.)
+                if obj_ty_n == "Map" or obj_ty_n == "Dict":
+                    mut dval_ty = AstType.init("void")
+                    mut dobj_full = hir_expr_type(hexpr_obj)
+                    if dobj_full.args.len > 1: dval_ty = dobj_full.args.get(1).read()
+                    mut didx_args = Vec[Pointer[HirExpr]].init(1)
+                    didx_args.push(self.lower_expr(idx_inner))
+                    return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", didx_args, dval_ty))
                 if not self.is_primitive_name(obj_ty_n) and obj_ty_n != "str" and obj_ty_n != "Pointer" and obj_ty_n != "List" and obj_ty_n != "Vec":
                     mut call_args = Vec[Pointer[HirExpr]].init(1)
                     call_args.push(self.lower_expr(idx_inner))
@@ -3466,7 +3815,14 @@ extend Sema:
                     h_keys.push(self.lower_expr(keys.get(di)))
                     h_vals.push(self.lower_expr(vals.get(di)))
                     di = di + 1
-                return box_hirexpr(HirExpr.EDict(h_keys, h_vals, AstType.init("Dict")))
+                # Infer key/value types from the first entry so `.get`/`[]`/print
+                # resolve correctly (otherwise the dict's K,V are lost and str
+                # values come back as raw void* garbage).
+                mut dict_ty = AstType.init("Dict")
+                if h_keys.len > 0:
+                    dict_ty.args.push(box_asttype(hir_expr_type(h_keys.get(0))))
+                    dict_ty.args.push(box_asttype(hir_expr_type(h_vals.get(0))))
+                return box_hirexpr(HirExpr.EDict(h_keys, h_vals, dict_ty))
             case Expr.EListComp(element, generators):
                 self.enter_scope()
                 mut hgens = Vec[Pointer[HirComprehension]].init(generators.len)

@@ -14,6 +14,7 @@ This directory covers advanced Tauraro topics. Core Tauraro development — writ
 | [04 — Generators](04_generators.md) | Not currently supported — use list comprehensions / manual loops | — |
 | [05 — Decorators](05_decorators.md) | `@inline`, `@hot`, `@property`, custom decorators | Compile-time code annotation and transformation |
 | [06 — Sendable](06_sendable.md) | Thread-safety enforcement via the `Sendable` interface | Passing types across threads without data races |
+| [07 — Concurrency Guide](07_concurrency_guide.md) | All concurrency models, primitives, decision matrix, best-practice combinations | Choosing the right model; building servers/parallel work; see `examples/concurrency/` |
 
 ---
 

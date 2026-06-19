@@ -1,0 +1,55 @@
+# Concurrency 04 — async / await (green threads, non-blocking)
+#
+# SCENARIO: I/O-bound work (here simulated). `async def` functions run as
+# cooperative GREEN THREADS: `await` suspends the current coroutine and lets
+# others run on the same OS thread — ideal when you're mostly WAITING (sockets,
+# pipes), not burning CPU.
+#
+#   await x          run x, suspend until it completes, get its result
+#   await_all(...)   run several async calls CONCURRENTLY, wait for all
+#   await_timeout    bound an async call by milliseconds
+#
+# NOTE: a *blocking* call inside an async fn blocks the whole worker — use the
+# async I/O primitives (recv_async, Coro.sleep_ms, Coro.await_readable) instead.
+
+async def fetch(id: int) -> str:
+    return f"item-{id}"            # stand-in for an awaited socket read
+
+async def fetch_len(id: int) -> int:
+    mut data = await fetch(id)     # suspends here; other coroutines may run
+    return len(data)
+
+# A small pipeline: await several stages in sequence.
+async def pipeline(ids: List[int]) -> int:
+    mut total = 0
+    for id in ids:
+        total = total + await fetch_len(id)
+    return total
+
+async def heavy(n: int) -> void:
+    mut s = 0
+    mut i = 0
+    while i < n:
+        s = s + i
+        i = i + 1
+    print("  heavy(" + n.to_str() + ") = " + s.to_str())
+
+async def main():
+    print("=== await (sequential) ===")
+    mut a = await fetch_len(1)             # len("item-1") = 6
+    mut b = await fetch_len(42)            # len("item-42") = 7
+    print("fetch_len 1=" + a.to_str() + " 42=" + b.to_str())
+
+    print("=== await in a pipeline ===")
+    mut total = await pipeline([1, 2, 3, 10])
+    print("pipeline total = " + total.to_str())
+
+    print("=== await_all (concurrent) ===")
+    await_all(heavy(1000), heavy(2000), heavy(3000))
+    print("  all heavy() finished concurrently")
+
+    print("=== await_timeout (bounded) ===")
+    # await_timeout returns the call's result (or the zero value on timeout);
+    # here fetch_len(7) = len("item-7") = 7, well within 1000ms.
+    mut got = await_timeout(fetch_len(7), 1000)
+    print("  fetch_len(7) within 1000ms = " + got.to_str())

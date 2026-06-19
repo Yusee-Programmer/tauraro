@@ -12,6 +12,8 @@
 #   spawn: do_work_c(); wg.done()
 #   wg.wait()
 
+from std.async.send import Sendable, UnsafeSendable
+
 extern "C":
     def _tr_wg_new_h() -> Pointer[char]
     def _tr_wg_add_h(w: Pointer[char], n: int)
@@ -20,7 +22,10 @@ extern "C":
     def _tr_wg_wait_timeout_h(w: Pointer[char], ms: int) -> bool
     def _tr_wg_free_h(w: Pointer[char])
 
-pub class WaitGroup:
+# Sendable: the handle wraps a mutex+condvar-backed C object whose operations
+# are internally synchronized, so the same WaitGroup can be shared across the
+# OS threads it is designed to coordinate.
+pub class WaitGroup implements Sendable, UnsafeSendable:
     pub handle: Pointer[char]
 
 extend WaitGroup:

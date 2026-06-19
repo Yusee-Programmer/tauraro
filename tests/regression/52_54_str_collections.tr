@@ -1,0 +1,77 @@
+# tests/regression/52_54_str_collections.tr
+# Regression coverage for #52 (List[str]/Dict[str,V] -> List_TrStr migration)
+# and #54 (std/string TrStr migration, Dict str-value .get()/.values()).
+
+from std.test import TestRunner
+from std.core.string import StringBuilder
+
+def main():
+    mut t = TestRunner.init("52_54_str_collections")
+
+    t.section("List[str] basics")
+    mut tags: List[str] = []
+    tags.append("alpha")
+    tags.append("beta")
+    tags.append("gamma")
+    t.assert_eq_int(len(tags), 3, "List[str] append grows length")
+    t.assert_eq_str(tags[0], "alpha", "List[str] index 0")
+    t.assert_eq_str(tags[2], "gamma", "List[str] index 2")
+
+    mut popped = tags.pop()
+    t.assert_eq_str(popped, "gamma", "List[str].pop returns last element")
+    t.assert_eq_int(len(tags), 2, "List[str].pop shrinks list")
+
+    t.section("List[str] sort")
+    mut words: List[str] = ["banana", "apple", "cherry", "date"]
+    words.sort()
+    t.assert_eq_str(words.get(0), "apple", "List[str].sort first")
+    t.assert_eq_str(words.get(3), "date", "List[str].sort last")
+
+    t.section("Set[str]")
+    mut set1: Set[str] = Set[str].init()
+    set1.add("x")
+    set1.add("y")
+    set1.add("x")
+    t.assert_eq_int(set1.len(), 2, "Set[str] dedups duplicates")
+    t.assert_true(set1.contains("x"), "Set[str].contains true")
+    t.assert_false(set1.contains("z"), "Set[str].contains false")
+
+    t.section("Dict[str,V] str-value get/values")
+    mut d: Dict[str, str] = {}
+    d.set("name", "tauraro")
+    d.set("kind", "language")
+    t.assert_eq_str(d.get("name"), "tauraro", "Dict[str,str].get")
+    t.assert_eq_str(d.get("kind"), "language", "Dict[str,str].get second key")
+
+    # .values() returns List[str] for str-valued maps (#54)
+    mut vals: List[str] = d.values()
+    t.assert_eq_int(len(vals), 2, "Dict[str,str].values() length")
+
+    t.section("Dict[str,int] from string-keyed counting")
+    sentence: str = "the quick brown fox jumps over the lazy dog the"
+    mut word_counts: Dict[str, int] = {}
+    mut ws: List[str] = sentence.split(" ")
+    mut wi: int = 0
+    while wi < len(ws):
+        mut word: str = ws[wi + 0]
+        if word_counts.has(word):
+            mut c = word_counts.get(word)
+            word_counts.set(word, c + 1)
+        else:
+            word_counts.set(word, 1)
+        wi += 1
+    t.assert_eq_int(word_counts.get("the"), 3, "word-count: 'the' appears 3 times")
+    t.assert_eq_int(word_counts.get("fox"), 1, "word-count: 'fox' appears 1 time")
+
+    t.section("std/string Str / StringBuilder (#54)")
+    mut joined = Str.join(["a", "b", "c"], "-")
+    t.assert_eq_str(joined, "a-b-c", "Str.join with str list")
+
+    mut sb = StringBuilder.init(16)
+    sb.append("hello")
+    sb.append(" ")
+    sb.append("world")
+    mut built: str = sb.to_string().as_str()
+    t.assert_eq_str(built, "hello world", "StringBuilder.to_string()")
+
+    t.summary()

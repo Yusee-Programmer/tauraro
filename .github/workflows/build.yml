@@ -148,6 +148,21 @@ jobs:
           fi
           echo "==> Binary present: $(ls -lh tauraroc${{ matrix.ext }})"
 
+      # -------------------------------------------------------
+      # Regression test suite: tests/lang/ and tests/regression/,
+      # run via `tauraroc --run` against the freshly-built binary
+      # on each platform. See scripts/run_tests.sh / run_tests.ps1.
+      # -------------------------------------------------------
+      - name: Run regression test suite (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/run_tests.sh
+
+      - name: Run regression test suite (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/run_tests.ps1
+
       - name: Clean up generated build output
         shell: bash
         run: |

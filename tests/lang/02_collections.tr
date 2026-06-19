@@ -1,0 +1,111 @@
+# tests/lang/02_collections.tr
+# Collections: List[T], Dict[K,V], Tuple, Set[T].
+
+from std.test import TestRunner
+
+def sum_list(items: List[int]) -> int:
+    mut total = 0
+    for x in items:
+        total += x
+    return total
+
+def min_max(items: List[int]) -> (int, int):
+    mut lo = items[0]
+    mut hi = items[0]
+    for x in items:
+        if x < lo: lo = x
+        if x > hi: hi = x
+    return (lo, hi)
+
+def main():
+    mut t = TestRunner.init("02_collections")
+
+    t.section("List basics")
+    mut primes: List[int] = [2, 3, 5, 7, 11]
+    t.assert_eq_int(len(primes), 5, "list literal length")
+    t.assert_eq_int(primes[0], 2, "first element")
+    t.assert_eq_int(primes[4], 11, "last element")
+
+    mut scores: List[int] = []
+    scores.append(90)
+    scores.append(85)
+    t.assert_eq_int(len(scores), 2, "append grows list")
+
+    mut vals: List[int] = [10, 20, 30]
+    vals[1] = 99
+    t.assert_eq_int(vals[1], 99, "index assignment")
+
+    mut popped = vals.pop()
+    t.assert_eq_int(popped, 30, "pop returns last element")
+    t.assert_eq_int(len(vals), 2, "pop shrinks list")
+
+    t.section("List aggregates")
+    t.assert_eq_int(sum_list(primes), 28, "sum via loop")
+    mut agg: List[int] = [3, 1, 4, 1, 5, 9, 2, 6]
+    t.assert_eq_int(agg.sum(), 31, "List.sum()")
+    t.assert_eq_int(agg.min_val(), 1, "List.min_val()")
+    t.assert_eq_int(agg.max_val(), 9, "List.max_val()")
+
+    t.section("List sort")
+    mut ns: List[int] = [5, 2, 8, 1, 9, 3]
+    ns.sort()
+    t.assert_eq_int(ns.get(0), 1, "sort asc first")
+    t.assert_eq_int(ns.get(5), 9, "sort asc last")
+
+    mut ds: List[int] = [5, 2, 8, 1, 9, 3]
+    ds.sort_desc()
+    t.assert_eq_int(ds.get(0), 9, "sort desc first")
+    t.assert_eq_int(ds.get(5), 1, "sort desc last")
+
+    t.section("List[str]")
+    mut tags: List[str] = []
+    tags.append("tauraro")
+    tags.append("systems")
+    tags.append("fast")
+    t.assert_eq_int(len(tags), 3, "List[str] length")
+    t.assert_eq_str(tags[1], "systems", "List[str] index")
+
+    t.section("Tuples")
+    mut point = (10, 20)
+    mut px, py = point
+    t.assert_eq_int(px, 10, "tuple unpack x")
+    t.assert_eq_int(py, 20, "tuple unpack y")
+
+    mut lo, hi = min_max([3, 1, 4, 1, 5, 9, 2, 6])
+    t.assert_eq_int(lo, 1, "function-returned tuple: min")
+    t.assert_eq_int(hi, 9, "function-returned tuple: max")
+
+    t.section("Dict")
+    mut config: Dict = {"host": "localhost", "port": "8080"}
+    host_val: str = config.get("host")
+    t.assert_eq_str(host_val, "localhost", "dict literal get")
+    config.set("timeout", "30")
+    t.assert_true(config.has("timeout"), "dict.set then has")
+    t.assert_false(config.has("missing"), "dict.has on missing key")
+
+    t.section("Typed Dict[str,int]")
+    mut player_scores: Dict[str, int] = {}
+    player_scores.set("alice", 95)
+    player_scores.set("bob", 82)
+    t.assert_eq_int(player_scores.get("alice"), 95, "typed dict get alice")
+    t.assert_eq_int(player_scores.get("bob"), 82, "typed dict get bob")
+
+    t.section("Dict[str,int].items()")
+    mut total = 0
+    for word, cnt in player_scores.items():
+        total = total + cnt
+    t.assert_eq_int(total, 177, "items() iterates all entries")
+
+    t.section("Set[T]")
+    mut fruit_set: Set[str] = Set[str].init()
+    fruit_set.add("apple")
+    fruit_set.add("banana")
+    fruit_set.add("apple")
+    t.assert_eq_int(fruit_set.len(), 2, "Set dedups on add")
+    t.assert_true(fruit_set.contains("apple"), "Set.contains true")
+    t.assert_false(fruit_set.contains("grape"), "Set.contains false")
+
+    fruit_set.remove("banana")
+    t.assert_eq_int(fruit_set.len(), 1, "Set.remove shrinks")
+
+    t.summary()

@@ -3,11 +3,15 @@
 # Sub-modules can also be imported directly:
 #
 #   from std.encoding.json   import JsonValue, JsonParser, Json
+#   from std.encoding.toml   import TomlValue, TomlParser, Toml
 #   from std.encoding.base64 import Base64
 #   from std.encoding.hex    import Hex
 
 from std.encoding.json   import JsonValue
 from std.encoding.json   import JsonParser
 from std.encoding.json   import Json
+from std.encoding.toml   import TomlValue
+from std.encoding.toml   import TomlParser
+from std.encoding.toml   import Toml
 from std.encoding.base64 import Base64
 from std.encoding.hex    import Hex

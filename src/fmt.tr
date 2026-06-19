@@ -1,0 +1,847 @@
+# compiler/src/fmt.tr - Source formatter for Tauraro (`tauraroc fmt`).
+#
+# Walks the parser AST and emits canonically-formatted Tauraro source. Comments
+# are NOT in the AST; the lexer records them separately (line + text + trailing)
+# and the formatter re-interleaves them by source line:
+#   * standalone comments are emitted on their own line, at the indentation of
+#     the following statement/declaration;
+#   * trailing comments are appended after the code on their original line.
+#
+# Correctness bar: never drop a comment, and be idempotent - fmt(fmt(x)) == fmt(x).
+# Binary/unary sub-expressions are conservatively parenthesized so the printed
+# form always re-parses to the same AST (no precedence guesswork).
+
+from core.vec import Vec
+from core.string import StringBuilder
+from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, VariantDef, FieldDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm, ElifClause, ImportItem
+
+pub class Formatter:
+    pub out:    StringBuilder
+    pub indent: int
+    # Comment streams (parallel), in source order, from the lexer.
+    pub c_lines:    Vec[int]
+    pub c_texts:    Vec[str]
+    pub c_trailing: Vec[bool]
+    pub ci:         int   # index of next unemitted comment
+    pub unsupported: bool # set if an AST construct the formatter can't render is hit
+    pub in_fstring: bool  # inside an f-string interpolation: emit str literals single-quoted
+
+extend Formatter:
+    pub def init(c_lines: Vec[int], c_texts: Vec[str], c_trailing: Vec[bool]) -> Formatter:
+        mut f = Formatter()
+        f.out = StringBuilder.init(4096)
+        f.indent = 0
+        f.c_lines = c_lines
+        f.c_texts = c_texts
+        f.c_trailing = c_trailing
+        f.ci = 0
+        f.unsupported = false
+        f.in_fstring = false
+        return f
+
+    # --- low-level emit helpers ----------------------------------------------
+    pub def pad(self) -> str:
+        mut sb = StringBuilder.init(self.indent * 4 + 1)
+        mut i = 0
+        while i < self.indent * 4:
+            sb.append_char(32)
+            i = i + 1
+        return sb.to_string().as_str()
+
+    pub def line(self, text: str):
+        self.out.append(self.pad())
+        self.out.append(text)
+        self.out.append("\n")
+
+    # --- comment interleaving -------------------------------------------------
+    # Emit every standalone comment whose source line is < `line_no`, at the
+    # current indentation. Trailing comments are skipped here (attached to code).
+    pub def flush_standalone_before(self, line_no: int):
+        while self.ci < self.c_lines.len:
+            if self.c_lines.get(self.ci) >= line_no: break
+            if self.c_trailing.get(self.ci):
+                # A trailing comment whose owner line was never matched (e.g.
+                # the statement had no recorded line): emit standalone so it is
+                # not lost.
+                self.out.append(self.pad())
+                self.out.append("#")
+                self.out.append(self.c_texts.get(self.ci))
+                self.out.append("\n")
+            else:
+                mut txt = self.c_texts.get(self.ci)
+                if txt.len() == 0:
+                    self.out.append("#\n")
+                else:
+                    self.out.append(self.pad())
+                    self.out.append("#")
+                    self.out.append(txt)
+                    self.out.append("\n")
+            self.ci = self.ci + 1
+
+    # Return the trailing comment for source line `line_no` (e.g. "  # note"),
+    # or "" if none. Consumes it.
+    pub def trailing_for(self, line_no: int) -> str:
+        if self.ci < self.c_lines.len:
+            if self.c_trailing.get(self.ci) and self.c_lines.get(self.ci) == line_no:
+                mut txt = self.c_texts.get(self.ci)
+                self.ci = self.ci + 1
+                return "  #" + txt
+        return ""
+
+    pub def flush_remaining(self):
+        while self.ci < self.c_lines.len:
+            mut txt = self.c_texts.get(self.ci)
+            if txt.len() == 0:
+                self.out.append("#\n")
+            else:
+                self.out.append("#")
+                self.out.append(txt)
+                self.out.append("\n")
+            self.ci = self.ci + 1
+
+    # --- string escaping ------------------------------------------------------
+    pub def escape_str(self, s: str) -> str:
+        mut sb = StringBuilder.init(s.len() + 2)
+        mut p = s as Pointer[char]
+        mut i = 0
+        mut n = s.len()
+        while i < n:
+            mut c = 0
+            unsafe: c = p.offset(i).read() as int
+            if c == 92: sb.append("\\\\")
+            elif c == 34: sb.append("\\\"")
+            elif c == 10: sb.append("\\n")
+            elif c == 9:  sb.append("\\t")
+            elif c == 13: sb.append("\\r")
+            else: sb.append_char(c)
+            i = i + 1
+        return sb.to_string().as_str()
+
+    # Escape a single character value for a char literal '...'. Handles NUL
+    # and the escapes that must round-trip (so '\0' is never emitted as '').
+    pub def escape_char(self, v: int) -> str:
+        if v == 0:  return "\\0"
+        if v == 92: return "\\\\"
+        if v == 39: return "\\'"
+        if v == 10: return "\\n"
+        if v == 9:  return "\\t"
+        if v == 13: return "\\r"
+        mut sb = StringBuilder.init(2)
+        sb.append_char(v)
+        return sb.to_string().as_str()
+
+    # Like escape_str but for single-quoted string literals (escapes ' not ").
+    pub def escape_str_sq(self, s: str) -> str:
+        mut sb = StringBuilder.init(s.len() + 2)
+        mut p = s as Pointer[char]
+        mut i = 0
+        mut n = s.len()
+        while i < n:
+            mut c = 0
+            unsafe: c = p.offset(i).read() as int
+            if c == 92: sb.append("\\\\")
+            elif c == 39: sb.append("\\'")
+            elif c == 10: sb.append("\\n")
+            elif c == 9:  sb.append("\\t")
+            elif c == 13: sb.append("\\r")
+            else: sb.append_char(c)
+            i = i + 1
+        return sb.to_string().as_str()
+
+    # --- types ----------------------------------------------------------------
+    pub def type_str(self, t: Pointer[AstType]) -> str:
+        if t as usize == 0 as usize: return ""
+        mut ty = t.read()
+        # Special-cased type spellings (see parser.parse_type encodings).
+        if ty.name == "ref" and ty.args.len == 1:
+            return "ref " + self.type_str(ty.args.get(0))
+        if ty.name == "mut_ref" and ty.args.len == 1:
+            return "mut ref " + self.type_str(ty.args.get(0))
+        if ty.name == "Tuple":
+            mut ts = "("
+            mut ti = 0
+            while ti < ty.args.len:
+                if ti > 0: ts = ts + ", "
+                ts = ts + self.type_str(ty.args.get(ti))
+                ti = ti + 1
+            return ts + ")"
+        if ty.name == "def":
+            # Function-pointer type: args = [param types..., return type].
+            mut ds = "def("
+            mut di = 0
+            while di < ty.args.len - 1:
+                if di > 0: ds = ds + ", "
+                ds = ds + self.type_str(ty.args.get(di))
+                di = di + 1
+            ds = ds + ")"
+            if ty.args.len > 0:
+                mut rt = self.type_str(ty.args.get(ty.args.len - 1))
+                if rt.len() > 0 and rt != "void": ds = ds + " -> " + rt
+            return ds
+        mut s = ty.name
+        if ty.args.len > 0:
+            s = s + "["
+            mut i = 0
+            while i < ty.args.len:
+                if i > 0: s = s + ", "
+                s = s + self.type_str(ty.args.get(i))
+                i = i + 1
+            s = s + "]"
+        if ty.from_param.len() > 0:
+            s = s + " from " + ty.from_param
+        return s
+
+    # --- expressions ----------------------------------------------------------
+    # True for expressions that must be parenthesized when used as an operand of
+    # a binary/unary operator, to guarantee the printed form re-parses identically.
+    pub def needs_parens(self, e: Pointer[Expr]) -> bool:
+        if e as usize == 0 as usize: return false
+        match e.read():
+            case Expr.EBinOp(_, _, _): return true
+            case Expr.EUnaryOp(_, _): return true
+            case Expr.EIfElse(_, _, _): return true
+            case Expr.ETuple(_): return true
+            case Expr.ERange(_, _, _): return true
+            case Expr.ECast(_, _): return true
+            case _: return false
+
+    pub def operand_str(self, e: Pointer[Expr]) -> str:
+        if self.needs_parens(e):
+            return "(" + self.expr_str(e) + ")"
+        return self.expr_str(e)
+
+    pub def args_str(self, args: Vec[Pointer[Expr]]) -> str:
+        mut s = ""
+        mut i = 0
+        while i < args.len:
+            if i > 0: s = s + ", "
+            s = s + self.expr_str(args.get(i))
+            i = i + 1
+        return s
+
+    pub def expr_str(self, e: Pointer[Expr]) -> str:
+        if e as usize == 0 as usize: return ""
+        match e.read():
+            case Expr.ELitInt(v): return v.to_str()
+            case Expr.ELitFloat(v): return v.to_str()
+            case Expr.ELitStr(v):
+                # Inside an f-string interpolation, use single quotes so an
+                # embedded string literal doesn't clash with the f-string's
+                # double-quote delimiter (e.g. f"{d.get('key')}").
+                if self.in_fstring:
+                    return "'" + self.escape_str_sq(v) + "'"
+                return "\"" + self.escape_str(v) + "\""
+            case Expr.ELitBool(b):
+                if b: return "True"
+                return "False"
+            case Expr.ELitChar(v): return "'" + self.escape_char(v) + "'"
+            case Expr.ELitBytes(v): return "b\"" + self.escape_str(v) + "\""
+            case Expr.ERawStr(v): return "r\"" + v + "\""
+            case Expr.ELitNone: return "None"
+            case Expr.EIdent(nm): return nm
+            case Expr.EBinOp(op, l, r):
+                return self.operand_str(l) + " " + op + " " + self.operand_str(r)
+            case Expr.EUnaryOp(op, x):
+                if op == "not": return "not " + self.operand_str(x)
+                return op + self.operand_str(x)
+            case Expr.ECall(callee, args):
+                return self.expr_str(callee) + "(" + self.args_str(args) + ")"
+            case Expr.EMethodCall(obj, m, args):
+                return self.operand_str(obj) + "." + m + "(" + self.args_str(args) + ")"
+            case Expr.EPropAccess(obj, p):
+                return self.operand_str(obj) + "." + p
+            case Expr.EIndex(obj, idx):
+                return self.operand_str(obj) + "[" + self.expr_str(idx) + "]"
+            case Expr.ECast(x, ty):
+                return self.operand_str(x) + " as " + self.type_str(ty)
+            case Expr.EFString(parts): return self.fstring_str(parts)
+            case Expr.ETryExpr(x): return self.operand_str(x) + "?"
+            case Expr.EClosure(params, ret_ty, body, is_async):
+                return self.closure_str(params, ret_ty, body, is_async)
+            case Expr.ESuperMethodCall(base, m, args):
+                return "super." + m + "(" + self.args_str(args) + ")"
+            case Expr.ESuperPropAccess(base, p):
+                return "super." + p
+            case Expr.EList(items): return "[" + self.args_str(items) + "]"
+            case Expr.ESet(items): return "{" + self.args_str(items) + "}"
+            case Expr.EDict(keys, vals): return self.dict_str(keys, vals)
+            case Expr.ETuple(items): return "(" + self.args_str(items) + ")"
+            case Expr.EListComp(elem, gens): return "[" + self.comp_str(elem, gens) + "]"
+            case Expr.EGeneratorExpr(elem, gens): return "(" + self.comp_str(elem, gens) + ")"
+            case Expr.ESlice(a, b, c): return self.slice_str(a, b, c)
+            case Expr.EAwait(x): return "await " + self.operand_str(x)
+            case Expr.EYield(x):
+                if x as usize == 0 as usize: return "yield"
+                return "yield " + self.expr_str(x)
+            case Expr.ERange(a, b, inclusive):
+                mut sep = ".."
+                if inclusive: sep = "..="
+                return self.operand_str(a) + sep + self.operand_str(b)
+            case Expr.ESizeOf(ty): return "sizeof(" + self.type_str(ty) + ")"
+            case Expr.EIfElse(c, t, f):
+                return self.operand_str(t) + " if " + self.operand_str(c) + " else " + self.operand_str(f)
+            case Expr.ETypeArg(ty): return self.type_str(ty)
+            case _:
+                self.unsupported = true
+                return ""
+
+    pub def fstring_str(self, parts: Vec[FStringPart]) -> str:
+        mut s = "f\""
+        mut i = 0
+        while i < parts.len:
+            mut part = parts.get(i)
+            if part.is_expr:
+                mut saved = self.in_fstring
+                self.in_fstring = true
+                mut es = self.expr_str(part.expr)
+                self.in_fstring = saved
+                s = s + "{" + es
+                if part.fmt_spec.len() > 0:
+                    s = s + ":" + part.fmt_spec
+                s = s + "}"
+            else:
+                s = s + self.escape_str(part.text)
+            i = i + 1
+        return s + "\""
+
+    pub def dict_str(self, keys: Vec[Pointer[Expr]], vals: Vec[Pointer[Expr]]) -> str:
+        if keys.len == 0: return "{}"
+        mut s = "{"
+        mut i = 0
+        while i < keys.len:
+            if i > 0: s = s + ", "
+            s = s + self.expr_str(keys.get(i)) + ": " + self.expr_str(vals.get(i))
+            i = i + 1
+        return s + "}"
+
+    pub def comp_str(self, elem: Pointer[Expr], gens: Vec[Pointer[Comprehension]]) -> str:
+        mut s = self.expr_str(elem)
+        mut i = 0
+        while i < gens.len:
+            mut g = gens.get(i).read()
+            s = s + " for " + g.target + " in " + self.expr_str(g.iter)
+            mut j = 0
+            while j < g.ifs.len:
+                s = s + " if " + self.expr_str(g.ifs.get(j))
+                j = j + 1
+            i = i + 1
+        return s
+
+    pub def slice_str(self, a: Pointer[Expr], b: Pointer[Expr], c: Pointer[Expr]) -> str:
+        mut s = ""
+        if a as usize != 0 as usize: s = s + self.expr_str(a)
+        s = s + ":"
+        if b as usize != 0 as usize: s = s + self.expr_str(b)
+        if c as usize != 0 as usize: s = s + ":" + self.expr_str(c)
+        return s
+
+    pub def closure_str(self, params: Vec[Param], ret_ty: Pointer[AstType], body: Block, is_async: bool) -> str:
+        mut s = ""
+        if is_async: s = "async "
+        s = s + "def (" + self.params_str(params) + ")"
+        if ret_ty as usize != 0 as usize:
+            mut rt = self.type_str(ret_ty)
+            if rt.len() > 0 and rt != "void": s = s + " -> " + rt
+        s = s + ":"
+        # Render single-statement closure bodies inline (the common form:
+        # `def () -> int: return x`). A multi-statement body can't be rendered
+        # inside an expression position, so mark it unsupported rather than
+        # emit a body-less (corrupting) closure.
+        mut real = Pointer[Stmt](0)
+        mut count = 0
+        mut i = 0
+        while i < body.stmts.len:
+            match body.stmts.get(i).read():
+                case Stmt.SLine(_): pass
+                case _:
+                    count = count + 1
+                    real = body.stmts.get(i)
+            i = i + 1
+        if count == 1:
+            match real.read():
+                case Stmt.SReturn(v):
+                    if v as usize == 0 as usize: return s + " return"
+                    return s + " return " + self.expr_str(v)
+                case Stmt.SExpr(e): return s + " " + self.expr_str(e)
+                case _:
+                    self.unsupported = true
+                    return s
+        self.unsupported = true
+        return s
+
+    # --- params / decorators --------------------------------------------------
+    pub def params_str(self, params: Vec[Param]) -> str:
+        mut s = ""
+        mut i = 0
+        while i < params.len:
+            if i > 0: s = s + ", "
+            mut p = params.get(i)
+            # NOTE: is_ref/is_mut_ref are derived by the parser from the type
+            # spelling (`ref T` / `mut ref T`), so the ref-ness is already
+            # carried by type_str - don't add a redundant prefix here.
+            s = s + p.name
+            mut tn = self.type_str(p.ty)
+            if tn.len() > 0 and tn != "void":
+                s = s + ": " + tn
+            if p.is_variadic: s = s + "..."
+            i = i + 1
+        return s
+
+    pub def emit_decorators(self, decs: Vec[Decorator]):
+        mut i = 0
+        while i < decs.len:
+            mut d = decs.get(i)
+            if d.args.len > 0:
+                self.line("@" + d.name + "(" + self.args_str(d.args) + ")")
+            else:
+                self.line("@" + d.name)
+            i = i + 1
+
+    # --- statements -----------------------------------------------------------
+    # Emit a block of statements at the current indentation (caller sets indent).
+    pub def emit_block(self, b: Block):
+        mut cur_line = 0
+        mut i = 0
+        while i < b.stmts.len:
+            mut sp = b.stmts.get(i)
+            match sp.read():
+                case Stmt.SLine(n):
+                    self.flush_standalone_before(n)
+                    cur_line = n
+                case _:
+                    self.emit_stmt(sp, cur_line)
+            i = i + 1
+
+    # Emit a simple (single-line) statement plus any trailing comment.
+    pub def emit_simple(self, text: str, src_line: int):
+        self.out.append(self.pad())
+        self.out.append(text)
+        self.out.append(self.trailing_for(src_line))
+        self.out.append("\n")
+
+    pub def emit_stmt(self, sp: Pointer[Stmt], src_line: int):
+        match sp.read():
+            case Stmt.SExpr(e): self.emit_simple(self.expr_str(e), src_line)
+            case Stmt.SLet(name, own, is_mut, is_const, is_shared, ty, val):
+                self.emit_simple(self.let_str(name, own, is_mut, is_const, is_shared, ty, val), src_line)
+            case Stmt.SMultiLet(names, is_mut, val):
+                mut pfx = ""
+                if is_mut: pfx = "mut "
+                mut ns = ""
+                mut k = 0
+                while k < names.len:
+                    if k > 0: ns = ns + ", "
+                    ns = ns + names.get(k)
+                    k = k + 1
+                self.emit_simple(pfx + ns + " = " + self.expr_str(val), src_line)
+            case Stmt.SAssign(t, v):
+                self.emit_simple(self.expr_str(t) + " = " + self.expr_str(v), src_line)
+            case Stmt.SReturn(v):
+                if v as usize == 0 as usize: self.emit_simple("return", src_line)
+                else: self.emit_simple("return " + self.expr_str(v), src_line)
+            case Stmt.SBreak: self.emit_simple("break", src_line)
+            case Stmt.SContinue: self.emit_simple("continue", src_line)
+            case Stmt.SPass: self.emit_simple("pass", src_line)
+            case Stmt.SRaise(v): self.emit_simple("raise " + self.expr_str(v), src_line)
+            case Stmt.SAssert(c, m):
+                if m as usize == 0 as usize: self.emit_simple("assert " + self.expr_str(c), src_line)
+                else: self.emit_simple("assert " + self.expr_str(c) + ", " + self.expr_str(m), src_line)
+            case Stmt.SUnsafe(body):
+                self.emit_simple("unsafe:", src_line)
+                self.indent = self.indent + 1
+                self.emit_block(body)
+                self.indent = self.indent - 1
+            case Stmt.SIf(cond, then_b, elifs, else_b):
+                self.emit_simple("if " + self.expr_str(cond) + ":", src_line)
+                self.indent = self.indent + 1
+                self.emit_block(then_b)
+                self.indent = self.indent - 1
+                mut ei = 0
+                while ei < elifs.len:
+                    mut ec = elifs.get(ei)
+                    self.line("elif " + self.expr_str(ec.cond) + ":")
+                    self.indent = self.indent + 1
+                    self.emit_block(ec.body.read())
+                    self.indent = self.indent - 1
+                    ei = ei + 1
+                if else_b.stmts.len > 0:
+                    self.line("else:")
+                    self.indent = self.indent + 1
+                    self.emit_block(else_b)
+                    self.indent = self.indent - 1
+            case Stmt.SWhile(cond, body, decs):
+                self.emit_simple("while " + self.expr_str(cond) + ":", src_line)
+                self.indent = self.indent + 1
+                self.emit_block(body)
+                self.indent = self.indent - 1
+            case Stmt.SFor(var, it, body, decs):
+                self.emit_simple("for " + var + " in " + self.expr_str(it) + ":", src_line)
+                self.indent = self.indent + 1
+                self.emit_block(body)
+                self.indent = self.indent - 1
+            case Stmt.SForUnpack(vars, it, body):
+                mut vs = ""
+                mut k = 0
+                while k < vars.len:
+                    if k > 0: vs = vs + ", "
+                    vs = vs + vars.get(k)
+                    k = k + 1
+                self.emit_simple("for " + vs + " in " + self.expr_str(it) + ":", src_line)
+                self.indent = self.indent + 1
+                self.emit_block(body)
+                self.indent = self.indent - 1
+            case Stmt.SMatch(e, arms):
+                self.emit_simple("match " + self.expr_str(e) + ":", src_line)
+                self.indent = self.indent + 1
+                mut ai = 0
+                while ai < arms.len:
+                    mut arm = arms.get(ai)
+                    mut head = "case " + self.pattern_str(arm.pat)
+                    if arm.guard as usize != 0 as usize:
+                        head = head + " if " + self.expr_str(arm.guard)
+                    self.line(head + ":")
+                    self.indent = self.indent + 1
+                    self.emit_block(arm.body.read())
+                    self.indent = self.indent - 1
+                    ai = ai + 1
+                self.indent = self.indent - 1
+            case Stmt.STry(try_b, catches, finally_b):
+                self.emit_simple("try:", src_line)
+                self.indent = self.indent + 1
+                self.emit_block(try_b)
+                self.indent = self.indent - 1
+                mut ci2 = 0
+                while ci2 < catches.len:
+                    mut cc = catches.get(ci2).read()
+                    mut head = "except"
+                    if cc.err_type as usize != 0 as usize:
+                        mut et = self.type_str(cc.err_type)
+                        if et.len() > 0 and et != "void":
+                            head = head + " " + et
+                    if cc.err_name.len() > 0:
+                        head = head + " as " + cc.err_name
+                    self.line(head + ":")
+                    self.indent = self.indent + 1
+                    self.emit_block(cc.body.read())
+                    self.indent = self.indent - 1
+                    ci2 = ci2 + 1
+                if finally_b.stmts.len > 0:
+                    self.line("finally:")
+                    self.indent = self.indent + 1
+                    self.emit_block(finally_b)
+                    self.indent = self.indent - 1
+            case Stmt.SWith(items, aliases, body):
+                mut hs = "with "
+                mut k = 0
+                while k < items.len:
+                    if k > 0: hs = hs + ", "
+                    hs = hs + self.expr_str(items.get(k))
+                    if k < aliases.len and aliases.get(k).len() > 0:
+                        hs = hs + " as " + aliases.get(k)
+                    k = k + 1
+                self.emit_simple(hs + ":", src_line)
+                self.indent = self.indent + 1
+                self.emit_block(body)
+                self.indent = self.indent - 1
+            case Stmt.SSpawn(e): self.emit_simple("spawn " + self.expr_str(e), src_line)
+            case Stmt.STaskGroup(body):
+                self.emit_simple("task_group:", src_line)
+                self.indent = self.indent + 1
+                self.emit_block(body)
+                self.indent = self.indent - 1
+            case Stmt.SDefer(inner):
+                self.out.append(self.pad())
+                self.out.append("defer ")
+                # Render the deferred statement inline (it is a single statement).
+                self.emit_inline_stmt(inner)
+                self.out.append("\n")
+            case Stmt.SGpuBlock(body):
+                self.emit_simple("gpu:", src_line)
+                self.indent = self.indent + 1
+                self.emit_block(body)
+                self.indent = self.indent - 1
+            case Stmt.SLocalDecl(d): self.emit_decl(d)
+            case _:
+                # Rare constructs not yet handled (asm, chan-select). Mark the
+                # output unsafe so run_fmt refuses to write a corrupted file.
+                self.unsupported = true
+
+    # Render a statement inline (no leading pad, no trailing newline) - used for
+    # `defer <stmt>`. Only simple statements are expected here.
+    pub def emit_inline_stmt(self, sp: Pointer[Stmt]):
+        match sp.read():
+            case Stmt.SExpr(e): self.out.append(self.expr_str(e))
+            case Stmt.SReturn(v):
+                if v as usize == 0 as usize: self.out.append("return")
+                else: self.out.append("return " + self.expr_str(v))
+            case Stmt.SAssign(t, v): self.out.append(self.expr_str(t) + " = " + self.expr_str(v))
+            case _: pass
+
+    pub def let_str(self, name: str, own: Ownership, is_mut: bool, is_const: bool, is_shared: bool, ty: Pointer[AstType], val: Pointer[Expr]) -> str:
+        # `shared` implies mutable (the parser sets is_mut for it), and there is
+        # no `mut shared` spelling - emit just `shared`. Otherwise const/mut/none.
+        mut s = ""
+        if is_const: s = "const "
+        elif is_shared: s = "shared "
+        elif is_mut: s = "mut "
+        s = s + name
+        mut tn = self.type_str(ty)
+        if tn.len() > 0 and tn != "void":
+            s = s + ": " + tn
+        if val as usize != 0 as usize:
+            s = s + " = " + self.expr_str(val)
+        return s
+
+    pub def pattern_str(self, p: Pattern) -> str:
+        match p:
+            case Pattern.PWild: return "_"
+            case Pattern.PBind(n): return n
+            case Pattern.PLitInt(v): return v.to_str()
+            case Pattern.PLitStr(v): return "\"" + self.escape_str(v) + "\""
+            case Pattern.PLitBool(b):
+                if b: return "True"
+                return "False"
+            case Pattern.PVariant(tn, vn): return tn + "." + vn
+            case Pattern.PVariantBind(tn, vn, f): return tn + "." + vn + "(" + f + ")"
+            case Pattern.PVariantBindMany(tn, vn, fs):
+                mut s = tn + "." + vn + "("
+                mut i = 0
+                while i < fs.len:
+                    if i > 0: s = s + ", "
+                    s = s + fs.get(i)
+                    i = i + 1
+                return s + ")"
+            case Pattern.PTuple(a, b): return "(" + a + ", " + b + ")"
+            case Pattern.POr(pats):
+                mut s = ""
+                mut i = 0
+                while i < pats.len:
+                    if i > 0: s = s + " | "
+                    s = s + self.pattern_str(pats.get(i))
+                    i = i + 1
+                return s
+            case _: return "_"
+
+    # --- declarations ---------------------------------------------------------
+    pub def fn_header(self, f: FunctionDef) -> str:
+        mut s = ""
+        if f.is_public: s = "pub "
+        if f.is_async: s = s + "async "
+        s = s + "def " + f.name
+        if f.generics.len > 0:
+            s = s + "["
+            mut gi = 0
+            while gi < f.generics.len:
+                if gi > 0: s = s + ", "
+                s = s + f.generics.get(gi)
+                gi = gi + 1
+            s = s + "]"
+        s = s + "(" + self.params_str(f.params) + ")"
+        # `throws` comes BEFORE the return-type arrow (parser order):
+        #   def f(params) throws ErrType -> RetType:
+        if f.throws_ty as usize != 0 as usize:
+            mut tt = self.type_str(f.throws_ty)
+            if tt.len() > 0: s = s + " throws " + tt
+        if f.ret_ty as usize != 0 as usize:
+            mut rt = self.type_str(f.ret_ty)
+            if rt.len() > 0 and rt != "void": s = s + " -> " + rt
+        return s + ":"
+
+    pub def emit_function(self, f: FunctionDef):
+        self.flush_standalone_before(f.line)
+        self.emit_decorators(f.decorators)
+        self.out.append(self.pad())
+        self.out.append(self.fn_header(f))
+        self.out.append(self.trailing_for(f.line))
+        self.out.append("\n")
+        self.indent = self.indent + 1
+        if f.body.stmts.len == 0:
+            self.line("pass")
+        else:
+            self.emit_block(f.body)
+        self.indent = self.indent - 1
+
+    pub def emit_class(self, c: ClassDef, kw: str):
+        self.flush_standalone_before(c.line)
+        self.emit_decorators(c.decorators)
+        mut head = ""
+        if c.is_public: head = "pub "
+        head = head + kw + " " + c.name
+        if c.generics.len > 0:
+            head = head + "["
+            mut gi = 0
+            while gi < c.generics.len:
+                if gi > 0: head = head + ", "
+                head = head + c.generics.get(gi)
+                gi = gi + 1
+            head = head + "]"
+        if c.base_classes.len > 0:
+            head = head + " extends " + c.base_classes.get(0)
+            mut bi = 1
+            while bi < c.base_classes.len:
+                head = head + ", " + c.base_classes.get(bi)
+                bi = bi + 1
+        if c.iface_names.len > 0:
+            head = head + " implements "
+            mut ii = 0
+            while ii < c.iface_names.len:
+                if ii > 0: head = head + ", "
+                head = head + c.iface_names.get(ii)
+                ii = ii + 1
+        self.line(head + ":")
+        self.indent = self.indent + 1
+        mut had_body = false
+        mut fi = 0
+        while fi < c.fields.len:
+            mut fld = c.fields.get(fi)
+            mut fs = "pub " + fld.name + ": " + self.type_str(fld.ty)
+            if fld.default_val as usize != 0 as usize:
+                fs = fs + " = " + self.expr_str(fld.default_val)
+            self.line(fs)
+            had_body = true
+            fi = fi + 1
+        mut mi = 0
+        while mi < c.methods.len:
+            self.emit_function(c.methods.get(mi))
+            had_body = true
+            mi = mi + 1
+        if not had_body:
+            self.line("pass")
+        self.indent = self.indent - 1
+
+    pub def emit_enum(self, e: EnumDef):
+        self.flush_standalone_before(e.line)
+        self.emit_decorators(e.decorators)
+        mut head = ""
+        if e.is_public: head = "pub "
+        head = head + "enum " + e.name
+        if e.generics.len > 0:
+            head = head + "["
+            mut gi = 0
+            while gi < e.generics.len:
+                if gi > 0: head = head + ", "
+                head = head + e.generics.get(gi)
+                gi = gi + 1
+            head = head + "]"
+        self.line(head + ":")
+        self.indent = self.indent + 1
+        mut vi = 0
+        while vi < e.variants.len:
+            mut v = e.variants.get(vi)
+            if v.fields.len > 0:
+                self.line(v.name + "(" + self.params_str(v.fields) + ")")
+            else:
+                self.line(v.name)
+            vi = vi + 1
+        mut mi = 0
+        while mi < e.methods.len:
+            self.emit_function(e.methods.get(mi))
+            mi = mi + 1
+        self.indent = self.indent - 1
+
+    pub def emit_interface(self, it: InterfaceDef):
+        self.flush_standalone_before(it.line)
+        mut head = ""
+        if it.is_public: head = "pub "
+        head = head + "interface " + it.name
+        if it.generics.len > 0:
+            head = head + "["
+            mut gi = 0
+            while gi < it.generics.len:
+                if gi > 0: head = head + ", "
+                head = head + it.generics.get(gi)
+                gi = gi + 1
+            head = head + "]"
+        self.line(head + ":")
+        self.indent = self.indent + 1
+        mut mi = 0
+        while mi < it.methods.len:
+            self.emit_function(it.methods.get(mi))
+            mi = mi + 1
+        if it.methods.len == 0: self.line("pass")
+        self.indent = self.indent - 1
+
+    pub def emit_decl(self, dp: Pointer[Decl]):
+        match dp.read():
+            case Decl.DFunction(f): self.emit_function(f)
+            case Decl.DDecoratorDef(f):
+                self.flush_standalone_before(f.line)
+                # Syntax is `decorator def name(...):` - the parser consumes the
+                # `def` after `decorator`, so it must be present.
+                self.line("decorator " + self.fn_header(f))
+                self.indent = self.indent + 1
+                if f.body.stmts.len == 0: self.line("pass")
+                else: self.emit_block(f.body)
+                self.indent = self.indent - 1
+            case Decl.DClass(c): self.emit_class(c, "class")
+            case Decl.DActor(c): self.emit_class(c, "actor")
+            case Decl.DEnum(e): self.emit_enum(e)
+            case Decl.DInterface(it): self.emit_interface(it)
+            case Decl.DExtend(target, methods):
+                self.line("extend " + target + ":")
+                self.indent = self.indent + 1
+                mut mi = 0
+                while mi < methods.len:
+                    self.emit_function(methods.get(mi))
+                    mi = mi + 1
+                self.indent = self.indent - 1
+            case Decl.DImport(path, alias):
+                if alias.len() > 0: self.line("import " + path + " as " + alias)
+                else: self.line("import " + path)
+            case Decl.DFromImport(path, items):
+                mut s = "from " + path + " import "
+                mut i = 0
+                while i < items.len:
+                    if i > 0: s = s + ", "
+                    mut it = items.get(i)
+                    s = s + it.name
+                    if it.alias.len() > 0: s = s + " as " + it.alias
+                    i = i + 1
+                self.line(s)
+            case Decl.DExtern(abi, functions):
+                self.line("extern \"" + abi + "\":")
+                self.indent = self.indent + 1
+                mut fi = 0
+                while fi < functions.len:
+                    self.line(self.fn_header_no_colon(functions.get(fi)))
+                    fi = fi + 1
+                self.indent = self.indent - 1
+            case Decl.DTypeAlias(name, target):
+                self.line("type " + name + " = " + self.type_str(target))
+            case Decl.DTopLevelStmt(s):
+                self.emit_stmt(s, 0)
+            case _: pass
+
+    # extern function prototypes have no body/colon.
+    pub def fn_header_no_colon(self, f: FunctionDef) -> str:
+        mut h = self.fn_header(f)
+        if h.len() > 0 and h.slice(h.len() - 1, h.len()) == ":":
+            return h.slice(0, h.len() - 1)
+        return h
+
+    # Block-style declarations (functions, classes, enums, etc.) get a blank
+    # line of separation; imports/type-aliases/top-level statements stay tight.
+    pub def is_block_decl(self, dp: Pointer[Decl]) -> bool:
+        match dp.read():
+            case Decl.DFunction(_): return true
+            case Decl.DDecoratorDef(_): return true
+            case Decl.DClass(_): return true
+            case Decl.DActor(_): return true
+            case Decl.DEnum(_): return true
+            case Decl.DInterface(_): return true
+            case Decl.DExtend(_, _): return true
+            case Decl.DExtern(_, _): return true
+            case _: return false
+
+    pub def format_program(self, prog: Program) -> str:
+        mut i = 0
+        while i < prog.decls.len:
+            mut dp = prog.decls.get(i)
+            # One blank line before each block declaration (except the very
+            # first output). The blank precedes any comments attached to it.
+            if i > 0 and self.is_block_decl(dp) and self.out.len() > 0:
+                self.out.append("\n")
+            self.emit_decl(dp)
+            i = i + 1
+        self.flush_remaining()
+        return self.out.to_string().as_str()

@@ -1,0 +1,78 @@
+# tests/regression/phase5_dict_value_retain.tr
+# Regression coverage for Phase 5:
+#   Tier2b - Dict/Map str VALUE args now retain-on-box (dict_val_arg ->
+#            _tr_str_box(_tr_str_retain(...))), mirroring List_TrStr_append.
+#            Previously the box aliased the caller's single reference, so
+#            storing the same str local under two keys (or storing a local
+#            that is later auto-dropped) double-freed / use-after-freed when
+#            the dict was torn down via Dict_free_strval.
+#   Tier2a - extern (`_tr_*`) calls with a FRESH str arg now hoist+release the
+#            temporary instead of leaking it. Exercised indirectly here via
+#            string operations that lower to extern helpers.
+
+from std.test import TestRunner
+
+def store_twice(d: Dict[str, str], v: str):
+    # The same str value bound under two distinct keys: each stored box must
+    # own an independent reference, or freeing the dict double-frees `v`.
+    d.set("first", v)
+    d.set("second", v)
+
+def main():
+    mut t = TestRunner.init("phase5_dict_value_retain")
+
+    t.section("same str local under two keys (retain-on-box)")
+    mut d: Dict[str, str] = {}
+    mut sval: str = "sval-value"
+    store_twice(d, sval)
+    mut a: str = d.get("first")
+    mut b: str = d.get("second")
+    t.assert_eq_str(a, "sval-value", "first key reads sval value")
+    t.assert_eq_str(b, "sval-value", "second key reads sval value")
+    t.assert_eq_str(sval, "sval-value", "original local still valid after storing twice")
+
+    t.section("fresh str value (hoist+retain)")
+    mut d2: Dict[str, str] = {}
+    mut base: str = "abc"
+    d2.set("upper", base.to_upper())
+    d2.set("concat", base + "-suffix")
+    mut up: str = d2.get("upper")
+    mut cc: str = d2.get("concat")
+    t.assert_eq_str(up, "ABC", "fresh method-call value stored")
+    t.assert_eq_str(cc, "abc-suffix", "fresh concat value stored")
+    t.assert_eq_str(base, "abc", "source local still valid after fresh-value sets")
+
+    t.section("overwrite same key (old value released, new retained)")
+    mut d3: Dict[str, str] = {}
+    mut v1: str = "one"
+    mut v2: str = "two"
+    d3.set("k", v1)
+    d3.set("k", v2)
+    mut got: str = d3.get("k")
+    t.assert_eq_str(got, "two", "overwritten key has new value")
+    t.assert_eq_int(d3.len(), 1, "overwrite keeps single entry")
+
+    t.section("dict-literal str values")
+    mut name: str = "tauraro"
+    mut kind: str = "language"
+    mut info: Dict[str, str] = {"name": name, "kind": kind}
+    mut got_name: str = info.get("name")
+    mut got_kind: str = info.get("kind")
+    t.assert_eq_str(got_name, "tauraro", "literal value from local 1")
+    t.assert_eq_str(got_kind, "language", "literal value from local 2")
+    t.assert_eq_str(name, "tauraro", "literal source local 1 still valid")
+    t.assert_eq_str(kind, "language", "literal source local 2 still valid")
+
+    t.section("build many entries in a loop")
+    mut counts: Dict[str, str] = {}
+    mut i: int = 0
+    while i < 50:
+        mut key: str = "key-" + i.to_str()
+        mut val: str = "val-" + i.to_str()
+        counts.set(key, val)
+        i += 1
+    t.assert_eq_int(counts.len(), 50, "loop built 50 entries")
+    mut mid: str = counts.get("key-25")
+    t.assert_eq_str(mid, "val-25", "loop entry 25 readable")
+
+    t.summary()

@@ -106,9 +106,21 @@ pub class Lexer:
     pub len:    int             # total source length
     pub pos:    int             # current byte position
     pub line:   int             # 1-based line number
+    pub line_start: int         # byte offset of the current line's first char
+    pub tok_col: int            # 1-based column of the token currently being emitted
     pub indent_stack: Vec[int]  # stack of indent levels
     pub pending_dedents: int    # dedents to emit before next token
     pub token_lines: Vec[int]   # parallel line numbers for each token
+    pub token_cols: Vec[int]    # parallel 1-based columns for each token
+    # Comment capture (for `tauraroc fmt`): off by default so normal
+    # compilation pays nothing. When `record_comments` is set, each `#` comment
+    # is recorded with its line, text (after the '#'), and whether it trails
+    # code on the same line. Comments stay OUT of the token stream, so the
+    # parser/codegen are completely unaffected.
+    pub record_comments: bool
+    pub comment_lines:    Vec[int]
+    pub comment_texts:    Vec[str]
+    pub comment_trailing: Vec[bool]
 
     pub def init(source: str) -> Lexer:
         mut lx = Lexer()
@@ -122,11 +134,27 @@ pub class Lexer:
         lx.len = src_len
         lx.pos = 0
         lx.line = 1
+        lx.line_start = 0
+        lx.tok_col = 1
         lx.indent_stack = Vec[int].init(16)
         lx.indent_stack.push(0)   # base indent level = 0
         lx.pending_dedents = 0
         lx.token_lines = Vec[int].init(1024)
+        lx.token_cols = Vec[int].init(1024)
+        lx.record_comments = false
+        lx.comment_lines    = Vec[int].init(0)
+        lx.comment_texts    = Vec[str].init(0)
+        lx.comment_trailing = Vec[bool].init(0)
         return lx
+
+    # Push the source location (line + column) for the token just emitted.
+    # token_lines/token_cols stay parallel to the tokens Vec. The column is
+    # `tok_col`, captured at the start of the token (see tokenize). Diagnostic-
+    # only: never consumed by codegen, so a stale/approximate column for
+    # structural tokens (Indent/Dedent/Newline/Eof) is harmless.
+    pub def push_loc(self):
+        self.token_lines.push(self.line)
+        self.token_cols.push(self.tok_col)
 
     # -- Token access helpers --
 
@@ -145,9 +173,10 @@ pub class Lexer:
 
     pub def advance(self) -> int:
         mut c = self.peek()
+        self.pos = self.pos + 1
         if c == 10:
             self.line = self.line + 1
-        self.pos = self.pos + 1
+            self.line_start = self.pos   # first char of the new line
         return c
 
     pub def at_end(self) -> bool:
@@ -163,9 +192,17 @@ pub class Lexer:
             else:
                 break
 
-    pub def skip_comment(self):
-        while not self.at_end() and not char_is_newline(self.peek()):
-            self.advance()
+    pub def skip_comment(self, trailing: bool):
+        if self.record_comments:
+            mut sb = StringBuilder.init(32)
+            while not self.at_end() and not char_is_newline(self.peek()):
+                sb.append_char(self.advance())
+            self.comment_lines.push(self.line)
+            self.comment_texts.push(sb.to_string().as_str())
+            self.comment_trailing.push(trailing)
+        else:
+            while not self.at_end() and not char_is_newline(self.peek()):
+                self.advance()
 
     pub def read_int(self) -> Token:
         # Hexadecimal: 0x / 0X
@@ -370,8 +407,9 @@ pub class Lexer:
 
         while not self.at_end():
             if self.pending_dedents > 0:
+                self.tok_col = 1
                 tokens.push(Token.Dedent)
-                self.token_lines.push(self.line)
+                self.push_loc()
                 self.pending_dedents = self.pending_dedents - 1
                 continue
 
@@ -398,7 +436,7 @@ pub class Lexer:
                 if char_is_newline(next_c) or next_c == 35:
                     if next_c == 35:
                         self.advance()
-                        self.skip_comment()
+                        self.skip_comment(false)   # standalone (own line)
                     else:
                         self.advance()
                         if next_c == 13 and self.peek() == 10: self.advance()
@@ -415,21 +453,27 @@ pub class Lexer:
                 #       .set("k", v)
                 #       .build()
                 if nesting == 0:
+                    self.tok_col = self.pos - self.line_start + 1
                     if next_c != 46:  # '.' -> NOT a continuation line
                         mut cur_indent = self.indent_stack.get(self.indent_stack.len - 1)
                         if indent > cur_indent:
                             self.indent_stack.push(indent)
                             tokens.push(Token.Indent)
-                            self.token_lines.push(self.line)
+                            self.push_loc()
                         elif indent < cur_indent:
                             while self.indent_stack.len > 1:
                                 mut top = self.indent_stack.get(self.indent_stack.len - 1)
                                 if top <= indent: break
                                 self.indent_stack.len = self.indent_stack.len - 1
                                 tokens.push(Token.Dedent)
-                                self.token_lines.push(self.line)
+                                self.push_loc()
 
             mut c = self.peek()
+            # Capture the 1-based column of this token's first byte. All real
+            # tokens (numbers, strings, idents, operators) begin here; the
+            # Newline/comment branches below reuse it (column of the trailing
+            # newline char), which is fine for line-level diagnostics.
+            self.tok_col = self.pos - self.line_start + 1
             if char_is_space(c): 
                 self.advance()
                 continue
@@ -441,50 +485,50 @@ pub class Lexer:
                     # (dot-continuation: method chains across lines).
                     if not _peek_next_line_dot(self.src, self.pos, self.len):
                         tokens.push(Token.Newline)
-                        self.token_lines.push(self.line)
+                        self.push_loc()
                     at_line_start = True
                 continue
             if c == 35:
                 self.advance()
-                self.skip_comment()
+                self.skip_comment(true)   # trailing (code preceded it on this line)
                 if nesting == 0:
                     if not _peek_next_line_dot(self.src, self.pos, self.len):
                         tokens.push(Token.Newline)
-                        self.token_lines.push(self.line)
+                        self.push_loc()
                     at_line_start = True
                 continue
 
             if char_is_digit(c):
                 tokens.push(self.read_int())
-                self.token_lines.push(self.line)
+                self.push_loc()
                 continue
             if c == 34 or c == 39:
                 if c == 34 and self.peek_at(1) == 34 and self.peek_at(2) == 34:
                     self.advance(); self.advance(); self.advance()
                     tokens.push(self.read_triple_string(34))
-                    self.token_lines.push(self.line)
+                    self.push_loc()
                 elif c == 39 and (self.peek_at(2) == 39 or self.peek_at(1) == 92):
                     tokens.push(self.read_char())
-                    self.token_lines.push(self.line)
+                    self.push_loc()
                 else:
                     tokens.push(self.read_string(c))
-                    self.token_lines.push(self.line)
+                    self.push_loc()
                 continue
             if c == 102 and (self.peek_at(1) == 34 or self.peek_at(1) == 39):
                 tokens.push(self.read_fstring())
-                self.token_lines.push(self.line)
+                self.push_loc()
                 continue
             if c == 114 and (self.peek_at(1) == 34 or self.peek_at(1) == 39):
                 tokens.push(self.read_raw_string())
-                self.token_lines.push(self.line)
+                self.push_loc()
                 continue
             if c == 98 and (self.peek_at(1) == 34 or self.peek_at(1) == 39):
                 tokens.push(self.read_byte_string())
-                self.token_lines.push(self.line)
+                self.push_loc()
                 continue
             if char_is_alpha(c):
                 tokens.push(self.read_ident())
-                self.token_lines.push(self.line)
+                self.push_loc()
                 continue
 
             self.advance()
@@ -641,14 +685,15 @@ pub class Lexer:
             else:
                 self.advance()
                 tokens.push(Token.Error("?"))
-            self.token_lines.push(self.line)
+            self.push_loc()
 
+        self.tok_col = 1
         while self.indent_stack.len > 1:
             self.indent_stack.len = self.indent_stack.len - 1
             tokens.push(Token.Dedent)
-            self.token_lines.push(self.line)
+            self.push_loc()
         tokens.push(Token.Eof)
-        self.token_lines.push(self.line)
+        self.push_loc()
         return tokens
 
 

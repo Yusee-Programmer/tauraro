@@ -24,3 +24,14 @@
 
 pub interface Sendable:
     pass
+
+# UnsafeSendable — the explicit "unsafe impl Send" escape hatch.
+#
+# A class that `implements Sendable` may NOT hold a raw `Pointer` field (the
+# compiler cannot prove its contents thread-safe). Declaring
+# `implements Sendable, UnsafeSendable` is the author asserting, on their own
+# responsibility, that the wrapped handle is internally synchronized and safe
+# to share across threads (e.g. a mutex/condvar-backed C object). It is
+# deliberate and greppable — never silently granted.
+pub interface UnsafeSendable:
+    pass

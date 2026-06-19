@@ -1,7 +1,6 @@
 # std.iter.transform — Filter, map, reduce, zip, enumerate and more.
 
 from std.core.vec import Vec
-from std.collections.tuple import Pair
 
 pub class Transform:
     _dummy: int
@@ -234,22 +233,22 @@ extend Transform:
         return out
 
     # Pair up elements from two vectors: [(a[0],b[0]), (a[1],b[1]), ...].
-    pub def zip(a: Vec[int], b: Vec[int]) -> Vec[Pair]:
+    pub def zip(a: Vec[int], b: Vec[int]) -> Vec[Tuple]:
         mut n   = a.len
         if b.len < n: n = b.len
-        mut out = Vec[Pair].init(n + 4)
+        mut out = Vec[Tuple].init(n + 4)
         mut i   = 0
         while i < n:
-            out.push(Pair.init(a.get(i), b.get(i)))
+            out.push((a.get(i), b.get(i)))
             i = i + 1
         return out
 
     # Pair each element with its index: [(0,v[0]), (1,v[1]), ...].
-    pub def enumerate(v: Vec[int]) -> Vec[Pair]:
-        mut out = Vec[Pair].init(v.len + 4)
+    pub def enumerate(v: Vec[int]) -> Vec[Tuple]:
+        mut out = Vec[Tuple].init(v.len + 4)
         mut i   = 0
         while i < v.len:
-            out.push(Pair.init(i, v.get(i)))
+            out.push((i, v.get(i)))
             i = i + 1
         return out
 

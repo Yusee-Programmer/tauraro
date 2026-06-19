@@ -1,0 +1,64 @@
+# tests/lang/08_async.tr - green-thread async/await on the coroutine scheduler.
+#
+# `await` runs the callee as a stackful coroutine and cooperatively resumes the
+# caller with its result. `Coro.sleep_ms` parks on a timer and yields the
+# worker (non-blocking) rather than blocking an OS thread.
+
+from std.test import TestRunner
+from std.async.coro import Coro
+
+# An async function that returns a value via await.
+async def compute(a: int, b: int) -> int:
+    return a * b + 1
+
+# An async function that cooperatively sleeps (non-blocking) before returning.
+async def delayed(n: int) -> int:
+    Coro.sleep_ms(5)
+    return n + 100
+
+# An async function that yields cooperatively a few times, then returns.
+async def stepper(base: int) -> int:
+    mut acc = base
+    mut i = 0
+    while i < 3:
+        acc = acc + 1
+        Coro.yield_now()
+        i = i + 1
+    return acc
+
+# Nested await: an async function awaiting another async function.
+async def nested(x: int) -> int:
+    mut a: int = await compute(x, 2)
+    mut b: int = await delayed(a)
+    return b
+
+async def main():
+    mut t = TestRunner.init("08_async")
+
+    t.section("await returns a value")
+    mut r1: int = await compute(6, 7)
+    t.assert_eq_int(r1, 43, "await compute(6,7) -> 6*7+1")
+
+    t.section("cooperative non-blocking sleep")
+    mut r2: int = await delayed(5)
+    t.assert_eq_int(r2, 105, "await delayed(5) -> 5+100 after a parked sleep")
+
+    t.section("cooperative yielding")
+    mut r3: int = await stepper(10)
+    t.assert_eq_int(r3, 13, "await stepper(10) -> 10 + 3 yields")
+
+    t.section("nested await chains")
+    mut r4: int = await nested(4)
+    t.assert_eq_int(r4, 109, "await nested(4) -> (4*2+1) + 100")
+
+    t.section("many awaits in a loop")
+    mut total = 0
+    mut k = 0
+    while k < 50:
+        mut v: int = await compute(k, 1)
+        total = total + v
+        k += 1
+    # sum of (k*1+1) for k in 0..49 = sum(k) + 50 = 1225 + 50 = 1275
+    t.assert_eq_int(total, 1275, "50 awaited coroutines accumulate correctly")
+
+    t.summary()

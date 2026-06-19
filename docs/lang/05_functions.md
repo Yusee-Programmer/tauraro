@@ -159,7 +159,10 @@ def compute(x: int, y: float, label: str) -> void:
     print(f"{label}: {x as float + y}")
 ```
 
-All parameter types must be annotated. Omitting a type is a parse error (`[F-1]`).
+All parameter types must be annotated. Omitting a type is a parse error (generic
+"expected ':' after parameter name" — `[F-1]` is reserved for this but not yet
+emitted as a distinct diagnostic code; see [19 — Compiler
+Errors](19_compiler_errors.md#reserved--not-yet-implemented)).
 
 **Return values:**
 
@@ -189,9 +192,12 @@ def find_first(items: List[int], target: int) -> int:
     return -1    # not found
 ```
 
-**Compiler rule [F-1]:** All parameters must have type annotations. Omitting a type is a parse error.
+**Compiler rule [F-1]** *(reserved, not yet a distinct diagnostic)*: All parameters
+must have type annotations. Omitting a type is currently a generic parse error.
 
-**Compiler rule [F-2]:** Parameters may not be shadowed by local variables of the same name.
+**Compiler rule [F-2]** *(reserved, not yet implemented)*: Parameters may not be
+shadowed by local variables of the same name. The compiler does not currently
+detect this — the example below compiles without error today.
 
 **Compiler rule [F-3]:** A non-void function must have a `return` on every reachable code path:
 
@@ -206,10 +212,11 @@ ERROR [F-3]: Function 'max_of' returns 'int' but is missing a return statement
 **Shadowing a parameter name:**
 ```python
 def scale(value: int, factor: int) -> int:
-    mut value = value * factor    # ERROR [F-2]: shadows parameter 'value'
+    mut value = value * factor    # not currently an error ([F-2] reserved),
+                                   # but shadows the parameter and hurts readability
     return value
 ```
-Fix: Use a different name: `mut result = value * factor`
+Prefer a different name regardless: `mut result = value * factor`
 
 **Non-void function with a missing return branch:**
 ```python
@@ -913,8 +920,8 @@ def main():
 
 | Rule | Description | Error |
 |------|-------------|-------|
-| F-1 | All parameters must have type annotations | `[F-1] Parameter type missing` |
-| F-2 | Parameters may not be shadowed by local variables | `[F-2] Parameter name shadowed` |
+| F-1 *(reserved)* | All parameters must have type annotations | generic parse error (not yet a distinct `[F-1]` code) |
+| F-2 *(reserved)* | Parameters may not be shadowed by local variables | not currently detected |
 | F-3 | Non-void function must return on all code paths | `[F-3] Missing return on code path` |
 | T-4 | Result from a `throws` call must be handled | `[T-4] Unhandled Result from throws call` |
 | E-1 | Method must exist on the receiver's type (or a base class) | `[E-1] No method 'x' found on type 'Y'` |

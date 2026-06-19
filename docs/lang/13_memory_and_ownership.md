@@ -33,11 +33,11 @@ The compiler assigns states based on:
 
 ---
 
-## Rule M-1: Automatic Ownership Inference
+## Automatic Ownership Inference
 
 ### When to Use (Understand)
 
-This rule is always active in safe code. Every heap allocation — `Point.init()`, `[]`, `{}`, `alloc[T](n)` — is automatically tracked.
+This is always active in safe code. Every heap allocation — `Point.init()`, `[]`, `{}`, `alloc[T](n)` — is automatically tracked. It is the foundation the M-series rules below build on, but it does not itself have an error code: it's the *absence* of a diagnostic that tells you it worked.
 
 ### How It Works
 
@@ -82,11 +82,6 @@ def conditional(flag: bool) -> void:
 # WRONG: Trying to free manually — double-free
 unsafe:
     free(p)    # the compiler also injects free(p) — now freed twice
-
-# WRONG: Returning a pointer to a local variable
-def get_local() -> Pointer[Point]:
-    mut p = Point.init(1, 2)
-    return p as Pointer[Point]    # ERROR [M-4]: p freed on return, caller holds dangling pointer
 ```
 
 ### Best Practices
@@ -97,7 +92,7 @@ def get_local() -> Pointer[Point]:
 
 ---
 
-## Rule M-2: No Use After Move
+## Rule M-1: No Use After Move
 
 ### When to Use (Understand)
 
@@ -108,8 +103,11 @@ This rule prevents accessing a variable after its ownership has been transferred
 ```python
 data = load_bytes()
 send(data)              # data moved into send — send takes ownership
-print(len(data))        # ERROR [M-2]: 'data' was moved and is no longer valid
+print(len(data))        # ERROR [M-1]: 'data' was moved and cannot be used again
 ```
+
+**Compiler message:** `'data' was moved and cannot be used again.`
+**FIX:** *Use the variable that now owns it, or call `.clone()` to copy before moving.*
 
 The compiler traces the control-flow graph. If `send` is defined as taking an `Own` parameter, every path after the call is checked to ensure `data` is not accessed.
 
@@ -136,12 +134,7 @@ print(len(data))         # data still valid
 # WRONG: Accessing a variable after passing it to a consuming function
 mut buf = Buffer.init(1024)
 compress(buf)         # buf moved
-write(buf)            # ERROR [M-2]
-
-# WRONG: Conditionally moving then accessing on both branches
-if flag:
-    send(data)        # move on true branch
-print(len(data))      # ERROR [M-2]: data may have been moved
+write(buf)            # ERROR [M-1]
 ```
 
 ### Best Practices
@@ -152,166 +145,186 @@ print(len(data))      # ERROR [M-2]: data may have been moved
 
 ---
 
-## Rule M-3: No Double-Free
+## Rule M-2: No Move While Borrowed
 
 ### When to Use (Understand)
 
-This rule is enforced automatically — it exists to document that the compiler guarantees exactly one `free()` per owned variable per execution path.
+This rule prevents moving a variable away while another binding currently holds a borrow into it — the move would leave that borrow dangling.
 
 ### How It Works
 
-For branching code, the compiler emits a `free()` at the exit of each branch independently. The result is that `free()` is called exactly once no matter which path is taken:
-
 ```python
-def process(flag: bool) -> void:
-    mut obj = MyClass.init()
-    if flag:
-        obj.do_thing()
-        return               # free(obj) here
-    obj.do_other()
-    # free(obj) here
-    # Neither branch double-frees
+mut data = load_bytes()
+view = &data            # view borrows data
+send(data)               # ERROR [M-2]: Cannot move 'data' while it is borrowed
 ```
+
+**Compiler message:** `Cannot move 'data' while it is borrowed.`
+**FIX:** *The borrow must end before 'data' can be moved.*
 
 ### Common Mistakes
 
 ```python
-# WRONG: Manually freeing inside unsafe: while safe code also tracks the variable
-mut p = Point.init(1, 2)
-unsafe:
-    free(p as Pointer[void])   # manual free
-# compiler also injects free(p) at scope exit → double-free
+# WRONG: moving a value while a borrow of it is still in scope
+mut buf = Buffer.init(1024)
+view = &buf
+compress(buf)    # ERROR [M-2]: buf is borrowed by 'view'
 ```
 
 ### Best Practices
 
-- Never mix manual `free()` with `Own` variables in safe code — one or the other, not both.
-- If you must manage memory manually, declare the pointer only inside `unsafe:` so the ownership system does not track it.
+- Finish all uses of a borrow before moving the value it borrows from.
+- If you need both, `clone()` the value and move the clone, keeping the original (and its borrow) intact.
 
 ---
 
-## Rule M-4: No Dangling Pointers
+## Rule M-3: No Aliased Mutable Access in a Call
 
 ### When to Use (Understand)
 
-This rule prevents returning or storing a reference that will outlive the object it points to.
+This rule prevents passing the **same** variable twice as arguments to one call when that creates two simultaneous mutable accesses to it.
 
 ### How It Works
 
 ```python
-def get_local_ref() -> Point:
-    mut p = Point.init(1, 2)
-    return &p                  # ERROR [M-4]: returning reference to local 'p'
-                               # 'p' will be freed when this function returns
+mut buf = [1, 2, 3]
+transform(buf, buf)    # ERROR [M-3]: 'buf' appears twice in the same call,
+                       # creating aliased mutable access
 ```
 
-**Fix — return ownership instead:**
-
-```python
-def get_point() -> Point:
-    return Point.init(1, 2)    # OK: transfers ownership to caller
-```
-
-**Lifetime annotation (`from`) — advanced use:**
-
-When a function returns a `Pointer[T]` that is derived from one of its parameters (e.g., returning a pointer into a buffer), the compiler needs to know the pointer's lifetime is bounded by that parameter. This is expressed with the `from` keyword in the return type:
-
-```python
-def get_first[T](items: List[T]) -> Pointer[T] from items:
-    return &items[0]    # pointer into items — caller must not outlive items
-```
-
-> **Note:** Lifetime annotations with `from` are an advanced feature. In most code you will never need them — the compiler auto-infers the lifetime source when a function returns `Pointer[T]` and has exactly one non-primitive parameter. See [Advanced: Lifetimes](../advanced/01_lifetimes.md) for the full details.
+**Compiler message:** `'buf' appears twice in the same call, creating aliased mutable access.`
+**FIX:** *Clone one of the arguments: `buf.clone()`*
 
 ### Common Mistakes
 
 ```python
-# WRONG: Storing a borrowed reference in a longer-lived variable
-def get_name(p: Person) -> str:
-    return p.name    # if name is a field reference, not a copy — may dangle
+# WRONG: passing the same list as two arguments to a function that mutates one of them
+mut items = [1, 2, 3]
+merge_into(items, items)    # ERROR [M-3]
 
-# WRONG: Returning a pointer to a stack-local inside unsafe:
-unsafe:
-    mut local: int = 42
-    return &local as Pointer[int]    # ERROR: local freed on return
+# RIGHT: clone one side
+merge_into(items, items.clone())
 ```
 
 ### Best Practices
 
-- Return owned values from functions, not references into local variables.
-- Use `Shared[T]` when multiple call sites need to hold a reference to the same heap object beyond the lifetime of the original function.
-- Only use the `from` lifetime annotation if the compiler explicitly requires it — do not add it speculatively.
+- If a function needs two views of the same data, design it to take one argument and an index/range, not two aliases.
+- Use `.clone()` at the call site when aliasing is unavoidable — it's a clear, local fix.
 
 ---
 
-## Rule M-5: No Aliased Mutation
+## Rule M-4: No Mutation While Borrowed
 
 ### When to Use (Understand)
 
-This rule prevents modification of a container while a borrow into it is active — the Tauraro analog of iterator invalidation.
+This rule prevents mutating a container or object while another binding holds a reference into it — the Tauraro analog of iterator invalidation.
 
 ### How It Works
 
 ```python
-mut list = [1, 2, 3]
-view = list               # 'view' borrows list
-list = [4, 5, 6]          # ERROR [M-5]: cannot reassign 'list' while 'view' borrows it
+mut items = [1, 2, 3]
+view = &items
+items.push(4)    # ERROR [M-4]: Cannot mutate 'items' while 'view' holds a
+                 # reference into it
 ```
+
+**Compiler message:** `Cannot mutate 'items' while 'view' holds a reference into it.`
+**FIX:** *Finish using `view` before modifying `items`, or copy it first: `mut copy = view`.*
 
 This prevents iterator invalidation — a common C++ bug where the container is replaced or resized while an iterator holds a pointer into the old allocation.
 
 ### Common Mistakes
 
 ```python
-# WRONG: Reassigning the list inside a for loop that borrows it
+# WRONG: mutating a list while iterating a borrowed view of it
 mut items = [1, 2, 3]
 for x in items:
-    items = []    # ERROR [M-5]: cannot mutate 'items' while iterating
-
-# WRONG: Passing both the list and a view of it to the same function
-mut buf = [1, 2, 3]
-view = buf
-transform(buf, view)    # ERROR [M-5]: buf mutated via first arg while view borrows it
+    items.push(x * 2)    # ERROR [M-4]: cannot mutate 'items' while iterating
 ```
 
 ### Best Practices
 
-- Finish all reads from a borrow before reassigning or consuming the source.
-- Use indices instead of borrows when you need to mutate a container inside a loop body.
+- Finish all reads from a borrow before mutating the source.
+- Collect items to add/remove into a separate list while iterating, then apply the changes after the loop ends.
 
 ---
 
-## Rule M-6: Immutable by Default
+## Rule M-5: No Use of Possibly-Moved Values
 
 ### When to Use (Understand)
 
-All bindings are immutable by default. Use `mut` only when you need to reassign or mutate.
+This is the flow-sensitive counterpart to [M-1]: it fires when a variable was moved on **some** branches but not others, so using it afterward would be valid on some paths and a use-after-move on others.
 
 ### How It Works
 
 ```python
-count = 10
-count = count + 1    # ERROR [M-6]: cannot assign to immutable binding 'count'
-
-mut count = 10
-count = count + 1    # OK
+mut data = load_bytes()
+if flag:
+    send(data)        # move on the true branch only
+print(len(data))      # ERROR [M-5]: 'data' may have been moved on some code
+                       # paths, making this use unsafe
 ```
 
-This is intentional: most variables are set once and never changed. `mut` is an explicit signal that a variable changes.
+**Compiler message:** `'data' may have been moved on some code paths, making this use unsafe.`
+**FIX:** *Ensure 'data' is not moved before this point on any branch, or restructure so the use is inside the branch where it's still valid.*
 
 ### Common Mistakes
 
 ```python
-# WRONG: Forgetting mut on an accumulator variable
-total = 0
-for x in items:
-    total = total + x    # ERROR [M-6]: 'total' is immutable
+# WRONG: using a variable after a conditional move
+if flag:
+    send(data)
+else:
+    log(data)          # 'data' moved on both branches here too, but...
+print(len(data))        # ERROR [M-5]: still flagged at the join point
+
+# RIGHT: move both branches into the use, or move after
+if flag:
+    send(data)
+    return
+log_and_send(data)       # single move on the remaining path
 ```
 
 ### Best Practices
 
-- Declare variables without `mut` first; add `mut` only when the compiler requires it.
-- Immutable bindings are easier to reason about — keep them as the default.
+- Keep the use of a value either entirely before, or entirely inside, the branch that moves it.
+- If every branch ends up moving the value, restructure so the move happens once, after the branches converge (or have each branch `return`).
+
+---
+
+## Rule M-6: No Use After Free (`dealloc`)
+
+### When to Use (Understand)
+
+This rule tracks raw pointers passed to `dealloc()` inside `unsafe:` blocks and flags any later use as use-after-free — including a second `dealloc()` (double-free).
+
+### How It Works
+
+```python
+unsafe:
+    mut buf: Pointer[char] = alloc[char](128)
+    dealloc(buf)
+    dealloc(buf)    # ERROR [M-6]: 'buf' was freed by 'dealloc()' and can no
+                     # longer be used
+```
+
+**Compiler message:** `'buf' was freed by 'dealloc()' and can no longer be used.`
+**FIX:** *Remove all uses of 'buf' after `dealloc()`, or restructure so the pointer is freed only when no longer needed.*
+
+### Common Mistakes
+
+```python
+# WRONG: using a pointer after dealloc
+unsafe:
+    mut buf: Pointer[char] = alloc[char](128)
+    dealloc(buf)
+    process(buf)    # ERROR [M-6]: buf was already freed
+```
+
+### Best Practices
+
+- Structure code so every allocation has exactly one `dealloc`, as the last thing done with that pointer.
+- Set the pointer to a sentinel/none-equivalent (or let it go out of scope) immediately after `dealloc` if you must keep the binding around.
 
 ---
 
@@ -357,6 +370,57 @@ class Node:
 - Use `Option[T]` for any value that legitimately may not exist.
 - Use `0`, `-1`, or another sentinel only if the domain guarantees that sentinel is not a valid value.
 - Model nullable links in linked data structures as `Option[T]` rather than bare class types.
+
+---
+
+## Rule M-8: Immutable by Default
+
+### When to Use (Understand)
+
+All bindings are immutable by default. Use `mut` only when you need to reassign or mutate.
+
+### How It Works
+
+```python
+count = 10
+count = count + 1    # ERROR [M-8]: cannot assign to 'count' a second time
+                     # because it is immutable
+```
+
+**Compiler message:** `Cannot assign to 'count' a second time because it is immutable.`
+**FIX:** *Declare it as `mut count = ...` if it needs to change.*
+
+This is intentional: most variables are set once and never changed. `mut` is an explicit signal that a variable changes.
+
+### Common Mistakes
+
+```python
+# WRONG: Forgetting mut on an accumulator variable
+total = 0
+for x in items:
+    total = total + x    # ERROR [M-8]: 'total' is immutable
+```
+
+### Best Practices
+
+- Declare variables without `mut` first; add `mut` only when the compiler requires it.
+- Immutable bindings are easier to reason about — keep them as the default.
+
+---
+
+## No Double-Free and No Dangling Pointers (structural guarantees)
+
+Two guarantees from the original ownership-system design are enforced **structurally** rather than by a single dedicated diagnostic — they're listed here for completeness since they're part of the same spec:
+
+- **No double-free of `Own` variables:** because the compiler emits exactly one `free()` per `Own` variable per execution path (see "Automatic Ownership Inference" above), a normal `Own` local can never be double-freed in safe code. The only way to double-free is to manually `dealloc()` a raw pointer twice inside `unsafe:` — which **is** caught, as [M-6] above.
+- **No dangling pointers from local returns:** returning a `Pointer[T]` that refers to a function-local is caught by **[L-1]** (see [19 — Compiler Errors §L-1](19_compiler_errors.md#l-1-local-pointer-may-not-outlive-its-function)), not by an M-series code. The fix is the same as described here: return owned values, or use a `from <param>` lifetime annotation when the pointer is derived from a parameter (see [Advanced: Lifetimes](../advanced/01_lifetimes.md)).
+
+```python
+def get_local() -> Pointer[Point]:
+    mut p = Point.init(1, 2)
+    return p as Pointer[Point]    # ERROR [L-1]: 'p' is a local Pointer that
+                                    # may not outlive this function call
+```
 
 ---
 
@@ -632,15 +696,18 @@ spawn_task(cfg)     # another task, another clone of the shared reference
 
 ## Safety Rules Summary
 
-| Rule | Guarantee | Error code |
-|------|-----------|-----------|
-| M-1: Ownership inference | Every `Own` variable freed exactly once | — |
-| M-2: No use-after-move | Cannot access a moved variable | `[M-2]` |
-| M-3: No double-free | Single `free()` per path | — |
-| M-4: No dangling pointers | Borrows cannot outlive their source | `[M-4]` |
-| M-5: No aliased mutation | Cannot mutate while a borrow is active | `[M-5]` |
-| M-6: Immutable by default | Cannot reassign without `mut` | `[M-6]` |
-| M-7: None requires optional | `none` only valid for `Option[T]` / pointer types | `[M-7]` |
+| Guarantee | Error code |
+|-----------|-----------|
+| Automatic ownership inference — every `Own` variable freed exactly once | — |
+| No use-after-move | `[M-1]` |
+| No move while borrowed | `[M-2]` |
+| No aliased mutable access in a call | `[M-3]` |
+| No mutation while borrowed | `[M-4]` |
+| No use of possibly-moved values (flow-sensitive) | `[M-5]` |
+| No use-after-free (`dealloc`), including double-free | `[M-6]` |
+| `none` requires `Option[T]` | `[M-7]` |
+| Immutable by default — no reassigning without `mut` | `[M-8]` |
+| No dangling pointers from local returns | `[L-1]` (see [19 — Compiler Errors](19_compiler_errors.md#l-1-local-pointer-may-not-outlive-its-function)) |
 
 ---
 

@@ -335,6 +335,23 @@ def main():
     mut q, r = divmod_pair(17, 5)
     print(f"17 div 5: quotient={q} remainder={r}")    # quotient=3 remainder=2
 
+    # Print a whole tuple (Python-style repr): mixed element types are shown
+    # with str elements quoted.
+    print(point)      # (10, 20)
+    print(triple)     # (1, 'hello', 42)
+    mut mixed = (1, "hello", 3.14)
+    print(mixed)      # (1, 'hello', 3.14)
+
+    # A vector of tuples — pairing values with the builtin tuple type:
+    mut pairs: Vec[Tuple] = Vec[Tuple].init(3)
+    pairs.push((1, 10))
+    pairs.push((2, 20))
+    pairs.push((3, 30))
+    print(f"pairs len: {pairs.len}")    # 3
+    # Unpack a stored tuple back into named values:
+    mut fa, fb = pairs.get(0)
+    print(f"first pair: ({fa}, {fb})")  # (1, 10)
+
     # ── 18. Ownership — lists returned from functions ─────────────────────────
     print("=== Ownership ===")
     mut my_range = make_range(5)

@@ -1,0 +1,40 @@
+# Leak gate (Phase 0) — regression detector for memory leaks.
+#
+# Run via scripts/leak_check.sh / .ps1, which builds this with -DTAURARO_MEMCOUNT
+# so the runtime tracks net live allocations. The gate runs a workload of
+# leak-prone patterns in a loop and asserts the live-allocation count does NOT
+# grow: a real leak shows up as POSITIVE growth, while the counter's known
+# under-counting of some primitive collections only ever drifts <= 0. So
+# `leaked <= 0` is a sound "no new leak" signal; `leaked > 0` fails the gate.
+#
+# As Phase 1+ make more patterns provably leak-free, widen `workload()`.
+
+extern "C":
+    def _tr_mem_live() -> int
+
+# Exercise the string + map paths that are fully ref-counted/auto-dropped.
+def workload():
+    mut s = "abc" + "def"          # fresh concat, auto-dropped at scope exit
+    mut t = s.to_upper()           # another owned string
+    mut n = t.len()
+
+    mut d: Dict[str, int] = {}     # str-keyed dict, auto-dropped
+    d.insert("alpha", 1)
+    d.insert("beta", 2)
+
+    mut m: Map[str, str] = Map[str, str].init(4)
+    m.insert("k", "v")             # boxed str value (the #54 path)
+    m.free()
+
+def main():
+    workload()                                  # warm up (one-time allocations)
+    mut before = _tr_mem_live()
+    mut i = 0
+    while i < 5000:
+        workload()
+        i = i + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS (net " + leaked.to_str() + " over 5000 iters)")
+    else:
+        print("LEAK-GATE FAIL: " + leaked.to_str() + " net allocations leaked")

@@ -1,0 +1,885 @@
+# compiler/src/mir.tr — Mid-level IR (control-flow graph) for Tauraro.
+#
+# The MIR is a flat control-flow graph: each function is a list of basic blocks,
+# each block a list of statements ending in one terminator (goto / branch /
+# return). Nested `if`/`while` from the HIR are flattened into blocks + edges.
+#
+# WHY: a CFG is the right substrate for (a) a clean LLVM backend (LLVM IR is also
+# a CFG of basic blocks with br/ret), and (b) precise dataflow analysis — move,
+# liveness, drop elaboration, borrow checking — which the tree-shaped HIR cannot
+# express. See docs/dev/memory_model.md.
+#
+# STATUS: foundation. This lowering builds the CFG and keeps expressions opaque
+# (carrying the original HIR expr) — flattening expressions into MIR operands and
+# re-pointing the C backend at the MIR come later, each fixpoint-verified. This
+# module is additive: nothing in the live HIR->C pipeline calls it yet; `--emit
+# mir` dumps it for inspection.
+
+from hir import HirProgram, HirFunction, HirBlock, HirStmt, HirExpr
+from core.vec import Vec
+
+# A MIR statement (straight-line; no control flow — that lives in terminators).
+pub enum MirStmt:
+    MDeclare(place: str, value: Pointer[HirExpr])   # `let place = value`
+    MAssign(place: str, value: Pointer[HirExpr])    # `place = value`
+    MEval(value: Pointer[HirExpr])                  # evaluate for side effects
+
+# A basic block terminator: exactly one per block, defines the out-edges.
+pub enum MirTerm:
+    TGoto(target: int)                              # -> bb{target}
+    TBranch(cond: Pointer[HirExpr], t: int, e: int) # cond ? bb{t} : bb{e}
+    TReturn(value: Pointer[HirExpr])
+    TReturnVoid()
+    TUnset()                                        # placeholder until set
+
+pub def box_mirstmt(s: MirStmt) -> Pointer[MirStmt]:
+    unsafe:
+        mut p = alloc[MirStmt](1)
+        p.write(s)
+        return p
+
+pub def box_mirterm(t: MirTerm) -> Pointer[MirTerm]:
+    unsafe:
+        mut p = alloc[MirTerm](1)
+        p.write(t)
+        return p
+
+pub class MirBlock:
+    pub id:    int
+    pub stmts: Vec[Pointer[MirStmt]]
+    pub term:  Pointer[MirTerm]
+    pub hir_block: HirBlock      # the HIR block whose statements fill this block
+                                 # (null for terminator-only blocks); lets the
+                                 # drop plan map a MIR drop back to a HIR position
+
+# A clean MIR->HIR drop mapping: the fall-through end of `hir_block` corresponds
+# to MIR block `block_id`, so MIR `drop[block_id]` should be released at the end
+# of `hir_block`. Only recorded for if/else bodies that lower to a SINGLE MIR
+# block (no nested control flow) — the unambiguous case — so the consumer can map
+# without tracking statement positions.
+pub class DropSite:
+    pub hir_block: HirBlock
+    pub places:    Vec[str]    # filled by mir_if_drop_plan: names to release here
+
+pub class MirFunction:
+    pub name:   str
+    pub params: Vec[str]
+    pub blocks: Vec[MirBlock]
+    pub if_bodies: Vec[HirBlock]   # then/else body HIR blocks (drop targets)
+    # True iff every statement in the body was fully lowered into the CFG (no
+    # `case _: pass` fallthrough). Only COMPLETE functions may drive MIR-based
+    # codegen / drop insertion — for incomplete ones the analysis is unsound
+    # (dropped statements ⇒ wrong liveness/ownership), so callers must fall back
+    # to the HIR path.
+    pub complete: bool
+
+pub class MirProgram:
+    pub functions: Vec[MirFunction]
+
+# Builds the CFG for one function: owns the block list and a "current block"
+# cursor; statements append to the current block, control flow opens new blocks.
+pub class MirBuilder:
+    pub blocks: Vec[MirBlock]
+    pub cur:    int
+    pub complete: bool          # cleared when an unlowered statement form is hit
+    pub cur_hb: HirBlock        # HIR block currently being lowered (for tagging)
+    pub if_bodies: Vec[HirBlock]
+    pub in_unsafe: int          # >0 inside an `unsafe:` block; bodies lowered there
+                                # are NOT drop targets (dev manages that memory)
+
+extend MirBuilder:
+    pub def init() -> MirBuilder:
+        mut b = MirBuilder()
+        b.blocks = Vec[MirBlock].init(8)
+        b.cur    = -1
+        b.complete = true
+        b.if_bodies = Vec[HirBlock].init(4)
+        b.in_unsafe = 0
+        return b
+
+    # Create a fresh block, return its id.
+    pub def new_block(self) -> int:
+        mut blk   = MirBlock()
+        blk.id    = self.blocks.len
+        blk.stmts = Vec[Pointer[MirStmt]].init(4)
+        blk.term  = box_mirterm(MirTerm.TUnset())
+        self.blocks.push(blk)
+        return blk.id
+
+    pub def push_stmt(self, s: MirStmt):
+        if self.cur >= 0:
+            mut blk = self.blocks.get(self.cur)
+            blk.stmts.push(box_mirstmt(s))
+            # Tag the block with the HIR block it's being filled from (the first
+            # statement wins; good enough since a block is filled from one HIR
+            # block).
+            if blk.hir_block as usize == 0 as usize:
+                blk.hir_block = self.cur_hb
+
+    pub def set_term(self, t: MirTerm):
+        if self.cur >= 0:
+            self.blocks.get(self.cur).term = box_mirterm(t)
+
+    # True once the current block already has a real terminator (so we must not
+    # append more straight-line statements to it).
+    pub def terminated(self) -> bool:
+        if self.cur < 0: return true
+        match self.blocks.get(self.cur).term.read():
+            case MirTerm.TUnset(): return false
+            case _: return true
+
+extend MirProgram:
+    pub def init() -> MirProgram:
+        mut p = MirProgram()
+        p.functions = Vec[MirFunction].init(16)
+        return p
+
+# Lower one HIR block's statements into the builder's CFG, flattening control flow.
+def lower_stmts(b: MirBuilder, hb: HirBlock):
+    mut saved_hb = b.cur_hb
+    b.cur_hb = hb
+    mut i = 0
+    while i < hb.stmts.len:
+        if b.terminated():
+            # Code after a return/branch on this path is unreachable; open a new
+            # block to keep the CFG well-formed.
+            b.cur = b.new_block()
+        mut sp = hb.stmts.get(i)
+        match sp.read():
+            case HirStmt.SLet(nm, _, _, _, _, _, val):
+                b.push_stmt(MirStmt.MDeclare(nm, val))
+            case HirStmt.SAssign(tgt, val):
+                # Record the place when the target is a simple local, so liveness
+                # can track def/use; field/index targets stay opaque (eval).
+                match tgt.read():
+                    case HirExpr.EIdent(tn, _, _): b.push_stmt(MirStmt.MAssign(tn, val))
+                    case _: b.push_stmt(MirStmt.MEval(val))
+            case HirStmt.SExpr(e):
+                b.push_stmt(MirStmt.MEval(e))
+            case HirStmt.SReturn(v):
+                b.set_term(MirTerm.TReturn(v))
+            case HirStmt.SIf(cond, then_b, else_b):
+                mut tb = b.new_block()
+                mut eb = b.new_block()
+                mut jb = b.new_block()
+                # The then/else HIR blocks are drop targets: a str declared there
+                # and dead at the body's fall-through end leaks today (the HIR gap).
+                # Skip when inside `unsafe:` — that memory is the dev's to manage.
+                if b.in_unsafe == 0:
+                    b.if_bodies.push(then_b)
+                    b.if_bodies.push(else_b)
+                b.set_term(MirTerm.TBranch(cond, tb, eb))
+                b.cur = tb
+                lower_stmts(b, then_b)
+                if not b.terminated(): b.set_term(MirTerm.TGoto(jb))
+                b.cur = eb
+                lower_stmts(b, else_b)
+                if not b.terminated(): b.set_term(MirTerm.TGoto(jb))
+                b.cur = jb
+            case HirStmt.SWhile(cond, body):
+                mut hdr  = b.new_block()
+                mut body_b = b.new_block()
+                mut exit_b = b.new_block()
+                b.set_term(MirTerm.TGoto(hdr))
+                b.cur = hdr
+                b.set_term(MirTerm.TBranch(cond, body_b, exit_b))
+                b.cur = body_b
+                lower_stmts(b, body)
+                if not b.terminated(): b.set_term(MirTerm.TGoto(hdr))
+                b.cur = exit_b
+            case HirStmt.SFor(_, fiter, fbody):
+                # Model like SWhile (body runs 0+ times). The loop VAR is left
+                # undeclared in the MIR (treated as a non-owned borrow) so it's
+                # never auto-dropped — the HIR for-loop codegen owns the loop var.
+                # Using `fiter` as the header cond keeps the iterable live across
+                # the loop (correct) and captures its uses.
+                mut for_hdr  = b.new_block()
+                mut for_body = b.new_block()
+                mut for_exit = b.new_block()
+                b.set_term(MirTerm.TGoto(for_hdr))
+                b.cur = for_hdr
+                b.set_term(MirTerm.TBranch(fiter, for_body, for_exit))
+                b.cur = for_body
+                lower_stmts(b, fbody)
+                if not b.terminated(): b.set_term(MirTerm.TGoto(for_hdr))
+                b.cur = for_exit
+            case HirStmt.SForUnpack(_, fuiter, fubody):
+                mut fu_hdr  = b.new_block()
+                mut fu_body = b.new_block()
+                mut fu_exit = b.new_block()
+                b.set_term(MirTerm.TGoto(fu_hdr))
+                b.cur = fu_hdr
+                b.set_term(MirTerm.TBranch(fuiter, fu_body, fu_exit))
+                b.cur = fu_body
+                lower_stmts(b, fubody)
+                if not b.terminated(): b.set_term(MirTerm.TGoto(fu_hdr))
+                b.cur = fu_exit
+            case HirStmt.STry(try_body, catches, finally_b):
+                # Conservative model: try -> catch* -> finally -> after as a TGoto
+                # chain (no branch cond needed). Each body is its own block AND a
+                # drop target. Over-approximates reachability (assumes all run),
+                # which is sound for liveness. On an exception path a body-end drop
+                # may not be reached (leak) but is never double-freed (the drop is
+                # on the normal path; unwinding takes a different path).
+                mut try_b = b.new_block()
+                if not b.terminated(): b.set_term(MirTerm.TGoto(try_b))
+                b.cur = try_b
+                b.if_bodies.push(try_body)
+                lower_stmts(b, try_body)
+                mut tci = 0
+                while tci < catches.len:
+                    mut tcc = catches.get(tci).read()
+                    mut catch_b = b.new_block()
+                    if not b.terminated(): b.set_term(MirTerm.TGoto(catch_b))
+                    b.cur = catch_b
+                    b.if_bodies.push(tcc.body)
+                    lower_stmts(b, tcc.body)
+                    tci = tci + 1
+                mut fin_b = b.new_block()
+                if not b.terminated(): b.set_term(MirTerm.TGoto(fin_b))
+                b.cur = fin_b
+                b.if_bodies.push(finally_b)
+                lower_stmts(b, finally_b)
+                mut try_after = b.new_block()
+                if not b.terminated(): b.set_term(MirTerm.TGoto(try_after))
+                b.cur = try_after
+            case HirStmt.SMatch(msubj, marms):
+                # N-way match -> chain of 2-way branches, all arm bodies joining a
+                # common exit. The subject drives each branch cond (stays live +
+                # captures its uses). Pattern BINDINGS are left undeclared in the
+                # MIR (non-owned borrows) so they're never auto-dropped — the HIR
+                # match codegen owns them. Each arm body IS a drop target.
+                mut m_exit = b.new_block()
+                mut mai = 0
+                while mai < marms.len:
+                    mut marm = marms.get(mai)
+                    mut arm_body = b.new_block()
+                    mut arm_next = b.new_block()
+                    b.set_term(MirTerm.TBranch(msubj, arm_body, arm_next))
+                    b.cur = arm_body
+                    if marm.guard as usize != 0 as usize:
+                        b.push_stmt(MirStmt.MEval(marm.guard))
+                    if b.in_unsafe == 0: b.if_bodies.push(marm.body)
+                    lower_stmts(b, marm.body)
+                    if not b.terminated(): b.set_term(MirTerm.TGoto(m_exit))
+                    b.cur = arm_next
+                    mai = mai + 1
+                if not b.terminated(): b.set_term(MirTerm.TGoto(m_exit))
+                b.cur = m_exit
+            case HirStmt.SAssert(acond, amsg):
+                b.push_stmt(MirStmt.MEval(acond))
+                if amsg as usize != 0 as usize:
+                    b.push_stmt(MirStmt.MEval(amsg))
+            # SUnsafe stays UNLOWERED → unsafe-containing functions are INCOMPLETE
+            # (full HIR fallback). Per the Rust model `unsafe` should NOT disable
+            # auto-drop, and collect_frees() now recognises manual frees — BUT the
+            # blocker is different: the compiler's own unsafe internals take raw
+            # pointers into a TrStr's `.data` buffer and use them past where the str
+            # would be auto-dropped (relying on no-drop). Auto-drop there would
+            # free the buffer under the live raw pointer. Enabling MIR drops for
+            # unsafe functions requires first auditing those raw-aliasing sites; a
+            # separate task. (collect_frees still helps all SAFE complete fns.)
+            case HirStmt.SRaise(rval):
+                # `raise` exits, but we model it as a plain eval (non-terminating)
+                # so liveness only OVER-approximates (keeps values live past it) —
+                # never an early drop. The HIR codegen owns the actual unwinding.
+                if rval as usize != 0 as usize:
+                    b.push_stmt(MirStmt.MEval(rval))
+            case HirStmt.SWith(witems, _, wbody):
+                # `with items as aliases: body` — evaluate the context exprs
+                # (captures their uses), then inline the body transparently. The
+                # aliases are non-owned (HIR codegen runs __enter__/__exit__).
+                mut wi = 0
+                while wi < witems.len:
+                    b.push_stmt(MirStmt.MEval(witems.get(wi)))
+                    wi = wi + 1
+                lower_stmts(b, wbody)
+            case HirStmt.SMultiLet(_, _, mlval):
+                # Tuple/destructuring let: evaluate the value (captures its uses);
+                # the bound names are left undeclared in the MIR (non-owned) so
+                # they're never auto-dropped — HIR codegen owns them.
+                b.push_stmt(MirStmt.MEval(mlval))
+            case HirStmt.SLineMarker(_):
+                pass    # source-line marker: semantically a no-op, keeps completeness
+            case HirStmt.SAutoDrop(_, _):
+                pass    # sema's own drop; the MIR recomputes drops, so ignore it
+                        # here (and avoid double-drop when MIR drives codegen)
+            case _:
+                # Statement form not yet lowered into the CFG. Mark the function
+                # incomplete so no MIR-driven codegen runs on it (the dropped
+                # statement would corrupt liveness/ownership).
+                b.complete = false
+        i = i + 1
+    b.cur_hb = saved_hb
+
+pub def lower_function(hf: HirFunction) -> MirFunction:
+    mut mf    = MirFunction()
+    mf.name   = hf.name
+    mf.params = Vec[str].init(hf.params.len)
+    mut pi = 0
+    while pi < hf.params.len:
+        mf.params.push(hf.params.get(pi).name)
+        pi = pi + 1
+    mut b  = MirBuilder.init()
+    b.cur  = b.new_block()           # entry block bb0
+    lower_stmts(b, hf.body)
+    if not b.terminated(): b.set_term(MirTerm.TReturnVoid())
+    mf.blocks = b.blocks
+    mf.complete = b.complete
+    mf.if_bodies = b.if_bodies
+    return mf
+
+pub def lower_program(hir: HirProgram) -> MirProgram:
+    mut mp = MirProgram.init()
+    mut i = 0
+    while i < hir.functions.len:
+        mp.functions.push(lower_function(hir.functions.get(i)))
+        i = i + 1
+    return mp
+
+# ── Dataflow: place liveness over the CFG ────────────────────────────────────
+# This is what the HIR scope-heuristic could NOT do: compute, on the real
+# control-flow graph, where each place is live — so drops/releases can later be
+# placed at true last-use per path (handling conditional moves/returns).
+# Conservative by design (over-approximates uses; skips a few exotic expr forms)
+# so liveness is never under-estimated — safe to drive drops on later.
+
+def set_contains(v: Vec[str], s: str) -> bool:
+    mut i = 0
+    while i < v.len:
+        if v.get(i) == s: return true
+        i = i + 1
+    return false
+
+def set_add(v: Vec[str], s: str) -> bool:
+    if set_contains(v, s): return false
+    v.push(s)
+    return true
+
+# Collect every identifier read anywhere in `e` into `out` (a use set).
+def collect_uses(e: Pointer[HirExpr], out: Vec[str]):
+    if e as usize == 0 as usize: return
+    match e.read():
+        case HirExpr.EIdent(nm, _, _): set_add(out, nm)
+        case HirExpr.EBinOp(_, l, r, _):
+            collect_uses(l, out)
+            collect_uses(r, out)
+        case HirExpr.EUnaryOp(_, x, _): collect_uses(x, out)
+        case HirExpr.ECall(callee, args, _):
+            collect_uses(callee, out)
+            mut i = 0
+            while i < args.len:
+                collect_uses(args.get(i), out)
+                i = i + 1
+        case HirExpr.EMethodCall(obj, _, args, _):
+            collect_uses(obj, out)
+            mut i = 0
+            while i < args.len:
+                collect_uses(args.get(i), out)
+                i = i + 1
+        case HirExpr.EPropAccess(obj, _, _): collect_uses(obj, out)
+        case HirExpr.EIndex(obj, idx, _):
+            collect_uses(obj, out)
+            collect_uses(idx, out)
+        case HirExpr.ECast(x, _): collect_uses(x, out)
+        case HirExpr.EAwait(x, _): collect_uses(x, out)
+        case HirExpr.EIfElse(c, t, f, _):
+            collect_uses(c, out)
+            collect_uses(t, out)
+            collect_uses(f, out)
+        case _: pass
+
+# Add the upward-exposed uses of `e` to `gen`: a name is upward-exposed only if
+# it is read before being defined earlier in the same block (i.e. not in `kill`).
+# This is what makes liveness precise enough to drop at TRUE last use rather than
+# at scope exit; over-approximating here would only delay drops (still sound).
+def add_exposed(e: Pointer[HirExpr], gen: Vec[str], kill: Vec[str]):
+    mut tmp = Vec[str].init(4)
+    collect_uses(e, tmp)
+    mut i = 0
+    while i < tmp.len:
+        if not set_contains(kill, tmp.get(i)): set_add(gen, tmp.get(i))
+        i = i + 1
+
+# Compute a block's gen (upward-exposed uses) and kill (defs) sets, walking
+# statements in order so a def kills later uses of the same name in this block.
+def block_use_def(blk: MirBlock, gen: Vec[str], kill: Vec[str]):
+    mut i = 0
+    while i < blk.stmts.len:
+        match blk.stmts.get(i).read():
+            case MirStmt.MDeclare(p, val):
+                add_exposed(val, gen, kill)
+                set_add(kill, p)
+            case MirStmt.MAssign(p, val):
+                add_exposed(val, gen, kill)
+                set_add(kill, p)
+            case MirStmt.MEval(val): add_exposed(val, gen, kill)
+        i = i + 1
+    match blk.term.read():
+        case MirTerm.TBranch(cond, _, _): add_exposed(cond, gen, kill)
+        case MirTerm.TReturn(val): add_exposed(val, gen, kill)
+        case _: pass
+
+def block_succs(blk: MirBlock, out: Vec[int]):
+    match blk.term.read():
+        case MirTerm.TGoto(n): out.push(n)
+        case MirTerm.TBranch(_, t, e):
+            out.push(t)
+            out.push(e)
+        case _: pass
+
+# A set of place names. Wrapped in a named class because nested generics
+# (`Vec[Vec[str]]`) lose their inner element type in the C backend, whereas
+# `Vec[LiveSet]` (a Vec of a named class) lowers correctly.
+#
+# All set operations are METHODS that touch `self.items` directly. Binding
+# `liveset.items` to a `mut` local instead would make the collection auto-drop
+# free that borrowed alias at scope exit, corrupting the LiveSet — so the
+# fixpoint below only ever calls these methods, never aliases `.items`.
+pub class LiveSet:
+    pub items: Vec[str]
+
+extend LiveSet:
+    pub def init() -> LiveSet:
+        mut s = LiveSet()
+        s.items = Vec[str].init(2)
+        return s
+
+    pub def has(self, s: str) -> bool:
+        mut i = 0
+        while i < self.items.len:
+            if self.items.get(i) == s: return true
+            i = i + 1
+        return false
+
+    pub def add(self, s: str) -> bool:    # returns true if newly added
+        if self.has(s): return false
+        self.items.push(s)
+        return true
+
+    # Add every member of `other`; return true if anything was new.
+    pub def union_in(self, other: LiveSet) -> bool:
+        mut changed = false
+        mut i = 0
+        while i < other.items.len:
+            if self.add(other.items.get(i)): changed = true
+            i = i + 1
+        return changed
+
+    # Add members of `src` that are NOT defined in `block`; return true if new.
+    pub def union_except(self, src: LiveSet, block: LiveSet) -> bool:
+        mut changed = false
+        mut i = 0
+        while i < src.items.len:
+            if not block.has(src.items.get(i)):
+                if self.add(src.items.get(i)): changed = true
+            i = i + 1
+        return changed
+
+    pub def clone(self) -> LiveSet:
+        mut r = LiveSet.init()
+        mut i = 0
+        while i < self.items.len:
+            r.items.push(self.items.get(i))
+            i = i + 1
+        return r
+
+    # Drop any member not also in `other` (set intersection, in place).
+    pub def retain_common(self, other: LiveSet):
+        mut keep = Vec[str].init(self.items.len)
+        mut i = 0
+        while i < self.items.len:
+            if other.has(self.items.get(i)): keep.push(self.items.get(i))
+            i = i + 1
+        self.items = keep
+
+    pub def equals(self, other: LiveSet) -> bool:
+        if self.items.len != other.items.len: return false
+        mut i = 0
+        while i < self.items.len:
+            if not other.has(self.items.get(i)): return false
+            i = i + 1
+        return true
+
+    # Replace this set's contents with a copy of `other`'s (mutates in place so
+    # references held in a Vec stay valid).
+    pub def set_to(self, other: LiveSet):
+        mut fresh = Vec[str].init(other.items.len)
+        mut i = 0
+        while i < other.items.len:
+            fresh.push(other.items.get(i))
+            i = i + 1
+        self.items = fresh
+
+    # Return a new set = self - other.
+    pub def minus(self, other: LiveSet) -> LiveSet:
+        mut r = LiveSet.init()
+        mut i = 0
+        while i < self.items.len:
+            if not other.has(self.items.get(i)): r.items.push(self.items.get(i))
+            i = i + 1
+        return r
+
+# Backward liveness to fixpoint. Returns live-out sets per block (by block id).
+# Sets grow monotonically, so "anything added this round" detects the fixpoint.
+#   live_out[b] = U over successors s of live_in[s]
+#   live_in[b]  = uses[b] U (live_out[b] - defs[b])
+pub def compute_liveness(mf: MirFunction) -> Vec[LiveSet]:
+    mut n = mf.blocks.len
+    mut uses     = Vec[LiveSet].init(n)
+    mut defs     = Vec[LiveSet].init(n)
+    mut live_in  = Vec[LiveSet].init(n)
+    mut live_out = Vec[LiveSet].init(n)
+    mut i = 0
+    while i < n:
+        mut u = LiveSet.init()
+        mut d = LiveSet.init()
+        block_use_def(mf.blocks.get(i), u.items, d.items)
+        uses.push(u)
+        defs.push(d)
+        live_in.push(LiveSet.init())
+        live_out.push(LiveSet.init())
+        i = i + 1
+    mut changed = true
+    while changed:
+        changed = false
+        mut bi = n - 1
+        while bi >= 0:
+            mut blk = mf.blocks.get(bi)
+            mut sl  = Vec[int].init(2)
+            block_succs(blk, sl)
+            mut si = 0
+            while si < sl.len:
+                if live_out.get(bi).union_in(live_in.get(sl.get(si))): changed = true
+                si = si + 1
+            if live_in.get(bi).union_in(uses.get(bi)): changed = true
+            if live_in.get(bi).union_except(live_out.get(bi), defs.get(bi)): changed = true
+            bi = bi - 1
+    return live_out
+
+# ── Drop-point analysis (ownership dataflow) ─────────────────────────────────
+# Liveness alone is NOT enough to place drops: a value can be dead (no future
+# use) yet still OWNED and needing a drop. So we pair liveness with a forward
+# MUST-ownership dataflow:
+#   own_out[b] = (own_in[b] U gen[b]) - kill[b]
+#   own_in[b]  = INTERSECTION over preds p of own_out[p]   (entry: {})
+# gen[b]  = places defined in b (become owned); kill[b] = places MOVED out of b
+# (ownership transferred away). Using intersection (must-owned-on-every-path) is
+# sound for codegen: a place is only "owned leaving b" if owned on ALL incoming
+# paths, so dropping it can never double-free a path that already moved it.
+#   drop[b] = own_out[b] - live_out[b]   (owned leaving b but never used again)
+# LIMITATION (drop flags, TODO): a place owned on SOME but not all merging paths
+# is conservatively NOT dropped here (leaks, never crashes) — the merge-point
+# drop-flag case is the next layer. Also type-agnostic: the place set includes
+# non-owning locals (ints); the type filter (only str/collection) is applied
+# when this drives real SAutoDrop insertion in sema, not here.
+
+# Collect names used in MOVE position (is_move) within `e`.
+def collect_moves(e: Pointer[HirExpr], out: Vec[str]):
+    if e as usize == 0 as usize: return
+    match e.read():
+        case HirExpr.EIdent(nm, _, ismv):
+            if ismv: set_add(out, nm)
+        case HirExpr.EBinOp(_, l, r, _):
+            collect_moves(l, out)
+            collect_moves(r, out)
+        case HirExpr.EUnaryOp(_, x, _): collect_moves(x, out)
+        case HirExpr.ECall(callee, args, _):
+            collect_moves(callee, out)
+            mut i = 0
+            while i < args.len:
+                collect_moves(args.get(i), out)
+                i = i + 1
+        case HirExpr.EMethodCall(obj, _, args, _):
+            collect_moves(obj, out)
+            mut i = 0
+            while i < args.len:
+                collect_moves(args.get(i), out)
+                i = i + 1
+        case HirExpr.EPropAccess(obj, _, _): collect_moves(obj, out)
+        case HirExpr.EIndex(obj, idx, _):
+            collect_moves(obj, out)
+            collect_moves(idx, out)
+        case HirExpr.ECast(x, _): collect_moves(x, out)
+        case HirExpr.EAwait(x, _): collect_moves(x, out)
+        case HirExpr.EIfElse(c, t, f, _):
+            collect_moves(c, out)
+            collect_moves(t, out)
+            collect_moves(f, out)
+        case _: pass
+
+# A function name that manually releases its first argument's memory.
+def is_free_fn(n: str) -> bool:
+    return n == "dealloc" or n == "free" or n == "_tr_c_free" or n == "_tr_free" or n == "_tr_str_release" or n == "_tr_str_free"
+
+# The base local name behind a free-call argument, peeling `as` casts:
+# `_tr_c_free(x as Pointer[char])` -> "x".
+def free_target(arg: Pointer[HirExpr]) -> str:
+    if arg as usize == 0 as usize: return ""
+    match arg.read():
+        case HirExpr.EIdent(n, _, _): return n
+        case HirExpr.ECast(x, _): return free_target(x)
+        case _: return ""
+
+# Collect names MANUALLY FREED within `e` (so the MIR won't auto-drop them again).
+# Mirrors (and extends) sema's mark_freed: `dealloc(x)`, `x.free()`, and the
+# compiler's str-release idiom `_tr_c_free(x as Pointer[char])`. This is what makes
+# `unsafe:` work like Rust's — auto-drop still applies to normal owned values, but
+# a value the dev frees by hand is recognized as consumed (no double-free).
+# Erring toward recognizing a free is safe: a false positive only leaks, never
+# double-frees.
+def collect_frees(e: Pointer[HirExpr], out: Vec[str]):
+    if e as usize == 0 as usize: return
+    match e.read():
+        case HirExpr.ECall(callee, args, _):
+            if callee as usize != 0 as usize:
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if is_free_fn(cn) and args.len > 0:
+                            mut ft = free_target(args.get(0))
+                            if ft != "": set_add(out, ft)
+                    case _: pass
+            collect_frees(callee, out)
+            mut i = 0
+            while i < args.len:
+                collect_frees(args.get(i), out)
+                i = i + 1
+        case HirExpr.EMethodCall(obj, m, args, _):
+            if m == "free":
+                match obj.read():
+                    case HirExpr.EIdent(on, _, _): set_add(out, on)
+                    case _: pass
+            collect_frees(obj, out)
+            mut j = 0
+            while j < args.len:
+                collect_frees(args.get(j), out)
+                j = j + 1
+        case HirExpr.EBinOp(_, l, r, _):
+            collect_frees(l, out)
+            collect_frees(r, out)
+        case HirExpr.EUnaryOp(_, x, _): collect_frees(x, out)
+        case HirExpr.EPropAccess(obj, _, _): collect_frees(obj, out)
+        case HirExpr.EIndex(obj, idx, _):
+            collect_frees(obj, out)
+            collect_frees(idx, out)
+        case HirExpr.ECast(x, _): collect_frees(x, out)
+        case HirExpr.EAwait(x, _): collect_frees(x, out)
+        case _: pass
+
+# gen[b]: places assigned/declared (become owned) in this block.
+def block_gen_own(blk: MirBlock, out: Vec[str]):
+    mut i = 0
+    while i < blk.stmts.len:
+        match blk.stmts.get(i).read():
+            case MirStmt.MDeclare(p, _): set_add(out, p)
+            case MirStmt.MAssign(p, _): set_add(out, p)
+            case MirStmt.MEval(_): pass
+        i = i + 1
+
+# kill[b]: places moved out of this block (ownership transferred away).
+def block_moves(blk: MirBlock, out: Vec[str]):
+    mut i = 0
+    while i < blk.stmts.len:
+        match blk.stmts.get(i).read():
+            case MirStmt.MDeclare(_, val):
+                collect_moves(val, out)
+                collect_frees(val, out)
+            case MirStmt.MAssign(_, val):
+                collect_moves(val, out)
+                collect_frees(val, out)
+            case MirStmt.MEval(val):
+                collect_moves(val, out)
+                collect_frees(val, out)
+        i = i + 1
+    match blk.term.read():
+        case MirTerm.TBranch(cond, _, _): collect_moves(cond, out)
+        case MirTerm.TReturn(val):
+            collect_moves(val, out)
+            # `return <local>` (a bare ident) MOVES that local out — the codegen
+            # transfers ownership to the caller with no retain. (A computed
+            # return like `return a + b` only borrows a,b; the result is fresh.)
+            if val as usize != 0 as usize:
+                match val.read():
+                    case HirExpr.EIdent(rnm, _, _): set_add(out, rnm)
+                    case _: pass
+        case _: pass
+
+# Predecessors of block `b`: every block whose successors include b.
+def preds_of(mf: MirFunction, b: int, out: Vec[int]):
+    mut i = 0
+    while i < mf.blocks.len:
+        mut sl = Vec[int].init(2)
+        block_succs(mf.blocks.get(i), sl)
+        mut j = 0
+        while j < sl.len:
+            if sl.get(j) == b: out.push(i)
+            j = j + 1
+        i = i + 1
+
+# Forward must-ownership dataflow + drop = own_out - live_out, per block.
+pub def compute_drops(mf: MirFunction, live_out: Vec[LiveSet]) -> Vec[LiveSet]:
+    mut n = mf.blocks.len
+    mut gen      = Vec[LiveSet].init(n)
+    mut kill     = Vec[LiveSet].init(n)
+    mut own_out  = Vec[LiveSet].init(n)
+    mut universe = LiveSet.init()
+    mut i = 0
+    while i < n:
+        mut g = LiveSet.init()
+        mut k = LiveSet.init()
+        block_gen_own(mf.blocks.get(i), g.items)
+        block_moves(mf.blocks.get(i), k.items)
+        gen.push(g)
+        kill.push(k)
+        mut _u = universe.union_in(g)
+        i = i + 1
+    # Must-analysis: initialise every own_out to the universe (top), then shrink.
+    i = 0
+    while i < n:
+        own_out.push(universe.clone())
+        i = i + 1
+    mut changed = true
+    while changed:
+        changed = false
+        mut b = 0
+        while b < n:
+            mut preds = Vec[int].init(2)
+            preds_of(mf, b, preds)
+            mut own_in = LiveSet.init()
+            if preds.len > 0:
+                own_in = own_out.get(preds.get(0)).clone()
+                mut pi = 1
+                while pi < preds.len:
+                    own_in.retain_common(own_out.get(preds.get(pi)))
+                    pi = pi + 1
+            mut _g = own_in.union_in(gen.get(b))
+            # owned-here = (own_in U gen) - moved. own_out additionally keeps only
+            # the LIVE portion: a place owned-but-dead is DROPPED in b, so it must
+            # not stay "owned" in successors (else it would be dropped twice).
+            mut owned_b = own_in.minus(kill.get(b))
+            mut new_oo = owned_b.clone()
+            new_oo.retain_common(live_out.get(b))
+            if not new_oo.equals(own_out.get(b)):
+                changed = true
+                own_out.get(b).set_to(new_oo)
+            b = b + 1
+    # drop[b] = owned-here(b) - live_out[b]  (owned leaving b but never used again)
+    mut drops = Vec[LiveSet].init(n)
+    i = 0
+    while i < n:
+        mut preds2 = Vec[int].init(2)
+        preds_of(mf, i, preds2)
+        mut own_in2 = LiveSet.init()
+        if preds2.len > 0:
+            own_in2 = own_out.get(preds2.get(0)).clone()
+            mut pj = 1
+            while pj < preds2.len:
+                own_in2.retain_common(own_out.get(preds2.get(pj)))
+                pj = pj + 1
+        mut _g2 = own_in2.union_in(gen.get(i))
+        mut owned_i = own_in2.minus(kill.get(i))
+        drops.push(owned_i.minus(live_out.get(i)))
+        i = i + 1
+    return drops
+
+# Public entry point for sema's HYBRID drop wiring: lower `hf` to MIR, and IF the
+# function is fully lowerable (complete), compute the drop schedule and return the
+# single-block if/else-body drop sites with their place lists filled in. For an
+# incomplete function it returns empty (caller keeps the HIR drop machinery). The
+# caller (sema) is responsible for the type filter (str only, declared-in-block)
+# and emitting the SAutoDrop — this only provides the proven WHERE+WHAT.
+# True if HIR block `hb` is one of the function's if/else body blocks.
+def is_if_body(mf: MirFunction, hb: HirBlock) -> bool:
+    mut i = 0
+    while i < mf.if_bodies.len:
+        if mf.if_bodies.get(i) as usize == hb as usize: return true
+        i = i + 1
+    return false
+
+# Find (or create+append) the DropSite for HIR block `hb` in `out`.
+def site_for(out: Vec[DropSite], hb: HirBlock) -> DropSite:
+    mut i = 0
+    while i < out.len:
+        if out.get(i).hir_block as usize == hb as usize: return out.get(i)
+        i = i + 1
+    mut s = DropSite()
+    s.hir_block = hb
+    s.places = Vec[str].init(4)
+    out.push(s)
+    return s
+
+pub def mir_if_drop_plan(hf: HirFunction) -> Vec[DropSite]:
+    mut out = Vec[DropSite].init(4)
+    mut mf  = lower_function(hf)
+    if not mf.complete: return out
+    if mf.if_bodies.len == 0: return out
+    mut live  = compute_liveness(mf)
+    mut drops = compute_drops(mf, live)
+    # For every MIR block that belongs to an if/else body, schedule its dead-owned
+    # places to be released at the END of that body's HIR block. Grouping by HIR
+    # block (not MIR block) handles multi-block bodies: a place that dies in any
+    # block of the body — before or after nested control flow — is dropped once,
+    # at the body's fall-through end (sound: always after its last use).
+    mut bi = 0
+    while bi < mf.blocks.len:
+        mut blk = mf.blocks.get(bi)
+        if blk.hir_block as usize != 0 as usize and is_if_body(mf, blk.hir_block):
+            mut dd = drops.get(blk.id)
+            mut pi = 0
+            while pi < dd.items.len:
+                mut site = site_for(out, blk.hir_block)
+                set_add(site.places, dd.items.get(pi))
+                pi = pi + 1
+        bi = bi + 1
+    return out
+
+def set_str(v: Vec[str]) -> str:
+    mut s = "{"
+    mut i = 0
+    while i < v.len:
+        if i > 0: s = s + ", "
+        s = s + v.get(i)
+        i = i + 1
+    return s + "}"
+
+# ── Textual dump (for `--emit mir`) ──────────────────────────────────────────
+def term_str(t: Pointer[MirTerm]) -> str:
+    match t.read():
+        case MirTerm.TGoto(n):           return "goto bb" + n.to_str()
+        case MirTerm.TBranch(_, tt, ee): return "branch <cond> ? bb" + tt.to_str() + " : bb" + ee.to_str()
+        case MirTerm.TReturn(_):         return "return <expr>"
+        case MirTerm.TReturnVoid():      return "return"
+        case MirTerm.TUnset():           return "<unset>"
+    return "<?>"
+
+def stmt_str(s: Pointer[MirStmt]) -> str:
+    match s.read():
+        case MirStmt.MDeclare(p, _): return "let " + p + " = <expr>"
+        case MirStmt.MAssign(p, _):  return p + " = <expr>"
+        case MirStmt.MEval(_):       return "eval <expr>"
+    return "<?>"
+
+pub def dump_mir(mp: MirProgram) -> str:
+    mut out = ""
+    mut fi = 0
+    while fi < mp.functions.len:
+        mut f = mp.functions.get(fi)
+        mut tag = " [complete]"
+        if not f.complete: tag = " [INCOMPLETE - falls back to HIR]"
+        out = out + "fn " + f.name + "(" + f.params.len.to_str() + " params), " + f.blocks.len.to_str() + " blocks" + tag + ":\n"
+        mut live = compute_liveness(f)
+        mut drops = compute_drops(f, live)
+        mut bi = 0
+        while bi < f.blocks.len:
+            mut blk = f.blocks.get(bi)
+            out = out + "  bb" + blk.id.to_str() + ":\n"
+            mut si = 0
+            while si < blk.stmts.len:
+                out = out + "    " + stmt_str(blk.stmts.get(si)) + "\n"
+                si = si + 1
+            out = out + "    " + term_str(blk.term) + "\n"
+            out = out + "    ; live_out " + set_str(live.get(blk.id).items) + "\n"
+            out = out + "    ; drop " + set_str(drops.get(blk.id).items) + "\n"
+            bi = bi + 1
+        fi = fi + 1
+    return out
