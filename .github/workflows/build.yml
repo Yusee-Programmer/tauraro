@@ -127,6 +127,10 @@ jobs:
       - name: Build (Linux / macOS)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          # Set CFLAGS and LDFLAGS for the C compiler to resolve ucontext symbols
+          CFLAGS: "-O2 -D_GNU_SOURCE"
+          LDFLAGS: "-lm -lpthread"
         run: bash scripts/build.sh
 
       - name: Build (Windows)
@@ -156,6 +160,10 @@ jobs:
       - name: Run regression test suite (Linux / macOS)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          # Also pass CFLAGS/LDFLAGS for the test runner's C compilation
+          CFLAGS: "-O2 -D_GNU_SOURCE"
+          LDFLAGS: "-lm -lpthread"
         run: bash scripts/run_tests.sh
 
       - name: Run regression test suite (Windows)
