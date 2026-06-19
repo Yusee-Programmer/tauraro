@@ -6,6 +6,7 @@ from core.alloc import alloc, dealloc
 from core.io import _tr_exit, write_file, append_file
 from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
+from mir import mir_if_drop_plan, DropSite
 
 
 pub enum SymbolKind:
@@ -1501,6 +1502,49 @@ extend Sema:
         if not self.block_ends_in_jump(hb):
             self.append_drops_from(hb, self.scopes.len - 1)
 
+    # #53 HYBRID: true if `hb` directly declares `nm` as a `str` local.
+    pub def block_str_decl(self, hb: HirBlock, nm: str) -> bool:
+        mut i = 0
+        while i < hb.stmts.len:
+            match hb.stmts.get(i).read():
+                case HirStmt.SLet(sn, _, _, _, _, sty, _):
+                    if sn == nm and sty.name == "str": return true
+                case _: pass
+            i = i + 1
+        return false
+
+    # #53 HYBRID: true if `hb` already contains an SAutoDrop for `nm`.
+    pub def block_has_autodrop(self, hb: HirBlock, nm: str) -> bool:
+        mut i = 0
+        while i < hb.stmts.len:
+            match hb.stmts.get(i).read():
+                case HirStmt.SAutoDrop(dn, _):
+                    if dn == nm: return true
+                case _: pass
+            i = i + 1
+        return false
+
+    # #53 HYBRID: drive if-body fall-through str drops from the MIR drop schedule.
+    # The MIR (built from the just-lowered `hf`) computes, for complete functions,
+    # which str locals are owned-but-dead at a single-block if/else body's
+    # fall-through end — exactly the leak the HIR scope/jump machinery misses, and
+    # exactly the case 6 scope-heuristic attempts got wrong. We only release a name
+    # the MIR proved dead, that is a `str` DECLARED in that body block, and not
+    # already dropped there. Incomplete functions get an empty plan ⇒ HIR path
+    # unchanged. str-only for now (collections later).
+    pub def apply_mir_if_drops(self, hf: HirFunction):
+        mut plan = mir_if_drop_plan(hf)
+        mut psi = 0
+        while psi < plan.len:
+            mut site = plan.get(psi)
+            mut ppi = 0
+            while ppi < site.places.len:
+                mut nm = site.places.get(ppi)
+                if self.block_str_decl(site.hir_block, nm) and (not self.block_has_autodrop(site.hir_block, nm)):
+                    site.hir_block.push(box_hirstmt(HirStmt.SAutoDrop(nm, "str")))
+                ppi = ppi + 1
+            psi = psi + 1
+
     pub def declare(self, name: str, kind: SymbolKind, ty: Pointer[AstType], is_mut: bool):
         # Rule N-1: Reserved name protection (skip 'self', internal '_*' names, short generics)
         if name != "self" and name != "_" and _tr_strlen(name) > 1:
@@ -1854,6 +1898,9 @@ extend Sema:
 
         self.finalize_scope_drops(hf.body)
         self.exit_scope()
+        # #53 HYBRID: fill the if-body fall-through leak from the MIR drop schedule
+        # (HIR machinery handled top-level/while/jump drops above).
+        self.apply_mir_if_drops(hf)
         # Restore async context and lifetime context
         self.in_async_fn = saved_async
         self.current_func_name = ""
