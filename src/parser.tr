@@ -1397,11 +1397,17 @@ extend Parser:
                         idx = box_expr(Expr.ETypeArg(box_asttype(self.parse_type())))
                     else:
                         idx = self.parse_expr()
-                    # Consume extra comma-separated type args (e.g. Map[str, T])
+                    # Consume extra comma-separated type args (e.g. Map[str, T]).
+                    # A subsequent arg may itself be a function-pointer type
+                    # (e.g. `Map[str, def(int) -> bool].init(4)`), which `def`
+                    # cannot start as a value expression - parse it as a type.
                     while self.peek() == Token.Comma:
                         self.pos = self.pos + 1
                         self.skip_newlines_and_indent()
-                        self.parse_expr()
+                        if self.peek() == Token.KwDef:
+                            self.parse_type()
+                        else:
+                            self.parse_expr()
                     if self.peek() == Token.RBracket:
                         self.pos = self.pos + 1
                     e = box_expr(Expr.EIndex(e, idx))
@@ -2130,6 +2136,16 @@ extend Parser:
         mut going = True
         while going:
             self.skip_newlines()
+            # A triple-quoted string at the top of the class body is its
+            # docstring (captured for `inspect`), not an executable statement.
+            if c.docstring == "":
+                match self.peek():
+                    case Token.TripleStrLit(_ds):
+                        c.docstring = _ds
+                        self.pos = self.pos + 1
+                        self.skip_newlines()
+                    case _:
+                        pass
             mut decorators = Vec[Decorator].init(0)
             while self.peek() == Token.At:
                 self.pos = self.pos + 1

@@ -3328,6 +3328,16 @@ static inline long long _tr_idict_len(TrIDict* d) { return d ? (long long)d->len
 /* ── Built-in Tuple (up to 8 elements, all stored as long long) ────────── */
 typedef struct { long long data[8]; } TrTuple;
 
+/* List_TrTuple: vector of builtin tuples (Vec[Tuple]). Predefined here so the
+   codegen needn't lazily emit it (which races the types-header global decls). */
+typedef struct { TrTuple* data; size_t len; size_t capacity; } List_TrTuple;
+static inline List_TrTuple* List_TrTuple_new(void) { List_TrTuple* l=(List_TrTuple*)malloc(sizeof(List_TrTuple)); l->data=(TrTuple*)malloc(sizeof(TrTuple)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_TrTuple_append(List_TrTuple* l, TrTuple val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrTuple*)realloc(l->data,sizeof(TrTuple)*l->capacity); } l->data[l->len++]=val; }
+static inline TrTuple List_TrTuple_get(List_TrTuple* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline TrTuple List_TrTuple_pop(List_TrTuple* l) { if(!l||l->len==0) return (TrTuple){0}; l->len--; return l->data[l->len]; }
+static inline void List_TrTuple_set(List_TrTuple* l, long long i, TrTuple v) { if(l&&(size_t)i<l->len) l->data[i]=v; }
+static inline void List_TrTuple_free(List_TrTuple* l) { if(l){ free(l->data); free(l); } }
+
 /* ── List types (bootstrap phase) ─────────────────────────────────── */
 
 typedef struct { long long* __restrict__ data; size_t len; size_t capacity; } List_i64;
@@ -3461,7 +3471,11 @@ static inline List_TrStr* _tr_dict_keys(TrMap* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _DictNode* n = d->buckets[i];
-        while (n) { if (n->key && n->value) List_TrStr_append_owned(out, _tr_str_wrap(n->key)); n = n->next; }
+        /* strdup the key: the returned TrStr owns its own buffer (rc=1), so
+           freeing the list (List_TrStr_free -> _tr_str_release) doesn't free
+           the dict's own key storage (which would dangle d's keys -> a later
+           d.get() / d[key] would miss). */
+        while (n) { if (n->key && n->value) List_TrStr_append_owned(out, _tr_str_wrap(strdup(n->key))); n = n->next; }
     }
     return out;
 }
@@ -5272,6 +5286,21 @@ static char* _tr_fmt_char(const void* p) {
 static char* _tr_fmt_str(const void* p) {
     const char* s = *(const char* const*)p;
     if (!s) s = "";
+    size_t n = strlen(s);
+    char* b = (char*)_tr_checked_alloc(n + 3);
+    b[0] = '\'';
+    memcpy(b + 1, s, n);
+    b[n + 1] = '\'';
+    b[n + 2] = '\0';
+    return b;
+}
+/* Boxed-string Dict/Map value, quoted Python-repr style: 'text'.
+   Dict values are stored as void* boxes (_tr_str_box -> TrStr*), so the slot
+   is a TrStr*, not a char*. Unbox it before quoting (plain _tr_fmt_str would
+   read the TrStr* address as a char* and print garbage). */
+static char* _tr_fmt_str_box(const void* p) {
+    TrStr* box = *(TrStr* const*)p;
+    const char* s = (box && box->data) ? box->data : "";
     size_t n = strlen(s);
     char* b = (char*)_tr_checked_alloc(n + 3);
     b[0] = '\'';

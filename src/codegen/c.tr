@@ -518,6 +518,10 @@ pub class CGenerator:
             elif cv == "short": actual_n = "i16"
             elif cv == "signed char": actual_n = "i8"
             elif cv == "float": actual_n = "f32"
+        # Builtin tuple as a list element: stored by value as TrTuple.
+        # List_TrTuple is predefined in the runtime header, so no ensure here.
+        if actual_n == "Tuple" or actual_n == "tuple":
+            return "TrTuple"
         mut sfx = self.type_suffix(actual_n)
         if sfx == "i64" or sfx == "f64" or sfx == "str" or sfx == "bool" or sfx == "i8" or sfx == "i32" or sfx == "char" or sfx == "u8" or sfx == "u32":
             return sfx
@@ -542,7 +546,17 @@ pub class CGenerator:
         mut i = 0
         while i < args.len:
             if i > 0: sfx = sfx + "_"
-            mut arg_name = args.get(i).read().name
+            mut arg_ty = args.get(i).read()
+            mut arg_name = arg_ty.name
+            # Nested user generic class arg (e.g. Box[Box[int]]): recurse so the
+            # inner type args aren't lost (otherwise Box[int] and Box[str] would
+            # both collapse to suffix "Box" and collide). Also ensure the inner
+            # monomorphization is emitted.
+            if (not self.type_subst.contains(arg_name)) and arg_ty.args.len > 0 and self.classes.contains(arg_name) and arg_name != "Vec" and arg_name != "Map" and arg_name != "Dict" and arg_name != "List" and not self.is_rt_concurrency_type(arg_name):
+                self.ensure_mono(self.classes.get(arg_name), arg_ty.args)
+                sfx = sfx + arg_name + "_" + self.type_args_suffix(arg_ty.args)
+                i = i + 1
+                continue
             # Apply active type substitution (e.g., T -> long long during mono gen)
             if self.type_subst.contains(arg_name):
                 mut concrete = self.type_subst.get(arg_name)
@@ -1340,6 +1354,10 @@ pub class CGenerator:
             if ty.args.len > 1: val_ty = ty.args.get(1).read()
             mut val_tn: str = self.resolve_generic_prim(val_ty.name)
             mut vfmt = self.ensure_elem_fmt_fn(val_ty)
+            # Dict/Map store str values BOXED (_tr_str_box -> TrStr*), so a plain
+            # _tr_fmt_str would read the box pointer as a char* and print garbage.
+            # Use the unboxing formatter for str values.
+            if _is_str_type(val_tn): vfmt = "_tr_fmt_str_box"
             mut vsize = "sizeof(void*)"
             if _is_float_type(val_tn): vsize = "sizeof(double)"
             return "({ List_TrStr* _dk = _tr_dict_keys(" + s + "); List_ptr* _dv = _tr_dict_values(" + s + "); char* _r = _tr_dict_to_str((void*)_dk->data, (void*)_dv->data, _dk->len, " + vsize + ", _tr_fmt_str, " + vfmt + "); List_TrStr_free(_dk); List_ptr_free(_dv); _r; })"
@@ -2188,6 +2206,8 @@ pub class CGenerator:
         if ty0_n == "Pointer": return "printf(\"0x%llx\\n\", (unsigned long long)(uintptr_t)(" + s0 + "))"
         if ty0_n == "List" or ty0_n == "Vec" or ty0_n == "Set" or ty0_n == "Dict" or ty0_n == "Map":
             return "printf(\"%s\\n\", " + self.gen_collection_to_str(s0, hir_expr_type(arg0)) + ")"
+        if ty0_n == "Tuple" or ty0_n == "tuple":
+            return "printf(\"%s\\n\", " + self.gen_tuple_to_str(s0, hir_expr_type(arg0)) + ")"
         if _is_str_type(ty0_n): return "printf(\"%s\\n\", _tr_strz(" + s0 + "))"
         mut mono0 = self.mono_cls_name_for(hir_expr_type(arg0))
         if self.has_method(mono0, "__str__"):
@@ -3301,7 +3321,9 @@ pub class CGenerator:
             if method == "init" or method == "new":
                 if is_idict: return "_tr_idict_new(" + self.gen_args(args) + ")"
                 return "_tr_dict_new(" + self.gen_args(args) + ")"
-            if method == "get":
+            # `get_index` is the desugaring of d[key] (read context); treat it
+            # exactly like `.get` so str values are unboxed.
+            if method == "get" or method == "get_index":
                 mut c_ty_c = self.type_to_c(call_ty)
                 if is_idict:
                     mut iget_r = "_tr_idict_get(" + obj_s + ", " + self.gen_args(args) + ")"
@@ -3502,15 +3524,52 @@ pub class CGenerator:
             if i > 0: s = s + ", "
             mut tup_e = items.get(i)
             mut tup_es = self.gen_expr(tup_e)
-            if _is_str_type(self.resolve_generic_prim(hir_expr_type(tup_e).name)):
+            mut tup_tn: str = self.resolve_generic_prim(hir_expr_type(tup_e).name)
+            if _is_str_type(tup_tn):
                 # Retain before boxing: the box's TrStr shares .data/.rc with
                 # tup_es's source; without a retain, the source's auto-drop
                 # would free .data while the box still points at it (UAF).
                 s = s + "(long long)(uintptr_t)_tr_str_box(_tr_str_retain(" + tup_es + "))"
+            elif _is_float_type(tup_tn):
+                # Bit-preserve the double in the long long slot (a plain cast
+                # would truncate 3.14 -> 3). Read back via _tr_ptr_to_f64.
+                s = s + "(long long)(uintptr_t)_tr_f64_to_ptr((double)(" + tup_es + "))"
             else:
                 s = s + "(long long)(uintptr_t)(" + tup_es + ")"
             i = i + 1
         return s + "}})"
+
+    # Render a tuple value as a Python-style string: "(1, 'hello', 3.14)".
+    # Tuple elements are heterogeneous; emitted as a self-contained GCC
+    # statement-expression (no helper fn) so it works in any context, including
+    # top-level code (the lazy proto_buf path is only flushed during mono gen).
+    # The tuple is bound to a temp so the source expression is evaluated once.
+    pub def gen_tuple_to_str(self, s: str, ty: AstType) -> str:
+        if ty.args.len == 0:
+            return "\"(...)\""
+        mut tt = self.next_temp()
+        mut body = "({ TrTuple " + tt + " = (" + s + "); size_t _cap, _bl = 0; char* _b = _tr_sb_init(&_cap); "
+        body = body + "_b = _tr_sb_append(_b, &_bl, &_cap, \"(\"); "
+        mut ei = 0
+        while ei < ty.args.len:
+            if ei > 0:
+                body = body + "_b = _tr_sb_append(_b, &_bl, &_cap, \", \"); "
+            mut etn: str = self.resolve_generic_prim(ty.args.get(ei).read().name)
+            mut slot = tt + ".data[" + ei.to_str() + "]"
+            if _is_str_type(etn):
+                # Boxed TrStr slot: quote its .data via _tr_fmt_str.
+                body = body + "{ TrStr* _bx" + ei.to_str() + " = (TrStr*)(uintptr_t)" + slot + "; const char* _sv" + ei.to_str() + " = _bx" + ei.to_str() + " ? _bx" + ei.to_str() + "->data : \"\"; _b = _tr_sb_append(_b, &_bl, &_cap, _tr_fmt_str(&_sv" + ei.to_str() + ")); } "
+            elif _is_float_type(etn):
+                body = body + "_b = _tr_sb_append(_b, &_bl, &_cap, _tr_float_to_str(_tr_ptr_to_f64((void*)(uintptr_t)" + slot + "))); "
+            elif etn == "bool":
+                body = body + "_b = _tr_sb_append(_b, &_bl, &_cap, _tr_bool_to_str((_Bool)" + slot + ")); "
+            elif etn == "char":
+                body = body + "{ char _cv" + ei.to_str() + " = (char)" + slot + "; char _cb" + ei.to_str() + "[2] = { _cv" + ei.to_str() + ", 0 }; _b = _tr_sb_append(_b, &_bl, &_cap, _cb" + ei.to_str() + "); } "
+            else:
+                body = body + "_b = _tr_sb_append(_b, &_bl, &_cap, _tr_int_to_str((long long)" + slot + ")); "
+            ei = ei + 1
+        body = body + "_b = _tr_sb_append(_b, &_bl, &_cap, \")\"); _b; })"
+        return body
 
     # -- Real async/await -----------------------------------------------------
 
@@ -4463,6 +4522,22 @@ pub class CGenerator:
                                 mut _si2_val = self.gen_expr(v)
                                 mut _si2_call = self.cls_method_c_call(mc_ty_n, "__setitem__", _si2_obj, _si2_key + ", " + _si2_val)
                                 self.w(pad + self.flush_wraps(_si2_call, true) + ";\n")
+                                return
+                            # Dict/Map index-assign d[key] = v -> dict set.
+                            if mc_ty_n == "Map" or mc_ty_n == "Dict":
+                                mut _di_obj = self.gen_expr(mc_obj)
+                                mut _di_key_full = hir_expr_type(mc_obj)
+                                mut _di_int_key = false
+                                if _di_key_full.args.len > 0:
+                                    mut _dik = _di_key_full.args.get(0).read()
+                                    if _is_int_type(_dik.name) or _dik.name == "int" or _dik.name == "i64" or _dik.name == "i32" or _dik.name == "usize":
+                                        _di_int_key = true
+                                mut _di_set = ""
+                                if _di_int_key:
+                                    _di_set = "_tr_idict_set(" + _di_obj + ", " + self.gen_expr(mc_args.get(0)) + ", " + self.dict_val_arg(v) + ")"
+                                else:
+                                    _di_set = "_tr_dict_set(" + _di_obj + ", " + self.dict_key_arg(mc_args.get(0)) + ", " + self.dict_val_arg(v) + ")"
+                                self.w(pad + self.flush_wraps(_di_set, true) + ";\n")
                                 return
                     case _: pass
                 mut _assign_rhs = ""

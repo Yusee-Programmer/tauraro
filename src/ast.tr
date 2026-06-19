@@ -360,6 +360,7 @@ pub class ClassDef:
     pub is_public: bool
     pub is_class: bool
     pub line: int
+    pub docstring: str
 
 extend ClassDef:
     pub def init(name: str) -> ClassDef:
@@ -375,6 +376,7 @@ extend ClassDef:
         c.is_public = false
         c.is_class = true
         c.line = 0
+        c.docstring = ""
         return c
 
 pub class VariantDef:

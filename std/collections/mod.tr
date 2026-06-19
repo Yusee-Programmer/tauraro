@@ -13,9 +13,6 @@ from std.collections.list    import LinkedList
 from std.collections.list    import ListNode
 from std.collections.dict    import MultiDict
 from std.collections.set     import Set
-from std.collections.tuple   import Pair
-from std.collections.tuple   import StrPair
-from std.collections.tuple   import Triple
 from std.collections.stack   import Stack
 from std.collections.queue   import Queue
 from std.collections.deque   import Deque

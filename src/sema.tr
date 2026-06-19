@@ -347,6 +347,8 @@ extend Sema:
                     bi = bi + 1
                 s = s + ")"
             s = s + ":\n"
+            if c.docstring != "":
+                s = s + "  doc: " + c.docstring + "\n"
             if c.fields.len > 0:
                 s = s + "  fields:\n"
                 mut fi = 0
@@ -1623,6 +1625,42 @@ extend Sema:
 
         return Symbol.init("", SymbolKind.SVariable, box_asttype(AstType.init("void")))
 
+    # #10: True if `nm` names a type (class/enum/interface/builtin primitive).
+    pub def is_type_name(self, nm: str) -> bool:
+        if self.classes.contains(nm) or self.enums.contains(nm) or self.interfaces.contains(nm): return true
+        if nm == "int" or nm == "float" or nm == "bool" or nm == "char" or nm == "str" or nm == "void": return true
+        if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" or nm == "isize": return true
+        if nm == "u8" or nm == "u16" or nm == "u32" or nm == "u64" or nm == "usize": return true
+        if nm == "f32" or nm == "f64": return true
+        return false
+
+    # #10: If `raw` is a bare identifier naming a TYPE (not a variable), return
+    # that type's name; else "". Used by `==`/`!=` for runtime type comparison.
+    pub def type_ref_name(self, raw: Pointer[Expr]) -> str:
+        if raw as usize == 0 as usize: return ""
+        match raw.read():
+            case Expr.EIdent(nm):
+                if not self.is_type_name(nm): return ""
+                # A real local/global VARIABLE named like a type shadows it
+                # (e.g. `mut int = 5`); only then is this not a type reference.
+                # Builtin cast names (int/float/...) are SFunction, and class
+                # names are SClass - both are valid type refs in `==` position.
+                mut s = self.resolve(nm)
+                if s.name != "" and s.kind == SymbolKind.SVariable: return ""
+                return nm
+            case _: return ""
+
+    # True when `name` is NOT bound in any function-local scope but IS a
+    # file-scope global. Used to let a bare `name = expr` inside a function
+    # introduce a fresh local that shadows the global (Python-like), instead
+    # of erroring on an immutable global.
+    pub def is_global_not_local(self, name: str) -> bool:
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name): return false
+            i = i - 1
+        return self.globals.contains(name)
+
     pub def analyze(self, prog: Program) -> HirProgram:
         mut hp = HirProgram.init()
 
@@ -2303,6 +2341,17 @@ extend Sema:
                                 # Bare `name = expr` with no prior declaration and no `mut`:
                                 # declares an IMMUTABLE binding (Rust-like default).
                                 self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), false)
+                            elif self.scopes.len > 0 and self.is_global_not_local(sa_decl_name) and not sa_existing.is_mut:
+                                # Inside a function, assigning to a name that only
+                                # exists as an IMMUTABLE global introduces a fresh
+                                # LOCAL that shadows the global (Python-like).
+                                # (A `mut` global stays mutable from functions and
+                                # falls through to the normal-assignment path.)
+                                # Emitted as SLet so codegen declares a new C local;
+                                # C scoping makes earlier reads see the global.
+                                self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), true)
+                                self.mark_init(sa_decl_name)
+                                return box_hirstmt(HirStmt.SLet(sa_decl_name, Ownership.Own, true, false, false, hir_expr_type(hv), hv))
                             elif sa_existing.kind == SymbolKind.SVariable and not sa_existing.is_mut:
                                 self.error("[M-8] Cannot assign to '" + sa_decl_name + "' a second time because it is immutable.\n      FIX: Declare it as 'mut " + sa_decl_name + " = ...' if it needs to change.")
                         case _: pass
@@ -2953,6 +3002,21 @@ extend Sema:
             case Expr.EBinOp(op, left, right):
                 mut hleft = self.lower_expr(left)
                 mut hright = self.lower_expr(right)
+                # #10 runtime type comparison: `T == U`, `obj == T`, `5 == int`,
+                # etc. When either side is a bare type name (class/enum/interface/
+                # primitive that isn't a variable), compare the TYPE NAMES. A value
+                # operand contributes its static type name (so `5 == int` is True,
+                # `obj == MyClass` is True for a MyClass instance). Lowered to a
+                # str comparison of the two names.
+                if op == "==" or op == "!=":
+                    mut lref = self.type_ref_name(left)
+                    mut rref = self.type_ref_name(right)
+                    if lref != "" or rref != "":
+                        mut lname = lref
+                        if lname == "": lname = hir_expr_type(hleft).name
+                        mut rname = rref
+                        if rname == "": rname = hir_expr_type(hright).name
+                        return box_hirexpr(HirExpr.EBinOp(op, box_hirexpr(HirExpr.ELitStr(lname, AstType.init("str"))), box_hirexpr(HirExpr.ELitStr(rname, AstType.init("str"))), AstType.init("bool")))
                 mut bin_ty = hir_expr_type(hleft)
                 if bin_ty.name == "void": bin_ty = hir_expr_type(hright)
                 if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "&&" or op == "||":
@@ -3589,7 +3653,7 @@ extend Sema:
                             if self.current_func_generics.get(fi) == iname: is_param = true
                             fi = fi + 1
 
-                        if self.is_primitive_name(iname) or iname == "str" or iname == "Str" or is_param or _tr_strlen(iname) == 1 or self.classes.contains(iname) or iname == "StringObj" or iname == "StringBuilder" or self.enums.contains(iname) or iname == "Vec" or iname == "List" or iname == "Map":
+                        if self.is_primitive_name(iname) or iname == "str" or iname == "Str" or is_param or _tr_strlen(iname) == 1 or self.classes.contains(iname) or iname == "StringObj" or iname == "StringBuilder" or self.enums.contains(iname) or iname == "Vec" or iname == "List" or iname == "Map" or iname == "Tuple" or iname == "tuple":
                             is_generic = true
                             generic_arg_n = iname
                     case Expr.EIndex(_, _):
@@ -3629,6 +3693,17 @@ extend Sema:
                         cls_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
                         return box_hirexpr(HirExpr.EIdent(obj_name, cls_ty, false))
                     return hexpr_obj
+                # Dict/Map index access d[key]: lower to get_index carrying the
+                # VALUE type so the read path unboxes str values and the write
+                # path (SAssign) dispatches to dict-set. (Handled for both read
+                # and write in codegen's EMethodCall "get_index" branches.)
+                if obj_ty_n == "Map" or obj_ty_n == "Dict":
+                    mut dval_ty = AstType.init("void")
+                    mut dobj_full = hir_expr_type(hexpr_obj)
+                    if dobj_full.args.len > 1: dval_ty = dobj_full.args.get(1).read()
+                    mut didx_args = Vec[Pointer[HirExpr]].init(1)
+                    didx_args.push(self.lower_expr(idx_inner))
+                    return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", didx_args, dval_ty))
                 if not self.is_primitive_name(obj_ty_n) and obj_ty_n != "str" and obj_ty_n != "Pointer" and obj_ty_n != "List" and obj_ty_n != "Vec":
                     mut call_args = Vec[Pointer[HirExpr]].init(1)
                     call_args.push(self.lower_expr(idx_inner))
@@ -3740,7 +3815,14 @@ extend Sema:
                     h_keys.push(self.lower_expr(keys.get(di)))
                     h_vals.push(self.lower_expr(vals.get(di)))
                     di = di + 1
-                return box_hirexpr(HirExpr.EDict(h_keys, h_vals, AstType.init("Dict")))
+                # Infer key/value types from the first entry so `.get`/`[]`/print
+                # resolve correctly (otherwise the dict's K,V are lost and str
+                # values come back as raw void* garbage).
+                mut dict_ty = AstType.init("Dict")
+                if h_keys.len > 0:
+                    dict_ty.args.push(box_asttype(hir_expr_type(h_keys.get(0))))
+                    dict_ty.args.push(box_asttype(hir_expr_type(h_vals.get(0))))
+                return box_hirexpr(HirExpr.EDict(h_keys, h_vals, dict_ty))
             case Expr.EListComp(element, generators):
                 self.enter_scope()
                 mut hgens = Vec[Pointer[HirComprehension]].init(generators.len)
