@@ -89,12 +89,32 @@ CEOF
     done
     cout=""
     if [ -n "$libfile" ]; then
-        "$CCBIN" "$libdir/consumer.c" -I"$libdir" "$libfile" -o "$libdir/consumer" >/dev/null 2>&1
+        # Compile with -std=gnu11 on Linux for ucontext compatibility
+        if [[ "$(uname -s)" == "Linux" ]]; then
+            "$CCBIN" -std=gnu11 -D_GNU_SOURCE "$libdir/consumer.c" -I"$libdir" "$libfile" -o "$libdir/consumer" >/dev/null 2>&1
+        else
+            "$CCBIN" "$libdir/consumer.c" -I"$libdir" "$libfile" -o "$libdir/consumer" >/dev/null 2>&1
+        fi
         # Run from the lib dir with it on the dynamic-loader search path so the
         # shared object is found at runtime (ELF: LD_LIBRARY_PATH, Mach-O:
         # DYLD_LIBRARY_PATH; Windows resolves the .dll from the cwd). Without
         # this the consumer fails to start on Linux/macOS -> empty output.
-        cout=$(cd "$libdir" && LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" DYLD_LIBRARY_PATH="$libdir:${DYLD_LIBRARY_PATH:-}" ./consumer 2>/dev/null)
+        if [ -f "$libdir/consumer" ]; then
+            case "$(uname -s)" in
+                Linux)
+                    cout=$(cd "$libdir" && LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" ./consumer 2>/dev/null)
+                    ;;
+                Darwin)
+                    cout=$(cd "$libdir" && DYLD_LIBRARY_PATH="$libdir:${DYLD_LIBRARY_PATH:-}" ./consumer 2>/dev/null)
+                    ;;
+                MINGW*|MSYS*|CYGWIN*)
+                    cout=$(cd "$libdir" && ./consumer.exe 2>/dev/null)
+                    ;;
+                *)
+                    cout=$(cd "$libdir" && LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" ./consumer 2>/dev/null)
+                    ;;
+            esac
+        fi
         [ -z "$cout" ] && [ -f "$libdir/consumer.exe" ] && cout=$(cd "$libdir" && ./consumer.exe 2>/dev/null)
     fi
     if [ "$cout" != "7 30" ]; then
