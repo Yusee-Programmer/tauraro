@@ -5872,9 +5872,10 @@ pub class CGenerator:
         self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")
-        self.w("#ifndef TAURARO_BARE\n")
-        self.w("    _tr_global_async_pool = _tr_threadpool_auto();\n")
-        self.w("#endif\n")
+        # NOTE: the global async pool is created LAZILY on first use (see
+        # _tr_async_pool() in the runtime). Eagerly spawning one worker thread
+        # per CPU here cost ~1-2 MB of stack per core (~64+ MB on big machines)
+        # in EVERY program, even pure-compute ones that never touch async.
         # Set up args list only when main() takes a parameter
         mut main_has_args = false
         mut main_args_name = "args"
@@ -5922,7 +5923,7 @@ pub class CGenerator:
             i = i + 1
 
         self.w("#ifndef TAURARO_BARE\n")
-        self.w("    if (_tr_global_async_pool) { _tr_threadpool_free(_tr_global_async_pool); _tr_global_async_pool = NULL; }\n")
+        self.w("    _tr_async_pool_shutdown();\n")
         self.w("#endif\n")
         self.w("    return 0;\n}\n")
 
@@ -6639,9 +6640,10 @@ pub class CGenerator:
         self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
         self.w("    _tr_argc = argc; _tr_argv = argv;\n")
         self.w("    _tr_init_console();\n")
-        self.w("#ifndef TAURARO_BARE\n")
-        self.w("    _tr_global_async_pool = _tr_threadpool_auto();\n")
-        self.w("#endif\n")
+        # NOTE: the global async pool is created LAZILY on first use (see
+        # _tr_async_pool() in the runtime). Eagerly spawning one worker thread
+        # per CPU here cost ~1-2 MB of stack per core (~64+ MB on big machines)
+        # in EVERY program, even pure-compute ones that never touch async.
         mut main_has_args = false
         mut main_args_name = "args"
         mut mi2 = 0
@@ -6690,7 +6692,7 @@ pub class CGenerator:
                 i = i + 1
 
         self.w("#ifndef TAURARO_BARE\n")
-        self.w("    if (_tr_global_async_pool) { _tr_threadpool_free(_tr_global_async_pool); _tr_global_async_pool = NULL; }\n")
+        self.w("    _tr_async_pool_shutdown();\n")
         self.w("#endif\n")
         self.w("    return 0;\n}\n")
         return self.buf.to_string().as_str()

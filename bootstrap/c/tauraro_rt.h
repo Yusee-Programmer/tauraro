@@ -24,6 +24,9 @@
 #if defined(__linux__)
 #  define _GNU_SOURCE
 #elif defined(__APPLE__)
+/* macOS: _XOPEN_SOURCE required by recent SDKs (Xcode 16+) for the ucontext
+ * routines used by the coroutine scheduler; _DARWIN_C_SOURCE keeps BSD extras. */
+#  define _XOPEN_SOURCE 700
 #  define _DARWIN_C_SOURCE
 #elif defined(__unix__)
 #  define _POSIX_C_SOURCE 200809L

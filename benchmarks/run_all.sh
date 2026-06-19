@@ -9,16 +9,17 @@ ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BENCH="$SCRIPT_DIR"
 RESULTS_MD="$BENCH/results.md"
 
-# Self-hosted compiler — look next to this script's build dir, then in PATH
-if   [ -x "$ROOT/tauraro/src/build/tauraroc" ]; then
-    TAU_EXE="$ROOT/tauraro/src/build/tauraroc"
-elif [ -x "$ROOT/tauraro/tauraroc" ]; then
-    TAU_EXE="$ROOT/tauraro/tauraroc"
-elif [ -x "$BENCH/../tauraroc" ]; then
-    TAU_EXE="$BENCH/../tauraroc"
-elif command -v tauraroc &>/dev/null; then
-    TAU_EXE="tauraroc"
-else
+# Self-hosted compiler — prefer a binary at the repo root / build dir (the
+# freshly-built one), then fall back to PATH. Checks both bare and .exe names
+# so the same script works on Linux/macOS and Windows (MSYS/Git-Bash).
+TAU_EXE=""
+for cand in \
+    "$BENCH/../tauraroc" "$BENCH/../tauraroc.exe" \
+    "$ROOT/tauraro/src/build/tauraroc" "$ROOT/tauraro/tauraroc" "$ROOT/tauraro/tauraroc.exe"; do
+    if [ -x "$cand" ]; then TAU_EXE="$cand"; break; fi
+done
+if [ -z "$TAU_EXE" ] && command -v tauraroc &>/dev/null; then TAU_EXE="tauraroc"; fi
+if [ -z "$TAU_EXE" ]; then
     echo "ERROR: tauraroc not found. Build it first or add it to PATH." >&2
     exit 1
 fi
@@ -26,6 +27,14 @@ fi
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[0;33m'
 CYN='\033[0;36m'; WHT='\033[1;37m'; GRY='\033[0;37m'; RST='\033[0m'
+
+# ── Portable arithmetic (awk; no `bc` dependency) ───────────────────────────────
+# div <num> <den> <decimals> -> formatted quotient (empty/zero den or num -> "")
+div() { [ -n "$1" ] && [ -n "$2" ] && awk "BEGIN{d=$2; if(d==0) exit 1; printf \"%.${3:-2}f\", $1/d}"; }
+# ratio <num> <den> -> "<q>x" or "" (so empty renders as "--", not a bare "x")
+ratio() { local q; q="$(div "$1" "$2" 2)"; [ -n "$q" ] && echo "${q}x"; }
+# le <a> <b> -> exit 0 if a <= b
+le()  { awk "BEGIN{exit !($1<=$2)}"; }
 
 # ── Memory-measuring `time` detection ──────────────────────────────────────────
 # GNU /usr/bin/time -v gives "Maximum resident set size (kbytes)"; BSD (macOS)
@@ -47,7 +56,7 @@ measure() {
         out="$(/usr/bin/time -l "$exe" 2>"$timefile" || true)"
         local rss_b
         rss_b="$(grep -i 'maximum resident set size' "$timefile" | grep -oE '[0-9]+' | head -1)"
-        [ -n "$rss_b" ] && rss_kb="$(echo "scale=1; $rss_b / 1024" | bc)"
+        [ -n "$rss_b" ] && rss_kb="$(div "$rss_b" 1024 1)"
     elif [ "$HAVE_TIME" -eq 1 ]; then
         out="$(/usr/bin/time -v "$exe" 2>"$timefile" || true)"
         rss_kb="$(grep -i 'Maximum resident set size' "$timefile" | grep -oE '[0-9]+' | head -1)"
@@ -56,7 +65,7 @@ measure() {
     fi
     rm -f "$timefile"
     ms="$(echo "$out" | grep -oE 'TIME_MS:[0-9]+' | grep -oE '[0-9]+' | head -1)"
-    [ -n "$ms" ] && time_s="$(echo "scale=3; $ms / 1000" | bc)"
+    [ -n "$ms" ] && time_s="$(div "$ms" 1000 3)"
     echo "${time_s:-}|${rss_kb:-}"
 }
 
@@ -136,10 +145,10 @@ for entry in "${benchmarks[@]}"; do
 
     tau_c=""; tau_rs=""
     if [ -n "$c_time"  ] && [ -n "$tr_time" ] && [ "$c_time"  != "0" ]; then
-        tau_c="$(echo "scale=2; $tr_time / $c_time"  | bc)x"
+        tau_c="$(ratio "$tr_time" "$c_time")"
     fi
     if [ -n "$rs_time" ] && [ -n "$tr_time" ] && [ "$rs_time" != "0" ]; then
-        tau_rs="$(echo "scale=2; $tr_time / $rs_time" | bc)x"
+        tau_rs="$(ratio "$tr_time" "$rs_time")"
     fi
 
     results+=("$name|${c_time:-}|${rs_time:-}|${tr_time:-}|${tau_c:---}|${tau_rs:---}|${c_mem:-}|${rs_mem:-}|${tr_mem:-}")
@@ -161,9 +170,9 @@ for row in "${results[@]}"; do
     IFS='|' read -r rname c_t rs_t tr_t tc trs c_m rs_m tr_m <<< "$row"
     ratio="${tc%%x*}"
     color="$WHT"
-    if [ -n "$ratio" ] && [ "$ratio" != "-" ] && (( $(echo "$ratio <= 1.05" | bc -l) )); then
+    if [ -n "$ratio" ] && [ "$ratio" != "-" ] && le "$ratio" 1.05; then
         color="$GRN"
-    elif [ -n "$ratio" ] && [ "$ratio" != "-" ] && (( $(echo "$ratio <= 1.20" | bc -l) )); then
+    elif [ -n "$ratio" ] && [ "$ratio" != "-" ] && le "$ratio" 1.20; then
         color="$YLW"
     fi
     printf "${color}%-24s %8s %8s %10s %9s %9s${RST}\n" \
@@ -184,8 +193,8 @@ printf "${GRY}%-24s %10s %10s %10s %9s %9s${RST}\n" \
 for row in "${results[@]}"; do
     IFS='|' read -r rname c_t rs_t tr_t tc trs c_m rs_m tr_m <<< "$row"
     tcm="--"; trsm="--"
-    if [ -n "$c_m"  ] && [ -n "$tr_m" ] && [ "$c_m"  != "0" ]; then tcm="$(echo "scale=2; $tr_m / $c_m"  | bc)x"; fi
-    if [ -n "$rs_m" ] && [ -n "$tr_m" ] && [ "$rs_m" != "0" ]; then trsm="$(echo "scale=2; $tr_m / $rs_m" | bc)x"; fi
+    if [ -n "$c_m"  ] && [ -n "$tr_m" ] && [ "$c_m"  != "0" ]; then tcm="$(ratio "$tr_m" "$c_m")"; [ -z "$tcm" ] && tcm="--"; fi
+    if [ -n "$rs_m" ] && [ -n "$tr_m" ] && [ "$rs_m" != "0" ]; then trsm="$(ratio "$tr_m" "$rs_m")"; [ -z "$trsm" ] && trsm="--"; fi
     printf "${WHT}%-24s %10s %10s %10s %9s %9s${RST}\n" \
         "$rname" "$(fmt "$c_m" '')" "$(fmt "$rs_m" '')" "$(fmt "$tr_m" '')" "$tcm" "$trsm"
 done
@@ -223,8 +232,8 @@ printf "${GRY}  Tau/Rust = Tauraro / Rust (< 1.00x = Tauraro better)${RST}\n\n"
     for row in "${results[@]}"; do
         IFS='|' read -r rname c_t rs_t tr_t tc trs c_m rs_m tr_m <<< "$row"
         tcm="--"; trsm="--"
-        if [ -n "$c_m"  ] && [ -n "$tr_m" ] && [ "$c_m"  != "0" ]; then tcm="$(echo "scale=2; $tr_m / $c_m"  | bc)x"; fi
-        if [ -n "$rs_m" ] && [ -n "$tr_m" ] && [ "$rs_m" != "0" ]; then trsm="$(echo "scale=2; $tr_m / $rs_m" | bc)x"; fi
+        if [ -n "$c_m"  ] && [ -n "$tr_m" ] && [ "$c_m"  != "0" ]; then tcm="$(ratio "$tr_m" "$c_m")"; [ -z "$tcm" ] && tcm="--"; fi
+        if [ -n "$rs_m" ] && [ -n "$tr_m" ] && [ "$rs_m" != "0" ]; then trsm="$(ratio "$tr_m" "$rs_m")"; [ -z "$trsm" ] && trsm="--"; fi
         echo "| $rname | $(fmt "$c_m" '') | $(fmt "$rs_m" '') | $(fmt "$tr_m" '') | $tcm | $trsm |"
     done
     echo ""
