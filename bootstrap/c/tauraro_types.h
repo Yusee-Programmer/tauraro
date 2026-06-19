@@ -41,9 +41,16 @@ typedef struct HirVariant HirVariant;
 typedef struct HirEnum HirEnum;
 typedef struct HirInterface HirInterface;
 typedef struct HirProgram HirProgram;
+typedef struct MirBlock MirBlock;
+typedef struct DropSite DropSite;
+typedef struct MirFunction MirFunction;
+typedef struct MirProgram MirProgram;
+typedef struct MirBuilder MirBuilder;
+typedef struct LiveSet LiveSet;
 typedef struct Symbol Symbol;
 typedef struct Scope Scope;
 typedef struct Sema Sema;
+typedef struct Formatter Formatter;
 typedef struct CGenerator CGenerator;
 typedef struct LlvmGenerator LlvmGenerator;
 typedef struct Token Token;
@@ -54,6 +61,8 @@ typedef struct Stmt Stmt;
 typedef struct Decl Decl;
 typedef struct HirExpr HirExpr;
 typedef struct HirStmt HirStmt;
+typedef struct MirStmt MirStmt;
+typedef struct MirTerm MirTerm;
 typedef struct SymbolKind SymbolKind;
 typedef struct List_Token List_Token;
 typedef struct List_Pattern List_Pattern;
@@ -1191,7 +1200,8 @@ typedef enum {
     HirStmt_SMultiLet,
     HirStmt_SChanSelect,
     HirStmt_SDefer,
-    HirStmt_SAutoDrop
+    HirStmt_SAutoDrop,
+    HirStmt_SLineMarker
 } HirStmt_tag;
 
 typedef struct HirStmt {
@@ -1292,6 +1302,9 @@ typedef struct HirStmt {
             TrStr name;
             TrStr class_name;
         } SAutoDrop;
+        struct {
+            long long n;
+        } SLineMarker;
     } data;
 } HirStmt;
 
@@ -1321,6 +1334,65 @@ static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SMultiLet(List
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SChanSelect(List_ptr* cases) { HirStmt _r = {.tag=HirStmt_SChanSelect}; _r.data.SChanSelect.cases = cases; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SDefer(HirStmt* stmt) { HirStmt _r = {.tag=HirStmt_SDefer}; _r.data.SDefer.stmt = stmt; return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SAutoDrop(TrStr name, TrStr class_name) { HirStmt _r = {.tag=HirStmt_SAutoDrop}; _r.data.SAutoDrop.name = _tr_str_retain(name); _r.data.SAutoDrop.class_name = _tr_str_retain(class_name); return _r; }
+static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SLineMarker(long long n) { HirStmt _r = {.tag=HirStmt_SLineMarker}; _r.data.SLineMarker.n = n; return _r; }
+
+typedef enum {
+    MirStmt_MDeclare,
+    MirStmt_MAssign,
+    MirStmt_MEval
+} MirStmt_tag;
+
+typedef struct MirStmt {
+    MirStmt_tag tag;
+    union {
+        struct {
+            TrStr place;
+            HirExpr* value;
+        } MDeclare;
+        struct {
+            TrStr place;
+            HirExpr* value;
+        } MAssign;
+        struct {
+            HirExpr* value;
+        } MEval;
+    } data;
+} MirStmt;
+
+static inline __attribute__((always_inline)) MirStmt MirStmt_ctor_MDeclare(TrStr place, HirExpr* value) { MirStmt _r = {.tag=MirStmt_MDeclare}; _r.data.MDeclare.place = _tr_str_retain(place); _r.data.MDeclare.value = value; return _r; }
+static inline __attribute__((always_inline)) MirStmt MirStmt_ctor_MAssign(TrStr place, HirExpr* value) { MirStmt _r = {.tag=MirStmt_MAssign}; _r.data.MAssign.place = _tr_str_retain(place); _r.data.MAssign.value = value; return _r; }
+static inline __attribute__((always_inline)) MirStmt MirStmt_ctor_MEval(HirExpr* value) { MirStmt _r = {.tag=MirStmt_MEval}; _r.data.MEval.value = value; return _r; }
+
+typedef enum {
+    MirTerm_TGoto,
+    MirTerm_TBranch,
+    MirTerm_TReturn,
+    MirTerm_TReturnVoid,
+    MirTerm_TUnset
+} MirTerm_tag;
+
+typedef struct MirTerm {
+    MirTerm_tag tag;
+    union {
+        struct {
+            long long target;
+        } TGoto;
+        struct {
+            HirExpr* cond;
+            long long t;
+            long long e;
+        } TBranch;
+        struct {
+            HirExpr* value;
+        } TReturn;
+    } data;
+} MirTerm;
+
+static inline __attribute__((always_inline)) MirTerm MirTerm_ctor_TGoto(long long target) { MirTerm _r = {.tag=MirTerm_TGoto}; _r.data.TGoto.target = target; return _r; }
+static inline __attribute__((always_inline)) MirTerm MirTerm_ctor_TBranch(HirExpr* cond, long long t, long long e) { MirTerm _r = {.tag=MirTerm_TBranch}; _r.data.TBranch.cond = cond; _r.data.TBranch.t = t; _r.data.TBranch.e = e; return _r; }
+static inline __attribute__((always_inline)) MirTerm MirTerm_ctor_TReturn(HirExpr* value) { MirTerm _r = {.tag=MirTerm_TReturn}; _r.data.TReturn.value = value; return _r; }
+#define MirTerm_make_TReturnVoid() ((MirTerm){.tag=MirTerm_TReturnVoid})
+#define MirTerm_make_TUnset() ((MirTerm){.tag=MirTerm_TUnset})
 
 typedef enum {
     SymbolKind_SFunction,
@@ -1363,9 +1435,16 @@ typedef struct Lexer {
     long long len;
     long long pos;
     long long line;
+    long long line_start;
+    long long tok_col;
     List_i64* indent_stack;
     long long pending_dedents;
     List_i64* token_lines;
+    List_i64* token_cols;
+    bool record_comments;
+    List_i64* comment_lines;
+    List_TrStr* comment_texts;
+    List_bool* comment_trailing;
 } Lexer;
 #endif
 
@@ -1484,6 +1563,7 @@ typedef struct FunctionDef {
     bool is_async;
     bool is_extern;
     bool is_public;
+    bool is_export;
     Block* body;
     long long line;
 } FunctionDef;
@@ -1512,6 +1592,7 @@ typedef struct ClassDef {
     bool is_public;
     bool is_class;
     long long line;
+    TrStr docstring;
 } ClassDef;
 #endif
 
@@ -1570,6 +1651,8 @@ typedef struct Parser {
     List_Token* tokens;
     long long pos;
     List_i64* lines;
+    List_i64* cols;
+    TrStr src_text;
     long long error_count;
     TrStr current_file;
 } Parser;
@@ -1668,6 +1751,7 @@ typedef struct HirFunction {
     bool is_async;
     bool is_extern;
     bool is_public;
+    bool is_export;
     bool is_static;
     bool is_variadic;
     bool is_decorator;
@@ -1742,6 +1826,61 @@ typedef struct HirProgram {
     List_TrStr* type_alias_names;
     List_ptr* type_alias_types;
 } HirProgram;
+#endif
+
+#ifndef MirBlock_STRUCT_DEFINED
+#define MirBlock_STRUCT_DEFINED
+typedef struct MirBlock {
+    long long id;
+    List_ptr* stmts;
+    MirTerm* term;
+    HirBlock* hir_block;
+} MirBlock;
+#endif
+
+#ifndef DropSite_STRUCT_DEFINED
+#define DropSite_STRUCT_DEFINED
+typedef struct DropSite {
+    HirBlock* hir_block;
+    List_TrStr* places;
+} DropSite;
+#endif
+
+#ifndef MirFunction_STRUCT_DEFINED
+#define MirFunction_STRUCT_DEFINED
+typedef struct MirFunction {
+    TrStr name;
+    List_TrStr* params;
+    List_ptr* blocks;
+    List_ptr* if_bodies;
+    bool complete;
+} MirFunction;
+#endif
+
+#ifndef MirProgram_STRUCT_DEFINED
+#define MirProgram_STRUCT_DEFINED
+typedef struct MirProgram {
+    List_ptr* functions;
+} MirProgram;
+#endif
+
+#ifndef MirBuilder_STRUCT_DEFINED
+#define MirBuilder_STRUCT_DEFINED
+typedef struct MirBuilder {
+    List_ptr* blocks;
+    long long cur;
+    bool complete;
+    HirBlock* cur_hb;
+    List_ptr* if_bodies;
+    long long in_unsafe;
+} MirBuilder;
+#endif
+
+#ifndef LiveSet_STRUCT_DEFINED
+#define LiveSet_STRUCT_DEFINED
+typedef struct LiveSet {
+    List_TrStr* items;
+} LiveSet;
 #endif
 
 #ifndef Symbol_STRUCT_DEFINED
@@ -1829,6 +1968,20 @@ typedef struct Sema {
 } Sema;
 #endif
 
+#ifndef Formatter_STRUCT_DEFINED
+#define Formatter_STRUCT_DEFINED
+typedef struct Formatter {
+    StringBuilder* out;
+    long long indent;
+    List_i64* c_lines;
+    List_TrStr* c_texts;
+    List_bool* c_trailing;
+    long long ci;
+    bool unsupported;
+    bool in_fstring;
+} Formatter;
+#endif
+
 #ifndef CGenerator_STRUCT_DEFINED
 #define CGenerator_STRUCT_DEFINED
 typedef struct CGenerator {
@@ -1875,6 +2028,8 @@ typedef struct CGenerator {
     List_TrStr* defer_stack;
     List_TrStr* wrap_temp_decls;
     List_TrStr* wrap_temp_names;
+    bool emit_line_info;
+    TrStr cur_src_file;
 } CGenerator;
 #endif
 
@@ -1937,6 +2092,18 @@ static inline void List_HirStmt_append(List_HirStmt* l, HirStmt val) { if(l->len
 static inline HirStmt List_HirStmt_get(List_HirStmt* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline HirStmt List_HirStmt_pop(List_HirStmt* l) { if(!l||l->len==0) return (HirStmt){0}; l->len--; return l->data[l->len]; }
 static inline void List_HirStmt_free(List_HirStmt* l) { if(l){ free(l->data); free(l); } }
+typedef struct List_MirStmt { MirStmt* data; size_t len; size_t capacity; } List_MirStmt;
+static inline List_MirStmt* List_MirStmt_new(void) { List_MirStmt* l=(List_MirStmt*)malloc(sizeof(List_MirStmt)); l->data=(MirStmt*)malloc(sizeof(MirStmt)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_MirStmt_append(List_MirStmt* l, MirStmt val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(MirStmt*)realloc(l->data,sizeof(MirStmt)*l->capacity); } l->data[l->len++]=val; }
+static inline MirStmt List_MirStmt_get(List_MirStmt* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline MirStmt List_MirStmt_pop(List_MirStmt* l) { if(!l||l->len==0) return (MirStmt){0}; l->len--; return l->data[l->len]; }
+static inline void List_MirStmt_free(List_MirStmt* l) { if(l){ free(l->data); free(l); } }
+typedef struct List_MirTerm { MirTerm* data; size_t len; size_t capacity; } List_MirTerm;
+static inline List_MirTerm* List_MirTerm_new(void) { List_MirTerm* l=(List_MirTerm*)malloc(sizeof(List_MirTerm)); l->data=(MirTerm*)malloc(sizeof(MirTerm)*8); l->len=0; l->capacity=8; return l; }
+static inline void List_MirTerm_append(List_MirTerm* l, MirTerm val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(MirTerm*)realloc(l->data,sizeof(MirTerm)*l->capacity); } l->data[l->len++]=val; }
+static inline MirTerm List_MirTerm_get(List_MirTerm* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
+static inline MirTerm List_MirTerm_pop(List_MirTerm* l) { if(!l||l->len==0) return (MirTerm){0}; l->len--; return l->data[l->len]; }
+static inline void List_MirTerm_free(List_MirTerm* l) { if(l){ free(l->data); free(l); } }
 typedef struct List_SymbolKind { SymbolKind* data; size_t len; size_t capacity; } List_SymbolKind;
 static inline List_SymbolKind* List_SymbolKind_new(void) { List_SymbolKind* l=(List_SymbolKind*)malloc(sizeof(List_SymbolKind)); l->data=(SymbolKind*)malloc(sizeof(SymbolKind)*8); l->len=0; l->capacity=8; return l; }
 static inline void List_SymbolKind_append(List_SymbolKind* l, SymbolKind val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(SymbolKind*)realloc(l->data,sizeof(SymbolKind)*l->capacity); } l->data[l->len++]=val; }
@@ -2022,6 +2189,8 @@ __attribute__((hot)) Expr* box_expr(Expr e);
 __attribute__((hot)) Stmt* box_stmt(Stmt s);
 __attribute__((hot)) Decl* box_decl(Decl d);
 __attribute__((hot)) AstType** box_asttype(AstType* t);
+__attribute__((hot)) TrStr _nth_source_line(TrStr src, long long n);
+__attribute__((hot)) TrStr _spaces(long long n);
 __attribute__((malloc,returns_nonnull,hot)) Parser* Parser_init(List_Token* tokens, List_i64* lines);
 __attribute__((hot)) Token Parser_peek(Parser* self);
 __attribute__((hot)) Token Parser_advance(Parser* self);
@@ -2030,6 +2199,8 @@ __attribute__((hot)) void Parser_skip_newlines_and_indent(Parser* self);
 __attribute__((hot)) void Parser_expect_newline(Parser* self);
 __attribute__((hot)) bool Parser_at_end(Parser* self);
 __attribute__((hot)) long long Parser_cur_line(Parser* self);
+__attribute__((hot)) long long Parser_cur_col(Parser* self);
+__attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint);
 __attribute__((hot)) TrStr Parser_consume_ident(Parser* self);
 __attribute__((hot)) TrStr Parser_consume_module_ident(Parser* self);
 __attribute__((hot)) AstType* Parser_parse_type(Parser* self);
@@ -2098,6 +2269,49 @@ __attribute__((hot)) HirExpr* box_hirexpr(HirExpr e);
 __attribute__((hot)) HirStmt* box_hirstmt(HirStmt s);
 __attribute__((hot)) AstType* hir_expr_type(HirExpr* e);
 __attribute__((hot)) long long _tr_str_len(TrStr s);
+__attribute__((hot)) MirStmt* box_mirstmt(MirStmt s);
+__attribute__((hot)) MirTerm* box_mirterm(MirTerm t);
+__attribute__((malloc,returns_nonnull,hot)) MirBuilder* MirBuilder_init();
+__attribute__((hot)) long long MirBuilder_new_block(MirBuilder* self);
+__attribute__((hot)) void MirBuilder_push_stmt(MirBuilder* self, MirStmt s);
+__attribute__((hot)) void MirBuilder_set_term(MirBuilder* self, MirTerm t);
+__attribute__((hot)) bool MirBuilder_terminated(MirBuilder* self);
+__attribute__((malloc,returns_nonnull,hot)) MirProgram* MirProgram_init();
+__attribute__((hot)) void lower_stmts(MirBuilder* b, HirBlock* hb);
+__attribute__((hot)) MirFunction* lower_function(HirFunction* hf);
+__attribute__((hot)) MirProgram* lower_program(HirProgram* hir);
+__attribute__((hot)) bool set_contains(List_TrStr* v, TrStr s);
+__attribute__((hot)) bool set_add(List_TrStr* v, TrStr s);
+__attribute__((hot)) void collect_uses(HirExpr* e, List_TrStr* out);
+__attribute__((hot)) void add_exposed(HirExpr* e, List_TrStr* gen, List_TrStr* kill);
+__attribute__((hot)) void block_use_def(MirBlock* blk, List_TrStr* gen, List_TrStr* kill);
+__attribute__((hot)) void block_succs(MirBlock* blk, List_i64* out);
+__attribute__((malloc,returns_nonnull,hot)) LiveSet* LiveSet_init();
+__attribute__((hot)) bool LiveSet_has(LiveSet* self, TrStr s);
+__attribute__((hot)) bool LiveSet_add(LiveSet* self, TrStr s);
+__attribute__((hot)) bool LiveSet_union_in(LiveSet* self, LiveSet* other);
+__attribute__((hot)) bool LiveSet_union_except(LiveSet* self, LiveSet* src, LiveSet* block);
+__attribute__((hot)) LiveSet* LiveSet_clone(LiveSet* self);
+__attribute__((hot)) void LiveSet_retain_common(LiveSet* self, LiveSet* other);
+__attribute__((hot)) bool LiveSet_equals(LiveSet* self, LiveSet* other);
+__attribute__((hot)) void LiveSet_set_to(LiveSet* self, LiveSet* other);
+__attribute__((hot)) LiveSet* LiveSet_minus(LiveSet* self, LiveSet* other);
+__attribute__((hot)) List_ptr* compute_liveness(MirFunction* mf);
+__attribute__((hot)) void collect_moves(HirExpr* e, List_TrStr* out);
+__attribute__((hot)) bool is_free_fn(TrStr n);
+__attribute__((hot)) TrStr free_target(HirExpr* arg);
+__attribute__((hot)) void collect_frees(HirExpr* e, List_TrStr* out);
+__attribute__((hot)) void block_gen_own(MirBlock* blk, List_TrStr* out);
+__attribute__((hot)) void block_moves(MirBlock* blk, List_TrStr* out);
+__attribute__((hot)) void preds_of(MirFunction* mf, long long b, List_i64* out);
+__attribute__((hot)) List_ptr* compute_drops(MirFunction* mf, List_ptr* live_out);
+__attribute__((hot)) bool is_if_body(MirFunction* mf, HirBlock* hb);
+__attribute__((hot)) DropSite* site_for(List_ptr* out, HirBlock* hb);
+__attribute__((hot)) List_ptr* mir_if_drop_plan(HirFunction* hf);
+__attribute__((hot)) TrStr set_str(List_TrStr* v);
+__attribute__((hot)) TrStr term_str(MirTerm* t);
+__attribute__((hot)) TrStr stmt_str(MirStmt* s);
+__attribute__((hot)) TrStr dump_mir(MirProgram* mp);
 __attribute__((malloc,returns_nonnull,hot)) Symbol* Symbol_init(TrStr name, SymbolKind kind, AstType** ty);
 __attribute__((malloc,returns_nonnull,hot)) Scope* Scope_init();
 __attribute__((hot)) AstType** Sema_build_ast_type(Sema* self, Expr* e);
@@ -2149,8 +2363,16 @@ __attribute__((hot)) void Sema_mark_escaped_coll_args(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema_block_ends_in_jump(Sema* self, HirBlock* b);
 __attribute__((hot)) void Sema_append_block_local_drops(Sema* self, HirBlock* hb, long long block_id);
 __attribute__((hot)) void Sema_finalize_scope_drops(Sema* self, HirBlock* hb);
+__attribute__((hot)) bool Sema_block_str_decl(Sema* self, HirBlock* hb, TrStr nm);
+__attribute__((hot)) bool Sema_block_has_autodrop(Sema* self, HirBlock* hb, TrStr nm);
+__attribute__((hot)) TrStr Sema_block_coll_decl(Sema* self, HirBlock* hb, TrStr nm);
+__attribute__((hot)) bool Sema_coll_droppable_by_sema(Sema* self, TrStr nm);
+__attribute__((hot)) void Sema_apply_mir_if_drops(Sema* self, HirFunction* hf);
 __attribute__((hot)) void Sema_declare(Sema* self, TrStr name, SymbolKind kind, AstType** ty, bool is_mut);
 __attribute__((hot)) Symbol* Sema_resolve(Sema* self, TrStr name);
+__attribute__((hot)) bool Sema_is_type_name(Sema* self, TrStr nm);
+__attribute__((hot)) TrStr Sema_type_ref_name(Sema* self, Expr* raw);
+__attribute__((hot)) bool Sema_is_global_not_local(Sema* self, TrStr name);
 __attribute__((hot)) HirProgram* Sema_analyze(Sema* self, Program* prog);
 __attribute__((hot)) void Sema_register_decl(Sema* self, Decl* d);
 __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f);
@@ -2170,6 +2392,42 @@ __attribute__((hot)) bool Sema_block_returns(Sema* self, Block* b);
 __attribute__((hot)) bool Sema_is_primitive(Sema* self, AstType* ty);
 __attribute__((hot)) bool Sema_is_primitive_name(Sema* self, TrStr name);
 __attribute__((hot)) Symbol** box_symbol(Symbol* s);
+__attribute__((malloc,returns_nonnull,hot)) Formatter* Formatter_init(List_i64* c_lines, List_TrStr* c_texts, List_bool* c_trailing);
+__attribute__((hot)) TrStr Formatter_pad(Formatter* self);
+__attribute__((hot)) void Formatter_line(Formatter* self, TrStr text);
+__attribute__((hot)) void Formatter_flush_standalone_before(Formatter* self, long long line_no);
+__attribute__((hot)) TrStr Formatter_trailing_for(Formatter* self, long long line_no);
+__attribute__((hot)) void Formatter_flush_remaining(Formatter* self);
+__attribute__((hot)) TrStr Formatter_escape_str(Formatter* self, TrStr s);
+__attribute__((hot)) TrStr Formatter_escape_char(Formatter* self, long long v);
+__attribute__((hot)) TrStr Formatter_escape_str_sq(Formatter* self, TrStr s);
+__attribute__((hot)) TrStr Formatter_type_str(Formatter* self, AstType** t);
+__attribute__((hot)) bool Formatter_needs_parens(Formatter* self, Expr* e);
+__attribute__((hot)) TrStr Formatter_operand_str(Formatter* self, Expr* e);
+__attribute__((hot)) TrStr Formatter_args_str(Formatter* self, List_ptr* args);
+__attribute__((hot)) TrStr Formatter_expr_str(Formatter* self, Expr* e);
+__attribute__((hot)) TrStr Formatter_fstring_str(Formatter* self, List_ptr* parts);
+__attribute__((hot)) TrStr Formatter_dict_str(Formatter* self, List_ptr* keys, List_ptr* vals);
+__attribute__((hot)) TrStr Formatter_comp_str(Formatter* self, Expr* elem, List_ptr* gens);
+__attribute__((hot)) TrStr Formatter_slice_str(Formatter* self, Expr* a, Expr* b, Expr* c);
+__attribute__((hot)) TrStr Formatter_closure_str(Formatter* self, List_ptr* params, AstType** ret_ty, Block* body, bool is_async);
+__attribute__((hot)) TrStr Formatter_params_str(Formatter* self, List_ptr* params);
+__attribute__((hot)) void Formatter_emit_decorators(Formatter* self, List_ptr* decs);
+__attribute__((hot)) void Formatter_emit_block(Formatter* self, Block* b);
+__attribute__((hot)) void Formatter_emit_simple(Formatter* self, TrStr text, long long src_line);
+__attribute__((hot)) void Formatter_emit_stmt(Formatter* self, Stmt* sp, long long src_line);
+__attribute__((hot)) void Formatter_emit_inline_stmt(Formatter* self, Stmt* sp);
+__attribute__((hot)) TrStr Formatter_let_str(Formatter* self, TrStr name, Ownership own, bool is_mut, bool is_const, bool is_shared, AstType** ty, Expr* val);
+__attribute__((hot)) TrStr Formatter_pattern_str(Formatter* self, Pattern p);
+__attribute__((hot)) TrStr Formatter_fn_header(Formatter* self, FunctionDef* f);
+__attribute__((hot)) void Formatter_emit_function(Formatter* self, FunctionDef* f);
+__attribute__((hot)) void Formatter_emit_class(Formatter* self, ClassDef* c, TrStr kw);
+__attribute__((hot)) void Formatter_emit_enum(Formatter* self, EnumDef* e);
+__attribute__((hot)) void Formatter_emit_interface(Formatter* self, InterfaceDef* it);
+__attribute__((hot)) void Formatter_emit_decl(Formatter* self, Decl* dp);
+__attribute__((hot)) TrStr Formatter_fn_header_no_colon(Formatter* self, FunctionDef* f);
+__attribute__((hot)) bool Formatter_is_block_decl(Formatter* self, Decl* dp);
+__attribute__((hot)) TrStr Formatter_format_program(Formatter* self, Program* prog);
 __attribute__((hot)) TrStr _c_dot_to_safe(TrStr s);
 __attribute__((hot)) TrStr _indent_str(long long n);
 __attribute__((hot)) bool _is_invalid_ptr(unsigned long long addr);
@@ -2214,6 +2472,7 @@ __attribute__((hot)) long long count_path_env_entries(TrStr s);
 __attribute__((hot)) TrStr get_path_env_entry(TrStr s, long long idx);
 __attribute__((hot)) TrStr to_runnable_path(TrStr s);
 __attribute__((hot)) TrStr path_to_native(TrStr s);
+__attribute__((hot)) TrStr to_fwd_slashes(TrStr s);
 __attribute__((hot)) TrStr dot_to_safe(TrStr s);
 __attribute__((hot)) TrStr dot_last_seg(TrStr s);
 __attribute__((hot)) TrStr get_filename(TrStr path);
@@ -2222,17 +2481,21 @@ __attribute__((hot)) TrStr ensure_builtin_dirs(TrStr build_dir, TrStr dot_path);
 __attribute__((hot)) bool is_builtin_mod(TrStr dot_path);
 __attribute__((hot)) void make_dir(TrStr path);
 __attribute__((hot)) long long compile_all_c(List_TrStr* c_files, TrStr exe_path, TrStr inc_dir, List_TrStr* link_paths, List_TrStr* lib_flags, TrStr opt_level, bool verbose, bool static_link, TrStr target, TrStr sysroot, bool debug_mode);
+__attribute__((hot)) TrStr obj_path_for(TrStr c_path);
+__attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, List_bool* needs, TrStr exe_path, TrStr inc_dir, List_TrStr* link_paths, List_TrStr* lib_flags, TrStr opt_level, bool verbose, bool static_link, TrStr target, TrStr sysroot, bool debug_mode, bool build_shared);
 __attribute__((hot)) long long compile_c_to_exe(TrStr c_path, TrStr exe_path, TrStr opt_level, bool verbose);
 __attribute__((hot)) void _print_diag(TrStr level, TrStr msg);
 __attribute__((hot)) void cleanup_build(TrStr build_dir, List_TrStr* all_c_files);
+__attribute__((hot)) void run_fmt(TrStr path0, bool write_in_place);
 
 __attribute__((malloc,returns_nonnull,hot)) Lexer* Lexer_init(TrStr source);
+__attribute__((hot)) void Lexer_push_loc(Lexer* self);
 __attribute__((hot)) long long Lexer_peek(Lexer* self);
 __attribute__((hot)) long long Lexer_peek_at(Lexer* self, long long offset);
 __attribute__((hot)) long long Lexer_advance(Lexer* self);
 __attribute__((hot)) bool Lexer_at_end(Lexer* self);
 __attribute__((hot)) void Lexer_skip_spaces(Lexer* self);
-__attribute__((hot)) void Lexer_skip_comment(Lexer* self);
+__attribute__((hot)) void Lexer_skip_comment(Lexer* self, bool trailing);
 __attribute__((hot)) Token Lexer_read_int(Lexer* self);
 __attribute__((hot)) Token Lexer_read_triple_string(Lexer* self, long long quote);
 __attribute__((hot)) Token Lexer_read_string(Lexer* self, long long quote);
@@ -2304,6 +2567,7 @@ __attribute__((hot)) TrStr CGenerator_gen_args_strify(CGenerator* self, List_ptr
 __attribute__((hot)) TrStr CGenerator_gen_method_call(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_fstring(CGenerator* self, List_ptr* parts);
 __attribute__((hot)) TrStr CGenerator_gen_tuple(CGenerator* self, List_ptr* items);
+__attribute__((hot)) TrStr CGenerator_gen_tuple_to_str(CGenerator* self, TrStr s, AstType* ty);
 __attribute__((hot)) void CGenerator_emit_async_wrapper_for_call(CGenerator* self, TrStr fn_name, List_ptr* args, TrStr ret_name);
 __attribute__((hot)) TrStr CGenerator_gen_await_call(CGenerator* self, HirExpr* expr);
 __attribute__((hot)) TrStr CGenerator_gen_await_timeout_call(CGenerator* self, HirExpr* expr, HirExpr* ms_expr);
@@ -2339,6 +2603,7 @@ __attribute__((hot)) TrStr CGenerator_generate(CGenerator* self, HirProgram* pro
 __attribute__((hot)) TrStr CGenerator_generate_types_header(CGenerator* self, HirProgram* prog);
 __attribute__((hot)) TrStr CGenerator_generate_module_compat(CGenerator* self, List_TrStr* all_decl_modules, List_ptr* all_decls);
 __attribute__((hot)) TrStr CGenerator_generate_module_c(CGenerator* self, HirProgram* prog, TrMap* class_set, TrMap* fn_set, long long depth);
+__attribute__((hot)) TrStr CGenerator_generate_export_header(CGenerator* self, HirProgram* prog);
 __attribute__((hot)) TrStr CGenerator_generate_main_c(CGenerator* self, HirProgram* prog, TrMap* class_set, TrMap* fn_set);
 
 
@@ -3132,6 +3397,138 @@ __attribute__((hot)) void core_alloc_dealloc_hir_HirProgram_ptr(hir_HirProgram**
 __attribute__((hot)) core_map_MapNode_str_hir_HirProgram** core_alloc_alloc_core_map_MapNode_str_hir_HirProgram(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_hir_HirProgram(core_map_MapNode_str_hir_HirProgram** ptr);
 
+typedef MirStmt mir_MirStmt;
+struct core_vec_Vec_mir_MirStmt { mir_MirStmt* data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirStmt core_vec_Vec_mir_MirStmt;
+struct core_vec_Vec_mir_MirStmt_ptr { mir_MirStmt** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirStmt_ptr core_vec_Vec_mir_MirStmt_ptr;
+__attribute__((hot)) mir_MirStmt* core_alloc_alloc_mir_MirStmt(long long count);
+__attribute__((hot)) mir_MirStmt* core_alloc_resize_mir_MirStmt(mir_MirStmt* ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirStmt(mir_MirStmt* ptr);
+__attribute__((hot)) mir_MirStmt** core_alloc_alloc_mir_MirStmt_ptr(long long count);
+__attribute__((hot)) mir_MirStmt** core_alloc_resize_mir_MirStmt_ptr(mir_MirStmt** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirStmt_ptr(mir_MirStmt** ptr);
+
+typedef MirTerm mir_MirTerm;
+struct core_vec_Vec_mir_MirTerm { mir_MirTerm* data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirTerm core_vec_Vec_mir_MirTerm;
+struct core_vec_Vec_mir_MirTerm_ptr { mir_MirTerm** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirTerm_ptr core_vec_Vec_mir_MirTerm_ptr;
+__attribute__((hot)) mir_MirTerm* core_alloc_alloc_mir_MirTerm(long long count);
+__attribute__((hot)) mir_MirTerm* core_alloc_resize_mir_MirTerm(mir_MirTerm* ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirTerm(mir_MirTerm* ptr);
+__attribute__((hot)) mir_MirTerm** core_alloc_alloc_mir_MirTerm_ptr(long long count);
+__attribute__((hot)) mir_MirTerm** core_alloc_resize_mir_MirTerm_ptr(mir_MirTerm** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirTerm_ptr(mir_MirTerm** ptr);
+
+typedef MirBlock mir_MirBlock;
+struct core_vec_Vec_mir_MirBlock { mir_MirBlock** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirBlock core_vec_Vec_mir_MirBlock;
+struct core_vec_Vec_mir_MirBlock_ptr { mir_MirBlock*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirBlock_ptr core_vec_Vec_mir_MirBlock_ptr;
+struct core_map_MapNode_str_mir_MirBlock { char* key; mir_MirBlock* value; struct core_map_MapNode_str_mir_MirBlock* next; };
+typedef struct core_map_MapNode_str_mir_MirBlock core_map_MapNode_str_mir_MirBlock;
+struct core_map_Map_str_mir_MirBlock { core_map_MapNode_str_mir_MirBlock** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_mir_MirBlock core_map_Map_str_mir_MirBlock;
+__attribute__((hot)) mir_MirBlock** core_alloc_alloc_mir_MirBlock(long long count);
+__attribute__((hot)) mir_MirBlock** core_alloc_resize_mir_MirBlock(mir_MirBlock** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirBlock(mir_MirBlock** ptr);
+__attribute__((hot)) mir_MirBlock*** core_alloc_alloc_mir_MirBlock_ptr(long long count);
+__attribute__((hot)) mir_MirBlock*** core_alloc_resize_mir_MirBlock_ptr(mir_MirBlock*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirBlock_ptr(mir_MirBlock*** ptr);
+__attribute__((hot)) core_map_MapNode_str_mir_MirBlock** core_alloc_alloc_core_map_MapNode_str_mir_MirBlock(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_MirBlock(core_map_MapNode_str_mir_MirBlock** ptr);
+
+typedef DropSite mir_DropSite;
+struct core_vec_Vec_mir_DropSite { mir_DropSite** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_DropSite core_vec_Vec_mir_DropSite;
+struct core_vec_Vec_mir_DropSite_ptr { mir_DropSite*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_DropSite_ptr core_vec_Vec_mir_DropSite_ptr;
+struct core_map_MapNode_str_mir_DropSite { char* key; mir_DropSite* value; struct core_map_MapNode_str_mir_DropSite* next; };
+typedef struct core_map_MapNode_str_mir_DropSite core_map_MapNode_str_mir_DropSite;
+struct core_map_Map_str_mir_DropSite { core_map_MapNode_str_mir_DropSite** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_mir_DropSite core_map_Map_str_mir_DropSite;
+__attribute__((hot)) mir_DropSite** core_alloc_alloc_mir_DropSite(long long count);
+__attribute__((hot)) mir_DropSite** core_alloc_resize_mir_DropSite(mir_DropSite** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_DropSite(mir_DropSite** ptr);
+__attribute__((hot)) mir_DropSite*** core_alloc_alloc_mir_DropSite_ptr(long long count);
+__attribute__((hot)) mir_DropSite*** core_alloc_resize_mir_DropSite_ptr(mir_DropSite*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_DropSite_ptr(mir_DropSite*** ptr);
+__attribute__((hot)) core_map_MapNode_str_mir_DropSite** core_alloc_alloc_core_map_MapNode_str_mir_DropSite(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_DropSite(core_map_MapNode_str_mir_DropSite** ptr);
+
+typedef MirFunction mir_MirFunction;
+struct core_vec_Vec_mir_MirFunction { mir_MirFunction** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirFunction core_vec_Vec_mir_MirFunction;
+struct core_vec_Vec_mir_MirFunction_ptr { mir_MirFunction*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirFunction_ptr core_vec_Vec_mir_MirFunction_ptr;
+struct core_map_MapNode_str_mir_MirFunction { char* key; mir_MirFunction* value; struct core_map_MapNode_str_mir_MirFunction* next; };
+typedef struct core_map_MapNode_str_mir_MirFunction core_map_MapNode_str_mir_MirFunction;
+struct core_map_Map_str_mir_MirFunction { core_map_MapNode_str_mir_MirFunction** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_mir_MirFunction core_map_Map_str_mir_MirFunction;
+__attribute__((hot)) mir_MirFunction** core_alloc_alloc_mir_MirFunction(long long count);
+__attribute__((hot)) mir_MirFunction** core_alloc_resize_mir_MirFunction(mir_MirFunction** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirFunction(mir_MirFunction** ptr);
+__attribute__((hot)) mir_MirFunction*** core_alloc_alloc_mir_MirFunction_ptr(long long count);
+__attribute__((hot)) mir_MirFunction*** core_alloc_resize_mir_MirFunction_ptr(mir_MirFunction*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirFunction_ptr(mir_MirFunction*** ptr);
+__attribute__((hot)) core_map_MapNode_str_mir_MirFunction** core_alloc_alloc_core_map_MapNode_str_mir_MirFunction(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_MirFunction(core_map_MapNode_str_mir_MirFunction** ptr);
+
+typedef MirProgram mir_MirProgram;
+struct core_vec_Vec_mir_MirProgram { mir_MirProgram** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirProgram core_vec_Vec_mir_MirProgram;
+struct core_vec_Vec_mir_MirProgram_ptr { mir_MirProgram*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirProgram_ptr core_vec_Vec_mir_MirProgram_ptr;
+struct core_map_MapNode_str_mir_MirProgram { char* key; mir_MirProgram* value; struct core_map_MapNode_str_mir_MirProgram* next; };
+typedef struct core_map_MapNode_str_mir_MirProgram core_map_MapNode_str_mir_MirProgram;
+struct core_map_Map_str_mir_MirProgram { core_map_MapNode_str_mir_MirProgram** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_mir_MirProgram core_map_Map_str_mir_MirProgram;
+__attribute__((hot)) mir_MirProgram** core_alloc_alloc_mir_MirProgram(long long count);
+__attribute__((hot)) mir_MirProgram** core_alloc_resize_mir_MirProgram(mir_MirProgram** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirProgram(mir_MirProgram** ptr);
+__attribute__((hot)) mir_MirProgram*** core_alloc_alloc_mir_MirProgram_ptr(long long count);
+__attribute__((hot)) mir_MirProgram*** core_alloc_resize_mir_MirProgram_ptr(mir_MirProgram*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirProgram_ptr(mir_MirProgram*** ptr);
+__attribute__((hot)) core_map_MapNode_str_mir_MirProgram** core_alloc_alloc_core_map_MapNode_str_mir_MirProgram(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_MirProgram(core_map_MapNode_str_mir_MirProgram** ptr);
+
+typedef MirBuilder mir_MirBuilder;
+struct core_vec_Vec_mir_MirBuilder { mir_MirBuilder** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirBuilder core_vec_Vec_mir_MirBuilder;
+struct core_vec_Vec_mir_MirBuilder_ptr { mir_MirBuilder*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_MirBuilder_ptr core_vec_Vec_mir_MirBuilder_ptr;
+struct core_map_MapNode_str_mir_MirBuilder { char* key; mir_MirBuilder* value; struct core_map_MapNode_str_mir_MirBuilder* next; };
+typedef struct core_map_MapNode_str_mir_MirBuilder core_map_MapNode_str_mir_MirBuilder;
+struct core_map_Map_str_mir_MirBuilder { core_map_MapNode_str_mir_MirBuilder** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_mir_MirBuilder core_map_Map_str_mir_MirBuilder;
+__attribute__((hot)) mir_MirBuilder** core_alloc_alloc_mir_MirBuilder(long long count);
+__attribute__((hot)) mir_MirBuilder** core_alloc_resize_mir_MirBuilder(mir_MirBuilder** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirBuilder(mir_MirBuilder** ptr);
+__attribute__((hot)) mir_MirBuilder*** core_alloc_alloc_mir_MirBuilder_ptr(long long count);
+__attribute__((hot)) mir_MirBuilder*** core_alloc_resize_mir_MirBuilder_ptr(mir_MirBuilder*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_MirBuilder_ptr(mir_MirBuilder*** ptr);
+__attribute__((hot)) core_map_MapNode_str_mir_MirBuilder** core_alloc_alloc_core_map_MapNode_str_mir_MirBuilder(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_MirBuilder(core_map_MapNode_str_mir_MirBuilder** ptr);
+
+typedef LiveSet mir_LiveSet;
+struct core_vec_Vec_mir_LiveSet { mir_LiveSet** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_LiveSet core_vec_Vec_mir_LiveSet;
+struct core_vec_Vec_mir_LiveSet_ptr { mir_LiveSet*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_LiveSet_ptr core_vec_Vec_mir_LiveSet_ptr;
+struct core_map_MapNode_str_mir_LiveSet { char* key; mir_LiveSet* value; struct core_map_MapNode_str_mir_LiveSet* next; };
+typedef struct core_map_MapNode_str_mir_LiveSet core_map_MapNode_str_mir_LiveSet;
+struct core_map_Map_str_mir_LiveSet { core_map_MapNode_str_mir_LiveSet** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_mir_LiveSet core_map_Map_str_mir_LiveSet;
+__attribute__((hot)) mir_LiveSet** core_alloc_alloc_mir_LiveSet(long long count);
+__attribute__((hot)) mir_LiveSet** core_alloc_resize_mir_LiveSet(mir_LiveSet** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_LiveSet(mir_LiveSet** ptr);
+__attribute__((hot)) mir_LiveSet*** core_alloc_alloc_mir_LiveSet_ptr(long long count);
+__attribute__((hot)) mir_LiveSet*** core_alloc_resize_mir_LiveSet_ptr(mir_LiveSet*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_LiveSet_ptr(mir_LiveSet*** ptr);
+__attribute__((hot)) core_map_MapNode_str_mir_LiveSet** core_alloc_alloc_core_map_MapNode_str_mir_LiveSet(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_LiveSet(core_map_MapNode_str_mir_LiveSet** ptr);
+
 typedef SymbolKind sema_SymbolKind;
 struct core_vec_Vec_sema_SymbolKind { sema_SymbolKind* data; long long len; long long capacity; };
 typedef struct core_vec_Vec_sema_SymbolKind core_vec_Vec_sema_SymbolKind;
@@ -3197,6 +3594,24 @@ __attribute__((hot)) sema_Sema*** core_alloc_resize_sema_Sema_ptr(sema_Sema*** p
 __attribute__((hot)) void core_alloc_dealloc_sema_Sema_ptr(sema_Sema*** ptr);
 __attribute__((hot)) core_map_MapNode_str_sema_Sema** core_alloc_alloc_core_map_MapNode_str_sema_Sema(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_sema_Sema(core_map_MapNode_str_sema_Sema** ptr);
+
+typedef Formatter fmt_Formatter;
+struct core_vec_Vec_fmt_Formatter { fmt_Formatter** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_fmt_Formatter core_vec_Vec_fmt_Formatter;
+struct core_vec_Vec_fmt_Formatter_ptr { fmt_Formatter*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_fmt_Formatter_ptr core_vec_Vec_fmt_Formatter_ptr;
+struct core_map_MapNode_str_fmt_Formatter { char* key; fmt_Formatter* value; struct core_map_MapNode_str_fmt_Formatter* next; };
+typedef struct core_map_MapNode_str_fmt_Formatter core_map_MapNode_str_fmt_Formatter;
+struct core_map_Map_str_fmt_Formatter { core_map_MapNode_str_fmt_Formatter** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_fmt_Formatter core_map_Map_str_fmt_Formatter;
+__attribute__((hot)) fmt_Formatter** core_alloc_alloc_fmt_Formatter(long long count);
+__attribute__((hot)) fmt_Formatter** core_alloc_resize_fmt_Formatter(fmt_Formatter** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_fmt_Formatter(fmt_Formatter** ptr);
+__attribute__((hot)) fmt_Formatter*** core_alloc_alloc_fmt_Formatter_ptr(long long count);
+__attribute__((hot)) fmt_Formatter*** core_alloc_resize_fmt_Formatter_ptr(fmt_Formatter*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_fmt_Formatter_ptr(fmt_Formatter*** ptr);
+__attribute__((hot)) core_map_MapNode_str_fmt_Formatter** core_alloc_alloc_core_map_MapNode_str_fmt_Formatter(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_fmt_Formatter(core_map_MapNode_str_fmt_Formatter** ptr);
 
 typedef CGenerator codegen_c_CGenerator;
 struct core_vec_Vec_codegen_c_CGenerator { codegen_c_CGenerator** data; long long len; long long capacity; };

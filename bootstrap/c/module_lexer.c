@@ -26,6 +26,10 @@ __attribute__((malloc,returns_nonnull,hot)) Lexer* Lexer_init(TrStr source) {
     /* pass */
     lx->line = 1LL;
     /* pass */
+    lx->line_start = 0LL;
+    /* pass */
+    lx->tok_col = 1LL;
+    /* pass */
     lx->indent_stack = (void*)List_i64_new();
     /* pass */
     List_i64_append(lx->indent_stack, 0LL);
@@ -34,7 +38,24 @@ __attribute__((malloc,returns_nonnull,hot)) Lexer* Lexer_init(TrStr source) {
     /* pass */
     lx->token_lines = (void*)List_i64_new();
     /* pass */
+    lx->token_cols = (void*)List_i64_new();
+    /* pass */
+    lx->record_comments = false;
+    /* pass */
+    lx->comment_lines = (void*)List_i64_new();
+    /* pass */
+    lx->comment_texts = (void*)List_TrStr_new();
+    /* pass */
+    lx->comment_trailing = (void*)List_bool_new();
+    /* pass */
     return lx;
+}
+
+__attribute__((hot)) void Lexer_push_loc(Lexer* self) {
+    /* pass */
+    List_i64_append(self->token_lines, self->line);
+    /* pass */
+    List_i64_append(self->token_cols, self->tok_col);
 }
 
 __attribute__((hot)) long long Lexer_peek(Lexer* self) {
@@ -67,12 +88,14 @@ __attribute__((hot)) long long Lexer_advance(Lexer* self) {
     /* pass */
     long long c = Lexer_peek(self);
     /* pass */
+    self->pos = (self->pos + 1LL);
+    /* pass */
     if ((c == 10LL)) {
         /* pass */
         self->line = (self->line + 1LL);
+        /* pass */
+        self->line_start = self->pos;
     }
-    /* pass */
-    self->pos = (self->pos + 1LL);
     /* pass */
     return c;
 }
@@ -98,11 +121,28 @@ __attribute__((hot)) void Lexer_skip_spaces(Lexer* self) {
     }
 }
 
-__attribute__((hot)) void Lexer_skip_comment(Lexer* self) {
+__attribute__((hot)) void Lexer_skip_comment(Lexer* self, bool trailing) {
     /* pass */
-    while (((!Lexer_at_end(self)) && (!char_is_newline(Lexer_peek(self))))) {
+    if (self->record_comments) {
         /* pass */
-        Lexer_advance(self);
+        StringBuilder* sb = StringBuilder_init(32LL);
+        /* pass */
+        while (((!Lexer_at_end(self)) && (!char_is_newline(Lexer_peek(self))))) {
+            /* pass */
+            StringBuilder_append_char(sb, Lexer_advance(self));
+        }
+        /* pass */
+        List_i64_append(self->comment_lines, self->line);
+        /* pass */
+        ({ TrStr _at_t6 = (StringObj_as_str(StringBuilder_to_string(sb))); List_TrStr_append(self->comment_texts, _at_t6); _tr_str_release(_at_t6); });
+        /* pass */
+        List_bool_append(self->comment_trailing, trailing);
+    } else {
+        /* pass */
+        while (((!Lexer_at_end(self)) && (!char_is_newline(Lexer_peek(self))))) {
+            /* pass */
+            Lexer_advance(self);
+        }
     }
 }
 
@@ -196,9 +236,9 @@ __attribute__((hot)) Token Lexer_read_int(Lexer* self) {
             /* pass */
             Lexer_advance(self);
             /* pass */
-            double frac = 0;
+            double frac = 0.0;
             /* pass */
-            double divisor = 10;
+            double divisor = 10.0;
             /* pass */
             while ((char_is_digit(Lexer_peek(self)) || (Lexer_peek(self) == 95LL))) {
                 /* pass */
@@ -208,7 +248,7 @@ __attribute__((hot)) Token Lexer_read_int(Lexer* self) {
                     /* pass */
                     frac = (frac + ((double)((c - 48LL)) / divisor));
                     /* pass */
-                    divisor = (divisor * 10);
+                    divisor = (divisor * 10.0);
                 }
             }
             /* pass */
@@ -243,7 +283,7 @@ __attribute__((hot)) Token Lexer_read_int(Lexer* self) {
                     /* pass */
                     while ((ei < exp)) {
                         /* pass */
-                        result = (result / 10);
+                        result = (result / 10.0);
                         /* pass */
                         ei = (ei + 1LL);
                     }
@@ -251,7 +291,7 @@ __attribute__((hot)) Token Lexer_read_int(Lexer* self) {
                     /* pass */
                     while ((ei < exp)) {
                         /* pass */
-                        result = (result * 10);
+                        result = (result * 10.0);
                         /* pass */
                         ei = (ei + 1LL);
                     }
@@ -292,7 +332,7 @@ __attribute__((hot)) Token Lexer_read_int(Lexer* self) {
                 /* pass */
                 while ((ei < exp)) {
                     /* pass */
-                    result = (result / 10);
+                    result = (result / 10.0);
                     /* pass */
                     ei = (ei + 1LL);
                 }
@@ -300,7 +340,7 @@ __attribute__((hot)) Token Lexer_read_int(Lexer* self) {
                 /* pass */
                 while ((ei < exp)) {
                     /* pass */
-                    result = (result * 10);
+                    result = (result * 10.0);
                     /* pass */
                     ei = (ei + 1LL);
                 }
@@ -327,13 +367,13 @@ __attribute__((hot)) Token Lexer_read_triple_string(Lexer* self, long long quote
             /* pass */
             Lexer_advance(self);
             /* pass */
-            return ({ TrStr _at_t6 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_TripleStrLit(_at_t6)); _tr_str_release(_at_t6); _wr; });
+            return ({ TrStr _at_t7 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_TripleStrLit(_at_t7)); _tr_str_release(_at_t7); _wr; });
         }
         /* pass */
         StringBuilder_append_char(sb, Lexer_advance(self));
     }
     /* pass */
-    return ({ TrStr _at_t7 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_TripleStrLit(_at_t7)); _tr_str_release(_at_t7); _wr; });
+    return ({ TrStr _at_t8 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_TripleStrLit(_at_t8)); _tr_str_release(_at_t8); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_string(Lexer* self, long long quote) {
@@ -386,7 +426,7 @@ __attribute__((hot)) Token Lexer_read_string(Lexer* self, long long quote) {
         Lexer_advance(self);
     }
     /* pass */
-    return ({ TrStr _at_t8 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_StrLit(_at_t8)); _tr_str_release(_at_t8); _wr; });
+    return ({ TrStr _at_t9 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_StrLit(_at_t9)); _tr_str_release(_at_t9); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_char(Lexer* self) {
@@ -456,7 +496,7 @@ __attribute__((hot)) Token Lexer_read_fstring(Lexer* self) {
         Lexer_advance(self);
     }
     /* pass */
-    return ({ TrStr _at_t9 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_FStrLit(_at_t9)); _tr_str_release(_at_t9); _wr; });
+    return ({ TrStr _at_t10 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_FStrLit(_at_t10)); _tr_str_release(_at_t10); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_raw_string(Lexer* self) {
@@ -477,7 +517,7 @@ __attribute__((hot)) Token Lexer_read_raw_string(Lexer* self) {
         Lexer_advance(self);
     }
     /* pass */
-    return ({ TrStr _at_t10 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_RawStrLit(_at_t10)); _tr_str_release(_at_t10); _wr; });
+    return ({ TrStr _at_t11 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_RawStrLit(_at_t11)); _tr_str_release(_at_t11); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_byte_string(Lexer* self) {
@@ -532,7 +572,7 @@ __attribute__((hot)) Token Lexer_read_byte_string(Lexer* self) {
         Lexer_advance(self);
     }
     /* pass */
-    return ({ TrStr _at_t11 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_ByteStrLit(_at_t11)); _tr_str_release(_at_t11); _wr; });
+    return ({ TrStr _at_t12 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (Token_ctor_ByteStrLit(_at_t12)); _tr_str_release(_at_t12); _wr; });
 }
 
 __attribute__((hot)) Token Lexer_read_ident(Lexer* self) {
@@ -544,7 +584,7 @@ __attribute__((hot)) Token Lexer_read_ident(Lexer* self) {
         StringBuilder_append_char(sb, Lexer_advance(self));
     }
     /* pass */
-    return ({ TrStr _at_t12 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (keyword_to_token(_at_t12)); _tr_str_release(_at_t12); _wr; });
+    return ({ TrStr _at_t13 = (StringObj_as_str(StringBuilder_to_string(sb))); __auto_type _wr = (keyword_to_token(_at_t13)); _tr_str_release(_at_t13); _wr; });
 }
 
 __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
@@ -567,9 +607,11 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
         /* pass */
         if ((self->pending_dedents > 0LL)) {
             /* pass */
+            self->tok_col = 1LL;
+            /* pass */
             List_Token_append(tokens, Token_make_Dedent());
             /* pass */
-            List_i64_append(self->token_lines, self->line);
+            Lexer_push_loc(self);
             /* pass */
             self->pending_dedents = (self->pending_dedents - 1LL);
             /* pass */
@@ -615,7 +657,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                     /* pass */
                     Lexer_advance(self);
                     /* pass */
-                    Lexer_skip_comment(self);
+                    Lexer_skip_comment(self, false);
                 } else {
                     /* pass */
                     Lexer_advance(self);
@@ -633,6 +675,8 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             /* pass */
             if ((nesting == 0LL)) {
                 /* pass */
+                self->tok_col = ((self->pos - self->line_start) + 1LL);
+                /* pass */
                 if ((next_c != 46LL)) {
                     /* pass */
                     long long cur_indent = List_i64_get(self->indent_stack, (self->indent_stack->len - 1LL));
@@ -643,7 +687,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                         /* pass */
                         List_Token_append(tokens, Token_make_Indent());
                         /* pass */
-                        List_i64_append(self->token_lines, self->line);
+                        Lexer_push_loc(self);
                     } else if ((indent < cur_indent)) {
                         /* pass */
                         while ((self->indent_stack->len > 1LL)) {
@@ -659,7 +703,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                             /* pass */
                             List_Token_append(tokens, Token_make_Dedent());
                             /* pass */
-                            List_i64_append(self->token_lines, self->line);
+                            Lexer_push_loc(self);
                         }
                     }
                 }
@@ -667,6 +711,8 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
         }
         /* pass */
         long long c = Lexer_peek(self);
+        /* pass */
+        self->tok_col = ((self->pos - self->line_start) + 1LL);
         /* pass */
         if (char_is_space(c)) {
             /* pass */
@@ -690,7 +736,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                     /* pass */
                     List_Token_append(tokens, Token_make_Newline());
                     /* pass */
-                    List_i64_append(self->token_lines, self->line);
+                    Lexer_push_loc(self);
                 }
                 /* pass */
                 at_line_start = true;
@@ -703,7 +749,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             /* pass */
             Lexer_advance(self);
             /* pass */
-            Lexer_skip_comment(self);
+            Lexer_skip_comment(self, true);
             /* pass */
             if ((nesting == 0LL)) {
                 /* pass */
@@ -711,7 +757,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                     /* pass */
                     List_Token_append(tokens, Token_make_Newline());
                     /* pass */
-                    List_i64_append(self->token_lines, self->line);
+                    Lexer_push_loc(self);
                 }
                 /* pass */
                 at_line_start = true;
@@ -724,7 +770,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             /* pass */
             List_Token_append(tokens, Lexer_read_int(self));
             /* pass */
-            List_i64_append(self->token_lines, self->line);
+            Lexer_push_loc(self);
             /* pass */
             continue;
         }
@@ -741,17 +787,17 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
                 /* pass */
                 List_Token_append(tokens, Lexer_read_triple_string(self, 34LL));
                 /* pass */
-                List_i64_append(self->token_lines, self->line);
+                Lexer_push_loc(self);
             } else if (((c == 39LL) && ((Lexer_peek_at(self, 2LL) == 39LL) || (Lexer_peek_at(self, 1LL) == 92LL)))) {
                 /* pass */
                 List_Token_append(tokens, Lexer_read_char(self));
                 /* pass */
-                List_i64_append(self->token_lines, self->line);
+                Lexer_push_loc(self);
             } else {
                 /* pass */
                 List_Token_append(tokens, Lexer_read_string(self, c));
                 /* pass */
-                List_i64_append(self->token_lines, self->line);
+                Lexer_push_loc(self);
             }
             /* pass */
             continue;
@@ -761,7 +807,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             /* pass */
             List_Token_append(tokens, Lexer_read_fstring(self));
             /* pass */
-            List_i64_append(self->token_lines, self->line);
+            Lexer_push_loc(self);
             /* pass */
             continue;
         }
@@ -770,7 +816,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             /* pass */
             List_Token_append(tokens, Lexer_read_raw_string(self));
             /* pass */
-            List_i64_append(self->token_lines, self->line);
+            Lexer_push_loc(self);
             /* pass */
             continue;
         }
@@ -779,7 +825,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             /* pass */
             List_Token_append(tokens, Lexer_read_byte_string(self));
             /* pass */
-            List_i64_append(self->token_lines, self->line);
+            Lexer_push_loc(self);
             /* pass */
             continue;
         }
@@ -788,7 +834,7 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             /* pass */
             List_Token_append(tokens, Lexer_read_ident(self));
             /* pass */
-            List_i64_append(self->token_lines, self->line);
+            Lexer_push_loc(self);
             /* pass */
             continue;
         }
@@ -1085,8 +1131,10 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
             List_Token_append(tokens, Token_ctor_Error(_tr_str_lit("?")));
         }
         /* pass */
-        List_i64_append(self->token_lines, self->line);
+        Lexer_push_loc(self);
     }
+    /* pass */
+    self->tok_col = 1LL;
     /* pass */
     while ((self->indent_stack->len > 1LL)) {
         /* pass */
@@ -1094,12 +1142,12 @@ __attribute__((hot)) List_Token* Lexer_tokenize(Lexer* self) {
         /* pass */
         List_Token_append(tokens, Token_make_Dedent());
         /* pass */
-        List_i64_append(self->token_lines, self->line);
+        Lexer_push_loc(self);
     }
     /* pass */
     List_Token_append(tokens, Token_make_Eof());
     /* pass */
-    List_i64_append(self->token_lines, self->line);
+    Lexer_push_loc(self);
     /* pass */
     return tokens;
 }

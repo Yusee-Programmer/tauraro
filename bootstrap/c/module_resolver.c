@@ -65,9 +65,9 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
         /* pass */
         /* unsafe block */
         /* pass */
-        TrStr _strtmp_t187 = _tr_str_wrap(_tr_str_slice(_tr_strz(main_path), 0LL, dir_end));
+        TrStr _strtmp_t191 = _tr_str_wrap(_tr_str_slice(_tr_strz(main_path), 0LL, dir_end));
         _tr_str_release(dir_str);
-        dir_str = _strtmp_t187;
+        dir_str = _strtmp_t191;
         /* pass */
         List_TrStr_append(self->search_paths, dir_str);
         /* pass */
@@ -95,9 +95,9 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
             /* pass */
             /* unsafe block */
             /* pass */
-            TrStr _strtmp_t188 = _tr_str_wrap(_tr_str_slice(_tr_strz(dir_str), 0LL, par_end));
+            TrStr _strtmp_t192 = _tr_str_wrap(_tr_str_slice(_tr_strz(dir_str), 0LL, par_end));
             _tr_str_release(parent_dir);
-            parent_dir = _strtmp_t188;
+            parent_dir = _strtmp_t192;
             /* pass */
             List_TrStr_append(self->search_paths, parent_dir);
             /* pass */
@@ -125,9 +125,9 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
                 /* pass */
                 /* unsafe block */
                 /* pass */
-                TrStr _strtmp_t189 = _tr_str_wrap(_tr_str_slice(_tr_strz(parent_dir), 0LL, gp_end));
+                TrStr _strtmp_t193 = _tr_str_wrap(_tr_str_slice(_tr_strz(parent_dir), 0LL, gp_end));
                 _tr_str_release(gp_dir);
-                gp_dir = _strtmp_t189;
+                gp_dir = _strtmp_t193;
                 /* pass */
                 List_TrStr_append(self->search_paths, gp_dir);
             }
@@ -151,9 +151,9 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
                     }
                 }
                 /* pass */
-                TrStr _strtmp_t190 = _tr_str_wrap(_tr_readdir(vh));
+                TrStr _strtmp_t194 = _tr_str_wrap(_tr_readdir(vh));
                 _tr_str_release(vname);
-                vname = _strtmp_t190;
+                vname = _strtmp_t194;
             }
             /* pass */
             _tr_closedir(vh);
@@ -216,9 +216,9 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrSt
         /* pass */
         if ((!has_tr)) {
             /* pass */
-            TrStr _strtmp_t192 = ({ TrStr _at_t191 = (_tr_strx_concat(_tr_strz(path), _tr_strz(_tr_str_lit(".tr")))); __auto_type _wr = (read_file(_at_t191)); _tr_str_release(_at_t191); _wr; });
+            TrStr _strtmp_t196 = ({ TrStr _at_t195 = (_tr_strx_concat(_tr_strz(path), _tr_strz(_tr_str_lit(".tr")))); __auto_type _wr = (read_file(_at_t195)); _tr_str_release(_at_t195); _wr; });
             _tr_str_release(source);
-            source = _strtmp_t192;
+            source = _strtmp_t196;
         }
         /* pass */
         if ((strcmp(_tr_strz(source), _tr_strz(_tr_str_lit(""))) == 0)) {
@@ -236,6 +236,10 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrSt
     /* pass */
     parser->current_file = _tr_str_retain(path);
     /* pass */
+    parser->cols = lexer->token_cols;
+    /* pass */
+    parser->src_text = _tr_str_retain(source);
+    /* pass */
     Program* prog = Parser_parse_program(parser);
     /* pass */
     self->parse_errors = (self->parse_errors + parser->error_count);
@@ -246,19 +250,19 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrSt
         /* pass */
         Decl* decl_ptr = Program_get(prog, i);
         /* pass */
-        __auto_type _t193 = (*decl_ptr);
-        if (_t193.tag == Decl_DImport) {
-            __auto_type mod_path = _t193.data.DImport.path;
-__auto_type alias = _t193.data.DImport.alias;
+        __auto_type _t197 = (*decl_ptr);
+        if (_t197.tag == Decl_DImport) {
+            __auto_type mod_path = _t197.data.DImport.path;
+__auto_type alias = _t197.data.DImport.alias;
             /* pass */
             ModuleResolver_resolve_module_path(self, mod_path);
-        } else if (_t193.tag == Decl_DFromImport) {
-            __auto_type mod_path = _t193.data.DFromImport.path;
-__auto_type items = _t193.data.DFromImport.items;
+        } else if (_t197.tag == Decl_DFromImport) {
+            __auto_type mod_path = _t197.data.DFromImport.path;
+__auto_type items = _t197.data.DFromImport.items;
             /* pass */
             ModuleResolver_resolve_module_path(self, mod_path);
         } else if (1) {
-            __auto_type _ = _t193;
+            __auto_type _ = _t197;
             /* pass */
             List_ptr_append(self->all_decls, decl_ptr);
             /* pass */
@@ -368,43 +372,43 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
 
 __attribute__((hot)) bool decl_is_pub(Decl d) {
     /* pass */
-    __auto_type _t194 = d;
-    if (_t194.tag == Decl_DFunction) {
-        __auto_type f = _t194.data.DFunction.func;
+    __auto_type _t198 = d;
+    if (_t198.tag == Decl_DFunction) {
+        __auto_type f = _t198.data.DFunction.func;
         /* pass */
         return f->is_public;
-    } else if (_t194.tag == Decl_DClass) {
-        __auto_type c = _t194.data.DClass.cls;
+    } else if (_t198.tag == Decl_DClass) {
+        __auto_type c = _t198.data.DClass.cls;
         /* pass */
         return c->is_public;
-    } else if (_t194.tag == Decl_DEnum) {
-        __auto_type e = _t194.data.DEnum.enm;
+    } else if (_t198.tag == Decl_DEnum) {
+        __auto_type e = _t198.data.DEnum.enm;
         /* pass */
         return e->is_public;
-    } else if (_t194.tag == Decl_DInterface) {
-        __auto_type i = _t194.data.DInterface.iface;
+    } else if (_t198.tag == Decl_DInterface) {
+        __auto_type i = _t198.data.DInterface.iface;
         /* pass */
         return i->is_public;
-    } else if (_t194.tag == Decl_DActor) {
-        __auto_type c = _t194.data.DActor.cls;
+    } else if (_t198.tag == Decl_DActor) {
+        __auto_type c = _t198.data.DActor.cls;
         /* pass */
         return c->is_public;
-    } else if (_t194.tag == Decl_DExtern) {
-        __auto_type abi = _t194.data.DExtern.abi;
-__auto_type funcs = _t194.data.DExtern.functions;
+    } else if (_t198.tag == Decl_DExtern) {
+        __auto_type abi = _t198.data.DExtern.abi;
+__auto_type funcs = _t198.data.DExtern.functions;
         /* pass */
         return true;
-    } else if (_t194.tag == Decl_DExtend) {
-        __auto_type target = _t194.data.DExtend.target;
-__auto_type methods = _t194.data.DExtend.methods;
+    } else if (_t198.tag == Decl_DExtend) {
+        __auto_type target = _t198.data.DExtend.target;
+__auto_type methods = _t198.data.DExtend.methods;
         /* pass */
         return true;
-    } else if (_t194.tag == Decl_DDecoratorDef) {
-        __auto_type f = _t194.data.DDecoratorDef.func;
+    } else if (_t198.tag == Decl_DDecoratorDef) {
+        __auto_type f = _t198.data.DDecoratorDef.func;
         /* pass */
         return f->is_public;
     } else if (1) {
-        __auto_type _ = _t194;
+        __auto_type _ = _t198;
         /* pass */
         return false;
     }
