@@ -1524,14 +1524,38 @@ extend Sema:
             i = i + 1
         return false
 
-    # #53 HYBRID: drive if-body fall-through str drops from the MIR drop schedule.
+    # #53 HYBRID: returns the collection type name (List/Vec/Dict/Map/Set) if `hb`
+    # directly declares `nm` as that collection, else "".
+    pub def block_coll_decl(self, hb: HirBlock, nm: str) -> str:
+        mut i = 0
+        while i < hb.stmts.len:
+            match hb.stmts.get(i).read():
+                case HirStmt.SLet(sn, _, _, _, _, sty, _):
+                    if sn == nm:
+                        mut tn = sty.name
+                        if tn == "List" or tn == "Vec" or tn == "Dict" or tn == "Map" or tn == "Set":
+                            return tn
+                case _: pass
+            i = i + 1
+        return ""
+
+    # #53 HYBRID: a collection local is safe to MIR-drop only if sema's own
+    # collection-droppability predicate clears it (not coll_escaped, POD/str-value
+    # elements, not moved/borrowed). Collections are raw pointers (unlike
+    # refcounted str), so this escape gate is REQUIRED for soundness.
+    pub def coll_droppable_by_sema(self, nm: str) -> bool:
+        mut sym = self.resolve(nm)
+        if sym.name == "": return false
+        return self.is_droppable_sym(sym)
+
+    # #53 HYBRID: drive if-body fall-through drops from the MIR drop schedule.
     # The MIR (built from the just-lowered `hf`) computes, for complete functions,
-    # which str locals are owned-but-dead at a single-block if/else body's
-    # fall-through end — exactly the leak the HIR scope/jump machinery misses, and
-    # exactly the case 6 scope-heuristic attempts got wrong. We only release a name
-    # the MIR proved dead, that is a `str` DECLARED in that body block, and not
-    # already dropped there. Incomplete functions get an empty plan ⇒ HIR path
-    # unchanged. str-only for now (collections later).
+    # which locals are owned-but-dead at an if/else/match/try body's fall-through
+    # end — exactly the leak the HIR scope/jump machinery misses. We release a name
+    # the MIR proved dead that is DECLARED in that body block and not already
+    # dropped. `str` (refcounted) needs no escape gate; COLLECTIONS (raw ptrs) are
+    # gated on sema's is_droppable_sym (coll_escaped etc.). Must run while the
+    # function scope is still open so coll_droppable_by_sema sees live symbols.
     pub def apply_mir_if_drops(self, hf: HirFunction):
         mut plan = mir_if_drop_plan(hf)
         mut psi = 0
@@ -1543,8 +1567,13 @@ extend Sema:
                 mut ppi = 0
                 while ppi < site.places.len:
                     mut nm = site.places.get(ppi)
-                    if self.block_str_decl(site.hir_block, nm) and (not self.block_has_autodrop(site.hir_block, nm)):
-                        site.hir_block.push(box_hirstmt(HirStmt.SAutoDrop(nm, "str")))
+                    if (not self.block_has_autodrop(site.hir_block, nm)):
+                        if self.block_str_decl(site.hir_block, nm):
+                            site.hir_block.push(box_hirstmt(HirStmt.SAutoDrop(nm, "str")))
+                        else:
+                            mut ctn = self.block_coll_decl(site.hir_block, nm)
+                            if ctn != "" and self.coll_droppable_by_sema(nm):
+                                site.hir_block.push(box_hirstmt(HirStmt.SAutoDrop(nm, ctn)))
                     ppi = ppi + 1
             psi = psi + 1
 
@@ -1900,10 +1929,12 @@ extend Sema:
                     self.error("[F-3] Function '" + f.name + "' returns '" + ret_nm + "' but is missing a return statement on at least one code path. FIX: Add a return at the end, or ensure all if/elif/else branches return.")
 
         self.finalize_scope_drops(hf.body)
-        self.exit_scope()
         # #53 HYBRID: fill the if-body fall-through leak from the MIR drop schedule
-        # (HIR machinery handled top-level/while/jump drops above).
+        # (HIR machinery handled top-level/while/jump drops above). BEFORE
+        # exit_scope so the collection escape gate (coll_droppable_by_sema) can read
+        # live symbols.
         self.apply_mir_if_drops(hf)
+        self.exit_scope()
         # Restore async context and lifetime context
         self.in_async_fn = saved_async
         self.current_func_name = ""

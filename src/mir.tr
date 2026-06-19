@@ -214,6 +214,35 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 lower_stmts(b, fubody)
                 if not b.terminated(): b.set_term(MirTerm.TGoto(fu_hdr))
                 b.cur = fu_exit
+            case HirStmt.STry(try_body, catches, finally_b):
+                # Conservative model: try -> catch* -> finally -> after as a TGoto
+                # chain (no branch cond needed). Each body is its own block AND a
+                # drop target. Over-approximates reachability (assumes all run),
+                # which is sound for liveness. On an exception path a body-end drop
+                # may not be reached (leak) but is never double-freed (the drop is
+                # on the normal path; unwinding takes a different path).
+                mut try_b = b.new_block()
+                if not b.terminated(): b.set_term(MirTerm.TGoto(try_b))
+                b.cur = try_b
+                b.if_bodies.push(try_body)
+                lower_stmts(b, try_body)
+                mut tci = 0
+                while tci < catches.len:
+                    mut tcc = catches.get(tci).read()
+                    mut catch_b = b.new_block()
+                    if not b.terminated(): b.set_term(MirTerm.TGoto(catch_b))
+                    b.cur = catch_b
+                    b.if_bodies.push(tcc.body)
+                    lower_stmts(b, tcc.body)
+                    tci = tci + 1
+                mut fin_b = b.new_block()
+                if not b.terminated(): b.set_term(MirTerm.TGoto(fin_b))
+                b.cur = fin_b
+                b.if_bodies.push(finally_b)
+                lower_stmts(b, finally_b)
+                mut try_after = b.new_block()
+                if not b.terminated(): b.set_term(MirTerm.TGoto(try_after))
+                b.cur = try_after
             case HirStmt.SMatch(msubj, marms):
                 # N-way match -> chain of 2-way branches, all arm bodies joining a
                 # common exit. The subject drives each branch cond (stays live +
