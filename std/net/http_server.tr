@@ -192,6 +192,11 @@ extend HttpResponse:
     # `mut resp = HttpResponse.init(...)` and pass it into send_response,
     # which is the sole owner that calls this.
     pub def dispose(self):
+        # Release the body string we retained in init (field-store retains the
+        # str). Without this the response body leaks one ref per request. The
+        # codegen rewrites `_tr_c_free(str as Pointer[char])` to the correct
+        # refcounted `_tr_str_release`. Balanced: init did +1, dispose does -1.
+        unsafe: _tr_c_free(self.body as Pointer[char])
         unsafe: _tr_c_free(self as Pointer[char])
 
     pub def set_header(self, name: str, value: str):
