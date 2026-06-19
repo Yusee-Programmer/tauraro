@@ -24,8 +24,10 @@
 #if defined(__linux__)
 #  define _GNU_SOURCE
 #elif defined(__APPLE__)
-/* macOS: _XOPEN_SOURCE required by recent SDKs (Xcode 16+) for the ucontext
- * routines used by the coroutine scheduler; _DARWIN_C_SOURCE keeps BSD extras. */
+/* macOS: _DARWIN_C_SOURCE re-enables BSD extensions (strdup, etc.); _XOPEN_SOURCE
+ * is ALSO required because recent SDKs (Xcode 16+) guard the ucontext routines
+ * (getcontext/makecontext/swapcontext, used by the coroutine scheduler) behind
+ * `#if !defined(_XOPEN_SOURCE) #error ...`. Both must be set before any include. */
 #  define _XOPEN_SOURCE 700
 #  define _DARWIN_C_SOURCE
 #elif defined(__unix__)
@@ -2816,6 +2818,18 @@ static inline char*     _tr_get_arg(long long n) { return (_tr_argv && n >= 0 &&
 typedef struct { _TrThread* ths; int count; int cap; } _TrTaskGroup;
 _TR_GLOBAL _TrTaskGroup _tr_tg;
 _TR_GLOBAL _TrThreadPool* _tr_global_async_pool;
+/* Shared async worker pool, created LAZILY on first use so pure-compute
+   programs (the overwhelming common case) never pay the per-core worker-
+   thread stack cost (~1-2 MB/core, tens of MB on big machines). Previously
+   this was spawned eagerly in every program's main(), which made even
+   "hello world" allocate one stack per CPU. */
+static inline _TrThreadPool* _tr_async_pool(void) {
+    if (!_tr_global_async_pool) _tr_global_async_pool = _tr_threadpool_auto();
+    return _tr_global_async_pool;
+}
+static inline void _tr_async_pool_shutdown(void) {
+    if (_tr_global_async_pool) { _tr_threadpool_free(_tr_global_async_pool); _tr_global_async_pool = NULL; }
+}
 static inline void _tr_tg_begin(void) {
     _tr_tg.cap = 16; _tr_tg.count = 0;
     _tr_tg.ths = (_TrThread*)TAURARO_ALLOC((size_t)_tr_tg.cap * sizeof(_TrThread));
@@ -5384,5 +5398,17 @@ static int64_t _tr_list_any_i64(List_i64* l, _tr_pred_fn p) { return _tr_list_an
 static int64_t _tr_list_all_i64(List_i64* l, _tr_pred_fn p) { return _tr_list_all_ptr((List_ptr*)l, p); }
 static int64_t _tr_list_any_f64(List_f64* l, _tr_pred_fn p) { return _tr_list_any_ptr((List_ptr*)l, p); }
 static int64_t _tr_list_all_f64(List_f64* l, _tr_pred_fn p) { return _tr_list_all_ptr((List_ptr*)l, p); }
+
+/* Drop libc object-like macros that collide with legitimate Tauraro identifiers
+ * generated AFTER this header (user/std functions). <signal.h> defines POLL_IN
+ * and POLL_OUT as si_code constants (1, 2), which would otherwise expand inside
+ * `long long POLL_IN(void)` -> `long long 1(void)`. The runtime itself never
+ * uses these macros, so undef'ing them here is safe. */
+#ifdef POLL_IN
+#  undef POLL_IN
+#endif
+#ifdef POLL_OUT
+#  undef POLL_OUT
+#endif
 
 #endif /* TAURARO_RT_H */

@@ -14538,12 +14538,6 @@ __auto_type gvval = _t1586.data.SLet.val;
     /* pass */
     CGenerator_w(self, _tr_str_lit("    _tr_init_console();\n"));
     /* pass */
-    CGenerator_w(self, _tr_str_lit("#ifndef TAURARO_BARE\n"));
-    /* pass */
-    CGenerator_w(self, _tr_str_lit("    _tr_global_async_pool = _tr_threadpool_auto();\n"));
-    /* pass */
-    CGenerator_w(self, _tr_str_lit("#endif\n"));
-    /* pass */
     bool main_has_args = false;
     /* pass */
     TrStr main_args_name = _tr_str_lit("args");
@@ -14640,7 +14634,7 @@ __auto_type tlv = _t1600.data.SLet.val;
     /* pass */
     CGenerator_w(self, _tr_str_lit("#ifndef TAURARO_BARE\n"));
     /* pass */
-    CGenerator_w(self, _tr_str_lit("    if (_tr_global_async_pool) { _tr_threadpool_free(_tr_global_async_pool); _tr_global_async_pool = NULL; }\n"));
+    CGenerator_w(self, _tr_str_lit("    _tr_async_pool_shutdown();\n"));
     /* pass */
     CGenerator_w(self, _tr_str_lit("#endif\n"));
     /* pass */
@@ -16230,12 +16224,6 @@ __auto_type gv_val = _t1693.data.SAssign.val;
     /* pass */
     CGenerator_w(self, _tr_str_lit("    _tr_init_console();\n"));
     /* pass */
-    CGenerator_w(self, _tr_str_lit("#ifndef TAURARO_BARE\n"));
-    /* pass */
-    CGenerator_w(self, _tr_str_lit("    _tr_global_async_pool = _tr_threadpool_auto();\n"));
-    /* pass */
-    CGenerator_w(self, _tr_str_lit("#endif\n"));
-    /* pass */
     bool main_has_args = false;
     /* pass */
     TrStr main_args_name = _tr_str_lit("args");
@@ -16347,7 +16335,7 @@ __auto_type tlv2 = _t1705.data.SLet.val;
     /* pass */
     CGenerator_w(self, _tr_str_lit("#ifndef TAURARO_BARE\n"));
     /* pass */
-    CGenerator_w(self, _tr_str_lit("    if (_tr_global_async_pool) { _tr_threadpool_free(_tr_global_async_pool); _tr_global_async_pool = NULL; }\n"));
+    CGenerator_w(self, _tr_str_lit("    _tr_async_pool_shutdown();\n"));
     /* pass */
     CGenerator_w(self, _tr_str_lit("#endif\n"));
     /* pass */
