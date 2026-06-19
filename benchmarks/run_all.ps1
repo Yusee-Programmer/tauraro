@@ -220,3 +220,8 @@ $md.Add("_``Tau/C`` and ``Tau/Rust`` are ratios: < 1.00x means Tauraro is faster
 ($md -join "`n") | Out-File -FilePath $RESULTS_MD -Encoding utf8
 Write-Host "Wrote Markdown report: $RESULTS_MD" -ForegroundColor Green
 Write-Host ""
+
+# Reporting tool: completed successfully even if some toolchains were absent.
+# Exit 0 explicitly so a non-zero $LASTEXITCODE left by the last gcc/rustc
+# invocation isn't mistaken for a script failure.
+exit 0
