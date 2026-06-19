@@ -84,6 +84,8 @@ pub class MirBuilder:
     pub complete: bool          # cleared when an unlowered statement form is hit
     pub cur_hb: HirBlock        # HIR block currently being lowered (for tagging)
     pub if_bodies: Vec[HirBlock]
+    pub in_unsafe: int          # >0 inside an `unsafe:` block; bodies lowered there
+                                # are NOT drop targets (dev manages that memory)
 
 extend MirBuilder:
     pub def init() -> MirBuilder:
@@ -92,6 +94,7 @@ extend MirBuilder:
         b.cur    = -1
         b.complete = true
         b.if_bodies = Vec[HirBlock].init(4)
+        b.in_unsafe = 0
         return b
 
     # Create a fresh block, return its id.
@@ -161,8 +164,10 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 mut jb = b.new_block()
                 # The then/else HIR blocks are drop targets: a str declared there
                 # and dead at the body's fall-through end leaks today (the HIR gap).
-                b.if_bodies.push(then_b)
-                b.if_bodies.push(else_b)
+                # Skip when inside `unsafe:` — that memory is the dev's to manage.
+                if b.in_unsafe == 0:
+                    b.if_bodies.push(then_b)
+                    b.if_bodies.push(else_b)
                 b.set_term(MirTerm.TBranch(cond, tb, eb))
                 b.cur = tb
                 lower_stmts(b, then_b)
@@ -225,7 +230,7 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                     b.cur = arm_body
                     if marm.guard as usize != 0 as usize:
                         b.push_stmt(MirStmt.MEval(marm.guard))
-                    b.if_bodies.push(marm.body)
+                    if b.in_unsafe == 0: b.if_bodies.push(marm.body)
                     lower_stmts(b, marm.body)
                     if not b.terminated(): b.set_term(MirTerm.TGoto(m_exit))
                     b.cur = arm_next
@@ -236,6 +241,15 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 b.push_stmt(MirStmt.MEval(acond))
                 if amsg as usize != 0 as usize:
                     b.push_stmt(MirStmt.MEval(amsg))
+            # SUnsafe stays UNLOWERED → unsafe-containing functions are INCOMPLETE
+            # (full HIR fallback). Per the Rust model `unsafe` should NOT disable
+            # auto-drop, and collect_frees() now recognises manual frees — BUT the
+            # blocker is different: the compiler's own unsafe internals take raw
+            # pointers into a TrStr's `.data` buffer and use them past where the str
+            # would be auto-dropped (relying on no-drop). Auto-drop there would
+            # free the buffer under the live raw pointer. Enabling MIR drops for
+            # unsafe functions requires first auditing those raw-aliasing sites; a
+            # separate task. (collect_frees still helps all SAFE complete fns.)
             case HirStmt.SRaise(rval):
                 # `raise` exits, but we model it as a plain eval (non-terminating)
                 # so liveness only OVER-approximates (keeps values live past it) —
@@ -565,6 +579,64 @@ def collect_moves(e: Pointer[HirExpr], out: Vec[str]):
             collect_moves(f, out)
         case _: pass
 
+# A function name that manually releases its first argument's memory.
+def is_free_fn(n: str) -> bool:
+    return n == "dealloc" or n == "free" or n == "_tr_c_free" or n == "_tr_free" or n == "_tr_str_release" or n == "_tr_str_free"
+
+# The base local name behind a free-call argument, peeling `as` casts:
+# `_tr_c_free(x as Pointer[char])` -> "x".
+def free_target(arg: Pointer[HirExpr]) -> str:
+    if arg as usize == 0 as usize: return ""
+    match arg.read():
+        case HirExpr.EIdent(n, _, _): return n
+        case HirExpr.ECast(x, _): return free_target(x)
+        case _: return ""
+
+# Collect names MANUALLY FREED within `e` (so the MIR won't auto-drop them again).
+# Mirrors (and extends) sema's mark_freed: `dealloc(x)`, `x.free()`, and the
+# compiler's str-release idiom `_tr_c_free(x as Pointer[char])`. This is what makes
+# `unsafe:` work like Rust's — auto-drop still applies to normal owned values, but
+# a value the dev frees by hand is recognized as consumed (no double-free).
+# Erring toward recognizing a free is safe: a false positive only leaks, never
+# double-frees.
+def collect_frees(e: Pointer[HirExpr], out: Vec[str]):
+    if e as usize == 0 as usize: return
+    match e.read():
+        case HirExpr.ECall(callee, args, _):
+            if callee as usize != 0 as usize:
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if is_free_fn(cn) and args.len > 0:
+                            mut ft = free_target(args.get(0))
+                            if ft != "": set_add(out, ft)
+                    case _: pass
+            collect_frees(callee, out)
+            mut i = 0
+            while i < args.len:
+                collect_frees(args.get(i), out)
+                i = i + 1
+        case HirExpr.EMethodCall(obj, m, args, _):
+            if m == "free":
+                match obj.read():
+                    case HirExpr.EIdent(on, _, _): set_add(out, on)
+                    case _: pass
+            collect_frees(obj, out)
+            mut j = 0
+            while j < args.len:
+                collect_frees(args.get(j), out)
+                j = j + 1
+        case HirExpr.EBinOp(_, l, r, _):
+            collect_frees(l, out)
+            collect_frees(r, out)
+        case HirExpr.EUnaryOp(_, x, _): collect_frees(x, out)
+        case HirExpr.EPropAccess(obj, _, _): collect_frees(obj, out)
+        case HirExpr.EIndex(obj, idx, _):
+            collect_frees(obj, out)
+            collect_frees(idx, out)
+        case HirExpr.ECast(x, _): collect_frees(x, out)
+        case HirExpr.EAwait(x, _): collect_frees(x, out)
+        case _: pass
+
 # gen[b]: places assigned/declared (become owned) in this block.
 def block_gen_own(blk: MirBlock, out: Vec[str]):
     mut i = 0
@@ -580,9 +652,15 @@ def block_moves(blk: MirBlock, out: Vec[str]):
     mut i = 0
     while i < blk.stmts.len:
         match blk.stmts.get(i).read():
-            case MirStmt.MDeclare(_, val): collect_moves(val, out)
-            case MirStmt.MAssign(_, val): collect_moves(val, out)
-            case MirStmt.MEval(val): collect_moves(val, out)
+            case MirStmt.MDeclare(_, val):
+                collect_moves(val, out)
+                collect_frees(val, out)
+            case MirStmt.MAssign(_, val):
+                collect_moves(val, out)
+                collect_frees(val, out)
+            case MirStmt.MEval(val):
+                collect_moves(val, out)
+                collect_frees(val, out)
         i = i + 1
     match blk.term.read():
         case MirTerm.TBranch(cond, _, _): collect_moves(cond, out)
