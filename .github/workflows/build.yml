@@ -52,7 +52,7 @@ jobs:
             case "$RUNNER_OS" in
               Windows) CC=gcc; LIBS="-lm -lws2_32"; CFLAGS="-D_GNU_SOURCE" ;;
               macOS)   CC=cc;  LIBS="-lm"; CFLAGS="" ;;
-              *)       CC=cc;  LIBS="-lm -lpthread"; CFLAGS="-D_GNU_SOURCE" ;;
+              *)       CC="gcc -std=gnu11"; LIBS="-lm -lpthread"; CFLAGS="-D_GNU_SOURCE" ;;
             esac
             "$CC" -O2 -std=c11 -w -Ibootstrap/c $CFLAGS \
                bootstrap/c/main.c bootstrap/c/module_*.c bootstrap/c/include/core/*.c \
@@ -128,7 +128,8 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          # Set CFLAGS and LDFLAGS for the C compiler to resolve ucontext symbols
+          # Override CC to use -std=gnu11 for ucontext functions on Linux
+          CC: "gcc -std=gnu11"
           CFLAGS: "-O2 -D_GNU_SOURCE"
           LDFLAGS: "-lm -lpthread"
         run: bash scripts/build.sh
@@ -161,7 +162,8 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          # Also pass CFLAGS/LDFLAGS for the test runner's C compilation
+          # Override CC to use -std=gnu11 for ucontext functions on Linux
+          CC: "gcc -std=gnu11"
           CFLAGS: "-O2 -D_GNU_SOURCE"
           LDFLAGS: "-lm -lpthread"
         run: bash scripts/run_tests.sh

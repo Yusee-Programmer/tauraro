@@ -16,15 +16,21 @@ if [ "$(uname -m)" = "aarch64" ] && [ "$(uname -s)" = "Linux" ]; then
     echo "==> ARM64 Linux: installing musl-tools for portable binary"
     sudo apt-get install -y --no-install-recommends musl-tools
     mkdir -p "$HOME/.local/bin"
-    printf '#!/bin/sh\nexec musl-gcc "$@"\n' > "$HOME/.local/bin/gcc"
+    printf '#!/bin/sh\nexec musl-gcc -std=gnu11 -D_GNU_SOURCE "$@"\n' > "$HOME/.local/bin/gcc"
     chmod +x "$HOME/.local/bin/gcc"
     export PATH="$HOME/.local/bin:$PATH"
     STATIC_FLAG="--static"
 fi
 
-# Fix: Set CFLAGS and LDFLAGS for the C compiler to resolve ucontext symbols
-export CFLAGS="${CFLAGS:--O2} -D_GNU_SOURCE"
-export LDFLAGS="${LDFLAGS:--lm} -lpthread"
+# For non-ARM64 Linux, ensure -std=gnu11 and -D_GNU_SOURCE for ucontext
+if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" != "aarch64" ]; then
+    mkdir -p "$HOME/.local/bin"
+    if [ ! -f "$HOME/.local/bin/gcc" ]; then
+        printf '#!/bin/sh\nexec /usr/bin/gcc -std=gnu11 -D_GNU_SOURCE "$@"\n' > "$HOME/.local/bin/gcc"
+        chmod +x "$HOME/.local/bin/gcc"
+    fi
+    export PATH="$HOME/.local/bin:$PATH"
+fi
 
 echo "==> Compiling src/main.tr → ./tauraroc"
 "$BOOTSTRAP" src/main.tr -o tauraroc $STATIC_FLAG
