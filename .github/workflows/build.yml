@@ -52,9 +52,9 @@ jobs:
             case "$RUNNER_OS" in
               Windows) CC=gcc; LIBS="-lm -lws2_32"; CFLAGS="-D_GNU_SOURCE" ;;
               macOS)   CC=cc;  LIBS="-lm"; CFLAGS="" ;;
-              *)       CC="gcc -std=gnu11"; LIBS="-lm -lpthread"; CFLAGS="-D_GNU_SOURCE" ;;
+              *)       CC=gcc; LIBS="-lm -lpthread"; CFLAGS="-std=gnu11 -D_GNU_SOURCE" ;;
             esac
-            "$CC" -O2 -std=c11 -w -Ibootstrap/c $CFLAGS \
+            "$CC" -O2 -w -Ibootstrap/c $CFLAGS \
                bootstrap/c/main.c bootstrap/c/module_*.c bootstrap/c/include/core/*.c \
                -o "$DEST/tauraroc${{ matrix.ext }}" $LIBS
             echo "==> stage0 built: $DEST/tauraroc${{ matrix.ext }}"
@@ -127,11 +127,6 @@ jobs:
       - name: Build (Linux / macOS)
         if: runner.os != 'Windows'
         shell: bash
-        env:
-          # Override CC to use -std=gnu11 for ucontext functions on Linux
-          CC: "gcc -std=gnu11"
-          CFLAGS: "-O2 -D_GNU_SOURCE"
-          LDFLAGS: "-lm -lpthread"
         run: bash scripts/build.sh
 
       - name: Build (Windows)
@@ -161,11 +156,6 @@ jobs:
       - name: Run regression test suite (Linux / macOS)
         if: runner.os != 'Windows'
         shell: bash
-        env:
-          # Override CC to use -std=gnu11 for ucontext functions on Linux
-          CC: "gcc -std=gnu11"
-          CFLAGS: "-O2 -D_GNU_SOURCE"
-          LDFLAGS: "-lm -lpthread"
         run: bash scripts/run_tests.sh
 
       - name: Run regression test suite (Windows)
