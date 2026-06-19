@@ -52,7 +52,7 @@ jobs:
             case "$RUNNER_OS" in
               Windows) CC=gcc; LIBS="-lm -lws2_32"; CFLAGS="-D_GNU_SOURCE" ;;
               macOS)   CC=cc;  LIBS="-lm"; CFLAGS="" ;;
-              *)       CC=gcc; LIBS="-lm -lpthread"; CFLAGS="-std=gnu11 -D_GNU_SOURCE" ;;
+              *)       CC=gcc; LIBS="-lm -lpthread -lrt"; CFLAGS="-std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700" ;;
             esac
             "$CC" -O2 -w -Ibootstrap/c $CFLAGS \
                bootstrap/c/main.c bootstrap/c/module_*.c bootstrap/c/include/core/*.c \
@@ -127,6 +127,11 @@ jobs:
       - name: Build (Linux / macOS)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          # Override CC to use -std=gnu11 for ucontext functions on Linux
+          CC: "gcc"
+          CFLAGS: "-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700"
+          LDFLAGS: "-lm -lpthread -lrt"
         run: bash scripts/build.sh
 
       - name: Build (Windows)
@@ -156,6 +161,11 @@ jobs:
       - name: Run regression test suite (Linux / macOS)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          # Override CC to use -std=gnu11 for ucontext functions on Linux
+          CC: "gcc"
+          CFLAGS: "-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700"
+          LDFLAGS: "-lm -lpthread -lrt"
         run: bash scripts/run_tests.sh
 
       - name: Run regression test suite (Windows)
