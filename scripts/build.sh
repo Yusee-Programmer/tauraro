@@ -22,8 +22,14 @@ if [ "$(uname -m)" = "aarch64" ] && [ "$(uname -s)" = "Linux" ]; then
     STATIC_FLAG="--static"
 fi
 
+# Fix: Add -lpthread and -D_GNU_SOURCE for ucontext functions on Linux
+LIBS="-lm"
+if [ "$(uname -s)" = "Linux" ]; then
+    LIBS="-lm -lpthread"
+fi
+
 echo "==> Compiling src/main.tr → ./tauraroc"
-"$BOOTSTRAP" src/main.tr -o tauraroc $STATIC_FLAG
+"$BOOTSTRAP" src/main.tr -o tauraroc $STATIC_FLAG --cflags "-D_GNU_SOURCE" --libs "$LIBS"
 
 # New bootstrap (v0.0.4+): binary lands in CWD as ./tauraroc
 # Old bootstrap (≤v0.0.3): binary lands in src/build/tauraroc

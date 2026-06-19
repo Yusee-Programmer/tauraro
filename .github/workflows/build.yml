@@ -50,11 +50,11 @@ jobs:
           if [ -f "bootstrap/c/main.c" ]; then
             echo "==> Building stage0 from portable C (bootstrap/c/)"
             case "$RUNNER_OS" in
-              Windows) CC=gcc; LIBS="-lm -lws2_32" ;;
-              macOS)   CC=cc;  LIBS="-lm" ;;
-              *)       CC=cc;  LIBS="-lm -lpthread" ;;
+              Windows) CC=gcc; LIBS="-lm -lws2_32"; CFLAGS="-D_GNU_SOURCE" ;;
+              macOS)   CC=cc;  LIBS="-lm"; CFLAGS="" ;;
+              *)       CC=cc;  LIBS="-lm -lpthread"; CFLAGS="-D_GNU_SOURCE" ;;
             esac
-            "$CC" -O2 -std=c11 -w -Ibootstrap/c \
+            "$CC" -O2 -std=c11 -w -Ibootstrap/c $CFLAGS \
                bootstrap/c/main.c bootstrap/c/module_*.c bootstrap/c/include/core/*.c \
                -o "$DEST/tauraroc${{ matrix.ext }}" $LIBS
             echo "==> stage0 built: $DEST/tauraroc${{ matrix.ext }}"
