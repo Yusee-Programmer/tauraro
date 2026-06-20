@@ -1,0 +1,56 @@
+name: Auto-resolve PR conflicts
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  resolve-conflicts:
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'auto-resolve') || contains(github.event.pull_request.head.ref, 'master')
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check for conflicts with base branch
+        run: |
+          # Check if there are conflicts
+          git fetch origin ${{ github.base_ref }}
+          if git merge-base --is-ancestor HEAD origin/${{ github.base_ref }}; then
+            echo "Already up to date, no rebase needed"
+            exit 0
+          fi
+          
+          # Try rebase with 'ours' strategy for benchmark conflicts
+          git rebase -X ours origin/${{ github.base_ref }} && {
+            echo "Rebase successful"
+            git push --force-with-lease origin ${{ github.head_ref }}
+          } || {
+            echo "Rebase failed even with -X ours strategy"
+            exit 1
+          }
+
+      - name: Comment on PR if rebased
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ Auto-resolved conflicts using `rebase -X ours` strategy for `benchmarks/results.md`'
+            })
