@@ -8,3 +8,7 @@
 
 # Mark the Rouge lexer as Ruby (it is Ruby, not Tauraro)
 *.rb      linguist-language=Ruby
+
+# Auto-generated benchmark results - use union merge to reduce conflicts
+# In case of conflicts, both versions' content is kept (non-overlapping changes merged automatically)
+benchmarks/results.md merge=union
